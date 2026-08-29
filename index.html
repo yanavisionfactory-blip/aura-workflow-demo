@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="AURA — a transparent, approval-first workflow execution demo." />
+  <title>AURA Workflow Demo</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="#" aria-label="AURA home"><span class="mark">A</span><span>AURA</span></a>
+      <nav aria-label="Main navigation">
+        <button class="nav-item active"><span>⌁</span> Workflows</button>
+        <button class="nav-item"><span>◫</span> Activity</button>
+        <button class="nav-item"><span>◇</span> Connections <b>4</b></button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="trust-card"><span class="pulse"></span><div><strong>Control layer active</strong><small>Every action is traceable</small></div></div>
+        <button class="profile"><span>YK</span><div><strong>Yana K.</strong><small>Workspace owner</small></div><i>•••</i></button>
+      </div>
+    </aside>
+
+    <main>
+      <header>
+        <div><p class="eyebrow">LIVE WORKFLOW · AURA-1042</p><h1>Onboard Acme Europe</h1></div>
+        <div class="header-actions"><span class="draft-dot"></span><span>Draft saved</span><button class="ghost" id="resetBtn">Reset demo</button></div>
+      </header>
+
+      <section class="intent-card">
+        <div class="avatar">YK</div>
+        <div><p class="intent-label">YOUR REQUEST</p><p class="request">“Onboard Acme Europe across our systems. Don’t contact the customer until everything is ready.”</p></div>
+      </section>
+
+      <section class="contract" id="contractSection">
+        <div class="section-heading"><div><p class="eyebrow">OUTCOME CONTRACT</p><h2>What “done” means</h2><p>AURA will finish only when these conditions are true—not when the last API call returns.</p></div><span class="status-pill neutral" id="contractStatus">Ready for approval</span></div>
+        <div class="contract-grid">
+          <div class="outcome-box"><span class="icon purple">◎</span><div><small>DESIRED OUTCOME</small><strong>Acme is active and consistent across every required system.</strong></div></div>
+          <div class="rules">
+            <div><span class="rule-icon">✓</span><p><strong>Salesforce</strong><small>Account exists with €20k contract value</small></p></div>
+            <div><span class="rule-icon">✓</span><p><strong>Stripe</strong><small>Customer ID is linked in Salesforce</small></p></div>
+            <div><span class="rule-icon">✓</span><p><strong>Google Drive</strong><small>Folder has the approved internal permissions</small></p></div>
+            <div><span class="rule-icon">✓</span><p><strong>Slack</strong><small>Announcement sends only after all checks pass</small></p></div>
+          </div>
+          <div class="guardrails">
+            <div><span>⚡</span><p><small>CAN DO AUTOMATICALLY</small><strong>Create internal records and folders</strong></p></div>
+            <div><span>⌁</span><p><small>MUST ASK FIRST</small><strong>Invite or contact the customer</strong></p></div>
+            <div><span>⊘</span><p><small>NEVER ALLOWED</small><strong>Change contract or billing terms</strong></p></div>
+          </div>
+        </div>
+        <div class="contract-actions"><button class="text-btn">Edit contract</button><button class="primary" id="approveBtn">Approve & run workflow <span>→</span></button></div>
+      </section>
+
+      <section class="execution hidden" id="executionSection" aria-live="polite">
+        <div class="section-heading"><div><p class="eyebrow">LIVE EXECUTION</p><h2 id="executionTitle">Making the outcome true</h2><p id="executionSub">AURA is checking each action before unlocking the next.</p></div><span class="status-pill running" id="runStatus"><i></i> Running</span></div>
+        <div class="timeline" id="timeline"></div>
+        <div class="recovery-panel hidden" id="recoveryPanel">
+          <div class="warning-icon">!</div><div class="recovery-copy"><p class="eyebrow">SAFE PAUSE</p><h3>Drive permissions could not be verified</h3><p>AURA stopped the Slack announcement. Salesforce and Stripe are intact; no customer-facing action occurred.</p><div class="recovery-choice"><span>Recommended recovery</span><strong>Retry using the approved “Client Operations” permission group.</strong></div></div>
+          <button class="primary" id="recoverBtn">Approve recovery <span>→</span></button>
+        </div>
+      </section>
+
+      <section class="certificate hidden" id="certificate">
+        <div class="cert-top"><div class="seal">✓</div><div><p class="eyebrow">VERIFIED OUTCOME</p><h2>Acme Europe is ready</h2><p>Every completion condition is true and independently re-checked.</p></div><span class="status-pill success">Completed</span></div>
+        <div class="metrics"><div><strong>4/4</strong><small>Systems verified</small></div><div><strong>1</strong><small>Failure recovered</small></div><div><strong>0</strong><small>Policy violations</small></div><div><strong>YK</strong><small>Approved by</small></div></div>
+        <div class="evidence">
+          <div><span class="system sf">S</span><p><strong>Salesforce</strong><small>Active · €20,000 · Stripe ID linked</small></p><b>Verified</b></div>
+          <div><span class="system st">S</span><p><strong>Stripe</strong><small>Customer created · Billing not started</small></p><b>Verified</b></div>
+          <div><span class="system gd">D</span><p><strong>Google Drive</strong><small>Folder created · 6 approved members</small></p><b>Verified</b></div>
+          <div><span class="system sl">#</span><p><strong>Slack</strong><small>Internal announcement delivered</small></p><b>Verified</b></div>
+        </div>
+        <div class="proof"><span>▣</span><p><strong>Completion evidence is preserved</strong><small>Request, plan, approvals, before/after state, failure, recovery, and verification are linked in one record.</small></p><button class="ghost" id="evidenceBtn">View evidence</button></div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="evidenceDialog">
+    <button class="dialog-close" id="closeDialog" aria-label="Close">×</button><p class="eyebrow">AUDIT RECORD · AURA-1042</p><h2>Proof of completion</h2>
+    <div class="log"><p><time>14:02:11</time><span>Request approved by Yana K.</span></p><p><time>14:02:14</time><span>Salesforce account created · sf_83921</span></p><p><time>14:02:17</time><span>Stripe customer created · cus_R8ac</span></p><p><time>14:02:20</time><span>Drive permission check failed · downstream action blocked</span></p><p><time>14:02:32</time><span>Recovery approved · Client Operations group applied</span></p><p><time>14:02:38</time><span>All four systems re-read and verified</span></p><p><time>14:02:40</time><span>Workflow outcome certified</span></p></div>
+  </dialog>
+  <script src="app.js"></script>
+</body>
+</html>
