@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Check, Loader2, Mail, ExternalLink, CheckCircle2, Pencil, ChevronDown, Save, X } from "lucide-react";
+import { Check, Loader2, Mail, ExternalLink, CheckCircle2, Pencil, Save, X } from "lucide-react";
 import { base44 } from "@/api/base44Client";
 
 // Renders the creators AURA discovered. For each, you can preview and EDIT

@@ -2,6 +2,7 @@ import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import { secrets } from "base44:runtime";
 import { TOOL_REGISTRY } from "../../shared/toolRegistry.ts";
 import { isCreatorOutreachIntent, runCreatorOutreachCore } from "../../shared/creatorOutreach.ts";
+import { executeToolIntent } from "../../shared/toolExecutor.ts";
 
 // AURA's orchestrator. This is where the workflow actually runs.
 //
@@ -29,13 +30,28 @@ const INTENT_SCHEMA = {
         properties: {
           action_type: {
             type: "string",
-            enum: ["send_email", "create_record", "read_data", "other"],
+            enum: ["send_email", "read_email", "airtable_create", "airtable_read", "sheets_read", "sheets_append", "calendar_read", "calendar_create", "other"],
           },
           tool: { type: "string" },
           to: { type: "string" },
           subject: { type: "string" },
           body: { type: "string" },
           fields: { type: "object", additionalProperties: true },
+          values: { type: "array", items: { type: "array", items: {} } },
+          resource_id: { type: "string" },
+          base_id: { type: "string" },
+          base_name: { type: "string" },
+          table_id: { type: "string" },
+          table_name: { type: "string" },
+          range: { type: "string" },
+          query: { type: "string" },
+          limit: { type: "number" },
+          title: { type: "string" },
+          start: { type: "string" },
+          end: { type: "string" },
+          location: { type: "string" },
+          time_min: { type: "string" },
+          time_max: { type: "string" },
           note: { type: "string" },
         },
       },
@@ -225,11 +241,20 @@ Steps:
 ${steps.map((s, i) => `${i + 1}. ${s.tool}: ${s.action || s.iWill || ""}`).join("\n")}
 
 For EACH step, return one intent object:
-- "action_type": "send_email" if the step sends an email; "create_record" if it writes a row/record to a sheet or CRM; "read_data" if it only fetches/reads; "other" otherwise.
-- "tool": the canonical tool name (exactly as given).
-- For send_email: fill "to" (a realistic recipient address), "subject" (realistic subject line), "body" (a realistic, complete email body reflecting the step's purpose — not a placeholder).
-- For create_record: fill "fields" (a JSON object of column name -> value, realistic content reflecting the step).
-- "note": one short line describing what will happen.
+- Choose the exact executable "action_type":
+  - Gmail: "send_email" or "read_email".
+  - Airtable: "airtable_create" or "airtable_read".
+  - Google Sheets: "sheets_read" or "sheets_append".
+  - Google Calendar: "calendar_read" or "calendar_create".
+  - Use "other" only when no adapter above applies.
+- "tool": canonical tool name exactly as given.
+- Email: populate to, subject, body. Never invent a recipient when none is present in the request or approved preview; leave it empty.
+- Airtable: populate base_name/table_name when named and fields for writes.
+- Sheets: extract resource_id from any spreadsheet URL/ID, set range, and values for writes.
+- Calendar: populate title, ISO start/end, location, and body for creates; time_min/time_max/query for reads.
+- "note": one factual line describing the provider operation.
+
+The approved step previews are authoritative for modify operations. Do not expand the scope beyond them.
 
 Be concrete and realistic. These will be REALLY executed against the user's connected tools.`,
       response_json_schema: INTENT_SCHEMA,
@@ -342,17 +367,19 @@ Be concrete and realistic. These will be REALLY executed against the user's conn
       }
 
       const realSummary = await compileResults(base44, outcomes, interpretation);
+      const creatorStatus = execSteps.some((s) => s.status === "failed" || s.status === "needs_connection") ? "failed" : "completed";
+      const verifiedResults = { ...realSummary, outcomes };
       const runUpdate = {
-        status: "completed",
+        status: creatorStatus,
         title: realSummary.title,
         summary: realSummary.summary,
         metrics: realSummary.metrics,
-        outcomes: realSummary.outcomes || outcomes,
+        outcomes,
         steps: execSteps,
         notes: outcomes.some((o) => o.attention) ? "Some submissions need manual follow-up." : "",
       };
       await base44.entities.WorkflowRun.update(runId, runUpdate).catch(() => {});
-      return Response.json({ steps: execSteps, results: realSummary });
+      return Response.json({ status: creatorStatus, steps: execSteps, results: verifiedResults });
     }
 
     const outcomes = [];
@@ -366,61 +393,28 @@ Be concrete and realistic. These will be REALLY executed against the user's conn
       let status = "completed";
       let output = "";
       try {
-        if (intent.action_type === "send_email" && tokens.Gmail) {
-          // Prefer the user's edited preview content over the LLM intent —
-          // edits on the preview screen drive execution.
-          const pv = steps[i].preview && steps[i].preview.type === "email" ? steps[i].preview : null;
-          const sent = await sendGmail(tokens.Gmail, {
-            to: (pv && pv.to) || intent.to || user.email,
-            subject: (pv && pv.subject) || intent.subject || "AURA workflow",
-            body: (pv && pv.body) || intent.body || "",
-          });
-          output = `→ Email sent to ${sent.to} (subject: "${sent.subject}")`;
-          outcomes.push({
-            type: "email",
-            count: 1,
-            title: "Email sent",
-            detail: `Sent "${sent.subject}" to ${sent.to}`,
-            link: "https://mail.google.com/mail/u/0/#sent",
-            linkLabel: "Open in Gmail",
-          });
-        } else if (intent.action_type === "create_record" && tokens.Airtable) {
-          const rec = await airtableCreateRecord(tokens.Airtable, intent.fields || {});
-          output = `→ Record created in Airtable (${rec.tableName})`;
-          outcomes.push({
-            type: "document",
-            count: 1,
-            title: "Record created",
-            detail: `New record in ${rec.tableName}`,
-            link: `https://airtable.com/${rec.baseId}`,
-            linkLabel: "Open in Airtable",
-          });
-        } else if (intent.action_type === "read_data") {
-          output = `→ ${intent.note || "Read data from " + intent.tool}`;
-          outcomes.push({
-            type: "metric",
-            title: `${intent.tool} read`,
-            detail: intent.note || "Data retrieved",
-          });
-        } else {
-          // Tool isn't really connected (no token) — never fake it.
-          status = "needs_connection";
-          output = `→ ${intent.tool || steps[i].tool} is not connected — skipped`;
-          outcomes.push({
-            type: "alert",
-            title: `${intent.tool || steps[i].tool} not connected`,
-            detail: "This step needs a connected tool to run.",
-            attention: true,
-          });
-        }
+        const executed = await executeToolIntent({
+          intent,
+          step: steps[i],
+          tokens,
+          prompt,
+          interpretation,
+          user,
+        });
+        output = `→ ${executed.output}`;
+        outcomes.push(executed.outcome);
       } catch (e) {
-        status = "failed";
-        output = `→ Error: ${e.message}`;
+        const message = e instanceof Error ? e.message : String(e);
+        status = /not connected|does not yet have an executable adapter/i.test(message)
+          ? "needs_connection"
+          : "failed";
+        output = `→ ${status === "needs_connection" ? "Needs attention" : "Error"}: ${message}`;
         outcomes.push({
           type: "alert",
-          title: `${steps[i].tool} step failed`,
-          detail: e.message,
+          title: `${steps[i].tool} step ${status === "needs_connection" ? "needs attention" : "failed"}`,
+          detail: message,
           attention: true,
+          evidence: { provider: intent.tool || steps[i].tool, status },
         });
       }
 
@@ -437,22 +431,27 @@ Be concrete and realistic. These will be REALLY executed against the user's conn
     const realSummary = await compileResults(base44, outcomes, interpretation);
 
     const finalSteps = execSteps.map((s) => ({ ...s }));
+    const finalStatus = execSteps.some((s) => s.status === "failed" || s.status === "needs_connection")
+      ? "failed"
+      : "completed";
+    const verifiedResults = { ...realSummary, outcomes };
     const runUpdate = {
-      status: "completed",
+      status: finalStatus,
       title: realSummary.title,
       summary: realSummary.summary,
       metrics: realSummary.metrics,
-      outcomes: realSummary.outcomes || outcomes,
+      outcomes,
       steps: finalSteps,
-      notes: execSteps.some((s) => s.status === "needs_connection")
-        ? "Some steps needed a connected tool that wasn't available."
+      notes: finalStatus === "failed"
+        ? "The workflow did not complete every approved provider action."
         : "",
     };
     await base44.entities.WorkflowRun.update(runId, runUpdate).catch(() => {});
 
     return Response.json({
+      status: finalStatus,
       steps: finalSteps,
-      results: realSummary,
+      results: verifiedResults,
     });
   } catch (error) {
     return Response.json({ error: error.message }, { status: 500 });

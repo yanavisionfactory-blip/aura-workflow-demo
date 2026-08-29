@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Search, Plus, FileUp, Loader2, Check, Link2, Paperclip, ScanSearch, X } from "lucide-react";
+import { Search, Plus, FileUp, Loader2, Check, Link2, Paperclip, X } from "lucide-react";
 import { CATALOG } from "@/lib/toolCatalog";
 import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
 import { connectTool } from "@/lib/connectService";

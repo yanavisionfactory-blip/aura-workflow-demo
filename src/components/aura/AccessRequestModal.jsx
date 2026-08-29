@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, ArrowRight, Sparkles, CheckCircle2, Loader2 } from "lucide-react";
+import { X, ArrowRight, CheckCircle2, Loader2 } from "lucide-react";
 import { base44 } from "@/api/base44Client";
 
 export default function AccessRequestModal({ open, onClose, workflowPrompt }) {

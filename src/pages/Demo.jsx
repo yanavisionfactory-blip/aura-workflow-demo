@@ -407,28 +407,15 @@ Rules:
     setCurrentStepIdx(0);
     setStartTime(Date.now());
 
-    const mock = pendingMock.current;
-    let template;
-    if (mock) {
-      // liveOutput is held back in `_output` and revealed only when a step completes
-      template = mock.execSteps.map((s) => ({
-        tool: s.tool,
-        action: s.action,
-        duration: s.duration,
-        riskLevel: s.riskLevel,
-        status: "pending",
-        _output: s.liveOutput,
-      }));
-    } else {
-      template = approvedStepsRef.current.map((s) => ({
-        tool: s.tool,
-        action: `${s.action}…`,
-        duration: `${(Math.random() * 1.5 + 0.5).toFixed(1)}s`,
-        riskLevel: s.riskLevel,
-        status: "pending",
-        _output: `→ ${s.output}`,
-      }));
-    }
+    // Examples may supply a pre-built plan, but execution is never mocked.
+    // Every approved plan goes through the same backend provider executor.
+    const template = approvedStepsRef.current.map((s) => ({
+      tool: s.tool,
+      action: s.action || s.iWill || "",
+      riskLevel: s.riskLevel,
+      status: "pending",
+      output: "",
+    }));
     execTemplateRef.current = template;
     setExecSteps(template);
 
@@ -470,11 +457,11 @@ Rules:
       /* ignore */
     }
 
-    if (mock) {
-      runFrom(0);
-    } else {
-      runRealWorkflow(currentRunIdRef.current);
+    if (!currentRunIdRef.current) {
+      finishExecution(null, "AURA could not create a persistent workflow run. No external actions were attempted.", "failed");
+      return;
     }
+    runRealWorkflow(currentRunIdRef.current);
   };
 
   const runRealWorkflow = async (runId) => {
@@ -506,7 +493,7 @@ Rules:
       const data = res.data || {};
       if (data.error) throw new Error(data.error);
       if (data.steps) setExecSteps(data.steps.map((s) => ({ ...s, liveOutput: s.output || "" })));
-      finishExecution(data.results);
+      finishExecution(data.results, null, data.status || "completed");
     } catch (e) {
       stopped = true;
       finishExecution(null, e.message);
@@ -566,13 +553,14 @@ Rules:
     pushT(setTimeout(() => finishExecution(), lastDone + 700));
   };
 
-  const finishExecution = async (resultsFromBackend = null, errorMsg = null) => {
+  const finishExecution = async (resultsFromBackend = null, errorMsg = null, executionStatus = "completed") => {
     const mock = pendingMock.current;
     let res;
-    if (mock) {
-      res = mock.results;
-    } else if (resultsFromBackend) {
+    if (resultsFromBackend) {
       res = resultsFromBackend;
+    } else if (mock && !errorMsg) {
+      // Legacy recovery path only; normal and example executions use the backend.
+      res = mock.results;
     } else if (errorMsg) {
       res = {
         title: "Workflow failed",
@@ -606,7 +594,7 @@ Generate a results summary in plain, human-friendly language (not technical).
     if (currentRunIdRef.current && !resultsFromBackend) {
       try {
         await base44.entities.WorkflowRun.update(currentRunIdRef.current, {
-          status: "completed",
+          status: executionStatus === "failed" || errorMsg ? "failed" : "completed",
           title: workflowName || res.title,
           summary: res.summary,
           metrics: res.metrics,
@@ -621,7 +609,7 @@ Generate a results summary in plain, human-friendly language (not technical).
     if (currentWorkflowIdRef.current) {
       try {
         const wfSet = {
-          last_run_status: "completed",
+          last_run_status: executionStatus === "failed" || errorMsg ? "failed" : "completed",
           last_summary: res.summary,
           last_run_date: new Date().toISOString(),
           steps: approvedStepsRef.current,
