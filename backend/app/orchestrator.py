@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from .agent_runtime import create_plan
+from .agent_runtime import create_plan, critique_step, synthesize_result
 from .db import SessionLocal
 from .models import Approval, AuditEvent, RunStatus, RunStep, StepStatus, ToolConnection, WorkflowRun
 from .config import get_settings
@@ -100,8 +100,53 @@ async def execute_run(run_id: str) -> None:
                         await session.commit()
                 executor = ProviderExecutor(credentials, tool.base_url)
                 result = await executor.execute(step.operation, step.arguments)
+                contract = {
+                    "step_id": step.id,
+                    "agent": step.agent,
+                    "tool_slug": step.tool_slug,
+                    "operation": step.operation,
+                    "arguments": step.arguments,
+                    "expected_output": (run.plan.get("steps") or [])[step.position].get("expected_output", "")
+                    if step.position < len(run.plan.get("steps") or []) else "",
+                    "consequential": step.consequential,
+                }
+                criticism = await critique_step(contract, result)
+                if criticism.action == "retry" and not step.consequential:
+                    await audit(
+                        session,
+                        run.workspace_id,
+                        "step.retry_requested",
+                        {"step_id": step.id, "reasons": criticism.reasons},
+                        run.id,
+                        actor="tool-output-critic",
+                    )
+                    result = await executor.execute(step.operation, step.arguments)
+                    criticism = await critique_step(contract, result)
+                await audit(
+                    session,
+                    run.workspace_id,
+                    "step.criticized",
+                    {"step_id": step.id, "decision": criticism.model_dump(mode="json")},
+                    run.id,
+                    actor="tool-output-critic",
+                )
+                if criticism.action != "accept":
+                    step.status = StepStatus.failed
+                    step.error = f"Runtime critic {criticism.action}: " + "; ".join(
+                        criticism.reasons + criticism.contract_failures + criticism.policy_violations
+                    )
+                    run.status = RunStatus.failed
+                    run.error = step.error
+                    await session.commit()
+                    return
                 step.status = StepStatus.completed
-                step.output = {"provider_result": result, "tool": tool.slug, "operation": step.operation}
+                step.output = {
+                    "step_id": step.id,
+                    "provider_result": result,
+                    "tool": tool.slug,
+                    "operation": step.operation,
+                    "critic": criticism.model_dump(mode="json"),
+                }
                 step.completed_at = datetime.now(timezone.utc)
                 outputs.append(step.output)
                 await audit(session, run.workspace_id, "step.completed", {"step_id": step.id, "evidence": step.output}, run.id)
@@ -115,7 +160,25 @@ async def execute_run(run_id: str) -> None:
                 await session.commit()
                 return
 
+        synthesis = await synthesize_result(run.prompt, outputs)
+        if not synthesis.validation_passed:
+            run.status = RunStatus.failed
+            run.error = "Final-output validation failed: " + "; ".join(synthesis.required_fixes)
+            await audit(
+                session,
+                run.workspace_id,
+                "run.synthesis_rejected",
+                {"required_fixes": synthesis.required_fixes},
+                run.id,
+                actor="tool-output-critic",
+            )
+            await session.commit()
+            return
         run.status = RunStatus.completed
-        run.result = {"completed_steps": len(outputs), "outputs": outputs}
+        run.result = {
+            "completed_steps": len(outputs),
+            "outputs": outputs,
+            "unified_deliverable": synthesis.model_dump(mode="json"),
+        }
         await audit(session, run.workspace_id, "run.completed", run.result, run.id)
         await session.commit()
