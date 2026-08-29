@@ -1,0 +1,51 @@
+name: Python control plane
+
+on:
+  push:
+    branches: [python-control-plane, main]
+    paths:
+      - "backend/**"
+      - "docker-compose.yml"
+      - ".github/workflows/python.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+      - "docker-compose.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Compile
+        run: python -m compileall -q app
+      - name: Test
+        run: pytest -q
+
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install
+        run: npm install
+      - name: Build React client
+        run: npm run build
+        env:
+          VITE_BASE44_APP_ID: 6a8263b40ee6995c4e825a4d
+          VITE_AURA_API_URL: https://api.example.invalid

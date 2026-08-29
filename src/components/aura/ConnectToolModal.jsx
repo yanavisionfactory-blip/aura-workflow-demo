@@ -19,6 +19,8 @@ export default function ConnectToolModal({ tool, onConnect, onClose, connecting 
   const [name, setName] = useState(tool?.name || "");
   const [desc, setDesc] = useState(tool?.desc || "");
   const [apiKey, setApiKey] = useState("");
+  const [connectionKind, setConnectionKind] = useState("openapi");
+  const [baseUrl, setBaseUrl] = useState("");
 
   // Re-sync fields when a new tool is presented (the modal instance persists
   // across triggers, so useState only initializes once).
@@ -28,14 +30,16 @@ export default function ConnectToolModal({ tool, onConnect, onClose, connecting 
     setName(tool.name || "");
     setDesc(tool.desc || "");
     setApiKey("");
+    setConnectionKind("openapi");
+    setBaseUrl("");
   }, [tool]);
 
-  const canConnect = customMode ? name.trim().length > 0 : isApiKey ? apiKey.trim().length > 0 : !!tool?.name;
+  const canConnect = customMode ? name.trim().length > 0 && baseUrl.trim().length > 0 && (connectionKind === "mcp" || apiKey.trim().length > 0) : isApiKey ? apiKey.trim().length > 0 : !!tool?.name;
 
   const handleConnect = () => {
     if (!canConnect) return;
     if (customMode) {
-      onConnect({ name: name.trim(), desc: desc.trim(), custom: true, interface: true });
+      onConnect({ name: name.trim(), desc: desc.trim(), custom: true, connectionKind, baseUrl: baseUrl.trim(), apiKey: apiKey.trim() });
     } else if (isApiKey) {
       onConnect({ ...tool, apiKey: apiKey.trim() });
     } else {
@@ -101,6 +105,12 @@ export default function ConnectToolModal({ tool, onConnect, onClose, connecting 
                   placeholder="What does it do? (optional)"
                   className="w-full bg-card/70 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary/40 placeholder:text-muted-foreground/40"
                 />
+                <select value={connectionKind} onChange={(e) => setConnectionKind(e.target.value)} className="w-full bg-card/70 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary/40">
+                  <option value="openapi">REST / OpenAPI API</option><option value="api_key">API-key service</option><option value="mcp">MCP server</option>
+                </select>
+                <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={connectionKind === "mcp" ? "https://tool.example.com/mcp" : "https://api.example.com"} className="w-full bg-card/70 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary/40 placeholder:text-muted-foreground/40 font-mono" />
+                {connectionKind !== "mcp" && <input value={apiKey} onChange={(e) => setApiKey(e.target.value)} type="password" placeholder="API key or bearer token" className="w-full bg-card/70 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary/40 placeholder:text-muted-foreground/40 font-mono" />}
+                <p className="text-[10px] text-muted-foreground/60">Credentials are encrypted by the Python control plane and never added to agent prompts.</p>
               </div>
             ) : isApiKey ? (
               <div className="px-4 pb-2 space-y-2">
