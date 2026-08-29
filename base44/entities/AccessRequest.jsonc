@@ -1,0 +1,32 @@
+{
+  "name": "AccessRequest",
+  "type": "object",
+  "properties": {
+    "full_name": {
+      "type": "string"
+    },
+    "work_email": {
+      "type": "string"
+    },
+    "company": {
+      "type": "string"
+    },
+    "role": {
+      "type": "string"
+    },
+    "use_case": {
+      "type": "string"
+    },
+    "current_solution": {
+      "type": "string"
+    },
+    "workflow_prompt": {
+      "type": "string",
+      "description": "The workflow they just ran"
+    }
+  },
+  "required": [
+    "full_name",
+    "work_email"
+  ]
+}

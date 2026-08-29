@@ -1,0 +1,76 @@
+{
+  "name": "Creator",
+  "type": "object",
+  "properties": {
+    "tiktok_username": {
+      "type": "string",
+      "description": "Canonical TikTok handle (lowercased, with @) \u2014 the dedup key"
+    },
+    "full_name": {
+      "type": "string"
+    },
+    "tiktok_url": {
+      "type": "string"
+    },
+    "instagram_username": {
+      "type": "string"
+    },
+    "email": {
+      "type": "string",
+      "description": "Creator contact email used for the approver submission"
+    },
+    "followers": {
+      "type": "number"
+    },
+    "video_count": {
+      "type": "number"
+    },
+    "avg_views": {
+      "type": "number",
+      "description": "Average views per video (excluding top & bottom 10%)"
+    },
+    "original_audio_pct": {
+      "type": "number",
+      "description": "Percentage of videos using original audio"
+    },
+    "last_post_date": {
+      "type": "string"
+    },
+    "niche": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "discovered",
+        "approved",
+        "emailed",
+        "rejected",
+        "failed"
+      ],
+      "default": "discovered"
+    },
+    "outreach_draft": {
+      "type": "string",
+      "description": "First-outreach email draft generated in the user's Gmail voice"
+    },
+    "outreach_subject": {
+      "type": "string"
+    },
+    "submission_date": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "criteria_notes": {
+      "type": "string",
+      "description": "Which criteria passed/failed at discovery time"
+    }
+  },
+  "required": [
+    "tiktok_username",
+    "status"
+  ]
+}

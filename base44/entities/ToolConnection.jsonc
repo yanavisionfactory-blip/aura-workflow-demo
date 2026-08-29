@@ -1,0 +1,27 @@
+{
+  "name": "ToolConnection",
+  "type": "object",
+  "properties": {
+    "tool_name": {
+      "type": "string",
+      "description": "The tool that was connected"
+    },
+    "method": {
+      "type": "string",
+      "enum": [
+        "oauth",
+        "mcp",
+        "interface"
+      ],
+      "description": "How AURA connected \u2014 decided by the agent, not the user"
+    },
+    "meta": {
+      "type": "object",
+      "description": "Method-specific details (mcpServerUrl, learned capabilities, connector slug, etc.)"
+    }
+  },
+  "required": [
+    "tool_name",
+    "method"
+  ]
+}

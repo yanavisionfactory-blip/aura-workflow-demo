@@ -1,0 +1,50 @@
+{
+  "name": "Workflow",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "User-given name for this saved workflow"
+    },
+    "prompt": {
+      "type": "string",
+      "description": "The original natural-language request"
+    },
+    "interpretation": {
+      "type": "string",
+      "description": "AURA's confirmed interpretation of the request"
+    },
+    "steps": {
+      "type": "array",
+      "description": "The approved plan steps",
+      "items": {
+        "type": "object"
+      }
+    },
+    "last_run_status": {
+      "type": "string",
+      "enum": [
+        "running",
+        "completed",
+        "failed"
+      ]
+    },
+    "last_run_date": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_summary": {
+      "type": "string",
+      "description": "Summary of the most recent run"
+    },
+    "run_count": {
+      "type": "number",
+      "default": 0,
+      "description": "Total number of times this workflow has run"
+    }
+  },
+  "required": [
+    "name",
+    "prompt"
+  ]
+}

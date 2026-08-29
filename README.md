@@ -1,23 +1,39 @@
-# AURA workflow demo
+**Welcome to your Base44 project** 
 
-A dependency-free, interactive prototype showing AURA's outcome-contract and safe-recovery flow.
+**About**
 
-## Run locally
+View and Edit  your app on [Base44.com](http://Base44.com) 
 
-```bash
-python3 -m http.server 8080 --directory aura-demo
+This project contains everything you need to run your app locally.
+
+**Edit the code in your local development environment**
+
+Any change pushed to the repo will also be reflected in the Base44 Builder.
+
+**Prerequisites:** 
+
+1. Clone the repository using the project's Git URL 
+2. Navigate to the project directory
+3. Install dependencies: `npm install`
+4. Create an `.env.local` file and set the right environment variables
+
+```
+VITE_BASE44_APP_ID=your_app_id
+VITE_BASE44_APP_BASE_URL=your_backend_url
+
+e.g.
+VITE_BASE44_APP_ID=cbef744a8545c389ef439ea6
+VITE_BASE44_APP_BASE_URL=https://my-to-do-list-81bfaad7.base44.app
 ```
 
-Then open `http://localhost:8080`.
+Run the app: `npm run dev`
 
-## Publish with GitHub Pages
+**Publish your changes**
 
-Push the contents of `aura-demo/` to a GitHub repository, then enable **Settings → Pages → Deploy from a branch** and select the branch root.
+Open [Base44.com](http://Base44.com) and click on Publish.
 
-## Demo flow
+**Docs & Support**
 
-1. Approve the outcome contract.
-2. Watch Salesforce and Stripe complete.
-3. A simulated Drive permission failure safely blocks Slack.
-4. Approve the recommended recovery.
-5. Inspect the verified outcome and audit evidence.
+Documentation: [https://docs.base44.com/Integrations/Using-GitHub](https://docs.base44.com/Integrations/Using-GitHub)
+
+Support: [https://app.base44.com/support](https://app.base44.com/support)
