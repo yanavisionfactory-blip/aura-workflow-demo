@@ -18,6 +18,7 @@ import { detectNewConsequential } from "@/lib/editRunDetect";
 import { requestNotifyPermission, notifyWorkflowComplete, notifyWorkflowError } from "@/lib/auraNotify";
 import { hydrateConnections } from "@/lib/connectService";
 import { getAllConnections } from "@/lib/connectionsStore";
+import { approvePythonPlan, createPythonRun, getPythonRun, pythonRuntimeEnabled } from "@/lib/auraApi";
 
 const STEP_DURATION = 2.6;
 
@@ -170,6 +171,8 @@ export default function Demo() {
   const originalPromptRef = useRef("");
   const currentRunIdRef = useRef(null);
   const currentWorkflowIdRef = useRef(null);
+  const pythonRunIdRef = useRef(null);
+  const pythonPlanRef = useRef(null);
 
   const clearTimeouts = () => {
     timeoutRefs.current.forEach(clearTimeout);
@@ -186,6 +189,8 @@ export default function Demo() {
     execTemplateRef.current = [];
     currentRunIdRef.current = null;
     currentWorkflowIdRef.current = null;
+    pythonRunIdRef.current = null;
+    pythonPlanRef.current = null;
     setPhase("input");
     setOriginalPrompt("");
     setInterpretation("");
@@ -246,7 +251,7 @@ Write ONE clear, conversational sentence restating what they want, as you unders
   const handlePickExample = useCallback(
     (i) => {
       const ex = WORKFLOW_EXAMPLES[i];
-      const mock = ex.mock ? { ...ex.mock, plan: { ...ex.mock.plan, workflowName: ex.title } } : null;
+      const mock = pythonRuntimeEnabled ? null : (ex.mock ? { ...ex.mock, plan: { ...ex.mock.plan, workflowName: ex.title } } : null);
       handleSubmit(ex.prompt, [], null, mock);
     },
     [handleSubmit]
@@ -278,6 +283,48 @@ Write ONE clear, conversational sentence restating what they want — but offer 
   const handleConfirm = useCallback(
     (editedInterpretation) => {
       setInterpretation(editedInterpretation);
+      if (pythonRuntimeEnabled) {
+        setPlanLoading(true);
+        setPhase("plan");
+        (async () => {
+          try {
+            const created = await createPythonRun(originalPromptRef.current);
+            pythonRunIdRef.current = created.id;
+            let run;
+            for (let attempt = 0; attempt < 120; attempt += 1) {
+              run = await getPythonRun(created.id);
+              if (run.status === "awaiting_approval" && run.plan?.steps?.length) break;
+              if (run.status === "failed") throw new Error(run.error || "Python orchestrator failed");
+              await new Promise((resolve) => setTimeout(resolve, 1000));
+            }
+            if (!run?.plan?.steps?.length) throw new Error("Python orchestrator did not return a plan in time");
+            pythonPlanRef.current = run.plan;
+            setPlan({
+              workflowName: run.plan.name,
+              interpretation: run.plan.interpretation,
+              estimatedTime: "Runs in the Python control plane",
+              steps: run.plan.steps.map((step) => ({
+                tool: step.tool_slug, title: step.operation, iWill: step.reason, action: step.operation,
+                detail: JSON.stringify(step.arguments, null, 2), reason: step.reason, output: step.expected_output,
+                flow: [{ label: "Uses", value: step.tool_slug }, { label: "Creates", value: step.expected_output }],
+                riskLevel: step.consequential ? "modify" : "read",
+                riskNote: step.consequential ? "This provider action runs only after your approval." : "",
+                preview: step.consequential ? {
+                  type: step.operation === "gmail.send" ? "email" : "list",
+                  to: step.arguments?.to || "", subject: step.arguments?.subject || "", body: step.arguments?.body || "",
+                  title: step.operation,
+                  items: Object.entries(step.arguments || {}).map(([label, value]) => ({ label, detail: JSON.stringify(value) })),
+                } : undefined,
+              })),
+            });
+          } catch (error) {
+            setPlan({ interpretation: editedInterpretation, workflowName: "Workflow unavailable", steps: [] });
+            setResults({ title: "Orchestrator unavailable", summary: error.message, metrics: [], outcomes: [], nextSteps: [] });
+          } finally { setPlanLoading(false); }
+        })();
+        return;
+      }
+
       const mock = pendingMock.current;
       if (mock) {
         setPlan({ ...mock.plan, interpretation: editedInterpretation });
@@ -386,7 +433,8 @@ Rules:
       return;
     }
     if (autoApprove) {
-      startExecution();
+      if (pythonRuntimeEnabled && pythonRunIdRef.current) startPythonExecution();
+      else startExecution();
       return;
     }
     setPhase("preview");
@@ -397,8 +445,58 @@ Rules:
       approvedStepsRef.current = editedSteps;
       setApprovedSteps(editedSteps);
     }
-    startExecution();
+    if (pythonRuntimeEnabled && pythonRunIdRef.current) startPythonExecution(editedSteps);
+    else startExecution();
   }, []);
+
+  const startPythonExecution = async (editedUiSteps = null) => {
+    const runId = pythonRunIdRef.current;
+    if (!runId || !pythonPlanRef.current) return;
+    setPhase("executing");
+    setStartTime(Date.now());
+    const reviewedPlan = {
+      ...pythonPlanRef.current,
+      steps: pythonPlanRef.current.steps.map((step, index) => {
+        const ui = editedUiSteps?.[index];
+        if (!ui?.preview) return step;
+        const patch = ui.preview.type === "email" ? { to: ui.preview.to, subject: ui.preview.subject, body: ui.preview.body } : {};
+        return { ...step, arguments: { ...step.arguments, ...patch } };
+      }),
+    };
+    try {
+      await approvePythonPlan(runId, reviewedPlan.steps);
+      for (let attempt = 0; attempt < 600; attempt += 1) {
+        const run = await getPythonRun(runId);
+        setExecSteps((run.steps || []).map((step) => ({
+          tool: step.tool_slug, action: step.operation, riskLevel: step.consequential ? "modify" : "read",
+          status: step.status,
+          liveOutput: step.output?.provider_result ? `→ Provider confirmed ${step.operation}` : step.error ? `→ ${step.error}` : "",
+          output: step.output,
+        })));
+        const active = (run.steps || []).findIndex((step) => step.status === "running");
+        if (active >= 0) setCurrentStepIdx(active);
+        if (run.status === "completed") {
+          const outputs = run.result?.outputs || [];
+          finishExecution({
+            title: "Workflow completed by Python agents",
+            summary: `${run.result?.completed_steps || outputs.length} provider actions completed with stored evidence.`,
+            metrics: [{ value: String(run.result?.completed_steps || outputs.length), label: "verified actions" }],
+            outcomes: outputs.map((output) => ({
+              type: "document", title: output.operation, detail: `Confirmed by ${output.tool}`,
+              items: [{ label: "Provider evidence", detail: JSON.stringify(output.provider_result).slice(0, 500) }],
+            })),
+            nextSteps: [],
+          }, null, "completed");
+          return;
+        }
+        if (run.status === "failed" || run.status === "cancelled") throw new Error(run.error || `Workflow ${run.status}`);
+        await new Promise((resolve) => setTimeout(resolve, 900));
+      }
+      throw new Error("Python workflow timed out");
+    } catch (error) {
+      finishExecution(null, error.message, "failed");
+    }
+  };
 
   // ---- Execution ----
   const startExecution = async () => {
