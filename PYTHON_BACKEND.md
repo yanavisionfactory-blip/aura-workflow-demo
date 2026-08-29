@@ -42,6 +42,32 @@ The frontend contract is unchanged: it continues storing the workspace response'
 it as `X-Workspace-ID`. The value is now a signed tenant token rather than a raw database UUID.
 Existing browser storage created before this release must be cleared once so the frontend requests a
 new signed workspace context.
+
+## Universal connector protocol
+
+The backend normalizes every external system into a verified capability manifest. The same registry
+accepts OAuth applications, OpenAPI and custom REST services, MCP servers, external agents, plugin
+manifests, webhooks and an optional isolated browser-connector worker. Plans consume declared
+capabilities instead of inventing brand-specific actions.
+
+- `GET /v1/connectors/catalog` reports supported adapter types and whether browser execution is available.
+- `POST /v1/connectors/discover` discovers, normalizes, tests and encrypts a provider connection.
+- Agent and plugin manifests are read from `.well-known/aura-agent.json` and
+  `.well-known/aura-plugin.json` by default.
+- OpenAPI operations become typed, approval-classified capabilities. MCP tools are discovered from the
+  live server. Custom APIs must supply a capability manifest; arbitrary undeclared HTTP operations are
+  never inferred by a model.
+- `POST /v1/connections/{id}/test` re-verifies health and `DELETE /v1/connections/{id}` revokes the
+  local credential and disables the provider.
+- Missing capabilities put a run into `waiting_for_connection`. The requirements are available at
+  `/v1/runs/{id}/connection-requirements`; after a verified provider is selected,
+  `/v1/runs/{id}/resume-after-connection` re-plans from the original objective.
+- External agents receive a scoped capability invocation with delegation disabled. They cannot expand
+  the approved plan or silently call another agent.
+
+Arbitrary website operation requires a separately deployed isolated browser worker configured through
+`BROWSER_CONNECTOR_URL`. Without that worker, the browser adapter refuses connection instead of storing
+passwords or presenting a theatrical success state.
 - Provider credentials are encrypted with Fernet and are never passed into model context.
 - Provider writes pause for approval. Approved payloads may be edited before execution.
 - Idempotency keys prevent an already-completed provider action from being treated as a new step.

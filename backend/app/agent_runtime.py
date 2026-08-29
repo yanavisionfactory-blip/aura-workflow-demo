@@ -13,6 +13,12 @@ from .schemas import (
 )
 
 
+class ConnectionRequiredError(RuntimeError):
+    def __init__(self, missing_capabilities: list[str]):
+        self.missing_capabilities = missing_capabilities
+        super().__init__("Missing capability providers: " + ", ".join(missing_capabilities))
+
+
 def _agent(name: str, instructions: str, output_type):
     return Agent(
         name=name,
@@ -123,6 +129,8 @@ async def create_plan(prompt: str, tool_inventory: list[dict]) -> WorkflowPlan:
             {"objective_spec": objective.model_dump(), "executable_tool_inventory": tool_inventory},
         )
     )
+    if toolset.missing_capabilities:
+        raise ConnectionRequiredError(toolset.missing_capabilities)
     plan_payload = {
         "objective_spec": objective.model_dump(),
         "toolset_proposal": toolset.model_dump(),

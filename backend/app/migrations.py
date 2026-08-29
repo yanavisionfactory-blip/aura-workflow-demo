@@ -7,6 +7,8 @@ DIRECT_TENANT_TABLES = (
     "tenant_memberships",
     "policy_configs",
     "tool_connections",
+    "capability_manifests",
+    "connection_requirements",
     "tool_trust_states",
     "workflows",
     "workflow_runs",
@@ -34,6 +36,10 @@ async def migrate_database() -> None:
             for value in ("waiting_for_action", "recovering", "blocked"):
                 await connection.execute(
                     text(f"ALTER TYPE runstatus ADD VALUE IF NOT EXISTS '{value}'")
+                )
+            for value in ("agent", "plugin", "webhook", "browser"):
+                await connection.execute(
+                    text(f"ALTER TYPE toolkind ADD VALUE IF NOT EXISTS '{value}'")
                 )
 
     if engine.dialect.name != "postgresql":

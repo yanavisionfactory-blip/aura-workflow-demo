@@ -6,11 +6,24 @@ from pydantic import BaseModel, Field, HttpUrl
 class ToolCreate(BaseModel):
     slug: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,119}$")
     display_name: str
-    kind: Literal["api_key", "openapi", "mcp"]
+    kind: Literal["api_key", "openapi", "mcp", "agent", "plugin", "webhook", "browser"]
     base_url: HttpUrl | None = None
     credentials: dict[str, str] = Field(default_factory=dict)
     config: dict[str, Any] = Field(default_factory=dict)
     allowed_operations: list[str] = Field(default_factory=list)
+
+
+class ConnectionDiscover(BaseModel):
+    slug: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,119}$")
+    display_name: str
+    kind: Literal["api_key", "openapi", "mcp", "agent", "plugin", "webhook", "browser"]
+    base_url: HttpUrl
+    credentials: dict[str, str] = Field(default_factory=dict)
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class ConnectionResume(BaseModel):
+    connection_id: str | None = None
 
 
 class ToolView(BaseModel):

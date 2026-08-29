@@ -2,6 +2,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
@@ -16,6 +17,8 @@ from .models import (
     Approval,
     ApprovalSnapshot,
     AuditEvent,
+    CapabilityManifest,
+    ConnectionRequirement,
     PlanVersion,
     PolicyConfig,
     RunStatus,
@@ -38,6 +41,8 @@ from .policy import (
 from .providers import PROVIDERS, exchange_oauth_code, idempotency_key, oauth_authorization_url
 from .schemas import (
     ApprovalDecision,
+    ConnectionDiscover,
+    ConnectionResume,
     PlanApproval,
     PolicyUpdate,
     ResumeDecision,
@@ -52,6 +57,12 @@ from .security import (
     create_tenant_token,
     decode_oauth_state,
     decode_tenant_token,
+)
+from .universal_connectors import (
+    ConnectorError,
+    allowed_operations as discovered_operations,
+    discover_provider,
+    verify_provider,
 )
 from .worker import execute_run_task, plan_run_task
 
@@ -142,15 +153,169 @@ async def add_tool(
         raise HTTPException(422, "MCP tools require a Streamable HTTP server URL")
     if payload.kind in {"api_key", "openapi"} and not payload.credentials:
         raise HTTPException(422, "Credentials are required")
+    manifest = None
+    verification = None
+    if payload.base_url:
+        discovery_config = dict(payload.config)
+        if payload.kind == "api_key" and not discovery_config.get("manifest"):
+            discovery_config["manifest"] = {
+                "name": payload.display_name,
+                "capabilities": [
+                    {
+                        "name": operation,
+                        "permission_scope": operation_scope(operation),
+                        "requires_approval": operation_scope(operation) != "read",
+                    }
+                    for operation in (payload.allowed_operations or ["http.request"])
+                ],
+            }
+        try:
+            manifest = await discover_provider(
+                payload.kind,
+                str(payload.base_url),
+                payload.credentials,
+                discovery_config,
+            )
+            verification = await verify_provider(manifest, payload.credentials)
+        except (ConnectorError, ValueError, httpx.HTTPError) as exc:
+            raise HTTPException(422, f"Connection verification failed: {exc}") from exc
     tool = ToolConnection(
         workspace_id=wid, slug=payload.slug, display_name=payload.display_name,
         kind=ToolKind(payload.kind), base_url=str(payload.base_url) if payload.base_url else None,
         encrypted_credentials=CredentialVault().encrypt(payload.credentials), config=payload.config,
-        allowed_operations=payload.allowed_operations,
+        allowed_operations=discovered_operations(manifest) if manifest else payload.allowed_operations,
     )
     session.add(tool)
+    await session.flush()
+    if manifest:
+        session.add(CapabilityManifest(
+            workspace_id=wid,
+            tool_id=tool.id,
+            provider_type=payload.kind,
+            status="verified" if verification and verification["ok"] else "degraded",
+            manifest=manifest,
+            verification=verification or {},
+            verified_at=datetime.now(timezone.utc) if verification and verification["ok"] else None,
+        ))
     await session.commit()
-    return {"id": tool.id, "slug": tool.slug, "connected": True}
+    return {"id": tool.id, "slug": tool.slug, "connected": True, "capabilities": tool.allowed_operations}
+
+
+@app.get("/v1/connectors/catalog")
+async def connector_catalog() -> dict:
+    return {
+        "schema_version": "1.0",
+        "adapter_types": [
+            "oauth", "openapi", "api_key", "mcp", "agent", "plugin", "webhook", "browser"
+        ],
+        "oauth_providers": sorted(PROVIDERS),
+        "browser_connector_available": bool(settings.browser_connector_url),
+    }
+
+
+@app.post("/v1/connectors/discover", status_code=201)
+async def discover_connector(
+    payload: ConnectionDiscover,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    try:
+        manifest = await discover_provider(
+            payload.kind,
+            str(payload.base_url),
+            payload.credentials,
+            payload.config,
+        )
+        verification = await verify_provider(manifest, payload.credentials)
+    except (ConnectorError, ValueError, httpx.HTTPError) as exc:
+        raise HTTPException(422, f"Connector discovery failed: {exc}") from exc
+    if not verification["ok"]:
+        raise HTTPException(422, {"message": "Connector verification failed", **verification})
+    existing = await session.scalar(
+        select(ToolConnection).where(
+            ToolConnection.workspace_id == context.workspace_id,
+            ToolConnection.slug == payload.slug,
+        )
+    )
+    if existing:
+        raise HTTPException(409, "A connection with this slug already exists")
+    tool = ToolConnection(
+        workspace_id=context.workspace_id,
+        slug=payload.slug,
+        display_name=payload.display_name,
+        kind=ToolKind(payload.kind),
+        base_url=str(payload.base_url),
+        encrypted_credentials=CredentialVault().encrypt(payload.credentials),
+        config=payload.config,
+        allowed_operations=discovered_operations(manifest),
+        enabled=True,
+    )
+    session.add(tool)
+    await session.flush()
+    record = CapabilityManifest(
+        workspace_id=context.workspace_id,
+        tool_id=tool.id,
+        provider_type=payload.kind,
+        status="verified",
+        manifest=manifest,
+        verification=verification,
+        verified_at=datetime.now(timezone.utc),
+    )
+    session.add(record)
+    session.add(AuditEvent(
+        workspace_id=context.workspace_id,
+        actor=context.subject,
+        event_type="connector.verified",
+        payload={"tool_id": tool.id, "slug": tool.slug, "kind": payload.kind, "capabilities": tool.allowed_operations},
+    ))
+    await session.commit()
+    return {
+        "id": tool.id,
+        "slug": tool.slug,
+        "connected": True,
+        "status": record.status,
+        "capabilities": manifest["capabilities"],
+        "verification": verification,
+    }
+
+
+@app.post("/v1/connections/{connection_id}/test")
+async def test_connection(
+    connection_id: str,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    tool = await session.get(ToolConnection, connection_id)
+    if not tool or tool.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Connection not found")
+    manifest = await session.scalar(select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id))
+    if not manifest:
+        raise HTTPException(409, "Connection has no discovered capability manifest")
+    result = await verify_provider(manifest.manifest, CredentialVault().decrypt(tool.encrypted_credentials))
+    manifest.verification = result
+    manifest.status = "verified" if result["ok"] else "degraded"
+    manifest.verified_at = datetime.now(timezone.utc)
+    await session.commit()
+    return {"id": tool.id, "status": manifest.status, "verification": result}
+
+
+@app.delete("/v1/connections/{connection_id}")
+async def disconnect_connection(
+    connection_id: str,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    tool = await session.get(ToolConnection, connection_id)
+    if not tool or tool.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Connection not found")
+    tool.enabled = False
+    tool.encrypted_credentials = None
+    manifest = await session.scalar(select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id))
+    if manifest:
+        manifest.status = "revoked"
+    session.add(AuditEvent(workspace_id=context.workspace_id, actor=context.subject, event_type="connector.revoked", payload={"tool_id": tool.id, "slug": tool.slug}))
+    await session.commit()
+    return {"id": tool.id, "status": "revoked"}
 
 
 @app.get("/v1/tools/{tool_slug}/trust")
@@ -270,7 +435,36 @@ async def oauth_callback(provider: str, code: str, state: str, session: AsyncSes
         tool.enabled = True
         tool.allowed_operations = allowed
     else:
-        session.add(ToolConnection(workspace_id=wid, slug=provider, display_name=definition.display_name, kind=ToolKind.oauth, encrypted_credentials=CredentialVault().encrypt(credentials), allowed_operations=allowed))
+        tool = ToolConnection(workspace_id=wid, slug=provider, display_name=definition.display_name, kind=ToolKind.oauth, encrypted_credentials=CredentialVault().encrypt(credentials), allowed_operations=allowed)
+        session.add(tool)
+        await session.flush()
+    capability_record = await session.scalar(
+        select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id)
+    )
+    oauth_manifest = {
+        "schema_version": "1.0",
+        "provider_type": "oauth",
+        "name": definition.display_name,
+        "base_url": "provider-managed",
+        "identity": {"provider": provider},
+        "capabilities": [
+            {
+                "name": operation,
+                "permission_scope": operation_scope(operation),
+                "requires_approval": operation_scope(operation) != "read",
+                "input_schema": {"type": "object"},
+                "output_schema": {"type": "object"},
+                "transport": {"builtin": operation},
+            }
+            for operation in allowed
+        ],
+    }
+    if capability_record:
+        capability_record.status = "verified"
+        capability_record.manifest = oauth_manifest
+        capability_record.verified_at = datetime.now(timezone.utc)
+    else:
+        session.add(CapabilityManifest(workspace_id=wid, tool_id=tool.id, provider_type="oauth", status="verified", manifest=oauth_manifest, verification={"ok": True, "source": "oauth_callback"}, verified_at=datetime.now(timezone.utc)))
     await session.commit()
     return RedirectResponse(f"{settings.frontend_url}?tool_connected={provider}")
 
@@ -373,6 +567,99 @@ async def get_run_governance(
             for event in events
         ],
     }
+
+
+@app.get("/v1/runs/{run_id}/connection-requirements")
+async def get_connection_requirements(
+    run_id: str,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    run = await session.get(WorkflowRun, run_id)
+    if not run or run.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Run not found")
+    requirements = (
+        await session.scalars(
+            select(ConnectionRequirement).where(ConnectionRequirement.run_id == run.id)
+        )
+    ).all()
+    return {
+        "run_id": run.id,
+        "status": run.status.value,
+        "requirements": [
+            {
+                "id": item.id,
+                "capability": item.capability,
+                "provider_hint": item.provider_hint,
+                "reason": item.reason,
+                "required_permissions": item.required_permissions,
+                "status": item.status,
+                "satisfied_by_tool_id": item.satisfied_by_tool_id,
+            }
+            for item in requirements
+        ],
+    }
+
+
+@app.post("/v1/runs/{run_id}/resume-after-connection")
+async def resume_after_connection(
+    run_id: str,
+    payload: ConnectionResume,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    run = await session.get(WorkflowRun, run_id)
+    if not run or run.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Run not found")
+    if run.status != RunStatus.waiting_for_action:
+        raise HTTPException(409, "Run is not waiting for a connection")
+    tool = None
+    if payload.connection_id:
+        tool = await session.get(ToolConnection, payload.connection_id)
+        if not tool or tool.workspace_id != context.workspace_id or not tool.enabled:
+            raise HTTPException(404, "Verified connection not found")
+        manifest = await session.scalar(
+            select(CapabilityManifest).where(
+                CapabilityManifest.tool_id == tool.id,
+                CapabilityManifest.status == "verified",
+            )
+        )
+        if not manifest:
+            raise HTTPException(409, "Connection has not passed capability verification")
+    requirements = (
+        await session.scalars(
+            select(ConnectionRequirement).where(
+                ConnectionRequirement.run_id == run.id,
+                ConnectionRequirement.status == "pending",
+            )
+        )
+    ).all()
+    if not requirements:
+        raise HTTPException(409, "Run has no pending connection requirement")
+    if tool:
+        # Re-planning is the authoritative capability check. Mark the user's selected
+        # provider as the candidate; the router may issue a new requirement if its
+        # verified manifest still cannot satisfy the objective.
+        for requirement in requirements:
+            requirement.status = "satisfied"
+            requirement.satisfied_by_tool_id = tool.id
+            requirement.satisfied_at = datetime.now(timezone.utc)
+    remaining = [item for item in requirements if item.status == "pending"]
+    if remaining:
+        return {"id": run.id, "status": run.status.value, "remaining": len(remaining)}
+    run.status = RunStatus.queued
+    run.error = None
+    run.result = {}
+    session.add(AuditEvent(
+        workspace_id=context.workspace_id,
+        run_id=run.id,
+        actor=context.subject,
+        event_type="run.connections_satisfied",
+        payload={"connection_id": tool.id if tool else None},
+    ))
+    await session.commit()
+    plan_run_task.delay(run.id, context.workspace_id)
+    return {"id": run.id, "status": run.status.value}
 
 
 @app.post("/v1/runs/{run_id}/approve-plan")

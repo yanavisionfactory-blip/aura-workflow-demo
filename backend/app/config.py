@@ -24,9 +24,9 @@ class Settings(BaseSettings):
     airtable_client_secret: str = ""
     slack_client_id: str = ""
     slack_client_secret: str = ""
+    browser_connector_url: str = ""
 
 
 @lru_cache
 def get_settings() -> Settings:
     return Settings()  # type: ignore[call-arg]
-

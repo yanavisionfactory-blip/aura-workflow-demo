@@ -17,6 +17,10 @@ class ToolKind(str, enum.Enum):
     api_key = "api_key"
     openapi = "openapi"
     mcp = "mcp"
+    agent = "agent"
+    plugin = "plugin"
+    webhook = "webhook"
+    browser = "browser"
 
 
 class RunStatus(str, enum.Enum):
@@ -100,6 +104,35 @@ class ToolTrustState(Base):
     incident_active: Mapped[bool] = mapped_column(Boolean, default=False)
     last_latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class CapabilityManifest(Base):
+    __tablename__ = "capability_manifests"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    tool_id: Mapped[str] = mapped_column(ForeignKey("tool_connections.id", ondelete="CASCADE"), unique=True, index=True)
+    provider_type: Mapped[str] = mapped_column(String(40))
+    status: Mapped[str] = mapped_column(String(40), default="pending_verification")
+    manifest: Mapped[dict] = mapped_column(JSON, default=dict)
+    verification: Mapped[dict] = mapped_column(JSON, default=dict)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ConnectionRequirement(Base):
+    __tablename__ = "connection_requirements"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("workflow_runs.id", ondelete="CASCADE"), index=True)
+    capability: Mapped[str] = mapped_column(String(200))
+    provider_hint: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    reason: Mapped[str] = mapped_column(Text)
+    required_permissions: Mapped[list] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(40), default="pending")
+    satisfied_by_tool_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    satisfied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Workflow(Base):

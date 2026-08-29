@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from .agent_runtime import create_plan, critique_step, synthesize_result
+from .agent_runtime import ConnectionRequiredError, create_plan, critique_step, synthesize_result
 from .config import get_settings
 from .db import SessionLocal, set_tenant_context
 from .models import (
@@ -12,6 +12,8 @@ from .models import (
     ApprovalSnapshot,
     Artifact,
     AuditEvent,
+    CapabilityManifest,
+    ConnectionRequirement,
     PlanVersion,
     RunStatus,
     RunStep,
@@ -127,6 +129,33 @@ async def plan_run(run_id: str, workspace_id: str) -> None:
                     "plan_hash": plan_version.plan_hash,
                 },
                 run.id,
+            )
+            await session.commit()
+        except ConnectionRequiredError as exc:
+            for capability in exc.missing_capabilities:
+                session.add(
+                    ConnectionRequirement(
+                        workspace_id=workspace_id,
+                        run_id=run.id,
+                        capability=capability,
+                        provider_hint=None,
+                        reason=f"The approved objective requires {capability}",
+                        required_permissions=[],
+                    )
+                )
+            run.status = RunStatus.waiting_for_action
+            run.error = "One or more capability providers must be connected"
+            run.result = {
+                "status": "waiting_for_connection",
+                "missing_capabilities": exc.missing_capabilities,
+            }
+            await audit(
+                session,
+                workspace_id,
+                "run.connection_required",
+                {"missing_capabilities": exc.missing_capabilities},
+                run.id,
+                actor="tool-router",
             )
             await session.commit()
         except Exception as exc:
@@ -416,6 +445,16 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                             )
                             if changed:
                                 active_tool.encrypted_credentials = vault.encrypt(credentials)
+                        manifest_record = None
+                        if active_tool.kind.value != "oauth":
+                            manifest_record = await session.scalar(
+                                select(CapabilityManifest).where(
+                                    CapabilityManifest.tool_id == active_tool.id,
+                                    CapabilityManifest.status == "verified",
+                                )
+                            )
+                            if not manifest_record:
+                                raise RuntimeError("Capability provider is not verified")
                         executor = ProviderExecutor(
                             credentials,
                             active_tool.base_url,
@@ -426,6 +465,8 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                                     else "step_timeout_seconds"
                                 ]
                             ),
+                            provider_kind=active_tool.kind.value,
+                            capability_manifest=manifest_record.manifest if manifest_record else {},
                         )
                         result = await asyncio.wait_for(
                             executor.execute(operation, arguments),
