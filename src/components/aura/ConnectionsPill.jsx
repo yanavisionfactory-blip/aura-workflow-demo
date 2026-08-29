@@ -63,7 +63,7 @@ export default function ConnectionsPill() {
     if (!pendingConnect) return;
     const name = toolObj?.name || pendingConnect.name;
     setPendingConnect(null);
-    connect(name, { apiKey: toolObj?.apiKey });
+    connect(name, { apiKey: toolObj?.apiKey, baseUrl: toolObj?.baseUrl, connectionKind: toolObj?.connectionKind, credentials: toolObj?.apiKey ? { api_key: toolObj.apiKey } : {}, allowedOperations: toolObj?.connectionKind === "mcp" ? ["mcp.call"] : ["http.request"] });
   };
 
   const q = query.trim();
