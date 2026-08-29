@@ -8,8 +8,8 @@ import AuraInterfaceConnect from "./AuraInterfaceConnect";
 import ConnectToolModal from "./ConnectToolModal";
 import { CATALOG } from "@/lib/toolCatalog";
 import { CONNECTIONS, INTERFACE_TOOLS } from "@/lib/demoData";
-import { getAllConnections, setConnection, subscribeConnections } from "@/lib/connectionsStore";
-import { connectTool, recordInterfaceConnection } from "@/lib/connectService";
+import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
+import { connectTool, hasStandardOAuth, hydrateConnections, recordInterfaceConnection } from "@/lib/connectService";
 
 // Case-insensitive lookup so LLM tool-name variations ("meta ads", "Jira Software")
 // still resolve to the canonical name in the registry — keeps connection detection
@@ -71,27 +71,29 @@ export default function PlanView({ plan, onApprove, approveLabel = "Start", user
   const [connectingTool, setConnectingTool] = useState(null);
   const [pendingConnect, setPendingConnect] = useState(null);
   const [authRequired, setAuthRequired] = useState({});
-  const isInterface = (name) => !!INTERFACE_TOOLS[name];
+  const [connectionError, setConnectionError] = useState("");
   const requestConnect = (name) => {
     const tool = CATALOG.find((t) => t.name === name) || { name, interface: !!INTERFACE_TOOLS[name], desc: "" };
-    setPendingConnect(tool);
+    setPendingConnect(hasStandardOAuth(name) ? tool : { ...tool, custom: true });
   };
   const confirmConnect = async (toolObj) => {
     if (!pendingConnect) return;
     const name = toolObj?.name || pendingConnect.name;
     setPendingConnect(null);
-    handleConnect(name, { apiKey: toolObj?.apiKey });
+    handleConnect(name, { apiKey: toolObj?.apiKey, baseUrl: toolObj?.baseUrl, connectionKind: toolObj?.connectionKind, credentials: toolObj?.credentials });
   };
   const handleConnect = async (name, opts = {}) => {
     setConnectingTool(name);
+    setConnectionError("");
     setAuthRequired((prev) => ({ ...prev, [name]: false }));
     try {
       const res = await connectTool(name, opts);
       if (res.interfaceTool) setInterfaceTool(res.interfaceTool);
       if (res.needsAuthorization) setAuthRequired((prev) => ({ ...prev, [name]: true }));
-    } catch {
-      if (isInterface(name)) setInterfaceTool(name);
-      else setConnection(name);
+      if (res.needsConfiguration) requestConnect(name);
+      if (res.connected) await hydrateConnections();
+    } catch (e) {
+      setConnectionError(e.message || `Could not connect ${name}.`);
     } finally {
       setConnectingTool(null);
     }
@@ -222,14 +224,20 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         onConnect={confirmConnect}
         onClose={() => setPendingConnect(null)}
       />
+      {connectionError && <p className="mb-3 text-xs text-red-400 rounded-lg border border-red-400/20 bg-red-400/5 p-2">{connectionError}</p>}
 
       <AuraInterfaceConnect
         open={!!interfaceTool}
         toolName={interfaceTool}
         onClose={() => setInterfaceTool(null)}
-        onConnect={(name) => {
-          recordInterfaceConnection(name);
-          setInterfaceTool(null);
+        onConnect={async (name, meta) => {
+          try {
+            await recordInterfaceConnection(name, meta);
+            await hydrateConnections();
+            setInterfaceTool(null);
+          } catch (e) {
+            setConnectionError(e.message || "This web application could not be connected.");
+          }
         }}
       />
 

@@ -318,7 +318,7 @@ export default function AuraInterfaceConnect({ open, toolName, onClose, onConnec
 
                     <div className="mt-auto">
                       <button
-                        onClick={() => onConnect(analysis.toolName || toolName)}
+                        onClick={() => onConnect(analysis.toolName || toolName, { baseUrl: url, analysis })}
                         className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-gradient-to-r from-primary to-accent text-white text-sm font-semibold shadow-lg shadow-primary/20 hover:opacity-95 transition-opacity"
                       >
                         <ShieldCheck className="w-4 h-4" />

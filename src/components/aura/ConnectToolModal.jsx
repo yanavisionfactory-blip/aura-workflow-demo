@@ -21,6 +21,7 @@ export default function ConnectToolModal({ tool, onConnect, onClose, connecting 
   const [apiKey, setApiKey] = useState("");
   const [connectionKind, setConnectionKind] = useState("openapi");
   const [baseUrl, setBaseUrl] = useState("");
+  const [credentialHeader, setCredentialHeader] = useState("Authorization");
 
   // Re-sync fields when a new tool is presented (the modal instance persists
   // across triggers, so useState only initializes once).
@@ -32,14 +33,25 @@ export default function ConnectToolModal({ tool, onConnect, onClose, connecting 
     setApiKey("");
     setConnectionKind("openapi");
     setBaseUrl("");
+    setCredentialHeader("Authorization");
   }, [tool]);
 
-  const canConnect = customMode ? name.trim().length > 0 && baseUrl.trim().length > 0 && (connectionKind === "mcp" || apiKey.trim().length > 0) : isApiKey ? apiKey.trim().length > 0 : !!tool?.name;
+  const canConnect = customMode
+    ? name.trim().length > 0 && /^https:\/\//i.test(baseUrl.trim()) && (connectionKind !== "api_key" || apiKey.trim().length > 0)
+    : isApiKey ? apiKey.trim().length > 0 : !!tool?.name;
 
   const handleConnect = () => {
     if (!canConnect) return;
     if (customMode) {
-      onConnect({ name: name.trim(), desc: desc.trim(), custom: true, connectionKind, baseUrl: baseUrl.trim(), apiKey: apiKey.trim() });
+      onConnect({
+        name: name.trim(),
+        desc: desc.trim(),
+        custom: true,
+        connectionKind,
+        baseUrl: baseUrl.trim(),
+        apiKey: apiKey.trim(),
+        credentials: apiKey.trim() ? { api_key: apiKey.trim(), header: credentialHeader.trim() || "Authorization", prefix: credentialHeader === "Authorization" ? "Bearer" : "" } : {},
+      });
     } else if (isApiKey) {
       onConnect({ ...tool, apiKey: apiKey.trim() });
     } else {
@@ -90,7 +102,7 @@ export default function ConnectToolModal({ tool, onConnect, onClose, connecting 
             {customMode ? (
               <div className="px-4 pb-2 space-y-2">
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  Add a tool you use at work that isn't in AURA's common list. AURA will learn its interface to connect it.
+                  Connect any API, MCP server, agent, plugin, webhook, or web application. AURA verifies the endpoint before enabling it.
                 </p>
                 <input
                   value={name}
@@ -106,11 +118,22 @@ export default function ConnectToolModal({ tool, onConnect, onClose, connecting 
                   className="w-full bg-card/70 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary/40 placeholder:text-muted-foreground/40"
                 />
                 <select value={connectionKind} onChange={(e) => setConnectionKind(e.target.value)} className="w-full bg-card/70 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary/40">
-                  <option value="openapi">REST / OpenAPI API</option><option value="api_key">API-key service</option><option value="mcp">MCP server</option>
+                  <option value="openapi">REST / OpenAPI API</option>
+                  <option value="api_key">API-key service</option>
+                  <option value="mcp">MCP server</option>
+                  <option value="agent">External agent</option>
+                  <option value="plugin">Plugin manifest</option>
+                  <option value="webhook">Webhook</option>
+                  <option value="browser">Web app / browser connector</option>
                 </select>
                 <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={connectionKind === "mcp" ? "https://tool.example.com/mcp" : "https://api.example.com"} className="w-full bg-card/70 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary/40 placeholder:text-muted-foreground/40 font-mono" />
-                {connectionKind !== "mcp" && <input value={apiKey} onChange={(e) => setApiKey(e.target.value)} type="password" placeholder="API key or bearer token" className="w-full bg-card/70 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary/40 placeholder:text-muted-foreground/40 font-mono" />}
-                <p className="text-[10px] text-muted-foreground/60">Credentials are encrypted by the Python control plane and never added to agent prompts.</p>
+                {!["mcp", "webhook", "browser"].includes(connectionKind) && (
+                  <>
+                    <input value={apiKey} onChange={(e) => setApiKey(e.target.value)} type="password" placeholder={connectionKind === "api_key" ? "API key (required)" : "API key or bearer token (optional)"} className="w-full bg-card/70 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary/40 placeholder:text-muted-foreground/40 font-mono" />
+                    {apiKey && <input value={credentialHeader} onChange={(e) => setCredentialHeader(e.target.value)} placeholder="Header name" className="w-full bg-card/70 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary/40 placeholder:text-muted-foreground/40 font-mono" />}
+                  </>
+                )}
+                <p className="text-[10px] text-muted-foreground/60">AURA discovers capabilities, tests the endpoint, and encrypts credentials. The connection is shown only after verification succeeds.</p>
               </div>
             ) : isApiKey ? (
               <div className="px-4 pb-2 space-y-2">

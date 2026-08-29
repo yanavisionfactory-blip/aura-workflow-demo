@@ -1,10 +1,9 @@
 import { useState, useMemo, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Link2, Plus, Search, X, ArrowLeft, Check, ScanSearch } from "lucide-react";
+import { Link2, Plus, Search, X, ArrowLeft, Check, ScanSearch, Trash2, Loader2 } from "lucide-react";
 
-import { INTERFACE_TOOLS } from "@/lib/demoData";
-import { getAllConnections, setConnection, subscribeConnections } from "@/lib/connectionsStore";
-import { connectTool, recordInterfaceConnection } from "@/lib/connectService";
+import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
+import { connectTool, disconnectTool, hasStandardOAuth, hydrateConnections, recordInterfaceConnection, testToolConnection } from "@/lib/connectService";
 import { CATALOG } from "@/lib/toolCatalog";
 import AuraInterfaceConnect from "./AuraInterfaceConnect";
 import ConnectToolModal from "./ConnectToolModal";
@@ -22,6 +21,12 @@ export default function ConnectionsPill() {
   const [query, setQuery] = useState("");
   const [interfaceTool, setInterfaceTool] = useState(null);
   const [pendingConnect, setPendingConnect] = useState(null);
+  const [error, setError] = useState("");
+  const [connectionAction, setConnectionAction] = useState("");
+
+  useEffect(() => {
+    hydrateConnections().catch((e) => setError(e.message));
+  }, []);
 
   const connectedTools = useMemo(() => {
     const catalogConnected = CATALOG.filter((t) => connected[t.name] && !isAura(t.name));
@@ -47,13 +52,14 @@ export default function ConnectionsPill() {
   const [connecting, setConnecting] = useState(null);
   const connect = async (name, opts = {}) => {
     setConnecting(name);
+    setError("");
     try {
       const res = await connectTool(name, opts);
       if (res.interfaceTool) setInterfaceTool(res.interfaceTool);
-    } catch {
-      // Fallback to the local interface classification if the backend is unavailable.
-      if (INTERFACE_TOOLS[name]) setInterfaceTool(name);
-      else setConnection(name);
+      if (res.needsConfiguration) setPendingConnect({ name, custom: true, desc: "" });
+      if (res.connected) await hydrateConnections();
+    } catch (e) {
+      setError(e.message || `Could not connect ${name}.`);
     } finally {
       setConnecting(null);
     }
@@ -62,8 +68,21 @@ export default function ConnectionsPill() {
   const confirmConnect = async (toolObj) => {
     if (!pendingConnect) return;
     const name = toolObj?.name || pendingConnect.name;
+    await connect(name, { apiKey: toolObj?.apiKey, baseUrl: toolObj?.baseUrl, connectionKind: toolObj?.connectionKind, credentials: toolObj?.credentials, allowedOperations: toolObj?.connectionKind === "mcp" ? ["mcp.call"] : ["http.request"] });
     setPendingConnect(null);
-    connect(name, { apiKey: toolObj?.apiKey, baseUrl: toolObj?.baseUrl, connectionKind: toolObj?.connectionKind, credentials: toolObj?.apiKey ? { api_key: toolObj.apiKey } : {}, allowedOperations: toolObj?.connectionKind === "mcp" ? ["mcp.call"] : ["http.request"] });
+  };
+
+  const runConnectionAction = async (name, action) => {
+    setConnectionAction(name);
+    setError("");
+    try {
+      if (action === "disconnect") await disconnectTool(name);
+      else await testToolConnection(name);
+    } catch (e) {
+      setError(e.message || `Could not ${action} ${name}.`);
+    } finally {
+      setConnectionAction("");
+    }
   };
 
   const q = query.trim();
@@ -124,6 +143,7 @@ export default function ConnectionsPill() {
 
               <div className="px-5 py-3">
                 <p className="text-xs text-muted-foreground">Give AURA access to the tools you want it to work with.</p>
+                {error && <p className="mt-2 text-xs text-red-400 rounded-lg border border-red-400/20 bg-red-400/5 p-2">{error}</p>}
               </div>
 
               {/* Connected list */}
@@ -139,9 +159,14 @@ export default function ConnectionsPill() {
                         {t.interface ? "Connected through AURA Interface" : t.desc}
                       </p>
                     </div>
-                    <div className="flex items-center gap-1.5 text-emerald-400">
+                    <button onClick={() => runConnectionAction(t.name, "test")} disabled={connectionAction === t.name} className="text-[10px] text-muted-foreground hover:text-foreground px-1.5 py-1">
+                      Test
+                    </button>
+                    <button onClick={() => runConnectionAction(t.name, "disconnect")} disabled={connectionAction === t.name} title="Revoke access" className="p-1.5 text-muted-foreground hover:text-red-400">
+                      {connectionAction === t.name ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                    </button>
+                    <div className="flex items-center gap-1 text-emerald-400">
                       <Check className="w-3.5 h-3.5" />
-                      <span className="text-xs">Connected</span>
                     </div>
                   </div>
                 ))}
@@ -234,7 +259,7 @@ export default function ConnectionsPill() {
                       <p className="text-xs text-muted-foreground truncate">{t.desc}</p>
                     </div>
                     <button
-                      onClick={() => (t.apiKey ? setPendingConnect(t) : connect(t.name))}
+                      onClick={() => (t.apiKey || !hasStandardOAuth(t.name) ? setPendingConnect({ ...t, custom: true }) : connect(t.name))}
                       disabled={connecting === t.name}
                       className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-primary hover:bg-primary/10 transition-colors text-xs font-medium disabled:opacity-50"
                     >
@@ -275,9 +300,15 @@ export default function ConnectionsPill() {
         open={!!interfaceTool}
         toolName={interfaceTool}
         onClose={() => setInterfaceTool(null)}
-        onConnect={(name) => {
-          recordInterfaceConnection(name);
-          setInterfaceTool(null);
+        onConnect={async (name, meta) => {
+          try {
+            setError("");
+            await recordInterfaceConnection(name, meta);
+            await hydrateConnections();
+            setInterfaceTool(null);
+          } catch (e) {
+            setError(e.message || "This web application could not be connected.");
+          }
         }}
       />
 
