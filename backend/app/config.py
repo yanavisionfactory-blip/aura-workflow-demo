@@ -1,0 +1,32 @@
+from functools import lru_cache
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    environment: str = "development"
+    public_url: str = "http://localhost:8000"
+    frontend_url: str = "http://localhost:5173"
+    database_url: str = "postgresql+psycopg://aura:aura@postgres:5432/aura"
+    redis_url: str = "redis://redis:6379/0"
+    openai_api_key: str = ""
+    openai_model: str = "gpt-5.4-mini"
+    credential_encryption_key: str = Field(
+        description="URL-safe Fernet key; generate with Fernet.generate_key().decode()"
+    )
+    session_signing_key: str = Field(min_length=32)
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    airtable_client_id: str = ""
+    airtable_client_secret: str = ""
+    slack_client_id: str = ""
+    slack_client_secret: str = ""
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()  # type: ignore[call-arg]
+
