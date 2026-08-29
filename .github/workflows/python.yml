@@ -33,3 +33,19 @@ jobs:
         run: python -m compileall -q app
       - name: Test
         run: pytest -q
+
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install
+        run: npm install
+      - name: Build React client
+        run: npm run build
+        env:
+          VITE_BASE44_APP_ID: 6a8263b40ee6995c4e825a4d
+          VITE_AURA_API_URL: https://api.example.invalid
