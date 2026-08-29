@@ -1,1 +1,14 @@
-<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="AURA turns a goal into an editable, approval-first workflow."><title>AURA · AI workflow control</title><link rel="stylesheet" href="styles.css"></head><body><div id="app"><header class="topbar"><button class="brand" data-action="home"><span class="logo">✦</span><strong>AURA</strong><i>PRO</i></button><div class="connections" id="connections"></div><button class="history-btn" data-action="history">◷ <span>History</span><b id="historyCount">0</b></button></header><main id="main" tabindex="-1"></main><footer><span>AURA v3.0 · Functional Demo</span><span class="ready"><i></i>System ready</span></footer></div><aside id="drawer" class="drawer" aria-hidden="true"><div class="drawer-head"><div><small>YOUR WORKSPACE</small><h2>Recent work</h2></div><button data-action="close-drawer">×</button></div><div class="drawer-stats"><div><strong id="completedCount">0</strong><span>Completed workflows</span></div><div><strong id="successRate">100%</strong><span>Success rate</span></div></div><div id="historyList" class="history-list"></div></aside><div id="scrim" class="scrim" data-action="close-drawer"></div><dialog id="modal"><button class="modal-x" data-action="close-modal">×</button><div id="modalBody"></div></dialog><div id="toast" role="status"></div><script src="app.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="https://base44.com/logo_v2.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="manifest" href="/manifest.json" />
+    <title>Base44 APP</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

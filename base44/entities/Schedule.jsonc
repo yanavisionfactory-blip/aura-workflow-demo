@@ -1,0 +1,54 @@
+{
+  "name": "Schedule",
+  "type": "object",
+  "properties": {
+    "prompt": {
+      "type": "string",
+      "description": "The workflow prompt to run on a schedule"
+    },
+    "title": {
+      "type": "string",
+      "description": "Human-readable name for the scheduled workflow"
+    },
+    "cadence": {
+      "type": "string",
+      "enum": [
+        "daily",
+        "weekly",
+        "monthly"
+      ],
+      "default": "weekly"
+    },
+    "day_of_week": {
+      "type": "number",
+      "description": "0=Sunday..6=Saturday (used for weekly cadence)"
+    },
+    "day_of_month": {
+      "type": "number",
+      "description": "1-31 (used for monthly cadence)"
+    },
+    "time": {
+      "type": "string",
+      "description": "HH:MM in 24h, local time",
+      "default": "09:00"
+    },
+    "enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "next_run": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Next scheduled run (ISO)"
+    },
+    "last_run": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "prompt",
+    "cadence",
+    "time"
+  ]
+}

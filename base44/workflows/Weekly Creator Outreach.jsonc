@@ -1,0 +1,47 @@
+{
+  "trigger": {
+    "condition": null,
+    "config": {
+      "trigger_type": "scheduled",
+      "events": [],
+      "schedule_mode": "recurring",
+      "cron_expression": "0 9 * * 1",
+      "one_time_date": null,
+      "timezone": "America/Chicago",
+      "interval_value": null,
+      "interval_unit": null,
+      "interval_anchor": null,
+      "ends_type": "never",
+      "ends_on_date": null,
+      "ends_after_count": null
+    }
+  },
+  "name": "Weekly Creator Outreach",
+  "description": "Discovers new TikTok creators for Grail Talent, dedups against the Contacted Creators sheet, submits them to the approver app, drafts outreach emails, and notifies the manager \u2014 every Monday at 9am.",
+  "definition": {
+    "document": {
+      "dsl": "1.0.0",
+      "name": "weekly_creator_outreach",
+      "version": "1.0",
+      "namespace": "base44"
+    },
+    "do": [
+      {
+        "run_outreach": {
+          "call": "invoke_backend_function",
+          "with": {
+            "function_name": "runCreatorOutreach",
+            "args": {
+              "maxCreators": 5
+            }
+          },
+          "then": "end",
+          "x-base44": {
+            "title": "Run creator outreach",
+            "description": "Discover, dedup, submit, draft, notify"
+          }
+        }
+      }
+    ]
+  }
+}
