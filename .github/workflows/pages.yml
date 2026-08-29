@@ -30,6 +30,7 @@ jobs:
         run: npm run build
         env:
           VITE_BASE44_APP_ID: 6a8263b40ee6995c4e825a4d
+          VITE_AURA_API_URL: https://impartial-emotion-production-49d4.up.railway.app
       - name: Disable Jekyll
         run: touch dist/.nojekyll
       - name: Configure Pages
