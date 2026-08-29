@@ -208,7 +208,16 @@ async def connector_catalog() -> dict:
         "adapter_types": [
             "oauth", "openapi", "api_key", "mcp", "agent", "plugin", "webhook", "browser"
         ],
-        "oauth_providers": sorted(PROVIDERS),
+        "oauth_providers": {
+            slug: {
+                "display_name": definition.display_name,
+                "configured": bool(
+                    getattr(settings, definition.client_id_attr)
+                    and getattr(settings, definition.client_secret_attr)
+                ),
+            }
+            for slug, definition in PROVIDERS.items()
+        },
         "browser_connector_available": bool(settings.browser_connector_url),
     }
 
@@ -415,7 +424,11 @@ async def oauth_start(
     if not definition:
         raise HTTPException(404, "Unknown OAuth provider")
     state = create_oauth_state(context.workspace_id, provider)
-    return {"authorization_url": oauth_authorization_url(settings, definition, state)}
+    try:
+        authorization_url = oauth_authorization_url(settings, definition, state)
+    except ValueError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    return {"authorization_url": authorization_url}
 
 
 @app.get("/v1/oauth/{provider}/callback")
