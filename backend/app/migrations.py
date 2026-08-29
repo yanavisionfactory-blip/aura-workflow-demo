@@ -25,12 +25,16 @@ CHILD_TENANT_TABLES = {
 
 async def migrate_database() -> None:
     async with engine.begin() as connection:
-        if connection.dialect.name == "postgresql":
+        await connection.run_sync(Base.metadata.create_all)
+
+    # New databases receive the complete enum from SQLAlchemy's metadata. Existing
+    # databases need the new values appended after the type is known to exist.
+    if engine.dialect.name == "postgresql":
+        async with engine.begin() as connection:
             for value in ("waiting_for_action", "recovering", "blocked"):
                 await connection.execute(
                     text(f"ALTER TYPE runstatus ADD VALUE IF NOT EXISTS '{value}'")
                 )
-        await connection.run_sync(Base.metadata.create_all)
 
     if engine.dialect.name != "postgresql":
         return
