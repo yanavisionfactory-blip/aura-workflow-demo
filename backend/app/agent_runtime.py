@@ -43,14 +43,18 @@ def build_agents() -> dict[str, Agent]:
             """Build a finite, auditable execution plan using only the proposed tools. Each step must
             have concrete inputs, an expected output contract, and a reason. Reads are normally not
             consequential. Sending, creating, updating, deleting, posting, scheduling, or purchasing
-            is consequential. Do not include narrative-only pseudo tools or claim execution occurred.""",
+            is consequential. Mark a step optional only when the final deliverable remains valid without
+            it. Recommend a fallback only when it is an inventory tool with equivalent permission scope.
+            A read step may include reduced-scope arguments for recovery. Do not include narrative-only
+            pseudo tools or claim execution occurred.""",
             WorkflowPlan,
         ),
         "evaluator": _agent(
             "Static Plan Evaluator Agent",
             """Act as a preflight authorization gate. Check every plan operation against the supplied
             inventory, required inputs, excessive permissions, data sensitivity, and obvious cost/time
-            risks. Fail plans that cannot execute safely and return concrete required fixes.""",
+            risks. Return a numeric risk score, estimated USD cost, and maximum permission scope. Fail
+            plans that cannot execute safely and return concrete required fixes.""",
             PlanEvaluation,
         ),
         "critic": _agent(
@@ -94,6 +98,17 @@ def deterministic_plan_fixes(plan: WorkflowPlan, tool_inventory: list[dict]) -> 
         operation = step.operation.lower()
         if any(marker in operation for marker in write_markers) and not step.consequential:
             fixes.append(f"Step {index} must be marked consequential")
+        if bool(step.fallback_tool_slug) != bool(step.fallback_operation):
+            fixes.append(f"Step {index} fallback must specify both tool and operation")
+        elif step.fallback_tool_slug:
+            if step.fallback_tool_slug not in allowed:
+                fixes.append(
+                    f"Step {index} selects unavailable fallback {step.fallback_tool_slug!r}"
+                )
+            elif step.fallback_operation not in allowed[step.fallback_tool_slug]:
+                fixes.append(
+                    f"Step {index} fallback operation {step.fallback_operation!r} is not allow-listed"
+                )
     return fixes
 
 

@@ -43,3 +43,24 @@ def create_oauth_state(workspace_id: str, provider: str) -> str:
 def decode_oauth_state(token: str) -> dict:
     return jwt.decode(token, get_settings().session_signing_key, algorithms=["HS256"])
 
+
+def create_tenant_token(workspace_id: str, subject: str, role: str = "owner") -> str:
+    now = datetime.now(timezone.utc)
+    return jwt.encode(
+        {
+            "typ": "tenant_context",
+            "workspace_id": workspace_id,
+            "sub": subject,
+            "role": role,
+            "iat": now,
+        },
+        get_settings().session_signing_key,
+        algorithm="HS256",
+    )
+
+
+def decode_tenant_token(token: str) -> dict:
+    claims = jwt.decode(token, get_settings().session_signing_key, algorithms=["HS256"])
+    if claims.get("typ") != "tenant_context" or not claims.get("workspace_id"):
+        raise jwt.InvalidTokenError("Invalid tenant context")
+    return claims

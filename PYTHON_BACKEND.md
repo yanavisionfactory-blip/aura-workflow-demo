@@ -16,6 +16,32 @@ The GitHub Pages site is only the React client. Real execution is provided by `b
 - Each real provider result is evaluated against its step contract. Safe reads may be retried once;
   consequential actions are never automatically replayed after an uncertain result.
 - Final synthesis uses only critic-accepted artifacts and includes step-level traceability.
+- Workspace context is a signed capability token issued in the existing workspace `id` field. The
+  server verifies active tenant membership and sets a transaction-local PostgreSQL tenant context.
+- PostgreSQL Row-Level Security is enabled and forced on every tenant-owned control-plane table,
+  including worker access to runs, steps, tools, artifacts, approvals, policy and audit records.
+- Every plan is stored as a version with a canonical SHA-256 digest. Approval locks that version and
+  stores immutable policy, permission, risk, cost, approver and hash snapshots. Execution refuses a
+  plan or step set that differs from the approved snapshot.
+- Policy defaults are centralized: +10% cost warning, +25% cost pause, $100 absolute cap, 0.70 trust
+  execution floor, 0.85 healthy trust floor, 0.75 risk pause and 0.90 risk block. Only the tenant cost
+  cap is tenant-configurable in v1; core safety thresholds cannot be weakened by tenants.
+- Tool health is updated from successes, failures, timeouts and latency. Policy is rechecked at every
+  step boundary against current trust and permissions; revoked access blocks and expanded access
+  pauses for re-approval.
+- Non-consequential steps use persisted attempts with three retries and 1s/2s/4s backoff. Approved
+  read-only fallback tools and reduced-scope arguments may recover automatically. Consequential
+  actions are never automatically replayed after an uncertain outcome.
+- Accepted outputs are stored as versioned artifacts. Exhausted recovery returns an explicit partial
+  result and `waiting_for_action`; `/v1/runs/{run_id}/resume` supports retry, approved fallback,
+  optional-step skip, or cancellation without rerunning completed steps.
+
+## Compatibility note
+
+The frontend contract is unchanged: it continues storing the workspace response's `id` and sending
+it as `X-Workspace-ID`. The value is now a signed tenant token rather than a raw database UUID.
+Existing browser storage created before this release must be cleared once so the frontend requests a
+new signed workspace context.
 - Provider credentials are encrypted with Fernet and are never passed into model context.
 - Provider writes pause for approval. Approved payloads may be edited before execution.
 - Idempotency keys prevent an already-completed provider action from being treated as a new step.

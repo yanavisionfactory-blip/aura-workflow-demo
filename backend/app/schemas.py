@@ -36,6 +36,10 @@ class PlanStep(BaseModel):
     reason: str
     expected_output: str
     consequential: bool = False
+    optional: bool = False
+    fallback_tool_slug: str | None = None
+    fallback_operation: str | None = None
+    reduced_scope_arguments: dict[str, Any] | None = None
 
 
 class ObjectiveSpec(BaseModel):
@@ -69,6 +73,9 @@ class PlanEvaluation(BaseModel):
     policy_flags: list[str] = Field(default_factory=list)
     missing_inputs: list[str] = Field(default_factory=list)
     estimated_risk: Literal["low", "medium", "high"] = "low"
+    risk_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    estimated_cost_usd: float = Field(default=0.0, ge=0.0)
+    permission_scope: Literal["read", "write", "destructive"] = "read"
 
 
 class WorkflowPlan(BaseModel):
@@ -101,3 +108,19 @@ class ApprovalDecision(BaseModel):
 class PlanApproval(BaseModel):
     approved: bool
     edited_steps: list[PlanStep] | None = None
+
+
+class ResumeDecision(BaseModel):
+    action: Literal["retry", "fallback", "skip", "cancel"]
+    step_id: str | None = None
+    fallback_tool_slug: str | None = None
+    fallback_operation: str | None = None
+
+
+class PolicyUpdate(BaseModel):
+    configuration: dict[str, Any]
+
+
+class TrustSignalUpdate(BaseModel):
+    incident_active: bool | None = None
+    external_score: float | None = Field(default=None, ge=0.0, le=1.0)

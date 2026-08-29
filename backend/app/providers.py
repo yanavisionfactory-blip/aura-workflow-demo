@@ -137,9 +137,15 @@ async def refresh_oauth_credentials(settings: Settings, provider_slug: str, cred
 class ProviderExecutor:
     """Executes only allow-listed operations; credentials never enter model context."""
 
-    def __init__(self, credentials: dict[str, Any], base_url: str | None = None):
+    def __init__(
+        self,
+        credentials: dict[str, Any],
+        base_url: str | None = None,
+        timeout_seconds: float = 45,
+    ):
         self.credentials = credentials
         self.base_url = base_url
+        self.timeout_seconds = timeout_seconds
 
     def _headers(self) -> dict[str, str]:
         token = self.credentials.get("access_token") or self.credentials.get("api_key")
@@ -166,7 +172,7 @@ class ProviderExecutor:
         return await handlers[operation](arguments)
 
     async def _request(self, method: str, url: str, **kwargs: Any) -> dict:
-        async with httpx.AsyncClient(timeout=45) as client:
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             response = await client.request(method, url, headers=self._headers(), **kwargs)
             response.raise_for_status()
             if response.status_code == 204:

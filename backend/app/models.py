@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -27,6 +27,9 @@ class RunStatus(str, enum.Enum):
     completed = "completed"
     failed = "failed"
     cancelled = "cancelled"
+    waiting_for_action = "waiting_for_action"
+    recovering = "recovering"
+    blocked = "blocked"
 
 
 class StepStatus(str, enum.Enum):
@@ -45,6 +48,28 @@ class Workspace(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
+class TenantMembership(Base):
+    __tablename__ = "tenant_memberships"
+    __table_args__ = (UniqueConstraint("workspace_id", "subject", name="uq_tenant_subject"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    subject: Mapped[str] = mapped_column(String(240))
+    role: Mapped[str] = mapped_column(String(30), default="owner")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class PolicyConfig(Base):
+    __tablename__ = "policy_configs"
+    __table_args__ = (UniqueConstraint("workspace_id", "version", name="uq_policy_version"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    configuration: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
 class ToolConnection(Base):
     __tablename__ = "tool_connections"
     __table_args__ = (UniqueConstraint("workspace_id", "slug", name="uq_workspace_tool_slug"),)
@@ -59,6 +84,21 @@ class ToolConnection(Base):
     allowed_operations: Mapped[list] = mapped_column(JSON, default=list)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ToolTrustState(Base):
+    __tablename__ = "tool_trust_states"
+    __table_args__ = (UniqueConstraint("workspace_id", "tool_id", name="uq_tenant_tool_trust"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    tool_id: Mapped[str] = mapped_column(ForeignKey("tool_connections.id", ondelete="CASCADE"), index=True)
+    score: Mapped[float] = mapped_column(Float, default=1.0)
+    success_count: Mapped[int] = mapped_column(Integer, default=0)
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    timeout_count: Mapped[int] = mapped_column(Integer, default=0)
+    incident_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
@@ -88,6 +128,38 @@ class WorkflowRun(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
     steps: Mapped[list["RunStep"]] = relationship(back_populates="run", cascade="all, delete-orphan", order_by="RunStep.position")
+
+
+class PlanVersion(Base):
+    __tablename__ = "plan_versions"
+    __table_args__ = (UniqueConstraint("run_id", "version", name="uq_run_plan_version"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("workflow_runs.id", ondelete="CASCADE"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(30), default="draft")
+    plan: Mapped[dict] = mapped_column(JSON)
+    plan_hash: Mapped[str] = mapped_column(String(64), index=True)
+    derived_from_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(240), default="system")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ApprovalSnapshot(Base):
+    __tablename__ = "approval_snapshots"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("workflow_runs.id", ondelete="CASCADE"), index=True)
+    plan_version_id: Mapped[str] = mapped_column(ForeignKey("plan_versions.id", ondelete="RESTRICT"), unique=True)
+    plan_hash: Mapped[str] = mapped_column(String(64))
+    approver_subject: Mapped[str] = mapped_column(String(240))
+    approver_role: Mapped[str] = mapped_column(String(30))
+    policy_snapshot: Mapped[dict] = mapped_column(JSON)
+    permission_snapshot: Mapped[dict] = mapped_column(JSON)
+    risk_snapshot: Mapped[dict] = mapped_column(JSON)
+    cost_snapshot: Mapped[dict] = mapped_column(JSON)
+    approved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
 class RunStep(Base):
@@ -120,6 +192,36 @@ class Approval(Base):
     status: Mapped[str] = mapped_column(String(30), default="pending")
     decided_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class StepAttempt(Base):
+    __tablename__ = "step_attempts"
+    __table_args__ = (UniqueConstraint("step_id", "attempt_number", name="uq_step_attempt"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("workflow_runs.id", ondelete="CASCADE"), index=True)
+    step_id: Mapped[str] = mapped_column(ForeignKey("run_steps.id", ondelete="CASCADE"), index=True)
+    attempt_number: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(30))
+    tool_slug: Mapped[str] = mapped_column(String(120))
+    operation: Mapped[str] = mapped_column(String(160))
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Artifact(Base):
+    __tablename__ = "artifacts"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("workflow_runs.id", ondelete="CASCADE"), index=True)
+    step_id: Mapped[str] = mapped_column(ForeignKey("run_steps.id", ondelete="CASCADE"), unique=True)
+    schema_version: Mapped[int] = mapped_column(Integer, default=1)
+    accepted: Mapped[bool] = mapped_column(Boolean, default=True)
+    provenance: Mapped[dict] = mapped_column(JSON, default=dict)
+    content: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
 class AuditEvent(Base):

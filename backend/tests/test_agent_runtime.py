@@ -55,3 +55,23 @@ def test_deterministic_validator_requires_write_approval() -> None:
     assert deterministic_plan_fixes(workflow, inventory) == [
         "Step 1 must be marked consequential"
     ]
+
+
+def test_deterministic_validator_rejects_unavailable_fallback() -> None:
+    workflow = plan(
+        PlanStep(
+            agent="data",
+            tool_slug="crm",
+            operation="records.read",
+            reason="Read records",
+            expected_output="Records",
+            fallback_tool_slug="backup",
+            fallback_operation="records.read",
+        )
+    )
+    inventory = [{"slug": "crm", "allowed_operations": ["records.read"]}]
+
+    assert any(
+        "unavailable fallback" in fix
+        for fix in deterministic_plan_fixes(workflow, inventory)
+    )
