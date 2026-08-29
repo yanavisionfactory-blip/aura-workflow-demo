@@ -38,7 +38,7 @@ from .policy import (
     evaluate_plan_policy,
     operation_scope,
 )
-from .providers import PROVIDERS, exchange_oauth_code, idempotency_key, oauth_authorization_url
+from .providers import PROVIDERS, exchange_oauth_code, idempotency_key, oauth_authorization_url, verify_oauth_credentials
 from .schemas import (
     ApprovalDecision,
     ConnectionDiscover,
@@ -291,7 +291,12 @@ async def test_connection(
     manifest = await session.scalar(select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id))
     if not manifest:
         raise HTTPException(409, "Connection has no discovered capability manifest")
-    result = await verify_provider(manifest.manifest, CredentialVault().decrypt(tool.encrypted_credentials))
+    credentials = CredentialVault().decrypt(tool.encrypted_credentials)
+    result = (
+        await verify_oauth_credentials(tool.slug, credentials)
+        if tool.kind == ToolKind.oauth
+        else await verify_provider(manifest.manifest, credentials)
+    )
     manifest.verification = result
     manifest.status = "verified" if result["ok"] else "degraded"
     manifest.verified_at = datetime.now(timezone.utc)

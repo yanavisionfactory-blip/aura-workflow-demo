@@ -135,6 +135,31 @@ async def refresh_oauth_credentials(settings: Settings, provider_slug: str, cred
     return merged, True
 
 
+async def verify_oauth_credentials(provider_slug: str, credentials: dict) -> dict:
+    token = credentials.get("access_token")
+    if not token:
+        return {"ok": False, "reason": "missing_access_token"}
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    if provider_slug == "google":
+        method, url, kwargs = "GET", "https://openidconnect.googleapis.com/v1/userinfo", {}
+    elif provider_slug == "slack":
+        method, url, kwargs = "POST", "https://slack.com/api/auth.test", {}
+    elif provider_slug == "airtable":
+        method, url, kwargs = "GET", "https://api.airtable.com/v0/meta/whoami", {}
+    else:
+        return {"ok": False, "reason": "unsupported_oauth_provider"}
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.request(method, url, headers=headers, **kwargs)
+        data = response.json() if "application/json" in response.headers.get("content-type", "") else {}
+    ok = response.is_success and (provider_slug != "slack" or bool(data.get("ok")))
+    identity = {
+        key: data.get(key)
+        for key in ("sub", "email", "team", "team_id", "user", "user_id", "id")
+        if data.get(key) is not None
+    }
+    return {"ok": ok, "status_code": response.status_code, "identity": identity}
+
+
 class ProviderExecutor:
     """Executes only allow-listed operations; credentials never enter model context."""
 
