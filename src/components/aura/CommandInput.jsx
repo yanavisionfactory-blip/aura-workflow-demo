@@ -35,6 +35,7 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
   const [documents, setDocuments] = useState([]);
   const [showComposer, setShowComposer] = useState(false);
   const [interfaceTool, setInterfaceTool] = useState(null);
+  const [interfaceError, setInterfaceError] = useState("");
   const [examplesCollapsed, setExamplesCollapsed] = useState(false);
   const inputRef = useRef(null);
 
@@ -160,11 +161,17 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
           open={!!interfaceTool}
           toolName={interfaceTool}
           onClose={() => setInterfaceTool(null)}
-          onConnect={(name) => {
-            recordInterfaceConnection(name);
-            setInterfaceTool(null);
+          onConnect={async (name, meta) => {
+            try {
+              setInterfaceError("");
+              await recordInterfaceConnection(name, meta);
+              setInterfaceTool(null);
+            } catch (e) {
+              setInterfaceError(e.message || "This web application could not be connected.");
+            }
           }}
         />
+        {interfaceError && <p className="mx-4 mb-2 text-xs text-red-400">{interfaceError}</p>}
 
         <div className="flex items-center justify-between px-4 pb-3">
           <span className="text-[11px] text-muted-foreground/60">Press Enter to run · Shift+Enter for a new line</span>

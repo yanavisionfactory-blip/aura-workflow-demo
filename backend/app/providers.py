@@ -10,7 +10,8 @@ import httpx
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
-from .config import Settings
+from .config import Settings, get_settings
+from .universal_connectors import capability_for
 
 
 @dataclass(frozen=True)
@@ -134,12 +135,47 @@ async def refresh_oauth_credentials(settings: Settings, provider_slug: str, cred
     return merged, True
 
 
+async def verify_oauth_credentials(provider_slug: str, credentials: dict) -> dict:
+    token = credentials.get("access_token")
+    if not token:
+        return {"ok": False, "reason": "missing_access_token"}
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    if provider_slug == "google":
+        method, url, kwargs = "GET", "https://openidconnect.googleapis.com/v1/userinfo", {}
+    elif provider_slug == "slack":
+        method, url, kwargs = "POST", "https://slack.com/api/auth.test", {}
+    elif provider_slug == "airtable":
+        method, url, kwargs = "GET", "https://api.airtable.com/v0/meta/whoami", {}
+    else:
+        return {"ok": False, "reason": "unsupported_oauth_provider"}
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.request(method, url, headers=headers, **kwargs)
+        data = response.json() if "application/json" in response.headers.get("content-type", "") else {}
+    ok = response.is_success and (provider_slug != "slack" or bool(data.get("ok")))
+    identity = {
+        key: data.get(key)
+        for key in ("sub", "email", "team", "team_id", "user", "user_id", "id")
+        if data.get(key) is not None
+    }
+    return {"ok": ok, "status_code": response.status_code, "identity": identity}
+
+
 class ProviderExecutor:
     """Executes only allow-listed operations; credentials never enter model context."""
 
-    def __init__(self, credentials: dict[str, Any], base_url: str | None = None):
+    def __init__(
+        self,
+        credentials: dict[str, Any],
+        base_url: str | None = None,
+        timeout_seconds: float = 45,
+        provider_kind: str | None = None,
+        capability_manifest: dict | None = None,
+    ):
         self.credentials = credentials
         self.base_url = base_url
+        self.timeout_seconds = timeout_seconds
+        self.provider_kind = provider_kind
+        self.capability_manifest = capability_manifest or {}
 
     def _headers(self) -> dict[str, str]:
         token = self.credentials.get("access_token") or self.credentials.get("api_key")
@@ -162,11 +198,66 @@ class ProviderExecutor:
             "mcp.call": self._mcp_call,
         }
         if operation not in handlers:
-            raise ValueError(f"Operation {operation!r} is not executable")
+            return await self._execute_capability(operation, arguments)
         return await handlers[operation](arguments)
 
+    async def _execute_capability(self, operation: str, arguments: dict[str, Any]) -> dict:
+        capability = capability_for(self.capability_manifest, operation)
+        transport = capability.get("transport", {})
+        if self.provider_kind == "mcp":
+            return await self._mcp_call(
+                {"tool_name": transport.get("tool_name", operation), "arguments": arguments}
+            )
+        if not self.base_url:
+            raise ValueError("Capability provider has no endpoint")
+        if self.provider_kind == "browser":
+            worker = get_settings().browser_connector_url
+            if not worker:
+                raise ValueError("Browser connector worker is not configured")
+            return await ProviderExecutor(
+                self.credentials,
+                worker,
+                self.timeout_seconds,
+            )._request(
+                "POST",
+                f"{worker.rstrip('/')}/v1/execute",
+                json={
+                    "target_url": self.base_url,
+                    "capability": operation,
+                    "input": arguments,
+                },
+            )
+        method = str(transport.get("method", "POST")).upper()
+        path = transport.get("path")
+        if self.provider_kind == "agent":
+            path = path or "/invoke"
+            payload = {
+                "capability": operation,
+                "input": arguments,
+                "delegation": {"depth": 0, "may_delegate": False},
+            }
+        elif self.provider_kind == "plugin":
+            path = path or "/invoke"
+            payload = {"capability": operation, "input": arguments}
+        elif self.provider_kind == "webhook":
+            path = path or ""
+            payload = arguments
+        else:
+            payload = arguments.get("body", arguments)
+        for key, value in arguments.get("path", {}).items():
+            path = str(path or "").replace("{" + key + "}", str(value))
+        if "{" in str(path or ""):
+            raise ValueError("Required path parameters are missing")
+        url = f"{self.base_url.rstrip('/')}/{str(path or '').lstrip('/')}"
+        kwargs: dict[str, Any] = {}
+        if method in {"GET", "HEAD"}:
+            kwargs["params"] = arguments.get("query", arguments)
+        else:
+            kwargs["json"] = payload
+        return await self._request(method, url, **kwargs)
+
     async def _request(self, method: str, url: str, **kwargs: Any) -> dict:
-        async with httpx.AsyncClient(timeout=45) as client:
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             response = await client.request(method, url, headers=self._headers(), **kwargs)
             response.raise_for_status()
             if response.status_code == 204:

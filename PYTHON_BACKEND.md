@@ -7,7 +7,67 @@ The GitHub Pages site is only the React client. Real execution is provided by `b
 - FastAPI exposes workspaces, tools, OAuth callbacks, runs, approvals, and run-state APIs.
 - PostgreSQL stores workflows, steps, approvals, encrypted tool connections, and audit events.
 - Redis and Celery provide recoverable background planning and execution.
-- OpenAI Agents SDK runs a manager-style orchestrator with data, communications, operations, and risk specialists.
+- OpenAI Agents SDK runs structured, role-specific agents behind the control-plane API.
+- The backend uses seven explicit runtime roles from the AURA orchestration design:
+  Intent & Scope, Tool Router, Plan Builder, Static Plan Evaluator, deterministic Workflow
+  State Manager, Tool Output Critic, and Unified Response Synthesizer.
+- Planning is separated into Propose and Authorize phases. Execution cannot begin until the
+  deterministic capability check, model-based preflight evaluation, and human plan approval pass.
+- Each real provider result is evaluated against its step contract. Safe reads may be retried once;
+  consequential actions are never automatically replayed after an uncertain result.
+- Final synthesis uses only critic-accepted artifacts and includes step-level traceability.
+- Workspace context is a signed capability token issued in the existing workspace `id` field. The
+  server verifies active tenant membership and sets a transaction-local PostgreSQL tenant context.
+- PostgreSQL Row-Level Security is enabled and forced on every tenant-owned control-plane table,
+  including worker access to runs, steps, tools, artifacts, approvals, policy and audit records.
+- Every plan is stored as a version with a canonical SHA-256 digest. Approval locks that version and
+  stores immutable policy, permission, risk, cost, approver and hash snapshots. Execution refuses a
+  plan or step set that differs from the approved snapshot.
+- Policy defaults are centralized: +10% cost warning, +25% cost pause, $100 absolute cap, 0.70 trust
+  execution floor, 0.85 healthy trust floor, 0.75 risk pause and 0.90 risk block. Only the tenant cost
+  cap is tenant-configurable in v1; core safety thresholds cannot be weakened by tenants.
+- Tool health is updated from successes, failures, timeouts and latency. Policy is rechecked at every
+  step boundary against current trust and permissions; revoked access blocks and expanded access
+  pauses for re-approval.
+- Non-consequential steps use persisted attempts with three retries and 1s/2s/4s backoff. Approved
+  read-only fallback tools and reduced-scope arguments may recover automatically. Consequential
+  actions are never automatically replayed after an uncertain outcome.
+- Accepted outputs are stored as versioned artifacts. Exhausted recovery returns an explicit partial
+  result and `waiting_for_action`; `/v1/runs/{run_id}/resume` supports retry, approved fallback,
+  optional-step skip, or cancellation without rerunning completed steps.
+
+## Compatibility note
+
+The frontend contract is unchanged: it continues storing the workspace response's `id` and sending
+it as `X-Workspace-ID`. The value is now a signed tenant token rather than a raw database UUID.
+Existing browser storage created before this release must be cleared once so the frontend requests a
+new signed workspace context.
+
+## Universal connector protocol
+
+The backend normalizes every external system into a verified capability manifest. The same registry
+accepts OAuth applications, OpenAPI and custom REST services, MCP servers, external agents, plugin
+manifests, webhooks and an optional isolated browser-connector worker. Plans consume declared
+capabilities instead of inventing brand-specific actions.
+
+- `GET /v1/connectors/catalog` reports supported adapter types and whether browser execution is available.
+- `POST /v1/connectors/discover` discovers, normalizes, tests and encrypts a provider connection.
+- Agent and plugin manifests are read from `.well-known/aura-agent.json` and
+  `.well-known/aura-plugin.json` by default.
+- OpenAPI operations become typed, approval-classified capabilities. MCP tools are discovered from the
+  live server. Custom APIs must supply a capability manifest; arbitrary undeclared HTTP operations are
+  never inferred by a model.
+- `POST /v1/connections/{id}/test` re-verifies health and `DELETE /v1/connections/{id}` revokes the
+  local credential and disables the provider.
+- Missing capabilities put a run into `waiting_for_connection`. The requirements are available at
+  `/v1/runs/{id}/connection-requirements`; after a verified provider is selected,
+  `/v1/runs/{id}/resume-after-connection` re-plans from the original objective.
+- External agents receive a scoped capability invocation with delegation disabled. They cannot expand
+  the approved plan or silently call another agent.
+
+Arbitrary website operation requires a separately deployed isolated browser worker configured through
+`BROWSER_CONNECTOR_URL`. Without that worker, the browser adapter refuses connection instead of storing
+passwords or presenting a theatrical success state.
 - Provider credentials are encrypted with Fernet and are never passed into model context.
 - Provider writes pause for approval. Approved payloads may be edited before execution.
 - Idempotency keys prevent an already-completed provider action from being treated as a new step.
