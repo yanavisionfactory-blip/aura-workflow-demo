@@ -10,7 +10,7 @@ import {
   testPythonConnection,
 } from "@/lib/auraApi";
 
-const PYTHON_OAUTH = { Gmail: "google", "Google Calendar": "google", "Google Sheets": "google", Airtable: "airtable", Slack: "slack" };
+const PYTHON_OAUTH = { Gmail: "google", "Google Drive": "google", "Google Calendar": "google", "Google Sheets": "google", Airtable: "airtable", Slack: "slack" };
 const slugify = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 const credentialsFor = (opts) => opts.credentials || (opts.apiKey ? { api_key: opts.apiKey } : {});
 
@@ -73,6 +73,7 @@ export async function hydrateConnections() {
     for (const tool of tools) map[tool.display_name] = tool.enabled;
     if (map["Google Workspace"]) {
       map.Gmail = true;
+      map["Google Drive"] = true;
       map["Google Calendar"] = true;
       map["Google Sheets"] = true;
     }
