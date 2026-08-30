@@ -145,6 +145,63 @@ class ConnectorPackage(Base):
     )
 
 
+class ConnectorInstallation(Base):
+    __tablename__ = "connector_installations"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "slug", name="uq_workspace_connector_installation"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    slug: Mapped[str] = mapped_column(String(120), index=True)
+    package_id: Mapped[str] = mapped_column(
+        ForeignKey("connector_packages.id", ondelete="RESTRICT"), index=True
+    )
+    previous_package_id: Mapped[str | None] = mapped_column(
+        ForeignKey("connector_packages.id", ondelete="RESTRICT"), nullable=True
+    )
+    tool_id: Mapped[str | None] = mapped_column(
+        ForeignKey("tool_connections.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    status: Mapped[str] = mapped_column(String(30), default="installing")
+    authentication_type: Mapped[str] = mapped_column(String(30))
+    encrypted_auth_config: Mapped[str | None] = mapped_column(Text, nullable=True)
+    configuration: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_by: Mapped[str] = mapped_column(String(240))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class ConnectorInstallationVersion(Base):
+    __tablename__ = "connector_installation_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "installation_id", "sequence", name="uq_connector_installation_sequence"
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    installation_id: Mapped[str] = mapped_column(
+        ForeignKey("connector_installations.id", ondelete="CASCADE"), index=True
+    )
+    sequence: Mapped[int] = mapped_column(Integer)
+    package_id: Mapped[str] = mapped_column(
+        ForeignKey("connector_packages.id", ondelete="RESTRICT"), index=True
+    )
+    action: Mapped[str] = mapped_column(String(30))
+    created_by: Mapped[str] = mapped_column(String(240))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow
+    )
+
+
 class PollingSubscription(Base):
     __tablename__ = "polling_subscriptions"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
