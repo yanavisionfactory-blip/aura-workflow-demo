@@ -152,6 +152,48 @@ def public_catalog(slug: str) -> dict[str, Any]:
     }
 
 
+def _validate_value(schema: dict[str, Any], value: Any, path: str) -> None:
+    schema_type = schema.get("type")
+    type_checks = {
+        "object": dict,
+        "array": list,
+        "string": str,
+        "integer": int,
+        "number": (int, float),
+        "boolean": bool,
+    }
+    expected = type_checks.get(schema_type)
+    if expected and (not isinstance(value, expected) or schema_type == "integer" and isinstance(value, bool)):
+        raise NativeConnectorError(f"{path} must be {schema_type}")
+    if schema_type == "object" and isinstance(value, dict):
+        missing = [
+            name
+            for name in schema.get("required", [])
+            if name not in value or value[name] in (None, "")
+        ]
+        if missing:
+            raise NativeConnectorError(
+                f"{path} is missing required inputs: {', '.join(missing)}"
+            )
+        properties = schema.get("properties", {})
+        unknown = set(value) - set(properties)
+        if schema.get("additionalProperties") is False and unknown:
+            raise NativeConnectorError(
+                f"{path} received unknown inputs: {', '.join(sorted(unknown))}"
+            )
+        for name, item in value.items():
+            if name in properties:
+                _validate_value(properties[name], item, f"{path}.{name}")
+    if schema_type == "array" and isinstance(value, list):
+        minimum = schema.get("minItems")
+        if minimum is not None and len(value) < int(minimum):
+            raise NativeConnectorError(f"{path} must contain at least {minimum} items")
+        item_schema = schema.get("items")
+        if item_schema:
+            for index, item in enumerate(value):
+                _validate_value(item_schema, item, f"{path}[{index}]")
+
+
 def validate_module_arguments(manifest: dict[str, Any], operation: str, arguments: dict[str, Any]) -> None:
     module = next(
         (item for item in manifest.get("capabilities", []) if item.get("name") == operation),
@@ -159,19 +201,4 @@ def validate_module_arguments(manifest: dict[str, Any], operation: str, argument
     )
     if not module:
         raise NativeConnectorError(f"Module {operation!r} is not declared")
-    schema = module.get("input_schema", {})
-    missing = [
-        name
-        for name in schema.get("required", [])
-        if name not in arguments or arguments[name] in (None, "")
-    ]
-    if missing:
-        raise NativeConnectorError(
-            f"Module {operation!r} is missing required inputs: {', '.join(missing)}"
-        )
-    allowed = set(schema.get("properties", {}))
-    unknown = set(arguments) - allowed
-    if schema.get("additionalProperties") is False and unknown:
-        raise NativeConnectorError(
-            f"Module {operation!r} received unknown inputs: {', '.join(sorted(unknown))}"
-        )
+    _validate_value(module.get("input_schema", {"type": "object"}), arguments, operation)
