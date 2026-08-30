@@ -120,6 +120,81 @@ class CapabilityManifest(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class ConnectorPackage(Base):
+    __tablename__ = "connector_packages"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id", "slug", "version", name="uq_connector_package_version"
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    slug: Mapped[str] = mapped_column(String(120), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(30), default="validated")
+    definition: Mapped[dict] = mapped_column(JSON)
+    definition_hash: Mapped[str] = mapped_column(String(64), index=True)
+    created_by: Mapped[str] = mapped_column(String(240))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow
+    )
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class PollingSubscription(Base):
+    __tablename__ = "polling_subscriptions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    tool_id: Mapped[str] = mapped_column(
+        ForeignKey("tool_connections.id", ondelete="CASCADE"), index=True
+    )
+    operation: Mapped[str] = mapped_column(String(160))
+    arguments: Mapped[dict] = mapped_column(JSON, default=dict)
+    interval_seconds: Mapped[int] = mapped_column(Integer, default=300)
+    prompt_template: Mapped[str] = mapped_column(Text)
+    trigger_on_first_result: Mapped[bool] = mapped_column(Boolean, default=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_payload_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_polled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    next_poll_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow
+    )
+
+
+class PollingDelivery(Base):
+    __tablename__ = "polling_deliveries"
+    __table_args__ = (
+        UniqueConstraint(
+            "subscription_id", "payload_hash", name="uq_polling_subscription_payload"
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    subscription_id: Mapped[str] = mapped_column(
+        ForeignKey("polling_subscriptions.id", ondelete="CASCADE"), index=True
+    )
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("workflow_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow
+    )
+
+
 class WebhookSubscription(Base):
     __tablename__ = "webhook_subscriptions"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
