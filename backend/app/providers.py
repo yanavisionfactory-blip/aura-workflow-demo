@@ -52,6 +52,15 @@ PROVIDERS = {
         client_id_attr="airtable_client_id",
         client_secret_attr="airtable_client_secret",
     ),
+    "notion": OAuthProvider(
+        slug="notion",
+        display_name="Notion",
+        authorization_url="https://api.notion.com/v1/oauth/authorize",
+        token_url="https://api.notion.com/v1/oauth/token",
+        scopes=(),
+        client_id_attr="notion_client_id",
+        client_secret_attr="notion_client_secret",
+    ),
     "slack": OAuthProvider(
         slug="slack",
         display_name="Slack",
@@ -74,7 +83,9 @@ def oauth_authorization_url(settings: Settings, provider: OAuthProvider, state: 
         "response_type": "code",
         "state": state,
     }
-    if provider.slug == "slack":
+    if provider.slug == "notion":
+        params["owner"] = "user"
+    elif provider.slug == "slack":
         params["scope"] = ",".join(provider.scopes)
     else:
         params["scope"] = " ".join(provider.scopes)
@@ -94,7 +105,7 @@ async def exchange_oauth_code(settings: Settings, provider: OAuthProvider, code:
         "redirect_uri": f"{settings.public_url}/v1/oauth/{provider.slug}/callback",
     }
     headers = {"Accept": "application/json"}
-    if provider.slug == "airtable":
+    if provider.slug in {"airtable", "notion"}:
         basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
         headers["Authorization"] = f"Basic {basic}"
         payload.pop("client_secret")
@@ -178,6 +189,9 @@ async def verify_oauth_credentials(provider_slug: str, credentials: dict) -> dic
         method, url, kwargs = "POST", "https://slack.com/api/auth.test", {}
     elif provider_slug == "airtable":
         method, url, kwargs = "GET", "https://api.airtable.com/v0/meta/whoami", {}
+    elif provider_slug == "notion":
+        method, url, kwargs = "GET", "https://api.notion.com/v1/users/me", {}
+        headers["Notion-Version"] = "2025-09-03"
     else:
         return {"ok": False, "reason": "unsupported_oauth_provider"}
     async with httpx.AsyncClient(timeout=15) as client:
@@ -227,6 +241,12 @@ class ProviderExecutor:
             "sheets.append": self._sheets_append,
             "airtable.list": self._airtable_list,
             "airtable.create": self._airtable_create,
+            "notion.search": self._notion_search,
+            "notion.page.get": self._notion_page_get,
+            "notion.blocks.children.list": self._notion_blocks_children_list,
+            "notion.page.create": self._notion_page_create,
+            "notion.page.update": self._notion_page_update,
+            "notion.blocks.children.append": self._notion_blocks_children_append,
             "slack.channels.list": self._slack_channels_list,
             "slack.post": self._slack_post,
             "http.request": self._http_request,
@@ -343,6 +363,61 @@ class ProviderExecutor:
     async def _airtable_create(self, a: dict) -> dict:
         if not a.get("base_id") or not a.get("table_id") or not a.get("records"): raise ValueError("airtable.create requires base_id, table_id and approved records")
         return await self._request("POST", f"https://api.airtable.com/v0/{a['base_id']}/{a['table_id']}", json={"records": a["records"], "typecast": True})
+
+    async def _notion_request(self, method: str, path: str, **kwargs: Any) -> dict:
+        headers = self._headers()
+        headers["Notion-Version"] = "2025-09-03"
+        headers["Accept"] = "application/json"
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+            response = await client.request(
+                method, f"https://api.notion.com/v1/{path.lstrip('/')}", headers=headers, **kwargs
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def _notion_search(self, a: dict) -> dict:
+        payload = {
+            key: value
+            for key, value in {
+                "query": a.get("query"),
+                "page_size": min(int(a.get("page_size", 20)), 100),
+                "start_cursor": a.get("start_cursor"),
+            }.items()
+            if value not in (None, "")
+        }
+        return await self._notion_request("POST", "search", json=payload)
+
+    async def _notion_page_get(self, a: dict) -> dict:
+        return await self._notion_request("GET", f"pages/{quote(a['page_id'], safe='')}")
+
+    async def _notion_blocks_children_list(self, a: dict) -> dict:
+        params = {"page_size": min(int(a.get("page_size", 100)), 100)}
+        if a.get("start_cursor"):
+            params["start_cursor"] = a["start_cursor"]
+        return await self._notion_request(
+            "GET", f"blocks/{quote(a['block_id'], safe='')}/children", params=params
+        )
+
+    async def _notion_page_create(self, a: dict) -> dict:
+        payload = {"parent": a["parent"], "properties": a["properties"]}
+        if a.get("children") is not None:
+            payload["children"] = a["children"]
+        return await self._notion_request("POST", "pages", json=payload)
+
+    async def _notion_page_update(self, a: dict) -> dict:
+        payload = {"properties": a["properties"]}
+        if "archived" in a:
+            payload["archived"] = a["archived"]
+        return await self._notion_request(
+            "PATCH", f"pages/{quote(a['page_id'], safe='')}", json=payload
+        )
+
+    async def _notion_blocks_children_append(self, a: dict) -> dict:
+        return await self._notion_request(
+            "PATCH",
+            f"blocks/{quote(a['block_id'], safe='')}/children",
+            json={"children": a["children"]},
+        )
 
     async def _slack_channels_list(self, a: dict) -> dict:
         params = {
