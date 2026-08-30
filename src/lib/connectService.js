@@ -2,6 +2,7 @@ import { base44 } from "@/api/base44Client";
 import { setConnection, replaceConnections } from "@/lib/connectionsStore";
 import {
   addPythonTool,
+  authorizeCustomOAuth,
   authorizeOAuth,
   discoverPythonConnector,
   disconnectPythonConnection,
@@ -26,6 +27,31 @@ export async function connectTool(toolName, opts = {}) {
       if (result.redirecting) return { method: "oauth", connected: false, authorizationStarted: true, provider };
       await hydrateConnections();
       return { method: "oauth", connected: true, provider, connection: result.tool };
+    }
+
+    if (opts.connectionKind === "oauth2") {
+      const result = await authorizeCustomOAuth({
+        slug: slugify(toolName),
+        display_name: toolName,
+        authorization_url: opts.authorizationUrl,
+        token_url: opts.tokenUrl,
+        api_base_url: opts.baseUrl,
+        client_id: opts.clientId,
+        client_secret: opts.clientSecret || "",
+        scopes: opts.scopes || [],
+        authorization_params: opts.authorizationParams || {},
+        token_params: opts.tokenParams || {},
+        token_auth_method: opts.tokenAuthMethod || (opts.clientSecret ? "client_secret_post" : "none"),
+        capabilities: opts.capabilities || [{
+          name: "api.request",
+          description: "Call the connected application's API",
+          permission_scope: "write",
+          requires_approval: true,
+          transport: { method: "POST", path: "" },
+        }],
+      });
+      await hydrateConnections();
+      return { method: "oauth2", connected: true, connection: result.tool };
     }
 
     if (!opts.baseUrl) return { method: "custom", connected: false, needsConfiguration: true };

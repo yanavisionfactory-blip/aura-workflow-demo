@@ -40,13 +40,13 @@ export async function listPythonTools() {
 }
 
 export async function authorizeOAuth(provider, timeoutMs = 120000) {
+  const popup = window.open("about:blank", `aura-oauth-${provider}`, "popup,width=620,height=760");
   await ensureWorkspace();
   const { authorization_url } = await request(`/v1/oauth/${provider}/start`);
-  const popup = window.open(authorization_url, `aura-oauth-${provider}`, "popup,width=620,height=760");
   if (!popup) {
-    window.location.assign(authorization_url);
-    return { authorization_url, redirecting: true };
+    throw new Error("Your browser blocked the authorization window. Allow pop-ups for AURA and try again.");
   }
+  popup.location.assign(authorization_url);
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     await new Promise((resolve) => window.setTimeout(resolve, 1000));
@@ -57,6 +57,36 @@ export async function authorizeOAuth(provider, timeoutMs = 120000) {
     if (connected) {
       if (!popup.closed) popup.close();
       return { authorization_url, connected: true, tool: connected };
+    }
+    if (popup.closed) throw new Error("Authorization was cancelled before the connection completed.");
+  }
+  if (!popup.closed) popup.close();
+  throw new Error("Authorization timed out. Please try again.");
+}
+
+export async function authorizeCustomOAuth(payload, timeoutMs = 120000) {
+  const popup = window.open("about:blank", `aura-oauth-${payload.slug}`, "popup,width=620,height=760");
+  if (!popup) throw new Error("Your browser blocked the authorization window. Allow pop-ups for AURA and try again.");
+  await ensureWorkspace();
+  let started;
+  try {
+    started = await request("/v1/oauth/custom/start", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    popup.location.assign(started.authorization_url);
+  } catch (error) {
+    popup.close();
+    throw error;
+  }
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    const tools = await listPythonTools().catch(() => []);
+    const connected = tools.find((tool) => tool.slug === payload.slug && tool.enabled);
+    if (connected) {
+      if (!popup.closed) popup.close();
+      return { connected: true, tool: connected };
     }
     if (popup.closed) throw new Error("Authorization was cancelled before the connection completed.");
   }

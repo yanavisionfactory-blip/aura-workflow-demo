@@ -30,6 +30,10 @@ def _public_endpoint(url: str) -> None:
             raise ConnectorError("Connector endpoints may not target private or reserved networks")
 
 
+def validate_public_endpoint(url: str) -> None:
+    _public_endpoint(url)
+
+
 def _headers(credentials: dict[str, str]) -> dict[str, str]:
     token = credentials.get("access_token") or credentials.get("api_key")
     if not token:
@@ -191,4 +195,3 @@ def capability_for(manifest: dict, operation: str) -> dict:
     if not capability:
         raise ConnectorError(f"Capability {operation!r} is not in the verified manifest")
     return capability
-

@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 
 class ToolCreate(BaseModel):
@@ -24,6 +24,29 @@ class ConnectionDiscover(BaseModel):
 
 class ConnectionResume(BaseModel):
     connection_id: str | None = None
+
+
+class CustomOAuthStart(BaseModel):
+    slug: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,119}$")
+    display_name: str = Field(min_length=2, max_length=200)
+    authorization_url: HttpUrl
+    token_url: HttpUrl
+    api_base_url: HttpUrl
+    client_id: str = Field(min_length=2, max_length=1000)
+    client_secret: str = Field(default="", max_length=4000)
+    scopes: list[str] = Field(default_factory=list, max_length=100)
+    authorization_params: dict[str, str] = Field(default_factory=dict)
+    token_params: dict[str, str] = Field(default_factory=dict)
+    token_auth_method: Literal["client_secret_post", "client_secret_basic", "none"] = "client_secret_post"
+    capabilities: list[dict[str, Any]] = Field(default_factory=list, min_length=1, max_length=200)
+    revocation_url: HttpUrl | None = None
+
+    @field_validator("authorization_url", "token_url", "api_base_url", "revocation_url")
+    @classmethod
+    def require_https(cls, value: HttpUrl | None) -> HttpUrl | None:
+        if value is not None and value.scheme != "https":
+            raise ValueError("Connector endpoints must use HTTPS")
+        return value
 
 
 class ToolView(BaseModel):

@@ -108,13 +108,43 @@ async def exchange_oauth_code(settings: Settings, provider: OAuthProvider, code:
     return data
 
 
-async def refresh_oauth_credentials(settings: Settings, provider_slug: str, credentials: dict) -> tuple[dict, bool]:
+async def refresh_oauth_credentials(
+    settings: Settings,
+    provider_slug: str,
+    credentials: dict,
+    config: dict | None = None,
+) -> tuple[dict, bool]:
     """Refresh shortly before expiry; returns credentials and whether they changed."""
     if not credentials.get("refresh_token") or int(credentials.get("expires_at", 0)) > int(time.time()) + 90:
         return credentials, False
     provider = PROVIDERS.get(provider_slug)
     if not provider:
-        return credentials, False
+        config = config or {}
+        token_url = config.get("token_url")
+        if not config.get("oauth_custom") or not token_url:
+            return credentials, False
+        payload = {
+            "grant_type": "refresh_token",
+            "refresh_token": credentials["refresh_token"],
+            **config.get("token_params", {}),
+        }
+        auth = None
+        method = config.get("token_auth_method", "client_secret_post")
+        if method == "client_secret_basic":
+            auth = (credentials["client_id"], credentials.get("client_secret", ""))
+        elif method == "client_secret_post":
+            payload.update(
+                {"client_id": credentials["client_id"], "client_secret": credentials.get("client_secret", "")}
+            )
+        else:
+            payload["client_id"] = credentials["client_id"]
+        async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
+            response = await client.post(token_url, data=payload, auth=auth, headers={"Accept": "application/json"})
+            response.raise_for_status()
+            updated = response.json()
+        if updated.get("expires_in"):
+            updated["expires_at"] = int(time.time()) + int(updated["expires_in"])
+        return {**credentials, **updated}, True
     payload = {
         "client_id": getattr(settings, provider.client_id_attr),
         "client_secret": getattr(settings, provider.client_secret_attr),

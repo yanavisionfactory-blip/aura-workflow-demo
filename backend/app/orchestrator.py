@@ -441,20 +441,18 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                         credentials = vault.decrypt(active_tool.encrypted_credentials)
                         if active_tool.kind.value == "oauth":
                             credentials, changed = await refresh_oauth_credentials(
-                                get_settings(), active_tool.slug, credentials
+                                get_settings(), active_tool.slug, credentials, active_tool.config
                             )
                             if changed:
                                 active_tool.encrypted_credentials = vault.encrypt(credentials)
-                        manifest_record = None
-                        if active_tool.kind.value != "oauth":
-                            manifest_record = await session.scalar(
-                                select(CapabilityManifest).where(
-                                    CapabilityManifest.tool_id == active_tool.id,
-                                    CapabilityManifest.status == "verified",
-                                )
+                        manifest_record = await session.scalar(
+                            select(CapabilityManifest).where(
+                                CapabilityManifest.tool_id == active_tool.id,
+                                CapabilityManifest.status == "verified",
                             )
-                            if not manifest_record:
-                                raise RuntimeError("Capability provider is not verified")
+                        )
+                        if not manifest_record:
+                            raise RuntimeError("Capability provider is not verified")
                         executor = ProviderExecutor(
                             credentials,
                             active_tool.base_url,
