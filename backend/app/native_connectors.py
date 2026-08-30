@@ -98,6 +98,34 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
             }),
         ],
     },
+    "notion": {
+        "schema_version": "1.1",
+        "catalog_version": 1,
+        "provider_type": "oauth",
+        "name": "Notion",
+        "description": "Search, read, create, and update Notion pages and blocks.",
+        "base_url": "provider-managed",
+        "identity": {"provider": "notion"},
+        "modules": [
+            _module("notion.search", "search", "Search pages and data sources.", properties={
+                "query": _TEXT, "page_size": {**_POSITIVE_INTEGER, "maximum": 100}, "start_cursor": _TEXT
+            }),
+            _module("notion.page.get", "search", "Read a Notion page.", required=("page_id",), properties={"page_id": _TEXT}),
+            _module("notion.blocks.children.list", "search", "Read child blocks.", required=("block_id",), properties={
+                "block_id": _TEXT, "page_size": {**_POSITIVE_INTEGER, "maximum": 100}, "start_cursor": _TEXT
+            }),
+            _module("notion.page.create", "action", "Create an approved page.", required=("parent", "properties"), properties={
+                "parent": {"type": "object"}, "properties": {"type": "object"},
+                "children": {"type": "array", "items": {"type": "object"}}
+            }),
+            _module("notion.page.update", "action", "Update an approved page.", required=("page_id", "properties"), properties={
+                "page_id": _TEXT, "properties": {"type": "object"}, "archived": {"type": "boolean"}
+            }),
+            _module("notion.blocks.children.append", "action", "Append approved blocks to a page or block.", required=("block_id", "children"), properties={
+                "block_id": _TEXT, "children": {"type": "array", "minItems": 1, "items": {"type": "object"}}
+            }),
+        ],
+    },
     "slack": {
         "schema_version": "1.1",
         "catalog_version": 1,
