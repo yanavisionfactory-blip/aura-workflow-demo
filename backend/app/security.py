@@ -64,3 +64,28 @@ def decode_tenant_token(token: str) -> dict:
     if claims.get("typ") != "tenant_context" or not claims.get("workspace_id"):
         raise jwt.InvalidTokenError("Invalid tenant context")
     return claims
+
+
+def create_webhook_token(workspace_id: str, subscription_id: str) -> str:
+    now = datetime.now(timezone.utc)
+    return jwt.encode(
+        {
+            "typ": "webhook_endpoint",
+            "workspace_id": workspace_id,
+            "subscription_id": subscription_id,
+            "iat": now,
+        },
+        get_settings().session_signing_key,
+        algorithm="HS256",
+    )
+
+
+def decode_webhook_token(token: str) -> dict:
+    claims = jwt.decode(token, get_settings().session_signing_key, algorithms=["HS256"])
+    if (
+        claims.get("typ") != "webhook_endpoint"
+        or not claims.get("workspace_id")
+        or not claims.get("subscription_id")
+    ):
+        raise jwt.InvalidTokenError("Invalid webhook endpoint")
+    return claims
