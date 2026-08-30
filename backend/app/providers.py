@@ -73,13 +73,19 @@ PROVIDERS = {
 }
 
 
+def oauth_callback_url(settings: Settings, provider: OAuthProvider) -> str:
+    # Notion is registered against AURA's shared installation callback.
+    callback_provider = "installation" if provider.slug == "notion" else provider.slug
+    return f"{settings.public_url}/v1/oauth/{callback_provider}/callback"
+
+
 def oauth_authorization_url(settings: Settings, provider: OAuthProvider, state: str) -> str:
     client_id = getattr(settings, provider.client_id_attr)
     if not client_id:
         raise ValueError(f"{provider.display_name} OAuth client is not configured")
     params = {
         "client_id": client_id,
-        "redirect_uri": f"{settings.public_url}/v1/oauth/{provider.slug}/callback",
+        "redirect_uri": oauth_callback_url(settings, provider),
         "response_type": "code",
         "state": state,
     }
@@ -102,7 +108,7 @@ async def exchange_oauth_code(settings: Settings, provider: OAuthProvider, code:
         "client_secret": client_secret,
         "code": code,
         "grant_type": "authorization_code",
-        "redirect_uri": f"{settings.public_url}/v1/oauth/{provider.slug}/callback",
+        "redirect_uri": oauth_callback_url(settings, provider),
     }
     headers = {"Accept": "application/json"}
     if provider.slug in {"airtable", "notion"}:
