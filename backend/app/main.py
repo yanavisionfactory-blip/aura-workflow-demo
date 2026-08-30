@@ -14,6 +14,7 @@ from .config import get_settings
 from .agent_runtime import deterministic_plan_fixes
 from .db import session_dependency, set_tenant_context
 from .migrations import migrate_database
+from .native_connectors import native_manifest, native_operations, public_catalog
 from .models import (
     Approval,
     ApprovalSnapshot,
@@ -260,7 +261,7 @@ async def connector_catalog() -> dict:
         ],
         "oauth_providers": {
             slug: {
-                "display_name": definition.display_name,
+                **public_catalog(slug),
                 "configured": bool(
                     getattr(settings, definition.client_id_attr)
                     and getattr(settings, definition.client_secret_attr)
@@ -727,11 +728,7 @@ async def oauth_callback(provider: str, code: str, state: str, session: AsyncSes
     wid = claims["workspace_id"]
     await set_tenant_context(session, wid)
     tool = await session.scalar(select(ToolConnection).where(ToolConnection.workspace_id == wid, ToolConnection.slug == provider))
-    allowed = {
-        "google": ["gmail.list", "gmail.send", "calendar.list", "calendar.create", "sheets.read"],
-        "airtable": ["airtable.list", "airtable.create"],
-        "slack": ["slack.channels.list", "slack.post"],
-    }[provider]
+    allowed = native_operations(provider)
     if tool:
         tool.encrypted_credentials = CredentialVault().encrypt(credentials)
         tool.enabled = True
@@ -743,24 +740,7 @@ async def oauth_callback(provider: str, code: str, state: str, session: AsyncSes
     capability_record = await session.scalar(
         select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id)
     )
-    oauth_manifest = {
-        "schema_version": "1.0",
-        "provider_type": "oauth",
-        "name": definition.display_name,
-        "base_url": "provider-managed",
-        "identity": {"provider": provider},
-        "capabilities": [
-            {
-                "name": operation,
-                "permission_scope": operation_scope(operation),
-                "requires_approval": operation_scope(operation) != "read",
-                "input_schema": {"type": "object"},
-                "output_schema": {"type": "object"},
-                "transport": {"builtin": operation},
-            }
-            for operation in allowed
-        ],
-    }
+    oauth_manifest = native_manifest(provider)
     if capability_record:
         capability_record.status = "verified"
         capability_record.manifest = oauth_manifest
