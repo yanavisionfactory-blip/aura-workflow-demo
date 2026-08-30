@@ -56,7 +56,7 @@ PROVIDERS = {
         display_name="Slack",
         authorization_url="https://slack.com/oauth/v2/authorize",
         token_url="https://slack.com/api/oauth.v2.access",
-        scopes=("channels:read", "chat:write", "users:read"),
+        scopes=("channels:read", "chat:write"),
         client_id_attr="slack_client_id",
         client_secret_attr="slack_client_secret",
     ),
@@ -224,6 +224,7 @@ class ProviderExecutor:
             "sheets.append": self._sheets_append,
             "airtable.list": self._airtable_list,
             "airtable.create": self._airtable_create,
+            "slack.channels.list": self._slack_channels_list,
             "slack.post": self._slack_post,
             "http.request": self._http_request,
             "mcp.call": self._mcp_call,
@@ -338,6 +339,19 @@ class ProviderExecutor:
     async def _airtable_create(self, a: dict) -> dict:
         if not a.get("base_id") or not a.get("table_id") or not a.get("records"): raise ValueError("airtable.create requires base_id, table_id and approved records")
         return await self._request("POST", f"https://api.airtable.com/v0/{a['base_id']}/{a['table_id']}", json={"records": a["records"], "typecast": True})
+
+    async def _slack_channels_list(self, a: dict) -> dict:
+        params = {
+            "limit": min(int(a.get("limit", 100)), 200),
+            "exclude_archived": "true",
+            "types": "public_channel,private_channel",
+        }
+        if a.get("cursor"):
+            params["cursor"] = a["cursor"]
+        data = await self._request("GET", "https://slack.com/api/conversations.list", params=params)
+        if not data.get("ok"):
+            raise RuntimeError(data.get("error", "Slack channel discovery failed"))
+        return data
 
     async def _slack_post(self, a: dict) -> dict:
         if not a.get("channel") or not a.get("text"): raise ValueError("slack.post requires channel and approved text")
