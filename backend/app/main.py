@@ -1530,6 +1530,61 @@ async def custom_oauth_start(
 async def oauth_callback(provider: str, code: str, state: str, session: AsyncSession = Depends(session_dependency)):
     claims = decode_oauth_state(state)
     state_provider = claims.get("provider", "")
+    if provider == "installation" and state_provider.startswith("installation:"):
+        installation_id = state_provider.split(":", 1)[1]
+        wid = claims["workspace_id"]
+        await set_tenant_context(session, wid)
+        installation = await session.get(ConnectorInstallation, installation_id)
+        if (
+            not installation
+            or installation.workspace_id != wid
+            or installation.status != "authorizing"
+        ):
+            raise HTTPException(404, "Pending connector authorization not found")
+        package = await session.get(ConnectorPackage, installation.package_id)
+        tool = await session.get(ToolConnection, installation.tool_id)
+        if not package or not tool:
+            raise HTTPException(404, "Connector installation is incomplete")
+        authentication = package.definition.get("authentication", {})
+        stored = CredentialVault().decrypt(installation.encrypted_auth_config)
+        callback_url = f"{settings.public_url}/v1/oauth/installation/callback"
+        try:
+            credentials = await exchange_installed_oauth_code(
+                authentication, stored, code, callback_url
+            )
+        except (ConnectorInstallationError, httpx.HTTPError, ValueError) as exc:
+            raise HTTPException(502, f"Connector OAuth exchange failed: {exc}") from exc
+        tool.encrypted_credentials = CredentialVault().encrypt(credentials)
+        tool.enabled = True
+        installation.status = "active"
+        installation.encrypted_auth_config = None
+        record = await session.scalar(
+            select(CapabilityManifest).where(
+                CapabilityManifest.tool_id == tool.id
+            )
+        )
+        record.status = "verified"
+        record.verification = {
+            "ok": True,
+            "source": "connector_installation_oauth",
+        }
+        record.verified_at = datetime.now(timezone.utc)
+        session.add(
+            AuditEvent(
+                workspace_id=wid,
+                actor="oauth_callback",
+                event_type="connector.installation_authorized",
+                payload={
+                    "installation_id": installation.id,
+                    "package_id": package.id,
+                    "slug": installation.slug,
+                },
+            )
+        )
+        await session.commit()
+        return RedirectResponse(
+            f"{frontend_url}?tool_connected={installation.slug}"
+        )
     if provider == "custom" and state_provider.startswith("custom:"):
         tool_id = state_provider.split(":", 1)[1]
         wid = claims["workspace_id"]
