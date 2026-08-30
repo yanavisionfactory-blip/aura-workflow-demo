@@ -80,7 +80,17 @@ export default function PlanView({ plan, onApprove, approveLabel = "Start", user
     if (!pendingConnect) return;
     const name = toolObj?.name || pendingConnect.name;
     setPendingConnect(null);
-    handleConnect(name, { apiKey: toolObj?.apiKey, baseUrl: toolObj?.baseUrl, connectionKind: toolObj?.connectionKind, credentials: toolObj?.credentials });
+    handleConnect(name, {
+      apiKey: toolObj?.apiKey,
+      baseUrl: toolObj?.baseUrl,
+      connectionKind: toolObj?.connectionKind,
+      credentials: toolObj?.credentials,
+      authorizationUrl: toolObj?.authorizationUrl,
+      tokenUrl: toolObj?.tokenUrl,
+      clientId: toolObj?.clientId,
+      clientSecret: toolObj?.clientSecret,
+      scopes: toolObj?.scopes,
+    });
   };
   const handleConnect = async (name, opts = {}) => {
     setConnectingTool(name);

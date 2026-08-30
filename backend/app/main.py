@@ -1,6 +1,7 @@
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from urllib.parse import urlencode
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
@@ -43,6 +44,7 @@ from .schemas import (
     ApprovalDecision,
     ConnectionDiscover,
     ConnectionResume,
+    CustomOAuthStart,
     PlanApproval,
     PolicyUpdate,
     ResumeDecision,
@@ -63,6 +65,8 @@ from .universal_connectors import (
     allowed_operations as discovered_operations,
     discover_provider,
     verify_provider,
+    normalize_manifest,
+    validate_public_endpoint,
 )
 from .worker import execute_run_task, plan_run_task
 
@@ -303,7 +307,7 @@ async def test_connection(
     credentials = CredentialVault().decrypt(tool.encrypted_credentials)
     result = (
         await verify_oauth_credentials(tool.slug, credentials)
-        if tool.kind == ToolKind.oauth
+        if tool.kind == ToolKind.oauth and not tool.config.get("oauth_custom")
         else await verify_provider(manifest.manifest, credentials)
     )
     manifest.verification = result
@@ -322,14 +326,29 @@ async def disconnect_connection(
     tool = await session.get(ToolConnection, connection_id)
     if not tool or tool.workspace_id != context.workspace_id:
         raise HTTPException(404, "Connection not found")
+    credentials = CredentialVault().decrypt(tool.encrypted_credentials)
+    revocation = {"attempted": False}
+    if tool.config.get("oauth_custom") and tool.config.get("revocation_url") and credentials.get("access_token"):
+        revocation["attempted"] = True
+        try:
+            validate_public_endpoint(tool.config["revocation_url"])
+            async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
+                response = await client.post(
+                    tool.config["revocation_url"],
+                    data={"token": credentials["access_token"]},
+                    auth=(credentials.get("client_id", ""), credentials.get("client_secret", "")),
+                )
+            revocation.update({"ok": response.is_success, "status_code": response.status_code})
+        except (ConnectorError, httpx.HTTPError, ValueError) as exc:
+            revocation.update({"ok": False, "error": str(exc)})
     tool.enabled = False
     tool.encrypted_credentials = None
     manifest = await session.scalar(select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id))
     if manifest:
         manifest.status = "revoked"
-    session.add(AuditEvent(workspace_id=context.workspace_id, actor=context.subject, event_type="connector.revoked", payload={"tool_id": tool.id, "slug": tool.slug}))
+    session.add(AuditEvent(workspace_id=context.workspace_id, actor=context.subject, event_type="connector.revoked", payload={"tool_id": tool.id, "slug": tool.slug, "provider_revocation": revocation}))
     await session.commit()
-    return {"id": tool.id, "status": "revoked"}
+    return {"id": tool.id, "status": "revoked", "provider_revocation": revocation}
 
 
 @app.get("/v1/tools/{tool_slug}/trust")
@@ -431,10 +450,150 @@ async def oauth_start(
     return {"authorization_url": authorization_url}
 
 
+@app.post("/v1/oauth/custom/start", status_code=201)
+async def custom_oauth_start(
+    payload: CustomOAuthStart,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    for endpoint in (payload.authorization_url, payload.token_url, payload.api_base_url):
+        validate_public_endpoint(str(endpoint))
+    if payload.revocation_url:
+        validate_public_endpoint(str(payload.revocation_url))
+    existing = await session.scalar(
+        select(ToolConnection).where(
+            ToolConnection.workspace_id == context.workspace_id,
+            ToolConnection.slug == payload.slug,
+        )
+    )
+    if existing:
+        raise HTTPException(409, "A connection with this slug already exists")
+    manifest = normalize_manifest(
+        {
+            "name": payload.display_name,
+            "capabilities": payload.capabilities,
+            "identity": {"oauth": "custom"},
+        },
+        "oauth",
+        str(payload.api_base_url),
+    )
+    tool = ToolConnection(
+        workspace_id=context.workspace_id,
+        slug=payload.slug,
+        display_name=payload.display_name,
+        kind=ToolKind.oauth,
+        base_url=str(payload.api_base_url),
+        encrypted_credentials=CredentialVault().encrypt(
+            {"client_id": payload.client_id, "client_secret": payload.client_secret}
+        ),
+        config={
+            "oauth_custom": True,
+            "authorization_url": str(payload.authorization_url),
+            "token_url": str(payload.token_url),
+            "revocation_url": str(payload.revocation_url) if payload.revocation_url else None,
+            "scopes": payload.scopes,
+            "authorization_params": payload.authorization_params,
+            "token_params": payload.token_params,
+            "token_auth_method": payload.token_auth_method,
+            "manifest": manifest,
+        },
+        allowed_operations=[item["name"] for item in manifest["capabilities"]],
+        enabled=False,
+    )
+    session.add(tool)
+    await session.flush()
+    session.add(
+        CapabilityManifest(
+            workspace_id=context.workspace_id,
+            tool_id=tool.id,
+            provider_type="oauth",
+            status="pending",
+            manifest=manifest,
+            verification={"ok": False, "reason": "awaiting_oauth_callback"},
+        )
+    )
+    state = create_oauth_state(context.workspace_id, f"custom:{tool.id}")
+    params = {
+        "client_id": payload.client_id,
+        "redirect_uri": f"{settings.public_url}/v1/oauth/custom/callback",
+        "response_type": "code",
+        "state": state,
+        **payload.authorization_params,
+    }
+    if payload.scopes:
+        params["scope"] = " ".join(payload.scopes)
+    await session.commit()
+    return {
+        "authorization_url": f"{str(payload.authorization_url)}?{urlencode(params)}",
+        "connection_id": tool.id,
+        "slug": tool.slug,
+    }
+
+
 @app.get("/v1/oauth/{provider}/callback")
 async def oauth_callback(provider: str, code: str, state: str, session: AsyncSession = Depends(session_dependency)):
     claims = decode_oauth_state(state)
-    if claims.get("provider") != provider:
+    state_provider = claims.get("provider", "")
+    if provider == "custom" and state_provider.startswith("custom:"):
+        tool_id = state_provider.split(":", 1)[1]
+        wid = claims["workspace_id"]
+        await set_tenant_context(session, wid)
+        tool = await session.get(ToolConnection, tool_id)
+        if not tool or tool.workspace_id != wid or not tool.config.get("oauth_custom"):
+            raise HTTPException(404, "Pending OAuth connection not found")
+        stored = CredentialVault().decrypt(tool.encrypted_credentials)
+        token_payload = {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": f"{settings.public_url}/v1/oauth/custom/callback",
+            **tool.config.get("token_params", {}),
+        }
+        auth = None
+        method = tool.config.get("token_auth_method", "client_secret_post")
+        if method == "client_secret_basic":
+            auth = (stored["client_id"], stored.get("client_secret", ""))
+        elif method == "client_secret_post":
+            token_payload.update(
+                {"client_id": stored["client_id"], "client_secret": stored.get("client_secret", "")}
+            )
+        else:
+            token_payload["client_id"] = stored["client_id"]
+        try:
+            validate_public_endpoint(tool.config["token_url"])
+            async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
+                response = await client.post(
+                    tool.config["token_url"],
+                    data=token_payload,
+                    auth=auth,
+                    headers={"Accept": "application/json"},
+                )
+                response.raise_for_status()
+                token_data = response.json()
+        except (ConnectorError, httpx.HTTPError, ValueError) as exc:
+            raise HTTPException(502, f"OAuth token exchange failed: {exc}") from exc
+        if not token_data.get("access_token"):
+            raise HTTPException(502, "OAuth provider did not return an access token")
+        if token_data.get("expires_in"):
+            token_data["expires_at"] = int(datetime.now(timezone.utc).timestamp()) + int(token_data["expires_in"])
+        tool.encrypted_credentials = CredentialVault().encrypt({**stored, **token_data})
+        tool.enabled = True
+        capability_record = await session.scalar(
+            select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id)
+        )
+        capability_record.status = "verified"
+        capability_record.verification = {"ok": True, "source": "custom_oauth_callback"}
+        capability_record.verified_at = datetime.now(timezone.utc)
+        session.add(
+            AuditEvent(
+                workspace_id=wid,
+                actor="oauth_callback",
+                event_type="connector.oauth_authorized",
+                payload={"tool_id": tool.id, "slug": tool.slug, "scopes": tool.config.get("scopes", [])},
+            )
+        )
+        await session.commit()
+        return RedirectResponse(f"{settings.frontend_url}?tool_connected={tool.slug}")
+    if state_provider != provider:
         raise HTTPException(400, "OAuth state/provider mismatch")
     definition = PROVIDERS.get(provider)
     if not definition:

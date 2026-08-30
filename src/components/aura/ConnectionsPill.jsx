@@ -68,7 +68,18 @@ export default function ConnectionsPill() {
   const confirmConnect = async (toolObj) => {
     if (!pendingConnect) return;
     const name = toolObj?.name || pendingConnect.name;
-    await connect(name, { apiKey: toolObj?.apiKey, baseUrl: toolObj?.baseUrl, connectionKind: toolObj?.connectionKind, credentials: toolObj?.credentials, allowedOperations: toolObj?.connectionKind === "mcp" ? ["mcp.call"] : ["http.request"] });
+    await connect(name, {
+      apiKey: toolObj?.apiKey,
+      baseUrl: toolObj?.baseUrl,
+      connectionKind: toolObj?.connectionKind,
+      credentials: toolObj?.credentials,
+      authorizationUrl: toolObj?.authorizationUrl,
+      tokenUrl: toolObj?.tokenUrl,
+      clientId: toolObj?.clientId,
+      clientSecret: toolObj?.clientSecret,
+      scopes: toolObj?.scopes,
+      allowedOperations: toolObj?.connectionKind === "mcp" ? ["mcp.call"] : ["http.request"],
+    });
     setPendingConnect(null);
   };
 

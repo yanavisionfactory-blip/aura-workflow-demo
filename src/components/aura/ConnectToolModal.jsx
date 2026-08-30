@@ -22,6 +22,11 @@ export default function ConnectToolModal({ tool, onConnect, onClose, connecting 
   const [connectionKind, setConnectionKind] = useState("openapi");
   const [baseUrl, setBaseUrl] = useState("");
   const [credentialHeader, setCredentialHeader] = useState("Authorization");
+  const [authorizationUrl, setAuthorizationUrl] = useState("");
+  const [tokenUrl, setTokenUrl] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [scopes, setScopes] = useState("");
 
   // Re-sync fields when a new tool is presented (the modal instance persists
   // across triggers, so useState only initializes once).
@@ -34,10 +39,21 @@ export default function ConnectToolModal({ tool, onConnect, onClose, connecting 
     setConnectionKind("openapi");
     setBaseUrl("");
     setCredentialHeader("Authorization");
+    setAuthorizationUrl("");
+    setTokenUrl("");
+    setClientId("");
+    setClientSecret("");
+    setScopes("");
   }, [tool]);
 
   const canConnect = customMode
-    ? name.trim().length > 0 && /^https:\/\//i.test(baseUrl.trim()) && (connectionKind !== "api_key" || apiKey.trim().length > 0)
+    ? name.trim().length > 0 && /^https:\/\//i.test(baseUrl.trim())
+      && (connectionKind !== "api_key" || apiKey.trim().length > 0)
+      && (connectionKind !== "oauth2" || (
+        /^https:\/\//i.test(authorizationUrl.trim())
+        && /^https:\/\//i.test(tokenUrl.trim())
+        && clientId.trim().length > 1
+      ))
     : isApiKey ? apiKey.trim().length > 0 : !!tool?.name;
 
   const handleConnect = () => {
@@ -51,6 +67,11 @@ export default function ConnectToolModal({ tool, onConnect, onClose, connecting 
         baseUrl: baseUrl.trim(),
         apiKey: apiKey.trim(),
         credentials: apiKey.trim() ? { api_key: apiKey.trim(), header: credentialHeader.trim() || "Authorization", prefix: credentialHeader === "Authorization" ? "Bearer" : "" } : {},
+        authorizationUrl: authorizationUrl.trim(),
+        tokenUrl: tokenUrl.trim(),
+        clientId: clientId.trim(),
+        clientSecret: clientSecret.trim(),
+        scopes: scopes.split(/[\s,]+/).map((scope) => scope.trim()).filter(Boolean),
       });
     } else if (isApiKey) {
       onConnect({ ...tool, apiKey: apiKey.trim() });
@@ -119,6 +140,7 @@ export default function ConnectToolModal({ tool, onConnect, onClose, connecting 
                 />
                 <select value={connectionKind} onChange={(e) => setConnectionKind(e.target.value)} className="w-full bg-card/70 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary/40">
                   <option value="openapi">REST / OpenAPI API</option>
+                  <option value="oauth2">OAuth 2.0 / OpenID Connect</option>
                   <option value="api_key">API-key service</option>
                   <option value="mcp">MCP server</option>
                   <option value="agent">External agent</option>
@@ -127,7 +149,17 @@ export default function ConnectToolModal({ tool, onConnect, onClose, connecting 
                   <option value="browser">Web app / browser connector</option>
                 </select>
                 <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={connectionKind === "mcp" ? "https://tool.example.com/mcp" : "https://api.example.com"} className="w-full bg-card/70 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary/40 placeholder:text-muted-foreground/40 font-mono" />
-                {!["mcp", "webhook", "browser"].includes(connectionKind) && (
+                {connectionKind === "oauth2" && (
+                  <>
+                    <input value={authorizationUrl} onChange={(e) => setAuthorizationUrl(e.target.value)} placeholder="Authorization URL" className="w-full bg-card/70 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary/40 placeholder:text-muted-foreground/40 font-mono" />
+                    <input value={tokenUrl} onChange={(e) => setTokenUrl(e.target.value)} placeholder="Token URL" className="w-full bg-card/70 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary/40 placeholder:text-muted-foreground/40 font-mono" />
+                    <input value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="OAuth client ID" className="w-full bg-card/70 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary/40 placeholder:text-muted-foreground/40 font-mono" />
+                    <input value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} type="password" placeholder="OAuth client secret (optional for public clients)" className="w-full bg-card/70 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary/40 placeholder:text-muted-foreground/40 font-mono" />
+                    <input value={scopes} onChange={(e) => setScopes(e.target.value)} placeholder="Scopes, separated by spaces or commas" className="w-full bg-card/70 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary/40 placeholder:text-muted-foreground/40 font-mono" />
+                    <p className="text-[10px] text-amber-300/80">Register this callback with the provider: https://impartial-emotion-production-49d4.up.railway.app/v1/oauth/custom/callback</p>
+                  </>
+                )}
+                {!["mcp", "webhook", "browser", "oauth2"].includes(connectionKind) && (
                   <>
                     <input value={apiKey} onChange={(e) => setApiKey(e.target.value)} type="password" placeholder={connectionKind === "api_key" ? "API key (required)" : "API key or bearer token (optional)"} className="w-full bg-card/70 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary/40 placeholder:text-muted-foreground/40 font-mono" />
                     {apiKey && <input value={credentialHeader} onChange={(e) => setCredentialHeader(e.target.value)} placeholder="Header name" className="w-full bg-card/70 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary/40 placeholder:text-muted-foreground/40 font-mono" />}
