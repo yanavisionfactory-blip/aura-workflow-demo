@@ -47,8 +47,11 @@ export async function authorizeOAuth(provider, timeoutMs = 120000) {
   popup.document.title = "Connecting to AURA";
   popup.document.body.innerHTML = '<main style="font-family:system-ui;background:#0b1020;color:#eef2ff;min-height:100vh;display:grid;place-items:center;margin:0"><div style="text-align:center"><div style="font-size:32px;margin-bottom:12px">◌</div><strong>Preparing secure authorization…</strong><p style="color:#94a3b8;font-size:14px">AURA is checking this connection.</p></div></main>';
   let authorization_url;
+  let previousUpdatedAt = null;
   try {
     await ensureWorkspace();
+    const before = await listPythonTools().catch(() => []);
+    previousUpdatedAt = before.find((tool) => tool.slug === provider)?.updated_at || null;
     ({ authorization_url } = await request(`/v1/oauth/${provider}/start`));
   } catch (error) {
     popup.close();
@@ -59,14 +62,20 @@ export async function authorizeOAuth(provider, timeoutMs = 120000) {
   while (Date.now() - started < timeoutMs) {
     await new Promise((resolve) => window.setTimeout(resolve, 1000));
     const tools = await listPythonTools().catch(() => []);
-    const connected = tools.find((tool) => tool.enabled && (
-      tool.slug === provider || (tool.kind === "oauth" && tool.slug.includes(provider))
-    ));
+    const connected = tools.find((tool) =>
+      tool.enabled &&
+      (tool.slug === provider || (tool.kind === "oauth" && tool.slug.includes(provider))) &&
+      (!previousUpdatedAt || tool.updated_at !== previousUpdatedAt)
+    );
     if (connected) {
       if (!popup.closed) popup.close();
       return { authorization_url, connected: true, tool: connected };
     }
-    if (popup.closed) throw new Error("Authorization was cancelled before the connection completed.");
+    if (popup.closed) {
+      const existing = tools.find((tool) => tool.enabled && tool.slug === provider);
+      if (existing && !previousUpdatedAt) return { authorization_url, connected: true, tool: existing };
+      throw new Error("Authorization was cancelled before the connection completed.");
+    }
   }
   if (!popup.closed) popup.close();
   throw new Error("Authorization timed out. Please try again.");
