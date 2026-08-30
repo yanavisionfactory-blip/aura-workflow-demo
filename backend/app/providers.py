@@ -344,7 +344,7 @@ class ProviderExecutor:
         params = {
             "limit": min(int(a.get("limit", 100)), 200),
             "exclude_archived": "true",
-            "types": "public_channel,private_channel",
+            "types": "public_channel",
         }
         if a.get("cursor"):
             params["cursor"] = a["cursor"]
