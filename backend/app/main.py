@@ -397,6 +397,68 @@ async def disconnect_connection(
     return {"id": tool.id, "status": "revoked", "provider_revocation": revocation}
 
 
+@app.post("/v1/connections/{connection_id}/reconnect")
+async def reconnect_connection(
+    connection_id: str,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    tool = await session.get(ToolConnection, connection_id)
+    if not tool or tool.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Connection not found")
+    if tool.kind != ToolKind.oauth:
+        raise HTTPException(
+            409,
+            "This connector is re-verified with Test; replace its credentials to reauthorize it",
+        )
+    previous_updated_at = tool.updated_at.isoformat() if tool.updated_at else None
+    if tool.config.get("oauth_custom"):
+        credentials = CredentialVault().decrypt(tool.encrypted_credentials)
+        client_id = credentials.get("client_id")
+        if not client_id:
+            raise HTTPException(
+                409,
+                "Custom OAuth application credentials are no longer available; configure the connector again",
+            )
+        state = create_oauth_state(context.workspace_id, f"custom:{tool.id}")
+        params = {
+            "client_id": client_id,
+            "redirect_uri": f"{settings.public_url}/v1/oauth/custom/callback",
+            "response_type": "code",
+            "state": state,
+            **tool.config.get("authorization_params", {}),
+        }
+        scopes = tool.config.get("scopes", [])
+        if scopes:
+            params["scope"] = " ".join(scopes)
+        authorization_url = (
+            f"{tool.config['authorization_url']}?{urlencode(params)}"
+        )
+    else:
+        definition = PROVIDERS.get(tool.slug)
+        if not definition:
+            raise HTTPException(409, "The OAuth provider is no longer registered")
+        state = create_oauth_state(context.workspace_id, tool.slug)
+        try:
+            authorization_url = oauth_authorization_url(settings, definition, state)
+        except ValueError as exc:
+            raise HTTPException(503, str(exc)) from exc
+    session.add(
+        AuditEvent(
+            workspace_id=context.workspace_id,
+            actor=context.subject,
+            event_type="connector.reauthorization_started",
+            payload={"tool_id": tool.id, "slug": tool.slug},
+        )
+    )
+    await session.commit()
+    return {
+        "authorization_url": authorization_url,
+        "connection_id": tool.id,
+        "previous_updated_at": previous_updated_at,
+    }
+
+
 @app.get("/v1/tools/{tool_slug}/trust")
 async def get_tool_trust(
     tool_slug: str,
