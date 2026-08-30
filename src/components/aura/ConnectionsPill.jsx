@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Link2, Plus, Search, X, ArrowLeft, Check, ScanSearch, Trash2, Loader2, Settings2, RefreshCw, ShieldCheck } from "lucide-react";
+import { Link2, Plus, Search, X, ArrowLeft, Check, ScanSearch, Trash2, Loader2, Settings2, RefreshCw } from "lucide-react";
 
 import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
 import { connectTool, disconnectTool, getToolConnection, hasStandardOAuth, hydrateConnections, reconnectTool, recordInterfaceConnection, testToolConnection } from "@/lib/connectService";
@@ -351,39 +351,22 @@ export default function ConnectionsPill() {
       <AnimatePresence>
         {managedConnection && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[80] bg-black/65 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setManagedConnection(null)}>
-            <motion.div initial={{ scale: 0.97, y: 8 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.97, y: 8 }} onClick={(e) => e.stopPropagation()} className="w-full max-w-md rounded-2xl border border-white/10 bg-card shadow-2xl overflow-hidden">
+            <motion.div initial={{ scale: 0.97, y: 8 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.97, y: 8 }} onClick={(e) => e.stopPropagation()} className="w-full max-w-sm rounded-2xl border border-white/10 bg-card shadow-2xl overflow-hidden">
               <div className="flex items-center justify-between px-5 py-4 border-b border-white/8">
-                <div>
-                  <p className="text-sm font-semibold">{managedConnection.uiName || managedConnection.display_name}</p>
-                  <p className="text-[11px] text-muted-foreground">{managedConnection.kind?.toUpperCase()} connection</p>
-                </div>
+                <p className="text-sm font-semibold">{managedConnection.uiName || managedConnection.display_name}</p>
                 <button onClick={() => setManagedConnection(null)} className="p-1.5 text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
               </div>
-              <div className="p-5 space-y-4">
-                <div className="grid grid-cols-2 gap-2 text-xs">
-                  <div className="rounded-xl bg-secondary/50 p-3"><p className="text-muted-foreground">Status</p><p className="mt-1 text-emerald-400 capitalize">{managedConnection.status || (managedConnection.enabled ? "connected" : "disabled")}</p></div>
-                  <div className="rounded-xl bg-secondary/50 p-3"><p className="text-muted-foreground">Trust score</p><p className="mt-1">{Math.round((managedConnection.trust_score ?? 1) * 100)}%</p></div>
+              <div className="px-6 py-7 text-center">
+                <div className="mx-auto mb-3 w-11 h-11 rounded-full bg-emerald-400/10 border border-emerald-400/20 flex items-center justify-center">
+                  <Check className="w-5 h-5 text-emerald-400" />
                 </div>
-                {managedConnection.identity && Object.keys(managedConnection.identity).length > 0 && (
-                  <div className="rounded-xl border border-white/8 p-3 text-xs">
-                    <p className="text-muted-foreground mb-2">Authorized identity</p>
-                    {Object.entries(managedConnection.identity).map(([key, value]) => <p key={key} className="truncate"><span className="text-muted-foreground capitalize">{key.replaceAll("_", " ")}:</span> {String(value)}</p>)}
-                  </div>
-                )}
-                <div>
-                  <p className="text-xs text-muted-foreground mb-2">Verified capabilities</p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {(managedConnection.allowed_operations || []).map((operation) => <span key={operation} className="px-2 py-1 rounded-md bg-primary/10 border border-primary/20 text-[10px] text-primary">{operation}</span>)}
-                    {(managedConnection.allowed_operations || []).length === 0 && <span className="text-xs text-muted-foreground">No executable capabilities declared.</span>}
-                  </div>
-                </div>
-                <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground"><ShieldCheck className="w-3.5 h-3.5 text-emerald-400" /> Credentials remain encrypted in your AURA workspace.</div>
-                {error && <p className="text-xs text-red-400 rounded-lg border border-red-400/20 bg-red-400/5 p-2">{error}</p>}
+                <p className="text-sm font-medium">Connected to AURA</p>
+                <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">AURA will use this connection only in workflows and plans you approve.</p>
+                {error && <p className="mt-4 text-xs text-red-400 rounded-lg border border-red-400/20 bg-red-400/5 p-2">{error}</p>}
               </div>
-              <div className="grid grid-cols-3 gap-2 p-4 border-t border-white/8">
-                <button onClick={() => runConnectionAction(managedConnection.uiName, "test")} disabled={connectionAction === managedConnection.uiName} className="rounded-lg border border-white/10 px-3 py-2 text-xs hover:bg-white/5">Test</button>
-                <button onClick={() => runConnectionAction(managedConnection.uiName, "reconnect")} disabled={managedConnection.kind !== "oauth" || connectionAction === managedConnection.uiName} className="flex items-center justify-center gap-1 rounded-lg border border-primary/30 px-3 py-2 text-xs text-primary hover:bg-primary/10 disabled:opacity-40"><RefreshCw className="w-3 h-3" /> Reconnect</button>
-                <button onClick={() => runConnectionAction(managedConnection.uiName, "disconnect")} disabled={connectionAction === managedConnection.uiName} className="flex items-center justify-center gap-1 rounded-lg border border-red-400/20 px-3 py-2 text-xs text-red-400 hover:bg-red-400/5"><Trash2 className="w-3 h-3" /> Disconnect</button>
+              <div className="grid grid-cols-2 gap-2 p-4 border-t border-white/8">
+                <button onClick={() => runConnectionAction(managedConnection.uiName, "reconnect")} disabled={managedConnection.kind !== "oauth" || connectionAction === managedConnection.uiName} className="flex items-center justify-center gap-1.5 rounded-lg border border-primary/30 px-3 py-2.5 text-xs text-primary hover:bg-primary/10 disabled:opacity-40"><RefreshCw className="w-3.5 h-3.5" /> Reconnect</button>
+                <button onClick={() => runConnectionAction(managedConnection.uiName, "disconnect")} disabled={connectionAction === managedConnection.uiName} className="flex items-center justify-center gap-1.5 rounded-lg border border-red-400/20 px-3 py-2.5 text-xs text-red-400 hover:bg-red-400/5"><Trash2 className="w-3.5 h-3.5" /> Disconnect</button>
               </div>
             </motion.div>
           </motion.div>
