@@ -18,14 +18,16 @@ from .connector_sdk import ConnectorSDKError, validate_connector_definition
 from .agent_runtime import deterministic_plan_fixes
 from .db import session_dependency, set_tenant_context
 from .migrations import migrate_database
-from .native_connectors import native_manifest, native_operations, public_catalog
+from .native_connectors import native_manifest, native_operations, public_catalog, validate_module_arguments
 from .models import (
     Approval,
     ApprovalSnapshot,
     AuditEvent,
     CapabilityManifest,
     ConnectionRequirement,
+    ConnectorPackage,
     PlanVersion,
+    PollingSubscription,
     PolicyConfig,
     RunStatus,
     RunStep,
@@ -52,9 +54,11 @@ from .schemas import (
     ConnectionDiscover,
     ConnectionResume,
     ConnectorDefinitionValidate,
+    ConnectorPackageSubmit,
     CustomOAuthStart,
     PlanApproval,
     PolicyUpdate,
+    PollingSubscriptionCreate,
     ResumeDecision,
     RunCreate,
     ToolCreate,
@@ -80,7 +84,7 @@ from .universal_connectors import (
     normalize_manifest,
     validate_public_endpoint,
 )
-from .worker import execute_run_task, plan_run_task
+from .worker import execute_run_task, plan_run_task, poll_subscription_task
 
 
 settings = get_settings()
@@ -282,6 +286,279 @@ async def connector_catalog() -> dict:
         },
         "browser_connector_available": bool(settings.browser_connector_url),
     }
+
+
+@app.post("/v1/connector-packages", status_code=201)
+async def submit_connector_package(
+    payload: ConnectorPackageSubmit,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    try:
+        validated = validate_connector_definition(payload.definition)
+    except ConnectorSDKError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    canonical = json.dumps(
+        validated, sort_keys=True, separators=(",", ":")
+    )
+    definition_hash = hashlib.sha256(canonical.encode()).hexdigest()
+    versions = (
+        await session.scalars(
+            select(ConnectorPackage).where(
+                ConnectorPackage.workspace_id == context.workspace_id,
+                ConnectorPackage.slug == validated["slug"],
+            )
+        )
+    ).all()
+    duplicate = next(
+        (item for item in versions if item.definition_hash == definition_hash),
+        None,
+    )
+    if duplicate:
+        return {
+            "id": duplicate.id,
+            "slug": duplicate.slug,
+            "version": duplicate.version,
+            "status": duplicate.status,
+            "definition_hash": duplicate.definition_hash,
+            "duplicate": True,
+        }
+    package = ConnectorPackage(
+        workspace_id=context.workspace_id,
+        slug=validated["slug"],
+        version=max((item.version for item in versions), default=0) + 1,
+        status="validated",
+        definition=validated,
+        definition_hash=definition_hash,
+        created_by=context.subject,
+    )
+    session.add(package)
+    session.add(
+        AuditEvent(
+            workspace_id=context.workspace_id,
+            actor=context.subject,
+            event_type="connector.package_validated",
+            payload={
+                "package_id": package.id,
+                "slug": package.slug,
+                "version": package.version,
+                "definition_hash": definition_hash,
+            },
+        )
+    )
+    await session.commit()
+    return {
+        "id": package.id,
+        "slug": package.slug,
+        "version": package.version,
+        "status": package.status,
+        "definition_hash": package.definition_hash,
+        "duplicate": False,
+    }
+
+
+@app.get("/v1/connector-packages")
+async def list_connector_packages(
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> list[dict]:
+    rows = (
+        await session.scalars(
+            select(ConnectorPackage).where(
+                ConnectorPackage.workspace_id == context.workspace_id
+            )
+        )
+    ).all()
+    return [
+        {
+            "id": item.id,
+            "slug": item.slug,
+            "version": item.version,
+            "status": item.status,
+            "definition_hash": item.definition_hash,
+            "created_at": item.created_at,
+            "published_at": item.published_at,
+        }
+        for item in rows
+    ]
+
+
+@app.post("/v1/connector-packages/{package_id}/publish")
+async def publish_connector_package(
+    package_id: str,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    if context.role not in {"owner", "admin"}:
+        raise HTTPException(403, "Only tenant administrators may publish connectors")
+    package = await session.get(ConnectorPackage, package_id)
+    if not package or package.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Connector package not found")
+    if package.status == "published":
+        return {
+            "id": package.id,
+            "slug": package.slug,
+            "version": package.version,
+            "status": package.status,
+        }
+    if package.status != "validated":
+        raise HTTPException(409, "Only validated connectors may be published")
+    package.status = "published"
+    package.published_at = datetime.now(timezone.utc)
+    session.add(
+        AuditEvent(
+            workspace_id=context.workspace_id,
+            actor=context.subject,
+            event_type="connector.package_published",
+            payload={
+                "package_id": package.id,
+                "slug": package.slug,
+                "version": package.version,
+                "definition_hash": package.definition_hash,
+            },
+        )
+    )
+    await session.commit()
+    return {
+        "id": package.id,
+        "slug": package.slug,
+        "version": package.version,
+        "status": package.status,
+    }
+
+
+@app.post("/v1/polling-subscriptions", status_code=201)
+async def create_polling_subscription(
+    payload: PollingSubscriptionCreate,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    tool = await session.scalar(
+        select(ToolConnection).where(
+            ToolConnection.workspace_id == context.workspace_id,
+            ToolConnection.slug == payload.tool_slug,
+            ToolConnection.enabled.is_(True),
+        )
+    )
+    if not tool:
+        raise HTTPException(404, "Connected tool not found")
+    manifest_record = await session.scalar(
+        select(CapabilityManifest).where(
+            CapabilityManifest.tool_id == tool.id,
+            CapabilityManifest.status == "verified",
+        )
+    )
+    if not manifest_record:
+        raise HTTPException(409, "Connected tool is not verified")
+    capability = next(
+        (
+            item
+            for item in manifest_record.manifest.get("capabilities", [])
+            if item.get("name") == payload.operation
+        ),
+        None,
+    )
+    if not capability:
+        raise HTTPException(422, "Polling operation is not available")
+    if capability.get("permission_scope") != "read":
+        raise HTTPException(422, "Polling triggers may only call read modules")
+    try:
+        validate_module_arguments(
+            manifest_record.manifest, payload.operation, payload.arguments
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    subscription = PollingSubscription(
+        workspace_id=context.workspace_id,
+        tool_id=tool.id,
+        operation=payload.operation,
+        arguments=payload.arguments,
+        interval_seconds=payload.interval_seconds,
+        prompt_template=payload.prompt_template,
+        trigger_on_first_result=payload.trigger_on_first_result,
+        active=True,
+        next_poll_at=datetime.now(timezone.utc),
+    )
+    session.add(subscription)
+    await session.flush()
+    session.add(
+        AuditEvent(
+            workspace_id=context.workspace_id,
+            actor=context.subject,
+            event_type="polling.subscription_created",
+            payload={
+                "subscription_id": subscription.id,
+                "tool_slug": tool.slug,
+                "operation": subscription.operation,
+                "interval_seconds": subscription.interval_seconds,
+            },
+        )
+    )
+    await session.commit()
+    poll_subscription_task.delay(subscription.id, context.workspace_id)
+    return {
+        "id": subscription.id,
+        "tool_slug": tool.slug,
+        "operation": subscription.operation,
+        "interval_seconds": subscription.interval_seconds,
+        "active": True,
+    }
+
+
+@app.get("/v1/polling-subscriptions")
+async def list_polling_subscriptions(
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> list[dict]:
+    subscriptions = (
+        await session.scalars(
+            select(PollingSubscription).where(
+                PollingSubscription.workspace_id == context.workspace_id
+            )
+        )
+    ).all()
+    tools = (
+        await session.scalars(
+            select(ToolConnection).where(
+                ToolConnection.workspace_id == context.workspace_id
+            )
+        )
+    ).all()
+    tool_slugs = {tool.id: tool.slug for tool in tools}
+    return [
+        {
+            "id": item.id,
+            "tool_slug": tool_slugs.get(item.tool_id),
+            "operation": item.operation,
+            "interval_seconds": item.interval_seconds,
+            "active": item.active,
+            "last_polled_at": item.last_polled_at,
+            "next_poll_at": item.next_poll_at,
+        }
+        for item in subscriptions
+    ]
+
+
+@app.delete("/v1/polling-subscriptions/{subscription_id}")
+async def disable_polling_subscription(
+    subscription_id: str,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    subscription = await session.get(PollingSubscription, subscription_id)
+    if not subscription or subscription.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Polling subscription not found")
+    subscription.active = False
+    session.add(
+        AuditEvent(
+            workspace_id=context.workspace_id,
+            actor=context.subject,
+            event_type="polling.subscription_disabled",
+            payload={"subscription_id": subscription.id},
+        )
+    )
+    await session.commit()
+    return {"id": subscription.id, "active": False}
 
 
 @app.post("/v1/connectors/validate-definition")
