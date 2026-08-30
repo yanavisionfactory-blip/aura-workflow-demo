@@ -1,5 +1,4 @@
 import hashlib
-import hmac
 import json
 import secrets
 import time
@@ -71,6 +70,7 @@ from .security import (
     decode_tenant_token,
     create_webhook_token,
     decode_webhook_token,
+    verify_webhook_signature,
 )
 from .universal_connectors import (
     ConnectorError,
@@ -420,11 +420,9 @@ async def receive_webhook(
     ):
         raise HTTPException(404, "Active webhook subscription not found")
     secret = CredentialVault().decrypt(subscription.encrypted_secret).get("secret", "")
-    signed = x_aura_timestamp.encode() + b"." + body
-    expected = "sha256=" + hmac.new(
-        secret.encode(), signed, hashlib.sha256
-    ).hexdigest()
-    if not hmac.compare_digest(expected, x_aura_signature):
+    if not verify_webhook_signature(
+        secret, x_aura_timestamp, body, x_aura_signature
+    ):
         raise HTTPException(401, "Invalid webhook signature")
 
     previous = await session.scalar(
