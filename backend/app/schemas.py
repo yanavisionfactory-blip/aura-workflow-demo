@@ -49,6 +49,21 @@ class CustomOAuthStart(BaseModel):
         return value
 
 
+class ConnectorInstallationCreate(BaseModel):
+    package_id: str
+    authentication_type: Literal["oauth2", "api_key", "bearer", "basic", "none"]
+    credentials: dict[str, str] = Field(default_factory=dict)
+    configuration: dict[str, Any] = Field(default_factory=dict)
+
+
+class ConnectorInstallationUpgrade(BaseModel):
+    package_id: str
+
+
+class ConnectorInstallationRollback(BaseModel):
+    package_id: str | None = None
+
+
 class ConnectorPackageSubmit(BaseModel):
     definition: dict[str, Any]
 
