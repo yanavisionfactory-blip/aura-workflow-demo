@@ -73,7 +73,7 @@ from .worker import execute_run_task, plan_run_task
 
 settings = get_settings()
 app = FastAPI(title="AURA Control Plane", version="0.1.0")
-app.add_middleware(CORSMiddleware, allow_origins=[settings.frontend_url], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+frontend_origin = settings.frontend_url.rstrip("/")\napp.add_middleware(CORSMiddleware, allow_origins=[frontend_origin], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
 @app.on_event("startup")
@@ -592,7 +592,7 @@ async def oauth_callback(provider: str, code: str, state: str, session: AsyncSes
             )
         )
         await session.commit()
-        return RedirectResponse(f"{settings.frontend_url}?tool_connected={tool.slug}")
+        return RedirectResponse(f"{frontend_origin}/?tool_connected={tool.slug}")
     if state_provider != provider:
         raise HTTPException(400, "OAuth state/provider mismatch")
     definition = PROVIDERS.get(provider)
@@ -643,7 +643,7 @@ async def oauth_callback(provider: str, code: str, state: str, session: AsyncSes
     else:
         session.add(CapabilityManifest(workspace_id=wid, tool_id=tool.id, provider_type="oauth", status="verified", manifest=oauth_manifest, verification={"ok": True, "source": "oauth_callback"}, verified_at=datetime.now(timezone.utc)))
     await session.commit()
-    return RedirectResponse(f"{settings.frontend_url}?tool_connected={provider}")
+    return RedirectResponse(f"{frontend_origin}/?tool_connected={provider}")
 
 
 @app.post("/v1/runs", status_code=202)
