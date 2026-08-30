@@ -330,6 +330,14 @@ async def install_connector_package(
     except ConnectorInstallationError as exc:
         raise HTTPException(422, str(exc)) from exc
     manifest = package.definition["manifest"]
+    verification = {"ok": False, "reason": "awaiting_oauth_callback"}
+    if payload.authentication_type != "oauth2":
+        try:
+            verification = await verify_provider(manifest, credentials)
+        except (ConnectorError, httpx.HTTPError, ValueError) as exc:
+            raise HTTPException(422, f"Connector verification failed: {exc}") from exc
+        if not verification.get("ok"):
+            raise HTTPException(422, "Connector credentials could not be verified")
     tool = ToolConnection(
         workspace_id=context.workspace_id,
         slug=package.slug,
@@ -402,7 +410,7 @@ async def install_connector_package(
         ),
         manifest=manifest,
         verification={
-            "ok": payload.authentication_type != "oauth2",
+            **verification,
             "source": "connector_installation",
         },
         verified_at=(
@@ -1554,6 +1562,14 @@ async def oauth_callback(provider: str, code: str, state: str, session: AsyncSes
             )
         except (ConnectorInstallationError, httpx.HTTPError, ValueError) as exc:
             raise HTTPException(502, f"Connector OAuth exchange failed: {exc}") from exc
+        try:
+            verification = await verify_provider(
+                package.definition["manifest"], credentials
+            )
+        except (ConnectorError, httpx.HTTPError, ValueError) as exc:
+            raise HTTPException(502, f"Connector verification failed: {exc}") from exc
+        if not verification.get("ok"):
+            raise HTTPException(502, "Authorized connector could not be verified")
         tool.encrypted_credentials = CredentialVault().encrypt(credentials)
         tool.enabled = True
         installation.status = "active"
@@ -1565,7 +1581,7 @@ async def oauth_callback(provider: str, code: str, state: str, session: AsyncSes
         )
         record.status = "verified"
         record.verification = {
-            "ok": True,
+            **verification,
             "source": "connector_installation_oauth",
         }
         record.verified_at = datetime.now(timezone.utc)
