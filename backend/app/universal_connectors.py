@@ -9,6 +9,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
 from .config import get_settings
+from .openapi_importer import OpenAPIImportError, compile_openapi
 from .policy import operation_scope
 
 
@@ -73,12 +74,14 @@ def normalize_manifest(raw: dict, provider_type: str, base_url: str) -> dict:
         normalized.append(
             {
                 "name": name,
+                "module_type": item.get("module_type", "action" if scope != "read" else "search"),
                 "description": item.get("description", ""),
                 "input_schema": item.get("input_schema", {"type": "object"}),
                 "output_schema": item.get("output_schema", {"type": "object"}),
                 "permission_scope": scope,
                 "requires_approval": bool(item.get("requires_approval", scope != "read")),
                 "transport": item.get("transport", {}),
+                "metadata": item.get("metadata", {}),
             }
         )
     if not normalized:
@@ -132,15 +135,19 @@ async def discover_provider(kind: str, base_url: str, credentials: dict, config:
         spec_url = config.get("spec_url") or urljoin(base_url.rstrip("/") + "/", "openapi.json")
         _public_endpoint(spec_url)
         spec = await _json("GET", spec_url, credentials)
-        capabilities = []
-        for path, operations in spec.get("paths", {}).items():
-            for method, operation in operations.items():
-                if method.lower() not in {"get", "post", "put", "patch", "delete"}:
-                    continue
-                name = operation.get("operationId") or f"{method.lower()}_{path.strip('/').replace('/', '_')}"
-                schema = operation.get("requestBody", {}).get("content", {}).get("application/json", {}).get("schema")
-                capabilities.append(_capability(name, method, path, schema))
-        return normalize_manifest({"name": spec.get("info", {}).get("title"), "capabilities": capabilities}, kind, base_url)
+        try:
+            capabilities = compile_openapi(spec)
+        except OpenAPIImportError as exc:
+            raise ConnectorError(str(exc)) from exc
+        return normalize_manifest(
+            {
+                "name": spec.get("info", {}).get("title"),
+                "description": spec.get("info", {}).get("description", ""),
+                "capabilities": capabilities,
+            },
+            kind,
+            base_url,
+        )
     if kind in {"agent", "plugin"}:
         default = ".well-known/aura-agent.json" if kind == "agent" else ".well-known/aura-plugin.json"
         manifest_url = config.get("manifest_url") or urljoin(base_url.rstrip("/") + "/", default)
