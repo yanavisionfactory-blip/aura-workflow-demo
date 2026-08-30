@@ -9,6 +9,9 @@ DIRECT_TENANT_TABLES = (
     "tool_connections",
     "capability_manifests",
     "connection_requirements",
+    "connector_packages",
+    "polling_subscriptions",
+    "polling_deliveries",
     "webhook_subscriptions",
     "webhook_deliveries",
     "tool_trust_states",
@@ -86,6 +89,17 @@ async def migrate_database() -> None:
                 END;
                 $$ LANGUAGE plpgsql
                 """
+            )
+        )
+        await connection.execute(
+            text("DROP TRIGGER IF EXISTS published_connector_packages_immutable ON connector_packages")
+        )
+        await connection.execute(
+            text(
+                "CREATE TRIGGER published_connector_packages_immutable "
+                "BEFORE UPDATE OR DELETE ON connector_packages FOR EACH ROW "
+                "WHEN (OLD.status = 'published') "
+                "EXECUTE FUNCTION reject_immutable_record_change()"
             )
         )
         await connection.execute(
