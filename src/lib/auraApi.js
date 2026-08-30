@@ -41,10 +41,18 @@ export async function listPythonTools() {
 
 export async function authorizeOAuth(provider, timeoutMs = 120000) {
   const popup = window.open("about:blank", `aura-oauth-${provider}`, "popup,width=620,height=760");
-  await ensureWorkspace();
-  const { authorization_url } = await request(`/v1/oauth/${provider}/start`);
   if (!popup) {
     throw new Error("Your browser blocked the authorization window. Allow pop-ups for AURA and try again.");
+  }
+  popup.document.title = "Connecting to AURA";
+  popup.document.body.innerHTML = '<main style="font-family:system-ui;background:#0b1020;color:#eef2ff;min-height:100vh;display:grid;place-items:center;margin:0"><div style="text-align:center"><div style="font-size:32px;margin-bottom:12px">◌</div><strong>Preparing secure authorization…</strong><p style="color:#94a3b8;font-size:14px">AURA is checking this connection.</p></div></main>';
+  let authorization_url;
+  try {
+    await ensureWorkspace();
+    ({ authorization_url } = await request(`/v1/oauth/${provider}/start`));
+  } catch (error) {
+    popup.close();
+    throw error;
   }
   popup.location.assign(authorization_url);
   const started = Date.now();
