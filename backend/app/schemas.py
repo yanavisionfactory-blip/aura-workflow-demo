@@ -49,6 +49,19 @@ class CustomOAuthStart(BaseModel):
         return value
 
 
+class ConnectorPackageSubmit(BaseModel):
+    definition: dict[str, Any]
+
+
+class PollingSubscriptionCreate(BaseModel):
+    tool_slug: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,119}$")
+    operation: str = Field(min_length=2, max_length=160)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    interval_seconds: int = Field(default=300, ge=60, le=86_400)
+    prompt_template: str = Field(min_length=3, max_length=10_000)
+    trigger_on_first_result: bool = False
+
+
 class ConnectorDefinitionValidate(BaseModel):
     definition: dict[str, Any]
 
