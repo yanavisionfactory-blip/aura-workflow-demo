@@ -1,16 +1,21 @@
+import hashlib
+import hmac
+import json
 import secrets
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlencode, urlsplit
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import get_settings
+from .connector_sdk import ConnectorSDKError, validate_connector_definition
 from .agent_runtime import deterministic_plan_fixes
 from .db import session_dependency, set_tenant_context
 from .migrations import migrate_database
@@ -30,6 +35,8 @@ from .models import (
     ToolConnection,
     ToolKind,
     ToolTrustState,
+    WebhookDelivery,
+    WebhookSubscription,
     WorkflowRun,
     Workspace,
 )
@@ -45,6 +52,7 @@ from .schemas import (
     ApprovalDecision,
     ConnectionDiscover,
     ConnectionResume,
+    ConnectorDefinitionValidate,
     CustomOAuthStart,
     PlanApproval,
     PolicyUpdate,
@@ -52,6 +60,7 @@ from .schemas import (
     RunCreate,
     ToolCreate,
     TrustSignalUpdate,
+    WebhookSubscriptionCreate,
     WorkflowPlan,
 )
 from .security import (
@@ -60,6 +69,8 @@ from .security import (
     create_tenant_token,
     decode_oauth_state,
     decode_tenant_token,
+    create_webhook_token,
+    decode_webhook_token,
 )
 from .universal_connectors import (
     ConnectorError,
@@ -271,6 +282,208 @@ async def connector_catalog() -> dict:
         },
         "browser_connector_available": bool(settings.browser_connector_url),
     }
+
+
+@app.post("/v1/connectors/validate-definition")
+async def validate_connector_package(
+    payload: ConnectorDefinitionValidate,
+    context: TenantContext = Depends(tenant_context),
+) -> dict:
+    try:
+        result = validate_connector_definition(payload.definition)
+    except ConnectorSDKError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {**result, "validated_for_workspace": context.workspace_id}
+
+
+@app.post("/v1/webhook-subscriptions", status_code=201)
+async def create_webhook_subscription(
+    payload: WebhookSubscriptionCreate,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    signing_secret = secrets.token_urlsafe(48)
+    subscription = WebhookSubscription(
+        workspace_id=context.workspace_id,
+        name=payload.name,
+        event_type=payload.event_type,
+        prompt_template=payload.prompt_template,
+        encrypted_secret=CredentialVault().encrypt({"secret": signing_secret}),
+        active=True,
+    )
+    session.add(subscription)
+    await session.flush()
+    token = create_webhook_token(context.workspace_id, subscription.id)
+    session.add(
+        AuditEvent(
+            workspace_id=context.workspace_id,
+            actor=context.subject,
+            event_type="webhook.subscription_created",
+            payload={
+                "subscription_id": subscription.id,
+                "name": subscription.name,
+                "event_type": subscription.event_type,
+            },
+        )
+    )
+    await session.commit()
+    return {
+        "id": subscription.id,
+        "name": subscription.name,
+        "event_type": subscription.event_type,
+        "webhook_url": f"{settings.public_url}/v1/webhooks/incoming/{token}",
+        "signing_secret": signing_secret,
+        "signature_header": "X-Aura-Signature",
+        "signature_format": "sha256=<hex HMAC of timestamp + '.' + raw request body>",
+        "timestamp_header": "X-Aura-Timestamp",
+        "event_id_header": "X-Aura-Event-Id",
+    }
+
+
+@app.get("/v1/webhook-subscriptions")
+async def list_webhook_subscriptions(
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> list[dict]:
+    rows = (
+        await session.scalars(
+            select(WebhookSubscription).where(
+                WebhookSubscription.workspace_id == context.workspace_id
+            )
+        )
+    ).all()
+    return [
+        {
+            "id": item.id,
+            "name": item.name,
+            "event_type": item.event_type,
+            "active": item.active,
+            "created_at": item.created_at,
+        }
+        for item in rows
+    ]
+
+
+@app.delete("/v1/webhook-subscriptions/{subscription_id}")
+async def disable_webhook_subscription(
+    subscription_id: str,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    subscription = await session.get(WebhookSubscription, subscription_id)
+    if not subscription or subscription.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Webhook subscription not found")
+    subscription.active = False
+    session.add(
+        AuditEvent(
+            workspace_id=context.workspace_id,
+            actor=context.subject,
+            event_type="webhook.subscription_disabled",
+            payload={"subscription_id": subscription.id},
+        )
+    )
+    await session.commit()
+    return {"id": subscription.id, "active": False}
+
+
+@app.post("/v1/webhooks/incoming/{endpoint_token}", status_code=202)
+async def receive_webhook(
+    endpoint_token: str,
+    request: Request,
+    x_aura_signature: str = Header(..., alias="X-Aura-Signature"),
+    x_aura_timestamp: str = Header(..., alias="X-Aura-Timestamp"),
+    x_aura_event_id: str = Header(..., alias="X-Aura-Event-Id"),
+    session: AsyncSession = Depends(session_dependency),
+) -> dict:
+    try:
+        claims = decode_webhook_token(endpoint_token)
+        timestamp = int(x_aura_timestamp)
+    except Exception as exc:
+        raise HTTPException(401, "Invalid webhook endpoint or timestamp") from exc
+    if abs(int(time.time()) - timestamp) > 300:
+        raise HTTPException(401, "Webhook timestamp is outside the five-minute window")
+    if not x_aura_event_id or len(x_aura_event_id) > 240:
+        raise HTTPException(422, "Invalid webhook event identifier")
+    body = await request.body()
+    if len(body) > 1_000_000:
+        raise HTTPException(413, "Webhook payload exceeds one megabyte")
+
+    workspace_id = claims["workspace_id"]
+    await set_tenant_context(session, workspace_id)
+    subscription = await session.get(
+        WebhookSubscription, claims["subscription_id"]
+    )
+    if (
+        not subscription
+        or subscription.workspace_id != workspace_id
+        or not subscription.active
+    ):
+        raise HTTPException(404, "Active webhook subscription not found")
+    secret = CredentialVault().decrypt(subscription.encrypted_secret).get("secret", "")
+    signed = x_aura_timestamp.encode() + b"." + body
+    expected = "sha256=" + hmac.new(
+        secret.encode(), signed, hashlib.sha256
+    ).hexdigest()
+    if not hmac.compare_digest(expected, x_aura_signature):
+        raise HTTPException(401, "Invalid webhook signature")
+
+    previous = await session.scalar(
+        select(WebhookDelivery).where(
+            WebhookDelivery.subscription_id == subscription.id,
+            WebhookDelivery.event_id == x_aura_event_id,
+        )
+    )
+    if previous:
+        return {
+            "delivery_id": previous.id,
+            "run_id": previous.run_id,
+            "status": "duplicate",
+        }
+    try:
+        payload = json.loads(body) if body else {}
+    except json.JSONDecodeError as exc:
+        raise HTTPException(422, "Webhook body must be valid JSON") from exc
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    event_context = serialized[:8_000]
+    prompt = (
+        f"{subscription.prompt_template}\n\n"
+        f"Trusted webhook event type: {subscription.event_type}\n"
+        f"Event ID: {x_aura_event_id}\n"
+        f"Event payload: {event_context}"
+    )
+    run = WorkflowRun(
+        workspace_id=workspace_id,
+        prompt=prompt,
+        status=RunStatus.queued,
+    )
+    session.add(run)
+    await session.flush()
+    delivery = WebhookDelivery(
+        workspace_id=workspace_id,
+        subscription_id=subscription.id,
+        event_id=x_aura_event_id,
+        payload_hash=hashlib.sha256(body).hexdigest(),
+        status="queued",
+        run_id=run.id,
+    )
+    session.add(delivery)
+    session.add(
+        AuditEvent(
+            workspace_id=workspace_id,
+            run_id=run.id,
+            actor=f"webhook:{subscription.id}",
+            event_type="webhook.delivery_accepted",
+            payload={
+                "subscription_id": subscription.id,
+                "delivery_id": delivery.id,
+                "event_id": x_aura_event_id,
+                "payload_hash": delivery.payload_hash,
+            },
+        )
+    )
+    await session.commit()
+    plan_run_task.delay(run.id, workspace_id)
+    return {"delivery_id": delivery.id, "run_id": run.id, "status": "queued"}
 
 
 @app.post("/v1/connectors/discover", status_code=201)
