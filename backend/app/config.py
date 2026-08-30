@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     airtable_client_secret: str = ""
     slack_client_id: str = ""
     slack_client_secret: str = ""
+    notion_client_id: str = ""
+    notion_client_secret: str = ""
     browser_connector_url: str = ""
 
 
