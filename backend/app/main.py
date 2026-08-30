@@ -18,6 +18,12 @@ from .connector_sdk import ConnectorSDKError, validate_connector_definition
 from .agent_runtime import deterministic_plan_fixes
 from .db import session_dependency, set_tenant_context
 from .migrations import migrate_database
+from .installation_runtime import (
+    ConnectorInstallationError,
+    exchange_installed_oauth_code,
+    installed_oauth_url,
+    normalized_credentials,
+)
 from .native_connectors import native_manifest, native_operations, public_catalog, validate_module_arguments
 from .models import (
     Approval,
@@ -26,6 +32,8 @@ from .models import (
     CapabilityManifest,
     ConnectionRequirement,
     ConnectorPackage,
+    ConnectorInstallation,
+    ConnectorInstallationVersion,
     PlanVersion,
     PollingSubscription,
     PolicyConfig,
@@ -54,6 +62,9 @@ from .schemas import (
     ConnectionDiscover,
     ConnectionResume,
     ConnectorDefinitionValidate,
+    ConnectorInstallationCreate,
+    ConnectorInstallationUpgrade,
+    ConnectorInstallationRollback,
     ConnectorPackageSubmit,
     CustomOAuthStart,
     PlanApproval,
@@ -286,6 +297,376 @@ async def connector_catalog() -> dict:
         },
         "browser_connector_available": bool(settings.browser_connector_url),
     }
+
+
+@app.post("/v1/connector-installations", status_code=201)
+async def install_connector_package(
+    payload: ConnectorInstallationCreate,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    package = await session.get(ConnectorPackage, payload.package_id)
+    if (
+        not package
+        or package.workspace_id != context.workspace_id
+        or package.status != "published"
+    ):
+        raise HTTPException(404, "Published connector package not found")
+    existing = await session.scalar(
+        select(ConnectorInstallation).where(
+            ConnectorInstallation.workspace_id == context.workspace_id,
+            ConnectorInstallation.slug == package.slug,
+        )
+    )
+    if existing:
+        raise HTTPException(409, "This connector is already installed")
+    authentication = package.definition.get("authentication", {"type": "none"})
+    if payload.authentication_type != authentication.get("type", "none"):
+        raise HTTPException(422, "Selected authentication does not match the package")
+    try:
+        credentials = normalized_credentials(
+            payload.authentication_type, payload.credentials
+        )
+    except ConnectorInstallationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    manifest = package.definition["manifest"]
+    tool = ToolConnection(
+        workspace_id=context.workspace_id,
+        slug=package.slug,
+        display_name=package.definition["name"],
+        kind=(
+            ToolKind.oauth
+            if payload.authentication_type == "oauth2"
+            else ToolKind.api_key
+        ),
+        base_url=manifest["base_url"],
+        encrypted_credentials=CredentialVault().encrypt(credentials),
+        config={
+            **payload.configuration,
+            "connector_package_id": package.id,
+            "oauth_custom": payload.authentication_type == "oauth2",
+            "token_url": authentication.get("token_url"),
+            "scopes": authentication.get("scopes", []),
+            "token_params": authentication.get("token_params", {}),
+            "token_auth_method": authentication.get(
+                "token_auth_method", "client_secret_post"
+            ),
+            "manifest": manifest,
+        },
+        allowed_operations=[
+            item["name"] for item in manifest.get("capabilities", [])
+        ],
+        enabled=payload.authentication_type != "oauth2",
+    )
+    session.add(tool)
+    await session.flush()
+    installation = ConnectorInstallation(
+        workspace_id=context.workspace_id,
+        slug=package.slug,
+        package_id=package.id,
+        tool_id=tool.id,
+        status=(
+            "authorizing"
+            if payload.authentication_type == "oauth2"
+            else "active"
+        ),
+        authentication_type=payload.authentication_type,
+        encrypted_auth_config=(
+            CredentialVault().encrypt(credentials)
+            if payload.authentication_type == "oauth2"
+            else None
+        ),
+        configuration=payload.configuration,
+        created_by=context.subject,
+    )
+    session.add(installation)
+    await session.flush()
+    session.add(
+        ConnectorInstallationVersion(
+            workspace_id=context.workspace_id,
+            installation_id=installation.id,
+            sequence=1,
+            package_id=package.id,
+            action="install",
+            created_by=context.subject,
+        )
+    )
+    capability_record = CapabilityManifest(
+        workspace_id=context.workspace_id,
+        tool_id=tool.id,
+        provider_type="connector_sdk",
+        status=(
+            "pending"
+            if payload.authentication_type == "oauth2"
+            else "verified"
+        ),
+        manifest=manifest,
+        verification={
+            "ok": payload.authentication_type != "oauth2",
+            "source": "connector_installation",
+        },
+        verified_at=(
+            None
+            if payload.authentication_type == "oauth2"
+            else datetime.now(timezone.utc)
+        ),
+    )
+    session.add(capability_record)
+    session.add(
+        AuditEvent(
+            workspace_id=context.workspace_id,
+            actor=context.subject,
+            event_type="connector.installed",
+            payload={
+                "installation_id": installation.id,
+                "package_id": package.id,
+                "slug": package.slug,
+                "authentication_type": payload.authentication_type,
+            },
+        )
+    )
+    response = {
+        "id": installation.id,
+        "slug": installation.slug,
+        "package_version": package.version,
+        "status": installation.status,
+        "tool_id": tool.id,
+        "modules": tool.allowed_operations,
+    }
+    if payload.authentication_type == "oauth2":
+        callback_url = f"{settings.public_url}/v1/oauth/installation/callback"
+        state = create_oauth_state(
+            context.workspace_id, f"installation:{installation.id}"
+        )
+        try:
+            response["authorization_url"] = installed_oauth_url(
+                authentication, credentials, state, callback_url
+            )
+        except ConnectorInstallationError as exc:
+            raise HTTPException(422, str(exc)) from exc
+    await session.commit()
+    return response
+
+
+@app.get("/v1/connector-installations")
+async def list_connector_installations(
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> list[dict]:
+    rows = (
+        await session.scalars(
+            select(ConnectorInstallation).where(
+                ConnectorInstallation.workspace_id == context.workspace_id
+            )
+        )
+    ).all()
+    packages = (
+        await session.scalars(
+            select(ConnectorPackage).where(
+                ConnectorPackage.workspace_id == context.workspace_id
+            )
+        )
+    ).all()
+    package_by_id = {item.id: item for item in packages}
+    return [
+        {
+            "id": item.id,
+            "slug": item.slug,
+            "status": item.status,
+            "authentication_type": item.authentication_type,
+            "package_version": (
+                package_by_id[item.package_id].version
+                if item.package_id in package_by_id
+                else None
+            ),
+            "tool_id": item.tool_id,
+            "updated_at": item.updated_at,
+        }
+        for item in rows
+    ]
+
+
+@app.post("/v1/connector-installations/{installation_id}/upgrade")
+async def upgrade_connector_installation(
+    installation_id: str,
+    payload: ConnectorInstallationUpgrade,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    installation = await session.get(ConnectorInstallation, installation_id)
+    package = await session.get(ConnectorPackage, payload.package_id)
+    if (
+        not installation
+        or installation.workspace_id != context.workspace_id
+        or not package
+        or package.workspace_id != context.workspace_id
+        or package.status != "published"
+        or package.slug != installation.slug
+    ):
+        raise HTTPException(404, "Compatible published upgrade not found")
+    current = await session.get(ConnectorPackage, installation.package_id)
+    if current and package.version <= current.version:
+        raise HTTPException(409, "Upgrade version must be newer")
+    if package.definition.get("authentication", {}).get(
+        "type", "none"
+    ) != installation.authentication_type:
+        raise HTTPException(409, "Authentication changes require reinstall")
+    tool = await session.get(ToolConnection, installation.tool_id)
+    manifest = package.definition["manifest"]
+    installation.previous_package_id = installation.package_id
+    installation.package_id = package.id
+    tool.allowed_operations = [
+        item["name"] for item in manifest.get("capabilities", [])
+    ]
+    tool.config = {**tool.config, "connector_package_id": package.id, "manifest": manifest}
+    record = await session.scalar(
+        select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id)
+    )
+    record.manifest = manifest
+    history = (
+        await session.scalars(
+            select(ConnectorInstallationVersion).where(
+                ConnectorInstallationVersion.installation_id == installation.id
+            )
+        )
+    ).all()
+    session.add(
+        ConnectorInstallationVersion(
+            workspace_id=context.workspace_id,
+            installation_id=installation.id,
+            sequence=max((item.sequence for item in history), default=0) + 1,
+            package_id=package.id,
+            action="upgrade",
+            created_by=context.subject,
+        )
+    )
+    await session.commit()
+    return {
+        "id": installation.id,
+        "slug": installation.slug,
+        "status": installation.status,
+        "package_version": package.version,
+        "modules": tool.allowed_operations,
+    }
+
+
+@app.post("/v1/connector-installations/{installation_id}/rollback")
+async def rollback_connector_installation(
+    installation_id: str,
+    payload: ConnectorInstallationRollback,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    installation = await session.get(ConnectorInstallation, installation_id)
+    if not installation or installation.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Connector installation not found")
+    target_id = payload.package_id or installation.previous_package_id
+    target = await session.get(ConnectorPackage, target_id) if target_id else None
+    if (
+        not target
+        or target.workspace_id != context.workspace_id
+        or target.status != "published"
+        or target.slug != installation.slug
+        or target.id == installation.package_id
+    ):
+        raise HTTPException(409, "No compatible published rollback version")
+    tool = await session.get(ToolConnection, installation.tool_id)
+    manifest = target.definition["manifest"]
+    current_id = installation.package_id
+    installation.package_id = target.id
+    installation.previous_package_id = current_id
+    tool.allowed_operations = [
+        item["name"] for item in manifest.get("capabilities", [])
+    ]
+    tool.config = {**tool.config, "connector_package_id": target.id, "manifest": manifest}
+    record = await session.scalar(
+        select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id)
+    )
+    record.manifest = manifest
+    history = (
+        await session.scalars(
+            select(ConnectorInstallationVersion).where(
+                ConnectorInstallationVersion.installation_id == installation.id
+            )
+        )
+    ).all()
+    session.add(
+        ConnectorInstallationVersion(
+            workspace_id=context.workspace_id,
+            installation_id=installation.id,
+            sequence=max((item.sequence for item in history), default=0) + 1,
+            package_id=target.id,
+            action="rollback",
+            created_by=context.subject,
+        )
+    )
+    await session.commit()
+    return {
+        "id": installation.id,
+        "slug": installation.slug,
+        "status": installation.status,
+        "package_version": target.version,
+        "modules": tool.allowed_operations,
+    }
+
+
+@app.delete("/v1/connector-installations/{installation_id}")
+async def uninstall_connector(
+    installation_id: str,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    installation = await session.get(ConnectorInstallation, installation_id)
+    if not installation or installation.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Connector installation not found")
+    if installation.status == "uninstalled":
+        return {"id": installation.id, "status": installation.status}
+    tool = await session.get(ToolConnection, installation.tool_id)
+    if tool:
+        tool.enabled = False
+        tool.encrypted_credentials = None
+        polls = (
+            await session.scalars(
+                select(PollingSubscription).where(
+                    PollingSubscription.workspace_id == context.workspace_id,
+                    PollingSubscription.tool_id == tool.id,
+                )
+            )
+        ).all()
+        for poll in polls:
+            poll.active = False
+    installation.status = "uninstalled"
+    installation.encrypted_auth_config = None
+    history = (
+        await session.scalars(
+            select(ConnectorInstallationVersion).where(
+                ConnectorInstallationVersion.installation_id == installation.id
+            )
+        )
+    ).all()
+    session.add(
+        ConnectorInstallationVersion(
+            workspace_id=context.workspace_id,
+            installation_id=installation.id,
+            sequence=max((item.sequence for item in history), default=0) + 1,
+            package_id=installation.package_id,
+            action="uninstall",
+            created_by=context.subject,
+        )
+    )
+    session.add(
+        AuditEvent(
+            workspace_id=context.workspace_id,
+            actor=context.subject,
+            event_type="connector.uninstalled",
+            payload={
+                "installation_id": installation.id,
+                "slug": installation.slug,
+            },
+        )
+    )
+    await session.commit()
+    return {"id": installation.id, "status": installation.status}
 
 
 @app.post("/v1/connector-packages", status_code=201)
