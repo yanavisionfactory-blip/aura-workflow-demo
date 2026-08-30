@@ -356,17 +356,24 @@ export default function ConnectionsPill() {
                 <p className="text-sm font-semibold">{managedConnection.uiName || managedConnection.display_name}</p>
                 <button onClick={() => setManagedConnection(null)} className="p-1.5 text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
               </div>
-              <div className="px-6 py-7 text-center">
-                <div className="mx-auto mb-3 w-11 h-11 rounded-full bg-emerald-400/10 border border-emerald-400/20 flex items-center justify-center">
-                  <Check className="w-5 h-5 text-emerald-400" />
+              <div className="px-6 py-6">
+                <div className="flex items-center gap-3 rounded-xl border border-emerald-400/15 bg-emerald-400/5 px-4 py-3">
+                  <div className="w-7 h-7 rounded-full bg-emerald-400/15 flex items-center justify-center shrink-0">
+                    <Check className="w-4 h-4 text-emerald-400" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium text-emerald-400">Connected</p>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">Ready to use in plans you approve.</p>
+                  </div>
                 </div>
-                <p className="text-sm font-medium">Connected to AURA</p>
-                <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">AURA will use this connection only in workflows and plans you approve.</p>
                 {error && <p className="mt-4 text-xs text-red-400 rounded-lg border border-red-400/20 bg-red-400/5 p-2">{error}</p>}
               </div>
-              <div className="grid grid-cols-2 gap-2 p-4 border-t border-white/8">
-                <button onClick={() => runConnectionAction(managedConnection.uiName, "reconnect")} disabled={managedConnection.kind !== "oauth" || connectionAction === managedConnection.uiName} className="flex items-center justify-center gap-1.5 rounded-lg border border-primary/30 px-3 py-2.5 text-xs text-primary hover:bg-primary/10 disabled:opacity-40"><RefreshCw className="w-3.5 h-3.5" /> Reconnect</button>
-                <button onClick={() => runConnectionAction(managedConnection.uiName, "disconnect")} disabled={connectionAction === managedConnection.uiName} className="flex items-center justify-center gap-1.5 rounded-lg border border-red-400/20 px-3 py-2.5 text-xs text-red-400 hover:bg-red-400/5"><Trash2 className="w-3.5 h-3.5" /> Disconnect</button>
+              <div className="p-4 border-t border-white/8">
+                <p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Connection actions</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <button onClick={() => runConnectionAction(managedConnection.uiName, "reconnect")} disabled={managedConnection.kind !== "oauth" || connectionAction === managedConnection.uiName} className="flex items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-40"><RefreshCw className="w-3.5 h-3.5" /> Reconnect</button>
+                  <button onClick={() => runConnectionAction(managedConnection.uiName, "disconnect")} disabled={connectionAction === managedConnection.uiName} className="flex items-center justify-center gap-1.5 rounded-lg border border-red-400/30 px-3 py-2.5 text-xs font-medium text-red-400 hover:bg-red-400/10"><Trash2 className="w-3.5 h-3.5" /> Disconnect</button>
+                </div>
               </div>
             </motion.div>
           </motion.div>
