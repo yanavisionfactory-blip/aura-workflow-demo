@@ -145,8 +145,51 @@ async def list_tools(
     session: AsyncSession = Depends(tenant_session),
 ) -> list[dict]:
     wid = context.workspace_id
-    tools = (await session.scalars(select(ToolConnection).where(ToolConnection.workspace_id == wid))).all()
-    return [{"id": t.id, "slug": t.slug, "display_name": t.display_name, "kind": t.kind.value, "base_url": t.base_url, "enabled": t.enabled, "allowed_operations": t.allowed_operations} for t in tools]
+    tools = (
+        await session.scalars(
+            select(ToolConnection).where(ToolConnection.workspace_id == wid)
+        )
+    ).all()
+    manifests = (
+        await session.scalars(
+            select(CapabilityManifest).where(CapabilityManifest.workspace_id == wid)
+        )
+    ).all()
+    trust_rows = (
+        await session.scalars(
+            select(ToolTrustState).where(ToolTrustState.workspace_id == wid)
+        )
+    ).all()
+    manifest_by_tool = {item.tool_id: item for item in manifests}
+    trust_by_tool = {item.tool_id: item for item in trust_rows}
+    result = []
+    for tool in tools:
+        manifest = manifest_by_tool.get(tool.id)
+        trust = trust_by_tool.get(tool.id)
+        verification = manifest.verification if manifest else {}
+        result.append(
+            {
+                "id": tool.id,
+                "slug": tool.slug,
+                "display_name": tool.display_name,
+                "kind": tool.kind.value,
+                "base_url": tool.base_url,
+                "enabled": tool.enabled,
+                "status": manifest.status if manifest else ("connected" if tool.enabled else "disabled"),
+                "allowed_operations": tool.allowed_operations,
+                "capabilities": (manifest.manifest or {}).get("capabilities", []) if manifest else [],
+                "identity": verification.get("identity", {}),
+                "verification": {
+                    key: value
+                    for key, value in verification.items()
+                    if key not in {"access_token", "refresh_token", "client_secret"}
+                },
+                "verified_at": manifest.verified_at.isoformat() if manifest and manifest.verified_at else None,
+                "updated_at": tool.updated_at.isoformat() if tool.updated_at else None,
+                "trust_score": trust.score if trust else 1.0,
+            }
+        )
+    return result
 
 
 @app.post("/v1/tools", status_code=201)
