@@ -8,6 +8,7 @@ import {
   disconnectPythonConnection,
   listPythonTools,
   pythonRuntimeEnabled,
+  reconnectPythonConnection,
   testPythonConnection,
 } from "@/lib/auraApi";
 
@@ -111,7 +112,7 @@ export async function hydrateConnections() {
   return [];
 }
 
-async function findConnection(toolName) {
+export async function getToolConnection(toolName) {
   const tools = await listPythonTools();
   const provider = PYTHON_OAUTH[toolName];
   return tools.find((tool) =>
@@ -123,18 +124,27 @@ async function findConnection(toolName) {
 
 export async function testToolConnection(toolName) {
   if (!pythonRuntimeEnabled) throw new Error("Connection testing requires the Python control plane.");
-  const tool = await findConnection(toolName);
+  const tool = await getToolConnection(toolName);
   if (!tool) throw new Error(`${toolName} is not connected.`);
   return testPythonConnection(tool.id);
 }
 
 export async function disconnectTool(toolName) {
   if (!pythonRuntimeEnabled) throw new Error("Revoking connections requires the Python control plane.");
-  const tool = await findConnection(toolName);
+  const tool = await getToolConnection(toolName);
   if (!tool) throw new Error(`${toolName} is not connected.`);
   await disconnectPythonConnection(tool.id);
   await hydrateConnections();
   return { disconnected: true };
+}
+
+export async function reconnectTool(toolName) {
+  if (!pythonRuntimeEnabled) throw new Error("Reauthorization requires the Python control plane.");
+  const tool = await getToolConnection(toolName);
+  if (!tool) throw new Error(`${toolName} is not connected.`);
+  const result = await reconnectPythonConnection(tool);
+  await hydrateConnections();
+  return result;
 }
 
 export async function recordInterfaceConnection(toolName, meta = {}) {
