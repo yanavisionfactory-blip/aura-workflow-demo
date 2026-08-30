@@ -374,7 +374,24 @@ async def disconnect_connection(
         raise HTTPException(404, "Connection not found")
     credentials = CredentialVault().decrypt(tool.encrypted_credentials)
     revocation = {"attempted": False}
-    if tool.config.get("oauth_custom") and tool.config.get("revocation_url") and credentials.get("access_token"):
+    if tool.slug == "slack" and credentials.get("access_token"):
+        revocation["attempted"] = True
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                response = await client.post(
+                    "https://slack.com/api/auth.revoke",
+                    headers={"Authorization": f"Bearer {credentials['access_token']}"},
+                )
+            data = response.json()
+            revocation.update(
+                {
+                    "ok": response.is_success and bool(data.get("ok")) and bool(data.get("revoked")),
+                    "status_code": response.status_code,
+                }
+            )
+        except (httpx.HTTPError, ValueError) as exc:
+            revocation.update({"ok": False, "error": str(exc)})
+    elif tool.config.get("oauth_custom") and tool.config.get("revocation_url") and credentials.get("access_token"):
         revocation["attempted"] = True
         try:
             validate_public_endpoint(tool.config["revocation_url"])
@@ -713,7 +730,7 @@ async def oauth_callback(provider: str, code: str, state: str, session: AsyncSes
     allowed = {
         "google": ["gmail.list", "gmail.send", "calendar.list", "calendar.create", "sheets.read"],
         "airtable": ["airtable.list", "airtable.create"],
-        "slack": ["slack.post"],
+        "slack": ["slack.channels.list", "slack.post"],
     }[provider]
     if tool:
         tool.encrypted_credentials = CredentialVault().encrypt(credentials)
