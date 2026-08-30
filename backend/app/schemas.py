@@ -49,6 +49,18 @@ class CustomOAuthStart(BaseModel):
         return value
 
 
+class ConnectorDefinitionValidate(BaseModel):
+    definition: dict[str, Any]
+
+
+class WebhookSubscriptionCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=200)
+    event_type: str = Field(
+        default="event.received", pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.:-]{1,159}$"
+    )
+    prompt_template: str = Field(min_length=3, max_length=10_000)
+
+
 class ToolView(BaseModel):
     id: str
     slug: str
