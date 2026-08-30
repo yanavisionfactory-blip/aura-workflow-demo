@@ -9,6 +9,8 @@ DIRECT_TENANT_TABLES = (
     "tool_connections",
     "capability_manifests",
     "connection_requirements",
+    "webhook_subscriptions",
+    "webhook_deliveries",
     "tool_trust_states",
     "workflows",
     "workflow_runs",
