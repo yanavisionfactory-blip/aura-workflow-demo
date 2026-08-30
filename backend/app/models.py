@@ -120,6 +120,47 @@ class CapabilityManifest(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class WebhookSubscription(Base):
+    __tablename__ = "webhook_subscriptions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(200))
+    event_type: Mapped[str] = mapped_column(String(160), default="event.received")
+    prompt_template: Mapped[str] = mapped_column(Text)
+    encrypted_secret: Mapped[str] = mapped_column(Text)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow
+    )
+
+
+class WebhookDelivery(Base):
+    __tablename__ = "webhook_deliveries"
+    __table_args__ = (
+        UniqueConstraint(
+            "subscription_id", "event_id", name="uq_webhook_subscription_event"
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    subscription_id: Mapped[str] = mapped_column(
+        ForeignKey("webhook_subscriptions.id", ondelete="CASCADE"), index=True
+    )
+    event_id: Mapped[str] = mapped_column(String(240))
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(40), default="accepted")
+    run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("workflow_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow
+    )
+
+
 class ConnectionRequirement(Base):
     __tablename__ = "connection_requirements"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
