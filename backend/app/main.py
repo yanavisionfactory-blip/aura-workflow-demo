@@ -73,7 +73,8 @@ from .worker import execute_run_task, plan_run_task
 
 settings = get_settings()
 app = FastAPI(title="AURA Control Plane", version="0.1.0")
-frontend_origin = settings.frontend_url.rstrip("/")\napp.add_middleware(CORSMiddleware, allow_origins=[frontend_origin], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+frontend_origin = settings.frontend_url.rstrip("/")
+app.add_middleware(CORSMiddleware, allow_origins=[frontend_origin], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
 @app.on_event("startup")
