@@ -47,3 +47,17 @@ def test_valid_module_arguments_pass():
         "slack.post",
         {"channel": "C123", "text": "hello"},
     )
+
+
+def test_notion_catalog_exposes_read_and_approved_write_modules():
+    manifest = native_manifest("notion")
+    operations = native_operations("notion")
+    assert "notion.search" in operations
+    assert "notion.page.create" in operations
+    create = next(item for item in manifest["capabilities"] if item["name"] == "notion.page.create")
+    assert create["requires_approval"] is True
+    validate_module_arguments(
+        manifest,
+        "notion.page.create",
+        {"parent": {"page_id": "page"}, "properties": {"title": {"title": []}}},
+    )
