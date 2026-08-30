@@ -1660,6 +1660,8 @@ async def oauth_callback(provider: str, code: str, state: str, session: AsyncSes
         )
         await session.commit()
         return RedirectResponse(f"{frontend_url}?tool_connected={tool.slug}")
+    if provider == "installation" and state_provider in PROVIDERS:
+        provider = state_provider
     if state_provider != provider:
         raise HTTPException(400, "OAuth state/provider mismatch")
     definition = PROVIDERS.get(provider)
