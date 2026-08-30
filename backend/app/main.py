@@ -333,6 +333,7 @@ async def submit_connector_package(
         created_by=context.subject,
     )
     session.add(package)
+    await session.flush()
     session.add(
         AuditEvent(
             workspace_id=context.workspace_id,
