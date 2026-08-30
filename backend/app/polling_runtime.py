@@ -22,6 +22,23 @@ from .security import CredentialVault
 from .universal_connectors import capability_for
 
 
+def result_fingerprint(result: object) -> tuple[str, str]:
+    canonical = json.dumps(
+        result, sort_keys=True, separators=(",", ":"), default=str
+    )
+    return canonical, hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def should_trigger_poll(
+    previous_hash: str | None,
+    current_hash: str,
+    trigger_on_first_result: bool,
+) -> bool:
+    if previous_hash is None:
+        return trigger_on_first_result
+    return previous_hash != current_hash
+
+
 async def poll_subscription(subscription_id: str, workspace_id: str) -> dict:
     vault = CredentialVault()
     async with SessionLocal() as session:
@@ -82,19 +99,14 @@ async def poll_subscription(subscription_id: str, workspace_id: str) -> dict:
         result = await executor.execute(
             subscription.operation, subscription.arguments
         )
-        canonical = json.dumps(
-            result, sort_keys=True, separators=(",", ":"), default=str
-        )
-        payload_hash = hashlib.sha256(canonical.encode()).hexdigest()
+        canonical, payload_hash = result_fingerprint(result)
         first_result = subscription.last_payload_hash is None
-        changed_result = (
-            subscription.last_payload_hash is not None
-            and subscription.last_payload_hash != payload_hash
+        should_trigger = should_trigger_poll(
+            subscription.last_payload_hash,
+            payload_hash,
+            subscription.trigger_on_first_result,
         )
         subscription.last_payload_hash = payload_hash
-        should_trigger = changed_result or (
-            first_result and subscription.trigger_on_first_result
-        )
         if not should_trigger:
             session.add(
                 AuditEvent(
