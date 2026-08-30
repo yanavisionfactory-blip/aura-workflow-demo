@@ -4,7 +4,7 @@ import json
 import time
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import httpx
 from mcp import ClientSession
@@ -280,8 +280,9 @@ class ProviderExecutor:
         else:
             payload = arguments.get("body", arguments)
         for key, value in arguments.get("path", {}).items():
-            path = str(path or "").replace("{" + key + "}", str(value))
-        if "{" in str(path or ""):
+            encoded = quote(str(value), safe="")
+            path = str(path or "").replace("{" + key + "}", encoded)
+        if "{" in str(path or "") or "}" in str(path or ""):
             raise ValueError("Required path parameters are missing")
         url = f"{self.base_url.rstrip('/')}/{str(path or '').lstrip('/')}"
         kwargs: dict[str, Any] = {}
