@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import json
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -89,3 +91,17 @@ def decode_webhook_token(token: str) -> dict:
     ):
         raise jwt.InvalidTokenError("Invalid webhook endpoint")
     return claims
+
+
+def webhook_signature(secret: str, timestamp: str, body: bytes) -> str:
+    signed = timestamp.encode() + b"." + body
+    return "sha256=" + hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
+
+
+def verify_webhook_signature(
+    secret: str, timestamp: str, body: bytes, signature: str
+) -> bool:
+    return hmac.compare_digest(
+        webhook_signature(secret, timestamp, body),
+        signature,
+    )
