@@ -92,8 +92,8 @@ PROVIDERS = {
 
 
 def oauth_callback_url(settings: Settings, provider: OAuthProvider) -> str:
-    # Notion and TikTok are registered against AURA's shared installation callback.
-    callback_provider = "installation" if provider.slug in {"notion", "tiktok"} else provider.slug
+    # Providers registered against AURA's shared installation callback.
+    callback_provider = "installation" if provider.slug in {"notion", "tiktok", "mailchimp"} else provider.slug
     return f"{settings.public_url}/v1/oauth/{callback_provider}/callback"
 
 
