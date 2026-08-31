@@ -61,3 +61,22 @@ def test_notion_catalog_exposes_read_and_approved_write_modules():
         "notion.page.create",
         {"parent": {"page_id": "page"}, "properties": {"title": {"title": []}}},
     )
+
+
+def test_tiktok_catalog_separates_reads_from_approved_posts():
+    manifest = native_manifest("tiktok")
+    operations = native_operations("tiktok")
+    assert "tiktok.profile.get" in operations
+    assert "tiktok.videos.list" in operations
+    assert "tiktok.video.upload.init" in operations
+    upload = next(
+        item for item in manifest["capabilities"]
+        if item["name"] == "tiktok.video.upload.init"
+    )
+    assert upload["permission_scope"] == "write"
+    assert upload["requires_approval"] is True
+    validate_module_arguments(
+        manifest,
+        "tiktok.video.upload.init",
+        {"source_info": {"source": "PULL_FROM_URL", "video_url": "https://example.com/video.mp4"}},
+    )
