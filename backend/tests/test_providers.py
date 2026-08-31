@@ -13,6 +13,8 @@ def _settings() -> Settings:
         tiktok_client_secret="tiktok-secret",
         mailchimp_client_id="mailchimp-client",
         mailchimp_client_secret="mailchimp-secret",
+        canva_client_id="canva-client",
+        canva_client_secret="canva-secret",
     )
 
 
@@ -41,6 +43,17 @@ def test_tiktok_uses_shared_callback_and_client_key():
     assert "client_key=tiktok-client" in url
     assert "client_id=" not in url
     assert "scope=user.info.basic%2Cvideo.list%2Cvideo.upload%2Cvideo.publish" in url
+
+
+def test_canva_uses_shared_callback_and_pkce():
+    provider = PROVIDERS["canva"]
+    settings = _settings()
+    assert oauth_callback_url(settings, provider) == "https://api.example.com/v1/oauth/installation/callback"
+    url = oauth_authorization_url(settings, provider, "signed-state")
+    assert "client_id=canva-client" in url
+    assert "code_challenge_method=S256" in url
+    assert "code_challenge=" in url
+    assert "profile%3Aread" in url
 
 
 def test_idempotency_is_stable_for_argument_order():
