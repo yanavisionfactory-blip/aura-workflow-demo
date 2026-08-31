@@ -10,6 +10,7 @@ export const CONNECTIONS = {
   "Google Sheets": true,
   "Google Calendar": true,
   Notion: true,
+  TikTok: false,
   Jira: false,
   Stripe: false,
   "AURA Intelligence": true,
