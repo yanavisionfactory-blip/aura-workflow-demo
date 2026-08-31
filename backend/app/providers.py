@@ -61,6 +61,15 @@ PROVIDERS = {
         client_id_attr="notion_client_id",
         client_secret_attr="notion_client_secret",
     ),
+    "mailchimp": OAuthProvider(
+        slug="mailchimp",
+        display_name="Mailchimp",
+        authorization_url="https://login.mailchimp.com/oauth2/authorize",
+        token_url="https://login.mailchimp.com/oauth2/token",
+        scopes=(),
+        client_id_attr="mailchimp_client_id",
+        client_secret_attr="mailchimp_client_secret",
+    ),
     "tiktok": OAuthProvider(
         slug="tiktok",
         display_name="TikTok",
@@ -100,6 +109,8 @@ def oauth_authorization_url(settings: Settings, provider: OAuthProvider, state: 
     }
     if provider.slug == "notion":
         params["owner"] = "user"
+    elif provider.slug == "mailchimp":
+        pass
     elif provider.slug in {"slack", "tiktok"}:
         params["scope"] = ",".join(provider.scopes)
     else:
@@ -130,6 +141,14 @@ async def exchange_oauth_code(settings: Settings, provider: OAuthProvider, code:
         data = response.json()
     if provider.slug == "slack" and not data.get("ok", False):
         raise RuntimeError(data.get("error", "Slack OAuth failed"))
+    if provider.slug == "mailchimp":
+        async with httpx.AsyncClient(timeout=30) as client:
+            metadata_response = await client.get(
+                "https://login.mailchimp.com/oauth2/metadata",
+                headers={"Authorization": f"OAuth {data['access_token']}"},
+            )
+            metadata_response.raise_for_status()
+            data.update(metadata_response.json())
     if data.get("expires_in"):
         data["expires_at"] = int(time.time()) + int(data["expires_in"])
     return data
@@ -209,6 +228,9 @@ async def verify_oauth_credentials(provider_slug: str, credentials: dict) -> dic
     elif provider_slug == "notion":
         method, url, kwargs = "GET", "https://api.notion.com/v1/users/me", {}
         headers["Notion-Version"] = "2025-09-03"
+    elif provider_slug == "mailchimp":
+        method, url, kwargs = "GET", "https://login.mailchimp.com/oauth2/metadata", {}
+        headers["Authorization"] = f"OAuth {token}"
     elif provider_slug == "tiktok":
         method, url, kwargs = (
             "GET",
@@ -282,6 +304,13 @@ class ProviderExecutor:
             "tiktok.video.upload.init": self._tiktok_video_upload_init,
             "tiktok.video.publish.init": self._tiktok_video_publish_init,
             "tiktok.post.status.get": self._tiktok_post_status_get,
+            "mailchimp.audiences.list": self._mailchimp_audiences_list,
+            "mailchimp.members.list": self._mailchimp_members_list,
+            "mailchimp.member.upsert": self._mailchimp_member_upsert,
+            "mailchimp.campaigns.list": self._mailchimp_campaigns_list,
+            "mailchimp.campaign.create": self._mailchimp_campaign_create,
+            "mailchimp.campaign.send": self._mailchimp_campaign_send,
+            "mailchimp.reports.list": self._mailchimp_reports_list,
             "http.request": self._http_request,
             "mcp.call": self._mcp_call,
         }
@@ -450,6 +479,63 @@ class ProviderExecutor:
             "PATCH",
             f"blocks/{quote(a['block_id'], safe='')}/children",
             json={"children": a["children"]},
+        )
+
+    async def _mailchimp_request(self, method: str, path: str, **kwargs: Any) -> dict:
+        api_endpoint = self.credentials.get("api_endpoint")
+        if not api_endpoint:
+            raise ValueError("Mailchimp connection is missing its data center metadata")
+        return await self._request(
+            method, f"{api_endpoint.rstrip('/')}/3.0/{path.lstrip('/')}", **kwargs
+        )
+
+    async def _mailchimp_audiences_list(self, a: dict) -> dict:
+        return await self._mailchimp_request(
+            "GET", "lists", params={"count": min(int(a.get("count", 20)), 1000)}
+        )
+
+    async def _mailchimp_members_list(self, a: dict) -> dict:
+        return await self._mailchimp_request(
+            "GET",
+            f"lists/{quote(a['list_id'], safe='')}/members",
+            params={"count": min(int(a.get("count", 20)), 1000)},
+        )
+
+    async def _mailchimp_member_upsert(self, a: dict) -> dict:
+        email = a["email_address"].strip().lower()
+        subscriber_hash = hashlib.md5(email.encode(), usedforsecurity=False).hexdigest()
+        payload = {
+            "email_address": email,
+            "status_if_new": a.get("status_if_new", "subscribed"),
+        }
+        if a.get("merge_fields") is not None:
+            payload["merge_fields"] = a["merge_fields"]
+        return await self._mailchimp_request(
+            "PUT",
+            f"lists/{quote(a['list_id'], safe='')}/members/{subscriber_hash}",
+            json=payload,
+        )
+
+    async def _mailchimp_campaigns_list(self, a: dict) -> dict:
+        return await self._mailchimp_request(
+            "GET", "campaigns", params={"count": min(int(a.get("count", 20)), 1000)}
+        )
+
+    async def _mailchimp_campaign_create(self, a: dict) -> dict:
+        return await self._mailchimp_request(
+            "POST",
+            "campaigns",
+            json={"type": a["type"], "recipients": a["recipients"], "settings": a["settings"]},
+        )
+
+    async def _mailchimp_campaign_send(self, a: dict) -> dict:
+        return await self._mailchimp_request(
+            "POST", f"campaigns/{quote(a['campaign_id'], safe='')}/actions/send", json={}
+        )
+
+    async def _mailchimp_reports_list(self, a: dict) -> dict:
+        return await self._mailchimp_request(
+            "GET", "reports", params={"count": min(int(a.get("count", 20)), 1000)}
         )
 
     async def _tiktok_request(
