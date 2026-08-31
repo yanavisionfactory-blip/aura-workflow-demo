@@ -4,6 +4,7 @@ import { CAMPAIGN_MOCK, FOLLOWUPS_MOCK, JIRA_MOCK, CRM_MOCK } from "@/lib/mockWo
 export const CONNECTIONS = {
   "Meta Ads": true,
   HubSpot: false,
+  Mailchimp: false,
   Salesforce: false,
   Gmail: true,
   Slack: false,
