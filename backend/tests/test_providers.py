@@ -30,7 +30,7 @@ def test_mailchimp_authorization_omits_scope_when_provider_has_none():
     url = oauth_authorization_url(_settings(), provider, "signed-state")
     assert "client_id=mailchimp-client" in url
     assert "scope=" not in url
-    assert oauth_callback_url(_settings(), provider) == "https://api.example.com/v1/oauth/mailchimp/callback"
+    assert oauth_callback_url(_settings(), provider) == "https://api.example.com/v1/oauth/installation/callback"
 
 
 def test_tiktok_uses_shared_callback_and_client_key():
