@@ -14,6 +14,7 @@ export const CATALOG = [
   { name: "Google Sheets", icon: "📊", desc: "Read and write spreadsheets" },
   { name: "Shopify", icon: "🛍️", desc: "Manage orders and products" },
   { name: "Instagram", icon: "📸", desc: "Publish and analyze posts" },
+  { name: "TikTok", icon: "🎵", desc: "Read videos and publish approved content" },
   { name: "QuickBooks", icon: "🧾", desc: "Read invoices and financials" },
   { name: "Stripe", icon: "💳", desc: "Charge customers and subscriptions" },
   { name: "Meta Ads", icon: "📈", desc: "Pull ad campaign performance" },
