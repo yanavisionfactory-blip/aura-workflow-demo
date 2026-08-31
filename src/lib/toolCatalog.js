@@ -14,10 +14,13 @@ export const CATALOG = [
   { name: "Google Sheets", icon: "📊", desc: "Read and write spreadsheets" },
   { name: "Shopify", icon: "🛍️", desc: "Manage orders and products" },
   { name: "Instagram", icon: "📸", desc: "Publish and analyze posts" },
+  { name: "TikTok", icon: "🎵", desc: "Read videos and publish approved content" },
   { name: "QuickBooks", icon: "🧾", desc: "Read invoices and financials" },
   { name: "Stripe", icon: "💳", desc: "Charge customers and subscriptions" },
   { name: "Meta Ads", icon: "📈", desc: "Pull ad campaign performance" },
-  { name: "Jira", icon: "✅", desc: "Create and track issues" },
+  { name: "Jira", icon: "✅", desc: "Create and track Atlassian issues" },
+  { name: "Confluence", icon: "📚", desc: "Read and update Atlassian knowledge bases" },
+  { name: "ClickUp", icon: "✔️", desc: "Manage tasks, lists, and workspaces" },
   // Internal tool with no standard connection — connects via the AURA Interface
   // learn flow. Same persistent store once connected.
   { name: "Creator Approvals", icon: "🔌", desc: "Submit creators for approval", interface: true },

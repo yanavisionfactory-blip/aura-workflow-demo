@@ -3,14 +3,17 @@ import { CAMPAIGN_MOCK, FOLLOWUPS_MOCK, JIRA_MOCK, CRM_MOCK } from "@/lib/mockWo
 // Simulated connection states for tools. `true` = connected, `false` = shows "Connect <tool>".
 export const CONNECTIONS = {
   "Meta Ads": true,
-  HubSpot: true,
-  Salesforce: true,
+  HubSpot: false,
+  Salesforce: false,
   Gmail: true,
-  Slack: true,
+  Slack: false,
   "Google Sheets": true,
   "Google Calendar": true,
-  Notion: true,
+  Notion: false,
+  TikTok: false,
   Jira: false,
+  Confluence: false,
+  ClickUp: false,
   Stripe: false,
   "AURA Intelligence": true,
   // Internal tool with no standard OAuth integration — connects through the
