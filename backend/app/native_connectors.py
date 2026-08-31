@@ -178,6 +178,19 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
             }),
         ],
     },
+    "canva": {
+        "schema_version": "1.1", "catalog_version": 1, "provider_type": "oauth",
+        "name": "Canva", "description": "Find, create, organize, and export Canva designs.",
+        "base_url": "provider-managed", "identity": {"provider": "canva"},
+        "modules": [
+            _module("canva.designs.list", "search", "Find Canva designs.", properties={"query": _TEXT, "continuation": _TEXT, "ownership": {"type": "string", "enum": ["any", "owned", "shared"]}}),
+            _module("canva.design.get", "search", "Read Canva design metadata.", required=("design_id",), properties={"design_id": _TEXT}),
+            _module("canva.design.create", "action", "Create an approved Canva design.", required=("design_type",), properties={"design_type": {"type": "object"}, "title": _TEXT, "asset_id": _TEXT}),
+            _module("canva.folder.items.list", "search", "List items in a Canva folder.", required=("folder_id",), properties={"folder_id": _TEXT, "continuation": _TEXT, "limit": {**_POSITIVE_INTEGER, "maximum": 100}}),
+            _module("canva.export.create", "action", "Start an approved design export.", required=("design_id", "format"), properties={"design_id": _TEXT, "format": {"type": "string", "enum": ["pdf", "jpg", "png", "gif", "pptx", "mp4", "csv", "html_bundle", "html_standalone"]}}),
+            _module("canva.export.get", "search", "Check an export and retrieve its download links.", required=("export_id",), properties={"export_id": _TEXT}),
+        ],
+    },
     "tiktok": {
         "schema_version": "1.1",
         "catalog_version": 1,
