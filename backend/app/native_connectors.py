@@ -126,6 +126,58 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
             }),
         ],
     },
+    "mailchimp": {
+        "schema_version": "1.1",
+        "catalog_version": 1,
+        "provider_type": "oauth",
+        "name": "Mailchimp",
+        "description": "Manage Mailchimp audiences, contacts, campaigns, and reports.",
+        "base_url": "provider-managed",
+        "identity": {"provider": "mailchimp"},
+        "modules": [
+            _module("mailchimp.audiences.list", "search", "List audiences.", properties={
+                "count": {**_POSITIVE_INTEGER, "maximum": 1000}
+            }),
+            _module("mailchimp.members.list", "search", "List audience contacts.", required=("list_id",), properties={
+                "list_id": _TEXT, "count": {**_POSITIVE_INTEGER, "maximum": 1000}
+            }),
+            _module(
+                "mailchimp.member.upsert",
+                "action",
+                "Create or update an approved audience contact.",
+                required=("list_id", "email_address"),
+                properties={
+                    "list_id": _TEXT,
+                    "email_address": {"type": "string", "format": "email"},
+                    "status_if_new": _TEXT,
+                    "merge_fields": {"type": "object"},
+                },
+                permission_scope="write",
+            ),
+            _module("mailchimp.campaigns.list", "search", "List campaigns.", properties={
+                "count": {**_POSITIVE_INTEGER, "maximum": 1000}
+            }),
+            _module(
+                "mailchimp.campaign.create",
+                "action",
+                "Create an approved campaign.",
+                required=("type", "recipients", "settings"),
+                properties={"type": _TEXT, "recipients": {"type": "object"}, "settings": {"type": "object"}},
+                permission_scope="write",
+            ),
+            _module(
+                "mailchimp.campaign.send",
+                "action",
+                "Send an approved Mailchimp campaign.",
+                required=("campaign_id",),
+                properties={"campaign_id": _TEXT},
+                permission_scope="write",
+            ),
+            _module("mailchimp.reports.list", "search", "List campaign reports.", properties={
+                "count": {**_POSITIVE_INTEGER, "maximum": 1000}
+            }),
+        ],
+    },
     "tiktok": {
         "schema_version": "1.1",
         "catalog_version": 1,
