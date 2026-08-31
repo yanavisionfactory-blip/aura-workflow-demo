@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import hmac
 import json
 import time
 from dataclasses import dataclass
@@ -70,6 +71,19 @@ PROVIDERS = {
         client_id_attr="mailchimp_client_id",
         client_secret_attr="mailchimp_client_secret",
     ),
+    "canva": OAuthProvider(
+        slug="canva",
+        display_name="Canva",
+        authorization_url="https://www.canva.com/api/oauth/authorize",
+        token_url="https://api.canva.com/rest/v1/oauth/token",
+        scopes=(
+            "profile:read", "design:meta:read", "design:content:read",
+            "design:content:write", "asset:read", "asset:write",
+            "folder:read", "folder:write",
+        ),
+        client_id_attr="canva_client_id",
+        client_secret_attr="canva_client_secret",
+    ),
     "tiktok": OAuthProvider(
         slug="tiktok",
         display_name="TikTok",
@@ -93,8 +107,22 @@ PROVIDERS = {
 
 def oauth_callback_url(settings: Settings, provider: OAuthProvider) -> str:
     # Providers registered against AURA's shared installation callback.
-    callback_provider = "installation" if provider.slug in {"notion", "tiktok", "mailchimp"} else provider.slug
+    callback_provider = "installation" if provider.slug in {"notion", "tiktok", "mailchimp", "canva"} else provider.slug
     return f"{settings.public_url}/v1/oauth/{callback_provider}/callback"
+
+
+def _canva_code_verifier(settings: Settings, state: str) -> str:
+    """Derive a short-lived PKCE verifier without persisting OAuth secrets."""
+    digest = hmac.new(
+        settings.session_signing_key.encode(), state.encode(), hashlib.sha256
+    ).digest()
+    return base64.urlsafe_b64encode(digest).decode().rstrip("=")
+
+
+def _canva_code_challenge(settings: Settings, state: str) -> str:
+    verifier = _canva_code_verifier(settings, state)
+    digest = hashlib.sha256(verifier.encode()).digest()
+    return base64.urlsafe_b64encode(digest).decode().rstrip("=")
 
 
 def oauth_authorization_url(settings: Settings, provider: OAuthProvider, state: str) -> str:
@@ -115,12 +143,19 @@ def oauth_authorization_url(settings: Settings, provider: OAuthProvider, state: 
         params["scope"] = ",".join(provider.scopes)
     else:
         params["scope"] = " ".join(provider.scopes)
+    if provider.slug == "canva":
+        params.update({
+            "code_challenge": _canva_code_challenge(settings, state),
+            "code_challenge_method": "S256",
+        })
     if provider.slug == "google":
         params.update({"access_type": "offline", "prompt": "consent", "include_granted_scopes": "true"})
     return f"{provider.authorization_url}?{urlencode(params)}"
 
 
-async def exchange_oauth_code(settings: Settings, provider: OAuthProvider, code: str) -> dict:
+async def exchange_oauth_code(
+    settings: Settings, provider: OAuthProvider, code: str, state: str | None = None
+) -> dict:
     client_id = getattr(settings, provider.client_id_attr)
     client_secret = getattr(settings, provider.client_secret_attr)
     payload = {
@@ -131,7 +166,14 @@ async def exchange_oauth_code(settings: Settings, provider: OAuthProvider, code:
         "redirect_uri": oauth_callback_url(settings, provider),
     }
     headers = {"Accept": "application/json"}
-    if provider.slug in {"airtable", "notion"}:
+    if provider.slug == "canva":
+        if not state:
+            raise ValueError("Canva OAuth callback is missing PKCE state")
+        basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+        headers["Authorization"] = f"Basic {basic}"
+        payload.pop("client_secret")
+        payload["code_verifier"] = _canva_code_verifier(settings, state)
+    elif provider.slug in {"airtable", "notion"}:
         basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
         headers["Authorization"] = f"Basic {basic}"
         payload.pop("client_secret")
@@ -200,7 +242,7 @@ async def refresh_oauth_credentials(
         "grant_type": "refresh_token",
     }
     headers = {"Accept": "application/json"}
-    if provider.slug == "airtable":
+    if provider.slug in {"airtable", "canva"}:
         basic = base64.b64encode(f"{payload['client_id']}:{payload['client_secret']}".encode()).decode()
         headers["Authorization"] = f"Basic {basic}"
         payload.pop("client_secret")
@@ -237,6 +279,8 @@ async def verify_oauth_credentials(provider_slug: str, credentials: dict) -> dic
             "https://open.tiktokapis.com/v2/user/info/",
             {"params": {"fields": "open_id,union_id,avatar_url,display_name"}},
         )
+    elif provider_slug == "canva":
+        method, url, kwargs = "GET", "https://api.canva.com/rest/v1/users/me/profile", {}
     else:
         return {"ok": False, "reason": "unsupported_oauth_provider"}
     async with httpx.AsyncClient(timeout=15) as client:
@@ -311,6 +355,12 @@ class ProviderExecutor:
             "mailchimp.campaign.create": self._mailchimp_campaign_create,
             "mailchimp.campaign.send": self._mailchimp_campaign_send,
             "mailchimp.reports.list": self._mailchimp_reports_list,
+            "canva.designs.list": self._canva_designs_list,
+            "canva.design.get": self._canva_design_get,
+            "canva.design.create": self._canva_design_create,
+            "canva.folder.items.list": self._canva_folder_items_list,
+            "canva.export.create": self._canva_export_create,
+            "canva.export.get": self._canva_export_get,
             "http.request": self._http_request,
             "mcp.call": self._mcp_call,
         }
@@ -480,6 +530,33 @@ class ProviderExecutor:
             f"blocks/{quote(a['block_id'], safe='')}/children",
             json={"children": a["children"]},
         )
+
+    async def _canva_request(self, method: str, path: str, **kwargs: Any) -> dict:
+        return await self._request(method, f"https://api.canva.com/rest/v1/{path.lstrip('/')}", **kwargs)
+
+    async def _canva_designs_list(self, a: dict) -> dict:
+        params = {key: a[key] for key in ("query", "continuation", "ownership") if a.get(key)}
+        return await self._canva_request("GET", "designs", params=params)
+
+    async def _canva_design_get(self, a: dict) -> dict:
+        return await self._canva_request("GET", f"designs/{quote(a['design_id'], safe='')}")
+
+    async def _canva_design_create(self, a: dict) -> dict:
+        payload = {"design_type": a["design_type"]}
+        if a.get("title"): payload["title"] = a["title"]
+        if a.get("asset_id"): payload["asset_id"] = a["asset_id"]
+        return await self._canva_request("POST", "designs", json=payload)
+
+    async def _canva_folder_items_list(self, a: dict) -> dict:
+        params = {"limit": min(int(a.get("limit", 50)), 100)}
+        if a.get("continuation"): params["continuation"] = a["continuation"]
+        return await self._canva_request("GET", f"folders/{quote(a['folder_id'], safe='')}/items", params=params)
+
+    async def _canva_export_create(self, a: dict) -> dict:
+        return await self._canva_request("POST", "exports", json={"design_id": a["design_id"], "format": {"type": a["format"]}})
+
+    async def _canva_export_get(self, a: dict) -> dict:
+        return await self._canva_request("GET", f"exports/{quote(a['export_id'], safe='')}")
 
     async def _mailchimp_request(self, method: str, path: str, **kwargs: Any) -> dict:
         api_endpoint = self.credentials.get("api_endpoint")

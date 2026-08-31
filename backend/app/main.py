@@ -1667,7 +1667,7 @@ async def oauth_callback(provider: str, code: str, state: str, session: AsyncSes
     definition = PROVIDERS.get(provider)
     if not definition:
         raise HTTPException(404, "Unknown OAuth provider")
-    credentials = await exchange_oauth_code(settings, definition, code)
+    credentials = await exchange_oauth_code(settings, definition, code, state)
     wid = claims["workspace_id"]
     await set_tenant_context(session, wid)
     tool = await session.scalar(select(ToolConnection).where(ToolConnection.workspace_id == wid, ToolConnection.slug == provider))

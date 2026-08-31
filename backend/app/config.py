@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     tiktok_client_secret: str = ""
     mailchimp_client_id: str = ""
     mailchimp_client_secret: str = ""
+    canva_client_id: str = ""
+    canva_client_secret: str = ""
     browser_connector_url: str = ""
 
 
