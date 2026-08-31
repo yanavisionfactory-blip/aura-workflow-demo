@@ -11,6 +11,7 @@ export const CATALOG = [
   { name: "Google Calendar", icon: "📅", desc: "Read and create events" },
   { name: "HubSpot", icon: "🔶", desc: "Manage contacts and deals" },
   { name: "Mailchimp", icon: "🐵", desc: "Manage audiences, contacts, and campaigns" },
+  { name: "Canva", icon: "🎨", desc: "Create, organize, and export designs" },
   { name: "Notion", icon: "📝", desc: "Read and edit notes and docs" },
   { name: "Google Sheets", icon: "📊", desc: "Read and write spreadsheets" },
   { name: "Shopify", icon: "🛍️", desc: "Manage orders and products" },
