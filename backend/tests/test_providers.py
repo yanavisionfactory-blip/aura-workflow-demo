@@ -11,6 +11,8 @@ def _settings() -> Settings:
         notion_client_secret="notion-secret",
         tiktok_client_id="tiktok-client",
         tiktok_client_secret="tiktok-secret",
+        mailchimp_client_id="mailchimp-client",
+        mailchimp_client_secret="mailchimp-secret",
     )
 
 
@@ -21,6 +23,14 @@ def test_notion_uses_shared_callback_and_owner_authorization():
     url = oauth_authorization_url(settings, provider, "signed-state")
     assert "owner=user" in url
     assert "client_id=notion-client" in url
+
+
+def test_mailchimp_authorization_omits_scope_when_provider_has_none():
+    provider = PROVIDERS["mailchimp"]
+    url = oauth_authorization_url(_settings(), provider, "signed-state")
+    assert "client_id=mailchimp-client" in url
+    assert "scope=" not in url
+    assert oauth_callback_url(_settings(), provider) == "https://api.example.com/v1/oauth/installation/callback"
 
 
 def test_tiktok_uses_shared_callback_and_client_key():

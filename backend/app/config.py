@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     notion_client_secret: str = ""
     tiktok_client_id: str = ""
     tiktok_client_secret: str = ""
+    mailchimp_client_id: str = ""
+    mailchimp_client_secret: str = ""
     browser_connector_url: str = ""
 
 

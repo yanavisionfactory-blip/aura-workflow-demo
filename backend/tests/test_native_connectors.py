@@ -80,3 +80,22 @@ def test_tiktok_catalog_separates_reads_from_approved_posts():
         "tiktok.video.upload.init",
         {"source_info": {"source": "PULL_FROM_URL", "video_url": "https://example.com/video.mp4"}},
     )
+
+
+def test_mailchimp_catalog_requires_approval_for_contact_and_campaign_writes():
+    manifest = native_manifest("mailchimp")
+    operations = native_operations("mailchimp")
+    assert "mailchimp.audiences.list" in operations
+    assert "mailchimp.member.upsert" in operations
+    assert "mailchimp.campaign.send" in operations
+    send = next(
+        item for item in manifest["capabilities"]
+        if item["name"] == "mailchimp.campaign.send"
+    )
+    assert send["permission_scope"] == "write"
+    assert send["requires_approval"] is True
+    validate_module_arguments(
+        manifest,
+        "mailchimp.member.upsert",
+        {"list_id": "list", "email_address": "person@example.com"},
+    )
