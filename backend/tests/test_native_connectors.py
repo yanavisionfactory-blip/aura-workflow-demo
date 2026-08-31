@@ -99,3 +99,13 @@ def test_mailchimp_catalog_requires_approval_for_contact_and_campaign_writes():
         "mailchimp.member.upsert",
         {"list_id": "list", "email_address": "person@example.com"},
     )
+
+
+def test_canva_catalog_exposes_design_and_export_modules():
+    manifest = native_manifest("canva")
+    operations = native_operations("canva")
+    assert "canva.designs.list" in operations
+    assert "canva.design.create" in operations
+    assert "canva.export.create" in operations
+    create = next(item for item in manifest["capabilities"] if item["name"] == "canva.design.create")
+    assert create["requires_approval"] is True
