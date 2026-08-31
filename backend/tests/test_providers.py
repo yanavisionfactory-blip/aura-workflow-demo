@@ -9,6 +9,8 @@ def _settings() -> Settings:
         public_url="https://api.example.com",
         notion_client_id="notion-client",
         notion_client_secret="notion-secret",
+        tiktok_client_id="tiktok-client",
+        tiktok_client_secret="tiktok-secret",
     )
 
 
@@ -19,6 +21,16 @@ def test_notion_uses_shared_callback_and_owner_authorization():
     url = oauth_authorization_url(settings, provider, "signed-state")
     assert "owner=user" in url
     assert "client_id=notion-client" in url
+
+
+def test_tiktok_uses_shared_callback_and_client_key():
+    provider = PROVIDERS["tiktok"]
+    settings = _settings()
+    assert oauth_callback_url(settings, provider) == "https://api.example.com/v1/oauth/installation/callback"
+    url = oauth_authorization_url(settings, provider, "signed-state")
+    assert "client_key=tiktok-client" in url
+    assert "client_id=" not in url
+    assert "scope=user.info.basic%2Cvideo.list%2Cvideo.upload%2Cvideo.publish" in url
 
 
 def test_idempotency_is_stable_for_argument_order():
