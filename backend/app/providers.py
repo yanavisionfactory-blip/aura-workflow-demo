@@ -61,6 +61,15 @@ PROVIDERS = {
         client_id_attr="notion_client_id",
         client_secret_attr="notion_client_secret",
     ),
+    "tiktok": OAuthProvider(
+        slug="tiktok",
+        display_name="TikTok",
+        authorization_url="https://www.tiktok.com/v2/auth/authorize/",
+        token_url="https://open.tiktokapis.com/v2/oauth/token/",
+        scopes=("user.info.basic", "video.list", "video.upload", "video.publish"),
+        client_id_attr="tiktok_client_id",
+        client_secret_attr="tiktok_client_secret",
+    ),
     "slack": OAuthProvider(
         slug="slack",
         display_name="Slack",
@@ -74,8 +83,8 @@ PROVIDERS = {
 
 
 def oauth_callback_url(settings: Settings, provider: OAuthProvider) -> str:
-    # Notion is registered against AURA's shared installation callback.
-    callback_provider = "installation" if provider.slug == "notion" else provider.slug
+    # Notion and TikTok are registered against AURA's shared installation callback.
+    callback_provider = "installation" if provider.slug in {"notion", "tiktok"} else provider.slug
     return f"{settings.public_url}/v1/oauth/{callback_provider}/callback"
 
 
@@ -84,14 +93,14 @@ def oauth_authorization_url(settings: Settings, provider: OAuthProvider, state: 
     if not client_id:
         raise ValueError(f"{provider.display_name} OAuth client is not configured")
     params = {
-        "client_id": client_id,
+        ("client_key" if provider.slug == "tiktok" else "client_id"): client_id,
         "redirect_uri": oauth_callback_url(settings, provider),
         "response_type": "code",
         "state": state,
     }
     if provider.slug == "notion":
         params["owner"] = "user"
-    elif provider.slug == "slack":
+    elif provider.slug in {"slack", "tiktok"}:
         params["scope"] = ",".join(provider.scopes)
     else:
         params["scope"] = " ".join(provider.scopes)
@@ -104,7 +113,7 @@ async def exchange_oauth_code(settings: Settings, provider: OAuthProvider, code:
     client_id = getattr(settings, provider.client_id_attr)
     client_secret = getattr(settings, provider.client_secret_attr)
     payload = {
-        "client_id": client_id,
+        ("client_key" if provider.slug == "tiktok" else "client_id"): client_id,
         "client_secret": client_secret,
         "code": code,
         "grant_type": "authorization_code",
@@ -164,7 +173,9 @@ async def refresh_oauth_credentials(
             updated["expires_at"] = int(time.time()) + int(updated["expires_in"])
         return {**credentials, **updated}, True
     payload = {
-        "client_id": getattr(settings, provider.client_id_attr),
+        ("client_key" if provider.slug == "tiktok" else "client_id"): getattr(
+            settings, provider.client_id_attr
+        ),
         "client_secret": getattr(settings, provider.client_secret_attr),
         "refresh_token": credentials["refresh_token"],
         "grant_type": "refresh_token",
@@ -198,16 +209,26 @@ async def verify_oauth_credentials(provider_slug: str, credentials: dict) -> dic
     elif provider_slug == "notion":
         method, url, kwargs = "GET", "https://api.notion.com/v1/users/me", {}
         headers["Notion-Version"] = "2025-09-03"
+    elif provider_slug == "tiktok":
+        method, url, kwargs = (
+            "GET",
+            "https://open.tiktokapis.com/v2/user/info/",
+            {"params": {"fields": "open_id,union_id,avatar_url,display_name"}},
+        )
     else:
         return {"ok": False, "reason": "unsupported_oauth_provider"}
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.request(method, url, headers=headers, **kwargs)
         data = response.json() if "application/json" in response.headers.get("content-type", "") else {}
     ok = response.is_success and (provider_slug != "slack" or bool(data.get("ok")))
+    identity_source = data.get("data", {}).get("user", {}) if provider_slug == "tiktok" else data
     identity = {
-        key: data.get(key)
-        for key in ("sub", "email", "team", "team_id", "user", "user_id", "id")
-        if data.get(key) is not None
+        key: identity_source.get(key)
+        for key in (
+            "sub", "email", "team", "team_id", "user", "user_id", "id",
+            "open_id", "union_id", "display_name",
+        )
+        if identity_source.get(key) is not None
     }
     return {"ok": ok, "status_code": response.status_code, "identity": identity}
 
@@ -255,6 +276,12 @@ class ProviderExecutor:
             "notion.blocks.children.append": self._notion_blocks_children_append,
             "slack.channels.list": self._slack_channels_list,
             "slack.post": self._slack_post,
+            "tiktok.profile.get": self._tiktok_profile_get,
+            "tiktok.videos.list": self._tiktok_videos_list,
+            "tiktok.post.creator_info": self._tiktok_post_creator_info,
+            "tiktok.video.upload.init": self._tiktok_video_upload_init,
+            "tiktok.video.publish.init": self._tiktok_video_publish_init,
+            "tiktok.post.status.get": self._tiktok_post_status_get,
             "http.request": self._http_request,
             "mcp.call": self._mcp_call,
         }
@@ -423,6 +450,58 @@ class ProviderExecutor:
             "PATCH",
             f"blocks/{quote(a['block_id'], safe='')}/children",
             json={"children": a["children"]},
+        )
+
+    async def _tiktok_request(
+        self, method: str, path: str, *, fields: str | None = None, body: dict | None = None
+    ) -> dict:
+        params = {"fields": fields} if fields else None
+        data = await self._request(
+            method,
+            f"https://open.tiktokapis.com/v2/{path.lstrip('/')}",
+            params=params,
+            json=body,
+        )
+        error = data.get("error", {})
+        if error.get("code") not in (None, "", "ok", 0):
+            raise RuntimeError(error.get("message") or error.get("code"))
+        return data
+
+    async def _tiktok_profile_get(self, a: dict) -> dict:
+        fields = (
+            "open_id,union_id,avatar_url,display_name,profile_deep_link,"
+            "is_verified,follower_count,following_count,likes_count,video_count"
+        )
+        return await self._tiktok_request("GET", "user/info/", fields=fields)
+
+    async def _tiktok_videos_list(self, a: dict) -> dict:
+        fields = (
+            "id,title,video_description,duration,cover_image_url,embed_link,"
+            "share_url,create_time,like_count,comment_count,share_count,view_count"
+        )
+        body = {"max_count": min(int(a.get("max_count", 20)), 20)}
+        if a.get("cursor") is not None:
+            body["cursor"] = int(a["cursor"])
+        return await self._tiktok_request("POST", "video/list/", fields=fields, body=body)
+
+    async def _tiktok_post_creator_info(self, a: dict) -> dict:
+        return await self._tiktok_request("POST", "post/publish/creator_info/query/", body={})
+
+    async def _tiktok_video_upload_init(self, a: dict) -> dict:
+        return await self._tiktok_request(
+            "POST", "post/publish/inbox/video/init/", body={"source_info": a["source_info"]}
+        )
+
+    async def _tiktok_video_publish_init(self, a: dict) -> dict:
+        return await self._tiktok_request(
+            "POST",
+            "post/publish/video/init/",
+            body={"post_info": a["post_info"], "source_info": a["source_info"]},
+        )
+
+    async def _tiktok_post_status_get(self, a: dict) -> dict:
+        return await self._tiktok_request(
+            "POST", "post/publish/status/fetch/", body={"publish_id": a["publish_id"]}
         )
 
     async def _slack_channels_list(self, a: dict) -> dict:
