@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Check, Loader2, Mail, ExternalLink, CheckCircle2, Pencil, Save, X } from "lucide-react";
-import { base44 } from "@/api/base44Client";
+import { aura } from "@/api/auraClient";
 
 // Renders the creators AURA discovered. For each, you can preview and EDIT
 // the outreach draft (subject + body) before approving. Approving marks the
@@ -27,7 +27,7 @@ export default function CreatorApprovalList({ items: initialItems }) {
   const saveDraft = async (id) => {
     setBusy(id);
     try {
-      await base44.entities.Creator.update(id, { outreach_subject: draft.subject, outreach_draft: draft.body });
+      await aura.entities.Creator.update(id, { outreach_subject: draft.subject, outreach_draft: draft.body });
       setItems((prev) => prev.map((it) => (it.id === id ? { ...it, subject: draft.subject, body: draft.body } : it)));
       setEditing(null);
       setDraft({});
@@ -38,7 +38,7 @@ export default function CreatorApprovalList({ items: initialItems }) {
   const approve = async (id) => {
     setBusy(id);
     try {
-      await base44.entities.Creator.update(id, { status: "approved" });
+      await aura.entities.Creator.update(id, { status: "approved" });
       setItems((prev) => prev.map((it) => (it.id === id ? { ...it, status: "approved" } : it)));
     } catch {}
     setBusy(null);
