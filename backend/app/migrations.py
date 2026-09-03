@@ -2,7 +2,6 @@ from sqlalchemy import text
 
 from .db import Base, engine
 
-
 DIRECT_TENANT_TABLES = (
     "tenant_memberships",
     "policy_configs",
@@ -18,6 +17,7 @@ DIRECT_TENANT_TABLES = (
     "webhook_deliveries",
     "tool_trust_states",
     "workflows",
+    "workspace_records",
     "workflow_runs",
     "plan_versions",
     "approval_snapshots",
