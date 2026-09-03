@@ -1,8 +1,11 @@
 import { motion } from "framer-motion";
 import ConnectionsPill from "./ConnectionsPill";
 import { Sparkles, History } from "lucide-react";
+import { OrganizationSwitcher, UserButton } from "@clerk/react";
+import { useAuth } from "@/lib/AuthContext";
 
 export default function TopBar({ onHistoryOpen }) {
+  const { workspace, workspaces, chooseWorkspace } = useAuth();
   return (
     <motion.header
       initial={{ opacity: 0, y: -10 }}
@@ -23,6 +26,20 @@ export default function TopBar({ onHistoryOpen }) {
         </span>
       </div>
       <div className="flex items-center gap-4">
+        {workspaces.length > 1 && (
+          <select
+            aria-label="AURA workspace"
+            value={workspace?.workspace_id || ""}
+            onChange={(event) => {
+              const next = workspaces.find((item) => item.workspace_id === event.target.value);
+              if (next) chooseWorkspace(next);
+            }}
+            className="max-w-40 rounded-lg border border-white/10 bg-secondary px-2 py-1.5 text-xs"
+          >
+            {workspaces.map((item) => <option key={item.workspace_id} value={item.workspace_id}>{item.name}</option>)}
+          </select>
+        )}
+        <OrganizationSwitcher hidePersonal afterSelectOrganizationUrl={import.meta.env.BASE_URL} />
         <ConnectionsPill />
         <button
           onClick={onHistoryOpen}
@@ -31,6 +48,7 @@ export default function TopBar({ onHistoryOpen }) {
           <History className="w-3.5 h-3.5" />
           My workflows
         </button>
+        <UserButton />
       </div>
     </motion.header>
   );

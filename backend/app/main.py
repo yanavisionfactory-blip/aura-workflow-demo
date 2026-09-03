@@ -226,6 +226,24 @@ async def create_workspace(
     return {"id": token, "workspace_id": workspace.id, "name": workspace.name, "role": role}
 
 
+@app.get("/v1/workspaces")
+async def list_workspaces_for_identity(
+    claims: dict = Depends(clerk_identity),
+    session: AsyncSession = Depends(session_dependency),
+) -> list[dict]:
+    subject = claims["sub"]
+    organization_id, _ = organization_claims(claims)
+    external_id = organization_id or f"personal:{subject}"
+    rows = (
+        await session.scalars(
+            select(Workspace)
+            .where(Workspace.external_organization_id == external_id)
+            .order_by(Workspace.created_at)
+        )
+    ).all()
+    return [{"workspace_id": row.id, "name": row.name} for row in rows]
+
+
 @app.post("/v1/auth/bootstrap")
 async def bootstrap_identity(
     name: str = Query(default="My AURA Workspace", min_length=2),

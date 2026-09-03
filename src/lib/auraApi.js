@@ -1,5 +1,18 @@
 const API_URL = (import.meta.env.VITE_AURA_API_URL || "").replace(/\/$/, "");
 const WORKSPACE_KEY = "aura_python_workspace_id";
+let tokenProvider = null;
+
+export function setAuraTokenProvider(provider) {
+  tokenProvider = provider;
+}
+
+export function clearWorkspace() {
+  localStorage.removeItem(WORKSPACE_KEY);
+}
+
+export function selectWorkspace(workspaceId) {
+  localStorage.setItem(WORKSPACE_KEY, workspaceId);
+}
 
 export const pythonRuntimeEnabled = Boolean(API_URL);
 
@@ -13,15 +26,21 @@ function messageFrom(data, status) {
 async function request(path, options = {}) {
   if (!API_URL) throw new Error("AURA Python API is not configured");
   const workspaceId = options.workspaceId || localStorage.getItem(WORKSPACE_KEY);
+  const token = tokenProvider ? await tokenProvider() : null;
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
       ...(workspaceId ? { "X-Workspace-Id": workspaceId } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(options.headers || {}),
     },
   });
   const data = await response.json().catch(() => ({}));
+  if (response.status === 401 && tokenProvider) {
+    clearWorkspace();
+    window.dispatchEvent(new CustomEvent("aura:session-expired"));
+  }
   if (!response.ok) throw new Error(messageFrom(data, response.status));
   return data;
 }
@@ -29,9 +48,33 @@ async function request(path, options = {}) {
 export async function ensureWorkspace() {
   const existing = localStorage.getItem(WORKSPACE_KEY);
   if (existing) return existing;
+  if (tokenProvider) {
+    const workspace = await bootstrapWorkspace();
+    return workspace.workspace_id;
+  }
   const workspace = await request("/v1/workspaces?name=My%20AURA%20Workspace", { method: "POST" });
-  localStorage.setItem(WORKSPACE_KEY, workspace.id);
+  selectWorkspace(workspace.id);
   return workspace.id;
+}
+
+export async function bootstrapWorkspace(name = "My AURA Workspace") {
+  const workspace = await request(`/v1/auth/bootstrap?name=${encodeURIComponent(name)}`, {
+    method: "POST",
+    workspaceId: null,
+  });
+  selectWorkspace(workspace.workspace_id);
+  return workspace;
+}
+
+export async function listPythonWorkspaces() {
+  return request("/v1/workspaces", { workspaceId: null });
+}
+
+export async function createPythonWorkspace(name) {
+  return request(`/v1/workspaces?name=${encodeURIComponent(name)}`, {
+    method: "POST",
+    workspaceId: null,
+  });
 }
 
 export async function listPythonTools() {
