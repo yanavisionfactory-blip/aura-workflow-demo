@@ -40,6 +40,15 @@ async def migrate_database() -> None:
     # databases need the new values appended after the type is known to exist.
     if engine.dialect.name == "postgresql":
         async with engine.begin() as connection:
+            await connection.execute(
+                text("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS external_organization_id VARCHAR(240)")
+            )
+            await connection.execute(
+                text("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS created_by VARCHAR(240)")
+            )
+            await connection.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_workspaces_external_organization_id ON workspaces (external_organization_id)")
+            )
             for value in ("waiting_for_action", "recovering", "blocked"):
                 await connection.execute(
                     text(f"ALTER TYPE runstatus ADD VALUE IF NOT EXISTS '{value}'")
