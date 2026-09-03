@@ -16,8 +16,10 @@ The GitHub Pages site is only the React client. Real execution is provided by `b
 - Each real provider result is evaluated against its step contract. Safe reads may be retried once;
   consequential actions are never automatically replayed after an uncertain result.
 - Final synthesis uses only critic-accepted artifacts and includes step-level traceability.
-- Workspace context is a signed capability token issued in the existing workspace `id` field. The
-  server verifies active tenant membership and sets a transaction-local PostgreSQL tenant context.
+- Production requests use verified Clerk session JWTs plus an AURA workspace UUID. The server maps
+  Clerk users and organizations to active AURA membership records, then sets a transaction-local
+  PostgreSQL tenant context. Signed workspace capability tokens remain available only as a migration
+  path and for local development.
 - PostgreSQL Row-Level Security is enabled and forced on every tenant-owned control-plane table,
   including worker access to runs, steps, tools, artifacts, approvals, policy and audit records.
 - Every plan is stored as a version with a canonical SHA-256 digest. Approval locks that version and
@@ -38,10 +40,26 @@ The GitHub Pages site is only the React client. Real execution is provided by `b
 
 ## Compatibility note
 
-The frontend contract is unchanged: it continues storing the workspace response's `id` and sending
-it as `X-Workspace-ID`. The value is now a signed tenant token rather than a raw database UUID.
-Existing browser storage created before this release must be cleared once so the frontend requests a
-new signed workspace context.
+When Clerk is configured, call `POST /v1/auth/bootstrap` with the Clerk session token in
+`Authorization: Bearer …`. Store the returned `workspace_id`, send it as `X-Workspace-ID`, and send
+the Clerk token on every protected request. Set `ALLOW_LEGACY_WORKSPACE_TOKENS=false` after the web
+client cutover. Development can temporarily keep the signed workspace-token contract enabled.
+
+Clerk token verification validates the RS256 signature, expiry, optional issuer, organization status,
+and the `azp` browser origin against `CLERK_AUTHORIZED_PARTIES`. AURA database membership remains the
+authorization boundary; a valid identity token alone never grants workspace access.
+
+## Production roadmap
+
+| Phase | Scope | Production outcome |
+|---|---|---|
+| 3. Real user accounts | Signup, login, organizations, workspaces, member roles | Data isolated between customers |
+| 4. Production secrets | Encrypted per-user tokens, rotation, revocation and audit records | No credentials exposed to frontend or agents |
+| 5. Workflow engine | Trigger → conditions → actions, schedules, retries, branching and reusable variables | Workflows survive restarts |
+| 6. Trigger infrastructure | Webhooks where available; polling with checkpoints otherwise | No duplicate or lost executions |
+| 7. Execution safety | Approval before sensitive actions, idempotency, rate limits, retry policy and dead-letter queue | Actions cannot accidentally run twice |
+| 8. Observability | Execution history, understandable errors, provider health and reconnect warnings | Users can diagnose failures themselves |
+| 9. Billing and limits | Plans, usage metering, connector/run limits and Stripe billing | Usage is enforced and billable |
 
 ## Universal connector protocol
 

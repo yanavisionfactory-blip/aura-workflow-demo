@@ -33,6 +33,25 @@ class Settings(BaseSettings):
     canva_client_id: str = ""
     canva_client_secret: str = ""
     browser_connector_url: str = ""
+    # Clerk is the production identity provider. The PEM key avoids a network
+    # request on every API call; JWKS is supported for key rotation.
+    clerk_jwt_key: str = ""
+    clerk_jwks_url: str = ""
+    clerk_issuer: str = ""
+    clerk_authorized_parties: str = ""
+    allow_legacy_workspace_tokens: bool = True
+
+    @property
+    def clerk_enabled(self) -> bool:
+        return bool(self.clerk_jwt_key or self.clerk_jwks_url)
+
+    @property
+    def clerk_parties(self) -> set[str]:
+        return {
+            item.strip().rstrip("/")
+            for item in self.clerk_authorized_parties.split(",")
+            if item.strip()
+        }
 
 
 @lru_cache

@@ -24,6 +24,7 @@ from .installation_runtime import (
     installed_oauth_url,
     normalized_credentials,
 )
+from .identity import IdentityError, organization_claims, verify_clerk_session
 from .native_connectors import native_manifest, native_operations, public_catalog, validate_module_arguments
 from .models import (
     Approval,
@@ -111,14 +112,46 @@ async def startup() -> None:
     await migrate_database()
 
 
-@dataclass(frozen=True)
+@dataclass
 class TenantContext:
     workspace_id: str
     subject: str
     role: str
 
 
-async def tenant_context(x_workspace_id: str = Header(...)) -> TenantContext:
+def _bearer_token(authorization: str | None) -> str | None:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    return authorization.split(" ", 1)[1].strip()
+
+
+async def clerk_identity(authorization: str | None = Header(default=None)) -> dict:
+    token = _bearer_token(authorization)
+    if not token:
+        raise HTTPException(401, "Sign in is required")
+    try:
+        return verify_clerk_session(token)
+    except IdentityError as exc:
+        raise HTTPException(401, str(exc)) from exc
+
+
+async def tenant_context(
+    x_workspace_id: str = Header(...),
+    authorization: str | None = Header(default=None),
+) -> TenantContext:
+    token = _bearer_token(authorization)
+    if token and settings.clerk_enabled:
+        try:
+            claims = verify_clerk_session(token)
+        except IdentityError as exc:
+            raise HTTPException(401, str(exc)) from exc
+        return TenantContext(
+            workspace_id=x_workspace_id,
+            subject=claims["sub"],
+            role="member",
+        )
+    if not settings.allow_legacy_workspace_tokens:
+        raise HTTPException(401, "Sign in is required")
     try:
         claims = decode_tenant_token(x_workspace_id)
     except Exception as exc:
@@ -142,8 +175,9 @@ async def tenant_session(
             TenantMembership.active.is_(True),
         )
     )
-    if not membership or membership.role != context.role:
+    if not membership:
         raise HTTPException(403, "Tenant membership is inactive or invalid")
+    context.role = membership.role
     return session
 
 
@@ -153,17 +187,84 @@ async def health() -> dict:
 
 
 @app.post("/v1/workspaces")
-async def create_workspace(name: str = Query(min_length=2), session: AsyncSession = Depends(session_dependency)) -> dict:
-    workspace = Workspace(name=name)
+async def create_workspace(
+    name: str = Query(min_length=2),
+    authorization: str | None = Header(default=None),
+    session: AsyncSession = Depends(session_dependency),
+) -> dict:
+    bearer = _bearer_token(authorization)
+    if settings.clerk_enabled:
+        if not bearer:
+            raise HTTPException(401, "Sign in is required")
+        try:
+            claims = verify_clerk_session(bearer)
+        except IdentityError as exc:
+            raise HTTPException(401, str(exc)) from exc
+        subject = claims["sub"]
+        organization_id, claimed_role = organization_claims(claims)
+        role = "owner" if claimed_role == "admin" else "member"
+        workspace = Workspace(
+            name=name,
+            external_organization_id=organization_id or f"personal:{subject}",
+            created_by=subject,
+        )
+    elif settings.allow_legacy_workspace_tokens:
+        subject = f"workspace-owner:{secrets.token_urlsafe(12)}"
+        role = "owner"
+        workspace = Workspace(name=name, created_by=subject)
+    else:
+        raise HTTPException(503, "Production identity is not configured")
     session.add(workspace)
     await session.commit()
-    subject = f"workspace-owner:{secrets.token_urlsafe(12)}"
     await set_tenant_context(session, workspace.id)
-    session.add(TenantMembership(workspace_id=workspace.id, subject=subject, role="owner"))
+    session.add(TenantMembership(workspace_id=workspace.id, subject=subject, role=role))
     session.add(PolicyConfig(workspace_id=workspace.id, version=1, configuration=DEFAULT_POLICY))
     await session.commit()
-    token = create_tenant_token(workspace.id, subject, "owner")
-    return {"id": token, "workspace_id": workspace.id, "name": workspace.name}
+    if settings.clerk_enabled:
+        return {"id": workspace.id, "workspace_id": workspace.id, "name": workspace.name, "role": role}
+    token = create_tenant_token(workspace.id, subject, role)
+    return {"id": token, "workspace_id": workspace.id, "name": workspace.name, "role": role}
+
+
+@app.post("/v1/auth/bootstrap")
+async def bootstrap_identity(
+    name: str = Query(default="My AURA Workspace", min_length=2),
+    claims: dict = Depends(clerk_identity),
+    session: AsyncSession = Depends(session_dependency),
+) -> dict:
+    """Resolve a Clerk user and active organization to an AURA workspace."""
+    subject = claims["sub"]
+    organization_id, claimed_role = organization_claims(claims)
+    external_id = organization_id or f"personal:{subject}"
+    workspace = await session.scalar(
+        select(Workspace).where(Workspace.external_organization_id == external_id).order_by(Workspace.created_at)
+    )
+    if workspace is None:
+        role = "owner" if claimed_role == "admin" or organization_id is None else "member"
+        workspace = Workspace(name=name, external_organization_id=external_id, created_by=subject)
+        session.add(workspace)
+        await session.commit()
+        await set_tenant_context(session, workspace.id)
+        session.add(TenantMembership(workspace_id=workspace.id, subject=subject, role=role))
+        session.add(PolicyConfig(workspace_id=workspace.id, version=1, configuration=DEFAULT_POLICY))
+        await session.commit()
+    else:
+        await set_tenant_context(session, workspace.id)
+        membership = await session.scalar(
+            select(TenantMembership).where(
+                TenantMembership.workspace_id == workspace.id,
+                TenantMembership.subject == subject,
+            )
+        )
+        if membership is None:
+            role = "admin" if claimed_role == "admin" else "member"
+            membership = TenantMembership(workspace_id=workspace.id, subject=subject, role=role)
+            session.add(membership)
+            await session.commit()
+        elif not membership.active:
+            raise HTTPException(403, "Workspace membership is inactive")
+        role = membership.role
+    return {"workspace_id": workspace.id, "name": workspace.name, "role": role}
 
 
 @app.get("/v1/tools")
