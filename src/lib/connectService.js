@@ -1,4 +1,3 @@
-import { base44 } from "@/api/base44Client";
 import { setConnection, replaceConnections } from "@/lib/connectionsStore";
 import {
   addPythonTool,
@@ -7,7 +6,6 @@ import {
   discoverPythonConnector,
   disconnectPythonConnection,
   listPythonTools,
-  pythonRuntimeEnabled,
   testPythonConnection,
 } from "@/lib/auraApi";
 
@@ -20,16 +18,15 @@ export function hasStandardOAuth(toolName) {
 }
 
 export async function connectTool(toolName, opts = {}) {
-  if (pythonRuntimeEnabled) {
-    const provider = PYTHON_OAUTH[toolName];
-    if (provider) {
-      const result = await authorizeOAuth(provider);
-      if (result.redirecting) return { method: "oauth", connected: false, authorizationStarted: true, provider };
-      await hydrateConnections();
-      return { method: "oauth", connected: true, provider, connection: result.tool };
-    }
+  const provider = PYTHON_OAUTH[toolName];
+  if (provider) {
+    const result = await authorizeOAuth(provider);
+    if (result.redirecting) return { method: "oauth", connected: false, authorizationStarted: true, provider };
+    await hydrateConnections();
+    return { method: "oauth", connected: true, provider, connection: result.tool };
+  }
 
-    if (opts.connectionKind === "oauth2") {
+  if (opts.connectionKind === "oauth2") {
       const result = await authorizeCustomOAuth({
         slug: slugify(toolName),
         display_name: toolName,
@@ -52,14 +49,14 @@ export async function connectTool(toolName, opts = {}) {
       });
       await hydrateConnections();
       return { method: "oauth2", connected: true, connection: result.tool };
-    }
+  }
 
-    if (!opts.baseUrl) return { method: "custom", connected: false, needsConfiguration: true };
-    const kind = opts.connectionKind || "openapi";
-    const credentials = credentialsFor(opts);
-    let connection;
-    if (kind === "api_key") {
-      connection = await addPythonTool({
+  if (!opts.baseUrl) return { method: "custom", connected: false, needsConfiguration: true };
+  const kind = opts.connectionKind || "openapi";
+  const credentials = credentialsFor(opts);
+  let connection;
+  if (kind === "api_key") {
+    connection = await addPythonTool({
         slug: slugify(toolName),
         displayName: toolName,
         kind,
@@ -67,34 +64,23 @@ export async function connectTool(toolName, opts = {}) {
         credentials,
         allowedOperations: opts.allowedOperations || ["http.request"],
         config: opts.config || {},
-      });
-    } else {
-      connection = await discoverPythonConnector({
+    });
+  } else {
+    connection = await discoverPythonConnector({
         slug: slugify(toolName),
         displayName: toolName,
         kind,
         baseUrl: opts.baseUrl,
         credentials,
         config: { name: toolName, ...(opts.config || {}) },
-      });
-    }
-    setConnection(toolName, true);
-    return { method: kind, connected: true, connection };
+    });
   }
-
-  const res = await base44.functions.invoke("resolveToolConnection", { tool: toolName });
-  const info = res.data;
-  if (info.method === "interface") return { method: info.method, interfaceTool: toolName, connected: false };
-  if (info.method === "api_key" && !opts.apiKey) return { method: info.method, connected: false, needsApiKey: true };
-  if (info.method === "oauth" && !info.oauthAuthorized) return { method: info.method, connected: false, needsAuthorization: true, connector: info.connector };
-  await base44.functions.invoke("recordToolConnection", { tool: toolName, method: info.method, meta: opts });
   setConnection(toolName, true);
-  return { method: info.method, connected: true };
+  return { method: kind, connected: true, connection };
 }
 
 export async function hydrateConnections() {
-  if (pythonRuntimeEnabled) {
-    const tools = await listPythonTools();
+  const tools = await listPythonTools();
     const map = {};
     for (const tool of tools) map[tool.display_name] = tool.enabled;
     if (map["Google Workspace"]) {
@@ -104,11 +90,7 @@ export async function hydrateConnections() {
       map["Google Sheets"] = true;
     }
     replaceConnections(map);
-    return tools;
-  }
-  const res = await base44.functions.invoke("listToolConnections", {});
-  replaceConnections(res.data?.connections || {});
-  return [];
+  return tools;
 }
 
 async function findConnection(toolName) {
@@ -122,14 +104,12 @@ async function findConnection(toolName) {
 }
 
 export async function testToolConnection(toolName) {
-  if (!pythonRuntimeEnabled) throw new Error("Connection testing requires the Python control plane.");
   const tool = await findConnection(toolName);
   if (!tool) throw new Error(`${toolName} is not connected.`);
   return testPythonConnection(tool.id);
 }
 
 export async function disconnectTool(toolName) {
-  if (!pythonRuntimeEnabled) throw new Error("Revoking connections requires the Python control plane.");
   const tool = await findConnection(toolName);
   if (!tool) throw new Error(`${toolName} is not connected.`);
   await disconnectPythonConnection(tool.id);
@@ -138,16 +118,11 @@ export async function disconnectTool(toolName) {
 }
 
 export async function recordInterfaceConnection(toolName, meta = {}) {
-  if (pythonRuntimeEnabled) {
-    if (!meta.baseUrl) throw new Error("Paste the tool URL before connecting it.");
-    return connectTool(toolName, {
+  if (!meta.baseUrl) throw new Error("Paste the tool URL before connecting it.");
+  return connectTool(toolName, {
       baseUrl: meta.baseUrl,
       connectionKind: "browser",
       credentials: meta.credentials || {},
       config: meta,
-    });
-  }
-  await base44.functions.invoke("recordToolConnection", { tool: toolName, method: "interface", meta });
-  setConnection(toolName, true);
-  return { connected: true };
+  });
 }
