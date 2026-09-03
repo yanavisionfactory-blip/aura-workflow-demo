@@ -49,6 +49,8 @@ class Workspace(Base):
     __tablename__ = "workspaces"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(String(200))
+    external_organization_id: Mapped[str | None] = mapped_column(String(240), nullable=True, index=True)
+    created_by: Mapped[str | None] = mapped_column(String(240), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
