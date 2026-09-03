@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Loader2, Layers } from "lucide-react";
-import { base44 } from "@/api/base44Client";
+import { aura } from "@/api/auraClient";
 import WorkflowList from "./WorkflowList";
 import WorkflowDetail from "./WorkflowDetail";
 import HistoryRunDetail from "./HistoryRunDetail";
@@ -19,9 +19,9 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun }) {
     setLoading(true);
     (async () => {
       let [wfs, rs, sch] = await Promise.all([
-        base44.entities.Workflow.list("-created_date", 50).catch(() => []),
-        base44.entities.WorkflowRun.list("-created_date", 100).catch(() => []),
-        base44.entities.Schedule.list("-created_date", 50).catch(() => []),
+        aura.entities.Workflow.list("-created_date", 50).catch(() => []),
+        aura.entities.WorkflowRun.list("-created_date", 100).catch(() => []),
+        aura.entities.Schedule.list("-created_date", 50).catch(() => []),
       ]);
 
       // Backfill: adopt orphaned runs from before the saved-workflow feature
@@ -33,7 +33,7 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun }) {
           const grp = groups[prompt].sort((a, b) => new Date(b.created_date) - new Date(a.created_date));
           const latest = grp[0];
           try {
-            const wf = await base44.entities.Workflow.create({
+            const wf = await aura.entities.Workflow.create({
               name: (prompt || "Workflow").slice(0, 60),
               prompt,
               interpretation: latest.summary || prompt,
@@ -43,14 +43,14 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun }) {
               last_summary: latest.summary,
               run_count: grp.length,
             });
-            await base44.entities.WorkflowRun.updateMany(
+            await aura.entities.WorkflowRun.updateMany(
               { id: { $in: grp.map((r) => r.id) } },
               { $set: { workflow_id: wf.id } }
             ).catch(() => {});
           } catch (e) { /* ignore */ }
         }
-        wfs = await base44.entities.Workflow.list("-created_date", 50).catch(() => wfs);
-        rs = await base44.entities.WorkflowRun.list("-created_date", 100).catch(() => rs);
+        wfs = await aura.entities.Workflow.list("-created_date", 50).catch(() => wfs);
+        rs = await aura.entities.WorkflowRun.list("-created_date", 100).catch(() => rs);
       }
 
       setWorkflows(wfs);
@@ -63,14 +63,14 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun }) {
   // Live updates
   useEffect(() => {
     if (!open) return;
-    const unsubWf = base44.entities.Workflow.subscribe((event) => {
+    const unsubWf = aura.entities.Workflow.subscribe((event) => {
       if (event.type === "create") setWorkflows((p) => [event.data, ...p]);
       else if (event.type === "update") {
         setWorkflows((p) => p.map((w) => (w.id === event.id ? event.data : w)));
         setSelectedWorkflow((prev) => (prev?.id === event.id ? event.data : prev));
       }
     });
-    const unsubRun = base44.entities.WorkflowRun.subscribe((event) => {
+    const unsubRun = aura.entities.WorkflowRun.subscribe((event) => {
       if (event.type === "create") setRuns((p) => [event.data, ...p]);
       else if (event.type === "update") {
         setRuns((p) => p.map((r) => (r.id === event.id ? event.data : r)));
@@ -132,7 +132,7 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun }) {
                   onRerun={async (approval) => {
                     let wf = selectedWf;
                     if (!wf && selectedRun.workflow_id) {
-                      try { wf = await base44.entities.Workflow.get(selectedRun.workflow_id); } catch (e) { wf = null; }
+                      try { wf = await aura.entities.Workflow.get(selectedRun.workflow_id); } catch (e) { wf = null; }
                     }
                     onClose();
                     onRerun(wf, approval);
@@ -140,7 +140,7 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun }) {
                   onEditRun={async (approval) => {
                     let wf = selectedWf;
                     if (!wf && selectedRun.workflow_id) {
-                      try { wf = await base44.entities.Workflow.get(selectedRun.workflow_id); } catch (e) { wf = null; }
+                      try { wf = await aura.entities.Workflow.get(selectedRun.workflow_id); } catch (e) { wf = null; }
                     }
                     onClose();
                     onEditRun(wf, approval);
