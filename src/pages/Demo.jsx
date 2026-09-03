@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { base44 } from "@/api/base44Client";
+import { aura } from "@/api/auraClient";
 import { WORKFLOW_EXAMPLES } from "@/lib/demoData";
 import { CREATOR_APPROVALS_MOCK } from "@/lib/mockWorkflows";
 import TopBar from "@/components/aura/TopBar";
@@ -18,7 +18,7 @@ import { detectNewConsequential } from "@/lib/editRunDetect";
 import { requestNotifyPermission, notifyWorkflowComplete, notifyWorkflowError } from "@/lib/auraNotify";
 import { hydrateConnections } from "@/lib/connectService";
 import { getAllConnections } from "@/lib/connectionsStore";
-import { approvePythonPlan, createPythonRun, getPythonRun, pythonRuntimeEnabled } from "@/lib/auraApi";
+import { approvePythonPlan, createPythonRun, getPythonRun } from "@/lib/auraApi";
 
 const STEP_DURATION = 2.6;
 
@@ -227,7 +227,7 @@ export default function Demo() {
     const attachedDocs = (resources && resources.documents) || [];
     setPhase("confirm");
     setInterpretationLoading(true);
-    base44.integrations.Core
+    aura.integrations.Core
       .InvokeLLM({
         prompt: `You are AURA, an AI workflow automation platform. A user described a business workflow they want automated.
 
@@ -251,7 +251,7 @@ Write ONE clear, conversational sentence restating what they want, as you unders
   const handlePickExample = useCallback(
     (i) => {
       const ex = WORKFLOW_EXAMPLES[i];
-      const mock = pythonRuntimeEnabled ? null : (ex.mock ? { ...ex.mock, plan: { ...ex.mock.plan, workflowName: ex.title } } : null);
+      const mock = null;
       handleSubmit(ex.prompt, [], null, mock);
     },
     [handleSubmit]
@@ -260,7 +260,7 @@ Write ONE clear, conversational sentence restating what they want, as you unders
   // Ask AURA to re-interpret the same request from a different angle
   const handleRegenerateInterpretation = useCallback(() => {
     setInterpretationLoading(true);
-    base44.integrations.Core
+    aura.integrations.Core
       .InvokeLLM({
         prompt: `You are AURA, an AI workflow automation platform. A user wants to automate a workflow.
 
@@ -283,7 +283,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
   const handleConfirm = useCallback(
     (editedInterpretation) => {
       setInterpretation(editedInterpretation);
-      if (pythonRuntimeEnabled) {
+      {
         setPlanLoading(true);
         setPhase("plan");
         (async () => {
@@ -336,7 +336,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
       setPlanLoading(true);
       setPhase("plan");
       const attachedPlanDocs = (attachedResourcesRef.current?.documents) || [];
-      base44.integrations.Core
+      aura.integrations.Core
         .InvokeLLM({
           prompt: `You are AURA, an AI workflow automation platform. Build an execution plan for this workflow.
 
@@ -433,7 +433,7 @@ Rules:
       return;
     }
     if (autoApprove) {
-      if (pythonRuntimeEnabled && pythonRunIdRef.current) startPythonExecution();
+      if (pythonRunIdRef.current) startPythonExecution();
       else startExecution();
       return;
     }
@@ -445,7 +445,7 @@ Rules:
       approvedStepsRef.current = editedSteps;
       setApprovedSteps(editedSteps);
     }
-    if (pythonRuntimeEnabled && pythonRunIdRef.current) startPythonExecution(editedSteps);
+    if (pythonRunIdRef.current) startPythonExecution(editedSteps);
     else startExecution();
   }, []);
 
@@ -522,19 +522,19 @@ Rules:
       const baseName = workflowName || plan?.workflowName || originalPromptRef.current.slice(0, 60);
       const now = new Date().toISOString();
       const startUpdate = (id) =>
-        base44.entities.Workflow.updateMany(
+        aura.entities.Workflow.updateMany(
           { id },
           { $set: { steps: approvedStepsRef.current, interpretation: plan?.interpretation || interpretation, last_run_status: "running", last_run_date: now }, $inc: { run_count: 1 } }
         );
       if (!wfId) {
         // Reuse an existing saved workflow for the same prompt, else create one
-        const existing = await base44.entities.Workflow.filter({ prompt: originalPromptRef.current }, "-created_date", 1).catch(() => []);
+        const existing = await aura.entities.Workflow.filter({ prompt: originalPromptRef.current }, "-created_date", 1).catch(() => []);
         if (existing.length) {
           wfId = existing[0].id;
           currentWorkflowIdRef.current = wfId;
           await startUpdate(wfId);
         } else {
-          const wf = await base44.entities.Workflow.create({
+          const wf = await aura.entities.Workflow.create({
             name: baseName,
             prompt: originalPromptRef.current,
             interpretation: plan?.interpretation || interpretation,
@@ -549,7 +549,7 @@ Rules:
       } else {
         await startUpdate(wfId);
       }
-      const run = await base44.entities.WorkflowRun.create({ prompt: originalPromptRef.current, status: "running", workflow_id: wfId });
+      const run = await aura.entities.WorkflowRun.create({ prompt: originalPromptRef.current, status: "running", workflow_id: wfId });
       currentRunIdRef.current = run.id;
     } catch (e) {
       /* ignore */
@@ -568,7 +568,7 @@ Rules:
     const poll = async () => {
       while (!stopped) {
         try {
-          const run = await base44.entities.WorkflowRun.get(runId);
+          const run = await aura.entities.WorkflowRun.get(runId);
           if (run.steps && run.steps.length) {
             setExecSteps(run.steps.map((s) => ({ ...s, liveOutput: s.output || "" })));
             const idx = run.steps.findIndex((s) => s.status === "running");
@@ -581,7 +581,7 @@ Rules:
     poll();
 
     try {
-      const res = await base44.functions.invoke("orchestrateWorkflow", {
+      const res = await aura.functions.invoke("orchestrateWorkflow", {
         runId,
         steps: approvedStepsRef.current,
         interpretation: plan?.interpretation || interpretation,
@@ -623,7 +623,7 @@ Rules:
             setPhase("error");
             notifyWorkflowError(mock?.results?.title || originalPromptRef.current, mock?.errorStep?.what);
             if (currentWorkflowIdRef.current) {
-              base44.entities.Workflow.updateMany(
+              aura.entities.Workflow.updateMany(
                 { id: currentWorkflowIdRef.current },
                 { $set: { last_run_status: "failed", last_run_date: new Date().toISOString() } }
               ).catch(() => {});
@@ -668,7 +668,7 @@ Rules:
         nextSteps: [],
       };
     } else {
-      res = await base44.integrations.Core.InvokeLLM({
+      res = await aura.integrations.Core.InvokeLLM({
         prompt: `You are AURA. A workflow has just been executed successfully.
 
 Confirmed intent: ${interpretation}
@@ -691,7 +691,7 @@ Generate a results summary in plain, human-friendly language (not technical).
 
     if (currentRunIdRef.current && !resultsFromBackend) {
       try {
-        await base44.entities.WorkflowRun.update(currentRunIdRef.current, {
+        await aura.entities.WorkflowRun.update(currentRunIdRef.current, {
           status: executionStatus === "failed" || errorMsg ? "failed" : "completed",
           title: workflowName || res.title,
           summary: res.summary,
@@ -713,7 +713,7 @@ Generate a results summary in plain, human-friendly language (not technical).
           steps: approvedStepsRef.current,
         };
         if (workflowName) wfSet.name = workflowName;
-        await base44.entities.Workflow.updateMany(
+        await aura.entities.Workflow.updateMany(
           { id: currentWorkflowIdRef.current },
           { $set: wfSet }
         );
@@ -811,7 +811,7 @@ Generate a results summary in plain, human-friendly language (not technical).
   const handleEditReviewRun = () => {
     setEditReviewOpen(false);
     setEditRunMode(false);
-    startExecution();
+    handleConfirm(plan?.interpretation || interpretation);
   };
 
   useEffect(() => {
@@ -821,11 +821,11 @@ Generate a results summary in plain, human-friendly language (not technical).
     if (!PROMPT) return;
     (async () => {
       try {
-        const existing = await base44.entities.Workflow.filter({ prompt: PROMPT }, "-created_date", 1);
+        const existing = await aura.entities.Workflow.filter({ prompt: PROMPT }, "-created_date", 1);
         if (existing.length) return;
         const m = CREATOR_APPROVALS_MOCK;
         const now = new Date().toISOString();
-        const wf = await base44.entities.Workflow.create({
+        const wf = await aura.entities.Workflow.create({
           name: m.plan.workflowName || "Weekly creator approvals",
           prompt: PROMPT,
           interpretation: m.plan.interpretation,
@@ -835,7 +835,7 @@ Generate a results summary in plain, human-friendly language (not technical).
           last_summary: m.results.summary,
           run_count: 1,
         });
-        await base44.entities.WorkflowRun.create({
+        await aura.entities.WorkflowRun.create({
           prompt: PROMPT,
           status: "completed",
           workflow_id: wf.id,

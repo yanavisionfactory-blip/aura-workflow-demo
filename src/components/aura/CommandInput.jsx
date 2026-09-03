@@ -5,7 +5,7 @@ import ValueProp from "./ValueProp";
 import ResourceComposer from "./ResourceComposer";
 import AuraInterfaceConnect from "./AuraInterfaceConnect";
 import { recordInterfaceConnection } from "@/lib/connectService";
-import { base44 } from "@/api/base44Client";
+import { aura } from "@/api/auraClient";
 
 const EXAMPLE_ICONS = [FileBarChart, Mail, ListChecks, RefreshCw];
 
@@ -40,7 +40,7 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
   const inputRef = useRef(null);
 
   useEffect(() => {
-    base44.entities.WorkflowRun.list("-created_date", 50)
+    aura.entities.WorkflowRun.list("-created_date", 50)
       .then((runs) => {
         const done = (runs || []).filter((r) => r.status === "completed");
         if (done.length >= 3) setExamplesCollapsed(true);

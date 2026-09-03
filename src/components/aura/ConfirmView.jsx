@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Sparkles, Check, Pencil, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { base44 } from "@/api/base44Client";
+import { aura } from "@/api/auraClient";
 
 export default function ConfirmView({ interpretation, originalPrompt, loading, onConfirm, onEdit }) {
   const [text, setText] = useState(interpretation || "");
@@ -26,7 +26,7 @@ export default function ConfirmView({ interpretation, originalPrompt, loading, o
     if (!originalPrompt) return;
     let cancelled = false;
     setAltLoading(true);
-    base44.integrations.Core.InvokeLLM({
+    aura.integrations.Core.InvokeLLM({
       prompt: `You are AURA, an AI workflow automation platform. A user wants to automate a workflow.
 
 Original request: "${originalPrompt}"

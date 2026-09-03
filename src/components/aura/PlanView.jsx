@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { Brain, Plus, ArrowRight, Sparkles, Loader2, Check, X } from "lucide-react";
-import { base44 } from "@/api/base44Client";
+import { aura } from "@/api/auraClient";
 import PlanStep from "./PlanStep";
 import AuraInterfaceConnect from "./AuraInterfaceConnect";
 import ConnectToolModal from "./ConnectToolModal";
@@ -174,7 +174,7 @@ export default function PlanView({ plan, onApprove, approveLabel = "Start", user
     setPlanSubmitting(true);
     setPlanError("");
     try {
-      const res = await base44.integrations.Core.InvokeLLM({
+      const res = await aura.integrations.Core.InvokeLLM({
         prompt: `You are AURA, an AI workflow automation platform. Revise the ENTIRE workflow plan based on the user's instruction.
 
 Confirmed intent: "${plan.interpretation || ""}"
