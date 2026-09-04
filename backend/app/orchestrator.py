@@ -26,6 +26,7 @@ from .models import (
 from .policy import canonical_plan_hash, operation_scope, runtime_policy_check
 from .providers import ProviderExecutor, idempotency_key, refresh_oauth_credentials
 from .security import CredentialVault
+from .workflow_context import WorkflowContextError, evaluate_condition, resolve_value
 
 
 async def audit(
@@ -94,10 +95,15 @@ async def plan_run(run_id: str, workspace_id: str) -> None:
                 step = RunStep(
                     run_id=run.id,
                     position=position,
+                    step_key=item.key,
                     agent=item.agent,
                     tool_slug=item.tool_slug,
                     operation=item.operation,
                     arguments=item.arguments,
+                    depends_on=item.depends_on,
+                    dependency_mode=item.dependency_mode,
+                    condition=item.condition.model_dump(mode="json") if item.condition else None,
+                    output_variables=item.output_variables,
                     consequential=item.consequential,
                     idempotency_key=idempotency_key(
                         run.id, position, item.operation, item.arguments
@@ -294,6 +300,12 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
             )
             mismatch = (
                 not (primary_match or approved_fallback_match)
+                or stored.step_key != approved.get("key", f"step_{stored.position + 1}")
+                or stored.depends_on != approved.get("depends_on", [])
+                or stored.dependency_mode
+                != approved.get("dependency_mode", "all_succeeded")
+                or stored.condition != approved.get("condition")
+                or stored.output_variables != approved.get("output_variables", {})
                 or stored.arguments
                 not in (
                     approved.get("arguments", {}),
@@ -323,12 +335,72 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
         await session.commit()
 
         outputs: list[dict] = []
+        context = run.execution_context or {
+            "inputs": run.inputs or {},
+            "vars": run.inputs or {},
+            "steps": {},
+        }
+        step_by_key = {step.step_key: step for step in steps}
         for step in steps:
             if step.status == StepStatus.completed:
                 outputs.append(step.output)
+                context.setdefault("steps", {})[step.step_key] = step.output.get(
+                    "provider_result", step.output
+                )
                 continue
             if step.status == StepStatus.skipped:
                 continue
+
+            dependencies = [step_by_key.get(key) for key in step.depends_on]
+            dependency_satisfied = all(
+                dependency
+                and (
+                    dependency.status in {StepStatus.completed, StepStatus.skipped}
+                    if step.dependency_mode == "all_settled"
+                    else dependency.status == StepStatus.completed
+                )
+                for dependency in dependencies
+            )
+            if not dependency_satisfied:
+                step.status = StepStatus.skipped
+                step.output = {"reason": "dependency_not_satisfied"}
+                await audit(
+                    session,
+                    workspace_id,
+                    "step.branch_skipped",
+                    {"step_id": step.id, "reason": "dependency_not_satisfied"},
+                    run.id,
+                )
+                await session.commit()
+                continue
+            try:
+                if step.condition and not evaluate_condition(step.condition, context):
+                    step.status = StepStatus.skipped
+                    step.output = {"reason": "condition_false"}
+                    await audit(
+                        session,
+                        workspace_id,
+                        "step.branch_skipped",
+                        {"step_id": step.id, "reason": "condition_false"},
+                        run.id,
+                    )
+                    await session.commit()
+                    continue
+                resolved_arguments = resolve_value(step.arguments, context)
+            except WorkflowContextError as exc:
+                step.status = StepStatus.failed
+                step.error = str(exc)
+                run.status = RunStatus.waiting_for_action
+                run.error = step.error
+                await audit(
+                    session,
+                    workspace_id,
+                    "step.variable_resolution_failed",
+                    {"step_id": step.id, "error": step.error},
+                    run.id,
+                )
+                await session.commit()
+                return
 
             tool = await session.scalar(
                 select(ToolConnection).where(
@@ -511,7 +583,7 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                     await session.commit()
                 return None, last_error
 
-            result, error = await call(tool, step.operation, step.arguments)
+            result, error = await call(tool, step.operation, resolved_arguments)
             approved_step = plan_steps[step.position]
             fallback_slug = approved_step.get("fallback_tool_slug")
             fallback_operation = approved_step.get("fallback_operation")
@@ -551,12 +623,17 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                         },
                         run.id,
                     )
-                    result, error = await call(fallback, fallback_operation, step.arguments)
+                    result, error = await call(
+                        fallback, fallback_operation, resolved_arguments
+                    )
                     if not error:
                         step.tool_slug = fallback.slug
                         step.operation = fallback_operation
                         step.idempotency_key = idempotency_key(
-                            run.id, step.position, fallback_operation, step.arguments
+                            run.id,
+                            step.position,
+                            fallback_operation,
+                            resolved_arguments,
                         )
 
             reduced_arguments = approved_step.get("reduced_scope_arguments")
@@ -573,11 +650,14 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                     {"step_id": step.id},
                     run.id,
                 )
-                result, error = await call(tool, step.operation, reduced_arguments)
+                resolved_reduced_arguments = resolve_value(reduced_arguments, context)
+                result, error = await call(
+                    tool, step.operation, resolved_reduced_arguments
+                )
                 if not error:
-                    step.arguments = reduced_arguments
+                    resolved_arguments = resolved_reduced_arguments
                     step.idempotency_key = idempotency_key(
-                        run.id, step.position, step.operation, reduced_arguments
+                        run.id, step.position, step.operation, resolved_reduced_arguments
                     )
 
             if error or result is None:
@@ -601,7 +681,7 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                 "agent": step.agent,
                 "tool_slug": step.tool_slug,
                 "operation": step.operation,
-                "arguments": step.arguments,
+                "arguments": resolved_arguments,
                 "expected_output": approved_step.get("expected_output", ""),
                 "consequential": step.consequential,
             }
@@ -638,6 +718,24 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
             step.completed_at = datetime.now(timezone.utc)
             run.updated_at = step.completed_at
             outputs.append(step.output)
+            context.setdefault("steps", {})[step.step_key] = result
+            try:
+                for name, value in step.output_variables.items():
+                    context.setdefault("vars", {})[name] = resolve_value(value, context)
+            except WorkflowContextError as exc:
+                run.execution_context = context
+                run.status = RunStatus.waiting_for_action
+                run.error = str(exc)
+                await audit(
+                    session,
+                    workspace_id,
+                    "step.output_mapping_failed",
+                    {"step_id": step.id, "error": run.error},
+                    run.id,
+                )
+                await session.commit()
+                return
+            run.execution_context = context
             session.add(
                 Artifact(
                     workspace_id=workspace_id,

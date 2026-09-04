@@ -11,6 +11,7 @@ from .schemas import (
     UnifiedDeliverable,
     WorkflowPlan,
 )
+from .workflow_context import referenced_step_keys
 
 
 class ConnectionRequiredError(RuntimeError):
@@ -52,7 +53,10 @@ def build_agents() -> dict[str, Agent]:
             is consequential. Mark a step optional only when the final deliverable remains valid without
             it. Recommend a fallback only when it is an inventory tool with equivalent permission scope.
             A read step may include reduced-scope arguments for recovery. Do not include narrative-only
-            pseudo tools or claim execution occurred.""",
+            pseudo tools or claim execution occurred. Give every step a stable lowercase key. Declare
+            dependencies explicitly. Use {{inputs.name}}, {{vars.name}}, or {{steps.key.field}} to pass
+            values, and use structured conditions for branches. A join after alternative branches uses
+            dependency_mode all_settled.""",
             WorkflowPlan,
         ),
         "evaluator": _agent(
@@ -115,6 +119,18 @@ def deterministic_plan_fixes(plan: WorkflowPlan, tool_inventory: list[dict]) -> 
                 fixes.append(
                     f"Step {index} fallback operation {step.fallback_operation!r} is not allow-listed"
                 )
+        referenced = referenced_step_keys(
+            {
+                "arguments": step.arguments,
+                "condition": step.condition.model_dump() if step.condition else None,
+            }
+        )
+        undeclared = referenced - set(step.depends_on)
+        if undeclared:
+            fixes.append(
+                f"Step {index} must declare referenced steps as dependencies: "
+                + ", ".join(sorted(undeclared))
+            )
     return fixes
 
 

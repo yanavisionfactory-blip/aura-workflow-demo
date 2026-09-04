@@ -50,6 +50,33 @@ async def migrate_database() -> None:
             await connection.execute(
                 text("CREATE INDEX IF NOT EXISTS ix_workspaces_external_organization_id ON workspaces (external_organization_id)")
             )
+            await connection.execute(
+                text("ALTER TABLE workflows ADD COLUMN IF NOT EXISTS variables JSON DEFAULT '{}'::json")
+            )
+            await connection.execute(
+                text("ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS inputs JSON DEFAULT '{}'::json")
+            )
+            await connection.execute(
+                text("ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS execution_context JSON DEFAULT '{}'::json")
+            )
+            await connection.execute(
+                text("ALTER TABLE run_steps ADD COLUMN IF NOT EXISTS step_key VARCHAR(120)")
+            )
+            await connection.execute(
+                text("ALTER TABLE run_steps ADD COLUMN IF NOT EXISTS depends_on JSON DEFAULT '[]'::json")
+            )
+            await connection.execute(
+                text("ALTER TABLE run_steps ADD COLUMN IF NOT EXISTS condition JSON")
+            )
+            await connection.execute(
+                text("ALTER TABLE run_steps ADD COLUMN IF NOT EXISTS dependency_mode VARCHAR(30) DEFAULT 'all_succeeded'")
+            )
+            await connection.execute(
+                text("ALTER TABLE run_steps ADD COLUMN IF NOT EXISTS output_variables JSON DEFAULT '{}'::json")
+            )
+            await connection.execute(
+                text("UPDATE run_steps SET step_key = 'step_' || (position + 1) WHERE step_key IS NULL")
+            )
             for value in ("waiting_for_action", "recovering", "blocked"):
                 await connection.execute(
                     text(f"ALTER TYPE runstatus ADD VALUE IF NOT EXISTS '{value}'")

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, HttpUrl, field_validator
+from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
 
 class ToolCreate(BaseModel):
@@ -103,17 +103,20 @@ class ToolView(BaseModel):
 class RunCreate(BaseModel):
     prompt: str = Field(min_length=3, max_length=20_000)
     workflow_id: str | None = None
+    inputs: dict[str, Any] = Field(default_factory=dict)
 
 
 class WorkflowCreate(BaseModel):
     name: str = Field(min_length=2, max_length=240)
     prompt: str = Field(min_length=3, max_length=20_000)
+    variables: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
 
 
 class WorkflowUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=240)
     prompt: str | None = Field(default=None, min_length=3, max_length=20_000)
+    variables: dict[str, Any] | None = None
     enabled: bool | None = None
 
 
@@ -148,7 +151,27 @@ class InterfaceAnalyzeRequest(BaseModel):
     url: HttpUrl
 
 
+class StepCondition(BaseModel):
+    left: Any
+    operator: Literal[
+        "equals",
+        "not_equals",
+        "greater_than",
+        "greater_than_or_equal",
+        "less_than",
+        "less_than_or_equal",
+        "contains",
+        "not_contains",
+        "exists",
+        "not_exists",
+        "is_true",
+        "is_false",
+    ]
+    right: Any = None
+
+
 class PlanStep(BaseModel):
+    key: str = Field(default="", pattern=r"^[a-z][a-z0-9_]{0,119}$")
     agent: str
     tool_slug: str
     operation: str
@@ -160,6 +183,10 @@ class PlanStep(BaseModel):
     fallback_tool_slug: str | None = None
     fallback_operation: str | None = None
     reduced_scope_arguments: dict[str, Any] | None = None
+    depends_on: list[str] = Field(default_factory=list, max_length=20)
+    dependency_mode: Literal["all_succeeded", "all_settled"] = "all_succeeded"
+    condition: StepCondition | None = None
+    output_variables: dict[str, Any] = Field(default_factory=dict)
 
 
 class ObjectiveSpec(BaseModel):
@@ -203,6 +230,23 @@ class WorkflowPlan(BaseModel):
     interpretation: str
     steps: list[PlanStep] = Field(min_length=1, max_length=20)
     planning_artifacts: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_execution_graph(self):
+        known: set[str] = set()
+        for index, step in enumerate(self.steps, start=1):
+            if not step.key:
+                step.key = f"step_{index}"
+            if step.key in known:
+                raise ValueError(f"Duplicate workflow step key: {step.key}")
+            unknown = set(step.depends_on) - known
+            if unknown:
+                raise ValueError(
+                    f"Step {step.key} depends on missing or later steps: "
+                    + ", ".join(sorted(unknown))
+                )
+            known.add(step.key)
+        return self
 
 
 class CriticDecision(BaseModel):
