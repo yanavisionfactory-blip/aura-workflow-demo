@@ -7,17 +7,19 @@ from datetime import datetime, timezone
 from urllib.parse import urlencode, urlsplit
 
 import httpx
+import redis.asyncio as redis
 from agents import Agent, Runner
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .agent_runtime import deterministic_plan_fixes
 from .config import get_settings
 from .connector_sdk import ConnectorSDKError, validate_connector_definition
-from .db import session_dependency, set_tenant_context
+from .db import engine, session_dependency, set_tenant_context
 from .identity import IdentityError, organization_claims, verify_clerk_session
 from .installation_runtime import (
     ConnectorInstallationError,
@@ -202,6 +204,37 @@ async def tenant_session(
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok", "service": "aura-control-plane"}
+
+
+def production_configuration_checks() -> dict[str, bool]:
+    return {
+        "clerk": settings.clerk_enabled and bool(settings.clerk_issuer),
+        "authorized_parties": bool(settings.clerk_parties),
+        "openai": bool(settings.openai_api_key),
+        "legacy_tokens_disabled": not settings.allow_legacy_workspace_tokens,
+        "credential_encryption": bool(settings.credential_encryption_key),
+    }
+
+
+@app.get("/ready")
+async def readiness() -> dict:
+    checks = production_configuration_checks()
+    try:
+        async with engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
+        checks["database"] = True
+    except (SQLAlchemyError, OSError):
+        checks["database"] = False
+    cache = redis.from_url(settings.redis_url, socket_connect_timeout=2, socket_timeout=2)
+    try:
+        checks["redis"] = bool(await cache.ping())
+    except (redis.RedisError, OSError):
+        checks["redis"] = False
+    finally:
+        await cache.aclose()
+    if not all(checks.values()):
+        raise HTTPException(503, {"status": "not_ready", "checks": checks})
+    return {"status": "ready", "checks": checks}
 
 
 @app.post("/v1/workspaces")
@@ -1490,6 +1523,39 @@ async def reconnect_connection(
         "connection_id": tool.id,
         "previous_updated_at": previous_updated_at,
     }
+
+
+@app.post("/v1/security/rotate-credentials")
+async def rotate_workspace_credentials(
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    if context.role not in {"owner", "admin"}:
+        raise HTTPException(403, "Only workspace administrators can rotate credentials")
+    tools = (
+        await session.scalars(
+            select(ToolConnection).where(
+                ToolConnection.workspace_id == context.workspace_id,
+                ToolConnection.encrypted_credentials.is_not(None),
+            )
+        )
+    ).all()
+    vault = CredentialVault()
+    rotated = 0
+    for tool in tools:
+        if vault.needs_rotation(tool.encrypted_credentials):
+            tool.encrypted_credentials = vault.rotate(tool.encrypted_credentials)
+            rotated += 1
+    session.add(
+        AuditEvent(
+            workspace_id=context.workspace_id,
+            actor=context.subject,
+            event_type="credentials.encryption_rotated",
+            payload={"rotated_connections": rotated, "inspected_connections": len(tools)},
+        )
+    )
+    await session.commit()
+    return {"rotated_connections": rotated, "inspected_connections": len(tools)}
 
 
 @app.get("/v1/tools/{tool_slug}/trust")
