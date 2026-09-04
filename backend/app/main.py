@@ -1908,6 +1908,7 @@ def _workflow_view(workflow: Workflow) -> dict:
         "id": workflow.id,
         "name": workflow.name,
         "prompt": workflow.prompt,
+        "variables": workflow.variables,
         "version": workflow.version,
         "enabled": workflow.enabled,
         "created_at": workflow.created_at,
@@ -1944,6 +1945,7 @@ async def create_workflow(
         workspace_id=context.workspace_id,
         name=payload.name,
         prompt=payload.prompt,
+        variables=payload.variables,
         enabled=payload.enabled,
     )
     session.add(workflow)
@@ -2069,7 +2071,18 @@ async def create_run(
         workflow = await session.get(Workflow, payload.workflow_id)
         if not workflow or workflow.workspace_id != wid or not workflow.enabled:
             raise HTTPException(404, "Enabled workflow not found")
-    run = WorkflowRun(workspace_id=wid, workflow_id=payload.workflow_id, prompt=payload.prompt, status=RunStatus.queued)
+    workflow_inputs: dict = {}
+    if payload.workflow_id:
+        workflow_inputs = workflow.variables
+    inputs = {**workflow_inputs, **payload.inputs}
+    run = WorkflowRun(
+        workspace_id=wid,
+        workflow_id=payload.workflow_id,
+        prompt=payload.prompt,
+        inputs=inputs,
+        execution_context={"inputs": inputs, "vars": inputs, "steps": {}},
+        status=RunStatus.queued,
+    )
     session.add(run)
     await session.commit()
     plan_run_task.delay(run.id, wid)
@@ -2087,7 +2100,7 @@ async def get_run(
     if not run or run.workspace_id != wid:
         raise HTTPException(404, "Run not found")
     steps = (await session.scalars(select(RunStep).where(RunStep.run_id == run.id).order_by(RunStep.position))).all()
-    return {"id": run.id, "status": run.status.value, "prompt": run.prompt, "plan": run.plan, "plan_approved": run.plan_approved, "result": run.result, "error": run.error, "steps": [{"id": s.id, "position": s.position, "agent": s.agent, "tool_slug": s.tool_slug, "operation": s.operation, "arguments": s.arguments, "status": s.status.value, "consequential": s.consequential, "approval_id": s.approval_id, "output": s.output, "error": s.error} for s in steps]}
+    return {"id": run.id, "status": run.status.value, "prompt": run.prompt, "inputs": run.inputs, "execution_context": run.execution_context, "plan": run.plan, "plan_approved": run.plan_approved, "result": run.result, "error": run.error, "steps": [{"id": s.id, "key": s.step_key, "position": s.position, "agent": s.agent, "tool_slug": s.tool_slug, "operation": s.operation, "arguments": s.arguments, "depends_on": s.depends_on, "dependency_mode": s.dependency_mode, "condition": s.condition, "output_variables": s.output_variables, "status": s.status.value, "consequential": s.consequential, "approval_id": s.approval_id, "output": s.output, "error": s.error} for s in steps]}
 
 
 @app.get("/v1/runs/{run_id}/governance")
@@ -2361,10 +2374,17 @@ async def approve_plan(
 
     if payload.edited_steps is not None:
         for stored, edited in zip(steps, payload.edited_steps, strict=True):
+            stored.step_key = edited.key
             stored.agent = edited.agent
             stored.tool_slug = edited.tool_slug
             stored.operation = edited.operation
             stored.arguments = edited.arguments
+            stored.depends_on = edited.depends_on
+            stored.dependency_mode = edited.dependency_mode
+            stored.condition = (
+                edited.condition.model_dump(mode="json") if edited.condition else None
+            )
+            stored.output_variables = edited.output_variables
             stored.consequential = edited.consequential
             stored.idempotency_key = idempotency_key(
                 run.id, stored.position, edited.operation, edited.arguments
