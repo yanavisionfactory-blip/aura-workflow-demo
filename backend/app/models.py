@@ -231,6 +231,9 @@ class PollingSubscription(Base):
     trigger_on_first_result: Mapped[bool] = mapped_column(Boolean, default=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_payload_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    checkpoint: Mapped[dict] = mapped_column(JSON, default=dict)
+    checkpoint_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    cursor_argument: Mapped[str | None] = mapped_column(String(200), nullable=True)
     last_polled_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -257,6 +260,7 @@ class PollingDelivery(Base):
         ForeignKey("polling_subscriptions.id", ondelete="CASCADE"), index=True
     )
     payload_hash: Mapped[str] = mapped_column(String(64))
+    checkpoint: Mapped[dict] = mapped_column(JSON, default=dict)
     run_id: Mapped[str | None] = mapped_column(
         ForeignKey("workflow_runs.id", ondelete="SET NULL"), nullable=True, index=True
     )
@@ -297,7 +301,12 @@ class WebhookDelivery(Base):
     )
     event_id: Mapped[str] = mapped_column(String(240))
     payload_hash: Mapped[str] = mapped_column(String(64))
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
     status: Mapped[str] = mapped_column(String(40), default="accepted")
+    replay_of_id: Mapped[str | None] = mapped_column(
+        ForeignKey("webhook_deliveries.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    replay_count: Mapped[int] = mapped_column(Integer, default=0)
     run_id: Mapped[str | None] = mapped_column(
         ForeignKey("workflow_runs.id", ondelete="SET NULL"), nullable=True, index=True
     )

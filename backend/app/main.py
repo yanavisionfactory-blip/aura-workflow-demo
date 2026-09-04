@@ -13,7 +13,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select, text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .agent_runtime import deterministic_plan_fixes
@@ -95,6 +95,7 @@ from .schemas import (
     ToolCreate,
     TrustSignalUpdate,
     WebhookSubscriptionCreate,
+    WebhookReplayRequest,
     WorkflowCreate,
     WorkflowPlan,
     WorkflowScheduleCreate,
@@ -119,6 +120,11 @@ from .universal_connectors import (
     normalize_manifest,
     validate_public_endpoint,
     verify_provider,
+)
+from .trigger_runtime import (
+    classify_delivery,
+    delivery_can_be_replayed,
+    timestamp_is_fresh,
 )
 from .universal_connectors import (
     allowed_operations as discovered_operations,
@@ -1042,6 +1048,8 @@ async def create_polling_subscription(
         interval_seconds=payload.interval_seconds,
         prompt_template=payload.prompt_template,
         trigger_on_first_result=payload.trigger_on_first_result,
+        checkpoint_path=payload.checkpoint_path,
+        cursor_argument=payload.cursor_argument,
         active=True,
         next_poll_at=datetime.now(timezone.utc),
     )
@@ -1098,6 +1106,9 @@ async def list_polling_subscriptions(
             "operation": item.operation,
             "interval_seconds": item.interval_seconds,
             "active": item.active,
+            "checkpoint": item.checkpoint,
+            "checkpoint_path": item.checkpoint_path,
+            "cursor_argument": item.cursor_argument,
             "last_polled_at": item.last_polled_at,
             "next_poll_at": item.next_poll_at,
         }
@@ -1229,6 +1240,126 @@ async def disable_webhook_subscription(
     return {"id": subscription.id, "active": False}
 
 
+@app.get("/v1/webhook-deliveries")
+async def list_webhook_deliveries(
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> list[dict]:
+    deliveries = (
+        await session.scalars(
+            select(WebhookDelivery)
+            .where(WebhookDelivery.workspace_id == context.workspace_id)
+            .order_by(WebhookDelivery.received_at.desc())
+            .limit(200)
+        )
+    ).all()
+    return [
+        {
+            "id": delivery.id,
+            "subscription_id": delivery.subscription_id,
+            "event_id": delivery.event_id,
+            "payload_hash": delivery.payload_hash,
+            "status": delivery.status,
+            "run_id": delivery.run_id,
+            "replay_of_id": delivery.replay_of_id,
+            "replay_count": delivery.replay_count,
+            "received_at": delivery.received_at,
+        }
+        for delivery in deliveries
+    ]
+
+
+@app.post("/v1/webhook-deliveries/{delivery_id}/replay", status_code=202)
+async def replay_webhook_delivery(
+    delivery_id: str,
+    payload: WebhookReplayRequest,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    if context.role not in {"owner", "admin"}:
+        raise HTTPException(403, "Only workspace administrators can replay deliveries")
+    delivery = await session.scalar(
+        select(WebhookDelivery)
+        .where(WebhookDelivery.id == delivery_id)
+        .with_for_update()
+    )
+    if not delivery or delivery.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Webhook delivery not found")
+    original_run = await session.get(WorkflowRun, delivery.run_id) if delivery.run_id else None
+    completed_steps = (
+        len(
+            (
+                await session.scalars(
+                    select(RunStep.id).where(
+                        RunStep.run_id == original_run.id,
+                        RunStep.status == StepStatus.completed,
+                    )
+                )
+            ).all()
+        )
+        if original_run
+        else 0
+    )
+    if not original_run or not delivery_can_be_replayed(
+        original_run.status, completed_steps
+    ):
+        raise HTTPException(
+            409, "Only failed deliveries without completed actions can be replayed"
+        )
+    subscription = await session.get(WebhookSubscription, delivery.subscription_id)
+    if not subscription or not subscription.active:
+        raise HTTPException(409, "Webhook subscription is inactive")
+    delivery.replay_count += 1
+    replay_event_id = f"{delivery.id}:replay:{delivery.replay_count}"
+    serialized = json.dumps(delivery.payload, sort_keys=True, separators=(",", ":"))
+    prompt = (
+        f"{subscription.prompt_template}\n\n"
+        f"Trusted replay of webhook event type: {subscription.event_type}\n"
+        f"Original event ID: {delivery.event_id}\n"
+        f"Event payload: {serialized[:8_000]}"
+    )
+    run = WorkflowRun(
+        workspace_id=context.workspace_id,
+        prompt=prompt,
+        inputs={"event": delivery.payload},
+        execution_context={
+            "inputs": {"event": delivery.payload},
+            "vars": {},
+            "steps": {},
+        },
+        status=RunStatus.queued,
+    )
+    session.add(run)
+    await session.flush()
+    replay = WebhookDelivery(
+        workspace_id=context.workspace_id,
+        subscription_id=subscription.id,
+        event_id=replay_event_id,
+        payload_hash=delivery.payload_hash,
+        payload=delivery.payload,
+        status="queued",
+        run_id=run.id,
+        replay_of_id=delivery.id,
+    )
+    session.add(replay)
+    session.add(
+        AuditEvent(
+            workspace_id=context.workspace_id,
+            run_id=run.id,
+            actor=context.subject,
+            event_type="webhook.delivery_replayed",
+            payload={
+                "delivery_id": replay.id,
+                "original_delivery_id": delivery.id,
+                "reason": payload.reason,
+            },
+        )
+    )
+    await session.commit()
+    plan_run_task.delay(run.id, context.workspace_id)
+    return {"delivery_id": replay.id, "run_id": run.id, "status": "queued"}
+
+
 @app.post("/v1/webhooks/incoming/{endpoint_token}", status_code=202)
 async def receive_webhook(
     endpoint_token: str,
@@ -1243,13 +1374,14 @@ async def receive_webhook(
         timestamp = int(x_aura_timestamp)
     except Exception as exc:
         raise HTTPException(401, "Invalid webhook endpoint or timestamp") from exc
-    if abs(int(time.time()) - timestamp) > 300:
+    if not timestamp_is_fresh(timestamp, int(time.time())):
         raise HTTPException(401, "Webhook timestamp is outside the five-minute window")
     if not x_aura_event_id or len(x_aura_event_id) > 240:
         raise HTTPException(422, "Invalid webhook event identifier")
     body = await request.body()
     if len(body) > 1_000_000:
         raise HTTPException(413, "Webhook payload exceeds one megabyte")
+    payload_hash = hashlib.sha256(body).hexdigest()
 
     workspace_id = claims["workspace_id"]
     await set_tenant_context(session, workspace_id)
@@ -1275,6 +1407,9 @@ async def receive_webhook(
         )
     )
     if previous:
+        classification = classify_delivery(previous.payload_hash, payload_hash)
+        if classification == "collision":
+            raise HTTPException(409, "Webhook event identifier was reused with new content")
         return {
             "delivery_id": previous.id,
             "run_id": previous.run_id,
@@ -1292,22 +1427,46 @@ async def receive_webhook(
         f"Event ID: {x_aura_event_id}\n"
         f"Event payload: {event_context}"
     )
-    run = WorkflowRun(
-        workspace_id=workspace_id,
-        prompt=prompt,
-        status=RunStatus.queued,
-    )
-    session.add(run)
-    await session.flush()
     delivery = WebhookDelivery(
         workspace_id=workspace_id,
         subscription_id=subscription.id,
         event_id=x_aura_event_id,
-        payload_hash=hashlib.sha256(body).hexdigest(),
-        status="queued",
-        run_id=run.id,
+        payload_hash=payload_hash,
+        payload=payload,
+        status="accepted",
     )
-    session.add(delivery)
+    try:
+        async with session.begin_nested():
+            session.add(delivery)
+            await session.flush()
+    except IntegrityError:
+        previous = await session.scalar(
+            select(WebhookDelivery).where(
+                WebhookDelivery.subscription_id == subscription.id,
+                WebhookDelivery.event_id == x_aura_event_id,
+            )
+        )
+        classification = classify_delivery(previous.payload_hash, payload_hash)
+        if classification == "collision":
+            raise HTTPException(
+                409, "Webhook event identifier was reused with new content"
+            )
+        return {
+            "delivery_id": previous.id,
+            "run_id": previous.run_id,
+            "status": "duplicate",
+        }
+    run = WorkflowRun(
+        workspace_id=workspace_id,
+        prompt=prompt,
+        inputs={"event": payload},
+        execution_context={"inputs": {"event": payload}, "vars": {}, "steps": {}},
+        status=RunStatus.queued,
+    )
+    session.add(run)
+    await session.flush()
+    delivery.run_id = run.id
+    delivery.status = "queued"
     session.add(
         AuditEvent(
             workspace_id=workspace_id,
