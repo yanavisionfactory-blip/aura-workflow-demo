@@ -76,6 +76,14 @@ class PollingSubscriptionCreate(BaseModel):
     interval_seconds: int = Field(default=300, ge=60, le=86_400)
     prompt_template: str = Field(min_length=3, max_length=10_000)
     trigger_on_first_result: bool = False
+    checkpoint_path: str | None = Field(default=None, min_length=1, max_length=500)
+    cursor_argument: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def checkpoint_fields_are_paired(self):
+        if bool(self.checkpoint_path) != bool(self.cursor_argument):
+            raise ValueError("checkpoint_path and cursor_argument must be configured together")
+        return self
 
 
 class ConnectorDefinitionValidate(BaseModel):
@@ -88,6 +96,10 @@ class WebhookSubscriptionCreate(BaseModel):
         default="event.received", pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.:-]{1,159}$"
     )
     prompt_template: str = Field(min_length=3, max_length=10_000)
+
+
+class WebhookReplayRequest(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
 
 
 class ToolView(BaseModel):
