@@ -77,6 +77,27 @@ async def migrate_database() -> None:
             await connection.execute(
                 text("UPDATE run_steps SET step_key = 'step_' || (position + 1) WHERE step_key IS NULL")
             )
+            await connection.execute(
+                text("ALTER TABLE polling_subscriptions ADD COLUMN IF NOT EXISTS checkpoint JSON DEFAULT '{}'::json")
+            )
+            await connection.execute(
+                text("ALTER TABLE polling_subscriptions ADD COLUMN IF NOT EXISTS checkpoint_path VARCHAR(500)")
+            )
+            await connection.execute(
+                text("ALTER TABLE polling_subscriptions ADD COLUMN IF NOT EXISTS cursor_argument VARCHAR(200)")
+            )
+            await connection.execute(
+                text("ALTER TABLE polling_deliveries ADD COLUMN IF NOT EXISTS checkpoint JSON DEFAULT '{}'::json")
+            )
+            await connection.execute(
+                text("ALTER TABLE webhook_deliveries ADD COLUMN IF NOT EXISTS payload JSON DEFAULT '{}'::json")
+            )
+            await connection.execute(
+                text("ALTER TABLE webhook_deliveries ADD COLUMN IF NOT EXISTS replay_of_id VARCHAR(36)")
+            )
+            await connection.execute(
+                text("ALTER TABLE webhook_deliveries ADD COLUMN IF NOT EXISTS replay_count INTEGER DEFAULT 0")
+            )
             for value in ("waiting_for_action", "recovering", "blocked"):
                 await connection.execute(
                     text(f"ALTER TYPE runstatus ADD VALUE IF NOT EXISTS '{value}'")
