@@ -31,6 +31,16 @@ celery -A app.worker.celery worker --loglevel=INFO
 
 Use a modest worker concurrency for the Railway service size, for example `--concurrency=4`, rather than Celery's CPU-derived default.
 
+Run one separate scheduler service so persisted schedules and interrupted-run recovery continue
+across API deployments:
+
+```bash
+celery -A app.worker.celery beat --loglevel=INFO
+```
+
+Only one beat service should run. Multiple workers remain safe: due schedules and stale runs are
+claimed with database row locks, and generated steps retain stable idempotency keys.
+
 ## GitHub Pages
 
 Create the repository Actions secret `CLERK_PUBLISHABLE_KEY`. The public Clerk publishable key is the only authentication value compiled into the browser. The API address is configured by `VITE_AURA_API_URL`.
