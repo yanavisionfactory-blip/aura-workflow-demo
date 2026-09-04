@@ -17,6 +17,7 @@ DIRECT_TENANT_TABLES = (
     "webhook_deliveries",
     "tool_trust_states",
     "workflows",
+    "workflow_schedules",
     "workspace_records",
     "workflow_runs",
     "plan_versions",
