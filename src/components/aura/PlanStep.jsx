@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Check, Pencil, X, GripVertical, Shield, Move, Loader2 } from "lucide-react";
-import { base44 } from "@/api/base44Client";
+import { aura } from "@/api/auraClient";
 import ToolPicker from "./ToolPicker";
 
 const STEP_SCHEMA = {
@@ -70,7 +70,7 @@ export default function PlanStep({ step, index, isLast, provided, onChange, onDe
     setSubmitting(true);
     setError("");
     try {
-      const res = await base44.integrations.Core.InvokeLLM({
+      const res = await aura.integrations.Core.InvokeLLM({
         prompt: `You are AURA, an AI workflow automation platform. Revise this single workflow step based on the user's requested change.
 
 Current step:

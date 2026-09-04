@@ -104,6 +104,23 @@ class RunCreate(BaseModel):
     workflow_id: str | None = None
 
 
+class WorkspaceRecordCreate(BaseModel):
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkspaceRecordUpdate(BaseModel):
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class AiGenerateRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=50_000)
+    response_json_schema: dict[str, Any] | None = None
+
+
+class InterfaceAnalyzeRequest(BaseModel):
+    url: HttpUrl
+
+
 class PlanStep(BaseModel):
     agent: str
     tool_slug: str

@@ -7,37 +7,39 @@ from datetime import datetime, timezone
 from urllib.parse import urlencode, urlsplit
 
 import httpx
+import redis.asyncio as redis
+from agents import Agent, Runner
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .agent_runtime import deterministic_plan_fixes
 from .config import get_settings
 from .connector_sdk import ConnectorSDKError, validate_connector_definition
-from .agent_runtime import deterministic_plan_fixes
-from .db import session_dependency, set_tenant_context
-from .migrations import migrate_database
+from .db import engine, session_dependency, set_tenant_context
+from .identity import IdentityError, organization_claims, verify_clerk_session
 from .installation_runtime import (
     ConnectorInstallationError,
     exchange_installed_oauth_code,
     installed_oauth_url,
     normalized_credentials,
 )
-from .identity import IdentityError, organization_claims, verify_clerk_session
-from .native_connectors import native_manifest, native_operations, public_catalog, validate_module_arguments
+from .migrations import migrate_database
 from .models import (
     Approval,
     ApprovalSnapshot,
     AuditEvent,
     CapabilityManifest,
     ConnectionRequirement,
-    ConnectorPackage,
     ConnectorInstallation,
     ConnectorInstallationVersion,
+    ConnectorPackage,
     PlanVersion,
-    PollingSubscription,
     PolicyConfig,
+    PollingSubscription,
     RunStatus,
     RunStep,
     StepStatus,
@@ -49,6 +51,13 @@ from .models import (
     WebhookSubscription,
     WorkflowRun,
     Workspace,
+    WorkspaceRecord,
+)
+from .native_connectors import (
+    native_manifest,
+    native_operations,
+    public_catalog,
+    validate_module_arguments,
 )
 from .policy import (
     DEFAULT_POLICY,
@@ -57,17 +66,25 @@ from .policy import (
     evaluate_plan_policy,
     operation_scope,
 )
-from .providers import PROVIDERS, exchange_oauth_code, idempotency_key, oauth_authorization_url, verify_oauth_credentials
+from .providers import (
+    PROVIDERS,
+    exchange_oauth_code,
+    idempotency_key,
+    oauth_authorization_url,
+    verify_oauth_credentials,
+)
 from .schemas import (
+    AiGenerateRequest,
     ApprovalDecision,
     ConnectionDiscover,
     ConnectionResume,
     ConnectorDefinitionValidate,
     ConnectorInstallationCreate,
-    ConnectorInstallationUpgrade,
     ConnectorInstallationRollback,
+    ConnectorInstallationUpgrade,
     ConnectorPackageSubmit,
     CustomOAuthStart,
+    InterfaceAnalyzeRequest,
     PlanApproval,
     PolicyUpdate,
     PollingSubscriptionCreate,
@@ -77,27 +94,30 @@ from .schemas import (
     TrustSignalUpdate,
     WebhookSubscriptionCreate,
     WorkflowPlan,
+    WorkspaceRecordCreate,
+    WorkspaceRecordUpdate,
 )
 from .security import (
     CredentialVault,
     create_oauth_state,
     create_tenant_token,
+    create_webhook_token,
     decode_oauth_state,
     decode_tenant_token,
-    create_webhook_token,
     decode_webhook_token,
     verify_webhook_signature,
 )
 from .universal_connectors import (
     ConnectorError,
-    allowed_operations as discovered_operations,
     discover_provider,
-    verify_provider,
     normalize_manifest,
     validate_public_endpoint,
+    verify_provider,
+)
+from .universal_connectors import (
+    allowed_operations as discovered_operations,
 )
 from .worker import execute_run_task, plan_run_task, poll_subscription_task
-
 
 settings = get_settings()
 app = FastAPI(title="AURA Control Plane", version="0.1.0")
@@ -184,6 +204,37 @@ async def tenant_session(
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok", "service": "aura-control-plane"}
+
+
+def production_configuration_checks() -> dict[str, bool]:
+    return {
+        "clerk": settings.clerk_enabled and bool(settings.clerk_issuer),
+        "authorized_parties": bool(settings.clerk_parties),
+        "openai": bool(settings.openai_api_key),
+        "legacy_tokens_disabled": not settings.allow_legacy_workspace_tokens,
+        "credential_encryption": bool(settings.credential_encryption_key),
+    }
+
+
+@app.get("/ready")
+async def readiness() -> dict:
+    checks = production_configuration_checks()
+    try:
+        async with engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
+        checks["database"] = True
+    except (SQLAlchemyError, OSError):
+        checks["database"] = False
+    cache = redis.from_url(settings.redis_url, socket_connect_timeout=2, socket_timeout=2)
+    try:
+        checks["redis"] = bool(await cache.ping())
+    except (redis.RedisError, OSError):
+        checks["redis"] = False
+    finally:
+        await cache.aclose()
+    if not all(checks.values()):
+        raise HTTPException(503, {"status": "not_ready", "checks": checks})
+    return {"status": "ready", "checks": checks}
 
 
 @app.post("/v1/workspaces")
@@ -1474,6 +1525,39 @@ async def reconnect_connection(
     }
 
 
+@app.post("/v1/security/rotate-credentials")
+async def rotate_workspace_credentials(
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    if context.role not in {"owner", "admin"}:
+        raise HTTPException(403, "Only workspace administrators can rotate credentials")
+    tools = (
+        await session.scalars(
+            select(ToolConnection).where(
+                ToolConnection.workspace_id == context.workspace_id,
+                ToolConnection.encrypted_credentials.is_not(None),
+            )
+        )
+    ).all()
+    vault = CredentialVault()
+    rotated = 0
+    for tool in tools:
+        if vault.needs_rotation(tool.encrypted_credentials):
+            tool.encrypted_credentials = vault.rotate(tool.encrypted_credentials)
+            rotated += 1
+    session.add(
+        AuditEvent(
+            workspace_id=context.workspace_id,
+            actor=context.subject,
+            event_type="credentials.encryption_rotated",
+            payload={"rotated_connections": rotated, "inspected_connections": len(tools)},
+        )
+    )
+    await session.commit()
+    return {"rotated_connections": rotated, "inspected_connections": len(tools)}
+
+
 @app.get("/v1/tools/{tool_slug}/trust")
 async def get_tool_trust(
     tool_slug: str,
@@ -2384,3 +2468,165 @@ async def resume_run(
     await session.commit()
     execute_run_task.delay(run.id, wid)
     return {"id": run.id, "status": run.status.value, "resumed_from_step": step.id}
+
+
+UI_RECORD_TYPES = {"workflow", "workflow_run", "schedule", "access_request", "creator"}
+
+
+def _record_view(record: WorkspaceRecord) -> dict:
+    return {
+        "id": record.id,
+        **record.data,
+        "created_date": record.created_at.isoformat(),
+        "updated_date": record.updated_at.isoformat(),
+    }
+
+
+def _record_type(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized not in UI_RECORD_TYPES:
+        raise HTTPException(404, "Unknown workspace record type")
+    return normalized
+
+
+@app.get("/v1/data/{record_type}")
+async def list_workspace_records(
+    record_type: str,
+    limit: int = Query(default=100, ge=1, le=500),
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> list[dict]:
+    kind = _record_type(record_type)
+    records = (
+        await session.scalars(
+            select(WorkspaceRecord)
+            .where(
+                WorkspaceRecord.workspace_id == context.workspace_id,
+                WorkspaceRecord.record_type == kind,
+            )
+            .order_by(WorkspaceRecord.created_at.desc())
+            .limit(limit)
+        )
+    ).all()
+    return [_record_view(record) for record in records]
+
+
+@app.post("/v1/data/{record_type}", status_code=201)
+async def create_workspace_record(
+    record_type: str,
+    payload: WorkspaceRecordCreate,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    record = WorkspaceRecord(
+        workspace_id=context.workspace_id,
+        record_type=_record_type(record_type),
+        data=payload.data,
+    )
+    session.add(record)
+    await session.commit()
+    return _record_view(record)
+
+
+@app.get("/v1/data/{record_type}/{record_id}")
+async def get_workspace_record(
+    record_type: str,
+    record_id: str,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    record = await session.get(WorkspaceRecord, record_id)
+    if (
+        not record
+        or record.workspace_id != context.workspace_id
+        or record.record_type != _record_type(record_type)
+    ):
+        raise HTTPException(404, "Workspace record not found")
+    return _record_view(record)
+
+
+@app.patch("/v1/data/{record_type}/{record_id}")
+async def update_workspace_record(
+    record_type: str,
+    record_id: str,
+    payload: WorkspaceRecordUpdate,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    record = await session.get(WorkspaceRecord, record_id)
+    if (
+        not record
+        or record.workspace_id != context.workspace_id
+        or record.record_type != _record_type(record_type)
+    ):
+        raise HTTPException(404, "Workspace record not found")
+    record.data = {**record.data, **payload.data}
+    record.updated_at = datetime.now(timezone.utc)
+    await session.commit()
+    return _record_view(record)
+
+
+@app.post("/v1/ai/generate")
+async def generate_workspace_json(
+    payload: AiGenerateRequest,
+    context: TenantContext = Depends(tenant_context),
+) -> dict:
+    if not settings.openai_api_key:
+        raise HTTPException(503, "AURA intelligence is not configured")
+    schema_instruction = ""
+    if payload.response_json_schema:
+        schema_instruction = (
+            "\nReturn only valid JSON matching this JSON Schema:\n"
+            + json.dumps(payload.response_json_schema)
+        )
+    agent = Agent(
+        name="AURA workspace assistant",
+        model=settings.openai_model,
+        instructions=(
+            "Follow the user's request accurately. Return only a JSON object, without markdown. "
+            "Do not claim that external actions happened."
+        ),
+    )
+    result = await Runner.run(agent, payload.prompt + schema_instruction, max_turns=4)
+    raw = str(result.final_output).strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(502, "AURA intelligence returned invalid JSON") from exc
+
+
+@app.post("/v1/interfaces/analyze")
+async def analyze_interface(
+    payload: InterfaceAnalyzeRequest,
+    context: TenantContext = Depends(tenant_context),
+) -> dict:
+    url = str(payload.url)
+    try:
+        validate_public_endpoint(url)
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            response = await client.get(url, headers={"User-Agent": "AURA-Connector/1.0"})
+            response.raise_for_status()
+    except (ConnectorError, httpx.HTTPError) as exc:
+        raise HTTPException(422, f"Could not inspect that public URL: {exc}") from exc
+    body = response.text[:200_000]
+    lowered = body.lower()
+    title = ""
+    if "<title" in lowered:
+        title = body[lowered.index("<title") :].split(">", 1)[-1].split("</title>", 1)[0].strip()
+    forms = lowered.count("<form")
+    buttons = lowered.count("<button")
+    login_required = any(marker in lowered for marker in ("sign in", "log in", "password")) and forms > 0
+    return {
+        "analysis": {
+            "title": title or payload.url.host,
+            "loginRequired": login_required,
+            "thinContent": len(body.strip()) < 500,
+            "capabilities": [
+                {"kind": "view", "label": "Read visible page content"},
+                *([{"kind": "do", "label": f"Use {forms} visible form(s)"}] if forms else []),
+                *([{"kind": "change", "label": f"Use {buttons} visible action(s)"}] if buttons else []),
+            ],
+        }
+    }

@@ -14,7 +14,7 @@ import {
   AlertTriangle,
   Lock,
 } from "lucide-react";
-import { base44 } from "@/api/base44Client";
+import { aura } from "@/api/auraClient";
 
 // AURA Interface — REAL site analysis. Calls the analyzeToolInterface backend
 // function, which fetches the URL server-side, extracts the actual DOM
@@ -66,7 +66,7 @@ export default function AuraInterfaceConnect({ open, toolName, onClose, onConnec
     setError("");
     setAnalysis(null);
     try {
-      const res = await base44.functions.invoke("analyzeToolInterface", { url });
+      const res = await aura.functions.invoke("analyzeToolInterface", { url });
       const data = res.data || {};
       if (data.error) throw new Error(data.error);
       setAnalysis(data.analysis);

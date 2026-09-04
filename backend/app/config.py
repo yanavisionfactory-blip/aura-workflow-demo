@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     credential_encryption_key: str = Field(
         description="URL-safe Fernet key; generate with Fernet.generate_key().decode()"
     )
+    credential_encryption_previous_keys: str = ""
     session_signing_key: str = Field(min_length=32)
     google_client_id: str = ""
     google_client_secret: str = ""
@@ -39,7 +40,7 @@ class Settings(BaseSettings):
     clerk_jwks_url: str = ""
     clerk_issuer: str = ""
     clerk_authorized_parties: str = ""
-    allow_legacy_workspace_tokens: bool = True
+    allow_legacy_workspace_tokens: bool = False
 
     @property
     def clerk_enabled(self) -> bool:
@@ -52,6 +53,17 @@ class Settings(BaseSettings):
             for item in self.clerk_authorized_parties.split(",")
             if item.strip()
         }
+
+    @property
+    def credential_keyring(self) -> list[str]:
+        return [
+            self.credential_encryption_key,
+            *[
+                key.strip()
+                for key in self.credential_encryption_previous_keys.split(",")
+                if key.strip()
+            ],
+        ]
 
 
 @lru_cache

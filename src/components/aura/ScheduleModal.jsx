@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, CalendarClock, Check, Bell, BellOff, ShieldAlert, Eye, FileCheck2, Zap } from "lucide-react";
-import { base44 } from "@/api/base44Client";
+import { aura } from "@/api/auraClient";
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const CADENCES = [
@@ -75,7 +75,7 @@ export default function ScheduleModal({ open, onClose, prompt, title }) {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await base44.entities.Schedule.create({
+      await aura.entities.Schedule.create({
         prompt: prompt || "",
         title: title || "Scheduled workflow",
         cadence,

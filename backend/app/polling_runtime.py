@@ -90,6 +90,14 @@ async def poll_subscription(subscription_id: str, workspace_id: str) -> dict:
             )
             if changed:
                 tool.encrypted_credentials = vault.encrypt(credentials)
+                session.add(
+                    AuditEvent(
+                        workspace_id=workspace_id,
+                        actor="polling-trigger",
+                        event_type="connector.token_refreshed",
+                        payload={"tool_id": tool.id, "slug": tool.slug},
+                    )
+                )
         executor = ProviderExecutor(
             credentials,
             tool.base_url,

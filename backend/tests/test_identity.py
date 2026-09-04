@@ -2,10 +2,12 @@ from datetime import UTC, datetime, timedelta
 
 import jwt
 import pytest
+from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from app.config import get_settings
 from app.identity import IdentityError, organization_claims, verify_clerk_session
+from app.security import CredentialVault
 
 
 def _keys() -> tuple[str, str]:
@@ -67,4 +69,22 @@ def test_rejects_wrong_authorized_party(monkeypatch: pytest.MonkeyPatch) -> None
     )
     with pytest.raises(IdentityError, match="unauthorized party"):
         verify_clerk_session(token)
+    get_settings.cache_clear()
+
+
+def test_credential_keyring_decrypts_and_rotates_retired_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = Fernet.generate_key().decode()
+    retired = Fernet.generate_key().decode()
+    old_token = Fernet(retired.encode()).encrypt(b'{"access_token":"private"}').decode()
+    monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY", current)
+    monkeypatch.setenv("CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS", retired)
+    get_settings.cache_clear()
+    vault = CredentialVault()
+    assert vault.decrypt(old_token) == {"access_token": "private"}
+    assert vault.needs_rotation(old_token)
+    rotated = vault.rotate(old_token)
+    assert not vault.needs_rotation(rotated)
+    assert vault.decrypt(rotated) == {"access_token": "private"}
     get_settings.cache_clear()

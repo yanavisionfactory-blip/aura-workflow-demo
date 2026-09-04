@@ -14,8 +14,6 @@ export function selectWorkspace(workspaceId) {
   localStorage.setItem(WORKSPACE_KEY, workspaceId);
 }
 
-export const pythonRuntimeEnabled = Boolean(API_URL);
-
 function messageFrom(data, status) {
   const detail = data?.detail ?? data?.error;
   if (typeof detail === "string") return detail;
@@ -44,6 +42,8 @@ async function request(path, options = {}) {
   if (!response.ok) throw new Error(messageFrom(data, response.status));
   return data;
 }
+
+export const auraRequest = request;
 
 export async function ensureWorkspace() {
   const existing = localStorage.getItem(WORKSPACE_KEY);

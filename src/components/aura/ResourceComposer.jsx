@@ -4,7 +4,7 @@ import { Search, Plus, FileUp, Loader2, Check, Link2, Paperclip, X } from "lucid
 import { CATALOG } from "@/lib/toolCatalog";
 import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
 import { connectTool } from "@/lib/connectService";
-import { base44 } from "@/api/base44Client";
+import { aura } from "@/api/auraClient";
 import ConnectToolModal from "./ConnectToolModal";
 
 // The "add" affordance in the command input. Unlike a static tool list, this
@@ -81,7 +81,7 @@ export default function ResourceComposer({ open, onClose, onAddTool, onAddDocume
     if (!file) return;
     setUploading(true);
     try {
-      const out = await base44.integrations.Core.UploadFile({ file });
+      const out = await aura.integrations.Core.UploadFile({ file });
       onAddDocument({ name: file.name, file_url: out.file_url, size: file.size });
     } catch {
       // non-fatal

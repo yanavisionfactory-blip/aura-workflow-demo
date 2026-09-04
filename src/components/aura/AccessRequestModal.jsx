@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, ArrowRight, CheckCircle2, Loader2 } from "lucide-react";
-import { base44 } from "@/api/base44Client";
+import { aura } from "@/api/auraClient";
 
 export default function AccessRequestModal({ open, onClose, workflowPrompt }) {
   const [form, setForm] = useState({
@@ -17,7 +17,7 @@ export default function AccessRequestModal({ open, onClose, workflowPrompt }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
-    await base44.entities.AccessRequest.create({ ...form, workflow_prompt: workflowPrompt || "" });
+    await aura.entities.AccessRequest.create({ ...form, workflow_prompt: workflowPrompt || "" });
     setLoading(false);
     setSubmitted(true);
   };
