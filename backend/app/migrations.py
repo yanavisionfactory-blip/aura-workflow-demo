@@ -23,6 +23,7 @@ DIRECT_TENANT_TABLES = (
     "plan_versions",
     "approval_snapshots",
     "step_attempts",
+    "dead_letter_entries",
     "artifacts",
     "audit_events",
 )
@@ -58,6 +59,15 @@ async def migrate_database() -> None:
             )
             await connection.execute(
                 text("ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS execution_context JSON DEFAULT '{}'::json")
+            )
+            await connection.execute(
+                text("ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS cancellation_requested BOOLEAN DEFAULT FALSE")
+            )
+            await connection.execute(
+                text("ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS request_key VARCHAR(200)")
+            )
+            await connection.execute(
+                text("CREATE UNIQUE INDEX IF NOT EXISTS uq_workspace_run_request ON workflow_runs (workspace_id, request_key) WHERE request_key IS NOT NULL")
             )
             await connection.execute(
                 text("ALTER TABLE run_steps ADD COLUMN IF NOT EXISTS step_key VARCHAR(120)")
