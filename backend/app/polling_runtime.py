@@ -1,5 +1,6 @@
 """Durable polling trigger execution for connectors without webhooks."""
 
+import copy
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
@@ -39,11 +40,45 @@ def should_trigger_poll(
     return previous_hash != current_hash
 
 
+def value_at_path(value: object, path: str) -> object:
+    current = value
+    for part in path.split("."):
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        elif isinstance(current, list) and part.isdigit() and int(part) < len(current):
+            current = current[int(part)]
+        else:
+            raise ValueError(f"Polling checkpoint path {path!r} was not found")
+    return current
+
+
+def arguments_with_checkpoint(
+    arguments: dict, cursor_argument: str | None, checkpoint: dict
+) -> dict:
+    result = copy.deepcopy(arguments)
+    if not cursor_argument or "value" not in checkpoint:
+        return result
+    target = result
+    parts = cursor_argument.split(".")
+    for part in parts[:-1]:
+        child = target.get(part)
+        if not isinstance(child, dict):
+            child = {}
+            target[part] = child
+        target = child
+    target[parts[-1]] = checkpoint["value"]
+    return result
+
+
 async def poll_subscription(subscription_id: str, workspace_id: str) -> dict:
     vault = CredentialVault()
     async with SessionLocal() as session:
         await set_tenant_context(session, workspace_id)
-        subscription = await session.get(PollingSubscription, subscription_id)
+        subscription = await session.scalar(
+            select(PollingSubscription)
+            .where(PollingSubscription.id == subscription_id)
+            .with_for_update()
+        )
         if (
             not subscription
             or subscription.workspace_id != workspace_id
@@ -104,10 +139,18 @@ async def poll_subscription(subscription_id: str, workspace_id: str) -> dict:
             provider_kind=tool.kind.value,
             capability_manifest=manifest_record.manifest,
         )
-        result = await executor.execute(
-            subscription.operation, subscription.arguments
+        arguments = arguments_with_checkpoint(
+            subscription.arguments,
+            subscription.cursor_argument,
+            subscription.checkpoint or {},
         )
+        result = await executor.execute(subscription.operation, arguments)
         canonical, payload_hash = result_fingerprint(result)
+        next_checkpoint = (
+            {"value": value_at_path(result, subscription.checkpoint_path)}
+            if subscription.checkpoint_path
+            else subscription.checkpoint
+        )
         first_result = subscription.last_payload_hash is None
         should_trigger = should_trigger_poll(
             subscription.last_payload_hash,
@@ -115,6 +158,7 @@ async def poll_subscription(subscription_id: str, workspace_id: str) -> dict:
             subscription.trigger_on_first_result,
         )
         subscription.last_payload_hash = payload_hash
+        subscription.checkpoint = next_checkpoint or {}
         if not should_trigger:
             session.add(
                 AuditEvent(
@@ -168,6 +212,7 @@ async def poll_subscription(subscription_id: str, workspace_id: str) -> dict:
             workspace_id=workspace_id,
             subscription_id=subscription.id,
             payload_hash=payload_hash,
+            checkpoint=subscription.checkpoint,
             run_id=run.id,
         )
         session.add(delivery)
