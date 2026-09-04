@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator
@@ -102,6 +103,32 @@ class ToolView(BaseModel):
 class RunCreate(BaseModel):
     prompt: str = Field(min_length=3, max_length=20_000)
     workflow_id: str | None = None
+
+
+class WorkflowCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=240)
+    prompt: str = Field(min_length=3, max_length=20_000)
+    enabled: bool = True
+
+
+class WorkflowUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=240)
+    prompt: str | None = Field(default=None, min_length=3, max_length=20_000)
+    enabled: bool | None = None
+
+
+class WorkflowScheduleCreate(BaseModel):
+    workflow_id: str
+    name: str = Field(min_length=2, max_length=240)
+    interval_seconds: int = Field(ge=60, le=2_592_000)
+    start_at: datetime | None = None
+
+
+class WorkflowScheduleUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=240)
+    interval_seconds: int | None = Field(default=None, ge=60, le=2_592_000)
+    enabled: bool | None = None
+    next_run_at: datetime | None = None
 
 
 class WorkspaceRecordCreate(BaseModel):
