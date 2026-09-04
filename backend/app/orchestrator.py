@@ -445,6 +445,13 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                             )
                             if changed:
                                 active_tool.encrypted_credentials = vault.encrypt(credentials)
+                                await audit(
+                                    session,
+                                    workspace_id,
+                                    "connector.token_refreshed",
+                                    {"tool_id": active_tool.id, "slug": active_tool.slug},
+                                    run.id,
+                                )
                         manifest_record = await session.scalar(
                             select(CapabilityManifest).where(
                                 CapabilityManifest.tool_id == active_tool.id,
