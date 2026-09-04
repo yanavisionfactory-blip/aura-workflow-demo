@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     clerk_issuer: str = ""
     clerk_authorized_parties: str = ""
     allow_legacy_workspace_tokens: bool = False
+    run_rate_limit_per_minute: int = 60
 
     @property
     def clerk_enabled(self) -> bool:
