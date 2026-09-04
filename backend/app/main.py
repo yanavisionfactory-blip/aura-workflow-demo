@@ -12,7 +12,7 @@ from agents import Agent, Runner
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,6 +37,7 @@ from .models import (
     ConnectorInstallation,
     ConnectorInstallationVersion,
     ConnectorPackage,
+    DeadLetterEntry,
     PlanVersion,
     PolicyConfig,
     PollingSubscription,
@@ -94,8 +95,8 @@ from .schemas import (
     RunCreate,
     ToolCreate,
     TrustSignalUpdate,
-    WebhookSubscriptionCreate,
     WebhookReplayRequest,
+    WebhookSubscriptionCreate,
     WorkflowCreate,
     WorkflowPlan,
     WorkflowScheduleCreate,
@@ -114,17 +115,17 @@ from .security import (
     decode_webhook_token,
     verify_webhook_signature,
 )
+from .trigger_runtime import (
+    classify_delivery,
+    delivery_can_be_replayed,
+    timestamp_is_fresh,
+)
 from .universal_connectors import (
     ConnectorError,
     discover_provider,
     normalize_manifest,
     validate_public_endpoint,
     verify_provider,
-)
-from .trigger_runtime import (
-    classify_delivery,
-    delivery_can_be_replayed,
-    timestamp_is_fresh,
 )
 from .universal_connectors import (
     allowed_operations as discovered_operations,
@@ -2222,10 +2223,29 @@ async def delete_workflow_schedule(
 @app.post("/v1/runs", status_code=202)
 async def create_run(
     payload: RunCreate,
+    idempotency_key_header: str | None = Header(default=None, alias="Idempotency-Key"),
     context: TenantContext = Depends(tenant_context),
     session: AsyncSession = Depends(tenant_session),
 ) -> dict:
     wid = context.workspace_id
+    if idempotency_key_header:
+        existing = await session.scalar(
+            select(WorkflowRun).where(
+                WorkflowRun.workspace_id == wid,
+                WorkflowRun.request_key == idempotency_key_header,
+            )
+        )
+        if existing:
+            return {"id": existing.id, "status": existing.status.value, "replayed": True}
+    minute_ago = datetime.now(timezone.utc) - timedelta(minutes=1)
+    recent_runs = await session.scalar(
+        select(func.count()).select_from(WorkflowRun).where(
+            WorkflowRun.workspace_id == wid,
+            WorkflowRun.created_at >= minute_ago,
+        )
+    )
+    if int(recent_runs or 0) >= settings.run_rate_limit_per_minute:
+        raise HTTPException(429, "Workspace run rate limit exceeded", headers={"Retry-After": "60"})
     if payload.workflow_id:
         workflow = await session.get(Workflow, payload.workflow_id)
         if not workflow or workflow.workspace_id != wid or not workflow.enabled:
@@ -2241,9 +2261,24 @@ async def create_run(
         inputs=inputs,
         execution_context={"inputs": inputs, "vars": inputs, "steps": {}},
         status=RunStatus.queued,
+        request_key=idempotency_key_header,
     )
     session.add(run)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        if not idempotency_key_header:
+            raise
+        existing = await session.scalar(
+            select(WorkflowRun).where(
+                WorkflowRun.workspace_id == wid,
+                WorkflowRun.request_key == idempotency_key_header,
+            )
+        )
+        if not existing:
+            raise
+        return {"id": existing.id, "status": existing.status.value, "replayed": True}
     plan_run_task.delay(run.id, wid)
     return {"id": run.id, "status": run.status.value}
 
@@ -2798,6 +2833,16 @@ async def resume_run(
     else:
         step.status = StepStatus.pending
     step.error = None
+    dead_letter = await session.scalar(
+        select(DeadLetterEntry).where(
+            DeadLetterEntry.run_id == run.id,
+            DeadLetterEntry.step_id == step.id,
+            DeadLetterEntry.status == "pending",
+        )
+    )
+    if dead_letter:
+        dead_letter.status = "resolved"
+        dead_letter.resolved_at = datetime.now(timezone.utc)
     run.status = RunStatus.recovering
     run.error = None
     session.add(
@@ -2812,6 +2857,58 @@ async def resume_run(
     await session.commit()
     execute_run_task.delay(run.id, wid)
     return {"id": run.id, "status": run.status.value, "resumed_from_step": step.id}
+
+
+@app.post("/v1/runs/{run_id}/cancel")
+async def cancel_run(
+    run_id: str,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    run = await session.get(WorkflowRun, run_id)
+    if not run or run.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Run not found")
+    if run.status in {RunStatus.completed, RunStatus.cancelled}:
+        return {"id": run.id, "status": run.status.value}
+    run.cancellation_requested = True
+    if run.status not in {RunStatus.running, RunStatus.planning}:
+        run.status = RunStatus.cancelled
+    session.add(AuditEvent(
+        workspace_id=context.workspace_id,
+        run_id=run.id,
+        actor=context.subject,
+        event_type="run.cancellation_requested",
+        payload={"status": run.status.value},
+    ))
+    await session.commit()
+    return {"id": run.id, "status": run.status.value, "cancellation_requested": True}
+
+
+@app.get("/v1/dead-letters")
+async def list_dead_letters(
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> list[dict]:
+    entries = (
+        await session.scalars(
+            select(DeadLetterEntry)
+            .where(DeadLetterEntry.workspace_id == context.workspace_id)
+            .order_by(DeadLetterEntry.created_at.desc())
+        )
+    ).all()
+    return [
+        {
+            "id": item.id,
+            "run_id": item.run_id,
+            "step_id": item.step_id,
+            "status": item.status,
+            "error": item.error,
+            "attempt_count": item.attempt_count,
+            "payload": item.payload,
+            "created_at": item.created_at,
+        }
+        for item in entries
+    ]
 
 
 UI_RECORD_TYPES = {"workflow", "workflow_run", "schedule", "access_request", "creator"}

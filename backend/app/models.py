@@ -382,6 +382,7 @@ class WorkspaceRecord(Base):
 
 class WorkflowRun(Base):
     __tablename__ = "workflow_runs"
+    __table_args__ = (UniqueConstraint("workspace_id", "request_key", name="uq_workspace_run_request"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
     workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
     workflow_id: Mapped[str | None] = mapped_column(ForeignKey("workflows.id", ondelete="SET NULL"), nullable=True)
@@ -393,6 +394,8 @@ class WorkflowRun(Base):
     plan_approved: Mapped[bool] = mapped_column(Boolean, default=False)
     result: Mapped[dict] = mapped_column(JSON, default=dict)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cancellation_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    request_key: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
     steps: Mapped[list["RunStep"]] = relationship(back_populates="run", cascade="all, delete-orphan", order_by="RunStep.position")
@@ -482,6 +485,21 @@ class StepAttempt(Base):
     latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class DeadLetterEntry(Base):
+    __tablename__ = "dead_letter_entries"
+    __table_args__ = (UniqueConstraint("run_id", "step_id", name="uq_dead_letter_step"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("workflow_runs.id", ondelete="CASCADE"), index=True)
+    step_id: Mapped[str] = mapped_column(ForeignKey("run_steps.id", ondelete="CASCADE"), index=True)
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    error: Mapped[str] = mapped_column(Text)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Artifact(Base):

@@ -14,6 +14,7 @@ from .models import (
     AuditEvent,
     CapabilityManifest,
     ConnectionRequirement,
+    DeadLetterEntry,
     PlanVersion,
     RunStatus,
     RunStep,
@@ -238,6 +239,17 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
         if not run or run.workspace_id != workspace_id:
             return
         if run.status in {RunStatus.completed, RunStatus.cancelled, RunStatus.blocked}:
+            return
+        if run.cancellation_requested:
+            run.status = RunStatus.cancelled
+            await audit(
+                session,
+                workspace_id,
+                "run.cancelled",
+                {"phase": "before_execution"},
+                run.id,
+            )
+            await session.commit()
             return
         if not run.plan_approved:
             run.status = RunStatus.awaiting_approval
@@ -494,6 +506,9 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                 backoffs = list(snapshot.policy_snapshot["retry_backoff_seconds"])
                 last_error: str | None = None
                 for retry_index in range(max_retries + 1):
+                    await session.refresh(run, attribute_names=["cancellation_requested"])
+                    if run.cancellation_requested:
+                        return None, "Run cancellation requested"
                     if retry_index:
                         delay = backoffs[min(retry_index - 1, len(backoffs) - 1)]
                         await asyncio.sleep(float(delay))
@@ -663,9 +678,35 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
             if error or result is None:
                 step.status = StepStatus.failed
                 step.error = error or "Tool execution failed"
-                run.status = RunStatus.waiting_for_action
+                if run.cancellation_requested:
+                    run.status = RunStatus.cancelled
+                else:
+                    run.status = RunStatus.waiting_for_action
                 run.error = step.error
                 run.result = _partial_result(outputs, step, step.error)
+                attempts = (
+                    await session.scalars(select(StepAttempt).where(StepAttempt.step_id == step.id))
+                ).all()
+                if not run.cancellation_requested:
+                    existing_dead_letter = await session.scalar(
+                        select(DeadLetterEntry).where(
+                            DeadLetterEntry.run_id == run.id,
+                            DeadLetterEntry.step_id == step.id,
+                        )
+                    )
+                    if not existing_dead_letter:
+                        session.add(DeadLetterEntry(
+                            workspace_id=workspace_id,
+                            run_id=run.id,
+                            step_id=step.id,
+                            error=step.error,
+                            attempt_count=len(attempts),
+                            payload={
+                                "tool_slug": step.tool_slug,
+                                "operation": step.operation,
+                                "arguments": resolved_arguments,
+                            },
+                        ))
                 await audit(
                     session,
                     workspace_id,
