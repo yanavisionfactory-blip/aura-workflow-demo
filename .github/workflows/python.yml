@@ -47,5 +47,5 @@ jobs:
       - name: Build React client
         run: npm run build
         env:
-          VITE_BASE44_APP_ID: 6a8263b40ee6995c4e825a4d
           VITE_AURA_API_URL: https://api.example.invalid
+          VITE_CLERK_PUBLISHABLE_KEY: pk_test_ci_placeholder
