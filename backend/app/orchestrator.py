@@ -395,6 +395,7 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
 
             step.status = StepStatus.running
             step.started_at = datetime.now(timezone.utc)
+            run.updated_at = step.started_at
             await audit(
                 session,
                 workspace_id,
@@ -635,6 +636,7 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                 "critic": criticism.model_dump(mode="json"),
             }
             step.completed_at = datetime.now(timezone.utc)
+            run.updated_at = step.completed_at
             outputs.append(step.output)
             session.add(
                 Artifact(
