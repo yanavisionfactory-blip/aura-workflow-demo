@@ -3,7 +3,7 @@ import json
 import secrets
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode, urlsplit
 
 import httpx
@@ -49,7 +49,9 @@ from .models import (
     ToolTrustState,
     WebhookDelivery,
     WebhookSubscription,
+    Workflow,
     WorkflowRun,
+    WorkflowSchedule,
     Workspace,
     WorkspaceRecord,
 )
@@ -93,7 +95,11 @@ from .schemas import (
     ToolCreate,
     TrustSignalUpdate,
     WebhookSubscriptionCreate,
+    WorkflowCreate,
     WorkflowPlan,
+    WorkflowScheduleCreate,
+    WorkflowScheduleUpdate,
+    WorkflowUpdate,
     WorkspaceRecordCreate,
     WorkspaceRecordUpdate,
 )
@@ -1897,6 +1903,161 @@ async def oauth_callback(provider: str, code: str, state: str, session: AsyncSes
     return RedirectResponse(f"{frontend_url}?tool_connected={provider}")
 
 
+def _workflow_view(workflow: Workflow) -> dict:
+    return {
+        "id": workflow.id,
+        "name": workflow.name,
+        "prompt": workflow.prompt,
+        "version": workflow.version,
+        "enabled": workflow.enabled,
+        "created_at": workflow.created_at,
+    }
+
+
+def _schedule_view(schedule: WorkflowSchedule) -> dict:
+    return {
+        "id": schedule.id,
+        "workflow_id": schedule.workflow_id,
+        "name": schedule.name,
+        "interval_seconds": schedule.interval_seconds,
+        "enabled": schedule.enabled,
+        "next_run_at": schedule.next_run_at,
+        "last_run_at": schedule.last_run_at,
+        "created_at": schedule.created_at,
+        "updated_at": schedule.updated_at,
+    }
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+@app.post("/v1/workflows", status_code=201)
+async def create_workflow(
+    payload: WorkflowCreate,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    workflow = Workflow(
+        workspace_id=context.workspace_id,
+        name=payload.name,
+        prompt=payload.prompt,
+        enabled=payload.enabled,
+    )
+    session.add(workflow)
+    await session.commit()
+    return _workflow_view(workflow)
+
+
+@app.get("/v1/workflows")
+async def list_workflows(
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> list[dict]:
+    workflows = (
+        await session.scalars(
+            select(Workflow)
+            .where(Workflow.workspace_id == context.workspace_id)
+            .order_by(Workflow.created_at.desc())
+        )
+    ).all()
+    return [_workflow_view(workflow) for workflow in workflows]
+
+
+@app.patch("/v1/workflows/{workflow_id}")
+async def update_workflow(
+    workflow_id: str,
+    payload: WorkflowUpdate,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    workflow = await session.get(Workflow, workflow_id)
+    if not workflow or workflow.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Workflow not found")
+    changes = payload.model_dump(exclude_unset=True)
+    for field, value in changes.items():
+        setattr(workflow, field, value)
+    if {"name", "prompt"} & changes.keys():
+        workflow.version += 1
+    await session.commit()
+    return _workflow_view(workflow)
+
+
+@app.post("/v1/workflow-schedules", status_code=201)
+async def create_workflow_schedule(
+    payload: WorkflowScheduleCreate,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    workflow = await session.get(Workflow, payload.workflow_id)
+    if not workflow or workflow.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Workflow not found")
+    schedule = WorkflowSchedule(
+        workspace_id=context.workspace_id,
+        workflow_id=workflow.id,
+        name=payload.name,
+        interval_seconds=payload.interval_seconds,
+        next_run_at=_as_utc(payload.start_at or datetime.now(timezone.utc)),
+        created_by=context.subject,
+    )
+    session.add(schedule)
+    await session.commit()
+    return _schedule_view(schedule)
+
+
+@app.get("/v1/workflow-schedules")
+async def list_workflow_schedules(
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> list[dict]:
+    schedules = (
+        await session.scalars(
+            select(WorkflowSchedule)
+            .where(WorkflowSchedule.workspace_id == context.workspace_id)
+            .order_by(WorkflowSchedule.created_at.desc())
+        )
+    ).all()
+    return [_schedule_view(schedule) for schedule in schedules]
+
+
+@app.patch("/v1/workflow-schedules/{schedule_id}")
+async def update_workflow_schedule(
+    schedule_id: str,
+    payload: WorkflowScheduleUpdate,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    schedule = await session.get(WorkflowSchedule, schedule_id)
+    if not schedule or schedule.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Workflow schedule not found")
+    changes = payload.model_dump(exclude_unset=True)
+    if "next_run_at" in changes:
+        changes["next_run_at"] = _as_utc(changes["next_run_at"])
+    if "interval_seconds" in changes and "next_run_at" not in changes:
+        changes["next_run_at"] = datetime.now(timezone.utc) + timedelta(
+            seconds=changes["interval_seconds"]
+        )
+    for field, value in changes.items():
+        setattr(schedule, field, value)
+    await session.commit()
+    return _schedule_view(schedule)
+
+
+@app.delete("/v1/workflow-schedules/{schedule_id}", status_code=204)
+async def delete_workflow_schedule(
+    schedule_id: str,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> None:
+    schedule = await session.get(WorkflowSchedule, schedule_id)
+    if not schedule or schedule.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Workflow schedule not found")
+    await session.delete(schedule)
+    await session.commit()
+
+
 @app.post("/v1/runs", status_code=202)
 async def create_run(
     payload: RunCreate,
@@ -1904,6 +2065,10 @@ async def create_run(
     session: AsyncSession = Depends(tenant_session),
 ) -> dict:
     wid = context.workspace_id
+    if payload.workflow_id:
+        workflow = await session.get(Workflow, payload.workflow_id)
+        if not workflow or workflow.workspace_id != wid or not workflow.enabled:
+            raise HTTPException(404, "Enabled workflow not found")
     run = WorkflowRun(workspace_id=wid, workflow_id=payload.workflow_id, prompt=payload.prompt, status=RunStatus.queued)
     session.add(run)
     await session.commit()
