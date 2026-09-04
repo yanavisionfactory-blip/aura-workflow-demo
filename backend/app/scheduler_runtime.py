@@ -49,6 +49,12 @@ async def dispatch_due_schedules(now: datetime | None = None) -> list[tuple[str,
                     workspace_id=schedule.workspace_id,
                     workflow_id=workflow.id,
                     prompt=workflow.prompt,
+                    inputs=workflow.variables,
+                    execution_context={
+                        "inputs": workflow.variables,
+                        "vars": workflow.variables,
+                        "steps": {},
+                    },
                     status=RunStatus.queued,
                 )
                 session.add(run)
