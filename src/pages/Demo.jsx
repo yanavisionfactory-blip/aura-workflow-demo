@@ -943,7 +943,13 @@ Generate a results summary in plain, human-friendly language (not technical).
                     <p className="text-sm text-muted-foreground">AURA is building your plan…</p>
                   </div>
                 ) : plan ? (
-                  <PlanView plan={plan} hasPreview={!!mock?.preview} onApprove={handleApprove} approveLabel={editRunMode ? "Review changes" : "Start"} userSelectedTools={userSelectedToolsRef.current} />
+                  <PlanView
+                    plan={plan}
+                    hasPreview={!!mock?.preview}
+                    onApprove={handleApprove}
+                    onBack={() => setPhase("confirm")}
+                    approveLabel={editRunMode ? "Review changes" : "Start"}
+                  />
                 ) : null}
               </motion.div>
             )}
