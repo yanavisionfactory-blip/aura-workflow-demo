@@ -1,6 +1,7 @@
 import json
 
 from agents import Agent, Runner
+from pydantic import BaseModel
 
 from .config import get_settings
 from .schemas import (
@@ -20,6 +21,14 @@ class ConnectionRequiredError(RuntimeError):
         super().__init__("Missing capability providers: " + ", ".join(missing_capabilities))
 
 
+class PlanningBundle(BaseModel):
+    """One model response for intent, routing, and the reviewable workflow."""
+
+    objective: ObjectiveSpec
+    toolset: ToolsetProposal
+    plan: WorkflowPlan
+
+
 def _agent(name: str, instructions: str, output_type):
     return Agent(
         name=name,
@@ -31,6 +40,19 @@ def _agent(name: str, instructions: str, output_type):
 
 def build_agents() -> dict[str, Agent]:
     return {
+        "planner": _agent(
+            "Fast Workflow Planner",
+            """Return one PlanningBundle that normalizes the request, selects the smallest sufficient
+            toolset from the supplied connector catalog, and builds a finite auditable plan. Preserve
+            explicit constraints and state assumptions. A catalog connector with connected=false is
+            valid for plan review. Select only listed operations. Every step needs concrete inputs,
+            an output contract, a stable lowercase key, and explicit dependencies. Reads are normally
+            not consequential. Sending, creating, updating, deleting, posting, scheduling, or
+            purchasing is consequential. Use {{inputs.name}}, {{vars.name}}, or
+            {{steps.key.field}} for reusable values. Report missing capabilities only when no catalog
+            connector can perform the job. Never claim execution occurred.""",
+            PlanningBundle,
+        ),
         "intent": _agent(
             "Intent & Scope Agent",
             """Normalize the request into an ObjectiveSpec. Preserve explicit user constraints.
@@ -141,58 +163,47 @@ def deterministic_plan_fixes(plan: WorkflowPlan, tool_inventory: list[dict]) -> 
 
 async def create_plan(prompt: str, tool_inventory: list[dict]) -> WorkflowPlan:
     agents = build_agents()
-    objective = ObjectiveSpec.model_validate(
-        await _run(agents["intent"], {"user_request": prompt})
+    request_payload = {
+        "user_request": prompt,
+        "executable_tool_inventory": tool_inventory,
+    }
+    bundle = PlanningBundle.model_validate(
+        await _run(agents["planner"], request_payload, max_turns=8)
     )
-    toolset = ToolsetProposal.model_validate(
-        await _run(
-            agents["router"],
-            {"objective_spec": objective.model_dump(), "executable_tool_inventory": tool_inventory},
-        )
-    )
+    objective = bundle.objective
+    toolset = bundle.toolset
     # A selected catalog connector is sufficient to build a reviewable plan even
     # when it is not connected. Only stop when the router found no viable tool.
     if toolset.missing_capabilities and not toolset.tools:
         raise ConnectionRequiredError(toolset.missing_capabilities)
-    plan_payload = {
-        "objective_spec": objective.model_dump(),
-        "toolset_proposal": toolset.model_dump(),
-        "executable_tool_inventory": tool_inventory,
-    }
-    plan = WorkflowPlan.model_validate(await _run(agents["builder"], plan_payload, max_turns=12))
+    plan = bundle.plan
     deterministic_fixes = deterministic_plan_fixes(plan, tool_inventory)
-    evaluation_payload = {
-        **plan_payload,
-        "workflow_plan": plan.model_dump(exclude={"planning_artifacts"}),
-        "deterministic_validation_failures": deterministic_fixes,
-    }
-    evaluation = PlanEvaluation.model_validate(
-        await _run(agents["evaluator"], evaluation_payload)
-    )
     if deterministic_fixes:
-        evaluation.passed = False
-        evaluation.required_fixes = list(
-            dict.fromkeys(evaluation.required_fixes + deterministic_fixes)
-        )
-    if not evaluation.passed:
         repaired_payload = {
-            **plan_payload,
-            "rejected_plan": plan.model_dump(),
-            "required_fixes": evaluation.required_fixes,
+            **request_payload,
+            "rejected_bundle": bundle.model_dump(),
+            "required_fixes": deterministic_fixes,
         }
-        plan = WorkflowPlan.model_validate(await _run(agents["builder"], repaired_payload, max_turns=12))
+        bundle = PlanningBundle.model_validate(
+            await _run(agents["planner"], repaired_payload, max_turns=8)
+        )
+        objective = bundle.objective
+        toolset = bundle.toolset
+        plan = bundle.plan
         deterministic_fixes = deterministic_plan_fixes(plan, tool_inventory)
-        evaluation_payload["workflow_plan"] = plan.model_dump(exclude={"planning_artifacts"})
-        evaluation_payload["deterministic_validation_failures"] = deterministic_fixes
-        evaluation = PlanEvaluation.model_validate(await _run(agents["evaluator"], evaluation_payload))
-        if deterministic_fixes:
-            evaluation.passed = False
-            evaluation.required_fixes = list(
-                dict.fromkeys(evaluation.required_fixes + deterministic_fixes)
-            )
-    if not evaluation.passed:
-        fixes = "; ".join(evaluation.required_fixes or evaluation.missing_inputs)
-        raise ValueError(f"Plan failed preflight authorization: {fixes or 'unspecified validation failure'}")
+    if deterministic_fixes:
+        raise ValueError("Plan failed preflight authorization: " + "; ".join(deterministic_fixes))
+
+    operations = [step.operation.lower() for step in plan.steps]
+    destructive = any(any(word in operation for word in ("delete", "purchase")) for operation in operations)
+    writes = destructive or any(step.consequential for step in plan.steps)
+    evaluation = PlanEvaluation(
+        passed=True,
+        missing_inputs=objective.required_inputs,
+        estimated_risk="high" if destructive else "medium" if writes else "low",
+        risk_score=0.8 if destructive else 0.4 if writes else 0.1,
+        permission_scope="destructive" if destructive else "write" if writes else "read",
+    )
     plan.planning_artifacts = {
         "objective_spec": objective.model_dump(mode="json"),
         "toolset_proposal": toolset.model_dump(mode="json"),
