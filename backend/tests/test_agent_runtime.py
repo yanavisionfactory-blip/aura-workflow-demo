@@ -1,7 +1,7 @@
 import asyncio
 
 from app import agent_runtime
-from app.agent_runtime import create_plan, deterministic_plan_fixes
+from app.agent_runtime import create_plan, deterministic_plan_fixes, normalize_plan_graph
 from app.schemas import PlanStep, WorkflowPlan
 
 
@@ -139,3 +139,74 @@ def test_combined_planner_allows_flexible_workflow_arguments() -> None:
     planner = agent_runtime.build_agents()["planner"]
 
     assert planner.output_type.is_strict_json_schema() is False
+
+
+def test_normalizer_infers_prior_step_dependencies_and_write_safety() -> None:
+    workflow = plan(
+        PlanStep(
+            key="draft_emails",
+            agent="writer",
+            tool_slug="openai",
+            operation="text.generate",
+            reason="Draft emails",
+            expected_output="Email drafts",
+        ),
+        PlanStep(
+            key="send_emails",
+            agent="communications",
+            tool_slug="gmail",
+            operation="gmail.send",
+            arguments={"drafts": "{{steps.draft_emails.items}}"},
+            reason="Send approved drafts",
+            expected_output="Send receipts",
+        ),
+    )
+
+    normalized = normalize_plan_graph(workflow)
+
+    assert normalized.steps[1].depends_on == ["draft_emails"]
+    assert normalized.steps[1].consequential is True
+
+
+def test_create_plan_does_not_reprompt_for_mechanical_graph_repairs(monkeypatch) -> None:
+    calls = []
+
+    async def fake_run(agent, payload, max_turns=8):
+        calls.append(payload)
+        return {
+            "objective": {"goal": "Draft and send email"},
+            "toolset": {
+                "tools": [
+                    {"slug": "writer", "role": "draft", "rationale": "Writes the draft"},
+                    {"slug": "gmail", "role": "send", "rationale": "Sends the email"},
+                ]
+            },
+            "plan": {
+                "name": "Draft and send",
+                "interpretation": "Draft and send an email",
+                "steps": [
+                    {
+                        "key": "draft_emails", "agent": "writer", "tool_slug": "writer",
+                        "operation": "text.generate", "reason": "Draft it", "expected_output": "Drafts",
+                    },
+                    {
+                        "key": "send_emails", "agent": "communications", "tool_slug": "gmail",
+                        "operation": "gmail.send", "arguments": {"drafts": "{{steps.draft_emails.items}}"},
+                        "reason": "Send it", "expected_output": "Receipts",
+                    },
+                ],
+            },
+        }
+
+    monkeypatch.setattr(agent_runtime, "build_agents", lambda: {"planner": object()})
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    result = asyncio.run(create_plan("Draft and send", [
+        {"slug": "writer", "allowed_operations": ["text.generate"], "connected": True},
+        {"slug": "gmail", "allowed_operations": ["gmail.send"], "connected": True},
+    ]))
+
+    assert len(calls) == 1
+    assert result.steps[1].depends_on == ["draft_emails"]
+    assert result.steps[1].consequential is True
+    assert result.planning_artifacts["timings_ms"]["repair"] == 0
