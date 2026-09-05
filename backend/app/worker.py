@@ -25,7 +25,6 @@ celery.conf.beat_schedule = {
 @celery.task(name="aura.plan_run", autoretry_for=(Exception,), retry_backoff=True, max_retries=3)
 def plan_run_task(run_id: str, workspace_id: str) -> None:
     asyncio.run(plan_run(run_id, workspace_id))
-    asyncio.run(execute_run(run_id, workspace_id))
 
 
 @celery.task(name="aura.execute_run", autoretry_for=(Exception,), retry_backoff=True, max_retries=3)
