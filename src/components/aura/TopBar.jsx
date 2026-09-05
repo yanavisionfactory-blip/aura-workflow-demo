@@ -1,7 +1,7 @@
 import { motion } from "framer-motion";
 import ConnectionsPill from "./ConnectionsPill";
 import { Sparkles, History } from "lucide-react";
-import { OrganizationSwitcher, UserButton } from "@clerk/react";
+import { UserButton } from "@clerk/react";
 import { useAuth } from "@/lib/AuthContext";
 
 export default function TopBar({ onHistoryOpen }) {
@@ -39,7 +39,6 @@ export default function TopBar({ onHistoryOpen }) {
             {workspaces.map((item) => <option key={item.workspace_id} value={item.workspace_id}>{item.name}</option>)}
           </select>
         )}
-        <OrganizationSwitcher hidePersonal afterSelectOrganizationUrl={import.meta.env.BASE_URL} />
         <ConnectionsPill />
         <button
           onClick={onHistoryOpen}
