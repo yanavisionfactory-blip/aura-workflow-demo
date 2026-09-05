@@ -18,8 +18,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout production application
         uses: actions/checkout@v4
+        with:
+          ref: python-control-plane
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -29,8 +31,8 @@ jobs:
       - name: Build
         run: npm run build
         env:
-          VITE_BASE44_APP_ID: 6a8263b40ee6995c4e825a4d
           VITE_AURA_API_URL: https://impartial-emotion-production-49d4.up.railway.app
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
       - name: Disable Jekyll
         run: touch dist/.nojekyll
       - name: Configure Pages
