@@ -2,7 +2,7 @@ name: Deploy AURA to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    branches: [main, python-control-plane]
   workflow_dispatch:
 
 permissions:
