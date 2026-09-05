@@ -50,6 +50,24 @@ async def audit(
     )
 
 
+def planning_error_message(exc: Exception) -> str:
+    """Return a user-facing planning failure without leaking provider payloads."""
+    raw = str(exc)
+    lowered = raw.lower()
+    if (
+        "insufficient_quota" in lowered
+        or "credit_balance_exhausted" in lowered
+        or "no credits remaining" in lowered
+    ):
+        return (
+            "AURA's AI planning credits are exhausted. Add credits to the OpenAI API "
+            "account configured in Railway, then try again."
+        )
+    if "rate limit" in lowered or "error code: 429" in lowered:
+        return "AURA's AI planning service is temporarily busy. Please try again shortly."
+    return raw
+
+
 async def plan_run(run_id: str, workspace_id: str) -> None:
     async with SessionLocal() as session:
         await set_tenant_context(session, workspace_id)
@@ -195,16 +213,15 @@ async def plan_run(run_id: str, workspace_id: str) -> None:
             await session.commit()
         except Exception as exc:
             run.status = RunStatus.failed
-            run.error = str(exc)
+            run.error = planning_error_message(exc)
             await audit(
                 session,
                 run.workspace_id,
                 "run.plan_failed",
-                {"error": str(exc)},
+                {"error": run.error},
                 run.id,
             )
             await session.commit()
-            raise
 
 
 async def _trust_state(
