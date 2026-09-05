@@ -10,6 +10,9 @@ export const CATALOG = [
   { name: "Salesforce", icon: "☁️", desc: "Read and update CRM records" },
   { name: "Google Calendar", icon: "📅", desc: "Read and create events" },
   { name: "HubSpot", icon: "🔶", desc: "Manage contacts and deals" },
+  { name: "Mailchimp", icon: "✉️", desc: "Manage audiences and campaigns" },
+  { name: "Canva", icon: "🎨", desc: "Create and export designs" },
+  { name: "TikTok", icon: "🎵", desc: "Read profiles and publish content" },
   { name: "Notion", icon: "📝", desc: "Read and edit notes and docs" },
   { name: "Google Sheets", icon: "📊", desc: "Read and write spreadsheets" },
   { name: "Shopify", icon: "🛍️", desc: "Manage orders and products" },
@@ -18,6 +21,11 @@ export const CATALOG = [
   { name: "Stripe", icon: "💳", desc: "Charge customers and subscriptions" },
   { name: "Meta Ads", icon: "📈", desc: "Pull ad campaign performance" },
   { name: "Jira", icon: "✅", desc: "Create and track issues" },
+  { name: "Confluence", icon: "📚", desc: "Read and update team knowledge" },
+  { name: "ClickUp", icon: "☑️", desc: "Create and manage project tasks" },
+  { name: "Pinterest", icon: "📌", desc: "Publish pins and read analytics" },
+  { name: "LinkedIn", icon: "💼", desc: "Publish and manage professional content" },
+  { name: "Figma", icon: "🖌️", desc: "Read design files and comments" },
   // Internal tool with no standard connection — connects via the AURA Interface
   // learn flow. Same persistent store once connected.
   { name: "Creator Approvals", icon: "🔌", desc: "Submit creators for approval", interface: true },
