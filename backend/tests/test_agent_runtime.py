@@ -1,4 +1,7 @@
-from app.agent_runtime import deterministic_plan_fixes
+import asyncio
+
+from app import agent_runtime
+from app.agent_runtime import create_plan, deterministic_plan_fixes
 from app.schemas import PlanStep, WorkflowPlan
 
 
@@ -75,3 +78,58 @@ def test_deterministic_validator_rejects_unavailable_fallback() -> None:
         "unavailable fallback" in fix
         for fix in deterministic_plan_fixes(workflow, inventory)
     )
+
+
+def test_create_plan_uses_one_model_round_trip_for_valid_plan(monkeypatch) -> None:
+    calls = []
+
+    async def fake_run(agent, payload, max_turns=8):
+        calls.append((agent, payload, max_turns))
+        return {
+            "objective": {"goal": "Read CRM records"},
+            "toolset": {
+                "tools": [
+                    {
+                        "slug": "crm",
+                        "role": "source",
+                        "rationale": "Contains the requested records",
+                        "required_permissions": ["records.read"],
+                    }
+                ]
+            },
+            "plan": {
+                "name": "Read CRM",
+                "interpretation": "Read the requested CRM records",
+                "steps": [
+                    {
+                        "key": "read_records",
+                        "agent": "data",
+                        "tool_slug": "crm",
+                        "operation": "records.read",
+                        "reason": "Retrieve the records",
+                        "expected_output": "CRM records",
+                    }
+                ],
+            },
+        }
+
+    monkeypatch.setattr(agent_runtime, "build_agents", lambda: {"planner": object()})
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    result = asyncio.run(
+        create_plan(
+            "Read CRM records",
+            [
+                {
+                    "slug": "crm",
+                    "allowed_operations": ["records.read"],
+                    "connected": False,
+                }
+            ],
+        )
+    )
+
+    assert len(calls) == 1
+    assert result.steps[0].operation == "records.read"
+    assert result.planning_artifacts["connection_requirements"] == ["crm"]
+    assert result.planning_artifacts["preflight_evaluation"]["passed"] is True
