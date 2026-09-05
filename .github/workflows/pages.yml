@@ -7,6 +7,7 @@ on:
 
 # Frontend Vite variables are injected at build time from GitHub Actions secrets.
 # The deployment always publishes the latest production control-plane frontend.
+# Release: personal accounts without organization session coupling.
 permissions:
   contents: read
   pages: write
