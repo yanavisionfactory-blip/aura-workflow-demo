@@ -37,7 +37,6 @@ async function request(path, options = {}) {
   const data = await response.json().catch(() => ({}));
   if (response.status === 401 && tokenProvider) {
     clearWorkspace();
-    window.dispatchEvent(new CustomEvent("aura:session-expired"));
   }
   if (!response.ok) throw new Error(messageFrom(data, response.status));
   return data;
