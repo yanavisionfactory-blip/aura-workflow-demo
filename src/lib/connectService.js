@@ -9,7 +9,18 @@ import {
   testPythonConnection,
 } from "@/lib/auraApi";
 
-const PYTHON_OAUTH = { Gmail: "google", "Google Drive": "google", "Google Calendar": "google", "Google Sheets": "google", Airtable: "airtable", Notion: "notion", Slack: "slack", TikTok: "tiktok" };
+const PYTHON_OAUTH = {
+  Gmail: "google",
+  "Google Drive": "google",
+  "Google Calendar": "google",
+  "Google Sheets": "google",
+  Airtable: "airtable",
+  Notion: "notion",
+  Slack: "slack",
+  TikTok: "tiktok",
+  Mailchimp: "mailchimp",
+  Canva: "canva",
+};
 const slugify = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 const credentialsFor = (opts) => opts.credentials || (opts.apiKey ? { api_key: opts.apiKey } : {});
 

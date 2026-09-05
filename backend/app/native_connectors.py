@@ -250,6 +250,24 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
     },
 }
 
+# Providers that use the universal connector lifecycle. Their detailed manifest
+# replaces this planning placeholder as soon as the user connects them.
+UNIVERSAL_PLANNING_CONNECTORS: dict[str, str] = {
+    "hubspot": "HubSpot",
+    "salesforce": "Salesforce",
+    "clickup": "ClickUp",
+    "jira": "Jira",
+    "confluence": "Confluence",
+    "meta-ads": "Meta Ads",
+    "instagram": "Instagram",
+    "linkedin": "LinkedIn",
+    "figma": "Figma",
+    "shopify": "Shopify",
+    "stripe": "Stripe",
+    "quickbooks": "QuickBooks",
+    "pinterest": "Pinterest",
+}
+
 
 def native_manifest(slug: str) -> dict[str, Any]:
     definition = NATIVE_CONNECTORS.get(slug)
@@ -263,6 +281,32 @@ def native_manifest(slug: str) -> dict[str, Any]:
 
 def native_operations(slug: str) -> list[str]:
     return [item["name"] for item in native_manifest(slug)["capabilities"]]
+
+
+def planning_catalog(connected_slugs: set[str] | None = None) -> list[dict[str, Any]]:
+    """Expose catalog capabilities for proposals without granting execution access."""
+    connected = connected_slugs or set()
+    native = [
+        {
+            "slug": slug,
+            "name": definition["name"],
+            "kind": definition["provider_type"],
+            "allowed_operations": native_operations(slug),
+            "connected": slug in connected,
+        }
+        for slug, definition in NATIVE_CONNECTORS.items()
+    ]
+    universal = [
+        {
+            "slug": slug,
+            "name": name,
+            "kind": "universal",
+            "allowed_operations": ["api.request"],
+            "connected": slug in connected,
+        }
+        for slug, name in UNIVERSAL_PLANNING_CONNECTORS.items()
+    ]
+    return native + universal
 
 
 def public_catalog(slug: str) -> dict[str, Any]:

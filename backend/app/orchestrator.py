@@ -24,6 +24,7 @@ from .models import (
     ToolTrustState,
     WorkflowRun,
 )
+from .native_connectors import planning_catalog
 from .policy import canonical_plan_hash, operation_scope, runtime_policy_check
 from .providers import ProviderExecutor, idempotency_key, refresh_oauth_credentials
 from .security import CredentialVault
@@ -68,15 +69,22 @@ async def plan_run(run_id: str, workspace_id: str) -> None:
                 )
             )
         ).all()
-        inventory = [
+        connected_inventory = [
             {
                 "slug": tool.slug,
                 "name": tool.display_name,
                 "kind": tool.kind.value,
                 "allowed_operations": tool.allowed_operations,
+                "connected": True,
             }
             for tool in tools
         ]
+        connected_slugs = {item["slug"] for item in connected_inventory}
+        inventory_by_slug = {
+            item["slug"]: item for item in planning_catalog(connected_slugs)
+        }
+        inventory_by_slug.update({item["slug"]: item for item in connected_inventory})
+        inventory = list(inventory_by_slug.values())
         await session.commit()
 
         try:
@@ -125,6 +133,26 @@ async def plan_run(run_id: str, workspace_id: str) -> None:
                     await session.flush()
                     step.approval_id = approval.id
                     step.status = StepStatus.awaiting_approval
+            for slug in sorted(
+                set(plan.planning_artifacts.get("connection_requirements", []))
+            ):
+                session.add(
+                    ConnectionRequirement(
+                        workspace_id=workspace_id,
+                        run_id=run.id,
+                        capability=slug,
+                        provider_hint=slug,
+                        reason=f"Connect {slug} before starting this reviewed plan",
+                        required_permissions=next(
+                            (
+                                item["allowed_operations"]
+                                for item in inventory
+                                if item["slug"] == slug
+                            ),
+                            [],
+                        ),
+                    )
+                )
             run.status = RunStatus.awaiting_approval
             await audit(
                 session,

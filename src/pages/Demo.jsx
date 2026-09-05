@@ -22,6 +22,37 @@ import { approvePythonPlan, createPythonRun, getPythonRun } from "@/lib/auraApi"
 
 const STEP_DURATION = 2.6;
 
+const planToolName = (step) => {
+  if (step.tool_slug === "google") {
+    if (step.operation.startsWith("gmail.")) return "Gmail";
+    if (step.operation.startsWith("calendar.")) return "Google Calendar";
+    if (step.operation.startsWith("sheets.")) return "Google Sheets";
+    return "Google Drive";
+  }
+  const names = {
+    airtable: "Airtable",
+    notion: "Notion",
+    mailchimp: "Mailchimp",
+    canva: "Canva",
+    tiktok: "TikTok",
+    slack: "Slack",
+    hubspot: "HubSpot",
+    salesforce: "Salesforce",
+    clickup: "ClickUp",
+    jira: "Jira",
+    confluence: "Confluence",
+    "meta-ads": "Meta Ads",
+    instagram: "Instagram",
+    linkedin: "LinkedIn",
+    figma: "Figma",
+    shopify: "Shopify",
+    stripe: "Stripe",
+    quickbooks: "QuickBooks",
+    pinterest: "Pinterest",
+  };
+  return names[step.tool_slug] || step.tool_slug;
+};
+
 const INTERPRETATION_SCHEMA = {
   type: "object",
   properties: {
@@ -304,9 +335,9 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               interpretation: run.plan.interpretation,
               estimatedTime: "Runs in the Python control plane",
               steps: run.plan.steps.map((step) => ({
-                tool: step.tool_slug, title: step.operation, iWill: step.reason, action: step.operation,
+                tool: planToolName(step), title: step.operation, iWill: step.reason, action: step.operation,
                 detail: JSON.stringify(step.arguments, null, 2), reason: step.reason, output: step.expected_output,
-                flow: [{ label: "Uses", value: step.tool_slug }, { label: "Creates", value: step.expected_output }],
+                flow: [{ label: "Uses", value: planToolName(step) }, { label: "Creates", value: step.expected_output }],
                 riskLevel: step.consequential ? "modify" : "read",
                 riskNote: step.consequential ? "This provider action runs only after your approval." : "",
                 preview: step.consequential ? {
@@ -318,7 +349,12 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               })),
             });
           } catch (error) {
-            setPlan({ interpretation: editedInterpretation, workflowName: "Workflow unavailable", steps: [] });
+            setPlan({
+              interpretation: editedInterpretation,
+              workflowName: originalPromptRef.current.slice(0, 60),
+              steps: [],
+              error: error.message || "AURA could not build this plan. Please try again.",
+            });
             setResults({ title: "Orchestrator unavailable", summary: error.message, metrics: [], outcomes: [], nextSteps: [] });
           } finally { setPlanLoading(false); }
         })();

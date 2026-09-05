@@ -40,15 +40,18 @@ def build_agents() -> dict[str, Agent]:
         ),
         "router": _agent(
             "Tool Router Agent",
-            """Choose the smallest sufficient toolset from the supplied executable inventory.
-            Never select an absent tool or operation. Explain each tool's role and exact permissions.
-            Report missing capabilities rather than fabricating a connection.""",
+            """Choose the smallest sufficient toolset from the supplied connector catalog.
+            Never select an absent tool or operation. A catalog tool may be selected when connected
+            is false: explain its role normally and let the application request connection after the
+            user reviews the plan. Report missing_capabilities only when no catalog connector can
+            perform the job, never merely because a suitable connector is not connected yet.""",
             ToolsetProposal,
         ),
         "builder": _agent(
             "Plan Builder Agent",
             """Build a finite, auditable execution plan using only the proposed tools. Each step must
-            have concrete inputs, an expected output contract, and a reason. Reads are normally not
+            have concrete inputs, an expected output contract, and a reason. Catalog tools marked
+            connected=false are valid in a proposal but cannot execute until connected. Reads are normally not
             consequential. Sending, creating, updating, deleting, posting, scheduling, or purchasing
             is consequential. Mark a step optional only when the final deliverable remains valid without
             it. Recommend a fallback only when it is an inventory tool with equivalent permission scope.
@@ -63,7 +66,9 @@ def build_agents() -> dict[str, Agent]:
             "Static Plan Evaluator Agent",
             """Act as a preflight authorization gate. Check every plan operation against the supplied
             inventory, required inputs, excessive permissions, data sensitivity, and obvious cost/time
-            risks. Return a numeric risk score, estimated USD cost, and maximum permission scope. Fail
+            risks. A catalog connector with connected=false is valid for plan review and must not fail
+            evaluation solely for being disconnected; execution will enforce the connection. Return a
+            numeric risk score, estimated USD cost, and maximum permission scope. Fail
             plans that cannot execute safely and return concrete required fixes.""",
             PlanEvaluation,
         ),
@@ -145,7 +150,9 @@ async def create_plan(prompt: str, tool_inventory: list[dict]) -> WorkflowPlan:
             {"objective_spec": objective.model_dump(), "executable_tool_inventory": tool_inventory},
         )
     )
-    if toolset.missing_capabilities:
+    # A selected catalog connector is sufficient to build a reviewable plan even
+    # when it is not connected. Only stop when the router found no viable tool.
+    if toolset.missing_capabilities and not toolset.tools:
         raise ConnectionRequiredError(toolset.missing_capabilities)
     plan_payload = {
         "objective_spec": objective.model_dump(),
@@ -191,6 +198,18 @@ async def create_plan(prompt: str, tool_inventory: list[dict]) -> WorkflowPlan:
         "toolset_proposal": toolset.model_dump(mode="json"),
         "preflight_evaluation": evaluation.model_dump(mode="json"),
         "architecture": ["propose", "authorize", "execute"],
+        "connection_requirements": [
+            selection.slug
+            for selection in toolset.tools
+            if not next(
+                (
+                    item.get("connected", True)
+                    for item in tool_inventory
+                    if item["slug"] == selection.slug
+                ),
+                False,
+            )
+        ],
     }
     return plan
 

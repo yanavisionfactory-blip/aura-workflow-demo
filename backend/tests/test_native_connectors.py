@@ -4,9 +4,20 @@ from app.native_connectors import (
     NativeConnectorError,
     native_manifest,
     native_operations,
+    planning_catalog,
     public_catalog,
     validate_module_arguments,
 )
+
+
+def test_planning_catalog_includes_unconnected_native_connectors() -> None:
+    catalog = {item["slug"]: item for item in planning_catalog({"slack"})}
+
+    assert catalog["slack"]["connected"] is True
+    assert catalog["notion"]["connected"] is False
+    assert "notion.page.create" in catalog["notion"]["allowed_operations"]
+    assert catalog["hubspot"]["connected"] is False
+    assert catalog["hubspot"]["allowed_operations"] == ["api.request"]
 
 
 def test_native_catalog_exposes_composable_module_types():
