@@ -1,9 +1,10 @@
 import { useState, useMemo, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
-import { Brain, Plus, ArrowRight, Sparkles, Loader2, Check, X } from "lucide-react";
+import { Brain, Plus, ArrowRight, ArrowLeft, Sparkles, Loader2, Check, X } from "lucide-react";
 import { aura } from "@/api/auraClient";
 import PlanStep from "./PlanStep";
+import PlanConnectionAlert from "./PlanConnectionAlert";
 import AuraInterfaceConnect from "./AuraInterfaceConnect";
 import ConnectToolModal from "./ConnectToolModal";
 import { CATALOG } from "@/lib/toolCatalog";
@@ -61,7 +62,7 @@ const PLAN_HINTS = [
   "Change the whole plan — make it weekly",
 ];
 
-export default function PlanView({ plan, onApprove, approveLabel = "Start", userSelectedTools = [] }) {
+export default function PlanView({ plan, onApprove, onBack, approveLabel = "Start" }) {
   const [steps, setSteps] = useState(plan.steps);
   const [forceEditIndex, setForceEditIndex] = useState(null);
   const [name, setName] = useState(plan.workflowName || "");
@@ -74,7 +75,9 @@ export default function PlanView({ plan, onApprove, approveLabel = "Start", user
   const [connectionError, setConnectionError] = useState("");
   const requestConnect = (name) => {
     const tool = CATALOG.find((t) => t.name === name) || { name, interface: !!INTERFACE_TOOLS[name], desc: "" };
-    setPendingConnect(hasStandardOAuth(name) ? tool : { ...tool, custom: true });
+    if (hasStandardOAuth(name)) setPendingConnect(tool);
+    else if (tool.interface || !CATALOG.some((item) => item.name === name)) setPendingConnect({ ...tool, custom: true });
+    else setConnectionError(`${name} needs a secure managed connection. AURA will not ask you for API configuration.`);
   };
   const confirmConnect = async (toolObj) => {
     if (!pendingConnect) return;
@@ -131,7 +134,11 @@ export default function PlanView({ plan, onApprove, approveLabel = "Start", user
     return out;
   }, [steps]);
 
-  const needed = planTools.filter((t) => !connections[t.name] && !userSelectedTools.includes(t.name));
+  const needed = planTools.filter((t) => !connections[t.name]);
+
+  const connectNeeded = async () => {
+    for (const tool of needed) await handleConnect(tool.name);
+  };
 
   const onDragEnd = (res) => {
     if (!res.destination || res.source.index === res.destination.index) return;
@@ -212,6 +219,13 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="w-full max-w-2xl mx-auto">
       {/* Header */}
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
+        <button
+          type="button"
+          onClick={onBack}
+          className="mb-4 inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ArrowLeft className="w-3.5 h-3.5" /> Back
+        </button>
         <div className="flex items-center gap-2 mb-1.5">
           <div className="p-1.5 rounded-lg bg-primary/10 border border-primary/20">
             <Brain className="w-4 h-4 text-primary" />
@@ -221,11 +235,6 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         <p className="text-xs text-muted-foreground ml-9 leading-relaxed">
           Review the steps and change anything that doesn't look right.
         </p>
-        {planTools.length > 0 && (
-          <p className="text-[11px] text-muted-foreground/60 ml-9 mt-1">
-            Tools used: {planTools.map((t) => t.name).join(" · ")}
-          </p>
-        )}
       </motion.div>
 
       {plan.error && (
@@ -258,6 +267,15 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         }}
       />
 
+      <PlanConnectionAlert
+        tools={needed}
+        connections={connections}
+        connectingTool={connectingTool}
+        authRequired={authRequired}
+        onConnect={handleConnect}
+        onConnectAll={connectNeeded}
+      />
+
       {/* Steps */}
       <DragDropContext onDragEnd={onDragEnd}>
         <Droppable droppableId="plan-steps">
@@ -275,10 +293,6 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
                       onDelete={() => deleteStep(i)}
                       forceEdit={forceEditIndex === i}
                       onEditConsumed={() => setForceEditIndex(null)}
-                      connections={connections}
-                      onConnect={handleConnect}
-                      connectingTool={connectingTool}
-                      onConnectRequest={requestConnect}
                     />
                   )}
                 </Draggable>
