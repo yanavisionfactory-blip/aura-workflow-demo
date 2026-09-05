@@ -53,13 +53,18 @@ authorization boundary; a valid identity token alone never grants workspace acce
 
 | Phase | Scope | Production outcome |
 |---|---|---|
-| 3. Real user accounts | Signup, login, organizations, workspaces, member roles | Data isolated between customers |
+| 3. Real user accounts | B2C-first signup and login with an automatically provisioned personal workspace | Every customer is isolated without requiring organization membership |
 | 4. Production secrets | Encrypted per-user tokens, rotation, revocation and audit records | No credentials exposed to frontend or agents |
 | 5. Workflow engine | Trigger → conditions → actions, schedules, retries, branching and reusable variables | Workflows survive restarts |
 | 6. Trigger infrastructure | Webhooks where available; polling with checkpoints otherwise | No duplicate or lost executions |
 | 7. Execution safety | Approval before sensitive actions, idempotency, rate limits, retry policy and dead-letter queue | Actions cannot accidentally run twice |
 | 8. Observability | Execution history, understandable errors, provider health and reconnect warnings | Users can diagnose failures themselves |
 | 9. Billing and limits | Plans, usage metering, connector/run limits and Stripe billing | Usage is enforced and billable |
+| 10. Optional team and enterprise accounts | Opt-in organizations, invitations, shared workspaces, member roles, SSO and enterprise administration | Personal accounts remain the default while teams can collaborate when they choose |
+
+Organizations are a later B2B/enterprise capability, not an onboarding requirement. AURA must always
+allow an individual to create an account and use a private personal workspace without creating or
+joining an organization.
 
 ## Universal connector protocol
 
