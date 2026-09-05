@@ -254,29 +254,11 @@ export default function Demo() {
       return;
     }
 
-    // Custom: generate an interpretation first (confirm phase)
-    const attachedDocs = (resources && resources.documents) || [];
+    // Confirmation is deliberately local and instant. The Python planner performs
+    // intent understanding once after the user confirms or edits this text.
     setPhase("confirm");
-    setInterpretationLoading(true);
-    aura.integrations.Core
-      .InvokeLLM({
-        prompt: `You are AURA, an AI workflow automation platform. A user described a business workflow they want automated.
-
-User request: "${prompt}"
-${attachedDocs.length ? `\nThe user attached ${attachedDocs.length} file(s): ${attachedDocs.map((d) => d.name).join(", ")}. Read their contents — they are the source data or context for this workflow.` : ""}
-
-Write ONE clear, conversational sentence restating what they want, as you understood it — plain, specific business language, no jargon, warm tone. This will be shown to the user as "Is this what you meant?" before any plan is built.`,
-        response_json_schema: INTERPRETATION_SCHEMA,
-        file_urls: attachedDocs.map((d) => d.file_url).filter(Boolean),
-      })
-      .then((res) => {
-        setInterpretation(res.interpretation || "");
-        setInterpretationLoading(false);
-      })
-      .catch(() => {
-        setInterpretation(prompt);
-        setInterpretationLoading(false);
-      });
+    setInterpretation(prompt);
+    setInterpretationLoading(false);
   }, []);
 
   const handlePickExample = useCallback(
@@ -319,7 +301,8 @@ Write ONE clear, conversational sentence restating what they want — but offer 
         setPhase("plan");
         (async () => {
           try {
-            const created = await createPythonRun(originalPromptRef.current);
+            const planningPrompt = editedInterpretation.trim() || originalPromptRef.current;
+            const created = await createPythonRun(planningPrompt);
             pythonRunIdRef.current = created.id;
             let run;
             for (let attempt = 0; attempt < 120; attempt += 1) {
@@ -333,7 +316,9 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             setPlan({
               workflowName: run.plan.name,
               interpretation: run.plan.interpretation,
-              estimatedTime: "Runs in the Python control plane",
+              estimatedTime: run.plan.planning_artifacts?.timings_ms?.total
+                ? `Planned in ${(run.plan.planning_artifacts.timings_ms.total / 1000).toFixed(1)}s`
+                : "Runs in the Python control plane",
               steps: run.plan.steps.map((step) => ({
                 tool: planToolName(step), title: step.operation, iWill: step.reason, action: step.operation,
                 detail: JSON.stringify(step.arguments, null, 2), reason: step.reason, output: step.expected_output,
