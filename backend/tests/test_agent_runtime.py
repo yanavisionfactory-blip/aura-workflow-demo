@@ -133,3 +133,9 @@ def test_create_plan_uses_one_model_round_trip_for_valid_plan(monkeypatch) -> No
     assert result.steps[0].operation == "records.read"
     assert result.planning_artifacts["connection_requirements"] == ["crm"]
     assert result.planning_artifacts["preflight_evaluation"]["passed"] is True
+
+
+def test_combined_planner_allows_flexible_workflow_arguments() -> None:
+    planner = agent_runtime.build_agents()["planner"]
+
+    assert planner.output_type.is_strict_json_schema() is False
