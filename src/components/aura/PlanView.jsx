@@ -7,7 +7,7 @@ import PlanStep from "./PlanStep";
 import AuraInterfaceConnect from "./AuraInterfaceConnect";
 import ConnectToolModal from "./ConnectToolModal";
 import { CATALOG } from "@/lib/toolCatalog";
-import { CONNECTIONS, INTERFACE_TOOLS } from "@/lib/demoData";
+import { INTERFACE_TOOLS } from "@/lib/demoData";
 import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
 import { connectTool, hasStandardOAuth, hydrateConnections, recordInterfaceConnection } from "@/lib/connectService";
 
@@ -15,7 +15,7 @@ import { connectTool, hasStandardOAuth, hydrateConnections, recordInterfaceConne
 // still resolve to the canonical name in the registry — keeps connection detection
 // reliable as real tools get integrated.
 const TOOL_BY_NAME = Object.fromEntries(
-  Object.keys(CONNECTIONS).map((k) => [k.toLowerCase(), k])
+  CATALOG.map((tool) => [tool.name.toLowerCase(), tool.name])
 );
 const resolveTool = (raw) => {
   if (!raw || typeof raw !== "string") return null;
@@ -228,6 +228,13 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         )}
       </motion.div>
 
+      {plan.error && (
+        <div className="mb-4 rounded-xl border border-red-400/25 bg-red-400/5 p-3 text-sm text-red-200">
+          <p className="font-medium">AURA couldn't build this plan</p>
+          <p className="mt-1 text-xs text-red-200/80">{plan.error}</p>
+        </div>
+      )}
+
       <ConnectToolModal
         tool={pendingConnect}
         connecting={connectingTool === pendingConnect?.name}
@@ -390,11 +397,17 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
           />
         </div>
         <div className="flex items-center justify-end gap-3">
+          {needed.length > 0 && (
+            <span className="mr-auto text-xs text-amber-300">
+              Connect {needed.map((tool) => tool.name).join(", ")} to start
+            </span>
+          )}
           <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
             onClick={() => onApprove(steps, name.trim())}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white"
+            disabled={needed.length > 0 || steps.length === 0 || Boolean(plan.error)}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white disabled:cursor-not-allowed disabled:opacity-40"
           >
             {approveLabel} <ArrowRight className="w-4 h-4" />
           </motion.button>
