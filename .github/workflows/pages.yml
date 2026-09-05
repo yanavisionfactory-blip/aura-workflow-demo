@@ -7,7 +7,7 @@ on:
 
 # Frontend Vite variables are injected at build time from GitHub Actions secrets.
 # The deployment always publishes the latest production control-plane frontend.
-# Release: instant confirmation and deterministic plan normalization.
+# Release: task-first universal connector plan experience.
 permissions:
   contents: read
   pages: write
