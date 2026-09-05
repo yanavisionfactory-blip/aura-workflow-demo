@@ -5,6 +5,7 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Frontend Vite variables are injected at build time from GitHub Actions secrets.
 permissions:
   contents: read
   pages: write
