@@ -34,7 +34,7 @@ export const AuthProvider = ({ children }) => {
   }, [clerk.isLoaded, clerk.isSignedIn]);
 
   useEffect(() => {
-    if (!clerk.isLoaded || !clerk.isSignedIn || !clerk.orgId) {
+    if (!clerk.isLoaded || !clerk.isSignedIn) {
       clearWorkspace();
       setWorkspace(null);
       setWorkspaces([]);
