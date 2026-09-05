@@ -1,6 +1,6 @@
 import json
 
-from agents import Agent, Runner
+from agents import Agent, AgentOutputSchema, Runner
 from pydantic import BaseModel
 
 from .config import get_settings
@@ -51,7 +51,7 @@ def build_agents() -> dict[str, Agent]:
             purchasing is consequential. Use {{inputs.name}}, {{vars.name}}, or
             {{steps.key.field}} for reusable values. Report missing capabilities only when no catalog
             connector can perform the job. Never claim execution occurred.""",
-            PlanningBundle,
+            AgentOutputSchema(PlanningBundle, strict_json_schema=False),
         ),
         "intent": _agent(
             "Intent & Scope Agent",
