@@ -1,0 +1,20 @@
+from app.orchestrator import planning_error_message
+
+
+def test_exhausted_api_credits_are_explained_without_raw_provider_payload() -> None:
+    error = RuntimeError(
+        "Error code: 429 - {'error': {'type': 'insufficient_quota', "
+        "'code': 'credit_balance_exhausted', 'message': 'You have no credits remaining'}}"
+    )
+
+    message = planning_error_message(error)
+
+    assert "credits are exhausted" in message
+    assert "Railway" in message
+    assert "{'error'" not in message
+
+
+def test_transient_rate_limit_has_retry_guidance() -> None:
+    assert planning_error_message(RuntimeError("rate limit exceeded")) == (
+        "AURA's AI planning service is temporarily busy. Please try again shortly."
+    )
