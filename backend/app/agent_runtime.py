@@ -1,4 +1,5 @@
 import json
+from time import perf_counter
 
 from agents import Agent, AgentOutputSchema, Runner
 from pydantic import BaseModel
@@ -161,35 +162,63 @@ def deterministic_plan_fixes(plan: WorkflowPlan, tool_inventory: list[dict]) -> 
     return fixes
 
 
+def normalize_plan_graph(plan: WorkflowPlan) -> WorkflowPlan:
+    """Repair mechanical graph metadata without spending another model call.
+
+    References to prior step outputs are authoritative dependencies. Write-like
+    operations are always consequential, even when the model omitted the flag.
+    Semantic problems (unknown tools, operations, or forward references) remain
+    validation errors and can still use the bounded model repair path.
+    """
+    known: set[str] = set()
+    write_markers = ("send", "create", "update", "delete", "post", "schedule", "purchase")
+    for step in plan.steps:
+        referenced = referenced_step_keys(
+            {
+                "arguments": step.arguments,
+                "condition": step.condition.model_dump() if step.condition else None,
+            }
+        )
+        inferred = [key for key in referenced if key in known and key not in step.depends_on]
+        if inferred:
+            step.depends_on = [*step.depends_on, *sorted(inferred)]
+        if any(marker in step.operation.lower() for marker in write_markers):
+            step.consequential = True
+        known.add(step.key)
+    return plan
+
+
 async def create_plan(prompt: str, tool_inventory: list[dict]) -> WorkflowPlan:
+    started_at = perf_counter()
     agents = build_agents()
     request_payload = {
         "user_request": prompt,
         "executable_tool_inventory": tool_inventory,
     }
-    bundle = PlanningBundle.model_validate(
-        await _run(agents["planner"], request_payload, max_turns=8)
-    )
+    model_started_at = perf_counter()
+    bundle = PlanningBundle.model_validate(await _run(agents["planner"], request_payload, max_turns=8))
+    model_ms = round((perf_counter() - model_started_at) * 1000)
     objective = bundle.objective
     toolset = bundle.toolset
     # A selected catalog connector is sufficient to build a reviewable plan even
     # when it is not connected. Only stop when the router found no viable tool.
     if toolset.missing_capabilities and not toolset.tools:
         raise ConnectionRequiredError(toolset.missing_capabilities)
-    plan = bundle.plan
+    plan = normalize_plan_graph(bundle.plan)
     deterministic_fixes = deterministic_plan_fixes(plan, tool_inventory)
+    repair_ms = 0
     if deterministic_fixes:
         repaired_payload = {
             **request_payload,
             "rejected_bundle": bundle.model_dump(),
             "required_fixes": deterministic_fixes,
         }
-        bundle = PlanningBundle.model_validate(
-            await _run(agents["planner"], repaired_payload, max_turns=8)
-        )
+        repair_started_at = perf_counter()
+        bundle = PlanningBundle.model_validate(await _run(agents["planner"], repaired_payload, max_turns=8))
+        repair_ms = round((perf_counter() - repair_started_at) * 1000)
         objective = bundle.objective
         toolset = bundle.toolset
-        plan = bundle.plan
+        plan = normalize_plan_graph(bundle.plan)
         deterministic_fixes = deterministic_plan_fixes(plan, tool_inventory)
     if deterministic_fixes:
         raise ValueError("Plan failed preflight authorization: " + "; ".join(deterministic_fixes))
@@ -221,6 +250,11 @@ async def create_plan(prompt: str, tool_inventory: list[dict]) -> WorkflowPlan:
                 False,
             )
         ],
+        "timings_ms": {
+            "model": model_ms,
+            "repair": repair_ms,
+            "total": round((perf_counter() - started_at) * 1000),
+        },
     }
     return plan
 
