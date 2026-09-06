@@ -90,6 +90,59 @@ const friendlyStepTitle = (step) => {
   return `Use ${tool}`;
 };
 
+const runtimeReference = (value) => typeof value === "string" && /\{\{[^}]+\}\}/.test(value);
+
+const jiraPreviewValue = (value, field, itemNumber) => {
+  if (!runtimeReference(value)) return value == null || value === "" ? "Not specified" : String(value);
+  if (field === "project") return "Your selected Jira project";
+  if (field === "summary") return `Action item ${itemNumber} title from your notes`;
+  if (field === "description") return `Action item ${itemNumber} details from your notes`;
+  if (field === "assignee") return "Assignee matched from your notes";
+  return "Filled automatically when AURA runs";
+};
+
+const actionPreview = (step) => {
+  const args = step.arguments || {};
+  if (step.operation === "jira.issue.create" || step.operation === "jira.issue.update") {
+    const references = Object.values(args).join(" ");
+    const itemNumber = references.match(/item_(\d+)/)?.[1] || "1";
+    const fields = {
+      project: args.project_key ?? args.project,
+      summary: args.summary,
+      description: args.description,
+      assignee: args.assignee_id ?? args.assignee,
+    };
+    return {
+      type: "jira",
+      title: step.operation === "jira.issue.create" ? "Jira task preview" : "Jira update preview",
+      project: jiraPreviewValue(fields.project, "project", itemNumber),
+      summary: jiraPreviewValue(fields.summary, "summary", itemNumber),
+      description: jiraPreviewValue(fields.description, "description", itemNumber),
+      assignee: jiraPreviewValue(fields.assignee, "assignee", itemNumber),
+      dynamicFields: Object.entries(fields)
+        .filter(([, value]) => runtimeReference(value))
+        .map(([field]) => field),
+      note: "AURA fills values from your notes before creating anything. You approve the tasks first.",
+    };
+  }
+  if (step.operation === "gmail.send") {
+    return {
+      type: "email",
+      to: jiraPreviewValue(args.to, "recipient", 1),
+      subject: jiraPreviewValue(args.subject, "subject", 1),
+      body: jiraPreviewValue(args.body, "body", 1),
+    };
+  }
+  return {
+    type: "list",
+    title: `${planToolName(step)} change preview`,
+    items: Object.entries(args).map(([label, value]) => ({
+      label: label.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase()),
+      detail: runtimeReference(value) ? "Filled automatically when AURA runs" : String(value),
+    })),
+  };
+};
+
 const INTERPRETATION_SCHEMA = {
   type: "object",
   properties: {
@@ -130,7 +183,7 @@ const PLAN_SCHEMA = {
           preview: {
             type: "object",
             properties: {
-              type: { type: "string", enum: ["email", "table", "list", "document"] },
+              type: { type: "string", enum: ["email", "table", "list", "document", "jira"] },
               summary: { type: "string" },
               to: { type: "string" },
               subject: { type: "string" },
@@ -390,12 +443,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
                 flow: [{ label: "Uses", value: planToolName(step) }, { label: "Creates", value: step.expected_output }],
                 riskLevel: step.consequential ? "modify" : "read",
                 riskNote: step.consequential ? "This provider action runs only after your approval." : "",
-                preview: step.consequential ? {
-                  type: step.operation === "gmail.send" ? "email" : "list",
-                  to: step.arguments?.to || "", subject: step.arguments?.subject || "", body: step.arguments?.body || "",
-                  title: step.operation,
-                  items: Object.entries(step.arguments || {}).map(([label, value]) => ({ label, detail: JSON.stringify(value) })),
-                } : undefined,
+                preview: step.consequential ? actionPreview(step) : undefined,
               })),
             });
           } catch (error) {
@@ -545,7 +593,16 @@ Rules:
       steps: pythonPlanRef.current.steps.map((step, index) => {
         const ui = editedUiSteps?.[index];
         if (!ui?.preview) return step;
-        const patch = ui.preview.type === "email" ? { to: ui.preview.to, subject: ui.preview.subject, body: ui.preview.body } : {};
+        let patch = {};
+        if (ui.preview.type === "email") {
+          patch = { to: ui.preview.to, subject: ui.preview.subject, body: ui.preview.body };
+        } else if (ui.preview.type === "jira") {
+          const dynamic = new Set(ui.preview.dynamicFields || []);
+          if (!dynamic.has("project")) patch.project_key = ui.preview.project;
+          if (!dynamic.has("summary")) patch.summary = ui.preview.summary;
+          if (!dynamic.has("description")) patch.description = ui.preview.description;
+          if (!dynamic.has("assignee")) patch.assignee_id = ui.preview.assignee;
+        }
         return { ...step, arguments: { ...step.arguments, ...patch } };
       }),
     };
