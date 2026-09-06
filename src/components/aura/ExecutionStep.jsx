@@ -1,6 +1,5 @@
 import { motion } from "framer-motion";
-import { Check, Loader2, Clock, AlertTriangle, ArrowRight, Plug, PlugZap } from "lucide-react";
-import { connectionFor } from "@/lib/demoData";
+import { Check, Loader2, Clock, AlertTriangle, ArrowRight } from "lucide-react";
 import { conjugateAction } from "@/lib/auraVerbs";
 
 const statusConfig = {
@@ -46,7 +45,6 @@ export default function ExecutionStep({ step, index, isLast }) {
       : step.status === "running"
       ? conjugateAction(step.action, "ing")
       : step.action;
-  const connected = connectionFor(step.tool);
   const isModify = step.riskLevel === "modify";
 
   return (
@@ -85,15 +83,6 @@ export default function ExecutionStep({ step, index, isLast }) {
               <div className="flex items-center justify-between mb-1">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-[11px] font-medium text-muted-foreground/60">{step.tool}</span>
-                  {connected ? (
-                    <span className="flex items-center gap-0.5 text-[10px] text-emerald-400/70">
-                      <Plug className="w-2.5 h-2.5" />
-                    </span>
-                  ) : (
-                    <span className="flex items-center gap-0.5 text-[10px] text-amber-400/80">
-                      <PlugZap className="w-2.5 h-2.5" />
-                    </span>
-                  )}
                   {isModify && (
                     <span className="text-[10px] text-amber-400/70 flex items-center gap-0.5">
                       <AlertTriangle className="w-2.5 h-2.5" />
@@ -106,9 +95,7 @@ export default function ExecutionStep({ step, index, isLast }) {
                 )}
               </div>
               <p className="text-sm">{displayAction}</p>
-              {step.liveOutput && (
-                <p className="text-xs text-accent/80 mt-1.5 font-mono leading-relaxed break-words">{step.liveOutput}</p>
-              )}
+              {step.liveOutput && <p className="text-xs text-accent/80 mt-1.5 leading-relaxed">{step.liveOutput}</p>}
             </div>
           </div>
         </div>
