@@ -121,6 +121,23 @@ async def _run(agent: Agent, payload: dict, max_turns: int = 8):
     return result.final_output
 
 
+async def _run_planner(agent: Agent, payload: dict, max_turns: int = 8):
+    """Retry a transient malformed structured response once with explicit guidance."""
+    try:
+        return await _run(agent, payload, max_turns=max_turns)
+    except Exception as exc:
+        if "invalid json" not in str(exc).lower():
+            raise
+        recovery_payload = {
+            **payload,
+            "response_recovery": (
+                "The previous response was not valid JSON. Return only one complete object "
+                "matching PlanningBundle; do not use Markdown fences or commentary."
+            ),
+        }
+        return await _run(agent, recovery_payload, max_turns=max_turns)
+
+
 def deterministic_plan_fixes(plan: WorkflowPlan, tool_inventory: list[dict]) -> list[str]:
     """Enforce executable capabilities independently of the model-based evaluator."""
     allowed = {
@@ -200,7 +217,9 @@ async def create_plan(prompt: str, tool_inventory: list[dict]) -> WorkflowPlan:
         "executable_tool_inventory": tool_inventory,
     }
     model_started_at = perf_counter()
-    bundle = PlanningBundle.model_validate(await _run(agents["planner"], request_payload, max_turns=8))
+    bundle = PlanningBundle.model_validate(
+        await _run_planner(agents["planner"], request_payload, max_turns=8)
+    )
     model_ms = round((perf_counter() - model_started_at) * 1000)
     objective = bundle.objective
     toolset = bundle.toolset
@@ -218,7 +237,9 @@ async def create_plan(prompt: str, tool_inventory: list[dict]) -> WorkflowPlan:
             "required_fixes": deterministic_fixes,
         }
         repair_started_at = perf_counter()
-        bundle = PlanningBundle.model_validate(await _run(agents["planner"], repaired_payload, max_turns=8))
+        bundle = PlanningBundle.model_validate(
+            await _run_planner(agents["planner"], repaired_payload, max_turns=8)
+        )
         repair_ms = round((perf_counter() - repair_started_at) * 1000)
         objective = bundle.objective
         toolset = bundle.toolset
