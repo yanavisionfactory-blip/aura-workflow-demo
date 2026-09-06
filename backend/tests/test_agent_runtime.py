@@ -141,6 +141,48 @@ def test_combined_planner_allows_flexible_workflow_arguments() -> None:
     assert planner.output_type.is_strict_json_schema() is False
 
 
+def test_combined_planner_retries_invalid_json_once(monkeypatch) -> None:
+    calls = []
+
+    async def fake_run(agent, payload, max_turns=8):
+        calls.append(payload)
+        if len(calls) == 1:
+            raise RuntimeError("Invalid JSON when parsing model output")
+        return {
+            "objective": {"goal": "Read CRM records"},
+            "toolset": {
+                "tools": [
+                    {"slug": "crm", "role": "source", "rationale": "Reads records"}
+                ]
+            },
+            "plan": {
+                "name": "Read CRM",
+                "interpretation": "Read the requested CRM records",
+                "steps": [
+                    {
+                        "key": "read_records",
+                        "agent": "data",
+                        "tool_slug": "crm",
+                        "operation": "records.read",
+                        "reason": "Retrieve the records",
+                        "expected_output": "CRM records",
+                    }
+                ],
+            },
+        }
+
+    monkeypatch.setattr(agent_runtime, "build_agents", lambda: {"planner": object()})
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    result = asyncio.run(create_plan("Read CRM records", [
+        {"slug": "crm", "allowed_operations": ["records.read"], "connected": True}
+    ]))
+
+    assert len(calls) == 2
+    assert "response_recovery" in calls[1]
+    assert result.steps[0].operation == "records.read"
+
+
 def test_normalizer_infers_prior_step_dependencies_and_write_safety() -> None:
     workflow = plan(
         PlanStep(
