@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Eye, Mail, Database, ShieldAlert, ArrowLeft, Play, List, FileDown, FileText, Pencil, ListChecks, Check } from "lucide-react";
+import { Eye, Mail, Database, ShieldAlert, ArrowLeft, Play, List, FileDown, FileText, Pencil, ListChecks, Check, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { downloadEmailEml, safeName } from "@/lib/auraDownload";
 
@@ -275,12 +275,16 @@ export default function PreviewView({ preview, steps, onApprove, onBack }) {
   const [editSteps, setEditSteps] = useState(
     initial.map((s) => ({ ...s, preview: s.preview ? { ...s.preview } : s.preview }))
   );
+  const [showBackground, setShowBackground] = useState(false);
   if (!editSteps.length) return null;
 
   const update = (i, patch) => setEditSteps((prev) => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
   const reviewSteps = editSteps
     .map((step, index) => ({ step, index }))
     .filter(({ step }) => step.riskLevel === "modify");
+  const backgroundSteps = editSteps
+    .map((step, index) => ({ step, index }))
+    .filter(({ step }) => step.riskLevel !== "modify");
   const sourceTools = [...new Set(editSteps.filter((step) => step.riskLevel !== "modify").map((step) => step.tool))];
   const destinationTools = [...new Set(reviewSteps.map(({ step }) => step.tool))];
   const reviewSummary = sourceTools.length
@@ -310,6 +314,29 @@ export default function PreviewView({ preview, steps, onApprove, onBack }) {
         <Check className="w-3.5 h-3.5 text-emerald-400" />
         <span>{reviewSummary}</span>
       </div>
+
+      {backgroundSteps.length > 0 && (
+        <div className="mt-4">
+          <button
+            type="button"
+            onClick={() => setShowBackground((value) => !value)}
+            className="flex w-full items-center justify-between rounded-xl border border-sky-400/15 bg-sky-400/[0.04] px-4 py-3 text-xs text-sky-300 hover:bg-sky-400/[0.08]"
+          >
+            <span>{showBackground ? "Hide preparation steps" : `Show ${backgroundSteps.length} preparation ${backgroundSteps.length === 1 ? "step" : "steps"}`}</span>
+            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showBackground ? "rotate-180" : ""}`} />
+          </button>
+          {showBackground && (
+            <div className="mt-2 space-y-1.5 rounded-xl border border-white/6 bg-card/20 p-3">
+              {backgroundSteps.map(({ step, index }) => (
+                <div key={index} className="flex items-start gap-2 text-xs">
+                  <Check className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-sky-400" />
+                  <div><span className="text-muted-foreground/60">{step.tool}</span><p className="text-foreground/80">{step.title || step.action}</p></div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="flex items-center justify-between mt-5 mb-2">
         <span className="flex items-center gap-1.5 text-sm font-medium text-amber-200">
