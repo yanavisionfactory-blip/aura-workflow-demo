@@ -20,7 +20,19 @@ CLERK_JWT_KEY=<Clerk PEM public key>
 CLERK_ISSUER=<Clerk issuer URL>
 CLERK_AUTHORIZED_PARTIES=https://yanavisionfactory-blip.github.io
 ALLOW_LEGACY_WORKSPACE_TOKENS=false
+NANGO_API_KEY=<Nango environment API key>
 ```
+
+With `NANGO_API_KEY` present, AURA discovers existing Nango integrations and provisions a
+neutral provider-named integration the first time an app is needed. A static integration map is
+not required. `NANGO_INTEGRATION_MAP` remains an optional JSON override only for migrations or
+non-standard integration IDs. The key needs integration list/create, provider list, connect-session,
+connection read/list/delete, and credential-read access; Nango's default full-access environment key
+is the simplest initial configuration.
+
+Set `NANGO_AUTO_PROVISION_INTEGRATIONS=false` only when an operator intentionally wants discovery
+without provisioning. When Nango is not configured, AURA's existing native OAuth adapters remain
+available.
 
 Managed OAuth providers declare their callback route in the provider registry. Managed,
 installed, and custom authorization and token exchange flows always use the same resolver.

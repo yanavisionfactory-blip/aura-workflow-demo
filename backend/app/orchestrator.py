@@ -7,7 +7,7 @@ from sqlalchemy import select
 from .agent_runtime import ConnectionRequiredError, create_plan, critique_step, synthesize_result
 from .config import get_settings
 from .db import SessionLocal, set_tenant_context
-from .managed_connectors import NangoClient
+from .managed_connectors import managed_connector_client
 from .models import (
     Approval,
     ApprovalSnapshot,
@@ -580,7 +580,7 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                     timed_out = False
                     try:
                         if active_tool.config.get("managed_by") == "nango":
-                            credentials = await NangoClient(get_settings()).get_credentials(
+                            credentials = await managed_connector_client().get_credentials(
                                 active_tool.config["connection_id"],
                                 active_tool.config["integration_id"],
                             )

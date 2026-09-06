@@ -27,7 +27,7 @@ from .installation_runtime import (
     installed_oauth_url,
     normalized_credentials,
 )
-from .managed_connectors import ManagedConnectorError, NangoClient
+from .managed_connectors import ManagedConnectorError, managed_connector_client
 from .migrations import migrate_database
 from .models import (
     Approval,
@@ -416,10 +416,16 @@ async def managed_connector_status(
     session: AsyncSession = Depends(tenant_session),
 ) -> dict:
     """Expose capabilities, never managed-connector credentials, to the UI."""
-    client = NangoClient(settings)
+    client = managed_connector_client()
     return {
         "configured": client.configured,
-        "providers": sorted(client.integrations) if client.configured else [],
+        # With a Nango environment key, every AURA provider can be resolved
+        # lazily. The frontend therefore routes only actually-needed apps into
+        # the managed flow and never asks users to configure integration IDs.
+        "providers": sorted(PROVIDERS) if client.configured else [],
+        "auto_provision": bool(
+            client.configured and settings.nango_auto_provision_integrations
+        ),
     }
 
 
@@ -433,7 +439,7 @@ async def create_managed_connector_session(
     if provider not in PROVIDERS:
         raise HTTPException(404, "Unknown app")
     try:
-        result = await NangoClient(settings).create_session(
+        result = await managed_connector_client().create_session(
             provider, context.workspace_id, context.subject
         )
     except ManagedConnectorError as exc:
@@ -459,7 +465,7 @@ async def sync_managed_connector(
     definition = PROVIDERS.get(provider)
     if not definition:
         raise HTTPException(404, "Unknown app")
-    client = NangoClient(settings)
+    client = managed_connector_client()
     try:
         connection = await client.find_connection(
             provider, context.workspace_id, context.subject
@@ -470,7 +476,7 @@ async def sync_managed_connector(
         return {"connected": False, "status": "waiting"}
     if connection.get("errors"):
         return {"connected": False, "status": "authorization_required"}
-    integration_id = client.integration_id(provider)
+    integration_id = await client.integration_id(provider)
     tool = await session.scalar(select(ToolConnection).where(
         ToolConnection.workspace_id == context.workspace_id,
         ToolConnection.slug == provider,
@@ -1694,7 +1700,7 @@ async def test_connection(
         raise HTTPException(409, "Connection has no discovered capability manifest")
     if tool.config.get("managed_by") == "nango":
         try:
-            credentials = await NangoClient(settings).get_credentials(
+            credentials = await managed_connector_client().get_credentials(
                 tool.config["connection_id"], tool.config["integration_id"]
             )
             result = await verify_oauth_credentials(tool.slug, credentials)
@@ -1739,7 +1745,7 @@ async def disconnect_connection(
     if tool.config.get("managed_by") == "nango":
         revocation = {"attempted": True, "ok": True, "managed": True}
         try:
-            await NangoClient(settings).delete_connection(
+            await managed_connector_client().delete_connection(
                 tool.config["connection_id"], tool.config["integration_id"]
             )
         except (ManagedConnectorError, KeyError):
@@ -1813,7 +1819,7 @@ async def reconnect_connection(
     previous_updated_at = tool.updated_at.isoformat() if tool.updated_at else None
     if tool.config.get("managed_by") == "nango":
         try:
-            managed = await NangoClient(settings).create_reconnect_session(
+            managed = await managed_connector_client().create_reconnect_session(
                 tool.slug,
                 tool.config["connection_id"],
                 context.workspace_id,

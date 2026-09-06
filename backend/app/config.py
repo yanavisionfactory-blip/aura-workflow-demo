@@ -50,9 +50,12 @@ class Settings(BaseSettings):
     run_rate_limit_per_minute: int = 60
     # Optional managed connector control plane. When configured, AURA delegates
     # OAuth storage and refresh to Nango and keeps only connection references.
+    # Integrations are discovered and provisioned on demand; the map is only an
+    # escape hatch for environments that use non-standard integration IDs.
     nango_api_key: str = ""
     nango_base_url: str = "https://api.nango.dev"
     nango_integration_map: str = "{}"
+    nango_auto_provision_integrations: bool = True
 
     @property
     def clerk_enabled(self) -> bool:

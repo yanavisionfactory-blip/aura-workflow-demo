@@ -11,9 +11,17 @@ def settings() -> Settings:
     )
 
 
+def dynamic_settings() -> Settings:
+    return Settings(
+        credential_encryption_key="MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+        session_signing_key="test-session-signing-key-000000000",
+        nango_api_key="secret",
+    )
+
+
 class FakeNango(NangoClient):
-    def __init__(self, responses: list[dict]):
-        super().__init__(settings())
+    def __init__(self, responses: list[dict], *, config: Settings | None = None):
+        super().__init__(config or settings())
         self.responses = responses
         self.calls = []
 
@@ -35,6 +43,71 @@ async def test_connect_session_is_scoped_to_user_and_workspace():
         "end_user_id": "user-1",
         "aura_provider": "jira",
     }
+
+
+def test_api_key_enables_managed_connections_without_static_map():
+    client = FakeNango([], config=dynamic_settings())
+
+    assert client.configured is True
+    assert client.integrations == {}
+
+
+async def test_existing_provider_integration_is_discovered_automatically():
+    client = FakeNango(
+        [
+            {
+                "data": [
+                    {
+                        "unique_key": "company-jira",
+                        "provider": "jira",
+                        "display_name": "Jira",
+                    }
+                ]
+            },
+            {"data": {"token": "short", "connect_link": "https://connect"}},
+        ],
+        config=dynamic_settings(),
+    )
+
+    await client.create_session("jira", "workspace-1", "user-1")
+
+    assert client.calls[0][:2] == ("GET", "/integrations")
+    assert client.calls[1][2]["json"]["allowed_integrations"] == ["company-jira"]
+
+
+async def test_missing_integration_is_provisioned_on_first_use():
+    client = FakeNango(
+        [
+            {"data": []},
+            {
+                "data": [
+                    {
+                        "name": "jira",
+                        "display_name": "Jira",
+                        "auth_mode": "OAUTH2",
+                    }
+                ]
+            },
+            {"data": {"unique_key": "jira", "provider": "jira"}},
+            {"data": {"token": "short", "connect_link": "https://connect"}},
+        ],
+        config=dynamic_settings(),
+    )
+
+    await client.create_session("jira", "workspace-1", "user-1")
+
+    assert [call[:2] for call in client.calls] == [
+        ("GET", "/integrations"),
+        ("GET", "/providers"),
+        ("POST", "/integrations"),
+        ("POST", "/connect/sessions"),
+    ]
+    assert client.calls[2][2]["json"] == {
+        "unique_key": "jira",
+        "provider": "jira",
+        "display_name": "Jira",
+    }
+    assert client.calls[3][2]["json"]["allowed_integrations"] == ["jira"]
 
 
 async def test_find_connection_never_crosses_tenant_tags():
