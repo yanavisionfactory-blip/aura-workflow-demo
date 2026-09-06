@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     canva_client_secret: str = ""
     hubspot_client_id: str = ""
     hubspot_client_secret: str = ""
+    atlassian_client_id: str = ""
+    atlassian_client_secret: str = ""
     browser_connector_url: str = ""
     # Clerk is the production identity provider. The PEM key avoids a network
     # request on every API call; JWKS is supported for key rotation.

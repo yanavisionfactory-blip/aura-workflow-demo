@@ -50,7 +50,9 @@ def build_agents() -> dict[str, Agent]:
             an output contract, a stable lowercase key, and explicit dependencies. Reads are normally
             not consequential. Sending, creating, updating, deleting, posting, scheduling, or
             purchasing is consequential. Use {{inputs.name}}, {{vars.name}}, or
-            {{steps.key.field}} for reusable values. Report missing capabilities only when no catalog
+            {{steps.key.field}} for reusable values. Plan only real external tool calls. Do not create
+            provider steps for internal reasoning, normalization, mapping, summarization, or drafting;
+            perform those transformations between external calls. Report missing capabilities only when no catalog
             connector can perform the job. Never claim execution occurred.""",
             AgentOutputSchema(PlanningBundle, strict_json_schema=False),
         ),
@@ -81,7 +83,9 @@ def build_agents() -> dict[str, Agent]:
             A read step may include reduced-scope arguments for recovery. Do not include narrative-only
             pseudo tools or claim execution occurred. Give every step a stable lowercase key. Declare
             dependencies explicitly. Use {{inputs.name}}, {{vars.name}}, or {{steps.key.field}} to pass
-            values, and use structured conditions for branches. A join after alternative branches uses
+            values, and use structured conditions for branches. Include only real provider operations;
+            internal reasoning, normalization, mapping, summarization, and drafting are not tool steps.
+            A join after alternative branches uses
             dependency_mode all_settled.""",
             WorkflowPlan,
         ),

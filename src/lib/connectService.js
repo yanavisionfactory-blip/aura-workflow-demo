@@ -21,6 +21,7 @@ const PYTHON_OAUTH = {
   Mailchimp: "mailchimp",
   Canva: "canva",
   HubSpot: "hubspot",
+  Jira: "jira",
 };
 const slugify = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 const credentialsFor = (opts) => opts.credentials || (opts.apiKey ? { api_key: opts.apiKey } : {});

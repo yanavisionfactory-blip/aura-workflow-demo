@@ -71,6 +71,15 @@ const friendlyStepTitle = (step) => {
   if (operation.startsWith("calendar.")) return operation.includes("create") ? "Schedule the event" : "Check the calendar";
   if (operation.startsWith("sheets.")) return operation.includes("update") || operation.includes("append") ? "Update the spreadsheet" : "Read the spreadsheet";
   if (operation.startsWith("hubspot.")) return reason.includes("update") ? "Update HubSpot records" : "Find HubSpot records";
+  if (operation === "notion.search") return "Find the Notion notes";
+  if (operation.startsWith("notion.page.get") || operation.startsWith("notion.blocks.children.list")) return "Read the Notion notes";
+  if (operation.startsWith("notion.page.create")) return "Create the Notion page";
+  if (operation.startsWith("notion.page.update") || operation.startsWith("notion.blocks.children.append")) return "Update the Notion page";
+  if (operation === "jira.projects.list") return "Find the Jira project";
+  if (operation === "jira.issues.search") return "Find Jira issues";
+  if (operation === "jira.issue.get") return "Read the Jira issue";
+  if (operation === "jira.issue.create") return "Create the Jira tasks";
+  if (operation === "jira.issue.update") return "Update the Jira task";
   if (/find|identify|determine|search|match/.test(reason)) return "Find matching records";
   if (/get|pull|fetch|read|collect/.test(reason)) return `Get ${tool} data`;
   if (/transform|compile|summari[sz]e|breakdown|report/.test(reason)) return "Prepare the report";

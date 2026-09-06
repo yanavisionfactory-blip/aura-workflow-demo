@@ -50,6 +50,42 @@ _POSITIVE_INTEGER = {"type": "integer", "minimum": 1}
 
 
 NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
+    "jira": {
+        "schema_version": "1.1",
+        "catalog_version": 1,
+        "provider_type": "oauth",
+        "name": "Jira",
+        "description": "Search Jira projects and issues, then create or update approved work items.",
+        "base_url": "provider-managed",
+        "identity": {"provider": "atlassian"},
+        "modules": [
+            _module("jira.projects.list", "search", "Find Jira projects.", properties={
+                "query": _TEXT, "limit": {**_POSITIVE_INTEGER, "maximum": 100}
+            }),
+            _module("jira.issues.search", "search", "Find Jira issues with JQL.", properties={
+                "jql": _TEXT,
+                "limit": {**_POSITIVE_INTEGER, "maximum": 100},
+                "fields": {"type": "array", "items": _TEXT},
+            }),
+            _module("jira.issue.get", "search", "Read a Jira issue.", required=("issue_id_or_key",), properties={
+                "issue_id_or_key": _TEXT,
+                "fields": {"type": "array", "items": _TEXT},
+            }),
+            _module("jira.issue.create", "action", "Create an approved Jira issue.", required=("project_key", "summary"), properties={
+                "project_key": _TEXT,
+                "summary": _TEXT,
+                "description": _TEXT,
+                "issue_type": _TEXT,
+                "assignee_id": _TEXT,
+                "labels": {"type": "array", "items": _TEXT},
+                "priority": {"type": "object"},
+            }),
+            _module("jira.issue.update", "action", "Update an approved Jira issue.", required=("issue_id_or_key", "fields"), properties={
+                "issue_id_or_key": _TEXT,
+                "fields": {"type": "object"},
+            }),
+        ],
+    },
     "google": {
         "schema_version": "1.1",
         "catalog_version": 1,
@@ -292,7 +328,6 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
 UNIVERSAL_PLANNING_CONNECTORS: dict[str, str] = {
     "salesforce": "Salesforce",
     "clickup": "ClickUp",
-    "jira": "Jira",
     "confluence": "Confluence",
     "meta-ads": "Meta Ads",
     "instagram": "Instagram",

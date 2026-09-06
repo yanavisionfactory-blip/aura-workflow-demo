@@ -116,12 +116,26 @@ PROVIDERS = {
         client_id_attr="hubspot_client_id",
         client_secret_attr="hubspot_client_secret",
     ),
+    "jira": OAuthProvider(
+        slug="jira",
+        display_name="Jira",
+        authorization_url="https://auth.atlassian.com/authorize",
+        token_url="https://auth.atlassian.com/oauth/token",
+        scopes=("read:jira-work", "write:jira-work", "read:jira-user", "offline_access"),
+        client_id_attr="atlassian_client_id",
+        client_secret_attr="atlassian_client_secret",
+    ),
 }
 
 
 def oauth_callback_url(settings: Settings, provider: OAuthProvider) -> str:
     # Providers registered against AURA's shared installation callback.
-    callback_provider = "installation" if provider.slug in {"notion", "tiktok", "mailchimp", "canva"} else provider.slug
+    if provider.slug in {"notion", "tiktok", "mailchimp", "canva"}:
+        callback_provider = "installation"
+    elif provider.slug == "jira":
+        callback_provider = "atlassian"
+    else:
+        callback_provider = provider.slug
     return f"{settings.public_url}/v1/oauth/{callback_provider}/callback"
 
 
@@ -151,6 +165,8 @@ def oauth_authorization_url(settings: Settings, provider: OAuthProvider, state: 
     }
     if provider.slug == "notion":
         params["owner"] = "user"
+    elif provider.slug == "jira":
+        params.update({"audience": "api.atlassian.com", "prompt": "consent"})
     elif provider.slug == "mailchimp":
         pass
     elif provider.slug in {"slack", "tiktok"}:
@@ -192,7 +208,12 @@ async def exchange_oauth_code(
         headers["Authorization"] = f"Basic {basic}"
         payload.pop("client_secret")
     async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(provider.token_url, data=payload, headers=headers)
+        response = await client.post(
+            provider.token_url,
+            json=payload if provider.slug == "jira" else None,
+            data=None if provider.slug == "jira" else payload,
+            headers=headers,
+        )
         response.raise_for_status()
         data = response.json()
     if provider.slug == "slack" and not data.get("ok", False):
@@ -205,6 +226,22 @@ async def exchange_oauth_code(
             )
             metadata_response.raise_for_status()
             data.update(metadata_response.json())
+    if provider.slug == "jira":
+        async with httpx.AsyncClient(timeout=30) as client:
+            resources_response = await client.get(
+                "https://api.atlassian.com/oauth/token/accessible-resources",
+                headers={"Authorization": f"Bearer {data['access_token']}", "Accept": "application/json"},
+            )
+            resources_response.raise_for_status()
+            resources = resources_response.json()
+        jira_sites = [
+            item for item in resources
+            if any("jira" in scope for scope in item.get("scopes", []))
+        ]
+        if not jira_sites:
+            raise RuntimeError("Atlassian authorization did not grant access to a Jira site")
+        site = jira_sites[0]
+        data.update({"cloud_id": site["id"], "site_name": site.get("name"), "site_url": site.get("url")})
     if data.get("expires_in"):
         data["expires_at"] = int(time.time()) + int(data["expires_in"])
     return data
@@ -261,7 +298,12 @@ async def refresh_oauth_credentials(
         headers["Authorization"] = f"Basic {basic}"
         payload.pop("client_secret")
     async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(provider.token_url, data=payload, headers=headers)
+        response = await client.post(
+            provider.token_url,
+            json=payload if provider.slug == "jira" else None,
+            data=None if provider.slug == "jira" else payload,
+            headers=headers,
+        )
         response.raise_for_status()
         refreshed = response.json()
     merged = {**credentials, **refreshed}
@@ -297,18 +339,30 @@ async def verify_oauth_credentials(provider_slug: str, credentials: dict) -> dic
         method, url, kwargs = "GET", "https://api.canva.com/rest/v1/users/me/profile", {}
     elif provider_slug == "hubspot":
         method, url, kwargs = "GET", "https://api.hubapi.com/crm/v3/objects/contacts", {"params": {"limit": 1}}
+    elif provider_slug == "jira":
+        method, url, kwargs = "GET", "https://api.atlassian.com/oauth/token/accessible-resources", {}
     else:
         return {"ok": False, "reason": "unsupported_oauth_provider"}
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.request(method, url, headers=headers, **kwargs)
         data = response.json() if "application/json" in response.headers.get("content-type", "") else {}
     ok = response.is_success and (provider_slug != "slack" or bool(data.get("ok")))
-    identity_source = data.get("data", {}).get("user", {}) if provider_slug == "tiktok" else data
+    if provider_slug == "tiktok":
+        identity_source = data.get("data", {}).get("user", {})
+    elif provider_slug == "jira":
+        site = next((item for item in data if any("jira" in scope for scope in item.get("scopes", []))), {})
+        identity_source = {
+            "id": site.get("id"),
+            "display_name": site.get("name"),
+            "site_url": site.get("url"),
+        }
+    else:
+        identity_source = data
     identity = {
         key: identity_source.get(key)
         for key in (
             "sub", "email", "team", "team_id", "user", "user_id", "id",
-            "open_id", "union_id", "display_name",
+            "open_id", "union_id", "display_name", "site_url",
         )
         if identity_source.get(key) is not None
     }
@@ -381,6 +435,11 @@ class ProviderExecutor:
             "hubspot.companies.list": self._hubspot_companies_list,
             "hubspot.contact.update": self._hubspot_contact_update,
             "hubspot.company.update": self._hubspot_company_update,
+            "jira.projects.list": self._jira_projects_list,
+            "jira.issues.search": self._jira_issues_search,
+            "jira.issue.get": self._jira_issue_get,
+            "jira.issue.create": self._jira_issue_create,
+            "jira.issue.update": self._jira_issue_update,
             "http.request": self._http_request,
             "mcp.call": self._mcp_call,
         }
@@ -737,6 +796,70 @@ class ProviderExecutor:
             f"https://api.hubapi.com/crm/v3/objects/companies/{quote(a['company_id'], safe='')}",
             json={"properties": a["properties"]},
         )
+
+    async def _jira_request(self, method: str, path: str, **kwargs: Any) -> dict:
+        cloud_id = self.credentials.get("cloud_id")
+        if not cloud_id:
+            raise ValueError("Jira connection is missing its authorized site")
+        return await self._request(
+            method,
+            f"https://api.atlassian.com/ex/jira/{quote(str(cloud_id), safe='')}/rest/api/3/{path.lstrip('/')}",
+            **kwargs,
+        )
+
+    async def _jira_projects_list(self, a: dict) -> dict:
+        params = {"maxResults": min(int(a.get("limit", 50)), 100)}
+        if a.get("query"):
+            params["query"] = a["query"]
+        return await self._jira_request("GET", "project/search", params=params)
+
+    async def _jira_issues_search(self, a: dict) -> dict:
+        payload = {
+            "jql": a.get("jql", "order by updated DESC"),
+            "maxResults": min(int(a.get("limit", 50)), 100),
+            "fields": a.get("fields") or ["summary", "status", "assignee", "project", "issuetype", "updated"],
+        }
+        return await self._jira_request("POST", "search/jql", json=payload)
+
+    async def _jira_issue_get(self, a: dict) -> dict:
+        fields = a.get("fields") or ["summary", "description", "status", "assignee", "project", "issuetype", "labels", "updated"]
+        return await self._jira_request(
+            "GET",
+            f"issue/{quote(a['issue_id_or_key'], safe='')}",
+            params={"fields": ",".join(fields)},
+        )
+
+    @staticmethod
+    def _jira_description(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        return {
+            "type": "doc",
+            "version": 1,
+            "content": [{"type": "paragraph", "content": [{"type": "text", "text": value}]}],
+        }
+
+    async def _jira_issue_create(self, a: dict) -> dict:
+        fields: dict[str, Any] = {
+            "project": {"key": a["project_key"]},
+            "summary": a["summary"],
+            "issuetype": {"name": a.get("issue_type", "Task")},
+        }
+        for name in ("description", "labels", "priority"):
+            if a.get(name) is not None:
+                fields[name] = self._jira_description(a[name]) if name == "description" else a[name]
+        if a.get("assignee_id"):
+            fields["assignee"] = {"accountId": a["assignee_id"]}
+        return await self._jira_request("POST", "issue", json={"fields": fields})
+
+    async def _jira_issue_update(self, a: dict) -> dict:
+        fields = dict(a["fields"])
+        if "description" in fields:
+            fields["description"] = self._jira_description(fields["description"])
+        result = await self._jira_request(
+            "PUT", f"issue/{quote(a['issue_id_or_key'], safe='')}", json={"fields": fields}
+        )
+        return result or {"updated": True, "issue_id_or_key": a["issue_id_or_key"]}
 
     async def _http_request(self, a: dict) -> dict:
         if not self.base_url: raise ValueError("Custom HTTP tool has no base URL")

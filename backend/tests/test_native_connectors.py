@@ -19,12 +19,26 @@ def test_planning_catalog_includes_unconnected_native_connectors() -> None:
     assert catalog["hubspot"]["connected"] is False
     assert "hubspot.contacts.list" in catalog["hubspot"]["allowed_operations"]
     assert "hubspot.contact.update" in catalog["hubspot"]["allowed_operations"]
+    assert catalog["jira"]["connected"] is False
+    assert "jira.issues.search" in catalog["jira"]["allowed_operations"]
+    assert "jira.issue.create" in catalog["jira"]["allowed_operations"]
 
 
 def test_native_catalog_exposes_composable_module_types():
     slack = public_catalog("slack")
     assert {module["type"] for module in slack["modules"]} == {"search", "action"}
     assert native_operations("slack") == ["slack.channels.list", "slack.post"]
+
+
+def test_jira_catalog_requires_approval_for_issue_writes():
+    manifest = native_manifest("jira")
+    create = next(item for item in manifest["capabilities"] if item["name"] == "jira.issue.create")
+    assert create["requires_approval"] is True
+    validate_module_arguments(
+        manifest,
+        "jira.issue.create",
+        {"project_key": "AURA", "summary": "Prepare launch brief"},
+    )
 
 
 def test_native_manifest_has_versioned_schema_and_transport():

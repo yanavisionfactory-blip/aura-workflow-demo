@@ -17,6 +17,8 @@ def _settings() -> Settings:
         canva_client_secret="canva-secret",
         hubspot_client_id="hubspot-client",
         hubspot_client_secret="hubspot-secret",
+        atlassian_client_id="atlassian-client",
+        atlassian_client_secret="atlassian-secret",
     )
 
 
@@ -77,3 +79,16 @@ def test_idempotency_changes_with_step_position():
     left = idempotency_key("run", 1, "gmail.send", {"to": "a@example.com"})
     right = idempotency_key("run", 2, "gmail.send", {"to": "a@example.com"})
     assert left != right
+
+
+def test_jira_uses_managed_atlassian_oauth():
+    provider = PROVIDERS["jira"]
+    settings = _settings()
+    assert oauth_callback_url(settings, provider) == "https://api.example.com/v1/oauth/atlassian/callback"
+    url = oauth_authorization_url(settings, provider, "signed-state")
+    assert "client_id=atlassian-client" in url
+    assert "audience=api.atlassian.com" in url
+    assert "prompt=consent" in url
+    assert "read%3Ajira-work" in url
+    assert "write%3Ajira-work" in url
+    assert "offline_access" in url
