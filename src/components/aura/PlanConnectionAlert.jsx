@@ -45,7 +45,6 @@ export default function PlanConnectionAlert({
   authRequired = {},
   errors = {},
   onConnect,
-  onConnectAll,
 }) {
   const needed = tools.filter((t) => !connections[t.name]);
   if (needed.length === 0) return null;
@@ -107,16 +106,6 @@ export default function PlanConnectionAlert({
             </div>
           );
         })}
-      </div>
-      <div className="p-3 border-t border-white/6">
-        <button
-          onClick={onConnectAll}
-          disabled={Boolean(connectingTool)}
-          className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
-        >
-          {connectingTool ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
-          Connect required {count === 1 ? "app" : "apps"}
-        </button>
       </div>
     </motion.div>
   );
