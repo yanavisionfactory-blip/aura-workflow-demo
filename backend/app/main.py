@@ -79,6 +79,7 @@ from .providers import (
     oauth_exchange_callback_url,
     oauth_registry_errors,
     oauth_route_callback_url,
+    refresh_oauth_credentials,
     verify_oauth_credentials,
 )
 from .schemas import (
@@ -1573,11 +1574,18 @@ async def test_connection(
     if not manifest:
         raise HTTPException(409, "Connection has no discovered capability manifest")
     credentials = CredentialVault().decrypt(tool.encrypted_credentials)
-    result = (
-        await verify_oauth_credentials(tool.slug, credentials)
-        if tool.kind == ToolKind.oauth and not tool.config.get("oauth_custom")
-        else await verify_provider(manifest.manifest, credentials)
-    )
+    if tool.kind == ToolKind.oauth and not tool.config.get("oauth_custom"):
+        try:
+            credentials, changed = await refresh_oauth_credentials(
+                settings, tool.slug, credentials, tool.config
+            )
+            if changed:
+                tool.encrypted_credentials = CredentialVault().encrypt(credentials)
+            result = await verify_oauth_credentials(tool.slug, credentials)
+        except (httpx.HTTPError, ValueError):
+            result = {"ok": False, "reason": "authorization_required"}
+    else:
+        result = await verify_provider(manifest.manifest, credentials)
     manifest.verification = result
     manifest.status = "verified" if result["ok"] else "degraded"
     manifest.verified_at = datetime.now(timezone.utc)
