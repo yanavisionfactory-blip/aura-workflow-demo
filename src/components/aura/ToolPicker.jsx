@@ -1,23 +1,18 @@
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Pencil, Check, Plug, ScanSearch, Search, Plus, Loader2 } from "lucide-react";
+import { Pencil, Search, Plus } from "lucide-react";
 import { CATALOG } from "@/lib/toolCatalog";
 
 // Inline editor for the "Uses" line on a plan step. The user can pick a known
 // tool from the catalog or type their own — an internal base, a document, or
-// any tool AURA doesn't know yet. If the chosen tool isn't connected, a Connect
-// affordance appears right on the chip, reusing the same connect flow as the
-// connections panel (oauth / mcp / AURA Interface learn) so everything stays in
-// one registry.
-export default function ToolPicker({ value, connections = {}, connecting, onConnect, onConnectRequest, onChange }) {
+// any tool AURA doesn't know yet. Connection state is deliberately not shown
+// here: the plan has one dedicated notification listing only missing apps.
+export default function ToolPicker({ value, onChange }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const ref = useRef(null);
 
   const entry = CATALOG.find((t) => t.name === value);
-  const connected = !!connections[value];
-  const isInterface = !!entry?.interface;
-  const isPlaceholder = !value || value === "—" || value.toLowerCase() === "none";
 
   useEffect(() => {
     if (!open) return;
@@ -37,9 +32,6 @@ export default function ToolPicker({ value, connections = {}, connecting, onConn
     onChange(name);
     setOpen(false);
     setQuery("");
-    // If the just-chosen tool isn't connected yet, immediately ask the user to
-    // connect it now — don't wait until plan approval.
-    if (!connections[name] && onConnectRequest) onConnectRequest(name);
   };
 
   return (
@@ -54,22 +46,6 @@ export default function ToolPicker({ value, connections = {}, connecting, onConn
           <span>{entry?.icon ? `${entry.icon} ` : ""}{value}</span>
           <Pencil className="w-2.5 h-2.5 text-muted-foreground/60" />
         </button>
-        {!isPlaceholder && connected && (
-          <span className="flex items-center gap-0.5 text-emerald-400 ml-0.5">
-            <Check className="w-3 h-3" />
-          </span>
-        )}
-        {!isPlaceholder && !connected && (
-          <button
-            type="button"
-            onClick={() => onConnect && onConnect(value)}
-            disabled={connecting}
-            className="flex items-center gap-0.5 text-amber-400 hover:text-amber-300 ml-1 disabled:opacity-50 transition-colors"
-          >
-            {connecting ? <Loader2 className="w-3 h-3 animate-spin" /> : isInterface ? <ScanSearch className="w-3 h-3" /> : <Plug className="w-3 h-3" />}
-            Connect
-          </button>
-        )}
       </div>
 
       <AnimatePresence>
@@ -110,7 +86,6 @@ export default function ToolPicker({ value, connections = {}, connecting, onConn
                     <p className="text-sm font-medium truncate">{t.name}</p>
                     <p className="text-[10px] text-muted-foreground truncate">{t.desc}</p>
                   </div>
-                  {connections[t.name] && <Check className="w-3 h-3 text-emerald-400 flex-shrink-0" />}
                 </button>
               ))}
               {filtered.length === 0 && !canAddCustom && (
