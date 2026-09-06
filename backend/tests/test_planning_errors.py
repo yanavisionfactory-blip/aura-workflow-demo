@@ -24,3 +24,10 @@ def test_invalid_json_does_not_leak_internal_parser_error() -> None:
     assert planning_error_message(RuntimeError("Invalid JSON when parsing model output")) == (
         "AURA couldn't format the plan correctly. Please try again."
     )
+
+
+def test_unknown_internal_error_is_never_exposed() -> None:
+    message = planning_error_message(RuntimeError("internal provider trace: secret detail"))
+
+    assert message == "AURA couldn't build the plan right now. Please try again."
+    assert "provider trace" not in message
