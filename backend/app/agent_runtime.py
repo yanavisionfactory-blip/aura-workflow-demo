@@ -1,3 +1,4 @@
+import asyncio
 import json
 from time import perf_counter
 
@@ -121,21 +122,38 @@ async def _run(agent: Agent, payload: dict, max_turns: int = 8):
     return result.final_output
 
 
-async def _run_planner(agent: Agent, payload: dict, max_turns: int = 8):
-    """Retry a transient malformed structured response once with explicit guidance."""
-    try:
-        return await _run(agent, payload, max_turns=max_turns)
-    except Exception as exc:
-        if "invalid json" not in str(exc).lower():
-            raise
-        recovery_payload = {
-            **payload,
-            "response_recovery": (
-                "The previous response was not valid JSON. Return only one complete object "
-                "matching PlanningBundle; do not use Markdown fences or commentary."
-            ),
-        }
-        return await _run(agent, recovery_payload, max_turns=max_turns)
+async def _run_planner(agent: Agent, payload: dict, max_turns: int = 8) -> PlanningBundle:
+    """Recover from transient model and structured-output failures before they reach the UI."""
+    attempt_payload = payload
+    for attempt in range(3):
+        try:
+            raw = await _run(agent, attempt_payload, max_turns=max_turns)
+            return PlanningBundle.model_validate(raw)
+        except Exception as exc:
+            lowered = str(exc).lower()
+            permanent = any(
+                marker in lowered
+                for marker in (
+                    "insufficient_quota",
+                    "credit_balance_exhausted",
+                    "no credits remaining",
+                    "invalid_api_key",
+                    "authentication_error",
+                )
+            )
+            if permanent or attempt == 2:
+                raise
+            await asyncio.sleep(attempt + 1)
+            attempt_payload = {
+                **payload,
+                "response_recovery": (
+                    f"Recovery attempt {attempt + 2} of 3. The previous response could not be "
+                    "used. Return only one complete JSON object matching PlanningBundle. Do not "
+                    "use Markdown fences, commentary, or partial output."
+                ),
+            }
+
+    raise RuntimeError("Planner recovery exhausted")
 
 
 def deterministic_plan_fixes(plan: WorkflowPlan, tool_inventory: list[dict]) -> list[str]:
@@ -217,9 +235,7 @@ async def create_plan(prompt: str, tool_inventory: list[dict]) -> WorkflowPlan:
         "executable_tool_inventory": tool_inventory,
     }
     model_started_at = perf_counter()
-    bundle = PlanningBundle.model_validate(
-        await _run_planner(agents["planner"], request_payload, max_turns=8)
-    )
+    bundle = await _run_planner(agents["planner"], request_payload, max_turns=8)
     model_ms = round((perf_counter() - model_started_at) * 1000)
     objective = bundle.objective
     toolset = bundle.toolset
@@ -237,9 +253,7 @@ async def create_plan(prompt: str, tool_inventory: list[dict]) -> WorkflowPlan:
             "required_fixes": deterministic_fixes,
         }
         repair_started_at = perf_counter()
-        bundle = PlanningBundle.model_validate(
-            await _run_planner(agents["planner"], repaired_payload, max_turns=8)
-        )
+        bundle = await _run_planner(agents["planner"], repaired_payload, max_turns=8)
         repair_ms = round((perf_counter() - repair_started_at) * 1000)
         objective = bundle.objective
         toolset = bundle.toolset
