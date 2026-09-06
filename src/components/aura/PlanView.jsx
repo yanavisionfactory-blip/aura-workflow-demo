@@ -120,10 +120,6 @@ export default function PlanView({ plan, onApprove, approveLabel = "Start" }) {
   // to do is grant the provider's required account permission.
   const needed = planTools.filter((tool) => !connections[tool.name]);
 
-  const connectNeeded = async () => {
-    for (const tool of needed) await handleConnect(tool.name);
-  };
-
   const onDragEnd = (res) => {
     if (!res.destination || res.source.index === res.destination.index) return;
     setSteps((prev) => {
@@ -227,7 +223,6 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         connectingTool={connectingTool}
         errors={connectionErrors}
         onConnect={handleConnect}
-        onConnectAll={connectNeeded}
       />
 
       {/* Steps */}
