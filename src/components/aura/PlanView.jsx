@@ -4,13 +4,9 @@ import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { Brain, Plus, ArrowRight, ArrowLeft, Sparkles, Loader2, Check, X } from "lucide-react";
 import { aura } from "@/api/auraClient";
 import PlanStep from "./PlanStep";
-import PlanConnectionAlert from "./PlanConnectionAlert";
-import AuraInterfaceConnect from "./AuraInterfaceConnect";
-import ConnectToolModal from "./ConnectToolModal";
 import { CATALOG } from "@/lib/toolCatalog";
-import { INTERFACE_TOOLS } from "@/lib/demoData";
 import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
-import { connectTool, hasStandardOAuth, hydrateConnections, recordInterfaceConnection } from "@/lib/connectService";
+import { connectTool, hasStandardOAuth, hydrateConnections } from "@/lib/connectService";
 
 // Case-insensitive lookup so LLM tool-name variations ("meta ads", "Jira Software")
 // still resolve to the canonical name in the registry — keeps connection detection
@@ -23,6 +19,13 @@ const resolveTool = (raw) => {
   const key = raw.trim().toLowerCase();
   if (key === "aura intelligence") return null;
   return TOOL_BY_NAME[key] || null;
+};
+
+const toolsForStep = (step) => {
+  const names = [step.tool, ...(step.flow || []).filter((item) => item.label === "Uses").map((item) => item.value)]
+    .map(resolveTool)
+    .filter(Boolean);
+  return [...new Set(names)];
 };
 
 const PLAN_REVISION_SCHEMA = {
@@ -68,45 +71,19 @@ export default function PlanView({ plan, onApprove, onBack, approveLabel = "Star
   const [name, setName] = useState(plan.workflowName || "");
   const [connections, setConnections] = useState(getAllConnections);
   useEffect(() => subscribeConnections(setConnections), []);
-  const [interfaceTool, setInterfaceTool] = useState(null);
   const [connectingTool, setConnectingTool] = useState(null);
-  const [pendingConnect, setPendingConnect] = useState(null);
-  const [authRequired, setAuthRequired] = useState({});
-  const [connectionError, setConnectionError] = useState("");
-  const requestConnect = (name) => {
-    const tool = CATALOG.find((t) => t.name === name) || { name, interface: !!INTERFACE_TOOLS[name], desc: "" };
-    if (hasStandardOAuth(name)) setPendingConnect(tool);
-    else if (tool.interface || !CATALOG.some((item) => item.name === name)) setPendingConnect({ ...tool, custom: true });
-    else setConnectionError(`${name} needs a secure managed connection. AURA will not ask you for API configuration.`);
-  };
-  const confirmConnect = async (toolObj) => {
-    if (!pendingConnect) return;
-    const name = toolObj?.name || pendingConnect.name;
-    setPendingConnect(null);
-    handleConnect(name, {
-      apiKey: toolObj?.apiKey,
-      baseUrl: toolObj?.baseUrl,
-      connectionKind: toolObj?.connectionKind,
-      credentials: toolObj?.credentials,
-      authorizationUrl: toolObj?.authorizationUrl,
-      tokenUrl: toolObj?.tokenUrl,
-      clientId: toolObj?.clientId,
-      clientSecret: toolObj?.clientSecret,
-      scopes: toolObj?.scopes,
-    });
-  };
-  const handleConnect = async (name, opts = {}) => {
+  const [connectionErrors, setConnectionErrors] = useState({});
+  const handleConnect = async (name) => {
     setConnectingTool(name);
-    setConnectionError("");
-    setAuthRequired((prev) => ({ ...prev, [name]: false }));
+    setConnectionErrors((prev) => ({ ...prev, [name]: "" }));
     try {
-      const res = await connectTool(name, opts);
-      if (res.interfaceTool) setInterfaceTool(res.interfaceTool);
-      if (res.needsAuthorization) setAuthRequired((prev) => ({ ...prev, [name]: true }));
-      if (res.needsConfiguration) requestConnect(name);
+      const res = await connectTool(name);
       if (res.connected) await hydrateConnections();
     } catch (e) {
-      setConnectionError(e.message || `Could not connect ${name}.`);
+      setConnectionErrors((prev) => ({
+        ...prev,
+        [name]: `AURA couldn't open ${name}. Please try again.`,
+      }));
     } finally {
       setConnectingTool(null);
     }
@@ -118,9 +95,7 @@ export default function PlanView({ plan, onApprove, onBack, approveLabel = "Star
     const seen = new Set();
     const out = [];
     steps.forEach((s) => {
-      const usesFlow = (s.flow || []).filter((f) => f.label === "Uses").map((f) => f.value);
-      [s.tool, ...usesFlow].forEach((raw) => {
-        const t = resolveTool(raw);
+      toolsForStep(s).forEach((t) => {
         if (!t || seen.has(t)) return;
         seen.add(t);
         const match = steps.find(
@@ -134,11 +109,9 @@ export default function PlanView({ plan, onApprove, onBack, approveLabel = "Star
     return out;
   }, [steps]);
 
-  const needed = planTools.filter((t) => !connections[t.name]);
-
-  const connectNeeded = async () => {
-    for (const tool of needed) await handleConnect(tool.name);
-  };
+  // AURA handles connector discovery and setup. The only thing a user may need
+  // to do is grant the provider's required account permission.
+  const permissionNeeded = planTools.filter((tool) => !connections[tool.name] && hasStandardOAuth(tool.name));
 
   const onDragEnd = (res) => {
     if (!res.destination || res.source.index === res.destination.index) return;
@@ -244,38 +217,6 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         </div>
       )}
 
-      <ConnectToolModal
-        tool={pendingConnect}
-        connecting={connectingTool === pendingConnect?.name}
-        onConnect={confirmConnect}
-        onClose={() => setPendingConnect(null)}
-      />
-      {connectionError && <p className="mb-3 text-xs text-red-400 rounded-lg border border-red-400/20 bg-red-400/5 p-2">{connectionError}</p>}
-
-      <AuraInterfaceConnect
-        open={!!interfaceTool}
-        toolName={interfaceTool}
-        onClose={() => setInterfaceTool(null)}
-        onConnect={async (name, meta) => {
-          try {
-            await recordInterfaceConnection(name, meta);
-            await hydrateConnections();
-            setInterfaceTool(null);
-          } catch (e) {
-            setConnectionError(e.message || "This web application could not be connected.");
-          }
-        }}
-      />
-
-      <PlanConnectionAlert
-        tools={needed}
-        connections={connections}
-        connectingTool={connectingTool}
-        authRequired={authRequired}
-        onConnect={handleConnect}
-        onConnectAll={connectNeeded}
-      />
-
       {/* Steps */}
       <DragDropContext onDragEnd={onDragEnd}>
         <Droppable droppableId="plan-steps">
@@ -293,6 +234,12 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
                       onDelete={() => deleteStep(i)}
                       forceEdit={forceEditIndex === i}
                       onEditConsumed={() => setForceEditIndex(null)}
+                      permissionNeeded={toolsForStep(step).filter(
+                        (tool) => !connections[tool] && hasStandardOAuth(tool)
+                      )}
+                      connectingTool={connectingTool}
+                      connectionErrors={connectionErrors}
+                      onAllowAccess={handleConnect}
                     />
                   )}
                 </Draggable>
@@ -411,16 +358,16 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
           />
         </div>
         <div className="flex items-center justify-end gap-3">
-          {needed.length > 0 && (
+          {permissionNeeded.length > 0 && (
             <span className="mr-auto text-xs text-amber-300">
-              Connect {needed.map((tool) => tool.name).join(", ")} to start
+              Allow access to {permissionNeeded.map((tool) => tool.name).join(", ")} to start
             </span>
           )}
           <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
             onClick={() => onApprove(steps, name.trim())}
-            disabled={needed.length > 0 || steps.length === 0 || Boolean(plan.error)}
+            disabled={permissionNeeded.length > 0 || steps.length === 0 || Boolean(plan.error)}
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white disabled:cursor-not-allowed disabled:opacity-40"
           >
             {approveLabel} <ArrowRight className="w-4 h-4" />
