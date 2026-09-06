@@ -71,9 +71,12 @@ export default function PlanView({ plan, onApprove, approveLabel = "Start" }) {
   const [forceEditIndex, setForceEditIndex] = useState(null);
   const [name, setName] = useState(plan.workflowName || "");
   const [connections, setConnections] = useState(getAllConnections);
+  const [connectionsReady, setConnectionsReady] = useState(false);
   useEffect(() => {
     const unsubscribe = subscribeConnections(setConnections);
-    hydrateConnections().catch(() => {});
+    hydrateConnections()
+      .then(() => setConnectionsReady(true))
+      .catch(() => setConnectionsReady(false));
     return () => { unsubscribe(); };
   }, []);
   const [connectingTool, setConnectingTool] = useState(null);
@@ -124,7 +127,11 @@ export default function PlanView({ plan, onApprove, approveLabel = "Start" }) {
 
   // AURA handles connector discovery and setup. The only thing a user may need
   // to do is grant the provider's required account permission.
-  const needed = planTools.filter((tool) => !connections[tool.name]);
+  // Never claim a connection is missing until the authoritative registry has
+  // loaded. Unknown state is not the same thing as disconnected.
+  const needed = connectionsReady
+    ? planTools.filter((tool) => !connections[tool.name])
+    : [];
 
   const onDragEnd = (res) => {
     if (!res.destination || res.source.index === res.destination.index) return;
@@ -366,11 +373,6 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
           />
         </div>
         <div className="flex items-center justify-end gap-3">
-          {needed.length > 0 && (
-            <span className="mr-auto text-xs text-amber-300">
-              Connect {needed.map((tool) => tool.name).join(", ")} to start
-            </span>
-          )}
           <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
