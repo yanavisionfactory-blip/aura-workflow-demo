@@ -4,6 +4,7 @@ import hmac
 import json
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import quote, urlencode, urlsplit
 
@@ -556,6 +557,7 @@ class ProviderExecutor:
             "jira.issue.get": self._jira_issue_get,
             "jira.issue.create": self._jira_issue_create,
             "jira.issue.update": self._jira_issue_update,
+            "weather.forecast": self._weather_forecast,
             "http.request": self._http_request,
             "mcp.call": self._mcp_call,
         }
@@ -632,14 +634,74 @@ class ProviderExecutor:
         return await self._request("GET", "https://gmail.googleapis.com/gmail/v1/users/me/messages", params=params)
 
     async def _gmail_send(self, a: dict) -> dict:
-        if not a.get("to"):
-            raise ValueError("gmail.send requires an approved recipient")
+        recipient = str(a.get("to") or "").strip()
+        if not recipient or recipient.lower() in {"me", "myself", "self"}:
+            profile = await self._request(
+                "GET", "https://gmail.googleapis.com/gmail/v1/users/me/profile"
+            )
+            recipient = str(profile.get("emailAddress") or "").strip()
+        if not recipient:
+            raise ValueError("gmail.send could not resolve the approved recipient")
         message = "\r\n".join([
-            f"To: {a['to']}", f"Subject: {a.get('subject', 'AURA workflow')}",
+            f"To: {recipient}", f"Subject: {a.get('subject', 'AURA workflow')}",
             "Content-Type: text/plain; charset=utf-8", "MIME-Version: 1.0", "", a.get("body", ""),
         ])
         raw = base64.urlsafe_b64encode(message.encode()).decode().rstrip("=")
-        return await self._request("POST", "https://gmail.googleapis.com/gmail/v1/users/me/messages/send", json={"raw": raw})
+        result = await self._request("POST", "https://gmail.googleapis.com/gmail/v1/users/me/messages/send", json={"raw": raw})
+        return {**result, "recipient": recipient}
+
+    async def _weather_forecast(self, a: dict) -> dict:
+        location = str(a.get("location") or "").strip()
+        if not location:
+            raise ValueError("weather.forecast requires a location")
+        geocoded = await self._request(
+            "GET",
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params={"name": location, "count": 1, "language": "en", "format": "json"},
+        )
+        places = geocoded.get("results") or []
+        if not places:
+            raise ValueError("AURA could not find that weather location")
+        place = places[0]
+        units = str(a.get("units") or "metric").lower()
+        params = {
+            "latitude": place["latitude"],
+            "longitude": place["longitude"],
+            "timezone": "auto",
+            "forecast_days": 7,
+            "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,wind_speed_10m_max",
+        }
+        if units == "imperial":
+            params.update({"temperature_unit": "fahrenheit", "wind_speed_unit": "mph"})
+        forecast = await self._request(
+            "GET", "https://api.open-meteo.com/v1/forecast", params=params
+        )
+        daily = forecast.get("daily") or {}
+        dates = daily.get("time") or []
+        requested = str(a.get("date") or "tomorrow").strip().lower()
+        target = (
+            (datetime.now(UTC).date() + timedelta(days=1)).isoformat()
+            if requested == "tomorrow"
+            else requested
+        )
+        index = dates.index(target) if target in dates else min(1, max(0, len(dates) - 1))
+        symbol = "°F" if units == "imperial" else "°C"
+        wind_unit = "mph" if units == "imperial" else "km/h"
+        result = {
+            "location": ", ".join(filter(None, [place.get("name"), place.get("admin1"), place.get("country")])),
+            "date": dates[index] if dates else target,
+            "temperature_high": (daily.get("temperature_2m_max") or [None])[index],
+            "temperature_low": (daily.get("temperature_2m_min") or [None])[index],
+            "precipitation_probability": (daily.get("precipitation_probability_max") or [None])[index],
+            "wind_speed": (daily.get("wind_speed_10m_max") or [None])[index],
+            "weather_code": (daily.get("weather_code") or [None])[index],
+        }
+        result["summary"] = (
+            f"{result['location']}: {result['temperature_low']}{symbol} to "
+            f"{result['temperature_high']}{symbol}, {result['precipitation_probability']}% chance "
+            f"of precipitation, wind up to {result['wind_speed']} {wind_unit}."
+        )
+        return result
 
     async def _calendar_list(self, a: dict) -> dict:
         params = {"singleEvents": "true", "orderBy": "startTime", "maxResults": min(int(a.get("limit", 20)), 100)}

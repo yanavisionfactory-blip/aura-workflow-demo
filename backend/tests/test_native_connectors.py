@@ -30,6 +30,22 @@ def test_native_catalog_exposes_composable_module_types():
     assert native_operations("slack") == ["slack.channels.list", "slack.post"]
 
 
+def test_aura_weather_is_connection_free_and_read_only():
+    catalog = {item["slug"]: item for item in planning_catalog({"aura"})}
+    manifest = native_manifest("aura")
+    forecast = next(
+        item for item in manifest["capabilities"]
+        if item["name"] == "weather.forecast"
+    )
+
+    assert catalog["aura"]["connected"] is True
+    assert forecast["permission_scope"] == "read"
+    assert forecast["requires_approval"] is False
+    validate_module_arguments(
+        manifest, "weather.forecast", {"location": "Munich", "date": "tomorrow"}
+    )
+
+
 def test_jira_catalog_requires_approval_for_issue_writes():
     manifest = native_manifest("jira")
     create = next(item for item in manifest["capabilities"] if item["name"] == "jira.issue.create")

@@ -2735,7 +2735,7 @@ async def approve_plan(
     inventory = [
         {"slug": tool.slug, "allowed_operations": tool.allowed_operations} for tool in tools
     ]
-    fixes = deterministic_plan_fixes(plan, inventory)
+    fixes = deterministic_plan_fixes(plan, inventory, set((run.inputs or {}).keys()))
     if fixes:
         raise HTTPException(422, {"message": "Plan failed authorization", "fixes": fixes})
 

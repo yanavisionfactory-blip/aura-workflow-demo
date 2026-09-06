@@ -1,8 +1,11 @@
-from app.config import Settings
+import asyncio
+from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlsplit
 
+from app.config import Settings
 from app.providers import (
     PROVIDERS,
+    ProviderExecutor,
     idempotency_key,
     oauth_authorization_url,
     oauth_callback_matches,
@@ -156,6 +159,43 @@ def test_default_registry_is_valid():
     settings.environment = "production"
 
     assert oauth_registry_errors(settings) == []
+
+
+def test_gmail_send_resolves_me_to_connected_account(monkeypatch):
+    executor = ProviderExecutor({"access_token": "token"})
+    request = AsyncMock(side_effect=[
+        {"emailAddress": "owner@example.com"},
+        {"id": "message-1", "threadId": "thread-1"},
+    ])
+    monkeypatch.setattr(executor, "_request", request)
+
+    result = asyncio.run(executor._gmail_send({"to": "me", "body": "Forecast"}))
+
+    assert result["recipient"] == "owner@example.com"
+    assert request.await_count == 2
+    assert request.await_args_list[0].args[1].endswith("/users/me/profile")
+
+
+def test_weather_forecast_returns_plain_language_summary(monkeypatch):
+    executor = ProviderExecutor({})
+    request = AsyncMock(side_effect=[
+        {"results": [{"name": "Munich", "admin1": "Bavaria", "country": "Germany", "latitude": 48.1, "longitude": 11.6}]},
+        {"daily": {
+            "time": ["2026-09-06", "2026-09-07"],
+            "weather_code": [1, 2],
+            "temperature_2m_max": [20, 22],
+            "temperature_2m_min": [10, 12],
+            "precipitation_probability_max": [5, 30],
+            "wind_speed_10m_max": [8, 14],
+        }},
+    ])
+    monkeypatch.setattr(executor, "_request", request)
+
+    result = asyncio.run(executor._weather_forecast({"location": "Munich"}))
+
+    assert result["location"] == "Munich, Bavaria, Germany"
+    assert "12°C to 22°C" in result["summary"]
+    assert "30% chance" in result["summary"]
 
 
 def test_custom_and_installation_callbacks_use_the_same_validated_resolver():

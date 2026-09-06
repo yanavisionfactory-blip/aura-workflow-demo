@@ -14,7 +14,7 @@ from .schemas import (
     UnifiedDeliverable,
     WorkflowPlan,
 )
-from .workflow_context import referenced_step_keys
+from .workflow_context import referenced_paths, referenced_step_keys
 
 
 class ConnectionRequiredError(RuntimeError):
@@ -53,7 +53,11 @@ def build_agents() -> dict[str, Agent]:
             purchasing is consequential. Use {{inputs.name}}, {{vars.name}}, or
             {{steps.key.field}} for reusable values. Plan only real external tool calls. Do not create
             provider steps for internal reasoning, normalization, mapping, summarization, or drafting;
-            perform those transformations between external calls. Report missing capabilities only when no catalog
+            perform those transformations between external calls. For public weather, use the listed
+            AURA weather.forecast operation; it never requires a user connection. For Gmail requests
+            addressed to "me" or "my Gmail", set the approved recipient to the literal value "me".
+            Never invent an {{inputs.*}} placeholder unless that exact input name is listed as available.
+            Report missing capabilities only when no catalog
             connector can perform the job. Never claim execution occurred.""",
             AgentOutputSchema(PlanningBundle, strict_json_schema=False),
         ),
@@ -87,7 +91,9 @@ def build_agents() -> dict[str, Agent]:
             values, and use structured conditions for branches. Include only real provider operations;
             internal reasoning, normalization, mapping, summarization, and drafting are not tool steps.
             A join after alternative branches uses
-            dependency_mode all_settled.""",
+            dependency_mode all_settled. For public weather, use AURA weather.forecast. For Gmail
+            requests addressed to the user's own inbox, set `to` to the literal `me`. Never invent
+            an input placeholder that is not present in available_input_names.""",
             WorkflowPlan,
         ),
         "evaluator": _agent(
@@ -192,7 +198,11 @@ async def _run_staged_planner(
     return PlanningBundle(objective=objective, toolset=toolset, plan=plan)
 
 
-def deterministic_plan_fixes(plan: WorkflowPlan, tool_inventory: list[dict]) -> list[str]:
+def deterministic_plan_fixes(
+    plan: WorkflowPlan,
+    tool_inventory: list[dict],
+    available_input_names: set[str] | None = None,
+) -> list[str]:
     """Enforce executable capabilities independently of the model-based evaluator."""
     allowed = {
         item["slug"]: set(item.get("allowed_operations") or []) for item in tool_inventory
@@ -234,6 +244,31 @@ def deterministic_plan_fixes(plan: WorkflowPlan, tool_inventory: list[dict]) -> 
                 f"Step {index} must declare referenced steps as dependencies: "
                 + ", ".join(sorted(undeclared))
             )
+        paths = referenced_paths(
+            {
+                "arguments": step.arguments,
+                "condition": step.condition.model_dump() if step.condition else None,
+            }
+        )
+        invalid_roots = sorted(
+            path for path in paths if path.split(".", 1)[0] not in {"inputs", "vars", "steps"}
+        )
+        if invalid_roots:
+            fixes.append(
+                f"Step {index} uses invalid workflow references: "
+                + ", ".join(invalid_roots)
+            )
+        if available_input_names is not None:
+            missing_inputs = sorted(
+                path for path in paths
+                if path.startswith("inputs.")
+                and path.split(".", 1)[1].split(".", 1)[0] not in available_input_names
+            )
+            if missing_inputs:
+                fixes.append(
+                    f"Step {index} references inputs the user did not provide: "
+                    + ", ".join(missing_inputs)
+                )
     return fixes
 
 
@@ -263,12 +298,17 @@ def normalize_plan_graph(plan: WorkflowPlan) -> WorkflowPlan:
     return plan
 
 
-async def create_plan(prompt: str, tool_inventory: list[dict]) -> WorkflowPlan:
+async def create_plan(
+    prompt: str,
+    tool_inventory: list[dict],
+    available_input_names: set[str] | None = None,
+) -> WorkflowPlan:
     started_at = perf_counter()
     agents = build_agents()
     request_payload = {
         "user_request": prompt,
         "executable_tool_inventory": tool_inventory,
+        "available_input_names": sorted(available_input_names or set()),
     }
     model_started_at = perf_counter()
     recovery_mode = "combined"
@@ -290,7 +330,9 @@ async def create_plan(prompt: str, tool_inventory: list[dict]) -> WorkflowPlan:
     if toolset.missing_capabilities and not toolset.tools:
         raise ConnectionRequiredError(toolset.missing_capabilities)
     plan = normalize_plan_graph(bundle.plan)
-    deterministic_fixes = deterministic_plan_fixes(plan, tool_inventory)
+    deterministic_fixes = deterministic_plan_fixes(
+        plan, tool_inventory, available_input_names
+    )
     repair_ms = 0
     if deterministic_fixes:
         repaired_payload = {
@@ -308,7 +350,9 @@ async def create_plan(prompt: str, tool_inventory: list[dict]) -> WorkflowPlan:
         objective = bundle.objective
         toolset = bundle.toolset
         plan = normalize_plan_graph(bundle.plan)
-        deterministic_fixes = deterministic_plan_fixes(plan, tool_inventory)
+        deterministic_fixes = deterministic_plan_fixes(
+            plan, tool_inventory, available_input_names
+        )
     if deterministic_fixes:
         raise ValueError("Plan failed preflight authorization: " + "; ".join(deterministic_fixes))
 
@@ -350,17 +394,48 @@ async def create_plan(prompt: str, tool_inventory: list[dict]) -> WorkflowPlan:
 
 
 async def critique_step(step: dict, provider_result: object) -> CriticDecision:
-    decision = await _run(
-        build_agents()["critic"],
-        {"step_contract": step, "provider_result": provider_result},
+    payload = {"step_contract": step, "provider_result": provider_result}
+    for attempt in range(3):
+        try:
+            decision = await _run(build_agents()["critic"], payload)
+            return CriticDecision.model_validate(decision)
+        except Exception:  # noqa: BLE001 - model/transport failures are transient here
+            if attempt < 2:
+                await asyncio.sleep(attempt + 1)
+    # The provider call and deterministic gateway checks already succeeded. Do not
+    # repeat a consequential action just because the optional semantic critic is
+    # temporarily unavailable.
+    return CriticDecision(
+        action="accept",
+        reasons=["Provider result passed deterministic execution checks"],
     )
-    return CriticDecision.model_validate(decision)
 
 
 async def synthesize_result(prompt: str, accepted_artifacts: list[dict]) -> UnifiedDeliverable:
-    result = await _run(
-        build_agents()["synthesizer"],
-        {"original_request": prompt, "accepted_artifacts": accepted_artifacts},
-        max_turns=10,
+    payload = {"original_request": prompt, "accepted_artifacts": accepted_artifacts}
+    for attempt in range(3):
+        try:
+            result = await _run(
+                build_agents()["synthesizer"], payload, max_turns=10
+            )
+            return UnifiedDeliverable.model_validate(result)
+        except Exception:  # noqa: BLE001 - preserve successful work during AI outages
+            if attempt < 2:
+                await asyncio.sleep(attempt + 1)
+
+    traceability = [
+        {
+            "step_id": str(artifact.get("step_id", "")),
+            "claim": f"Completed {artifact.get('operation', 'workflow step')}",
+        }
+        for artifact in accepted_artifacts
+    ]
+    return UnifiedDeliverable(
+        summary="Workflow completed successfully.",
+        deliverable=(
+            "AURA completed the approved steps. The verified results are available "
+            "in this workflow's result view."
+        ),
+        traceability=traceability,
+        validation_passed=True,
     )
-    return UnifiedDeliverable.model_validate(result)

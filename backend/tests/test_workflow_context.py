@@ -6,9 +6,17 @@ from app.schemas import PlanStep, StepCondition, WorkflowPlan
 from app.workflow_context import (
     WorkflowContextError,
     evaluate_condition,
+    referenced_paths,
     referenced_step_keys,
     resolve_value,
 )
+
+
+def test_referenced_paths_includes_all_template_roots() -> None:
+    assert referenced_paths({"to": "{{inputs.email}}", "body": "{{weather_facts}}"}) == {
+        "inputs.email",
+        "weather_facts",
+    }
 
 
 def _step(**changes) -> PlanStep:

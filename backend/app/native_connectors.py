@@ -50,6 +50,28 @@ _POSITIVE_INTEGER = {"type": "integer", "minimum": 1}
 
 
 NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
+    "aura": {
+        "schema_version": "1.1",
+        "catalog_version": 1,
+        "provider_type": "api_key",
+        "name": "AURA Intelligence",
+        "description": "Built-in, connection-free access to safe public information.",
+        "base_url": "provider-managed",
+        "identity": {"provider": "aura"},
+        "modules": [
+            _module(
+                "weather.forecast",
+                "search",
+                "Fetch a current public weather forecast for a named location.",
+                required=("location",),
+                properties={
+                    "location": _TEXT,
+                    "date": _TEXT,
+                    "units": {"type": "string", "enum": ["metric", "imperial"]},
+                },
+            ),
+        ],
+    },
     "jira": {
         "schema_version": "1.1",
         "catalog_version": 1,

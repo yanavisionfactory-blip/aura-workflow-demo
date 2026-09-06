@@ -1,7 +1,13 @@
 import asyncio
 
 from app import agent_runtime
-from app.agent_runtime import create_plan, deterministic_plan_fixes, normalize_plan_graph
+from app.agent_runtime import (
+    create_plan,
+    critique_step,
+    deterministic_plan_fixes,
+    normalize_plan_graph,
+    synthesize_result,
+)
 from app.schemas import PlanStep, WorkflowPlan
 
 
@@ -78,6 +84,59 @@ def test_deterministic_validator_rejects_unavailable_fallback() -> None:
         "unavailable fallback" in fix
         for fix in deterministic_plan_fixes(workflow, inventory)
     )
+
+
+def test_critic_outage_does_not_repeat_a_successful_provider_action(monkeypatch) -> None:
+    calls = 0
+
+    async def fail_run(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("temporary structured-output outage")
+
+    async def no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(agent_runtime, "_run", fail_run)
+    monkeypatch.setattr(agent_runtime.asyncio, "sleep", no_sleep)
+
+    decision = asyncio.run(
+        critique_step(
+            {"operation": "gmail.send", "expected_output": "message id"},
+            {"id": "sent-message"},
+        )
+    )
+
+    assert calls == 3
+    assert decision.action == "accept"
+
+
+def test_synthesis_outage_preserves_successful_workflow(monkeypatch) -> None:
+    async def fail_run(*_args, **_kwargs):
+        raise RuntimeError("temporary structured-output outage")
+
+    async def no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(agent_runtime, "_run", fail_run)
+    monkeypatch.setattr(agent_runtime.asyncio, "sleep", no_sleep)
+
+    result = asyncio.run(
+        synthesize_result(
+            "Send tomorrow's weather to me",
+            [
+                {
+                    "step_id": "weather-step",
+                    "operation": "weather.forecast",
+                    "provider_result": {"summary": "Sunny, 18°C"},
+                }
+            ],
+        )
+    )
+
+    assert result.validation_passed is True
+    assert result.summary == "Workflow completed successfully."
+    assert result.traceability[0]["step_id"] == "weather-step"
 
 
 def test_create_plan_uses_one_model_round_trip_for_valid_plan(monkeypatch) -> None:

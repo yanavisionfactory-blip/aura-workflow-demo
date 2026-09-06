@@ -11,6 +11,16 @@ class WorkflowContextError(ValueError):
     pass
 
 
+def referenced_paths(value: Any) -> set[str]:
+    if isinstance(value, dict):
+        return set().union(*(referenced_paths(item) for item in value.values()))
+    if isinstance(value, list):
+        return set().union(*(referenced_paths(item) for item in value))
+    if not isinstance(value, str):
+        return set()
+    return {match.group(1) for match in REFERENCE.finditer(value)}
+
+
 def referenced_step_keys(value: Any) -> set[str]:
     if isinstance(value, dict):
         return set().union(*(referenced_step_keys(item) for item in value.values()))
@@ -19,9 +29,9 @@ def referenced_step_keys(value: Any) -> set[str]:
     if not isinstance(value, str):
         return set()
     return {
-        match.group(1).split(".", 2)[1]
-        for match in REFERENCE.finditer(value)
-        if match.group(1).startswith("steps.") and len(match.group(1).split(".")) >= 3
+        path.split(".", 2)[1]
+        for path in referenced_paths(value)
+        if path.startswith("steps.") and len(path.split(".")) >= 3
     }
 
 

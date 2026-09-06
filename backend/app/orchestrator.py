@@ -22,10 +22,11 @@ from .models import (
     StepAttempt,
     StepStatus,
     ToolConnection,
+    ToolKind,
     ToolTrustState,
     WorkflowRun,
 )
-from .native_connectors import planning_catalog
+from .native_connectors import native_manifest, native_operations, planning_catalog
 from .policy import canonical_plan_hash, operation_scope, runtime_policy_check
 from .providers import (
     ProviderExecutor,
@@ -54,6 +55,52 @@ async def audit(
             payload=payload,
         )
     )
+
+
+async def ensure_aura_intelligence(session, workspace_id: str) -> ToolConnection:
+    """Provision AURA's connection-free public-data runtime for every workspace."""
+    tool = await session.scalar(
+        select(ToolConnection).where(
+            ToolConnection.workspace_id == workspace_id,
+            ToolConnection.slug == "aura",
+        )
+    )
+    operations = native_operations("aura")
+    if not tool:
+        tool = ToolConnection(
+            workspace_id=workspace_id,
+            slug="aura",
+            display_name="AURA Intelligence",
+            kind=ToolKind.api_key,
+            encrypted_credentials=CredentialVault().encrypt({}),
+            config={"managed_by": "aura"},
+            allowed_operations=operations,
+            enabled=True,
+        )
+        session.add(tool)
+        await session.flush()
+    else:
+        tool.display_name = "AURA Intelligence"
+        tool.config = {**(tool.config or {}), "managed_by": "aura"}
+        tool.allowed_operations = operations
+        tool.enabled = True
+
+    manifest = await session.scalar(
+        select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id)
+    )
+    if not manifest:
+        manifest = CapabilityManifest(
+            workspace_id=workspace_id,
+            tool_id=tool.id,
+            provider_type="api_key",
+        )
+        session.add(manifest)
+    manifest.status = "verified"
+    manifest.manifest = native_manifest("aura")
+    manifest.verification = {"ok": True, "source": "aura_runtime"}
+    manifest.verified_at = datetime.now(timezone.utc)
+    await session.flush()
+    return tool
 
 
 def planning_error_message(exc: Exception) -> str:
@@ -87,6 +134,7 @@ async def plan_run(run_id: str, workspace_id: str) -> None:
         ):
             return
         run.status = RunStatus.planning
+        await ensure_aura_intelligence(session, run.workspace_id)
         tools = (
             await session.scalars(
                 select(ToolConnection).where(
@@ -114,7 +162,9 @@ async def plan_run(run_id: str, workspace_id: str) -> None:
         await session.commit()
 
         try:
-            plan = await create_plan(run.prompt, inventory)
+            plan = await create_plan(
+                run.prompt, inventory, set((run.inputs or {}).keys())
+            )
             run.plan = plan.model_dump(mode="json")
             plan_version = PlanVersion(
                 workspace_id=run.workspace_id,
