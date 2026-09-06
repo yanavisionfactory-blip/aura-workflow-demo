@@ -2,10 +2,12 @@ import { base44 } from "@/api/base44Client";
 import { setConnection, replaceConnections } from "@/lib/connectionsStore";
 import {
   addPythonTool,
+  authorizeManagedConnector,
   authorizeCustomOAuth,
   authorizeOAuth,
   discoverPythonConnector,
   disconnectPythonConnection,
+  getManagedConnectorStatus,
   listPythonTools,
   pythonRuntimeEnabled,
   reconnectPythonConnection,
@@ -43,10 +45,13 @@ export async function connectTool(toolName, opts = {}) {
   if (pythonRuntimeEnabled) {
     const provider = PYTHON_OAUTH[toolName];
     if (provider) {
-      const result = await authorizeOAuth(provider);
+      const managed = await getManagedConnectorStatus().catch(() => ({ configured: false, providers: [] }));
+      const result = managed.configured && managed.providers.includes(provider)
+        ? await authorizeManagedConnector(provider)
+        : await authorizeOAuth(provider);
       if (result.redirecting) return { method: "oauth", connected: false, authorizationStarted: true, provider };
       await hydrateConnections();
-      return { method: "oauth", connected: true, provider, connection: result.tool };
+      return { method: result.managed ? "managed" : "oauth", connected: true, provider, connection: result.tool };
     }
 
     if (opts.connectionKind === "oauth2") {

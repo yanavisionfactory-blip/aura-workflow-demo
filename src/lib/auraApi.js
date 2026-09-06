@@ -92,6 +92,58 @@ export async function listPythonTools() {
   return request("/v1/tools");
 }
 
+let managedConnectorStatus = null;
+
+export async function getManagedConnectorStatus() {
+  await ensureWorkspace();
+  if (!managedConnectorStatus) {
+    managedConnectorStatus = await request("/v1/managed-connectors/status");
+  }
+  return managedConnectorStatus;
+}
+
+export async function syncManagedConnector(provider) {
+  await ensureWorkspace();
+  return request(`/v1/managed-connectors/${provider}/sync`, { method: "POST" });
+}
+
+export async function authorizeManagedConnector(provider, timeoutMs = 120000) {
+  const popup = window.open("about:blank", `aura-connect-${provider}`, "popup,width=620,height=760");
+  if (!popup) {
+    throw new Error("Your browser blocked the authorization window. Allow pop-ups for AURA and try again.");
+  }
+  popup.document.title = "Connecting to AURA";
+  popup.document.body.innerHTML = '<main style="font-family:system-ui;background:#0b1020;color:#eef2ff;min-height:100vh;display:grid;place-items:center;margin:0"><div style="text-align:center"><div style="font-size:32px;margin-bottom:12px">◌</div><strong>Preparing your connection…</strong><p style="color:#94a3b8;font-size:14px">AURA will remember this app after you approve access.</p></div></main>';
+  let session;
+  try {
+    await ensureWorkspace();
+    session = await request(`/v1/managed-connectors/${provider}/session`, { method: "POST" });
+    popup.location.assign(session.connect_link);
+  } catch (error) {
+    popup.close();
+    throw error;
+  }
+  const startedAt = Date.now();
+  let closedAt = null;
+  while (Date.now() - startedAt < timeoutMs) {
+    await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    const result = await syncManagedConnector(provider).catch(() => null);
+    if (result?.connected) {
+      if (!popup.closed) popup.close();
+      const tools = await listPythonTools();
+      return { connected: true, managed: true, tool: tools.find((tool) => tool.slug === provider) };
+    }
+    if (popup.closed) {
+      closedAt ||= Date.now();
+      if (Date.now() - closedAt > 10000) {
+        throw new Error("The app did not grant access. AURA kept your plan unchanged.");
+      }
+    }
+  }
+  if (!popup.closed) popup.close();
+  throw new Error("The app did not finish connecting. AURA kept your plan unchanged.");
+}
+
 export async function authorizeOAuth(provider, timeoutMs = 120000) {
   const popup = window.open("about:blank", `aura-oauth-${provider}`, "popup,width=620,height=760");
   if (!popup) {
@@ -235,6 +287,14 @@ export async function reconnectPythonConnection(connection, timeoutMs = 120000) 
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    if (started.managed) {
+      const synced = await syncManagedConnector(connection.slug).catch(() => null);
+      if (synced?.connected) {
+        if (!popup.closed) popup.close();
+        const tools = await listPythonTools();
+        return { connected: true, managed: true, tool: tools.find((tool) => tool.id === connection.id) };
+      }
+    }
     const tools = await listPythonTools().catch(() => []);
     const updated = tools.find((tool) =>
       tool.id === connection.id && tool.enabled && (!baseline || tool.updated_at !== baseline)
