@@ -18,3 +18,9 @@ def test_transient_rate_limit_has_retry_guidance() -> None:
     assert planning_error_message(RuntimeError("rate limit exceeded")) == (
         "AURA's AI planning service is temporarily busy. Please try again shortly."
     )
+
+
+def test_invalid_json_does_not_leak_internal_parser_error() -> None:
+    assert planning_error_message(RuntimeError("Invalid JSON when parsing model output")) == (
+        "AURA couldn't format the plan correctly. Please try again."
+    )
