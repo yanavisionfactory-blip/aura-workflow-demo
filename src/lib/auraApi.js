@@ -263,3 +263,11 @@ export async function approvePythonPlan(runId, editedSteps = null) {
   await ensureWorkspace();
   return request(`/v1/runs/${runId}/approve-plan`, { method: "POST", body: JSON.stringify({ approved: true, edited_steps: editedSteps }) });
 }
+
+export async function resumePythonRun(runId, stepId = null) {
+  await ensureWorkspace();
+  return request(`/v1/runs/${runId}/resume`, {
+    method: "POST",
+    body: JSON.stringify({ action: "retry", step_id: stepId }),
+  });
+}
