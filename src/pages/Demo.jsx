@@ -92,6 +92,14 @@ const friendlyStepTitle = (step) => {
 
 const runtimeReference = (value) => typeof value === "string" && /\{\{[^}]+\}\}/.test(value);
 
+const isAuthorizationFailure = (run, failedStep) => {
+  const detail = [failedStep?.error, run?.error, run?.result?.failed_step?.error]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return /\b(401|403)\b|unauthori[sz]ed|invalid[_ -]?grant|expired.*token|token.*expired|credential|authentication/.test(detail);
+};
+
 const jiraPreviewValue = (value, field, itemNumber) => {
   if (!runtimeReference(value)) return value == null || value === "" ? "Not specified" : String(value);
   if (field === "project") return "Your selected Jira project";
@@ -280,6 +288,7 @@ export default function Demo() {
   const [editFlag, setEditFlag] = useState(null);
   const [editRunMode, setEditRunMode] = useState(false);
   const [autoApprove, setAutoApprove] = useState(false);
+  const [requiredReconnectTools, setRequiredReconnectTools] = useState([]);
   const editOriginalStepsRef = useRef([]);
   const attachedResourcesRef = useRef(null);
   const userSelectedToolsRef = useRef([]);
@@ -342,6 +351,7 @@ export default function Demo() {
     setWorkflowName("");
     setEditRunMode(false);
     setAutoApprove(false);
+    setRequiredReconnectTools([]);
     editOriginalStepsRef.current = [];
     userSelectedToolsRef.current = [];
   }, []);
@@ -648,6 +658,12 @@ Rules:
             await new Promise((resolve) => setTimeout(resolve, 1200 * (recoveryCount + 1)));
             continue;
           }
+          if (failedStep && isAuthorizationFailure(run, failedStep)) {
+            const toolName = planToolName(failedStep);
+            setRequiredReconnectTools((current) => current.includes(toolName) ? current : [...current, toolName]);
+            setPhase("plan");
+            return;
+          }
           throw new Error("AURA could not complete this step after retrying safely.");
         }
         if (run.status === "cancelled") throw new Error("The workflow was cancelled safely.");
@@ -822,6 +838,7 @@ Rules:
       res = mock.results;
     } else if (errorMsg) {
       res = {
+        status: "failed",
         title: "Workflow failed",
         summary: errorMsg,
         metrics: [],
@@ -1092,6 +1109,8 @@ Generate a results summary in plain, human-friendly language (not technical).
                     onApprove={handleApprove}
                     onBack={() => setPhase("confirm")}
                     approveLabel={editRunMode ? "Review changes" : "Start"}
+                    requiredReconnectTools={requiredReconnectTools}
+                    onConnectionRecovered={(toolName) => setRequiredReconnectTools((current) => current.filter((name) => name !== toolName))}
                   />
                 ) : null}
               </motion.div>
