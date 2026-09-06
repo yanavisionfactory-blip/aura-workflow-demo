@@ -2598,3 +2598,478 @@ async def approve_plan(
             approver_subject=context.subject,
             approver_role=context.role,
             policy_snapshot=policy,
+            permission_snapshot=permission_snapshot,
+            risk_snapshot={
+                "risk_score": policy_decision["risk_score"],
+                "minimum_trust_score": policy_decision["minimum_trust_score"],
+            },
+            cost_snapshot={
+                "estimated_cost_usd": policy_decision["estimated_cost_usd"],
+                "actual_cost_usd": 0.0,
+            },
+        )
+    )
+    approvals = (
+        await session.scalars(select(Approval).where(Approval.run_id == run.id))
+    ).all()
+    approvals_by_step = {approval.step_id: approval for approval in approvals}
+    for step in steps:
+        approval = approvals_by_step.get(step.id)
+        if step.consequential and not approval:
+            approval = Approval(
+                run_id=run.id,
+                step_id=step.id,
+                preview={"operation": step.operation, "arguments": step.arguments},
+            )
+            session.add(approval)
+            await session.flush()
+            step.approval_id = approval.id
+            approvals.append(approval)
+        elif approval:
+            approval.preview = {
+                "operation": step.operation,
+                "arguments": step.arguments,
+            }
+    for approval in approvals:
+        approval.status = "approved"
+        approval.decided_by = context.subject
+        approval.decided_at = datetime.now(timezone.utc)
+        step = next(stored for stored in steps if stored.id == approval.step_id)
+        step.status = StepStatus.pending
+    run.plan_approved = True
+    run.status = RunStatus.running
+    session.add(
+        AuditEvent(
+            workspace_id=wid,
+            run_id=run.id,
+            actor=context.subject,
+            event_type="run.plan_version_approved",
+            payload={
+                "plan_version_id": plan_version.id,
+                "version": plan_version.version,
+                "plan_hash": plan_hash,
+                "policy_decision": policy_decision,
+            },
+        )
+    )
+    await session.commit()
+    execute_run_task.delay(run.id, wid)
+    return {
+        "id": run.id,
+        "status": run.status.value,
+        "plan_version": plan_version.version,
+        "plan_hash": plan_hash,
+    }
+
+
+@app.post("/v1/approvals/{approval_id}")
+async def decide_approval(
+    approval_id: str,
+    payload: ApprovalDecision,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    wid = context.workspace_id
+    approval = await session.get(Approval, approval_id)
+    if not approval:
+        raise HTTPException(404, "Approval not found")
+    run = await session.get(WorkflowRun, approval.run_id)
+    step = await session.get(RunStep, approval.step_id)
+    if not run or run.workspace_id != wid or not step:
+        raise HTTPException(404, "Approval not found")
+    if approval.status != "pending":
+        raise HTTPException(409, "Approval already decided")
+    approval.status = "approved" if payload.approved else "rejected"
+    approval.decided_by = context.subject
+    approval.decided_at = datetime.now(timezone.utc)
+    if payload.approved:
+        if payload.edited_arguments is not None:
+            raise HTTPException(
+                409,
+                "Changing approved arguments requires a new immutable plan version",
+            )
+        step.status = StepStatus.pending
+    else:
+        step.status = StepStatus.skipped
+    remaining = await session.scalar(select(Approval).where(Approval.run_id == run.id, Approval.status == "pending").limit(1))
+    if not remaining:
+        run.status = RunStatus.running
+    await session.commit()
+    if not remaining:
+        execute_run_task.delay(run.id, wid)
+    return {"approval_id": approval.id, "status": approval.status, "run_id": run.id}
+
+
+@app.get("/v1/policies/current")
+async def get_policy(
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    policy = await session.scalar(
+        select(PolicyConfig)
+        .where(
+            PolicyConfig.workspace_id == context.workspace_id,
+            PolicyConfig.active.is_(True),
+        )
+        .order_by(PolicyConfig.version.desc())
+        .limit(1)
+    )
+    return {
+        "version": policy.version if policy else 1,
+        "configuration": policy.configuration if policy else DEFAULT_POLICY,
+    }
+
+
+@app.put("/v1/policies/current")
+async def update_policy(
+    payload: PolicyUpdate,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    if context.role not in {"owner", "admin"}:
+        raise HTTPException(403, "Only tenant administrators may change policy")
+    unknown = set(payload.configuration) - TENANT_OVERRIDABLE_POLICY_KEYS
+    if unknown:
+        raise HTTPException(422, {"unknown_policy_keys": sorted(unknown)})
+    current = await session.scalar(
+        select(PolicyConfig)
+        .where(
+            PolicyConfig.workspace_id == context.workspace_id,
+            PolicyConfig.active.is_(True),
+        )
+        .order_by(PolicyConfig.version.desc())
+        .limit(1)
+    )
+    configuration = {**DEFAULT_POLICY, **payload.configuration}
+    if current:
+        current.active = False
+    updated = PolicyConfig(
+        workspace_id=context.workspace_id,
+        version=(current.version + 1) if current else 1,
+        active=True,
+        configuration=configuration,
+    )
+    session.add(updated)
+    session.add(
+        AuditEvent(
+            workspace_id=context.workspace_id,
+            actor=context.subject,
+            event_type="policy.version_created",
+            payload={"version": updated.version, "configuration": configuration},
+        )
+    )
+    await session.commit()
+    return {"version": updated.version, "configuration": configuration}
+
+
+@app.post("/v1/runs/{run_id}/resume")
+async def resume_run(
+    run_id: str,
+    payload: ResumeDecision,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    wid = context.workspace_id
+    run = await session.get(WorkflowRun, run_id)
+    if not run or run.workspace_id != wid:
+        raise HTTPException(404, "Run not found")
+    if run.status not in {RunStatus.waiting_for_action, RunStatus.failed}:
+        raise HTTPException(409, "Run is not waiting for a recovery decision")
+    if payload.action == "cancel":
+        run.status = RunStatus.cancelled
+        await session.commit()
+        return {"id": run.id, "status": run.status.value}
+
+    steps = (
+        await session.scalars(
+            select(RunStep).where(RunStep.run_id == run.id).order_by(RunStep.position)
+        )
+    ).all()
+    step = next(
+        (
+            item
+            for item in steps
+            if item.status == StepStatus.failed
+            and (payload.step_id is None or item.id == payload.step_id)
+        ),
+        None,
+    )
+    if not step:
+        raise HTTPException(404, "Failed step not found")
+    approved_step = (run.plan.get("steps") or [])[step.position]
+    if payload.action == "skip":
+        if not approved_step.get("optional", False):
+            raise HTTPException(409, "Only an optional approved step may be skipped")
+        step.status = StepStatus.skipped
+    elif payload.action == "fallback":
+        fallback_slug = payload.fallback_tool_slug or approved_step.get(
+            "fallback_tool_slug"
+        )
+        fallback_operation = payload.fallback_operation or approved_step.get(
+            "fallback_operation"
+        )
+        if (
+            fallback_slug != approved_step.get("fallback_tool_slug")
+            or fallback_operation != approved_step.get("fallback_operation")
+        ):
+            raise HTTPException(409, "An unapproved fallback requires a new plan version")
+        if not fallback_slug or not fallback_operation:
+            raise HTTPException(409, "No fallback was approved for this step")
+        if operation_scope(fallback_operation) != operation_scope(step.operation):
+            raise HTTPException(409, "Fallback permission scope differs from the approved step")
+        fallback = await session.scalar(
+            select(ToolConnection).where(
+                ToolConnection.workspace_id == wid,
+                ToolConnection.slug == fallback_slug,
+                ToolConnection.enabled.is_(True),
+            )
+        )
+        if not fallback or fallback_operation not in fallback.allowed_operations:
+            raise HTTPException(409, "Approved fallback is currently unavailable")
+        step.tool_slug = fallback_slug
+        step.operation = fallback_operation
+        step.idempotency_key = idempotency_key(
+            run.id, step.position, fallback_operation, step.arguments
+        )
+        step.status = StepStatus.pending
+    else:
+        step.status = StepStatus.pending
+    step.error = None
+    dead_letter = await session.scalar(
+        select(DeadLetterEntry).where(
+            DeadLetterEntry.run_id == run.id,
+            DeadLetterEntry.step_id == step.id,
+            DeadLetterEntry.status == "pending",
+        )
+    )
+    if dead_letter:
+        dead_letter.status = "resolved"
+        dead_letter.resolved_at = datetime.now(timezone.utc)
+    run.status = RunStatus.recovering
+    run.error = None
+    session.add(
+        AuditEvent(
+            workspace_id=wid,
+            run_id=run.id,
+            actor=context.subject,
+            event_type="run.recovery_requested",
+            payload={"action": payload.action, "step_id": step.id},
+        )
+    )
+    await session.commit()
+    execute_run_task.delay(run.id, wid)
+    return {"id": run.id, "status": run.status.value, "resumed_from_step": step.id}
+
+
+@app.post("/v1/runs/{run_id}/cancel")
+async def cancel_run(
+    run_id: str,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    run = await session.get(WorkflowRun, run_id)
+    if not run or run.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Run not found")
+    if run.status in {RunStatus.completed, RunStatus.cancelled}:
+        return {"id": run.id, "status": run.status.value}
+    run.cancellation_requested = True
+    if run.status not in {RunStatus.running, RunStatus.planning}:
+        run.status = RunStatus.cancelled
+    session.add(AuditEvent(
+        workspace_id=context.workspace_id,
+        run_id=run.id,
+        actor=context.subject,
+        event_type="run.cancellation_requested",
+        payload={"status": run.status.value},
+    ))
+    await session.commit()
+    return {"id": run.id, "status": run.status.value, "cancellation_requested": True}
+
+
+@app.get("/v1/dead-letters")
+async def list_dead_letters(
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> list[dict]:
+    entries = (
+        await session.scalars(
+            select(DeadLetterEntry)
+            .where(DeadLetterEntry.workspace_id == context.workspace_id)
+            .order_by(DeadLetterEntry.created_at.desc())
+        )
+    ).all()
+    return [
+        {
+            "id": item.id,
+            "run_id": item.run_id,
+            "step_id": item.step_id,
+            "status": item.status,
+            "error": item.error,
+            "attempt_count": item.attempt_count,
+            "payload": item.payload,
+            "created_at": item.created_at,
+        }
+        for item in entries
+    ]
+
+
+UI_RECORD_TYPES = {"workflow", "workflow_run", "schedule", "access_request", "creator"}
+
+
+def _record_view(record: WorkspaceRecord) -> dict:
+    return {
+        "id": record.id,
+        **record.data,
+        "created_date": record.created_at.isoformat(),
+        "updated_date": record.updated_at.isoformat(),
+    }
+
+
+def _record_type(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized not in UI_RECORD_TYPES:
+        raise HTTPException(404, "Unknown workspace record type")
+    return normalized
+
+
+@app.get("/v1/data/{record_type}")
+async def list_workspace_records(
+    record_type: str,
+    limit: int = Query(default=100, ge=1, le=500),
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> list[dict]:
+    kind = _record_type(record_type)
+    records = (
+        await session.scalars(
+            select(WorkspaceRecord)
+            .where(
+                WorkspaceRecord.workspace_id == context.workspace_id,
+                WorkspaceRecord.record_type == kind,
+            )
+            .order_by(WorkspaceRecord.created_at.desc())
+            .limit(limit)
+        )
+    ).all()
+    return [_record_view(record) for record in records]
+
+
+@app.post("/v1/data/{record_type}", status_code=201)
+async def create_workspace_record(
+    record_type: str,
+    payload: WorkspaceRecordCreate,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    record = WorkspaceRecord(
+        workspace_id=context.workspace_id,
+        record_type=_record_type(record_type),
+        data=payload.data,
+    )
+    session.add(record)
+    await session.commit()
+    return _record_view(record)
+
+
+@app.get("/v1/data/{record_type}/{record_id}")
+async def get_workspace_record(
+    record_type: str,
+    record_id: str,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    record = await session.get(WorkspaceRecord, record_id)
+    if (
+        not record
+        or record.workspace_id != context.workspace_id
+        or record.record_type != _record_type(record_type)
+    ):
+        raise HTTPException(404, "Workspace record not found")
+    return _record_view(record)
+
+
+@app.patch("/v1/data/{record_type}/{record_id}")
+async def update_workspace_record(
+    record_type: str,
+    record_id: str,
+    payload: WorkspaceRecordUpdate,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    record = await session.get(WorkspaceRecord, record_id)
+    if (
+        not record
+        or record.workspace_id != context.workspace_id
+        or record.record_type != _record_type(record_type)
+    ):
+        raise HTTPException(404, "Workspace record not found")
+    record.data = {**record.data, **payload.data}
+    record.updated_at = datetime.now(timezone.utc)
+    await session.commit()
+    return _record_view(record)
+
+
+@app.post("/v1/ai/generate")
+async def generate_workspace_json(
+    payload: AiGenerateRequest,
+    context: TenantContext = Depends(tenant_context),
+) -> dict:
+    if not settings.openai_api_key:
+        raise HTTPException(503, "AURA intelligence is not configured")
+    schema_instruction = ""
+    if payload.response_json_schema:
+        schema_instruction = (
+            "\nReturn only valid JSON matching this JSON Schema:\n"
+            + json.dumps(payload.response_json_schema)
+        )
+    agent = Agent(
+        name="AURA workspace assistant",
+        model=settings.openai_model,
+        instructions=(
+            "Follow the user's request accurately. Return only a JSON object, without markdown. "
+            "Do not claim that external actions happened."
+        ),
+    )
+    result = await Runner.run(agent, payload.prompt + schema_instruction, max_turns=4)
+    raw = str(result.final_output).strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(502, "AURA intelligence returned invalid JSON") from exc
+
+
+@app.post("/v1/interfaces/analyze")
+async def analyze_interface(
+    payload: InterfaceAnalyzeRequest,
+    context: TenantContext = Depends(tenant_context),
+) -> dict:
+    url = str(payload.url)
+    try:
+        validate_public_endpoint(url)
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            response = await client.get(url, headers={"User-Agent": "AURA-Connector/1.0"})
+            response.raise_for_status()
+    except (ConnectorError, httpx.HTTPError) as exc:
+        raise HTTPException(422, f"Could not inspect that public URL: {exc}") from exc
+    body = response.text[:200_000]
+    lowered = body.lower()
+    title = ""
+    if "<title" in lowered:
+        title = body[lowered.index("<title") :].split(">", 1)[-1].split("</title>", 1)[0].strip()
+    forms = lowered.count("<form")
+    buttons = lowered.count("<button")
+    login_required = any(marker in lowered for marker in ("sign in", "log in", "password")) and forms > 0
+    return {
+        "analysis": {
+            "title": title or payload.url.host,
+            "loginRequired": login_required,
+            "thinContent": len(body.strip()) < 500,
+            "capabilities": [
+                {"kind": "view", "label": "Read visible page content"},
+                *([{"kind": "do", "label": f"Use {forms} visible form(s)"}] if forms else []),
+                *([{"kind": "change", "label": f"Use {buttons} visible action(s)"}] if buttons else []),
+            ],
+        }
+    }
