@@ -5,7 +5,7 @@ import json
 import time
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
 from mcp import ClientSession
@@ -25,6 +25,8 @@ class OAuthProvider:
     scopes: tuple[str, ...]
     client_id_attr: str
     client_secret_attr: str
+    callback_provider: str
+    legacy_callback_providers: tuple[str, ...] = ()
 
 
 PROVIDERS = {
@@ -43,6 +45,7 @@ PROVIDERS = {
         ),
         client_id_attr="google_client_id",
         client_secret_attr="google_client_secret",
+        callback_provider="google",
     ),
     "airtable": OAuthProvider(
         slug="airtable",
@@ -52,6 +55,7 @@ PROVIDERS = {
         scopes=("data.records:read", "data.records:write", "schema.bases:read"),
         client_id_attr="airtable_client_id",
         client_secret_attr="airtable_client_secret",
+        callback_provider="airtable",
     ),
     "notion": OAuthProvider(
         slug="notion",
@@ -61,6 +65,7 @@ PROVIDERS = {
         scopes=(),
         client_id_attr="notion_client_id",
         client_secret_attr="notion_client_secret",
+        callback_provider="installation",
     ),
     "mailchimp": OAuthProvider(
         slug="mailchimp",
@@ -70,6 +75,7 @@ PROVIDERS = {
         scopes=(),
         client_id_attr="mailchimp_client_id",
         client_secret_attr="mailchimp_client_secret",
+        callback_provider="installation",
     ),
     "canva": OAuthProvider(
         slug="canva",
@@ -83,6 +89,7 @@ PROVIDERS = {
         ),
         client_id_attr="canva_client_id",
         client_secret_attr="canva_client_secret",
+        callback_provider="installation",
     ),
     "tiktok": OAuthProvider(
         slug="tiktok",
@@ -92,6 +99,7 @@ PROVIDERS = {
         scopes=("user.info.basic", "video.list", "video.upload", "video.publish"),
         client_id_attr="tiktok_client_id",
         client_secret_attr="tiktok_client_secret",
+        callback_provider="installation",
     ),
     "slack": OAuthProvider(
         slug="slack",
@@ -101,6 +109,7 @@ PROVIDERS = {
         scopes=("channels:read", "chat:write"),
         client_id_attr="slack_client_id",
         client_secret_attr="slack_client_secret",
+        callback_provider="slack",
     ),
     "hubspot": OAuthProvider(
         slug="hubspot",
@@ -115,6 +124,7 @@ PROVIDERS = {
         ),
         client_id_attr="hubspot_client_id",
         client_secret_attr="hubspot_client_secret",
+        callback_provider="hubspot",
     ),
     "jira": OAuthProvider(
         slug="jira",
@@ -124,17 +134,117 @@ PROVIDERS = {
         scopes=("read:jira-work", "write:jira-work", "read:jira-user", "offline_access"),
         client_id_attr="atlassian_client_id",
         client_secret_attr="atlassian_client_secret",
+        callback_provider="jira",
+        legacy_callback_providers=("atlassian",),
     ),
 }
 
 
+def _oauth_callback_overrides(settings: Settings) -> dict[str, str]:
+    if not settings.oauth_callback_overrides.strip():
+        return {}
+    try:
+        overrides = json.loads(settings.oauth_callback_overrides)
+    except json.JSONDecodeError as exc:
+        raise ValueError("OAUTH_CALLBACK_OVERRIDES must be a JSON object") from exc
+    if not isinstance(overrides, dict) or not all(
+        isinstance(key, str) and isinstance(value, str)
+        for key, value in overrides.items()
+    ):
+        raise ValueError("OAUTH_CALLBACK_OVERRIDES must map provider slugs to URLs")
+    return overrides
+
+
+def _validated_callback_url(callback: str, label: str) -> str:
+    parts = urlsplit(callback)
+    path = parts.path.strip("/").split("/")
+    if (
+        parts.scheme not in {"http", "https"}
+        or not parts.netloc
+        or parts.query
+        or parts.fragment
+        or len(path) != 4
+        or path[:2] != ["v1", "oauth"]
+        or path[3] != "callback"
+        or not path[2]
+    ):
+        raise ValueError(
+            f"Invalid OAuth callback contract for {label}; expected "
+            "https://host/v1/oauth/{provider}/callback"
+        )
+    return callback
+
+
+def oauth_route_callback_url(settings: Settings, route_provider: str) -> str:
+    """Resolve managed, installed, and custom OAuth routes through one contract."""
+    override = _oauth_callback_overrides(settings).get(route_provider)
+    callback = override or (
+        f"{settings.public_url.rstrip('/')}/v1/oauth/{route_provider}/callback"
+    )
+    return _validated_callback_url(callback, route_provider)
+
+
 def oauth_callback_url(settings: Settings, provider: OAuthProvider) -> str:
-    # Providers registered against AURA's shared installation callback.
-    if provider.slug in {"notion", "tiktok", "mailchimp", "canva"}:
-        callback_provider = "installation"
-    else:
-        callback_provider = provider.slug
-    return f"{settings.public_url}/v1/oauth/{callback_provider}/callback"
+    """Return the callback used for both authorization and token exchange."""
+    override = _oauth_callback_overrides(settings).get(provider.slug)
+    if override:
+        return _validated_callback_url(override, provider.slug)
+    return oauth_route_callback_url(settings, provider.callback_provider)
+
+
+def oauth_callback_route_provider(settings: Settings, provider: OAuthProvider) -> str:
+    return urlsplit(oauth_callback_url(settings, provider)).path.strip("/").split("/")[2]
+
+
+def oauth_callback_matches(
+    settings: Settings, state_provider: str, route_provider: str
+) -> bool:
+    definition = PROVIDERS.get(state_provider)
+    if not definition:
+        return False
+    accepted = {
+        oauth_callback_route_provider(settings, definition),
+        *definition.legacy_callback_providers,
+    }
+    return route_provider in accepted
+
+
+def oauth_exchange_callback_url(
+    settings: Settings, provider: OAuthProvider, route_provider: str
+) -> str:
+    """Preserve the exact redirect URI used by current or accepted legacy flows."""
+    if route_provider == oauth_callback_route_provider(settings, provider):
+        return oauth_callback_url(settings, provider)
+    if route_provider in provider.legacy_callback_providers:
+        return oauth_route_callback_url(settings, route_provider)
+    raise ValueError(f"OAuth callback route does not match {provider.slug}")
+
+
+def oauth_registry_errors(settings: Settings) -> list[str]:
+    """Validate all managed callback contracts before users encounter OAuth."""
+    errors: list[str] = []
+    try:
+        oauth_route_callback_url(settings, "custom")
+        oauth_route_callback_url(settings, "installation")
+    except ValueError as exc:
+        errors.append(str(exc))
+    for key, provider in PROVIDERS.items():
+        if key != provider.slug:
+            errors.append(f"Provider key {key!r} does not match slug {provider.slug!r}")
+        for endpoint_name, endpoint in (
+            ("authorization", provider.authorization_url),
+            ("token", provider.token_url),
+        ):
+            if urlsplit(endpoint).scheme != "https":
+                errors.append(f"{provider.slug} {endpoint_name} URL must use HTTPS")
+        try:
+            callback = oauth_callback_url(settings, provider)
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
+        if settings.environment == "production" and urlsplit(callback).scheme != "https":
+            errors.append(f"{provider.slug} callback URL must use HTTPS in production")
+    return errors
 
 
 def _canva_code_verifier(settings: Settings, state: str) -> str:
@@ -186,7 +296,11 @@ def oauth_authorization_url(settings: Settings, provider: OAuthProvider, state: 
 
 
 async def exchange_oauth_code(
-    settings: Settings, provider: OAuthProvider, code: str, state: str | None = None
+    settings: Settings,
+    provider: OAuthProvider,
+    code: str,
+    state: str | None = None,
+    callback_url: str | None = None,
 ) -> dict:
     client_id = getattr(settings, provider.client_id_attr)
     client_secret = getattr(settings, provider.client_secret_attr)
@@ -195,7 +309,7 @@ async def exchange_oauth_code(
         "client_secret": client_secret,
         "code": code,
         "grant_type": "authorization_code",
-        "redirect_uri": oauth_callback_url(settings, provider),
+        "redirect_uri": callback_url or oauth_callback_url(settings, provider),
     }
     headers = {"Accept": "application/json"}
     if provider.slug == "canva":
