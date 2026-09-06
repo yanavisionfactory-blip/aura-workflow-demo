@@ -25,6 +25,13 @@ const CONNECTION_NAMES = {
   mailchimp: ["Mailchimp"],
   canva: ["Canva"],
 };
+const connectionAliases = (tool) => {
+  const identity = `${tool.slug || ""} ${tool.display_name || ""}`.toLowerCase();
+  if (identity.includes("atlassian") || identity.includes("jira")) return ["Jira"];
+  if (identity.includes("google")) return CONNECTION_NAMES.google;
+  if (identity.includes("notion")) return ["Notion"];
+  return CONNECTION_NAMES[String(tool.slug || "").toLowerCase()] || [];
+};
 const slugify = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 const credentialsFor = (opts) => opts.credentials || (opts.apiKey ? { api_key: opts.apiKey } : {});
 
@@ -112,7 +119,7 @@ export async function hydrateConnections() {
     for (const tool of tools) {
       if (!tool.enabled) continue;
       if (tool.display_name) map[tool.display_name] = true;
-      const aliases = CONNECTION_NAMES[String(tool.slug || "").toLowerCase()] || [];
+      const aliases = connectionAliases(tool);
       aliases.forEach((name) => { map[name] = true; });
       if (String(tool.display_name || "").toLowerCase() === "google workspace") {
         CONNECTION_NAMES.google.forEach((name) => { map[name] = true; });
