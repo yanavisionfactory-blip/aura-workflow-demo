@@ -156,6 +156,42 @@ async def _run_planner(agent: Agent, payload: dict, max_turns: int = 8) -> Plann
     raise RuntimeError("Planner recovery exhausted")
 
 
+async def _run_staged_planner(
+    agents: dict[str, Agent], payload: dict, max_turns: int = 8
+) -> PlanningBundle:
+    """Use independent, smaller schemas when the combined planner cannot recover.
+
+    Retrying the same combined schema does not help when that schema itself is the
+    source of the provider failure. The staged route gives each model call a much
+    smaller output contract while preserving the same inventory and safety checks.
+    """
+    objective = ObjectiveSpec.model_validate(
+        await _run(agents["intent"], payload, max_turns=max_turns)
+    )
+    toolset = ToolsetProposal.model_validate(
+        await _run(
+            agents["router"],
+            {
+                "objective": objective.model_dump(mode="json"),
+                "executable_tool_inventory": payload["executable_tool_inventory"],
+            },
+            max_turns=max_turns,
+        )
+    )
+    plan = WorkflowPlan.model_validate(
+        await _run(
+            agents["builder"],
+            {
+                "objective": objective.model_dump(mode="json"),
+                "toolset_proposal": toolset.model_dump(mode="json"),
+                "executable_tool_inventory": payload["executable_tool_inventory"],
+            },
+            max_turns=max_turns,
+        )
+    )
+    return PlanningBundle(objective=objective, toolset=toolset, plan=plan)
+
+
 def deterministic_plan_fixes(plan: WorkflowPlan, tool_inventory: list[dict]) -> list[str]:
     """Enforce executable capabilities independently of the model-based evaluator."""
     allowed = {
@@ -235,7 +271,17 @@ async def create_plan(prompt: str, tool_inventory: list[dict]) -> WorkflowPlan:
         "executable_tool_inventory": tool_inventory,
     }
     model_started_at = perf_counter()
-    bundle = await _run_planner(agents["planner"], request_payload, max_turns=8)
+    recovery_mode = "combined"
+    try:
+        bundle = await _run_planner(agents["planner"], request_payload, max_turns=8)
+    except Exception:  # noqa: BLE001 - provider/SDK failures all use the staged route
+        try:
+            bundle = await _run_staged_planner(agents, request_payload, max_turns=8)
+            recovery_mode = "staged"
+        except Exception as staged_error:
+            raise RuntimeError(
+                "Planner recovery exhausted across combined and staged routes"
+            ) from staged_error
     model_ms = round((perf_counter() - model_started_at) * 1000)
     objective = bundle.objective
     toolset = bundle.toolset
@@ -253,7 +299,11 @@ async def create_plan(prompt: str, tool_inventory: list[dict]) -> WorkflowPlan:
             "required_fixes": deterministic_fixes,
         }
         repair_started_at = perf_counter()
-        bundle = await _run_planner(agents["planner"], repaired_payload, max_turns=8)
+        try:
+            bundle = await _run_planner(agents["planner"], repaired_payload, max_turns=8)
+        except Exception:  # noqa: BLE001 - repair needs the same independent recovery path
+            bundle = await _run_staged_planner(agents, repaired_payload, max_turns=8)
+            recovery_mode = "staged_repair"
         repair_ms = round((perf_counter() - repair_started_at) * 1000)
         objective = bundle.objective
         toolset = bundle.toolset
@@ -277,6 +327,7 @@ async def create_plan(prompt: str, tool_inventory: list[dict]) -> WorkflowPlan:
         "toolset_proposal": toolset.model_dump(mode="json"),
         "preflight_evaluation": evaluation.model_dump(mode="json"),
         "architecture": ["propose", "authorize", "execute"],
+        "planner_recovery_mode": recovery_mode,
         "connection_requirements": [
             selection.slug
             for selection in toolset.tools
