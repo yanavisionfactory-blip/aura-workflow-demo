@@ -18,7 +18,7 @@ import { detectNewConsequential } from "@/lib/editRunDetect";
 import { requestNotifyPermission, notifyWorkflowComplete, notifyWorkflowError } from "@/lib/auraNotify";
 import { hydrateConnections } from "@/lib/connectService";
 import { getAllConnections } from "@/lib/connectionsStore";
-import { approvePythonPlan, createPythonRun, getPythonRun } from "@/lib/auraApi";
+import { approvePythonPlan, createPythonRun, getPythonRun, resumePythonRun } from "@/lib/auraApi";
 
 const STEP_DURATION = 2.6;
 
@@ -311,6 +311,7 @@ export default function Demo() {
   const currentWorkflowIdRef = useRef(null);
   const pythonRunIdRef = useRef(null);
   const pythonPlanRef = useRef(null);
+  const pythonRecoveryRef = useRef({});
 
   const clearTimeouts = () => {
     timeoutRefs.current.forEach(clearTimeout);
@@ -329,6 +330,7 @@ export default function Demo() {
     currentWorkflowIdRef.current = null;
     pythonRunIdRef.current = null;
     pythonPlanRef.current = null;
+    pythonRecoveryRef.current = {};
     setPhase("input");
     setOriginalPrompt("");
     setInterpretation("");
@@ -610,10 +612,12 @@ Rules:
       await approvePythonPlan(runId, reviewedPlan.steps);
       for (let attempt = 0; attempt < 600; attempt += 1) {
         const run = await getPythonRun(runId);
-        setExecSteps((run.steps || []).map((step) => ({
-          tool: step.tool_slug, action: step.operation, riskLevel: step.consequential ? "modify" : "read",
+        setExecSteps((run.steps || []).map((step, index) => ({
+          tool: approvedStepsRef.current[index]?.tool || planToolName(step),
+          action: approvedStepsRef.current[index]?.title || approvedStepsRef.current[index]?.action || friendlyStepTitle(step),
+          riskLevel: step.consequential ? "modify" : "read",
           status: step.status,
-          liveOutput: step.output?.provider_result ? `→ Provider confirmed ${step.operation}` : step.error ? `→ ${step.error}` : "",
+          liveOutput: step.output?.provider_result ? "Completed successfully" : step.status === "recovering" ? "AURA is resolving this automatically…" : "",
           output: step.output,
         })));
         const active = (run.steps || []).findIndex((step) => step.status === "running");
@@ -632,12 +636,26 @@ Rules:
           }, null, "completed");
           return;
         }
-        if (run.status === "failed" || run.status === "cancelled") throw new Error(run.error || `Workflow ${run.status}`);
+        if (run.status === "waiting_for_action" || run.status === "failed") {
+          const failedStep = (run.steps || []).find((step) => step.status === "failed");
+          const recoveryCount = pythonRecoveryRef.current[runId] || 0;
+          if (failedStep && recoveryCount < 3) {
+            pythonRecoveryRef.current[runId] = recoveryCount + 1;
+            setExecSteps((previous) => previous.map((step, index) => index === failedStep.position
+              ? { ...step, status: "running", liveOutput: "AURA is resolving this automatically…" }
+              : step));
+            await resumePythonRun(runId, failedStep.id);
+            await new Promise((resolve) => setTimeout(resolve, 1200 * (recoveryCount + 1)));
+            continue;
+          }
+          throw new Error("AURA could not complete this step after retrying safely.");
+        }
+        if (run.status === "cancelled") throw new Error("The workflow was cancelled safely.");
         await new Promise((resolve) => setTimeout(resolve, 900));
       }
       throw new Error("Python workflow timed out");
-    } catch (error) {
-      finishExecution(null, error.message, "failed");
+    } catch {
+      finishExecution(null, "AURA could not complete this workflow after retrying safely.", "failed");
     }
   };
 
@@ -1101,7 +1119,7 @@ Generate a results summary in plain, human-friendly language (not technical).
                 transition={{ duration: 0.4 }}
                 className="w-full flex justify-center"
               >
-                <ExecutionView steps={execSteps} currentStepIndex={currentStepIdx} isReal={!mock} />
+                <ExecutionView steps={execSteps} currentStepIndex={currentStepIdx} isReal={!mock} workflowSummary={plan?.interpretation || interpretation || originalPrompt} />
               </motion.div>
             )}
 
