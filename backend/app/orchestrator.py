@@ -65,6 +65,8 @@ def planning_error_message(exc: Exception) -> str:
         )
     if "rate limit" in lowered or "error code: 429" in lowered:
         return "AURA's AI planning service is temporarily busy. Please try again shortly."
+    if "invalid json" in lowered:
+        return "AURA couldn't format the plan correctly. Please try again."
     return raw
 
 
