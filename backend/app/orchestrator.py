@@ -7,6 +7,7 @@ from sqlalchemy import select
 from .agent_runtime import ConnectionRequiredError, create_plan, critique_step, synthesize_result
 from .config import get_settings
 from .db import SessionLocal, set_tenant_context
+from .managed_connectors import NangoClient
 from .models import (
     Approval,
     ApprovalSnapshot,
@@ -26,7 +27,12 @@ from .models import (
 )
 from .native_connectors import planning_catalog
 from .policy import canonical_plan_hash, operation_scope, runtime_policy_check
-from .providers import ProviderExecutor, idempotency_key, refresh_oauth_credentials
+from .providers import (
+    ProviderExecutor,
+    idempotency_key,
+    refresh_oauth_credentials,
+    verify_oauth_credentials,
+)
 from .security import CredentialVault
 from .workflow_context import WorkflowContextError, evaluate_condition, resolve_value
 
@@ -573,8 +579,22 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                     started = time.perf_counter()
                     timed_out = False
                     try:
-                        credentials = vault.decrypt(active_tool.encrypted_credentials)
-                        if active_tool.kind.value == "oauth":
+                        if active_tool.config.get("managed_by") == "nango":
+                            credentials = await NangoClient(get_settings()).get_credentials(
+                                active_tool.config["connection_id"],
+                                active_tool.config["integration_id"],
+                            )
+                            if active_tool.slug == "jira" and not credentials.get("cloud_id"):
+                                verification = await verify_oauth_credentials("jira", credentials)
+                                identity = verification.get("identity", {})
+                                if identity.get("id"):
+                                    credentials["cloud_id"] = identity["id"]
+                        else:
+                            credentials = vault.decrypt(active_tool.encrypted_credentials)
+                        if (
+                            active_tool.kind.value == "oauth"
+                            and active_tool.config.get("managed_by") != "nango"
+                        ):
                             credentials, changed = await refresh_oauth_credentials(
                                 get_settings(), active_tool.slug, credentials, active_tool.config
                             )

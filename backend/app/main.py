@@ -27,6 +27,7 @@ from .installation_runtime import (
     installed_oauth_url,
     normalized_credentials,
 )
+from .managed_connectors import ManagedConnectorError, NangoClient
 from .migrations import migrate_database
 from .models import (
     Approval,
@@ -407,6 +408,124 @@ async def list_tools(
             }
         )
     return result
+
+
+@app.get("/v1/managed-connectors/status")
+async def managed_connector_status(
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    """Expose capabilities, never managed-connector credentials, to the UI."""
+    client = NangoClient(settings)
+    return {
+        "configured": client.configured,
+        "providers": sorted(client.integrations) if client.configured else [],
+    }
+
+
+@app.post("/v1/managed-connectors/{provider}/session", status_code=201)
+async def create_managed_connector_session(
+    provider: str,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    provider = provider.lower()
+    if provider not in PROVIDERS:
+        raise HTTPException(404, "Unknown app")
+    try:
+        result = await NangoClient(settings).create_session(
+            provider, context.workspace_id, context.subject
+        )
+    except ManagedConnectorError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    session.add(AuditEvent(
+        workspace_id=context.workspace_id,
+        actor=context.subject,
+        event_type="connector.managed_authorization_started",
+        payload={"provider": provider},
+    ))
+    await session.commit()
+    return result
+
+
+@app.post("/v1/managed-connectors/{provider}/sync")
+async def sync_managed_connector(
+    provider: str,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    """Import only a durable Nango reference after hosted authorization succeeds."""
+    provider = provider.lower()
+    definition = PROVIDERS.get(provider)
+    if not definition:
+        raise HTTPException(404, "Unknown app")
+    client = NangoClient(settings)
+    try:
+        connection = await client.find_connection(
+            provider, context.workspace_id, context.subject
+        )
+    except ManagedConnectorError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    if not connection:
+        return {"connected": False, "status": "waiting"}
+    if connection.get("errors"):
+        return {"connected": False, "status": "authorization_required"}
+    integration_id = client.integration_id(provider)
+    tool = await session.scalar(select(ToolConnection).where(
+        ToolConnection.workspace_id == context.workspace_id,
+        ToolConnection.slug == provider,
+    ))
+    config = {
+        "managed_by": "nango",
+        "connection_id": connection["connection_id"],
+        "integration_id": integration_id,
+    }
+    if tool:
+        tool.display_name = definition.display_name
+        tool.kind = ToolKind.oauth
+        tool.config = config
+        tool.encrypted_credentials = CredentialVault().encrypt({})
+        tool.allowed_operations = native_operations(provider)
+        tool.enabled = True
+    else:
+        tool = ToolConnection(
+            workspace_id=context.workspace_id,
+            slug=provider,
+            display_name=definition.display_name,
+            kind=ToolKind.oauth,
+            encrypted_credentials=CredentialVault().encrypt({}),
+            config=config,
+            allowed_operations=native_operations(provider),
+            enabled=True,
+        )
+        session.add(tool)
+        await session.flush()
+    record = await session.scalar(
+        select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id)
+    )
+    if not record:
+        record = CapabilityManifest(
+            workspace_id=context.workspace_id,
+            tool_id=tool.id,
+            provider_type="oauth",
+        )
+        session.add(record)
+    record.status = "verified"
+    record.manifest = native_manifest(provider)
+    record.verification = {
+        "ok": True,
+        "source": "managed_connector",
+        "identity": connection.get("metadata") or {},
+    }
+    record.verified_at = datetime.now(timezone.utc)
+    session.add(AuditEvent(
+        workspace_id=context.workspace_id,
+        actor=context.subject,
+        event_type="connector.managed_authorized",
+        payload={"tool_id": tool.id, "provider": provider},
+    ))
+    await session.commit()
+    return {"connected": True, "status": "verified", "tool_id": tool.id}
 
 
 @app.post("/v1/tools", status_code=201)
@@ -1573,6 +1692,21 @@ async def test_connection(
     manifest = await session.scalar(select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id))
     if not manifest:
         raise HTTPException(409, "Connection has no discovered capability manifest")
+    if tool.config.get("managed_by") == "nango":
+        try:
+            credentials = await NangoClient(settings).get_credentials(
+                tool.config["connection_id"], tool.config["integration_id"]
+            )
+            result = await verify_oauth_credentials(tool.slug, credentials)
+            if result.get("reason") == "unsupported_oauth_provider":
+                result = {"ok": True, "source": "managed_connector"}
+        except (ManagedConnectorError, KeyError):
+            result = {"ok": False, "reason": "authorization_required"}
+        manifest.verification = result
+        manifest.status = "verified" if result["ok"] else "degraded"
+        manifest.verified_at = datetime.now(timezone.utc)
+        await session.commit()
+        return {"id": tool.id, "status": manifest.status, "verification": result}
     credentials = CredentialVault().decrypt(tool.encrypted_credentials)
     if tool.kind == ToolKind.oauth and not tool.config.get("oauth_custom"):
         try:
@@ -1602,6 +1736,24 @@ async def disconnect_connection(
     tool = await session.get(ToolConnection, connection_id)
     if not tool or tool.workspace_id != context.workspace_id:
         raise HTTPException(404, "Connection not found")
+    if tool.config.get("managed_by") == "nango":
+        revocation = {"attempted": True, "ok": True, "managed": True}
+        try:
+            await NangoClient(settings).delete_connection(
+                tool.config["connection_id"], tool.config["integration_id"]
+            )
+        except (ManagedConnectorError, KeyError):
+            revocation["ok"] = False
+        tool.enabled = False
+        tool.encrypted_credentials = None
+        manifest = await session.scalar(
+            select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id)
+        )
+        if manifest:
+            manifest.status = "revoked"
+        session.add(AuditEvent(workspace_id=context.workspace_id, actor=context.subject, event_type="connector.revoked", payload={"tool_id": tool.id, "slug": tool.slug, "provider_revocation": revocation}))
+        await session.commit()
+        return {"id": tool.id, "status": "revoked", "provider_revocation": revocation}
     credentials = CredentialVault().decrypt(tool.encrypted_credentials)
     revocation = {"attempted": False}
     if tool.slug == "slack" and credentials.get("access_token"):
@@ -1659,6 +1811,22 @@ async def reconnect_connection(
             "This connector is re-verified with Test; replace its credentials to reauthorize it",
         )
     previous_updated_at = tool.updated_at.isoformat() if tool.updated_at else None
+    if tool.config.get("managed_by") == "nango":
+        try:
+            managed = await NangoClient(settings).create_reconnect_session(
+                tool.slug,
+                tool.config["connection_id"],
+                context.workspace_id,
+                context.subject,
+            )
+        except (ManagedConnectorError, KeyError) as exc:
+            raise HTTPException(503, str(exc)) from exc
+        return {
+            "authorization_url": managed["connect_link"],
+            "connection_id": tool.id,
+            "previous_updated_at": previous_updated_at,
+            "managed": True,
+        }
     if tool.config.get("oauth_custom"):
         credentials = CredentialVault().decrypt(tool.encrypted_credentials)
         client_id = credentials.get("client_id")

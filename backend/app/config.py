@@ -1,3 +1,4 @@
+import json
 from functools import lru_cache
 
 from pydantic import Field
@@ -47,6 +48,11 @@ class Settings(BaseSettings):
     clerk_authorized_parties: str = ""
     allow_legacy_workspace_tokens: bool = False
     run_rate_limit_per_minute: int = 60
+    # Optional managed connector control plane. When configured, AURA delegates
+    # OAuth storage and refresh to Nango and keeps only connection references.
+    nango_api_key: str = ""
+    nango_base_url: str = "https://api.nango.dev"
+    nango_integration_map: str = "{}"
 
     @property
     def clerk_enabled(self) -> bool:
@@ -70,6 +76,21 @@ class Settings(BaseSettings):
                 if key.strip()
             ],
         ]
+
+
+    @property
+    def managed_integrations(self) -> dict[str, str]:
+        try:
+            value = json.loads(self.nango_integration_map or "{}")
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(value, dict):
+            return {}
+        return {
+            str(provider).strip().lower(): str(integration).strip()
+            for provider, integration in value.items()
+            if str(provider).strip() and str(integration).strip()
+        }
 
 
 @lru_cache
