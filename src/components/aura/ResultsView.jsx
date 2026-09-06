@@ -16,6 +16,7 @@ import {
   ChevronDown,
   Plus,
   Wrench,
+  AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import ProofLine from "./ProofLine";
@@ -29,6 +30,7 @@ import { buildSummaryText } from "@/lib/auraSummary";
 import { INTERFACE_TOOLS } from "@/lib/demoData";
 
 export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, workflowPrompt, activity, prompt, interpretation }) {
+  const isFailure = results.status === "failed";
   const [showModal, setShowModal] = useState(false);
   const [detailOutcome, setDetailOutcome] = useState(null);
   const [showActivity, setShowActivity] = useState(false);
@@ -100,6 +102,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
     const seen = new Set();
     const out = [];
     (activity || []).forEach((s) => {
+      if (s.status !== "completed") return;
       const name = s.tool;
       if (!name || name === "AURA Intelligence" || seen.has(name)) return;
       seen.add(name);
@@ -117,8 +120,8 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
         transition={{ type: "spring", stiffness: 200, damping: 20 }}
         className="text-center mb-6"
       >
-        <div className="inline-flex p-3 rounded-2xl bg-emerald-400/10 border border-emerald-400/20 mb-4 glow-success">
-          <CheckCircle2 className="w-8 h-8 text-emerald-400" />
+        <div className={`inline-flex p-3 rounded-2xl border mb-4 ${isFailure ? "bg-amber-400/10 border-amber-400/20" : "bg-emerald-400/10 border-emerald-400/20 glow-success"}`}>
+          {isFailure ? <AlertTriangle className="w-8 h-8 text-amber-400" /> : <CheckCircle2 className="w-8 h-8 text-emerald-400" />}
         </div>
         <h2 className="text-2xl font-bold mb-1">{results.title || "Workflow complete"}</h2>
         <p className="text-sm text-muted-foreground max-w-xl mx-auto">{results.summary}</p>
@@ -293,7 +296,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
       )}
 
       {/* Suggested next */}
-      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }} className="mb-5">
+      {!isFailure && <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }} className="mb-5">
         <h3 className="text-sm font-medium mb-3 flex items-center gap-2">
           <ArrowRight className="w-4 h-4 text-primary" />
           Suggested next
@@ -309,7 +312,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
             </button>
           ))}
         </div>
-      </motion.div>
+      </motion.div>}
 
       {/* Run this again? */}
       <motion.div
@@ -321,7 +324,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
         <div className="flex items-center gap-2 mb-1">
           <p className="text-sm font-medium">What would you like to do next?</p>
         </div>
-        <p className="text-[11px] text-muted-foreground/70 mb-3">Run it again, automate it for later, or start something new.</p>
+        <p className="text-[11px] text-muted-foreground/70 mb-3">{isFailure ? "AURA saved the completed work. Try again now or adjust the workflow." : "Run it again, automate it for later, or start something new."}</p>
         <div className="flex gap-2">
           <motion.button
             whileHover={{ scale: 1.02 }}
@@ -332,7 +335,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
             <RefreshCw className="w-4 h-4" />
             Run again
           </motion.button>
-          <motion.button
+          {!isFailure && <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
             onClick={() => setShowSchedule(true)}
@@ -340,7 +343,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
           >
             <CalendarClock className="w-4 h-4" />
             Schedule
-          </motion.button>
+          </motion.button>}
           <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
@@ -372,14 +375,14 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
             <FileDown className="w-3.5 h-3.5" /> Download
           </Button>
         </div>
-        <motion.button
+        {!isFailure && <motion.button
           whileHover={{ scale: 1.03 }}
           whileTap={{ scale: 0.97 }}
           onClick={() => setShowModal(true)}
           className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-primary to-accent text-white text-xs font-semibold shadow-lg shadow-primary/20"
         >
           <Zap className="w-3.5 h-3.5" /> Connect & run for real
-        </motion.button>
+        </motion.button>}
       </motion.div>
 
       <OutcomeDetailModal
