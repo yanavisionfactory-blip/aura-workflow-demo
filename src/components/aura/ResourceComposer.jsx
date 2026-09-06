@@ -1,79 +1,38 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Search, Plus, FileUp, Loader2, Check, Link2, Paperclip, X } from "lucide-react";
 import { CATALOG } from "@/lib/toolCatalog";
-import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
-import { connectTool } from "@/lib/connectService";
 import { aura } from "@/api/auraClient";
-import ConnectToolModal from "./ConnectToolModal";
 
 // The "add" affordance in the command input. Unlike a static tool list, this
 // lets the user:
-//   1. Connect ANY tool — catalog or a custom one they type — and actually
-//      connect it for real (AURA runs its oauth/mcp/interface flow behind the
-//      scenes via connectTool).
+//   1. Choose any tool by name while AURA handles access and setup later.
 //   2. Attach a document (or any file) — really uploaded, not metaphorically —
 //      so AURA can read it during the workflow.
 // Both kinds flow into the plan as resources the workflow can use.
 
-export default function ResourceComposer({ open, onClose, onAddTool, onAddDocument, onInterfaceTool, pinnedTools = [], pinnedDocs = [] }) {
+export default function ResourceComposer({ open, onClose, onAddTool, onAddDocument, pinnedTools = [], pinnedDocs = [] }) {
   const [tab, setTab] = useState("tools");
   const [query, setQuery] = useState("");
-  const [connecting, setConnecting] = useState(null);
   const [uploading, setUploading] = useState(false);
-  const [connections, setConnections] = useState(getAllConnections);
-  const [pendingConnect, setPendingConnect] = useState(null);
   const [customToolName, setCustomToolName] = useState("");
   const [customToolDesc, setCustomToolDesc] = useState("");
   const fileRef = useRef(null);
-
-  useEffect(() => subscribeConnections(setConnections), []);
 
   const q = query.trim().toLowerCase();
   const filtered = CATALOG.filter((t) => t.name.toLowerCase().includes(q));
   const customName = query.trim();
   const canAddCustom = customName.length > 0 && !CATALOG.some((t) => t.name.toLowerCase() === customName.toLowerCase());
 
-  // Selecting a tool pins it to "AURA will use". If the tool isn't connected
-  // yet, a popup opens asking the user to connect it as a separate step.
+  // Selecting a tool only expresses intent. AURA decides how to access it.
   const select = (name) => {
     if (pinnedTools.includes(name)) return;
     onAddTool(name);
-    if (!connections[name]) {
-      const tool = CATALOG.find((t) => t.name === name);
-      setPendingConnect(tool || { name, interface: false, desc: "" });
-    }
   };
 
-  const connectOne = async (name) => {
-    setConnecting(name);
-    try {
-      const res = await connectTool(name);
-      if (res.interfaceTool) onInterfaceTool(name);
-    } catch {
-      // non-fatal — user can retry from the plan
-    }
-    setConnecting(null);
-  };
-
-  const confirmConnect = async (toolObj) => {
-    if (!pendingConnect) return;
-    await connectOne(toolObj?.name || pendingConnect.name);
-    setPendingConnect(null);
-  };
-
-  // Custom (non-catalog) tools: pin + open the AURA Interface learn flow, since
-  // "connect" for them IS the interface-learning modal.
-  const addCustom = async (name) => {
-    setConnecting(name);
-    try {
-      const res = await connectTool(name);
-      if (res.interfaceTool) onInterfaceTool(name);
-      onAddTool(name);
-    } catch {
-      onAddTool(name);
-    }
-    setConnecting(null);
+  const addCustom = (name) => {
+    if (!name || pinnedTools.includes(name)) return;
+    onAddTool(name);
   };
 
   const handleFile = async (e) => {
@@ -140,9 +99,7 @@ export default function ResourceComposer({ open, onClose, onAddTool, onAddDocume
 
               <div className="max-h-[220px] overflow-y-auto space-y-0.5">
                 {filtered.map((t) => {
-                  const isConnected = !!connections[t.name];
                   const isPinned = pinnedTools.includes(t.name);
-                  const isConnecting = connecting === t.name;
                   return (
                     <div key={t.name} className="flex items-center gap-2 p-1.5 rounded-lg hover:bg-white/5 transition-colors">
                       <div className="w-7 h-7 rounded-lg bg-secondary border border-white/8 flex items-center justify-center text-sm shrink-0">
@@ -158,14 +115,6 @@ export default function ResourceComposer({ open, onClose, onAddTool, onAddDocume
                             <span className="flex items-center gap-1 text-[10px] text-emerald-400 pr-0.5">
                               <Check className="w-3 h-3" /> Selected
                             </span>
-                            {!isConnected && (
-                              <button
-                                onClick={() => setPendingConnect(t)}
-                                className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-md text-amber-400 hover:bg-amber-400/10 transition-colors"
-                              >
-                                <Plus className="w-3 h-3" /> Connect
-                              </button>
-                            )}
                           </>
                         ) : (
                           <button
@@ -185,23 +134,21 @@ export default function ResourceComposer({ open, onClose, onAddTool, onAddDocume
                     {filtered.length > 0 && <div className="h-px bg-white/6 my-1" />}
                     <button
                       onClick={() => addCustom(customName)}
-                      disabled={connecting === customName}
-                      className="w-full flex items-center gap-2 p-1.5 rounded-lg hover:bg-primary/10 text-left transition-colors disabled:opacity-50"
+                      className="w-full flex items-center gap-2 p-1.5 rounded-lg hover:bg-primary/10 text-left transition-colors"
                     >
                       <div className="w-7 h-7 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
                         <Plus className="w-3.5 h-3.5 text-primary" />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-[11px] font-medium truncate">Connect “{customName}”</p>
-                        <p className="text-[10px] text-muted-foreground/70">Custom tool, base, or service — AURA connects it for you</p>
+                        <p className="text-[11px] font-medium truncate">Use “{customName}”</p>
+                        <p className="text-[10px] text-muted-foreground/70">AURA will work out how to access it</p>
                       </div>
-                      {connecting === customName ? <Loader2 className="w-3 h-3 animate-spin text-primary" /> : null}
                     </button>
                   </>
                 )}
 
                 {!filtered.length && !canAddCustom && (
-                  <p className="text-center text-[10px] text-muted-foreground/60 py-6">Type a tool name to connect it</p>
+                  <p className="text-center text-[10px] text-muted-foreground/60 py-6">Type the tool you want AURA to use</p>
                 )}
               </div>
             </div>
@@ -256,23 +203,16 @@ export default function ResourceComposer({ open, onClose, onAddTool, onAddDocume
               />
               <button
                 onClick={() => addCustom(customToolName.trim())}
-                disabled={!customToolName.trim() || connecting === customToolName.trim()}
+                disabled={!customToolName.trim()}
                 className="w-full flex items-center justify-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
               >
-                {connecting === customToolName.trim() ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
-                {connecting === customToolName.trim() ? "Connecting…" : "Connect custom tool"}
+                <Plus className="w-3.5 h-3.5" />
+                Use this tool
               </button>
             </div>
           )}
         </motion.div>
       )}
-
-      <ConnectToolModal
-        tool={pendingConnect}
-        connecting={connecting === pendingConnect?.name}
-        onConnect={confirmConnect}
-        onClose={() => setPendingConnect(null)}
-      />
     </AnimatePresence>
   );
 }
