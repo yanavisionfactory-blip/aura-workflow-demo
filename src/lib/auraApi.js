@@ -2,6 +2,8 @@ const API_URL = (import.meta.env.VITE_AURA_API_URL || "").replace(/\/$/, "");
 const WORKSPACE_KEY = "aura_python_workspace_id";
 let tokenProvider = null;
 
+export const pythonRuntimeEnabled = Boolean(API_URL);
+
 export function setAuraTokenProvider(provider) {
   tokenProvider = provider;
 }
@@ -204,6 +206,38 @@ export async function testPythonConnection(connectionId) {
 export async function disconnectPythonConnection(connectionId) {
   await ensureWorkspace();
   return request(`/v1/connections/${connectionId}`, { method: "DELETE" });
+}
+
+export async function reconnectPythonConnection(connection, timeoutMs = 120000) {
+  const popup = window.open("about:blank", `aura-reconnect-${connection.id}`, "popup,width=620,height=760");
+  if (!popup) throw new Error("Your browser blocked the authorization window. Allow pop-ups for AURA and try again.");
+  popup.document.title = "Reconnecting to AURA";
+  popup.document.body.innerHTML = '<main style="font-family:system-ui;background:#0b1020;color:#eef2ff;min-height:100vh;display:grid;place-items:center;margin:0"><div style="text-align:center"><div style="font-size:32px;margin-bottom:12px">◌</div><strong>Preparing secure reauthorization…</strong><p style="color:#94a3b8;font-size:14px">AURA is checking this connection.</p></div></main>';
+  let started;
+  try {
+    await ensureWorkspace();
+    started = await request(`/v1/connections/${connection.id}/reconnect`, { method: "POST" });
+    popup.location.assign(started.authorization_url);
+  } catch (error) {
+    popup.close();
+    throw error;
+  }
+  const baseline = started.previous_updated_at || connection.updated_at || null;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    const tools = await listPythonTools().catch(() => []);
+    const updated = tools.find((tool) =>
+      tool.id === connection.id && tool.enabled && (!baseline || tool.updated_at !== baseline)
+    );
+    if (updated) {
+      if (!popup.closed) popup.close();
+      return { connected: true, tool: updated };
+    }
+    if (popup.closed) throw new Error("Reauthorization was cancelled before completion.");
+  }
+  if (!popup.closed) popup.close();
+  throw new Error("Reauthorization timed out. Please try again.");
 }
 
 export async function createPythonRun(prompt, workflowId = null) {
