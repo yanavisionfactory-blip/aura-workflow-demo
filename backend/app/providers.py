@@ -166,7 +166,11 @@ def oauth_authorization_url(settings: Settings, provider: OAuthProvider, state: 
     if provider.slug == "notion":
         params["owner"] = "user"
     elif provider.slug == "jira":
-        params.update({"audience": "api.atlassian.com", "prompt": "consent"})
+        params.update({
+            "audience": "api.atlassian.com",
+            "prompt": "consent",
+            "scope": " ".join(provider.scopes),
+        })
     elif provider.slug == "mailchimp":
         pass
     elif provider.slug in {"slack", "tiktok"}:
