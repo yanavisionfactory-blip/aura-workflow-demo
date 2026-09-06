@@ -15,6 +15,8 @@ def _settings() -> Settings:
         mailchimp_client_secret="mailchimp-secret",
         canva_client_id="canva-client",
         canva_client_secret="canva-secret",
+        hubspot_client_id="hubspot-client",
+        hubspot_client_secret="hubspot-secret",
     )
 
 
@@ -60,6 +62,15 @@ def test_idempotency_is_stable_for_argument_order():
     left = idempotency_key("run", 1, "gmail.send", {"to": "a@example.com", "body": "x"})
     right = idempotency_key("run", 1, "gmail.send", {"body": "x", "to": "a@example.com"})
     assert left == right
+
+
+def test_hubspot_uses_managed_oauth_callback_and_crm_scopes():
+    provider = PROVIDERS["hubspot"]
+    settings = _settings()
+    assert oauth_callback_url(settings, provider) == "https://api.example.com/v1/oauth/hubspot/callback"
+    url = oauth_authorization_url(settings, provider, "signed-state")
+    assert "client_id=hubspot-client" in url
+    assert "crm.objects.contacts.read" in url
 
 
 def test_idempotency_changes_with_step_position():

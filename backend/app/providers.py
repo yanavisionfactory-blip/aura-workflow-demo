@@ -102,6 +102,20 @@ PROVIDERS = {
         client_id_attr="slack_client_id",
         client_secret_attr="slack_client_secret",
     ),
+    "hubspot": OAuthProvider(
+        slug="hubspot",
+        display_name="HubSpot",
+        authorization_url="https://app.hubspot.com/oauth/authorize",
+        token_url="https://api.hubapi.com/oauth/v1/token",
+        scopes=(
+            "crm.objects.contacts.read",
+            "crm.objects.contacts.write",
+            "crm.objects.companies.read",
+            "crm.objects.companies.write",
+        ),
+        client_id_attr="hubspot_client_id",
+        client_secret_attr="hubspot_client_secret",
+    ),
 }
 
 
@@ -281,6 +295,8 @@ async def verify_oauth_credentials(provider_slug: str, credentials: dict) -> dic
         )
     elif provider_slug == "canva":
         method, url, kwargs = "GET", "https://api.canva.com/rest/v1/users/me/profile", {}
+    elif provider_slug == "hubspot":
+        method, url, kwargs = "GET", "https://api.hubapi.com/crm/v3/objects/contacts", {"params": {"limit": 1}}
     else:
         return {"ok": False, "reason": "unsupported_oauth_provider"}
     async with httpx.AsyncClient(timeout=15) as client:
@@ -361,6 +377,10 @@ class ProviderExecutor:
             "canva.folder.items.list": self._canva_folder_items_list,
             "canva.export.create": self._canva_export_create,
             "canva.export.get": self._canva_export_get,
+            "hubspot.contacts.list": self._hubspot_contacts_list,
+            "hubspot.companies.list": self._hubspot_companies_list,
+            "hubspot.contact.update": self._hubspot_contact_update,
+            "hubspot.company.update": self._hubspot_company_update,
             "http.request": self._http_request,
             "mcp.call": self._mcp_call,
         }
@@ -685,6 +705,38 @@ class ProviderExecutor:
         data = await self._request("POST", "https://slack.com/api/chat.postMessage", json={"channel": a["channel"], "text": a["text"]})
         if not data.get("ok"): raise RuntimeError(data.get("error", "Slack post failed"))
         return data
+
+    async def _hubspot_contacts_list(self, a: dict) -> dict:
+        params = {
+            "limit": min(int(a.get("limit", 20)), 100),
+            "properties": ",".join(a.get("properties") or ["firstname", "lastname", "email", "lastmodifieddate"]),
+        }
+        if a.get("after"):
+            params["after"] = a["after"]
+        return await self._request("GET", "https://api.hubapi.com/crm/v3/objects/contacts", params=params)
+
+    async def _hubspot_companies_list(self, a: dict) -> dict:
+        params = {
+            "limit": min(int(a.get("limit", 20)), 100),
+            "properties": ",".join(a.get("properties") or ["name", "domain", "lastmodifieddate"]),
+        }
+        if a.get("after"):
+            params["after"] = a["after"]
+        return await self._request("GET", "https://api.hubapi.com/crm/v3/objects/companies", params=params)
+
+    async def _hubspot_contact_update(self, a: dict) -> dict:
+        return await self._request(
+            "PATCH",
+            f"https://api.hubapi.com/crm/v3/objects/contacts/{quote(a['contact_id'], safe='')}",
+            json={"properties": a["properties"]},
+        )
+
+    async def _hubspot_company_update(self, a: dict) -> dict:
+        return await self._request(
+            "PATCH",
+            f"https://api.hubapi.com/crm/v3/objects/companies/{quote(a['company_id'], safe='')}",
+            json={"properties": a["properties"]},
+        )
 
     async def _http_request(self, a: dict) -> dict:
         if not self.base_url: raise ValueError("Custom HTTP tool has no base URL")

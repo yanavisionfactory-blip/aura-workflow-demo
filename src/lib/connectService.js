@@ -20,6 +20,7 @@ const PYTHON_OAUTH = {
   TikTok: "tiktok",
   Mailchimp: "mailchimp",
   Canva: "canva",
+  HubSpot: "hubspot",
 };
 const slugify = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 const credentialsFor = (opts) => opts.credentials || (opts.apiKey ? { api_key: opts.apiKey } : {});

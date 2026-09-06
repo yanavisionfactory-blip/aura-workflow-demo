@@ -248,12 +248,48 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
             }),
         ],
     },
+    "hubspot": {
+        "schema_version": "1.1",
+        "catalog_version": 1,
+        "provider_type": "oauth",
+        "name": "HubSpot",
+        "description": "Read and update HubSpot contacts and companies.",
+        "base_url": "provider-managed",
+        "identity": {"provider": "hubspot"},
+        "modules": [
+            _module("hubspot.contacts.list", "search", "List CRM contacts.", properties={
+                "limit": {**_POSITIVE_INTEGER, "maximum": 100},
+                "after": _TEXT,
+                "properties": {"type": "array", "items": _TEXT},
+            }),
+            _module("hubspot.companies.list", "search", "List CRM companies.", properties={
+                "limit": {**_POSITIVE_INTEGER, "maximum": 100},
+                "after": _TEXT,
+                "properties": {"type": "array", "items": _TEXT},
+            }),
+            _module(
+                "hubspot.contact.update",
+                "action",
+                "Update an approved CRM contact.",
+                required=("contact_id", "properties"),
+                properties={"contact_id": _TEXT, "properties": {"type": "object"}},
+                permission_scope="write",
+            ),
+            _module(
+                "hubspot.company.update",
+                "action",
+                "Update an approved CRM company.",
+                required=("company_id", "properties"),
+                properties={"company_id": _TEXT, "properties": {"type": "object"}},
+                permission_scope="write",
+            ),
+        ],
+    },
 }
 
 # Providers that use the universal connector lifecycle. Their detailed manifest
 # replaces this planning placeholder as soon as the user connects them.
 UNIVERSAL_PLANNING_CONNECTORS: dict[str, str] = {
-    "hubspot": "HubSpot",
     "salesforce": "Salesforce",
     "clickup": "ClickUp",
     "jira": "Jira",

@@ -17,7 +17,8 @@ def test_planning_catalog_includes_unconnected_native_connectors() -> None:
     assert catalog["notion"]["connected"] is False
     assert "notion.page.create" in catalog["notion"]["allowed_operations"]
     assert catalog["hubspot"]["connected"] is False
-    assert catalog["hubspot"]["allowed_operations"] == ["api.request"]
+    assert "hubspot.contacts.list" in catalog["hubspot"]["allowed_operations"]
+    assert "hubspot.contact.update" in catalog["hubspot"]["allowed_operations"]
 
 
 def test_native_catalog_exposes_composable_module_types():
