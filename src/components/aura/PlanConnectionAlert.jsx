@@ -33,13 +33,17 @@ const TOOL_ICONS = {
 const iconFor = (name) => TOOL_ICONS[name] || Box;
 
 // Capitalize the first letter of a lowercase "iWill" sentence for the subtext.
-const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : "");
+const cap = (s) => {
+  const text = String(s || "").replace(/[.\s]+$/, "").trim();
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : "";
+};
 
 export default function PlanConnectionAlert({
   tools,
   connections,
   connectingTool,
   authRequired = {},
+  errors = {},
   onConnect,
   onConnectAll,
 }) {
@@ -74,7 +78,7 @@ export default function PlanConnectionAlert({
                   <span className="text-sm font-medium">{t.name}</span>
                   {isAuthRequired ? (
                     <span className="flex items-center gap-1 text-[11px] text-amber-400">
-                      <AlertTriangle className="w-3 h-3" /> Authorization required
+                      <AlertTriangle className="w-3 h-3" /> Access needed
                     </span>
                   ) : isConnecting ? (
                     <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
@@ -91,13 +95,14 @@ export default function PlanConnectionAlert({
                 </div>
                 {isAuthRequired ? (
                   <p className="text-[11px] text-amber-400/70 mt-0.5 leading-relaxed">
-                    OAuth access needed — ask AURA to authorize {t.name}, then it can run for real.
+                    AURA needs your permission to use {t.name}.
                   </p>
                 ) : (
                   t.reason && (
                     <p className="text-[11px] text-muted-foreground/70 mt-0.5 leading-relaxed">{cap(t.reason)}.</p>
                   )
                 )}
+                {errors[t.name] && <p className="mt-1 text-[11px] text-red-300">{errors[t.name]}</p>}
               </div>
             </div>
           );

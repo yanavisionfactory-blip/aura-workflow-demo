@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Check, Pencil, X, GripVertical, Shield, Move, Loader2, LockKeyhole } from "lucide-react";
+import { Check, Pencil, X, GripVertical, Shield, Move, Loader2 } from "lucide-react";
 import { aura } from "@/api/auraClient";
 
 const STEP_SCHEMA = {
@@ -45,27 +45,20 @@ const LABEL_MAP = {
 };
 const normLabel = (l) => LABEL_MAP[l] || l;
 
-export default function PlanStep({
-  step,
-  index,
-  isLast,
-  provided,
-  onChange,
-  onDelete,
-  forceEdit,
-  onEditConsumed,
-  permissionNeeded = [],
-  connectingTool,
-  connectionErrors = {},
-  onAllowAccess,
-}) {
+export default function PlanStep({ step, index, isLast, provided, onChange, onDelete, forceEdit, onEditConsumed }) {
   const [changing, setChanging] = useState(false);
   const [changeText, setChangeText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
   const title = step.title || step.action;
-  const iWill = step.iWill || (step.action ? step.action[0].toLowerCase() + step.action.slice(1) : "");
+  const description = String(step.iWill || step.action || "Complete this step")
+    .replace(/^i(?:'|’)ll\s+/i, "")
+    .replace(/[.\s]+$/, "")
+    .trim();
+  const displayDescription = description
+    ? description.charAt(0).toUpperCase() + description.slice(1)
+    : "Complete this step";
   const flow = (step.flow || []).map((f) => ({ ...f, label: normLabel(f.label) }));
   const needsApproval = step.riskLevel === "modify";
 
@@ -146,8 +139,7 @@ Return the REVISED step with all fields updated to reflect the change. Keep the 
               </div>
             </div>
 
-            {/* I'll ... */}
-            <p className="text-sm text-muted-foreground leading-relaxed mb-3">I'll {iWill}.</p>
+            <p className="text-sm text-muted-foreground leading-relaxed mb-3">{displayDescription}.</p>
 
             {/* Show the assigned tool and output. Connection handling happens once,
                 at plan level, only when a required app is missing. */}
@@ -165,31 +157,6 @@ Return the REVISED step with all fields updated to reflect the change. Keep the 
               </div>
             )}
 
-            {permissionNeeded.map((tool) => {
-              const isOpening = connectingTool === tool;
-              return (
-                <div key={tool} className="mt-3 rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2.5">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-2 text-xs text-amber-100/90">
-                      <LockKeyhole className="h-3.5 w-3.5 flex-shrink-0 text-amber-300" />
-                      <span>AURA needs your permission to use {tool}.</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => onAllowAccess(tool)}
-                      disabled={isOpening}
-                      className="flex flex-shrink-0 items-center gap-1.5 rounded-lg bg-amber-300 px-2.5 py-1.5 text-[11px] font-medium text-slate-950 transition-colors hover:bg-amber-200 disabled:opacity-60"
-                    >
-                      {isOpening && <Loader2 className="h-3 w-3 animate-spin" />}
-                      {isOpening ? `Opening ${tool}…` : "Allow access"}
-                    </button>
-                  </div>
-                  {connectionErrors[tool] && (
-                    <p className="mt-1.5 pl-5.5 text-[11px] text-red-300">{connectionErrors[tool]}</p>
-                  )}
-                </div>
-              );
-            })}
 
             {/* Approval shield for steps that send or change things */}
             {needsApproval && (

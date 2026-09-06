@@ -53,6 +53,34 @@ const planToolName = (step) => {
   return names[step.tool_slug] || step.tool_slug;
 };
 
+const cleanSentence = (value, fallback = "Complete this step") => {
+  const text = String(value || fallback)
+    .replace(/^i(?:'|’)ll\s+/i, "")
+    .replace(/[.\s]+$/, "")
+    .trim();
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : fallback;
+};
+
+const friendlyStepTitle = (step) => {
+  const tool = planToolName(step);
+  const reason = String(step.reason || "").toLowerCase();
+  const operation = String(step.operation || "");
+
+  if (operation === "gmail.send") return "Send the email";
+  if (operation.startsWith("gmail.")) return "Review email context";
+  if (operation.startsWith("calendar.")) return operation.includes("create") ? "Schedule the event" : "Check the calendar";
+  if (operation.startsWith("sheets.")) return operation.includes("update") || operation.includes("append") ? "Update the spreadsheet" : "Read the spreadsheet";
+  if (operation.startsWith("hubspot.")) return reason.includes("update") ? "Update HubSpot records" : "Find HubSpot records";
+  if (/transform|compile|summari[sz]e|breakdown|report/.test(reason)) return "Prepare the report";
+  if (/find|identify|determine|search|match/.test(reason)) return "Find matching records";
+  if (/draft|write|compose/.test(reason)) return "Draft the content";
+  if (/send|deliver|notify|post/.test(reason)) return `Send with ${tool}`;
+  if (/update|change|sync/.test(reason)) return `Update ${tool}`;
+  if (/create|add/.test(reason)) return `Create in ${tool}`;
+  if (/get|pull|fetch|read|collect/.test(reason)) return `Get ${tool} data`;
+  return `Use ${tool}`;
+};
+
 const INTERPRETATION_SCHEMA = {
   type: "object",
   properties: {
@@ -237,6 +265,14 @@ export default function Demo() {
     userSelectedToolsRef.current = [];
   }, []);
 
+  const handlePageBack = useCallback(() => {
+    if (phase === "confirm") reset();
+    else if (phase === "plan") setPhase("confirm");
+    else if (phase === "preview") setPhase("plan");
+    else if (phase === "executing" || phase === "error") setPhase("plan");
+    else if (phase === "results") reset();
+  }, [phase, reset]);
+
   // ---- Submit (input) ----
   const handleSubmit = useCallback((prompt, pinnedTools = [], resources = null, mock = null) => {
     clearTimeouts();
@@ -320,7 +356,10 @@ Write ONE clear, conversational sentence restating what they want — but offer 
                 ? `Planned in ${(run.plan.planning_artifacts.timings_ms.total / 1000).toFixed(1)}s`
                 : "Runs in the Python control plane",
               steps: run.plan.steps.map((step) => ({
-                tool: planToolName(step), title: step.operation, iWill: step.reason, action: step.operation,
+                tool: planToolName(step),
+                title: friendlyStepTitle(step),
+                iWill: cleanSentence(step.reason),
+                action: cleanSentence(step.reason),
                 detail: JSON.stringify(step.arguments, null, 2), reason: step.reason, output: step.expected_output,
                 flow: [{ label: "Uses", value: planToolName(step) }, { label: "Creates", value: step.expected_output }],
                 riskLevel: step.consequential ? "modify" : "read",
@@ -905,7 +944,10 @@ Generate a results summary in plain, human-friendly language (not technical).
       <AmbientBackground phase={phase} />
 
       <div className="relative z-10 flex flex-col min-h-screen">
-        <TopBar onHistoryOpen={() => setHistoryOpen(true)} />
+        <TopBar
+          onHistoryOpen={() => setHistoryOpen(true)}
+          onBack={phase === "input" ? null : handlePageBack}
+        />
 
         <main className="flex-1 flex items-center justify-center px-4 py-8 md:py-12">
           <AnimatePresence mode="wait">

@@ -1,12 +1,13 @@
 import { useState, useMemo, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
-import { Brain, Plus, ArrowRight, ArrowLeft, Sparkles, Loader2, Check, X } from "lucide-react";
+import { Brain, Plus, ArrowRight, Sparkles, Loader2, Check, X } from "lucide-react";
 import { aura } from "@/api/auraClient";
 import PlanStep from "./PlanStep";
+import PlanConnectionAlert from "./PlanConnectionAlert";
 import { CATALOG } from "@/lib/toolCatalog";
 import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
-import { connectTool, hasStandardOAuth, hydrateConnections } from "@/lib/connectService";
+import { connectTool, hydrateConnections } from "@/lib/connectService";
 
 // Case-insensitive lookup so LLM tool-name variations ("meta ads", "Jira Software")
 // still resolve to the canonical name in the registry — keeps connection detection
@@ -65,7 +66,7 @@ const PLAN_HINTS = [
   "Change the whole plan — make it weekly",
 ];
 
-export default function PlanView({ plan, onApprove, onBack, approveLabel = "Start" }) {
+export default function PlanView({ plan, onApprove, approveLabel = "Start" }) {
   const [steps, setSteps] = useState(plan.steps);
   const [forceEditIndex, setForceEditIndex] = useState(null);
   const [name, setName] = useState(plan.workflowName || "");
@@ -78,6 +79,12 @@ export default function PlanView({ plan, onApprove, onBack, approveLabel = "Star
     setConnectionErrors((prev) => ({ ...prev, [name]: "" }));
     try {
       const res = await connectTool(name);
+      if (res.needsConfiguration) {
+        setConnectionErrors((prev) => ({
+          ...prev,
+          [name]: `AURA couldn't finish connecting ${name} automatically. Please try again.`,
+        }));
+      }
       if (res.connected) await hydrateConnections();
     } catch (e) {
       setConnectionErrors((prev) => ({
@@ -111,7 +118,11 @@ export default function PlanView({ plan, onApprove, onBack, approveLabel = "Star
 
   // AURA handles connector discovery and setup. The only thing a user may need
   // to do is grant the provider's required account permission.
-  const permissionNeeded = planTools.filter((tool) => !connections[tool.name] && hasStandardOAuth(tool.name));
+  const needed = planTools.filter((tool) => !connections[tool.name]);
+
+  const connectNeeded = async () => {
+    for (const tool of needed) await handleConnect(tool.name);
+  };
 
   const onDragEnd = (res) => {
     if (!res.destination || res.source.index === res.destination.index) return;
@@ -192,13 +203,6 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="w-full max-w-2xl mx-auto">
       {/* Header */}
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
-        <button
-          type="button"
-          onClick={onBack}
-          className="mb-4 inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <ArrowLeft className="w-3.5 h-3.5" /> Back
-        </button>
         <div className="flex items-center gap-2 mb-1.5">
           <div className="p-1.5 rounded-lg bg-primary/10 border border-primary/20">
             <Brain className="w-4 h-4 text-primary" />
@@ -217,6 +221,15 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         </div>
       )}
 
+      <PlanConnectionAlert
+        tools={needed}
+        connections={connections}
+        connectingTool={connectingTool}
+        errors={connectionErrors}
+        onConnect={handleConnect}
+        onConnectAll={connectNeeded}
+      />
+
       {/* Steps */}
       <DragDropContext onDragEnd={onDragEnd}>
         <Droppable droppableId="plan-steps">
@@ -234,12 +247,6 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
                       onDelete={() => deleteStep(i)}
                       forceEdit={forceEditIndex === i}
                       onEditConsumed={() => setForceEditIndex(null)}
-                      permissionNeeded={toolsForStep(step).filter(
-                        (tool) => !connections[tool] && hasStandardOAuth(tool)
-                      )}
-                      connectingTool={connectingTool}
-                      connectionErrors={connectionErrors}
-                      onAllowAccess={handleConnect}
                     />
                   )}
                 </Draggable>
@@ -358,16 +365,16 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
           />
         </div>
         <div className="flex items-center justify-end gap-3">
-          {permissionNeeded.length > 0 && (
+          {needed.length > 0 && (
             <span className="mr-auto text-xs text-amber-300">
-              Allow access to {permissionNeeded.map((tool) => tool.name).join(", ")} to start
+              Connect {needed.map((tool) => tool.name).join(", ")} to start
             </span>
           )}
           <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
             onClick={() => onApprove(steps, name.trim())}
-            disabled={permissionNeeded.length > 0 || steps.length === 0 || Boolean(plan.error)}
+            disabled={needed.length > 0 || steps.length === 0 || Boolean(plan.error)}
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white disabled:cursor-not-allowed disabled:opacity-40"
           >
             {approveLabel} <ArrowRight className="w-4 h-4" />
