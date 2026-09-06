@@ -1,10 +1,12 @@
-import { motion } from "framer-motion";
-import { Activity, Zap, Clock } from "lucide-react";
+import { useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Activity, Zap, Clock, ChevronDown } from "lucide-react";
 import ExecutionStep from "./ExecutionStep";
 
 const STEP_DURATION = 2.6; // seconds per step (for ETA)
 
-export default function ExecutionView({ steps, currentStepIndex, isReal }) {
+export default function ExecutionView({ steps, currentStepIndex, isReal, workflowSummary }) {
+  const [showActivity, setShowActivity] = useState(false);
   const completedCount = steps.filter((s) => s.status === "completed").length;
   const failed = steps.some((s) => s.status === "failed");
   const progress = (completedCount / steps.length) * 100;
@@ -21,6 +23,10 @@ export default function ExecutionView({ steps, currentStepIndex, isReal }) {
     : etaSecs >= 60
     ? `About ${Math.max(1, Math.round(etaSecs / 60))} min remaining`
     : `~${Math.round(etaSecs)}s remaining`;
+  const currentStep = steps[currentStepIndex] || steps.find((step) => step.status === "pending") || steps.at(-1);
+  const currentLabel = currentStep?.status === "completed"
+    ? "Finishing up"
+    : currentStep?.action || "Preparing the next step";
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="w-full max-w-3xl mx-auto">
@@ -61,12 +67,32 @@ export default function ExecutionView({ steps, currentStepIndex, isReal }) {
         />
       </div>
 
-      {/* Steps */}
-      <div>
-        {steps.map((step, i) => (
-          <ExecutionStep key={i} step={step} index={i} isLast={i === steps.length - 1} isCurrent={i === currentStepIndex} />
-        ))}
+      <div className="rounded-2xl border border-accent/15 bg-accent/[0.03] p-5">
+        <p className="text-[10px] uppercase tracking-[0.16em] text-accent/70">What AURA is doing</p>
+        <h3 className="mt-1.5 text-base font-semibold">{workflowSummary || "Completing your workflow"}</h3>
+        <p className="mt-3 text-sm text-muted-foreground">
+          Now: <span className="text-foreground">{currentLabel}</span>
+        </p>
       </div>
+
+      <button
+        type="button"
+        onClick={() => setShowActivity((value) => !value)}
+        className="mt-4 flex w-full items-center justify-between rounded-xl border border-sky-400/15 bg-sky-400/[0.04] px-4 py-3 text-sm text-sky-300 hover:bg-sky-400/[0.08]"
+      >
+        <span>{showActivity ? "Hide activity" : `Show activity · ${completedCount} of ${steps.length} complete`}</span>
+        <ChevronDown className={`h-4 w-4 transition-transform ${showActivity ? "rotate-180" : ""}`} />
+      </button>
+
+      <AnimatePresence initial={false}>
+        {showActivity && (
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="mt-4 overflow-hidden">
+            {steps.map((step, i) => (
+              <ExecutionStep key={i} step={step} index={i} isLast={i === steps.length - 1} />
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {!failed && (
         <div className="flex items-center justify-center gap-1.5 mt-4 text-[11px] text-muted-foreground/50">
