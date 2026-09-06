@@ -2,7 +2,6 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Check, Pencil, X, GripVertical, Shield, Move, Loader2 } from "lucide-react";
 import { base44 } from "@/api/base44Client";
-import ToolPicker from "./ToolPicker";
 
 const STEP_SCHEMA = {
   type: "object",
@@ -46,7 +45,7 @@ const LABEL_MAP = {
 };
 const normLabel = (l) => LABEL_MAP[l] || l;
 
-export default function PlanStep({ step, index, isLast, provided, onChange, onDelete, forceEdit, onEditConsumed, connections = {}, onConnect, connectingTool, onConnectRequest }) {
+export default function PlanStep({ step, index, isLast, provided, onChange, onDelete, forceEdit, onEditConsumed }) {
   const [changing, setChanging] = useState(false);
   const [changeText, setChangeText] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -142,19 +141,13 @@ Return the REVISED step with all fields updated to reflect the change. Keep the 
               <div className="flex flex-wrap gap-1.5">
                 {flow.map((f, i) =>
                   f.label === "Uses" ? (
-                    <ToolPicker
+                    <div
                       key={i}
-                      value={f.value}
-                      connections={connections}
-                      connecting={connectingTool === f.value}
-                      onConnect={onConnect}
-                      onConnectRequest={onConnectRequest}
-                      onChange={(newName) => {
-                        const newFlow = [...(step.flow || [])];
-                        newFlow[i] = { ...newFlow[i], value: newName };
-                        onChange({ ...step, flow: newFlow, tool: newName });
-                      }}
-                    />
+                      className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg bg-primary/5 border border-primary/10"
+                    >
+                      <span className="text-primary/50 font-medium">Uses:</span>
+                      <span className="text-foreground/80">{f.value}</span>
+                    </div>
                   ) : (
                     <div
                       key={i}
