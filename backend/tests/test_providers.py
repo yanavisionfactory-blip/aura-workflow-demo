@@ -84,7 +84,7 @@ def test_idempotency_changes_with_step_position():
 def test_jira_uses_managed_atlassian_oauth():
     provider = PROVIDERS["jira"]
     settings = _settings()
-    assert oauth_callback_url(settings, provider) == "https://api.example.com/v1/oauth/atlassian/callback"
+    assert oauth_callback_url(settings, provider) == "https://api.example.com/v1/oauth/jira/callback"
     url = oauth_authorization_url(settings, provider, "signed-state")
     assert "client_id=atlassian-client" in url
     assert "audience=api.atlassian.com" in url
