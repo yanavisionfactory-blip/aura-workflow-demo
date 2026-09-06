@@ -1,5 +1,4 @@
 import { motion } from "framer-motion";
-import ConnectionsPill from "./ConnectionsPill";
 import { Sparkles, History } from "lucide-react";
 import { UserButton } from "@clerk/react";
 import { useAuth } from "@/lib/AuthContext";
@@ -39,7 +38,6 @@ export default function TopBar({ onHistoryOpen }) {
             {workspaces.map((item) => <option key={item.workspace_id} value={item.workspace_id}>{item.name}</option>)}
           </select>
         )}
-        <ConnectionsPill />
         <button
           onClick={onHistoryOpen}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/8 text-muted-foreground hover:text-foreground hover:border-white/15 hover:bg-white/5 transition-all text-xs"
