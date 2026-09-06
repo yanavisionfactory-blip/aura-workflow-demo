@@ -26,22 +26,31 @@ function messageFrom(data, status) {
 async function request(path, options = {}) {
   if (!API_URL) throw new Error("AURA Python API is not configured");
   const workspaceId = options.workspaceId || localStorage.getItem(WORKSPACE_KEY);
-  const token = tokenProvider ? await tokenProvider() : null;
-  const response = await fetch(`${API_URL}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(workspaceId ? { "X-Workspace-Id": workspaceId } : {}),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(options.headers || {}),
-    },
-  });
-  const data = await response.json().catch(() => ({}));
-  if (response.status === 401 && tokenProvider) {
-    clearWorkspace();
+  const performRequest = async (token) => {
+    const response = await fetch(`${API_URL}${path}`, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...(workspaceId ? { "X-Workspace-Id": workspaceId } : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(options.headers || {}),
+      },
+    });
+    const data = await response.json().catch(() => ({}));
+    return { response, data };
+  };
+
+  let token = tokenProvider ? await tokenProvider() : null;
+  let result = await performRequest(token);
+
+  if (result.response.status === 401 && tokenProvider) {
+    token = await tokenProvider({ skipCache: true });
+    result = await performRequest(token);
   }
-  if (!response.ok) throw new Error(messageFrom(data, response.status));
-  return data;
+
+  if (result.response.status === 401) clearWorkspace();
+  if (!result.response.ok) throw new Error(messageFrom(result.data, result.response.status));
+  return result.data;
 }
 
 export const auraRequest = request;
