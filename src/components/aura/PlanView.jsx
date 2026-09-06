@@ -7,7 +7,7 @@ import PlanStep from "./PlanStep";
 import PlanConnectionAlert from "./PlanConnectionAlert";
 import { CATALOG } from "@/lib/toolCatalog";
 import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
-import { connectTool, hydrateConnections } from "@/lib/connectService";
+import { connectTool, getToolConnection, hydrateConnections, reconnectTool } from "@/lib/connectService";
 
 // Case-insensitive lookup so LLM tool-name variations ("meta ads", "Jira Software")
 // still resolve to the canonical name in the registry — keeps connection detection
@@ -66,7 +66,13 @@ const PLAN_HINTS = [
   "Change the whole plan — make it weekly",
 ];
 
-export default function PlanView({ plan, onApprove, approveLabel = "Start" }) {
+export default function PlanView({
+  plan,
+  onApprove,
+  approveLabel = "Start",
+  requiredReconnectTools = [],
+  onConnectionRecovered,
+}) {
   const [steps, setSteps] = useState(plan.steps);
   const [forceEditIndex, setForceEditIndex] = useState(null);
   const [name, setName] = useState(plan.workflowName || "");
@@ -85,14 +91,19 @@ export default function PlanView({ plan, onApprove, approveLabel = "Start" }) {
     setConnectingTool(name);
     setConnectionErrors((prev) => ({ ...prev, [name]: "" }));
     try {
-      const res = await connectTool(name);
+      const reconnectRequired = requiredReconnectTools.includes(name);
+      const existing = reconnectRequired ? await getToolConnection(name) : null;
+      const res = existing ? await reconnectTool(name) : await connectTool(name);
       if (res.needsConfiguration) {
         setConnectionErrors((prev) => ({
           ...prev,
           [name]: `AURA couldn't finish connecting ${name} automatically. Please try again.`,
         }));
       }
-      if (res.connected) await hydrateConnections();
+      if (res.connected) {
+        await hydrateConnections();
+        onConnectionRecovered?.(name);
+      }
     } catch (e) {
       setConnectionErrors((prev) => ({
         ...prev,
@@ -102,6 +113,12 @@ export default function PlanView({ plan, onApprove, approveLabel = "Start" }) {
       }));
     } finally {
       setConnectingTool(null);
+    }
+  };
+
+  const handleConnectAll = async () => {
+    for (const tool of needed) {
+      await handleConnect(tool.name);
     }
   };
 
@@ -129,8 +146,14 @@ export default function PlanView({ plan, onApprove, approveLabel = "Start" }) {
   // to do is grant the provider's required account permission.
   // Never claim a connection is missing until the authoritative registry has
   // loaded. Unknown state is not the same thing as disconnected.
+  const effectiveConnections = useMemo(() => {
+    const next = { ...connections };
+    requiredReconnectTools.forEach((toolName) => { next[toolName] = false; });
+    return next;
+  }, [connections, requiredReconnectTools]);
+
   const needed = connectionsReady
-    ? planTools.filter((tool) => !connections[tool.name])
+    ? planTools.filter((tool) => !effectiveConnections[tool.name])
     : [];
 
   const onDragEnd = (res) => {
@@ -232,10 +255,11 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
 
       <PlanConnectionAlert
         tools={needed}
-        connections={connections}
+        connections={effectiveConnections}
         connectingTool={connectingTool}
         errors={connectionErrors}
         onConnect={handleConnect}
+        onConnectAll={handleConnectAll}
       />
 
       {/* Steps */}
