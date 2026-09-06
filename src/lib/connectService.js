@@ -12,7 +12,19 @@ import {
   testPythonConnection,
 } from "@/lib/auraApi";
 
-const PYTHON_OAUTH = { Gmail: "google", "Google Drive": "google", "Google Calendar": "google", "Google Sheets": "google", Airtable: "airtable", Notion: "notion", Slack: "slack", TikTok: "tiktok", Mailchimp: "mailchimp", Canva: "canva" };
+const PYTHON_OAUTH = { Gmail: "google", "Google Drive": "google", "Google Calendar": "google", "Google Sheets": "google", Jira: "jira", Airtable: "airtable", Notion: "notion", Slack: "slack", TikTok: "tiktok", Mailchimp: "mailchimp", Canva: "canva" };
+const CONNECTION_NAMES = {
+  atlassian: ["Jira"],
+  jira: ["Jira"],
+  google: ["Gmail", "Google Drive", "Google Calendar", "Google Sheets"],
+  "google-workspace": ["Gmail", "Google Drive", "Google Calendar", "Google Sheets"],
+  notion: ["Notion"],
+  slack: ["Slack"],
+  airtable: ["Airtable"],
+  tiktok: ["TikTok"],
+  mailchimp: ["Mailchimp"],
+  canva: ["Canva"],
+};
 const slugify = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 const credentialsFor = (opts) => opts.credentials || (opts.apiKey ? { api_key: opts.apiKey } : {});
 
@@ -97,12 +109,14 @@ export async function hydrateConnections() {
   if (pythonRuntimeEnabled) {
     const tools = await listPythonTools();
     const map = {};
-    for (const tool of tools) map[tool.display_name] = tool.enabled;
-    if (map["Google Workspace"]) {
-      map.Gmail = true;
-      map["Google Drive"] = true;
-      map["Google Calendar"] = true;
-      map["Google Sheets"] = true;
+    for (const tool of tools) {
+      if (!tool.enabled) continue;
+      if (tool.display_name) map[tool.display_name] = true;
+      const aliases = CONNECTION_NAMES[String(tool.slug || "").toLowerCase()] || [];
+      aliases.forEach((name) => { map[name] = true; });
+      if (String(tool.display_name || "").toLowerCase() === "google workspace") {
+        CONNECTION_NAMES.google.forEach((name) => { map[name] = true; });
+      }
     }
     replaceConnections(map);
     return tools;
