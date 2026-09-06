@@ -132,8 +132,6 @@ def oauth_callback_url(settings: Settings, provider: OAuthProvider) -> str:
     # Providers registered against AURA's shared installation callback.
     if provider.slug in {"notion", "tiktok", "mailchimp", "canva"}:
         callback_provider = "installation"
-    elif provider.slug == "jira":
-        callback_provider = "atlassian"
     else:
         callback_provider = provider.slug
     return f"{settings.public_url}/v1/oauth/{callback_provider}/callback"
