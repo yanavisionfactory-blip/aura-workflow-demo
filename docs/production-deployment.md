@@ -7,6 +7,7 @@ Configure the same environment on the API and Celery worker services:
 ```env
 ENVIRONMENT=production
 PUBLIC_URL=https://<api-domain>
+OAUTH_CALLBACK_OVERRIDES={}
 FRONTEND_URL=https://yanavisionfactory-blip.github.io
 DATABASE_URL=<Railway PostgreSQL URL using postgresql+psycopg://>
 REDIS_URL=<Railway Redis URL>
@@ -20,6 +21,19 @@ CLERK_ISSUER=<Clerk issuer URL>
 CLERK_AUTHORIZED_PARTIES=https://yanavisionfactory-blip.github.io
 ALLOW_LEGACY_WORKSPACE_TOKENS=false
 ```
+
+Managed OAuth providers declare their callback route in the provider registry. Managed,
+installed, and custom authorization and token exchange flows always use the same resolver.
+If an existing provider application has a different registered callback, set one deployment
+override instead of changing code:
+
+```env
+OAUTH_CALLBACK_OVERRIDES={"jira":"https://<api-domain>/v1/oauth/jira/callback"}
+```
+
+Each override must be an absolute callback URL with no query string or fragment. Production
+readiness fails when the registry contains an invalid or non-HTTPS callback. Keys may be a
+managed provider slug or the shared `installation` and `custom` routes.
 
 Add each provider's client ID and secret to both services. Never add provider secrets to GitHub Pages, source control, build arguments, or variables prefixed with `VITE_`.
 
