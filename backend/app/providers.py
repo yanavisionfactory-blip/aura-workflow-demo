@@ -409,7 +409,7 @@ async def refresh_oauth_credentials(
         "grant_type": "refresh_token",
     }
     headers = {"Accept": "application/json"}
-    if provider.slug in {"airtable", "canva"}:
+    if provider.slug in {"airtable", "canva", "notion"}:
         basic = base64.b64encode(f"{payload['client_id']}:{payload['client_secret']}".encode()).decode()
         headers["Authorization"] = f"Basic {basic}"
         payload.pop("client_secret")
