@@ -228,6 +228,91 @@ def test_combined_planner_retries_schema_validation_failure(monkeypatch) -> None
     assert result.steps[0].operation == "records.read"
 
 
+def test_create_plan_falls_back_to_staged_agents_after_combined_recovery(monkeypatch) -> None:
+    planner = object()
+    intent = object()
+    router = object()
+    builder = object()
+    calls = []
+
+    async def no_sleep(_delay):
+        return None
+
+    async def fake_run(agent, payload, max_turns=8):
+        calls.append(agent)
+        if agent is planner:
+            raise RuntimeError("combined structured output failed")
+        if agent is intent:
+            return {"goal": "Turn research notes into Jira tasks"}
+        if agent is router:
+            return {
+                "tools": [
+                    {"slug": "notion", "role": "source", "rationale": "Find notes"},
+                    {"slug": "jira", "role": "destination", "rationale": "Create tasks"},
+                ]
+            }
+        return {
+            "name": "Research notes to Jira",
+            "interpretation": "Turn research notes into reviewed Jira tasks",
+            "steps": [
+                {
+                    "key": "find_notes",
+                    "agent": "research",
+                    "tool_slug": "notion",
+                    "operation": "notion.search",
+                    "arguments": {"query": "research notes"},
+                    "reason": "Find the research notes",
+                    "expected_output": "Matching research notes",
+                },
+                {
+                    "key": "create_task",
+                    "agent": "delivery",
+                    "tool_slug": "jira",
+                    "operation": "jira.issue.create",
+                    "arguments": {
+                        "project_key": "{{inputs.project_key}}",
+                        "summary": "{{steps.find_notes.title}}",
+                    },
+                    "reason": "Create a reviewed Jira task",
+                    "expected_output": "Created Jira task",
+                    "consequential": True,
+                    "depends_on": ["find_notes"],
+                },
+            ],
+        }
+
+    monkeypatch.setattr(
+        agent_runtime,
+        "build_agents",
+        lambda: {"planner": planner, "intent": intent, "router": router, "builder": builder},
+    )
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+    monkeypatch.setattr(agent_runtime.asyncio, "sleep", no_sleep)
+
+    result = asyncio.run(
+        create_plan(
+            "Turn action items from my research notes into Jira tasks",
+            [
+                {
+                    "slug": "notion",
+                    "allowed_operations": ["notion.search"],
+                    "connected": True,
+                },
+                {
+                    "slug": "jira",
+                    "allowed_operations": ["jira.issue.create"],
+                    "connected": False,
+                },
+            ],
+        )
+    )
+
+    assert calls.count(planner) == 3
+    assert calls[-3:] == [intent, router, builder]
+    assert result.planning_artifacts["planner_recovery_mode"] == "staged"
+    assert result.planning_artifacts["connection_requirements"] == ["jira"]
+
+
 def test_normalizer_infers_prior_step_dependencies_and_write_safety() -> None:
     workflow = plan(
         PlanStep(
