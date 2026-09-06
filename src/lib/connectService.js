@@ -116,8 +116,18 @@ export async function hydrateConnections() {
   if (pythonRuntimeEnabled) {
     const tools = await listPythonTools();
     const map = {};
-    for (const tool of tools) {
+    const health = await Promise.all(tools.map(async (tool) => {
+      if (!tool.enabled || tool.kind !== "oauth") return { tool, connected: !!tool.enabled };
+      try {
+        const result = await testPythonConnection(tool.id);
+        return { tool, connected: result.status === "verified" && result.verification?.ok !== false };
+      } catch {
+        return { tool, connected: false };
+      }
+    }));
+    for (const { tool, connected } of health) {
       if (!tool.enabled) continue;
+      if (!connected) continue;
       if (tool.display_name) map[tool.display_name] = true;
       const aliases = connectionAliases(tool);
       aliases.forEach((name) => { map[name] = true; });
