@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { base44 } from "@/api/base44Client";
+import { aura } from "@/api/auraClient";
 import { WORKFLOW_EXAMPLES } from "@/lib/demoData";
 import { CREATOR_APPROVALS_MOCK } from "@/lib/mockWorkflows";
 import TopBar from "@/components/aura/TopBar";
@@ -18,9 +18,77 @@ import { detectNewConsequential } from "@/lib/editRunDetect";
 import { requestNotifyPermission, notifyWorkflowComplete, notifyWorkflowError } from "@/lib/auraNotify";
 import { hydrateConnections } from "@/lib/connectService";
 import { getAllConnections } from "@/lib/connectionsStore";
-import { approvePythonPlan, createPythonRun, getPythonRun, pythonRuntimeEnabled } from "@/lib/auraApi";
+import { approvePythonPlan, createPythonRun, getPythonRun } from "@/lib/auraApi";
 
 const STEP_DURATION = 2.6;
+
+const planToolName = (step) => {
+  if (step.tool_slug === "google") {
+    if (step.operation.startsWith("gmail.")) return "Gmail";
+    if (step.operation.startsWith("calendar.")) return "Google Calendar";
+    if (step.operation.startsWith("sheets.")) return "Google Sheets";
+    return "Google Drive";
+  }
+  const names = {
+    airtable: "Airtable",
+    notion: "Notion",
+    mailchimp: "Mailchimp",
+    canva: "Canva",
+    tiktok: "TikTok",
+    slack: "Slack",
+    hubspot: "HubSpot",
+    salesforce: "Salesforce",
+    clickup: "ClickUp",
+    jira: "Jira",
+    confluence: "Confluence",
+    "meta-ads": "Meta Ads",
+    instagram: "Instagram",
+    linkedin: "LinkedIn",
+    figma: "Figma",
+    shopify: "Shopify",
+    stripe: "Stripe",
+    quickbooks: "QuickBooks",
+    pinterest: "Pinterest",
+  };
+  return names[step.tool_slug] || step.tool_slug;
+};
+
+const cleanSentence = (value, fallback = "Complete this step") => {
+  const text = String(value || fallback)
+    .replace(/^i(?:'|’)ll\s+/i, "")
+    .replace(/[.\s]+$/, "")
+    .trim();
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : fallback;
+};
+
+const friendlyStepTitle = (step) => {
+  const tool = planToolName(step);
+  const reason = String(step.reason || "").toLowerCase();
+  const operation = String(step.operation || "");
+
+  if (operation === "gmail.send") return "Send the email";
+  if (operation.startsWith("gmail.")) return "Review email context";
+  if (operation.startsWith("calendar.")) return operation.includes("create") ? "Schedule the event" : "Check the calendar";
+  if (operation.startsWith("sheets.")) return operation.includes("update") || operation.includes("append") ? "Update the spreadsheet" : "Read the spreadsheet";
+  if (operation.startsWith("hubspot.")) return reason.includes("update") ? "Update HubSpot records" : "Find HubSpot records";
+  if (operation === "notion.search") return "Find the Notion notes";
+  if (operation.startsWith("notion.page.get") || operation.startsWith("notion.blocks.children.list")) return "Read the Notion notes";
+  if (operation.startsWith("notion.page.create")) return "Create the Notion page";
+  if (operation.startsWith("notion.page.update") || operation.startsWith("notion.blocks.children.append")) return "Update the Notion page";
+  if (operation === "jira.projects.list") return "Find the Jira project";
+  if (operation === "jira.issues.search") return "Find Jira issues";
+  if (operation === "jira.issue.get") return "Read the Jira issue";
+  if (operation === "jira.issue.create") return "Create the Jira tasks";
+  if (operation === "jira.issue.update") return "Update the Jira task";
+  if (/find|identify|determine|search|match/.test(reason)) return "Find matching records";
+  if (/get|pull|fetch|read|collect/.test(reason)) return `Get ${tool} data`;
+  if (/transform|compile|summari[sz]e|breakdown|report/.test(reason)) return "Prepare the report";
+  if (/draft|write|compose/.test(reason)) return "Draft the content";
+  if (/send|deliver|notify|post/.test(reason)) return `Send with ${tool}`;
+  if (/update|change|sync/.test(reason)) return `Update ${tool}`;
+  if (/create|add/.test(reason)) return `Create in ${tool}`;
+  return `Use ${tool}`;
+};
 
 const INTERPRETATION_SCHEMA = {
   type: "object",
@@ -163,6 +231,23 @@ export default function Demo() {
   const attachedResourcesRef = useRef(null);
   const userSelectedToolsRef = useRef([]);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const provider = params.get("tool_connected") || params.get("oauth_provider");
+    const status = params.get("oauth_status") || (params.has("tool_connected") ? "success" : null);
+    if (!provider || !status || !window.opener) return;
+    window.opener.postMessage(
+      {
+        source: "aura-oauth",
+        provider,
+        status,
+        message: params.get("oauth_message") || undefined,
+      },
+      window.location.origin
+    );
+    window.close();
+  }, []);
+
   const timeoutRefs = useRef([]);
   const pendingMock = useRef(null);
   const resolvedErrorRef = useRef(false);
@@ -206,6 +291,14 @@ export default function Demo() {
     userSelectedToolsRef.current = [];
   }, []);
 
+  const handlePageBack = useCallback(() => {
+    if (phase === "confirm") reset();
+    else if (phase === "plan") setPhase("confirm");
+    else if (phase === "preview") setPhase("plan");
+    else if (phase === "executing" || phase === "error") setPhase("plan");
+    else if (phase === "results") reset();
+  }, [phase, reset]);
+
   // ---- Submit (input) ----
   const handleSubmit = useCallback((prompt, pinnedTools = [], resources = null, mock = null) => {
     clearTimeouts();
@@ -223,35 +316,17 @@ export default function Demo() {
       return;
     }
 
-    // Custom: generate an interpretation first (confirm phase)
-    const attachedDocs = (resources && resources.documents) || [];
+    // Confirmation is deliberately local and instant. The Python planner performs
+    // intent understanding once after the user confirms or edits this text.
     setPhase("confirm");
-    setInterpretationLoading(true);
-    base44.integrations.Core
-      .InvokeLLM({
-        prompt: `You are AURA, an AI workflow automation platform. A user described a business workflow they want automated.
-
-User request: "${prompt}"
-${attachedDocs.length ? `\nThe user attached ${attachedDocs.length} file(s): ${attachedDocs.map((d) => d.name).join(", ")}. Read their contents — they are the source data or context for this workflow.` : ""}
-
-Write ONE clear, conversational sentence restating what they want, as you understood it — plain, specific business language, no jargon, warm tone. This will be shown to the user as "Is this what you meant?" before any plan is built.`,
-        response_json_schema: INTERPRETATION_SCHEMA,
-        file_urls: attachedDocs.map((d) => d.file_url).filter(Boolean),
-      })
-      .then((res) => {
-        setInterpretation(res.interpretation || "");
-        setInterpretationLoading(false);
-      })
-      .catch(() => {
-        setInterpretation(prompt);
-        setInterpretationLoading(false);
-      });
+    setInterpretation(prompt);
+    setInterpretationLoading(false);
   }, []);
 
   const handlePickExample = useCallback(
     (i) => {
       const ex = WORKFLOW_EXAMPLES[i];
-      const mock = pythonRuntimeEnabled ? null : (ex.mock ? { ...ex.mock, plan: { ...ex.mock.plan, workflowName: ex.title } } : null);
+      const mock = null;
       handleSubmit(ex.prompt, [], null, mock);
     },
     [handleSubmit]
@@ -260,7 +335,7 @@ Write ONE clear, conversational sentence restating what they want, as you unders
   // Ask AURA to re-interpret the same request from a different angle
   const handleRegenerateInterpretation = useCallback(() => {
     setInterpretationLoading(true);
-    base44.integrations.Core
+    aura.integrations.Core
       .InvokeLLM({
         prompt: `You are AURA, an AI workflow automation platform. A user wants to automate a workflow.
 
@@ -283,12 +358,13 @@ Write ONE clear, conversational sentence restating what they want — but offer 
   const handleConfirm = useCallback(
     (editedInterpretation) => {
       setInterpretation(editedInterpretation);
-      if (pythonRuntimeEnabled) {
+      {
         setPlanLoading(true);
         setPhase("plan");
         (async () => {
           try {
-            const created = await createPythonRun(originalPromptRef.current);
+            const planningPrompt = editedInterpretation.trim() || originalPromptRef.current;
+            const created = await createPythonRun(planningPrompt);
             pythonRunIdRef.current = created.id;
             let run;
             for (let attempt = 0; attempt < 120; attempt += 1) {
@@ -302,11 +378,16 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             setPlan({
               workflowName: run.plan.name,
               interpretation: run.plan.interpretation,
-              estimatedTime: "Runs in the Python control plane",
+              estimatedTime: run.plan.planning_artifacts?.timings_ms?.total
+                ? `Planned in ${(run.plan.planning_artifacts.timings_ms.total / 1000).toFixed(1)}s`
+                : "Runs in the Python control plane",
               steps: run.plan.steps.map((step) => ({
-                tool: step.tool_slug, title: step.operation, iWill: step.reason, action: step.operation,
+                tool: planToolName(step),
+                title: friendlyStepTitle(step),
+                iWill: cleanSentence(step.reason),
+                action: cleanSentence(step.reason),
                 detail: JSON.stringify(step.arguments, null, 2), reason: step.reason, output: step.expected_output,
-                flow: [{ label: "Uses", value: step.tool_slug }, { label: "Creates", value: step.expected_output }],
+                flow: [{ label: "Uses", value: planToolName(step) }, { label: "Creates", value: step.expected_output }],
                 riskLevel: step.consequential ? "modify" : "read",
                 riskNote: step.consequential ? "This provider action runs only after your approval." : "",
                 preview: step.consequential ? {
@@ -318,7 +399,12 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               })),
             });
           } catch (error) {
-            setPlan({ interpretation: editedInterpretation, workflowName: "Workflow unavailable", steps: [] });
+            setPlan({
+              interpretation: editedInterpretation,
+              workflowName: originalPromptRef.current.slice(0, 60),
+              steps: [],
+              error: error.message || "AURA could not build this plan. Please try again.",
+            });
             setResults({ title: "Orchestrator unavailable", summary: error.message, metrics: [], outcomes: [], nextSteps: [] });
           } finally { setPlanLoading(false); }
         })();
@@ -336,7 +422,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
       setPlanLoading(true);
       setPhase("plan");
       const attachedPlanDocs = (attachedResourcesRef.current?.documents) || [];
-      base44.integrations.Core
+      aura.integrations.Core
         .InvokeLLM({
           prompt: `You are AURA, an AI workflow automation platform. Build an execution plan for this workflow.
 
@@ -433,7 +519,7 @@ Rules:
       return;
     }
     if (autoApprove) {
-      if (pythonRuntimeEnabled && pythonRunIdRef.current) startPythonExecution();
+      if (pythonRunIdRef.current) startPythonExecution();
       else startExecution();
       return;
     }
@@ -445,7 +531,7 @@ Rules:
       approvedStepsRef.current = editedSteps;
       setApprovedSteps(editedSteps);
     }
-    if (pythonRuntimeEnabled && pythonRunIdRef.current) startPythonExecution(editedSteps);
+    if (pythonRunIdRef.current) startPythonExecution(editedSteps);
     else startExecution();
   }, []);
 
@@ -522,19 +608,19 @@ Rules:
       const baseName = workflowName || plan?.workflowName || originalPromptRef.current.slice(0, 60);
       const now = new Date().toISOString();
       const startUpdate = (id) =>
-        base44.entities.Workflow.updateMany(
+        aura.entities.Workflow.updateMany(
           { id },
           { $set: { steps: approvedStepsRef.current, interpretation: plan?.interpretation || interpretation, last_run_status: "running", last_run_date: now }, $inc: { run_count: 1 } }
         );
       if (!wfId) {
         // Reuse an existing saved workflow for the same prompt, else create one
-        const existing = await base44.entities.Workflow.filter({ prompt: originalPromptRef.current }, "-created_date", 1).catch(() => []);
+        const existing = await aura.entities.Workflow.filter({ prompt: originalPromptRef.current }, "-created_date", 1).catch(() => []);
         if (existing.length) {
           wfId = existing[0].id;
           currentWorkflowIdRef.current = wfId;
           await startUpdate(wfId);
         } else {
-          const wf = await base44.entities.Workflow.create({
+          const wf = await aura.entities.Workflow.create({
             name: baseName,
             prompt: originalPromptRef.current,
             interpretation: plan?.interpretation || interpretation,
@@ -549,7 +635,7 @@ Rules:
       } else {
         await startUpdate(wfId);
       }
-      const run = await base44.entities.WorkflowRun.create({ prompt: originalPromptRef.current, status: "running", workflow_id: wfId });
+      const run = await aura.entities.WorkflowRun.create({ prompt: originalPromptRef.current, status: "running", workflow_id: wfId });
       currentRunIdRef.current = run.id;
     } catch (e) {
       /* ignore */
@@ -568,7 +654,7 @@ Rules:
     const poll = async () => {
       while (!stopped) {
         try {
-          const run = await base44.entities.WorkflowRun.get(runId);
+          const run = await aura.entities.WorkflowRun.get(runId);
           if (run.steps && run.steps.length) {
             setExecSteps(run.steps.map((s) => ({ ...s, liveOutput: s.output || "" })));
             const idx = run.steps.findIndex((s) => s.status === "running");
@@ -581,7 +667,7 @@ Rules:
     poll();
 
     try {
-      const res = await base44.functions.invoke("orchestrateWorkflow", {
+      const res = await aura.functions.invoke("orchestrateWorkflow", {
         runId,
         steps: approvedStepsRef.current,
         interpretation: plan?.interpretation || interpretation,
@@ -623,7 +709,7 @@ Rules:
             setPhase("error");
             notifyWorkflowError(mock?.results?.title || originalPromptRef.current, mock?.errorStep?.what);
             if (currentWorkflowIdRef.current) {
-              base44.entities.Workflow.updateMany(
+              aura.entities.Workflow.updateMany(
                 { id: currentWorkflowIdRef.current },
                 { $set: { last_run_status: "failed", last_run_date: new Date().toISOString() } }
               ).catch(() => {});
@@ -668,7 +754,7 @@ Rules:
         nextSteps: [],
       };
     } else {
-      res = await base44.integrations.Core.InvokeLLM({
+      res = await aura.integrations.Core.InvokeLLM({
         prompt: `You are AURA. A workflow has just been executed successfully.
 
 Confirmed intent: ${interpretation}
@@ -691,7 +777,7 @@ Generate a results summary in plain, human-friendly language (not technical).
 
     if (currentRunIdRef.current && !resultsFromBackend) {
       try {
-        await base44.entities.WorkflowRun.update(currentRunIdRef.current, {
+        await aura.entities.WorkflowRun.update(currentRunIdRef.current, {
           status: executionStatus === "failed" || errorMsg ? "failed" : "completed",
           title: workflowName || res.title,
           summary: res.summary,
@@ -713,7 +799,7 @@ Generate a results summary in plain, human-friendly language (not technical).
           steps: approvedStepsRef.current,
         };
         if (workflowName) wfSet.name = workflowName;
-        await base44.entities.Workflow.updateMany(
+        await aura.entities.Workflow.updateMany(
           { id: currentWorkflowIdRef.current },
           { $set: wfSet }
         );
@@ -811,7 +897,7 @@ Generate a results summary in plain, human-friendly language (not technical).
   const handleEditReviewRun = () => {
     setEditReviewOpen(false);
     setEditRunMode(false);
-    startExecution();
+    handleConfirm(plan?.interpretation || interpretation);
   };
 
   useEffect(() => {
@@ -821,11 +907,11 @@ Generate a results summary in plain, human-friendly language (not technical).
     if (!PROMPT) return;
     (async () => {
       try {
-        const existing = await base44.entities.Workflow.filter({ prompt: PROMPT }, "-created_date", 1);
+        const existing = await aura.entities.Workflow.filter({ prompt: PROMPT }, "-created_date", 1);
         if (existing.length) return;
         const m = CREATOR_APPROVALS_MOCK;
         const now = new Date().toISOString();
-        const wf = await base44.entities.Workflow.create({
+        const wf = await aura.entities.Workflow.create({
           name: m.plan.workflowName || "Weekly creator approvals",
           prompt: PROMPT,
           interpretation: m.plan.interpretation,
@@ -835,7 +921,7 @@ Generate a results summary in plain, human-friendly language (not technical).
           last_summary: m.results.summary,
           run_count: 1,
         });
-        await base44.entities.WorkflowRun.create({
+        await aura.entities.WorkflowRun.create({
           prompt: PROMPT,
           status: "completed",
           workflow_id: wf.id,
@@ -884,7 +970,10 @@ Generate a results summary in plain, human-friendly language (not technical).
       <AmbientBackground phase={phase} />
 
       <div className="relative z-10 flex flex-col min-h-screen">
-        <TopBar onHistoryOpen={() => setHistoryOpen(true)} />
+        <TopBar
+          onHistoryOpen={() => setHistoryOpen(true)}
+          onBack={phase === "input" ? null : handlePageBack}
+        />
 
         <main className="flex-1 flex items-center justify-center px-4 py-8 md:py-12">
           <AnimatePresence mode="wait">
@@ -922,7 +1011,13 @@ Generate a results summary in plain, human-friendly language (not technical).
                     <p className="text-sm text-muted-foreground">AURA is building your plan…</p>
                   </div>
                 ) : plan ? (
-                  <PlanView plan={plan} hasPreview={!!mock?.preview} onApprove={handleApprove} approveLabel={editRunMode ? "Review changes" : "Start"} userSelectedTools={userSelectedToolsRef.current} />
+                  <PlanView
+                    plan={plan}
+                    hasPreview={!!mock?.preview}
+                    onApprove={handleApprove}
+                    onBack={() => setPhase("confirm")}
+                    approveLabel={editRunMode ? "Review changes" : "Start"}
+                  />
                 ) : null}
               </motion.div>
             )}

@@ -2,26 +2,31 @@ import { useState, useMemo, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { Brain, Plus, ArrowRight, Sparkles, Loader2, Check, X } from "lucide-react";
-import { base44 } from "@/api/base44Client";
+import { aura } from "@/api/auraClient";
 import PlanStep from "./PlanStep";
-import AuraInterfaceConnect from "./AuraInterfaceConnect";
-import ConnectToolModal from "./ConnectToolModal";
+import PlanConnectionAlert from "./PlanConnectionAlert";
 import { CATALOG } from "@/lib/toolCatalog";
-import { CONNECTIONS, INTERFACE_TOOLS } from "@/lib/demoData";
 import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
-import { connectTool, hasStandardOAuth, hydrateConnections, recordInterfaceConnection } from "@/lib/connectService";
+import { connectTool, hydrateConnections } from "@/lib/connectService";
 
 // Case-insensitive lookup so LLM tool-name variations ("meta ads", "Jira Software")
 // still resolve to the canonical name in the registry — keeps connection detection
 // reliable as real tools get integrated.
 const TOOL_BY_NAME = Object.fromEntries(
-  Object.keys(CONNECTIONS).map((k) => [k.toLowerCase(), k])
+  CATALOG.map((tool) => [tool.name.toLowerCase(), tool.name])
 );
 const resolveTool = (raw) => {
   if (!raw || typeof raw !== "string") return null;
   const key = raw.trim().toLowerCase();
   if (key === "aura intelligence") return null;
   return TOOL_BY_NAME[key] || null;
+};
+
+const toolsForStep = (step) => {
+  const names = [step.tool, ...(step.flow || []).filter((item) => item.label === "Uses").map((item) => item.value)]
+    .map(resolveTool)
+    .filter(Boolean);
+  return [...new Set(names)];
 };
 
 const PLAN_REVISION_SCHEMA = {
@@ -61,49 +66,37 @@ const PLAN_HINTS = [
   "Change the whole plan — make it weekly",
 ];
 
-export default function PlanView({ plan, onApprove, approveLabel = "Start", userSelectedTools = [] }) {
+export default function PlanView({ plan, onApprove, approveLabel = "Start" }) {
   const [steps, setSteps] = useState(plan.steps);
   const [forceEditIndex, setForceEditIndex] = useState(null);
   const [name, setName] = useState(plan.workflowName || "");
   const [connections, setConnections] = useState(getAllConnections);
-  useEffect(() => subscribeConnections(setConnections), []);
-  const [interfaceTool, setInterfaceTool] = useState(null);
+  useEffect(() => {
+    const unsubscribe = subscribeConnections(setConnections);
+    hydrateConnections().catch(() => {});
+    return () => { unsubscribe(); };
+  }, []);
   const [connectingTool, setConnectingTool] = useState(null);
-  const [pendingConnect, setPendingConnect] = useState(null);
-  const [authRequired, setAuthRequired] = useState({});
-  const [connectionError, setConnectionError] = useState("");
-  const requestConnect = (name) => {
-    const tool = CATALOG.find((t) => t.name === name) || { name, interface: !!INTERFACE_TOOLS[name], desc: "" };
-    setPendingConnect(hasStandardOAuth(name) ? tool : { ...tool, custom: true });
-  };
-  const confirmConnect = async (toolObj) => {
-    if (!pendingConnect) return;
-    const name = toolObj?.name || pendingConnect.name;
-    setPendingConnect(null);
-    handleConnect(name, {
-      apiKey: toolObj?.apiKey,
-      baseUrl: toolObj?.baseUrl,
-      connectionKind: toolObj?.connectionKind,
-      credentials: toolObj?.credentials,
-      authorizationUrl: toolObj?.authorizationUrl,
-      tokenUrl: toolObj?.tokenUrl,
-      clientId: toolObj?.clientId,
-      clientSecret: toolObj?.clientSecret,
-      scopes: toolObj?.scopes,
-    });
-  };
-  const handleConnect = async (name, opts = {}) => {
+  const [connectionErrors, setConnectionErrors] = useState({});
+  const handleConnect = async (name) => {
     setConnectingTool(name);
-    setConnectionError("");
-    setAuthRequired((prev) => ({ ...prev, [name]: false }));
+    setConnectionErrors((prev) => ({ ...prev, [name]: "" }));
     try {
-      const res = await connectTool(name, opts);
-      if (res.interfaceTool) setInterfaceTool(res.interfaceTool);
-      if (res.needsAuthorization) setAuthRequired((prev) => ({ ...prev, [name]: true }));
-      if (res.needsConfiguration) requestConnect(name);
+      const res = await connectTool(name);
+      if (res.needsConfiguration) {
+        setConnectionErrors((prev) => ({
+          ...prev,
+          [name]: `AURA couldn't finish connecting ${name} automatically. Please try again.`,
+        }));
+      }
       if (res.connected) await hydrateConnections();
     } catch (e) {
-      setConnectionError(e.message || `Could not connect ${name}.`);
+      setConnectionErrors((prev) => ({
+        ...prev,
+        [name]: e?.message?.includes("AURA kept your plan unchanged")
+          ? e.message
+          : `AURA couldn't connect ${name}. Your plan is unchanged.`,
+      }));
     } finally {
       setConnectingTool(null);
     }
@@ -115,9 +108,7 @@ export default function PlanView({ plan, onApprove, approveLabel = "Start", user
     const seen = new Set();
     const out = [];
     steps.forEach((s) => {
-      const usesFlow = (s.flow || []).filter((f) => f.label === "Uses").map((f) => f.value);
-      [s.tool, ...usesFlow].forEach((raw) => {
-        const t = resolveTool(raw);
+      toolsForStep(s).forEach((t) => {
         if (!t || seen.has(t)) return;
         seen.add(t);
         const match = steps.find(
@@ -131,7 +122,9 @@ export default function PlanView({ plan, onApprove, approveLabel = "Start", user
     return out;
   }, [steps]);
 
-  const needed = planTools.filter((t) => !connections[t.name] && !userSelectedTools.includes(t.name));
+  // AURA handles connector discovery and setup. The only thing a user may need
+  // to do is grant the provider's required account permission.
+  const needed = planTools.filter((tool) => !connections[tool.name]);
 
   const onDragEnd = (res) => {
     if (!res.destination || res.source.index === res.destination.index) return;
@@ -174,7 +167,7 @@ export default function PlanView({ plan, onApprove, approveLabel = "Start", user
     setPlanSubmitting(true);
     setPlanError("");
     try {
-      const res = await base44.integrations.Core.InvokeLLM({
+      const res = await aura.integrations.Core.InvokeLLM({
         prompt: `You are AURA, an AI workflow automation platform. Revise the ENTIRE workflow plan based on the user's instruction.
 
 Confirmed intent: "${plan.interpretation || ""}"
@@ -221,34 +214,21 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         <p className="text-xs text-muted-foreground ml-9 leading-relaxed">
           Review the steps and change anything that doesn't look right.
         </p>
-        {planTools.length > 0 && (
-          <p className="text-[11px] text-muted-foreground/60 ml-9 mt-1">
-            Tools used: {planTools.map((t) => t.name).join(" · ")}
-          </p>
-        )}
       </motion.div>
 
-      <ConnectToolModal
-        tool={pendingConnect}
-        connecting={connectingTool === pendingConnect?.name}
-        onConnect={confirmConnect}
-        onClose={() => setPendingConnect(null)}
-      />
-      {connectionError && <p className="mb-3 text-xs text-red-400 rounded-lg border border-red-400/20 bg-red-400/5 p-2">{connectionError}</p>}
+      {plan.error && (
+        <div className="mb-4 rounded-xl border border-red-400/25 bg-red-400/5 p-3 text-sm text-red-200">
+          <p className="font-medium">AURA couldn't build this plan</p>
+          <p className="mt-1 text-xs text-red-200/80">{plan.error}</p>
+        </div>
+      )}
 
-      <AuraInterfaceConnect
-        open={!!interfaceTool}
-        toolName={interfaceTool}
-        onClose={() => setInterfaceTool(null)}
-        onConnect={async (name, meta) => {
-          try {
-            await recordInterfaceConnection(name, meta);
-            await hydrateConnections();
-            setInterfaceTool(null);
-          } catch (e) {
-            setConnectionError(e.message || "This web application could not be connected.");
-          }
-        }}
+      <PlanConnectionAlert
+        tools={needed}
+        connections={connections}
+        connectingTool={connectingTool}
+        errors={connectionErrors}
+        onConnect={handleConnect}
       />
 
       {/* Steps */}
@@ -268,10 +248,6 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
                       onDelete={() => deleteStep(i)}
                       forceEdit={forceEditIndex === i}
                       onEditConsumed={() => setForceEditIndex(null)}
-                      connections={connections}
-                      onConnect={handleConnect}
-                      connectingTool={connectingTool}
-                      onConnectRequest={requestConnect}
                     />
                   )}
                 </Draggable>
@@ -390,11 +366,17 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
           />
         </div>
         <div className="flex items-center justify-end gap-3">
+          {needed.length > 0 && (
+            <span className="mr-auto text-xs text-amber-300">
+              Connect {needed.map((tool) => tool.name).join(", ")} to start
+            </span>
+          )}
           <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
             onClick={() => onApprove(steps, name.trim())}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white"
+            disabled={needed.length > 0 || steps.length === 0 || Boolean(plan.error)}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white disabled:cursor-not-allowed disabled:opacity-40"
           >
             {approveLabel} <ArrowRight className="w-4 h-4" />
           </motion.button>
