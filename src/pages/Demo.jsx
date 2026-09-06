@@ -71,13 +71,13 @@ const friendlyStepTitle = (step) => {
   if (operation.startsWith("calendar.")) return operation.includes("create") ? "Schedule the event" : "Check the calendar";
   if (operation.startsWith("sheets.")) return operation.includes("update") || operation.includes("append") ? "Update the spreadsheet" : "Read the spreadsheet";
   if (operation.startsWith("hubspot.")) return reason.includes("update") ? "Update HubSpot records" : "Find HubSpot records";
-  if (/transform|compile|summari[sz]e|breakdown|report/.test(reason)) return "Prepare the report";
   if (/find|identify|determine|search|match/.test(reason)) return "Find matching records";
+  if (/get|pull|fetch|read|collect/.test(reason)) return `Get ${tool} data`;
+  if (/transform|compile|summari[sz]e|breakdown|report/.test(reason)) return "Prepare the report";
   if (/draft|write|compose/.test(reason)) return "Draft the content";
   if (/send|deliver|notify|post/.test(reason)) return `Send with ${tool}`;
   if (/update|change|sync/.test(reason)) return `Update ${tool}`;
   if (/create|add/.test(reason)) return `Create in ${tool}`;
-  if (/get|pull|fetch|read|collect/.test(reason)) return `Get ${tool} data`;
   return `Use ${tool}`;
 };
 
