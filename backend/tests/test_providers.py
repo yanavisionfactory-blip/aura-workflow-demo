@@ -1,5 +1,17 @@
 from app.config import Settings
-from app.providers import PROVIDERS, oauth_callback_url, oauth_authorization_url, idempotency_key
+from urllib.parse import parse_qs, urlsplit
+
+from app.providers import (
+    PROVIDERS,
+    idempotency_key,
+    oauth_authorization_url,
+    oauth_callback_matches,
+    oauth_callback_route_provider,
+    oauth_callback_url,
+    oauth_exchange_callback_url,
+    oauth_registry_errors,
+    oauth_route_callback_url,
+)
 
 
 def _settings() -> Settings:
@@ -19,6 +31,12 @@ def _settings() -> Settings:
         hubspot_client_secret="hubspot-secret",
         atlassian_client_id="atlassian-client",
         atlassian_client_secret="atlassian-secret",
+        google_client_id="google-client",
+        google_client_secret="google-secret",
+        airtable_client_id="airtable-client",
+        airtable_client_secret="airtable-secret",
+        slack_client_id="slack-client",
+        slack_client_secret="slack-secret",
     )
 
 
@@ -92,3 +110,83 @@ def test_jira_uses_managed_atlassian_oauth():
     assert "read%3Ajira-work" in url
     assert "write%3Ajira-work" in url
     assert "offline_access" in url
+
+
+def test_every_managed_provider_uses_one_explicit_callback_contract():
+    settings = _settings()
+
+    for slug, provider in PROVIDERS.items():
+        callback = oauth_callback_url(settings, provider)
+        authorization = parse_qs(urlsplit(oauth_authorization_url(settings, provider, "state")).query)
+
+        assert authorization["redirect_uri"] == [callback]
+        assert oauth_callback_matches(
+            settings, slug, oauth_callback_route_provider(settings, provider)
+        )
+
+
+def test_callback_override_changes_authorization_and_callback_matching_without_code_change():
+    settings = _settings()
+    settings.oauth_callback_overrides = (
+        '{"jira":"https://oauth.example.com/v1/oauth/atlassian/callback"}'
+    )
+    provider = PROVIDERS["jira"]
+
+    callback = oauth_callback_url(settings, provider)
+    authorization = parse_qs(urlsplit(oauth_authorization_url(settings, provider, "state")).query)
+
+    assert callback == "https://oauth.example.com/v1/oauth/atlassian/callback"
+    assert authorization["redirect_uri"] == [callback]
+    assert oauth_callback_matches(settings, "jira", "atlassian")
+
+
+def test_registry_validation_rejects_invalid_override_before_oauth_starts():
+    settings = _settings()
+    settings.environment = "production"
+    settings.oauth_callback_overrides = '{"jira":"http://api.example.com/not-a-callback"}'
+
+    errors = oauth_registry_errors(settings)
+
+    assert errors
+    assert any("Invalid OAuth callback contract for jira" in error for error in errors)
+
+
+def test_default_registry_is_valid():
+    settings = _settings()
+    settings.environment = "production"
+
+    assert oauth_registry_errors(settings) == []
+
+
+def test_custom_and_installation_callbacks_use_the_same_validated_resolver():
+    settings = _settings()
+    settings.public_url = "https://api.example.com/"
+
+    assert oauth_route_callback_url(settings, "custom") == (
+        "https://api.example.com/v1/oauth/custom/callback"
+    )
+    assert oauth_route_callback_url(settings, "installation") == (
+        "https://api.example.com/v1/oauth/installation/callback"
+    )
+
+
+def test_shared_route_override_applies_without_provider_code_changes():
+    settings = _settings()
+    settings.oauth_callback_overrides = (
+        '{"installation":"https://oauth.example.com/v1/oauth/installation/callback"}'
+    )
+
+    assert oauth_callback_url(settings, PROVIDERS["notion"]) == (
+        "https://oauth.example.com/v1/oauth/installation/callback"
+    )
+    assert oauth_callback_url(settings, PROVIDERS["canva"]) == (
+        "https://oauth.example.com/v1/oauth/installation/callback"
+    )
+
+
+def test_legacy_callback_keeps_the_same_uri_during_token_exchange():
+    settings = _settings()
+
+    assert oauth_exchange_callback_url(
+        settings, PROVIDERS["jira"], "atlassian"
+    ) == "https://api.example.com/v1/oauth/atlassian/callback"
