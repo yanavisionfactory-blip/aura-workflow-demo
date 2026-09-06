@@ -1911,10 +1911,28 @@ async def custom_oauth_start(
 
 
 @app.get("/v1/oauth/{provider}/callback")
-async def oauth_callback(provider: str, code: str, state: str, session: AsyncSession = Depends(session_dependency)):
+async def oauth_callback(
+    provider: str,
+    state: str,
+    code: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+    session: AsyncSession = Depends(session_dependency),
+):
     claims = decode_oauth_state(state)
     state_provider = claims.get("provider", "")
     callback_route_provider = provider
+    if error or not code:
+        safe_provider = state_provider if state_provider in PROVIDERS else provider
+        message = (
+            "Jira did not grant access to an available workspace. "
+            "AURA kept your plan unchanged."
+            if safe_provider == "jira"
+            else "The app did not grant access. AURA kept your plan unchanged."
+        )
+        return RedirectResponse(
+            f"{frontend_url}?{urlencode({'oauth_provider': safe_provider, 'oauth_status': 'error', 'oauth_message': message})}"
+        )
     if provider == "installation" and state_provider.startswith("installation:"):
         installation_id = state_provider.split(":", 1)[1]
         wid = claims["workspace_id"]
@@ -2047,9 +2065,20 @@ async def oauth_callback(provider: str, code: str, state: str, session: AsyncSes
     callback_url = oauth_exchange_callback_url(
         settings, definition, callback_route_provider
     )
-    credentials = await exchange_oauth_code(
-        settings, definition, code, state, callback_url=callback_url
-    )
+    try:
+        credentials = await exchange_oauth_code(
+            settings, definition, code, state, callback_url=callback_url
+        )
+    except (httpx.HTTPError, RuntimeError, ValueError):
+        message = (
+            "Jira did not return an accessible workspace. "
+            "AURA kept your plan unchanged."
+            if provider == "jira"
+            else "The app could not finish connecting. AURA kept your plan unchanged."
+        )
+        return RedirectResponse(
+            f"{frontend_url}?{urlencode({'oauth_provider': provider, 'oauth_status': 'error', 'oauth_message': message})}"
+        )
     wid = claims["workspace_id"]
     await set_tenant_context(session, wid)
     tool = await session.scalar(select(ToolConnection).where(ToolConnection.workspace_id == wid, ToolConnection.slug == provider))

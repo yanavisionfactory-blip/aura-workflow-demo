@@ -71,7 +71,11 @@ export default function PlanView({ plan, onApprove, approveLabel = "Start" }) {
   const [forceEditIndex, setForceEditIndex] = useState(null);
   const [name, setName] = useState(plan.workflowName || "");
   const [connections, setConnections] = useState(getAllConnections);
-  useEffect(() => subscribeConnections(setConnections), []);
+  useEffect(() => {
+    const unsubscribe = subscribeConnections(setConnections);
+    hydrateConnections().catch(() => {});
+    return () => { unsubscribe(); };
+  }, []);
   const [connectingTool, setConnectingTool] = useState(null);
   const [connectionErrors, setConnectionErrors] = useState({});
   const handleConnect = async (name) => {
@@ -89,7 +93,9 @@ export default function PlanView({ plan, onApprove, approveLabel = "Start" }) {
     } catch (e) {
       setConnectionErrors((prev) => ({
         ...prev,
-        [name]: `AURA couldn't open ${name}. Please try again.`,
+        [name]: e?.message?.includes("AURA kept your plan unchanged")
+          ? e.message
+          : `AURA couldn't connect ${name}. Your plan is unchanged.`,
       }));
     } finally {
       setConnectingTool(null);

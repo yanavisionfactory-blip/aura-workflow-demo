@@ -231,6 +231,23 @@ export default function Demo() {
   const attachedResourcesRef = useRef(null);
   const userSelectedToolsRef = useRef([]);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const provider = params.get("tool_connected") || params.get("oauth_provider");
+    const status = params.get("oauth_status") || (params.has("tool_connected") ? "success" : null);
+    if (!provider || !status || !window.opener) return;
+    window.opener.postMessage(
+      {
+        source: "aura-oauth",
+        provider,
+        status,
+        message: params.get("oauth_message") || undefined,
+      },
+      window.location.origin
+    );
+    window.close();
+  }, []);
+
   const timeoutRefs = useRef([]);
   const pendingMock = useRef(null);
   const resolvedErrorRef = useRef(false);
