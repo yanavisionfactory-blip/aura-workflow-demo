@@ -79,7 +79,7 @@ export default function ExecutionStep({ step, index, isLast }) {
                 : "border-white/5 bg-card/30"
             }`}
           >
-            <div className="p-3">
+            <div className="p-4">
               <div className="flex items-center justify-between mb-1">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-[11px] font-medium text-muted-foreground/60">{step.tool}</span>
@@ -94,8 +94,12 @@ export default function ExecutionStep({ step, index, isLast }) {
                   <span className="text-[10px] text-muted-foreground/40">{step.duration}</span>
                 )}
               </div>
-              <p className="text-sm">{displayAction}</p>
-              {step.liveOutput && <p className="text-xs text-accent/80 mt-1.5 leading-relaxed">{step.liveOutput}</p>}
+              <p className="text-sm font-medium">{displayAction}</p>
+              {step.liveOutput && (
+                <div className="mt-3 rounded-lg border border-white/5 bg-background/35 px-3 py-2 text-xs font-mono leading-relaxed text-muted-foreground">
+                  → {step.liveOutput}
+                </div>
+              )}
             </div>
           </div>
         </div>

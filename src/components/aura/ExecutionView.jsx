@@ -4,7 +4,7 @@ import ExecutionStep from "./ExecutionStep";
 
 const STEP_DURATION = 2.6; // seconds per step (for ETA)
 
-export default function ExecutionView({ steps, currentStepIndex, isReal, workflowSummary }) {
+export default function ExecutionView({ steps, currentStepIndex, isReal }) {
   const completedCount = steps.filter((s) => s.status === "completed").length;
   const failed = steps.some((s) => s.status === "failed");
   const progress = (completedCount / steps.length) * 100;
@@ -21,13 +21,8 @@ export default function ExecutionView({ steps, currentStepIndex, isReal, workflo
     : etaSecs >= 60
     ? `About ${Math.max(1, Math.round(etaSecs / 60))} min remaining`
     : `~${Math.round(etaSecs)}s remaining`;
-  const currentStep = steps[currentStepIndex] || steps.find((step) => step.status === "pending") || steps.at(-1);
-  const currentLabel = currentStep?.status === "completed"
-    ? "Finishing up"
-    : currentStep?.action || "Preparing the next step";
-
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="w-full max-w-3xl mx-auto">
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="w-full max-w-4xl mx-auto">
       {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: 10 }}
@@ -65,18 +60,10 @@ export default function ExecutionView({ steps, currentStepIndex, isReal, workflo
         />
       </div>
 
-      <div className="rounded-2xl border border-accent/15 bg-accent/[0.03] p-5">
-        <p className="text-[10px] uppercase tracking-[0.16em] text-accent/70">What AURA is doing</p>
-        <h3 className="mt-1.5 text-base font-semibold">{workflowSummary || "Completing your workflow"}</h3>
-        <p className="mt-3 text-sm text-muted-foreground">
-          Now: <span className="text-foreground">{currentLabel}</span>
-        </p>
-      </div>
-
       <motion.div
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
-        className="mt-5"
+        className="mt-2"
       >
         {steps.map((step, i) => (
           <ExecutionStep key={i} step={step} index={i} isLast={i === steps.length - 1} />

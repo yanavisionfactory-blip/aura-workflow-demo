@@ -9,7 +9,7 @@ function EditableEmail({ preview, onPreviewChange, editing }) {
     <div className="rounded-xl border border-white/8 bg-card/40 overflow-hidden">
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-white/6 bg-card/30">
         <Mail className="w-3.5 h-3.5 text-primary" />
-        <span className="text-xs font-medium">Email</span>
+        <span className="text-xs font-medium">Email preview</span>
         <button
           onClick={() => downloadEmailEml(`aura-email-${safeName(preview.subject)}.eml`, preview)}
           className="ml-auto flex items-center gap-1 text-[10px] px-2 py-1 rounded-full border border-white/10 text-muted-foreground hover:text-foreground hover:border-white/20 transition-colors"
@@ -198,12 +198,12 @@ function FallbackPreview({ step }) {
           <p className="text-sm mt-0.5">{step.output}</p>
         </div>
       )}
-      {step.detail && (
-        <div className={step.output ? "pt-2 border-t border-white/5" : ""}>
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground/50">Details</span>
-          <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{step.detail}</p>
-        </div>
-      )}
+      <div className={step.output ? "pt-2 border-t border-white/5" : ""}>
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/50">What you are approving</span>
+        <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
+          AURA will prepare the final values from the completed steps before making this change.
+        </p>
+      </div>
       {f.length > 0 && (
         <div className="flex flex-wrap gap-1.5 pt-1">
           {f.map((fl, i) => (
@@ -220,12 +220,51 @@ function FallbackPreview({ step }) {
   );
 }
 
+const parseArguments = (step) => {
+  if (step.arguments && typeof step.arguments === "object") return step.arguments;
+  try {
+    const parsed = JSON.parse(step.detail || "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const friendlyValue = (value, kind) => {
+  if (value == null || value === "") return kind === "to" ? "Your connected Gmail address" : "Filled automatically by AURA";
+  if (String(value).toLowerCase() === "me") return "Your connected Gmail address";
+  if (/\{\{[^}]+\}\}/.test(String(value))) {
+    if (kind === "to") return "Your connected Gmail address";
+    if (kind === "subject") return "Prepared automatically from your request";
+    if (kind === "body") return "Prepared automatically from the completed steps";
+    return "Filled automatically by AURA";
+  }
+  return String(value);
+};
+
+const previewForStep = (step) => {
+  if (step.preview?.type) return step.preview;
+  const args = parseArguments(step);
+  const identity = `${step.tool || ""} ${step.action || ""} ${step.title || ""}`.toLowerCase();
+  if (identity.includes("gmail") || identity.includes("email")) {
+    return {
+      type: "email",
+      to: friendlyValue(args.to, "to"),
+      subject: friendlyValue(args.subject, "subject"),
+      body: friendlyValue(args.body, "body"),
+      sourceValues: { to: args.to, subject: args.subject, body: args.body },
+      note: "AURA fills the forecast into the message before sending it.",
+    };
+  }
+  return null;
+};
+
 function EditableStepCard({ step, number, index, onUpdate }) {
-  const p = step.preview || {};
+  const p = previewForStep(step) || {};
   const isModify = step.riskLevel === "modify";
   const [editing, setEditing] = useState(false);
   const updateAction = (action) => onUpdate(index, { action });
-  const updatePreview = (patch) => onUpdate(index, { preview: { ...(step.preview || {}), ...patch } });
+  const updatePreview = (patch) => onUpdate(index, { preview: { ...p, ...patch } });
 
   if (!isModify) return null;
 
@@ -361,7 +400,10 @@ export default function PreviewView({ preview, steps, onApprove, onBack }) {
         <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
           <Button
             size="sm"
-            onClick={() => onApprove(editSteps)}
+            onClick={() => onApprove(editSteps.map((step) => ({
+              ...step,
+              preview: previewForStep(step) || step.preview,
+            })))}
             className="bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white border-0 gap-1.5"
           >
             <Play className="w-3.5 h-3.5" />

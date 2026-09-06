@@ -100,12 +100,42 @@ const isAuthorizationFailure = (run, failedStep) => {
   return /\b(401|403)\b|unauthori[sz]ed|invalid[_ -]?grant|expired.*token|token.*expired|credential|authentication/.test(detail);
 };
 
+const humanExecutionOutput = (step) => {
+  if (step.status === "recovering") return "AURA is resolving this automatically…";
+  if (step.status !== "completed") return "";
+  const result = step.output?.provider_result || {};
+  if (step.operation === "weather.forecast") {
+    return result.summary || `Forecast ready for ${result.location || "the requested location"}`;
+  }
+  if (step.operation === "gmail.send") {
+    return `Email sent to ${result.recipient || "your connected Gmail address"}`;
+  }
+  const count = result.items?.length || result.results?.length || result.messages?.length;
+  if (count) return `${count} ${count === 1 ? "item" : "items"} completed`;
+  return "Completed successfully";
+};
+
+const humanOutcome = (output) => {
+  const result = output.provider_result || {};
+  if (output.operation === "weather.forecast") {
+    return { type: "metric", title: "Weather forecast retrieved", detail: result.summary || "Forecast ready" };
+  }
+  if (output.operation === "gmail.send") {
+    return { type: "email", title: "Email sent", detail: `Delivered to ${result.recipient || "your connected Gmail address"}`, link: "https://mail.google.com/mail/u/0/#sent", linkLabel: "Open Gmail" };
+  }
+  return { type: "document", title: friendlyStepTitle(output), detail: "Completed successfully" };
+};
+
 const jiraPreviewValue = (value, field, itemNumber) => {
+  if (field === "recipient" && String(value || "").toLowerCase() === "me") return "Your connected Gmail address";
   if (!runtimeReference(value)) return value == null || value === "" ? "Not specified" : String(value);
   if (field === "project") return "Your selected Jira project";
   if (field === "summary") return `Action item ${itemNumber} title from your notes`;
   if (field === "description") return `Action item ${itemNumber} details from your notes`;
   if (field === "assignee") return "Assignee matched from your notes";
+  if (field === "recipient") return "Your connected Gmail address";
+  if (field === "subject") return "Prepared automatically from your request";
+  if (field === "body") return "Prepared automatically from the completed steps";
   return "Filled automatically when AURA runs";
 };
 
@@ -139,6 +169,8 @@ const actionPreview = (step) => {
       to: jiraPreviewValue(args.to, "recipient", 1),
       subject: jiraPreviewValue(args.subject, "subject", 1),
       body: jiraPreviewValue(args.body, "body", 1),
+      sourceValues: { to: args.to, subject: args.subject, body: args.body },
+      note: "AURA fills information from the completed preparation steps before sending.",
     };
   }
   return {
@@ -447,6 +479,9 @@ Write ONE clear, conversational sentence restating what they want — but offer 
                 ? `Planned in ${(run.plan.planning_artifacts.timings_ms.total / 1000).toFixed(1)}s`
                 : "Runs in the Python control plane",
               steps: run.plan.steps.map((step) => ({
+                tool_slug: step.tool_slug,
+                operation: step.operation,
+                arguments: step.arguments,
                 tool: planToolName(step),
                 title: friendlyStepTitle(step),
                 iWill: cleanSentence(step.reason),
@@ -607,7 +642,19 @@ Rules:
         if (!ui?.preview) return step;
         let patch = {};
         if (ui.preview.type === "email") {
-          patch = { to: ui.preview.to, subject: ui.preview.subject, body: ui.preview.body };
+          const source = ui.preview.sourceValues || {};
+          const displayFor = (value, field) => jiraPreviewValue(value, field === "to" ? "recipient" : field, 1);
+          const approvedEmailValue = (field) => {
+            const displayed = ui.preview[field];
+            if (Object.hasOwn(source, field) && displayed === displayFor(source[field], field)) return source[field];
+            if (field === "to" && displayed === "Your connected Gmail address") return "me";
+            return displayed;
+          };
+          patch = {
+            to: approvedEmailValue("to"),
+            subject: approvedEmailValue("subject"),
+            body: approvedEmailValue("body"),
+          };
         } else if (ui.preview.type === "jira") {
           const dynamic = new Set(ui.preview.dynamicFields || []);
           if (!dynamic.has("project")) patch.project_key = ui.preview.project;
@@ -627,7 +674,7 @@ Rules:
           action: approvedStepsRef.current[index]?.title || approvedStepsRef.current[index]?.action || friendlyStepTitle(step),
           riskLevel: step.consequential ? "modify" : "read",
           status: step.status,
-          liveOutput: step.output?.provider_result ? "Completed successfully" : step.status === "recovering" ? "AURA is resolving this automatically…" : "",
+          liveOutput: humanExecutionOutput(step),
           output: step.output,
         })));
         const active = (run.steps || []).findIndex((step) => step.status === "running");
@@ -635,13 +682,10 @@ Rules:
         if (run.status === "completed") {
           const outputs = run.result?.outputs || [];
           finishExecution({
-            title: "Workflow completed by Python agents",
-            summary: `${run.result?.completed_steps || outputs.length} provider actions completed with stored evidence.`,
-            metrics: [{ value: String(run.result?.completed_steps || outputs.length), label: "verified actions" }],
-            outcomes: outputs.map((output) => ({
-              type: "document", title: output.operation, detail: `Confirmed by ${output.tool}`,
-              items: [{ label: "Provider evidence", detail: JSON.stringify(output.provider_result).slice(0, 500) }],
-            })),
+            title: "Workflow completed",
+            summary: run.result?.unified_deliverable?.summary || `${run.result?.completed_steps || outputs.length} steps completed successfully.`,
+            metrics: [{ value: String(run.result?.completed_steps || outputs.length), label: "steps completed" }],
+            outcomes: outputs.map(humanOutcome),
             nextSteps: [],
           }, null, "completed");
           return;
