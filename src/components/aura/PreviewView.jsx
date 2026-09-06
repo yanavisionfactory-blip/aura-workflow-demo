@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { Eye, Mail, Database, ShieldAlert, ArrowLeft, Play, List, FileDown, FileText, Pencil, ChevronDown, ChevronUp } from "lucide-react";
+import { motion } from "framer-motion";
+import { Eye, Mail, Database, ShieldAlert, ArrowLeft, Play, List, FileDown, FileText, Pencil, ListChecks, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { downloadEmailEml, safeName } from "@/lib/auraDownload";
 
@@ -100,6 +100,56 @@ function ApprovalList({ preview }) {
   );
 }
 
+function EditableJiraTask({ preview, onPreviewChange, editing }) {
+  const dynamic = new Set(preview.dynamicFields || []);
+  const fields = [
+    { key: "project", label: "Project" },
+    { key: "summary", label: "Task" },
+    { key: "assignee", label: "Assignee" },
+  ];
+  return (
+    <div className="rounded-xl border border-white/8 bg-card/40 overflow-hidden">
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-white/6 bg-card/30">
+        <ListChecks className="w-3.5 h-3.5 text-primary" />
+        <span className="text-xs font-medium">{preview.title || "Jira task preview"}</span>
+        <span className="ml-auto flex items-center gap-1 text-[10px] text-emerald-300/80">
+          <Check className="w-3 h-3" /> Prepared from your notes
+        </span>
+      </div>
+      <div className="p-4 space-y-3">
+        {fields.map(({ key, label }) => (
+          <div key={key} className="grid grid-cols-[5rem_1fr] gap-3 items-start text-xs">
+            <span className="text-muted-foreground/55 pt-1">{label}</span>
+            <div>
+              <input
+                value={preview[key] || ""}
+                onChange={(event) => onPreviewChange({ [key]: event.target.value })}
+                readOnly={!editing || dynamic.has(key)}
+                className={`w-full bg-transparent border-b outline-none py-1 ${editing && !dynamic.has(key) ? "border-white/10 focus:border-primary" : "border-transparent"}`}
+              />
+              {dynamic.has(key) && <p className="text-[10px] text-muted-foreground/45 mt-0.5">Filled automatically</p>}
+            </div>
+          </div>
+        ))}
+        <div className="grid grid-cols-[5rem_1fr] gap-3 items-start text-xs pt-1 border-t border-white/5">
+          <span className="text-muted-foreground/55 pt-2">Details</span>
+          <div>
+            <textarea
+              value={preview.description || ""}
+              onChange={(event) => onPreviewChange({ description: event.target.value })}
+              readOnly={!editing || dynamic.has("description")}
+              rows={3}
+              className={`w-full bg-transparent outline-none py-1.5 resize-y border-b ${editing && !dynamic.has("description") ? "border-white/10 focus:border-primary" : "border-transparent"}`}
+            />
+            {dynamic.has("description") && <p className="text-[10px] text-muted-foreground/45">Filled automatically</p>}
+          </div>
+        </div>
+        {preview.note && <p className="text-[11px] text-muted-foreground/60 pt-1">{preview.note}</p>}
+      </div>
+    </div>
+  );
+}
+
 function EditableDocument({ preview, onPreviewChange, editing }) {
   return (
     <div className="rounded-xl border border-white/8 bg-card/40 overflow-hidden">
@@ -174,54 +224,10 @@ function EditableStepCard({ step, number, index, onUpdate }) {
   const p = step.preview || {};
   const isModify = step.riskLevel === "modify";
   const [editing, setEditing] = useState(false);
-  const [showPreview, setShowPreview] = useState(false);
   const updateAction = (action) => onUpdate(index, { action });
   const updatePreview = (patch) => onUpdate(index, { preview: { ...(step.preview || {}), ...patch } });
 
-  // Read-only step (data pulled, nothing sent/changed): collapsed + not editable.
-  // Tap "show" to reveal the table/list — purely informational, never editable.
-  if (!isModify) {
-    return (
-      <div className="rounded-2xl border border-white/8 bg-card/30">
-        <div className="flex items-start gap-3 p-4">
-          <div className="flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-accent/10 border border-accent/20 text-accent">
-            {number}
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-1.5 mb-1">
-              <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground/50">{step.tool}</span>
-              <span className="text-[10px] text-muted-foreground/40">read-only</span>
-              <button
-                onClick={() => setShowPreview((s) => !s)}
-                className="flex items-center gap-0.5 text-[10px] text-muted-foreground/60 hover:text-accent ml-auto transition-colors"
-              >
-                {showPreview ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                {showPreview ? "hide" : "show"}
-              </button>
-            </div>
-            <p className="text-sm font-medium">{step.action}</p>
-          </div>
-        </div>
-        <AnimatePresence initial={false}>
-          {showPreview && (
-            <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: "auto", opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              transition={{ duration: 0.2 }}
-              className="overflow-hidden"
-            >
-              <div className="pl-10 pr-4 pb-4">
-                {p.type === "table" ? <ApprovalTable preview={p} />
-                  : p.type === "list" ? <ApprovalList preview={p} />
-                  : <FallbackPreview step={step} />}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
-    );
-  }
+  if (!isModify) return null;
 
   // Modify step (sends / changes data): the focus of review — expanded & editable.
   return (
@@ -254,6 +260,7 @@ function EditableStepCard({ step, number, index, onUpdate }) {
       </div>
       <div className="pl-10">
         {p.type === "email" ? <EditableEmail preview={p} onPreviewChange={updatePreview} editing={editing} />
+          : p.type === "jira" ? <EditableJiraTask preview={p} onPreviewChange={updatePreview} editing={editing} />
           : p.type === "document" ? <EditableDocument preview={p} onPreviewChange={updatePreview} editing={editing} />
           : p.type === "table" ? <ApprovalTable preview={p} />
           : p.type === "list" ? <ApprovalList preview={p} />
@@ -271,6 +278,14 @@ export default function PreviewView({ preview, steps, onApprove, onBack }) {
   if (!editSteps.length) return null;
 
   const update = (i, patch) => setEditSteps((prev) => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
+  const reviewSteps = editSteps
+    .map((step, index) => ({ step, index }))
+    .filter(({ step }) => step.riskLevel === "modify");
+  const sourceTools = [...new Set(editSteps.filter((step) => step.riskLevel !== "modify").map((step) => step.tool))];
+  const destinationTools = [...new Set(reviewSteps.map(({ step }) => step.tool))];
+  const reviewSummary = sourceTools.length
+    ? `AURA will use ${sourceTools.join(" and ")} to prepare ${reviewSteps.length} reviewed ${destinationTools.join(" / ")} ${reviewSteps.length === 1 ? "change" : "changes"}.`
+    : `${reviewSteps.length} ${reviewSteps.length === 1 ? "change is" : "changes are"} ready for your review.`;
 
   return (
     <motion.div
@@ -286,15 +301,27 @@ export default function PreviewView({ preview, steps, onApprove, onBack }) {
           <Eye className="w-5 h-5 text-accent" />
         </div>
         <div>
-          <h2 className="text-lg font-semibold">Review &amp; edit before running</h2>
-          <p className="text-xs text-muted-foreground">Edit any step's content — your changes drive the execution.</p>
+          <h2 className="text-lg font-semibold">Review before running</h2>
+          <p className="text-xs text-muted-foreground">Check what AURA is about to create or change. You can edit anything available before approving.</p>
         </div>
+      </div>
+
+      <div className="flex items-center gap-2 mt-5 text-xs text-muted-foreground">
+        <Check className="w-3.5 h-3.5 text-emerald-400" />
+        <span>{reviewSummary}</span>
+      </div>
+
+      <div className="flex items-center justify-between mt-5 mb-2">
+        <span className="flex items-center gap-1.5 text-sm font-medium text-amber-200">
+          <ShieldAlert className="w-4 h-4 text-amber-400" /> Your approval is needed
+        </span>
+        <span className="text-[11px] text-muted-foreground">{reviewSteps.length} {reviewSteps.length === 1 ? "change" : "changes"}</span>
       </div>
 
       {/* Editable steps */}
       <div className="space-y-3 mb-5 mt-4">
-        {editSteps.map((step, i) => (
-          <EditableStepCard key={i} step={step} number={i + 1} index={i} onUpdate={update} />
+        {reviewSteps.map(({ step, index }, reviewIndex) => (
+          <EditableStepCard key={index} step={step} number={reviewIndex + 1} index={index} onUpdate={update} />
         ))}
       </div>
 
