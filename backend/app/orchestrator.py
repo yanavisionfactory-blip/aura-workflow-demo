@@ -67,7 +67,7 @@ def planning_error_message(exc: Exception) -> str:
         return "AURA's AI planning service is temporarily busy. Please try again shortly."
     if "invalid json" in lowered:
         return "AURA couldn't format the plan correctly. Please try again."
-    return raw
+    return "AURA couldn't build the plan right now. Please try again."
 
 
 async def plan_run(run_id: str, workspace_id: str) -> None:
