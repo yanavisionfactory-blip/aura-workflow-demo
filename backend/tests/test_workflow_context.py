@@ -55,6 +55,27 @@ def test_resolves_typed_outputs_and_interpolated_variables() -> None:
     }
 
 
+def test_resolves_safe_array_and_quoted_key_paths() -> None:
+    context = {
+        "steps": {
+            "search": {
+                "candidates": [
+                    {"id": "page-1", "properties": {"Page title": "Roadmap"}}
+                ]
+            }
+        }
+    }
+
+    assert resolve_value("{{steps.search.candidates[0].id}}", context) == "page-1"
+    assert (
+        resolve_value(
+            "{{steps.search.candidates[0].properties['Page title']}}", context
+        )
+        == "Roadmap"
+    )
+    assert referenced_step_keys("{{steps.search.candidates[0].id}}") == {"search"}
+
+
 def test_missing_variable_fails_without_executing_code() -> None:
     with pytest.raises(WorkflowContextError, match="unavailable"):
         resolve_value("{{steps.unknown.token}}", {"steps": {}})
@@ -116,6 +137,18 @@ def test_step_result_exposes_operation_noun_as_a_summary_alias() -> None:
     }
 
     assert resolve_value("{{steps.weather.forecast}}", context) == "Sunny, 24 C"
+
+
+def test_step_result_normalizes_provider_collection_aliases() -> None:
+    provider_result = {"results": [{"id": "page-1"}]}
+    context = {
+        "steps": {
+            "search": step_context_value(provider_result, "notion.search")
+        }
+    }
+
+    assert resolve_value("{{steps.search.candidates[0].id}}", context) == "page-1"
+    assert resolve_value("{{steps.search.items[0].id}}", context) == "page-1"
 
 
 def test_plan_rejects_dependencies_on_later_steps() -> None:
