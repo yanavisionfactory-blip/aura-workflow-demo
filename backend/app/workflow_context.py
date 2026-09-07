@@ -133,6 +133,25 @@ def step_context_value(result: Any, operation: str | None = None) -> Any:
                 first = collection[0]
                 value.setdefault("item", first)
                 value.setdefault("candidate", first)
+                entity_name = next(
+                    (
+                        first.get(key)
+                        for key in ("object", "type", "kind")
+                        if isinstance(first.get(key), str)
+                        and re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", first[key])
+                    ),
+                    None,
+                )
+                if entity_name:
+                    singular = entity_name.lower().replace("-", "_")
+                    if singular.endswith("y") and not singular.endswith(("ay", "ey", "iy", "oy", "uy")):
+                        plural = f"{singular[:-1]}ies"
+                    elif singular.endswith("s"):
+                        plural = singular
+                    else:
+                        plural = f"{singular}s"
+                    value.setdefault(singular, first)
+                    value.setdefault(plural, collection)
                 for key, item in first.items():
                     value.setdefault(key, item)
     return value
