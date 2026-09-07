@@ -8,6 +8,7 @@ Nango also validates or refreshes them.
 from __future__ import annotations
 
 import asyncio
+import logging
 from functools import lru_cache
 from typing import Any
 from urllib.parse import quote
@@ -15,6 +16,9 @@ from urllib.parse import quote
 import httpx
 
 from .config import Settings, get_settings
+from .providers import PROVIDERS
+
+logger = logging.getLogger(__name__)
 
 
 class ManagedConnectorError(RuntimeError):
@@ -48,6 +52,23 @@ class NangoClient:
 
     async def list_providers(self) -> list[dict]:
         return self._data_list(await self._request("GET", "/providers"), "providers")
+
+    def integration_credentials(self, provider: str) -> dict[str, str]:
+        """Use AURA's server-side OAuth app credentials for Nango provisioning."""
+        definition = PROVIDERS.get(provider)
+        if not definition:
+            return {}
+        client_id = getattr(self.settings, definition.client_id_attr, "")
+        client_secret = getattr(self.settings, definition.client_secret_attr, "")
+        if not client_id or not client_secret:
+            return {}
+        credentials = {
+            "client_id": client_id,
+            "client_secret": client_secret,
+        }
+        if definition.scopes:
+            credentials["scopes"] = " ".join(definition.scopes)
+        return credentials
 
     async def integration_id(self, provider: str) -> str:
         """Resolve a provider without requiring a hand-maintained map.
@@ -96,6 +117,11 @@ class NangoClient:
         if not definition:
             raise ManagedConnectorError("This app is not available right now")
 
+        credentials = self.integration_credentials(provider)
+        if not credentials:
+            logger.warning("managed_connector_missing_oauth_app provider=%s", provider)
+            raise ManagedConnectorError("This app is not available right now")
+
         try:
             created = await self._request(
                 "POST",
@@ -107,6 +133,8 @@ class NangoClient:
                         definition.get("display_name")
                         or provider.replace("-", " ").title()
                     ),
+                    "credentials": credentials,
+                    "integration_config": {},
                 },
             )
         except ManagedConnectorError:
@@ -162,12 +190,32 @@ class NangoClient:
                 return response.json() if response.content else {}
             except httpx.HTTPStatusError as exc:
                 last_error = exc
+                detail = ""
+                try:
+                    payload = exc.response.json()
+                    error = payload.get("error", payload) if isinstance(payload, dict) else {}
+                    detail = str(error.get("code") or error.get("message") or "")[:160]
+                except (ValueError, AttributeError):
+                    pass
+                logger.warning(
+                    "managed_connector_upstream_http method=%s path=%s status=%s detail=%s",
+                    method,
+                    path,
+                    exc.response.status_code,
+                    detail,
+                )
                 break
             except (httpx.TransportError, ValueError) as exc:
                 last_error = exc
                 if attempt < 2:
                     await asyncio.sleep(0.25 * (2**attempt))
                     continue
+                logger.warning(
+                    "managed_connector_upstream_transport method=%s path=%s error=%s",
+                    method,
+                    path,
+                    type(exc).__name__,
+                )
                 break
         raise ManagedConnectorError(
             "The secure connection service is temporarily unavailable"
