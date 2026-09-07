@@ -70,6 +70,23 @@ def resolve_value(value: Any, context: dict[str, Any]) -> Any:
     return REFERENCE.sub(replace, value)
 
 
+def step_context_value(result: Any) -> Any:
+    """Expose provider results through both canonical and compatibility paths.
+
+    The planner is instructed to use ``steps.key.field`` for named fields, but
+    structured-output models can still produce the common ``steps.key.output``
+    or ``steps.key.result`` forms when they mean the entire provider response.
+    Keep direct fields available while making those whole-result aliases safe.
+    """
+    if not isinstance(result, dict):
+        return {"output": result, "result": result, "provider_result": result}
+    value = dict(result)
+    value.setdefault("output", result)
+    value.setdefault("result", result)
+    value.setdefault("provider_result", result)
+    return value
+
+
 def evaluate_condition(condition: StepCondition | dict, context: dict[str, Any]) -> bool:
     rule = (
         condition
