@@ -514,6 +514,7 @@ _ARGUMENT_ALIASES = {
     "project": "project_key",
     "project_id": "project_key",
     "issue": "issue_key",
+    "limit": "page_size",
 }
 
 
