@@ -255,6 +255,38 @@ def test_connection_free_provider_does_not_send_fake_authorization_header():
     assert executor._headers() == {"Content-Type": "application/json"}
 
 
+def test_provider_results_include_user_facing_deep_links():
+    notion = ProviderExecutor({})._attach_result_url(
+        "notion.search",
+        {},
+        {"results": [{"id": "page-1", "url": "https://www.notion.so/page-1"}]},
+    )
+    gmail = ProviderExecutor({})._attach_result_url(
+        "gmail.send", {}, {"message_id": "message-1"}
+    )
+    jira = ProviderExecutor({"site_url": "https://acme.atlassian.net"})._attach_result_url(
+        "jira.issue.create", {}, {"key": "AURA-42"}
+    )
+    slack = ProviderExecutor({"team": {"id": "T123"}})._attach_result_url(
+        "slack.post", {}, {"channel": "C456", "ts": "1234.5678"}
+    )
+
+    assert notion["result_url"] == "https://www.notion.so/page-1"
+    assert gmail["result_url"] == "https://mail.google.com/mail/u/0/#all/message-1"
+    assert jira["result_url"] == "https://acme.atlassian.net/browse/AURA-42"
+    assert slack["result_url"] == (
+        "https://app.slack.com/client/T123/C456/thread/C456-12345678"
+    )
+
+
+def test_provider_result_link_rejects_non_https_urls():
+    result = ProviderExecutor({})._attach_result_url(
+        "calendar.create", {}, {"htmlLink": "javascript:alert(1)"}
+    )
+
+    assert "result_url" not in result
+
+
 def test_custom_and_installation_callbacks_use_the_same_validated_resolver():
     settings = _settings()
     settings.public_url = "https://api.example.com/"
