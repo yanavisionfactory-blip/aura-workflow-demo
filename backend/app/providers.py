@@ -652,7 +652,14 @@ class ProviderExecutor:
         ])
         raw = base64.urlsafe_b64encode(message.encode()).decode().rstrip("=")
         result = await self._request("POST", "https://gmail.googleapis.com/gmail/v1/users/me/messages/send", json={"raw": raw})
-        return {**result, "recipient": recipient}
+        return {
+            **result,
+            "message_id": result.get("id"),
+            "thread_id": result.get("threadId"),
+            "recipient": recipient,
+            "subject": a.get("subject", "AURA workflow"),
+            "body": a.get("body", ""),
+        }
 
     async def _weather_forecast(self, a: dict) -> dict:
         location = str(a.get("location") or "").strip()
