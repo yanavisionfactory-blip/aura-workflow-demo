@@ -110,8 +110,8 @@ def step_context_value(result: Any, operation: str | None = None) -> Any:
     # Both ``steps.read.id`` and ``steps.read.page.id`` then address the same
     # provider-confirmed object without connector-specific mappings.
     operation_parts = (operation or "").split(".")
-    if len(operation_parts) >= 3:
-        value.setdefault(operation_parts[-2], result)
+    for resource_name in operation_parts[1:-1]:
+        value.setdefault(resource_name, result)
 
     # Search/list providers use different collection nouns (results, items,
     # records, candidates). Expose stable compatibility aliases so a valid
