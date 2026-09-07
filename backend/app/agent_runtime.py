@@ -236,9 +236,10 @@ def deterministic_plan_fixes(
             {
                 "arguments": step.arguments,
                 "condition": step.condition.model_dump() if step.condition else None,
+                "output_variables": step.output_variables,
             }
         )
-        undeclared = referenced - set(step.depends_on)
+        undeclared = referenced - set(step.depends_on) - {step.key}
         if undeclared:
             fixes.append(
                 f"Step {index} must declare referenced steps as dependencies: "
@@ -248,6 +249,7 @@ def deterministic_plan_fixes(
             {
                 "arguments": step.arguments,
                 "condition": step.condition.model_dump() if step.condition else None,
+                "output_variables": step.output_variables,
             }
         )
         invalid_roots = sorted(
@@ -287,8 +289,9 @@ def normalize_plan_graph(plan: WorkflowPlan) -> WorkflowPlan:
             {
                 "arguments": step.arguments,
                 "condition": step.condition.model_dump() if step.condition else None,
+                "output_variables": step.output_variables,
             }
-        )
+        ) - {step.key}
         inferred = [key for key in referenced if key in known and key not in step.depends_on]
         if inferred:
             step.depends_on = [*step.depends_on, *sorted(inferred)]
