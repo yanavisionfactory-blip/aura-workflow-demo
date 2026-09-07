@@ -55,6 +55,33 @@ def test_notion_uses_shared_callback_and_owner_authorization():
     assert "client_id=notion-client" in url
 
 
+def test_notion_search_forwards_filter_and_sort(monkeypatch):
+    executor = ProviderExecutor({"access_token": "token"})
+    request = AsyncMock(return_value={"results": []})
+    monkeypatch.setattr(executor, "_notion_request", request)
+
+    result = asyncio.run(
+        executor._notion_search(
+            {
+                "filter": {"property": "object", "value": "page"},
+                "sort": "last_edited_time",
+                "direction": "descending",
+            }
+        )
+    )
+
+    assert result == {"results": []}
+    request.assert_awaited_once_with(
+        "POST",
+        "search",
+        json={
+            "page_size": 20,
+            "filter": {"property": "object", "value": "page"},
+            "sort": {"timestamp": "last_edited_time", "direction": "descending"},
+        },
+    )
+
+
 def test_mailchimp_authorization_omits_scope_when_provider_has_none():
     provider = PROVIDERS["mailchimp"]
     url = oauth_authorization_url(_settings(), provider, "signed-state")
