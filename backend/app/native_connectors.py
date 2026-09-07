@@ -379,6 +379,14 @@ def native_manifest(slug: str) -> dict[str, Any]:
     return manifest
 
 
+def current_capability_manifest(slug: str, stored: dict[str, Any] | None) -> dict[str, Any]:
+    """Use the deployed native contract, falling back to a discovered connector schema."""
+    try:
+        return native_manifest(slug)
+    except NativeConnectorError:
+        return stored or {}
+
+
 def native_operations(slug: str) -> list[str]:
     return [item["name"] for item in native_manifest(slug)["capabilities"]]
 
