@@ -6,12 +6,14 @@ from app.config import Settings
 from app.models import DeadLetterEntry, WorkflowRun
 from app.native_connectors import NativeConnectorError
 from app.orchestrator import (
+    _accept_successful_read_after_critic,
     _failure_impacts_trust,
     _friendly_execution_error,
     _has_confirmed_consequential_result,
     _has_empty_collection,
     _required_read_arguments,
 )
+from app.schemas import CriticDecision
 
 
 def test_workflow_run_request_key_is_workspace_scoped_unique():
@@ -84,3 +86,22 @@ def test_reduced_read_preserves_only_required_inputs():
         "crm.contacts.search",
         {"workspace_id": "acme", "query": "Ada"},
     ) == {"workspace_id": "acme"}
+
+
+def test_semantic_retry_does_not_replay_successful_read():
+    semantic_retry = CriticDecision(
+        action="retry",
+        contract_failures=["Expected content was not present"],
+    )
+    policy_retry = CriticDecision(
+        action="retry",
+        policy_violations=["Response exceeds approved scope"],
+    )
+
+    assert _accept_successful_read_after_critic(
+        "notion.page.get", semantic_retry
+    ) is True
+    assert _accept_successful_read_after_critic(
+        "notion.page.get", policy_retry
+    ) is False
+    assert _accept_successful_read_after_critic("gmail.send", semantic_retry) is False
