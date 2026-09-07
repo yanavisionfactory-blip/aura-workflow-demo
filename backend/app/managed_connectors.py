@@ -133,6 +133,7 @@ class NangoClient:
                         definition.get("display_name")
                         or provider.replace("-", " ").title()
                     ),
+                    "forward_webhooks": True,
                     "credentials": credentials,
                     "integration_config": {},
                 },
