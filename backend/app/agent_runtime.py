@@ -305,6 +305,7 @@ async def create_plan(
     prompt: str,
     tool_inventory: list[dict],
     available_input_names: set[str] | None = None,
+    planner_repair_requirements: list[str] | None = None,
 ) -> WorkflowPlan:
     started_at = perf_counter()
     agents = build_agents()
@@ -312,6 +313,7 @@ async def create_plan(
         "user_request": prompt,
         "executable_tool_inventory": tool_inventory,
         "available_input_names": sorted(available_input_names or set()),
+        "planner_repair_requirements": planner_repair_requirements or [],
     }
     model_started_at = perf_counter()
     recovery_mode = "combined"
