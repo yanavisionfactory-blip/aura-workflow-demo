@@ -757,12 +757,21 @@ class ProviderExecutor:
             return response.json()
 
     async def _notion_search(self, a: dict) -> dict:
+        sort = a.get("sort")
+        direction = a.get("direction")
+        sort_payload = None
+        if sort or direction:
+            sort_payload = {
+                "timestamp": sort or "last_edited_time",
+                "direction": direction or "descending",
+            }
         payload = {
             key: value
             for key, value in {
                 "query": a.get("query"),
                 "page_size": min(int(a.get("page_size", 20)), 100),
                 "start_cursor": a.get("start_cursor"),
+                "sort": sort_payload,
             }.items()
             if value not in (None, "")
         }
