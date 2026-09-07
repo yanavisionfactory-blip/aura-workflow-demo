@@ -771,6 +771,7 @@ class ProviderExecutor:
                 "query": a.get("query"),
                 "page_size": min(int(a.get("page_size", 20)), 100),
                 "start_cursor": a.get("start_cursor"),
+                "filter": a.get("filter"),
                 "sort": sort_payload,
             }.items()
             if value not in (None, "")
