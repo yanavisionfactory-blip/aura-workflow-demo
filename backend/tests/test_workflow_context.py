@@ -150,6 +150,20 @@ def test_step_context_exposes_resource_alias_for_provider_objects() -> None:
     assert resolve_value("{{steps.read_page.page.id}}", context) == "page-123"
 
 
+def test_step_context_exposes_all_nested_operation_resource_aliases() -> None:
+    provider_result = {"results": [{"id": "block-123"}]}
+    context = {
+        "steps": {
+            "read_blocks": step_context_value(
+                provider_result, "notion.blocks.children.list"
+            )
+        }
+    }
+
+    assert resolve_value("{{steps.read_blocks.blocks}}", context) == provider_result
+    assert resolve_value("{{steps.read_blocks.children}}", context) == provider_result
+
+
 def test_step_result_normalizes_provider_collection_aliases() -> None:
     provider_result = {"results": [{"id": "page-1"}]}
     context = {
