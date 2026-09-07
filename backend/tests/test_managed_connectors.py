@@ -110,6 +110,7 @@ async def test_missing_integration_is_provisioned_on_first_use():
         "unique_key": "jira",
         "provider": "jira",
         "display_name": "Jira",
+        "forward_webhooks": True,
         "credentials": {
             "client_id": "jira-client-id",
             "client_secret": "jira-client-secret",
