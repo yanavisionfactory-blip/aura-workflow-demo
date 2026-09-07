@@ -7,6 +7,7 @@ from app.models import DeadLetterEntry, WorkflowRun
 from app.native_connectors import NativeConnectorError
 from app.orchestrator import (
     _accept_successful_read_after_critic,
+    _bounded_read_trust_score,
     _current_capability_manifest,
     _failure_impacts_trust,
     _friendly_execution_error,
@@ -43,6 +44,13 @@ def test_default_workspace_rate_limit_is_bounded():
 def test_schema_and_internal_errors_do_not_penalize_connector_trust():
     assert _failure_impacts_trust(NativeConnectorError("invalid arguments")) is False
     assert _failure_impacts_trust(RuntimeError("internal orchestration error")) is False
+
+
+def test_degraded_read_trust_recovery_is_bounded_to_three_attempts():
+    assert _bounded_read_trust_score("notion.search", 0.5, 0.7, 0) == (0.7, True)
+    assert _bounded_read_trust_score("notion.search", 0.5, 0.7, 2) == (0.7, True)
+    assert _bounded_read_trust_score("notion.search", 0.5, 0.7, 3) == (0.5, False)
+    assert _bounded_read_trust_score("gmail.send", 0.5, 0.7, 0) == (0.5, False)
 
 
 def test_internal_error_is_replaced_with_friendly_recovery_copy():
