@@ -1,3 +1,8 @@
+import asyncio
+from types import SimpleNamespace
+
+import app.orchestrator as orchestrator
+from app.native_connectors import native_manifest
 from app.orchestrator import planning_error_message
 
 
@@ -56,3 +61,47 @@ def test_unknown_internal_error_is_never_exposed() -> None:
 
     assert message == "AURA couldn't build the plan right now. Please try again."
     assert "provider trace" not in message
+
+
+def test_connector_contract_mismatch_is_replanned_before_reaching_user(monkeypatch) -> None:
+    invalid = SimpleNamespace(
+        steps=[
+            SimpleNamespace(
+                tool_slug="aura",
+                operation="weather.forecast",
+                arguments={"location": "Munich", "internal_hint": True},
+                reduced_scope_arguments=None,
+            )
+        ]
+    )
+    repaired = SimpleNamespace(
+        steps=[
+            SimpleNamespace(
+                tool_slug="aura",
+                operation="weather.forecast",
+                arguments={"location": "Munich"},
+                reduced_scope_arguments=None,
+            )
+        ]
+    )
+    plans = [invalid, repaired]
+    calls = []
+
+    async def fake_create_plan(*_args, **kwargs):
+        calls.append(kwargs.get("planner_repair_requirements"))
+        return plans.pop(0)
+
+    monkeypatch.setattr(orchestrator, "create_plan", fake_create_plan)
+
+    result = asyncio.run(
+        orchestrator._create_compiled_plan(
+            "Find Munich weather",
+            [{"slug": "aura"}],
+            set(),
+            {"aura": native_manifest("aura")},
+        )
+    )
+
+    assert result is repaired
+    assert calls[0] == []
+    assert "unknown inputs" in calls[1][0]
