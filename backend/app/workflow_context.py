@@ -106,6 +106,13 @@ def step_context_value(result: Any, operation: str | None = None) -> Any:
         alias_value = result.get("summary", result) if isinstance(result, dict) else result
         value.setdefault(operation_alias, alias_value)
 
+    # Expose the resource noun from operations such as ``notion.page.get``.
+    # Both ``steps.read.id`` and ``steps.read.page.id`` then address the same
+    # provider-confirmed object without connector-specific mappings.
+    operation_parts = (operation or "").split(".")
+    if len(operation_parts) >= 3:
+        value.setdefault(operation_parts[-2], result)
+
     # Search/list providers use different collection nouns (results, items,
     # records, candidates). Expose stable compatibility aliases so a valid
     # provider response can feed the next step without leaking those naming
