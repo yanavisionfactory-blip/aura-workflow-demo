@@ -70,7 +70,7 @@ def resolve_value(value: Any, context: dict[str, Any]) -> Any:
     return REFERENCE.sub(replace, value)
 
 
-def step_context_value(result: Any) -> Any:
+def step_context_value(result: Any, operation: str | None = None) -> Any:
     """Expose provider results through both canonical and compatibility paths.
 
     The planner is instructed to use ``steps.key.field`` for named fields, but
@@ -79,11 +79,21 @@ def step_context_value(result: Any) -> Any:
     Keep direct fields available while making those whole-result aliases safe.
     """
     if not isinstance(result, dict):
-        return {"output": result, "result": result, "provider_result": result}
-    value = dict(result)
-    value.setdefault("output", result)
-    value.setdefault("result", result)
-    value.setdefault("provider_result", result)
+        value = {"output": result, "result": result, "provider_result": result}
+    else:
+        value = dict(result)
+        value.setdefault("output", result)
+        value.setdefault("result", result)
+        value.setdefault("provider_result", result)
+
+    # Structured planners sometimes name a downstream value after the source
+    # operation (for example ``steps.weather.forecast``). Expose that operation
+    # noun as a stable compatibility alias. Prefer a provider's human-readable
+    # summary when it has one, otherwise preserve the full provider result.
+    operation_alias = (operation or "").rsplit(".", 1)[-1]
+    if operation_alias:
+        alias_value = result.get("summary", result) if isinstance(result, dict) else result
+        value.setdefault(operation_alias, alias_value)
     return value
 
 
