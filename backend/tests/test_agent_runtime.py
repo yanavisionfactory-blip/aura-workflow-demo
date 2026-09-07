@@ -86,6 +86,50 @@ def test_deterministic_validator_rejects_unavailable_fallback() -> None:
     )
 
 
+def test_output_variable_references_infer_prior_step_dependencies() -> None:
+    workflow = plan(
+        PlanStep(
+            key="weather",
+            agent="data",
+            tool_slug="aura",
+            operation="weather.forecast",
+            reason="Check the weather",
+            expected_output="Forecast",
+        ),
+        PlanStep(
+            key="email",
+            agent="communications",
+            tool_slug="google",
+            operation="gmail.send",
+            reason="Send the forecast",
+            expected_output="Sent message",
+            consequential=True,
+            output_variables={"forecast": "{{steps.weather.output}}"},
+        ),
+    )
+
+    normalized = normalize_plan_graph(workflow)
+
+    assert normalized.steps[1].depends_on == ["weather"]
+
+
+def test_output_variable_self_reference_does_not_require_dependency() -> None:
+    workflow = plan(
+        PlanStep(
+            key="weather",
+            agent="data",
+            tool_slug="aura",
+            operation="weather.forecast",
+            reason="Check the weather",
+            expected_output="Forecast",
+            output_variables={"forecast": "{{steps.weather.output}}"},
+        )
+    )
+    inventory = [{"slug": "aura", "allowed_operations": ["weather.forecast"]}]
+
+    assert deterministic_plan_fixes(workflow, inventory) == []
+
+
 def test_critic_outage_does_not_repeat_a_successful_provider_action(monkeypatch) -> None:
     calls = 0
 
