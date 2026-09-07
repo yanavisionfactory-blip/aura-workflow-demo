@@ -18,7 +18,7 @@ import { detectNewConsequential } from "@/lib/editRunDetect";
 import { requestNotifyPermission, notifyWorkflowComplete, notifyWorkflowError } from "@/lib/auraNotify";
 import { hydrateConnections } from "@/lib/connectService";
 import { getAllConnections } from "@/lib/connectionsStore";
-import { approvePythonPlan, createPythonRun, getPythonRun, resumePythonRun } from "@/lib/auraApi";
+import { approvePythonPlan, createPythonRun, getPythonRun } from "@/lib/auraApi";
 
 const STEP_DURATION = 2.6;
 
@@ -30,7 +30,6 @@ const planToolName = (step) => {
     return "Google Drive";
   }
   const names = {
-    aura: "AURA Intelligence",
     airtable: "Airtable",
     notion: "Notion",
     mailchimp: "Mailchimp",
@@ -67,13 +66,6 @@ const friendlyStepTitle = (step) => {
   const reason = String(step.reason || "").toLowerCase();
   const operation = String(step.operation || "");
 
-  if (operation === "weather.forecast") {
-    const location = String(step.arguments?.location || "").trim();
-    const date = String(step.arguments?.date || "").trim().toLowerCase();
-    const when = date === "tomorrow" ? "tomorrow's " : "";
-    return `Check ${when}weather${location ? ` in ${location}` : ""}`;
-  }
-
   if (operation === "gmail.send") return "Send the email";
   if (operation.startsWith("gmail.")) return "Review email context";
   if (operation.startsWith("calendar.")) return operation.includes("create") ? "Schedule the event" : "Check the calendar";
@@ -96,99 +88,6 @@ const friendlyStepTitle = (step) => {
   if (/update|change|sync/.test(reason)) return `Update ${tool}`;
   if (/create|add/.test(reason)) return `Create in ${tool}`;
   return `Use ${tool}`;
-};
-
-const runtimeReference = (value) => typeof value === "string" && /\{\{[^}]+\}\}/.test(value);
-
-const isAuthorizationFailure = (run, failedStep) => {
-  const detail = [failedStep?.error, run?.error, run?.result?.failed_step?.error]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-  return /\b(401|403)\b|unauthori[sz]ed|invalid[_ -]?grant|expired.*token|token.*expired|credential|authentication/.test(detail);
-};
-
-const humanExecutionOutput = (step) => {
-  if (step.status === "recovering") return "AURA is resolving this automatically…";
-  if (step.status !== "completed") return "";
-  const result = step.output?.provider_result || {};
-  if (step.operation === "weather.forecast") {
-    return result.summary || `Forecast ready for ${result.location || "the requested location"}`;
-  }
-  if (step.operation === "gmail.send") {
-    return `Email sent to ${result.recipient || "your connected Gmail address"}`;
-  }
-  const count = result.items?.length || result.results?.length || result.messages?.length;
-  if (count) return `${count} ${count === 1 ? "item" : "items"} completed`;
-  return "Completed successfully";
-};
-
-const humanOutcome = (output) => {
-  const result = output.provider_result || {};
-  if (output.operation === "weather.forecast") {
-    return { type: "metric", title: "Weather forecast retrieved", detail: result.summary || "Forecast ready" };
-  }
-  if (output.operation === "gmail.send") {
-    return { type: "email", title: "Email sent", detail: `Delivered to ${result.recipient || "your connected Gmail address"}`, link: "https://mail.google.com/mail/u/0/#sent", linkLabel: "Open Gmail" };
-  }
-  return { type: "document", title: friendlyStepTitle(output), detail: "Completed successfully" };
-};
-
-const jiraPreviewValue = (value, field, itemNumber) => {
-  if (field === "recipient" && String(value || "").toLowerCase() === "me") return "Your connected Gmail address";
-  if (!runtimeReference(value)) return value == null || value === "" ? "Not specified" : String(value);
-  if (field === "project") return "Your selected Jira project";
-  if (field === "summary") return `Action item ${itemNumber} title from your notes`;
-  if (field === "description") return `Action item ${itemNumber} details from your notes`;
-  if (field === "assignee") return "Assignee matched from your notes";
-  if (field === "recipient") return "Your connected Gmail address";
-  if (field === "subject") return "Prepared automatically from your request";
-  if (field === "body") return "Prepared automatically from the completed steps";
-  return "Filled automatically when AURA runs";
-};
-
-const actionPreview = (step) => {
-  const args = step.arguments || {};
-  if (step.operation === "jira.issue.create" || step.operation === "jira.issue.update") {
-    const references = Object.values(args).join(" ");
-    const itemNumber = references.match(/item_(\d+)/)?.[1] || "1";
-    const fields = {
-      project: args.project_key ?? args.project,
-      summary: args.summary,
-      description: args.description,
-      assignee: args.assignee_id ?? args.assignee,
-    };
-    return {
-      type: "jira",
-      title: step.operation === "jira.issue.create" ? "Jira task preview" : "Jira update preview",
-      project: jiraPreviewValue(fields.project, "project", itemNumber),
-      summary: jiraPreviewValue(fields.summary, "summary", itemNumber),
-      description: jiraPreviewValue(fields.description, "description", itemNumber),
-      assignee: jiraPreviewValue(fields.assignee, "assignee", itemNumber),
-      dynamicFields: Object.entries(fields)
-        .filter(([, value]) => runtimeReference(value))
-        .map(([field]) => field),
-      note: "AURA fills values from your notes before creating anything. You approve the tasks first.",
-    };
-  }
-  if (step.operation === "gmail.send") {
-    return {
-      type: "email",
-      to: jiraPreviewValue(args.to, "recipient", 1),
-      subject: jiraPreviewValue(args.subject, "subject", 1),
-      body: jiraPreviewValue(args.body, "body", 1),
-      sourceValues: { to: args.to, subject: args.subject, body: args.body },
-      note: "AURA fills information from the completed preparation steps before sending.",
-    };
-  }
-  return {
-    type: "list",
-    title: `${planToolName(step)} change preview`,
-    items: Object.entries(args).map(([label, value]) => ({
-      label: label.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase()),
-      detail: runtimeReference(value) ? "Filled automatically when AURA runs" : String(value),
-    })),
-  };
 };
 
 const INTERPRETATION_SCHEMA = {
@@ -231,7 +130,7 @@ const PLAN_SCHEMA = {
           preview: {
             type: "object",
             properties: {
-              type: { type: "string", enum: ["email", "table", "list", "document", "jira"] },
+              type: { type: "string", enum: ["email", "table", "list", "document"] },
               summary: { type: "string" },
               to: { type: "string" },
               subject: { type: "string" },
@@ -328,7 +227,6 @@ export default function Demo() {
   const [editFlag, setEditFlag] = useState(null);
   const [editRunMode, setEditRunMode] = useState(false);
   const [autoApprove, setAutoApprove] = useState(false);
-  const [requiredReconnectTools, setRequiredReconnectTools] = useState([]);
   const editOriginalStepsRef = useRef([]);
   const attachedResourcesRef = useRef(null);
   const userSelectedToolsRef = useRef([]);
@@ -360,7 +258,6 @@ export default function Demo() {
   const currentWorkflowIdRef = useRef(null);
   const pythonRunIdRef = useRef(null);
   const pythonPlanRef = useRef(null);
-  const pythonRecoveryRef = useRef({});
 
   const clearTimeouts = () => {
     timeoutRefs.current.forEach(clearTimeout);
@@ -379,7 +276,6 @@ export default function Demo() {
     currentWorkflowIdRef.current = null;
     pythonRunIdRef.current = null;
     pythonPlanRef.current = null;
-    pythonRecoveryRef.current = {};
     setPhase("input");
     setOriginalPrompt("");
     setInterpretation("");
@@ -391,7 +287,6 @@ export default function Demo() {
     setWorkflowName("");
     setEditRunMode(false);
     setAutoApprove(false);
-    setRequiredReconnectTools([]);
     editOriginalStepsRef.current = [];
     userSelectedToolsRef.current = [];
   }, []);
@@ -487,9 +382,6 @@ Write ONE clear, conversational sentence restating what they want — but offer 
                 ? `Planned in ${(run.plan.planning_artifacts.timings_ms.total / 1000).toFixed(1)}s`
                 : "Runs in the Python control plane",
               steps: run.plan.steps.map((step) => ({
-                tool_slug: step.tool_slug,
-                operation: step.operation,
-                arguments: step.arguments,
                 tool: planToolName(step),
                 title: friendlyStepTitle(step),
                 iWill: cleanSentence(step.reason),
@@ -498,7 +390,12 @@ Write ONE clear, conversational sentence restating what they want — but offer 
                 flow: [{ label: "Uses", value: planToolName(step) }, { label: "Creates", value: step.expected_output }],
                 riskLevel: step.consequential ? "modify" : "read",
                 riskNote: step.consequential ? "This provider action runs only after your approval." : "",
-                preview: step.consequential ? actionPreview(step) : undefined,
+                preview: step.consequential ? {
+                  type: step.operation === "gmail.send" ? "email" : "list",
+                  to: step.arguments?.to || "", subject: step.arguments?.subject || "", body: step.arguments?.body || "",
+                  title: step.operation,
+                  items: Object.entries(step.arguments || {}).map(([label, value]) => ({ label, detail: JSON.stringify(value) })),
+                } : undefined,
               })),
             });
           } catch (error) {
@@ -626,6 +523,12 @@ Rules:
       else startExecution();
       return;
     }
+    const requiresReview = steps.some((step) => step.riskLevel === "modify");
+    if (!requiresReview) {
+      if (pythonRunIdRef.current) startPythonExecution();
+      else startExecution();
+      return;
+    }
     setPhase("preview");
   }, [editRunMode, autoApprove]);
 
@@ -643,44 +546,12 @@ Rules:
     if (!runId || !pythonPlanRef.current) return;
     setPhase("executing");
     setStartTime(Date.now());
-    setCurrentStepIdx(0);
-    setExecSteps(pythonPlanRef.current.steps.map((step, index) => ({
-      tool: approvedStepsRef.current[index]?.tool || planToolName(step),
-      action:
-        approvedStepsRef.current[index]?.title ||
-        approvedStepsRef.current[index]?.action ||
-        friendlyStepTitle(step),
-      riskLevel: step.consequential ? "modify" : "read",
-      status: "pending",
-      liveOutput: "",
-    })));
     const reviewedPlan = {
       ...pythonPlanRef.current,
       steps: pythonPlanRef.current.steps.map((step, index) => {
         const ui = editedUiSteps?.[index];
         if (!ui?.preview) return step;
-        let patch = {};
-        if (ui.preview.type === "email") {
-          const source = ui.preview.sourceValues || {};
-          const displayFor = (value, field) => jiraPreviewValue(value, field === "to" ? "recipient" : field, 1);
-          const approvedEmailValue = (field) => {
-            const displayed = ui.preview[field];
-            if (Object.hasOwn(source, field) && displayed === displayFor(source[field], field)) return source[field];
-            if (field === "to" && displayed === "Your connected Gmail address") return "me";
-            return displayed;
-          };
-          patch = {
-            to: approvedEmailValue("to"),
-            subject: approvedEmailValue("subject"),
-            body: approvedEmailValue("body"),
-          };
-        } else if (ui.preview.type === "jira") {
-          const dynamic = new Set(ui.preview.dynamicFields || []);
-          if (!dynamic.has("project")) patch.project_key = ui.preview.project;
-          if (!dynamic.has("summary")) patch.summary = ui.preview.summary;
-          if (!dynamic.has("description")) patch.description = ui.preview.description;
-          if (!dynamic.has("assignee")) patch.assignee_id = ui.preview.assignee;
-        }
+        const patch = ui.preview.type === "email" ? { to: ui.preview.to, subject: ui.preview.subject, body: ui.preview.body } : {};
         return { ...step, arguments: { ...step.arguments, ...patch } };
       }),
     };
@@ -688,61 +559,52 @@ Rules:
       await approvePythonPlan(runId, reviewedPlan.steps);
       for (let attempt = 0; attempt < 600; attempt += 1) {
         const run = await getPythonRun(runId);
-        const failedStep = (run.steps || []).find((step) => step.status === "failed");
-        const recoveryCount = pythonRecoveryRef.current[runId] || 0;
-        const recoveringAutomatically =
-          failedStep &&
-          (run.status === "waiting_for_action" || run.status === "recovering") &&
-          recoveryCount < 3;
-        setExecSteps((run.steps || []).map((step, index) => ({
-          tool: approvedStepsRef.current[index]?.tool || planToolName(step),
-          action: approvedStepsRef.current[index]?.title || approvedStepsRef.current[index]?.action || friendlyStepTitle(step),
-          riskLevel: step.consequential ? "modify" : "read",
-          status: recoveringAutomatically && step.id === failedStep.id ? "recovering" : step.status,
-          liveOutput: recoveringAutomatically && step.id === failedStep.id
-            ? `AURA is resolving this automatically · attempt ${recoveryCount + 1} of 3`
-            : humanExecutionOutput(step),
-          output: step.output,
-        })));
-        const active = (run.steps || []).findIndex((step) =>
-          step.status === "running" || (recoveringAutomatically && step.id === failedStep?.id)
-        );
+        setExecSteps((run.steps || []).map((step, index) => {
+          const planned = approvedStepsRef.current[index];
+          return {
+            tool: planned?.tool || planToolName(step),
+            action: planned?.title || planned?.action || friendlyStepTitle(step),
+            riskLevel: step.consequential ? "modify" : "read",
+            status: step.status,
+            liveOutput: step.output?.provider_result
+              ? `→ ${planned?.output || "Completed successfully"}`
+              : step.error
+                ? `→ ${step.error}`
+                : "",
+            output: step.output,
+          };
+        }));
+        const active = (run.steps || []).findIndex((step) => step.status === "running");
         if (active >= 0) setCurrentStepIdx(active);
         if (run.status === "completed") {
           const outputs = run.result?.outputs || [];
+          const synthesis = run.result?.unified_deliverable || {};
+          const completedCount = run.result?.completed_steps ?? outputs.length;
           finishExecution({
-            title: "Workflow completed",
-            summary: run.result?.unified_deliverable?.summary || `${run.result?.completed_steps || outputs.length} steps completed successfully.`,
-            metrics: [{ value: String(run.result?.completed_steps || outputs.length), label: "steps completed" }],
-            outcomes: outputs.map(humanOutcome),
+            title: run.plan?.name || "Workflow completed",
+            summary: synthesis.summary || "AURA completed the requested workflow.",
+            metrics: [{ value: String(completedCount), label: completedCount === 1 ? "step completed" : "steps completed" }],
+            outcomes: [{
+              type: "document",
+              title: "Result",
+              detail: synthesis.deliverable || synthesis.summary || "The workflow completed successfully.",
+              items: [{
+                label: "Summary",
+                detail: synthesis.deliverable || synthesis.summary || "The workflow completed successfully.",
+              }],
+            }],
             nextSteps: [],
           }, null, "completed");
           return;
         }
-        if (run.status === "waiting_for_action" || run.status === "failed") {
-          if (failedStep && recoveryCount < 3) {
-            pythonRecoveryRef.current[runId] = recoveryCount + 1;
-            setExecSteps((previous) => previous.map((step, index) => index === failedStep.position
-              ? { ...step, status: "recovering", liveOutput: `AURA is resolving this automatically · attempt ${recoveryCount + 1} of 3` }
-              : step));
-            await resumePythonRun(runId, failedStep.id);
-            await new Promise((resolve) => setTimeout(resolve, 1200 * (recoveryCount + 1)));
-            continue;
-          }
-          if (failedStep && isAuthorizationFailure(run, failedStep)) {
-            const toolName = planToolName(failedStep);
-            setRequiredReconnectTools((current) => current.includes(toolName) ? current : [...current, toolName]);
-            setPhase("plan");
-            return;
-          }
-          throw new Error("AURA could not complete this step after retrying safely.");
+        if (["failed", "cancelled", "blocked", "waiting_for_action"].includes(run.status)) {
+          throw new Error(run.error || "AURA needs your help to continue this workflow.");
         }
-        if (run.status === "cancelled") throw new Error("The workflow was cancelled safely.");
         await new Promise((resolve) => setTimeout(resolve, 900));
       }
       throw new Error("Python workflow timed out");
-    } catch {
-      finishExecution(null, "AURA could not complete this workflow after retrying safely.", "failed");
+    } catch (error) {
+      finishExecution(null, error.message, "failed");
     }
   };
 
@@ -909,7 +771,6 @@ Rules:
       res = mock.results;
     } else if (errorMsg) {
       res = {
-        status: "failed",
         title: "Workflow failed",
         summary: errorMsg,
         metrics: [],
@@ -1180,8 +1041,6 @@ Generate a results summary in plain, human-friendly language (not technical).
                     onApprove={handleApprove}
                     onBack={() => setPhase("confirm")}
                     approveLabel={editRunMode ? "Review changes" : "Start"}
-                    requiredReconnectTools={requiredReconnectTools}
-                    onConnectionRecovered={(toolName) => setRequiredReconnectTools((current) => current.filter((name) => name !== toolName))}
                   />
                 ) : null}
               </motion.div>
@@ -1209,7 +1068,7 @@ Generate a results summary in plain, human-friendly language (not technical).
                 transition={{ duration: 0.4 }}
                 className="w-full flex justify-center"
               >
-                <ExecutionView steps={execSteps} currentStepIndex={currentStepIdx} isReal={!mock} workflowSummary={plan?.interpretation || interpretation || originalPrompt} />
+                <ExecutionView steps={execSteps} currentStepIndex={currentStepIdx} isReal={!mock} />
               </motion.div>
             )}
 
