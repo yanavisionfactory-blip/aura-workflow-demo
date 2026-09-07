@@ -5,11 +5,12 @@ import ExecutionStep from "./ExecutionStep";
 const STEP_DURATION = 2.6; // seconds per step (for ETA)
 
 export default function ExecutionView({ steps, currentStepIndex, isReal }) {
+  const stepCount = steps.length;
   const completedCount = steps.filter((s) => s.status === "completed").length;
   const failed = steps.some((s) => s.status === "failed");
   const recovering = steps.some((s) => s.status === "recovering");
-  const progress = (completedCount / steps.length) * 100;
-  const remaining = Math.max(0, steps.length - completedCount);
+  const progress = stepCount ? (completedCount / stepCount) * 100 : 0;
+  const remaining = Math.max(0, stepCount - completedCount);
   const etaSecs = remaining > 0 && !failed ? remaining * STEP_DURATION : 0;
   const eta = failed
     ? null
@@ -40,7 +41,7 @@ export default function ExecutionView({ steps, currentStepIndex, isReal }) {
               {failed ? "Workflow paused" : recovering ? "AURA is resolving a step" : "Running your workflow"}
             </h2>
             <p className="text-xs text-muted-foreground">
-              Step {Math.min(currentStepIndex + 1, steps.length)} of {steps.length}
+              Step {stepCount ? Math.min(currentStepIndex + 1, stepCount) : 1} of {stepCount || 1}
               {eta ? ` · ${eta}` : ""}
             </p>
           </div>
@@ -48,7 +49,7 @@ export default function ExecutionView({ steps, currentStepIndex, isReal }) {
         <div className="flex items-center gap-2">
           <Zap className="w-3.5 h-3.5 text-accent" />
           <span className="text-sm font-mono text-accent">
-            {completedCount}/{steps.length}
+            {completedCount}/{stepCount || 1}
           </span>
         </div>
       </motion.div>
