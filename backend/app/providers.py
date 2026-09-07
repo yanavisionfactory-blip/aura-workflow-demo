@@ -13,7 +13,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
 from .config import Settings, get_settings
-from .native_connectors import validate_module_arguments
+from .native_connectors import coerce_module_arguments
 from .universal_connectors import capability_for
 
 
@@ -513,7 +513,9 @@ class ProviderExecutor:
 
     async def execute(self, operation: str, arguments: dict[str, Any]) -> dict:
         if self.capability_manifest:
-            validate_module_arguments(self.capability_manifest, operation, arguments)
+            arguments = coerce_module_arguments(
+                self.capability_manifest, operation, arguments
+            )
         handlers = {
             "gmail.list": self._gmail_list,
             "gmail.send": self._gmail_send,
