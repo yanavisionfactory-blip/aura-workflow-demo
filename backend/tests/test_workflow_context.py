@@ -149,6 +149,8 @@ def test_step_result_normalizes_provider_collection_aliases() -> None:
 
     assert resolve_value("{{steps.search.candidates[0].id}}", context) == "page-1"
     assert resolve_value("{{steps.search.items[0].id}}", context) == "page-1"
+    assert resolve_value("{{steps.search.id}}", context) == "page-1"
+    assert resolve_value("{{steps.search.page_id}}", context) == "page-1"
 
 
 def test_plan_rejects_dependencies_on_later_steps() -> None:
