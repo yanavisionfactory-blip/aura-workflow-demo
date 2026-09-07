@@ -279,6 +279,20 @@ async def plan_run(run_id: str, workspace_id: str) -> None:
                         manifest, planned_step.operation, planned_step.arguments
                     )
             run.plan = plan.model_dump(mode="json")
+            logger.info(
+                "Workflow plan ready run_id=%s graph=%s",
+                run.id,
+                [
+                    {
+                        "key": item.key,
+                        "depends_on": item.depends_on,
+                        "condition": item.condition is not None,
+                        "optional": item.optional,
+                        "operation": item.operation,
+                    }
+                    for item in plan.steps
+                ],
+            )
             plan_version = PlanVersion(
                 workspace_id=run.workspace_id,
                 run_id=run.id,
@@ -631,6 +645,13 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
             if not dependency_satisfied:
                 step.status = StepStatus.skipped
                 step.output = {"reason": "dependency_not_satisfied"}
+                logger.warning(
+                    "Workflow step skipped run_id=%s step_key=%s "
+                    "reason=dependency_not_satisfied dependencies=%s",
+                    run.id,
+                    step.step_key,
+                    step.depends_on,
+                )
                 await audit(
                     session,
                     workspace_id,
@@ -644,6 +665,13 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                 if step.condition and not evaluate_condition(step.condition, context):
                     step.status = StepStatus.skipped
                     step.output = {"reason": "condition_false"}
+                    logger.info(
+                        "Workflow step skipped run_id=%s step_key=%s "
+                        "reason=condition_false optional=%s",
+                        run.id,
+                        step.step_key,
+                        plan_steps[step.position].get("optional", False),
+                    )
                     await audit(
                         session,
                         workspace_id,
@@ -1150,6 +1178,43 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                 run.id,
             )
             await session.commit()
+
+        required_incomplete = [
+            step
+            for step, approved in zip(steps, plan_steps, strict=True)
+            if not approved.get("optional", False)
+            and step.status != StepStatus.completed
+        ]
+        if required_incomplete:
+            run.status = RunStatus.failed
+            run.error = (
+                "AURA couldn't complete every required step after trying the safe "
+                "recovery options. No completed work was repeated."
+            )
+            run.result = {
+                "partial": bool(outputs),
+                "completed_steps": len(outputs),
+                "outputs": outputs,
+                "incomplete_steps": [step.step_key for step in required_incomplete],
+            }
+            logger.error(
+                "Workflow incomplete run_id=%s required_steps=%s statuses=%s",
+                run.id,
+                [step.step_key for step in required_incomplete],
+                {step.step_key: step.status.value for step in steps},
+            )
+            await audit(
+                session,
+                workspace_id,
+                "run.required_steps_incomplete",
+                {
+                    "completed_steps": len(outputs),
+                    "incomplete_steps": [step.step_key for step in required_incomplete],
+                },
+                run.id,
+            )
+            await session.commit()
+            return
 
         synthesis = await synthesize_result(run.prompt, outputs)
         if not synthesis.validation_passed:
