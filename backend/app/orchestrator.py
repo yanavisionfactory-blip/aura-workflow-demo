@@ -65,6 +65,29 @@ def _friendly_execution_error(error: str | None) -> str:
     return "AURA is resolving an issue with this step automatically."
 
 
+def _has_empty_collection(result: object) -> bool:
+    """Recognize successful search/list responses that found no matching items."""
+    if not isinstance(result, dict):
+        return False
+    return any(
+        key in result and isinstance(result[key], list) and not result[key]
+        for key in ("results", "items", "records", "candidates", "data")
+    )
+
+
+def _required_read_arguments(manifest: dict, operation: str, arguments: dict) -> dict | None:
+    """Create a safe broad-read fallback while preserving all required inputs."""
+    capability = next(
+        (item for item in manifest.get("capabilities", []) if item.get("name") == operation),
+        None,
+    )
+    if not capability or operation_scope(operation) != "read":
+        return None
+    required = set(capability.get("input_schema", {}).get("required", []))
+    reduced = {key: value for key, value in arguments.items() if key in required}
+    return reduced if reduced != arguments else None
+
+
 def _has_confirmed_consequential_result(step: RunStep) -> bool:
     """Return true when replaying a failed write could duplicate external work."""
     return bool(
@@ -234,6 +257,10 @@ async def plan_run(run_id: str, workspace_id: str) -> None:
                 planned_step.arguments = normalize_module_arguments(
                     manifest, planned_step.operation, planned_step.arguments
                 )
+                if planned_step.reduced_scope_arguments is None:
+                    planned_step.reduced_scope_arguments = _required_read_arguments(
+                        manifest, planned_step.operation, planned_step.arguments
+                    )
             run.plan = plan.model_dump(mode="json")
             plan_version = PlanVersion(
                 workspace_id=run.workspace_id,
@@ -845,6 +872,13 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
 
             result, error = await call(tool, step.operation, resolved_arguments)
             approved_step = plan_steps[step.position]
+            if (
+                not error
+                and result is not None
+                and _has_empty_collection(result)
+                and approved_step.get("reduced_scope_arguments") is not None
+            ):
+                error = "The narrow read returned no matching items"
             fallback_slug = approved_step.get("fallback_tool_slug")
             fallback_operation = approved_step.get("fallback_operation")
             if error and fallback_slug and fallback_operation:
@@ -899,7 +933,7 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
             reduced_arguments = approved_step.get("reduced_scope_arguments")
             if (
                 error
-                and reduced_arguments
+                and reduced_arguments is not None
                 and operation_scope(step.operation) == "read"
                 and reduced_arguments != step.arguments
             ):
