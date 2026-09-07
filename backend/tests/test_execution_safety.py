@@ -106,6 +106,10 @@ def test_semantic_retry_does_not_replay_successful_read():
         action="retry",
         policy_violations=["Response exceeds approved scope"],
     )
+    mislabeled_semantic_retry = CriticDecision(
+        action="retry",
+        policy_violations=["Output may be incomplete relative to expected_output."],
+    )
 
     assert _accept_successful_read_after_critic(
         "notion.page.get", semantic_retry
@@ -113,6 +117,9 @@ def test_semantic_retry_does_not_replay_successful_read():
     assert _accept_successful_read_after_critic(
         "notion.page.get", policy_retry
     ) is False
+    assert _accept_successful_read_after_critic(
+        "notion.page.get", mislabeled_semantic_retry
+    ) is True
     assert _accept_successful_read_after_critic("gmail.send", semantic_retry) is False
 
 
