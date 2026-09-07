@@ -107,6 +107,17 @@ def test_scalar_step_result_has_stable_whole_result_paths() -> None:
     assert resolve_value("{{steps.count.result}}", context) == 3
 
 
+def test_step_result_exposes_operation_noun_as_a_summary_alias() -> None:
+    provider_result = {"location": "Munich", "summary": "Sunny, 24 C"}
+    context = {
+        "steps": {
+            "weather": step_context_value(provider_result, "weather.forecast")
+        }
+    }
+
+    assert resolve_value("{{steps.weather.forecast}}", context) == "Sunny, 24 C"
+
+
 def test_plan_rejects_dependencies_on_later_steps() -> None:
     with pytest.raises(ValidationError, match="missing or later"):
         WorkflowPlan(
