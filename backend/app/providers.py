@@ -567,8 +567,76 @@ class ProviderExecutor:
             "mcp.call": self._mcp_call,
         }
         if operation not in handlers:
-            return await self._execute_capability(operation, arguments)
-        return await handlers[operation](arguments)
+            result = await self._execute_capability(operation, arguments)
+        else:
+            result = await handlers[operation](arguments)
+        return self._attach_result_url(operation, arguments, result)
+
+    def _attach_result_url(
+        self, operation: str, arguments: dict[str, Any], result: dict
+    ) -> dict:
+        """Add a user-facing deep link without exposing transport endpoints."""
+        if not isinstance(result, dict) or result.get("result_url"):
+            return result
+
+        url: str | None = None
+        for key in (
+            "web_url",
+            "html_url",
+            "htmlLink",
+            "webViewLink",
+            "permalink",
+            "browser_url",
+            "edit_url",
+        ):
+            if isinstance(result.get(key), str):
+                url = result[key]
+                break
+
+        if not url and operation.startswith("notion."):
+            if isinstance(result.get("url"), str):
+                url = result["url"]
+            elif isinstance(result.get("results"), list):
+                url = next(
+                    (
+                        item.get("url")
+                        for item in result["results"]
+                        if isinstance(item, dict) and isinstance(item.get("url"), str)
+                    ),
+                    None,
+                )
+        elif not url and operation == "gmail.send" and result.get("message_id"):
+            message_id = quote(str(result["message_id"]), safe="")
+            url = f"https://mail.google.com/mail/u/0/#all/{message_id}"
+        elif not url and operation.startswith("jira."):
+            issue_key = result.get("key") or result.get("issue_id_or_key")
+            site_url = self.credentials.get("site_url")
+            if issue_key and isinstance(site_url, str):
+                url = f"{site_url.rstrip('/')}/browse/{quote(str(issue_key), safe='')}"
+        elif not url and operation.startswith("sheets."):
+            spreadsheet_id = result.get("spreadsheetId") or arguments.get("spreadsheet_id")
+            if spreadsheet_id:
+                url = (
+                    "https://docs.google.com/spreadsheets/d/"
+                    f"{quote(str(spreadsheet_id), safe='')}/edit"
+                )
+        elif not url and operation == "slack.post":
+            channel = result.get("channel") or arguments.get("channel")
+            timestamp = result.get("ts")
+            team = self.credentials.get("team")
+            team_id = team.get("id") if isinstance(team, dict) else None
+            if team_id and channel and timestamp:
+                team_id = quote(str(team_id), safe="")
+                channel = quote(str(channel), safe="")
+                thread = str(timestamp).replace(".", "")
+                url = (
+                    f"https://app.slack.com/client/{team_id}/{channel}"
+                    f"/thread/{channel}-{thread}"
+                )
+
+        if isinstance(url, str) and url.startswith("https://"):
+            return {**result, "result_url": url}
+        return result
 
     async def _execute_capability(self, operation: str, arguments: dict[str, Any]) -> dict:
         capability = capability_for(self.capability_manifest, operation)
