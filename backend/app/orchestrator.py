@@ -141,8 +141,17 @@ async def ensure_aura_intelligence(session, workspace_id: str) -> ToolConnection
 
 def planning_error_message(exc: Exception) -> str:
     """Return a user-facing planning failure without leaking provider payloads."""
-    raw = str(exc)
-    lowered = raw.lower()
+    # Recovery wrappers intentionally replace raw provider messages. Walk the
+    # exception chain so operational categories such as quota exhaustion and
+    # rate limiting are not lost when combined and staged planning both fail.
+    chain: list[str] = []
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(str(current))
+        current = current.__cause__ or current.__context__
+    lowered = " ".join(chain).lower()
     if (
         "insufficient_quota" in lowered
         or "credit_balance_exhausted" in lowered
@@ -330,6 +339,11 @@ async def plan_run(run_id: str, workspace_id: str) -> None:
             )
             await session.commit()
         except Exception as exc:
+            logger.exception(
+                "Workflow planning failed after automatic recovery run_id=%s error_type=%s",
+                run.id,
+                type(exc).__name__,
+            )
             run.status = RunStatus.failed
             run.error = planning_error_message(exc)
             await audit(
