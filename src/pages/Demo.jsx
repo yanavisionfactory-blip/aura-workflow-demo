@@ -30,6 +30,7 @@ const planToolName = (step) => {
     return "Google Drive";
   }
   const names = {
+    aura: "AURA Intelligence",
     airtable: "Airtable",
     notion: "Notion",
     mailchimp: "Mailchimp",
@@ -65,6 +66,13 @@ const friendlyStepTitle = (step) => {
   const tool = planToolName(step);
   const reason = String(step.reason || "").toLowerCase();
   const operation = String(step.operation || "");
+
+  if (operation === "weather.forecast") {
+    const location = String(step.arguments?.location || "").trim();
+    const date = String(step.arguments?.date || "").trim().toLowerCase();
+    const when = date === "tomorrow" ? "tomorrow's " : "";
+    return `Check ${when}weather${location ? ` in ${location}` : ""}`;
+  }
 
   if (operation === "gmail.send") return "Send the email";
   if (operation.startsWith("gmail.")) return "Review email context";
@@ -635,6 +643,17 @@ Rules:
     if (!runId || !pythonPlanRef.current) return;
     setPhase("executing");
     setStartTime(Date.now());
+    setCurrentStepIdx(0);
+    setExecSteps(pythonPlanRef.current.steps.map((step, index) => ({
+      tool: approvedStepsRef.current[index]?.tool || planToolName(step),
+      action:
+        approvedStepsRef.current[index]?.title ||
+        approvedStepsRef.current[index]?.action ||
+        friendlyStepTitle(step),
+      riskLevel: step.consequential ? "modify" : "read",
+      status: "pending",
+      liveOutput: "",
+    })));
     const reviewedPlan = {
       ...pythonPlanRef.current,
       steps: pythonPlanRef.current.steps.map((step, index) => {
