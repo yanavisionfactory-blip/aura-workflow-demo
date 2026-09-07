@@ -319,9 +319,17 @@ export async function getPythonRun(runId) {
   return request(`/v1/runs/${runId}`);
 }
 
-export async function approvePythonPlan(runId, editedSteps = null) {
+export async function approvePythonPlan(runId, editedSteps = null, approveConsequential = true) {
   await ensureWorkspace();
-  return request(`/v1/runs/${runId}/approve-plan`, { method: "POST", body: JSON.stringify({ approved: true, edited_steps: editedSteps }) });
+  return request(`/v1/runs/${runId}/approve-plan`, { method: "POST", body: JSON.stringify({ approved: true, edited_steps: editedSteps, approve_consequential: approveConsequential }) });
+}
+
+export async function decidePythonApproval(approvalId, approved, editedArguments = null) {
+  await ensureWorkspace();
+  return request(`/v1/approvals/${approvalId}`, {
+    method: "POST",
+    body: JSON.stringify({ approved, edited_arguments: editedArguments }),
+  });
 }
 
 export async function resumePythonRun(runId, stepId = null) {

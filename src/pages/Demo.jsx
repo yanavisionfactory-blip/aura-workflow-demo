@@ -18,7 +18,7 @@ import { detectNewConsequential } from "@/lib/editRunDetect";
 import { requestNotifyPermission, notifyWorkflowComplete, notifyWorkflowError } from "@/lib/auraNotify";
 import { hydrateConnections } from "@/lib/connectService";
 import { getAllConnections } from "@/lib/connectionsStore";
-import { approvePythonPlan, createPythonRun, getPythonRun } from "@/lib/auraApi";
+import { approvePythonPlan, createPythonRun, decidePythonApproval, getPythonRun } from "@/lib/auraApi";
 
 const STEP_DURATION = 2.6;
 
@@ -96,6 +96,64 @@ const resultLinkFromOutputs = (outputs = []) => {
     if (typeof url === "string" && url.startsWith("https://")) return url;
   }
   return null;
+};
+
+const resolvedPreviewStep = (planned, runtime) => {
+  if (!runtime?.consequential) return planned;
+  const args = runtime.approval_preview?.arguments || runtime.arguments || {};
+  let preview;
+  if (runtime.operation === "gmail.send") {
+    preview = {
+      type: "email",
+      to: args.to || "me",
+      subject: args.subject || "",
+      body: args.body || "",
+      note: "Prepared from the completed workflow steps.",
+    };
+  } else if (runtime.operation.startsWith("jira.issue.")) {
+    preview = {
+      type: "jira",
+      title: runtime.operation === "jira.issue.create" ? "Jira task preview" : "Jira update preview",
+      project: args.project_key || args.projectKey || args.project || "",
+      summary: args.summary || "",
+      description: args.description || "",
+      assignee: args.assignee_id || args.assignee || "",
+    };
+  } else {
+    preview = {
+      type: "list",
+      title: `${planToolName(runtime)} change preview`,
+      items: Object.entries(args).map(([label, value]) => ({
+        label,
+        detail: typeof value === "string" ? value : JSON.stringify(value),
+      })),
+    };
+  }
+  return {
+    ...planned,
+    arguments: args,
+    resolvedArguments: args,
+    approvalId: runtime.approval_id,
+    preview,
+  };
+};
+
+const editedArgumentsForStep = (step) => {
+  const args = { ...(step.resolvedArguments || step.arguments || {}) };
+  const preview = step.preview || {};
+  if (preview.type === "email") {
+    return { ...args, to: preview.to, subject: preview.subject, body: preview.body };
+  }
+  if (preview.type === "jira") {
+    return {
+      ...args,
+      project_key: preview.project,
+      summary: preview.summary,
+      description: preview.description,
+      assignee_id: preview.assignee,
+    };
+  }
+  return args;
 };
 
 const INTERPRETATION_SCHEMA = {
@@ -537,6 +595,10 @@ Rules:
       else startExecution();
       return;
     }
+    if (pythonRunIdRef.current) {
+      startPythonPreparation(steps);
+      return;
+    }
     setPhase("preview");
   }, [editRunMode, autoApprove]);
 
@@ -545,11 +607,67 @@ Rules:
       approvedStepsRef.current = editedSteps;
       setApprovedSteps(editedSteps);
     }
-    if (pythonRunIdRef.current) startPythonExecution(editedSteps);
+    if (pythonRunIdRef.current) startPythonExecution(editedSteps, true);
     else startExecution();
   }, []);
 
-  const startPythonExecution = async (editedUiSteps = null) => {
+  const mapRuntimeSteps = (run) => (run.steps || []).map((step, index) => {
+    const planned = approvedStepsRef.current[index];
+    return {
+      tool: planned?.tool || planToolName(step),
+      action: planned?.title || planned?.action || friendlyStepTitle(step),
+      riskLevel: step.consequential ? "modify" : "read",
+      status: step.status,
+      liveOutput: step.output?.provider_result
+        ? `→ ${planned?.output || "Completed successfully"}`
+        : step.error
+          ? `→ ${step.error}`
+          : "",
+      output: step.output,
+    };
+  });
+
+  const startPythonPreparation = async (reviewedUiSteps) => {
+    const runId = pythonRunIdRef.current;
+    if (!runId || !pythonPlanRef.current) return;
+    setPhase("executing");
+    setStartTime(Date.now());
+    setCurrentStepIdx(0);
+    setExecSteps(reviewedUiSteps.map((step) => ({
+      tool: step.tool,
+      action: step.title || step.action,
+      riskLevel: step.riskLevel,
+      status: "pending",
+      liveOutput: "",
+    })));
+    try {
+      await approvePythonPlan(runId, pythonPlanRef.current.steps, false);
+      for (let attempt = 0; attempt < 600; attempt += 1) {
+        const run = await getPythonRun(runId);
+        setExecSteps(mapRuntimeSteps(run));
+        const active = (run.steps || []).findIndex((step) => step.status === "running");
+        if (active >= 0) setCurrentStepIdx(active);
+        if (run.status === "awaiting_approval") {
+          const prepared = reviewedUiSteps.map((step, index) =>
+            resolvedPreviewStep(step, run.steps?.[index])
+          );
+          approvedStepsRef.current = prepared;
+          setApprovedSteps(prepared);
+          setPhase("preview");
+          return;
+        }
+        if (["failed", "cancelled", "blocked", "waiting_for_action"].includes(run.status)) {
+          throw new Error(run.error || "AURA needs your help to continue this workflow.");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 900));
+      }
+      throw new Error("AURA took too long to prepare the review.");
+    } catch (error) {
+      finishExecution(null, error.message, "failed");
+    }
+  };
+
+  const startPythonExecution = async (editedUiSteps = null, prepared = false) => {
     const runId = pythonRunIdRef.current;
     if (!runId || !pythonPlanRef.current) return;
     setPhase("executing");
@@ -564,24 +682,23 @@ Rules:
       }),
     };
     try {
-      await approvePythonPlan(runId, reviewedPlan.steps);
+      if (prepared) {
+        const run = await getPythonRun(runId);
+        const pending = (run.steps || []).filter((step) => step.approval_status === "pending");
+        for (const step of pending) {
+          const uiStep = editedUiSteps?.[step.position] || approvedStepsRef.current[step.position];
+          await decidePythonApproval(
+            step.approval_id,
+            true,
+            editedArgumentsForStep(uiStep || {})
+          );
+        }
+      } else {
+        await approvePythonPlan(runId, reviewedPlan.steps);
+      }
       for (let attempt = 0; attempt < 600; attempt += 1) {
         const run = await getPythonRun(runId);
-        setExecSteps((run.steps || []).map((step, index) => {
-          const planned = approvedStepsRef.current[index];
-          return {
-            tool: planned?.tool || planToolName(step),
-            action: planned?.title || planned?.action || friendlyStepTitle(step),
-            riskLevel: step.consequential ? "modify" : "read",
-            status: step.status,
-            liveOutput: step.output?.provider_result
-              ? `→ ${planned?.output || "Completed successfully"}`
-              : step.error
-                ? `→ ${step.error}`
-                : "",
-            output: step.output,
-          };
-        }));
+        setExecSteps(mapRuntimeSteps(run));
         const active = (run.steps || []).findIndex((step) => step.status === "running");
         if (active >= 0) setCurrentStepIdx(active);
         if (run.status === "completed") {
