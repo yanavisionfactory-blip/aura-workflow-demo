@@ -220,3 +220,10 @@ def test_notion_search_normalizes_common_limit_alias():
         {"query": "", "limit": 1},
     ) == {"query": "", "page_size": 1}
 
+
+def test_schema_guided_aliases_normalize_unseen_pagination_variants():
+    assert normalize_module_arguments(
+        native_manifest("notion"),
+        "notion.search",
+        {"maxResults": 5, "cursor": "next-page"},
+    ) == {"page_size": 5, "start_cursor": "next-page"}
