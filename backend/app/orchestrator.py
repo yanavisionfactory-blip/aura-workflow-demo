@@ -1,7 +1,9 @@
 import asyncio
+import logging
 import time
 from datetime import datetime, timezone
 
+import httpx
 from sqlalchemy import select
 
 from .agent_runtime import ConnectionRequiredError, create_plan, critique_step, synthesize_result
@@ -26,7 +28,13 @@ from .models import (
     ToolTrustState,
     WorkflowRun,
 )
-from .native_connectors import native_manifest, native_operations, planning_catalog
+from .native_connectors import (
+    NativeConnectorError,
+    native_manifest,
+    native_operations,
+    normalize_module_arguments,
+    planning_catalog,
+)
 from .policy import canonical_plan_hash, operation_scope, runtime_policy_check
 from .providers import (
     ProviderExecutor,
@@ -36,6 +44,20 @@ from .providers import (
 )
 from .security import CredentialVault
 from .workflow_context import WorkflowContextError, evaluate_condition, resolve_value
+
+logger = logging.getLogger(__name__)
+
+
+def _failure_impacts_trust(exc: Exception) -> bool:
+    """Only provider availability failures should affect connector reliability."""
+    return isinstance(exc, (asyncio.TimeoutError, httpx.HTTPError))
+
+
+def _friendly_execution_error(error: str | None) -> str:
+    detail = (error or "").lower()
+    if any(marker in detail for marker in ("unauthorized", "forbidden", "sign in", "token", "credential")):
+        return "This app connection needs your attention before AURA can continue."
+    return "AURA is resolving an issue with this step automatically."
 
 
 async def audit(
@@ -159,12 +181,36 @@ async def plan_run(run_id: str, workspace_id: str) -> None:
         }
         inventory_by_slug.update({item["slug"]: item for item in connected_inventory})
         inventory = list(inventory_by_slug.values())
+        manifests = (
+            await session.scalars(
+                select(CapabilityManifest).where(
+                    CapabilityManifest.tool_id.in_([tool.id for tool in tools]),
+                    CapabilityManifest.status == "verified",
+                )
+            )
+        ).all()
+        manifests_by_slug = {
+            tool.slug: manifest.manifest
+            for tool in tools
+            for manifest in manifests
+            if manifest.tool_id == tool.id
+        }
         await session.commit()
 
         try:
             plan = await create_plan(
                 run.prompt, inventory, set((run.inputs or {}).keys())
             )
+            for planned_step in plan.steps:
+                manifest = manifests_by_slug.get(planned_step.tool_slug)
+                if not manifest:
+                    try:
+                        manifest = native_manifest(planned_step.tool_slug)
+                    except NativeConnectorError:
+                        continue
+                planned_step.arguments = normalize_module_arguments(
+                    manifest, planned_step.operation, planned_step.arguments
+                )
             run.plan = plan.model_dump(mode="json")
             plan_version = PlanVersion(
                 workspace_id=run.workspace_id,
@@ -341,6 +387,12 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
         run = await session.get(WorkflowRun, run_id)
         if not run or run.workspace_id != workspace_id:
             return
+        recovery_context = dict(run.execution_context or {})
+        recovery_counts = dict(recovery_context.get("__aura_recovery__") or {})
+        is_bounded_recovery = (
+            run.status == RunStatus.recovering
+            and max((int(value) for value in recovery_counts.values()), default=0) <= 3
+        )
         if run.status in {RunStatus.completed, RunStatus.cancelled, RunStatus.blocked}:
             return
         if run.cancellation_requested:
@@ -503,15 +555,20 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                     continue
                 resolved_arguments = resolve_value(step.arguments, context)
             except WorkflowContextError as exc:
+                internal_error = str(exc)
+                logger.exception(
+                    "Workflow input resolution failed run_id=%s step_id=%s",
+                    run.id, step.id,
+                )
                 step.status = StepStatus.failed
-                step.error = str(exc)
+                step.error = _friendly_execution_error(internal_error)
                 run.status = RunStatus.waiting_for_action
                 run.error = step.error
                 await audit(
                     session,
                     workspace_id,
                     "step.variable_resolution_failed",
-                    {"step_id": step.id, "error": step.error},
+                    {"step_id": step.id, "internal_error": internal_error},
                     run.id,
                 )
                 await session.commit()
@@ -547,7 +604,11 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                 approved_permissions=approved_permissions,
                 current_permissions=tool.allowed_operations,
                 operation=step.operation,
-                trust_score=trust.score,
+                trust_score=(
+                    max(trust.score, float(snapshot.policy_snapshot["trust_execution_floor"]))
+                    if is_bounded_recovery
+                    else trust.score
+                ),
                 policy=snapshot.policy_snapshot,
             )
             if runtime_decision["action"] in {"pause", "block"}:
@@ -696,22 +757,33 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                         )
                         await session.commit()
                         return result, None
-                    except asyncio.TimeoutError:
+                    except asyncio.TimeoutError as exc:
                         timed_out = True
                         last_error = "Step timed out"
+                        failure_impacts_trust = _failure_impacts_trust(exc)
+                        logger.exception(
+                            "Workflow step timed out run_id=%s step_id=%s tool=%s operation=%s",
+                            run.id, step.id, active_tool.slug, operation,
+                        )
                     except Exception as exc:
                         last_error = str(exc)
+                        failure_impacts_trust = _failure_impacts_trust(exc)
+                        logger.exception(
+                            "Workflow step failed run_id=%s step_id=%s tool=%s operation=%s error_type=%s",
+                            run.id, step.id, active_tool.slug, operation, type(exc).__name__,
+                        )
                     latency = (time.perf_counter() - started) * 1000
                     attempt.status = "failed"
                     attempt.error = last_error
                     attempt.latency_ms = latency
                     attempt.completed_at = datetime.now(timezone.utc)
-                    _update_trust(
-                        active_trust,
-                        succeeded=False,
-                        timed_out=timed_out,
-                        latency_ms=latency,
-                    )
+                    if failure_impacts_trust:
+                        _update_trust(
+                            active_trust,
+                            succeeded=False,
+                            timed_out=timed_out,
+                            latency_ms=latency,
+                        )
                     await session.commit()
                 return None, last_error
 
@@ -794,7 +866,8 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
 
             if error or result is None:
                 step.status = StepStatus.failed
-                step.error = error or "Tool execution failed"
+                internal_error = error or "Tool execution failed"
+                step.error = _friendly_execution_error(internal_error)
                 if run.cancellation_requested:
                     run.status = RunStatus.cancelled
                 else:
@@ -816,7 +889,7 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                             workspace_id=workspace_id,
                             run_id=run.id,
                             step_id=step.id,
-                            error=step.error,
+                            error=internal_error,
                             attempt_count=len(attempts),
                             payload={
                                 "tool_slug": step.tool_slug,
@@ -828,7 +901,7 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                     session,
                     workspace_id,
                     "step.recovery_exhausted",
-                    {"step_id": step.id, "error": step.error},
+                    {"step_id": step.id, "internal_error": internal_error},
                     run.id,
                 )
                 await session.commit()
@@ -853,12 +926,17 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                 actor="tool-output-critic",
             )
             if criticism.action != "accept":
-                step.status = StepStatus.failed
-                step.error = f"Runtime critic {criticism.action}: " + "; ".join(
+                internal_error = f"Runtime critic {criticism.action}: " + "; ".join(
                     criticism.reasons
                     + criticism.contract_failures
                     + criticism.policy_violations
                 )
+                logger.error(
+                    "Workflow output rejected run_id=%s step_id=%s detail=%s",
+                    run.id, step.id, internal_error,
+                )
+                step.status = StepStatus.failed
+                step.error = _friendly_execution_error(internal_error)
                 run.status = RunStatus.waiting_for_action
                 run.error = step.error
                 run.result = _partial_result(outputs, step, step.error)
@@ -881,14 +959,22 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                 for name, value in step.output_variables.items():
                     context.setdefault("vars", {})[name] = resolve_value(value, context)
             except WorkflowContextError as exc:
+                internal_error = str(exc)
+                logger.exception(
+                    "Workflow output mapping failed run_id=%s step_id=%s",
+                    run.id, step.id,
+                )
                 run.execution_context = context
+                step.status = StepStatus.failed
+                step.error = _friendly_execution_error(internal_error)
                 run.status = RunStatus.waiting_for_action
-                run.error = str(exc)
+                run.error = step.error
+                run.result = _partial_result(outputs, step, step.error)
                 await audit(
                     session,
                     workspace_id,
                     "step.output_mapping_failed",
-                    {"step_id": step.id, "error": run.error},
+                    {"step_id": step.id, "internal_error": internal_error},
                     run.id,
                 )
                 await session.commit()

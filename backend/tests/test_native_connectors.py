@@ -4,6 +4,7 @@ from app.native_connectors import (
     NativeConnectorError,
     native_manifest,
     native_operations,
+    normalize_module_arguments,
     planning_catalog,
     public_catalog,
     validate_module_arguments,
@@ -44,6 +45,25 @@ def test_aura_weather_is_connection_free_and_read_only():
     validate_module_arguments(
         manifest, "weather.forecast", {"location": "Munich", "date": "tomorrow"}
     )
+
+
+def test_module_arguments_normalize_common_model_variants_before_approval():
+    normalized = normalize_module_arguments(
+        native_manifest("aura"),
+        "weather.forecast",
+        {"city": "Munich", "forecastDate": "tomorrow"},
+    )
+
+    assert normalized == {"location": "Munich", "date": "tomorrow"}
+
+
+def test_module_argument_normalization_still_rejects_unknown_inputs():
+    with pytest.raises(NativeConnectorError, match="unknown inputs"):
+        normalize_module_arguments(
+            native_manifest("aura"),
+            "weather.forecast",
+            {"location": "Munich", "admin_override": True},
+        )
 
 
 def test_jira_catalog_requires_approval_for_issue_writes():

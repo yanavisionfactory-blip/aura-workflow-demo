@@ -198,6 +198,12 @@ def test_weather_forecast_returns_plain_language_summary(monkeypatch):
     assert "30% chance" in result["summary"]
 
 
+def test_connection_free_provider_does_not_send_fake_authorization_header():
+    executor = ProviderExecutor({})
+
+    assert executor._headers() == {"Content-Type": "application/json"}
+
+
 def test_custom_and_installation_callbacks_use_the_same_validated_resolver():
     settings = _settings()
     settings.public_url = "https://api.example.com/"

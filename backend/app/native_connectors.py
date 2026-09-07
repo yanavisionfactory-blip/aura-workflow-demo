@@ -4,6 +4,7 @@ A connector exposes composable modules. The orchestrator chooses modules; it doe
 not encode provider-specific workflows.
 """
 
+import re
 from copy import deepcopy
 from typing import Any
 
@@ -472,3 +473,35 @@ def validate_module_arguments(manifest: dict[str, Any], operation: str, argument
     if not module:
         raise NativeConnectorError(f"Module {operation!r} is not declared")
     _validate_value(module.get("input_schema", {"type": "object"}), arguments, operation)
+
+
+_ARGUMENT_ALIASES = {
+    "city": "location",
+    "place": "location",
+    "forecast_date": "date",
+    "project": "project_key",
+    "project_id": "project_key",
+    "issue": "issue_key",
+}
+
+
+def normalize_module_arguments(
+    manifest: dict[str, Any], operation: str, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    """Normalize harmless model naming variants before an approved plan is frozen."""
+    module = next(
+        (item for item in manifest.get("capabilities", []) if item.get("name") == operation),
+        None,
+    )
+    if not module:
+        raise NativeConnectorError(f"Module {operation!r} is not declared")
+    properties = module.get("input_schema", {}).get("properties", {})
+    normalized: dict[str, Any] = {}
+    for key, value in arguments.items():
+        snake_key = re.sub(r"(?<!^)(?=[A-Z])", "_", key).lower()
+        target = snake_key if snake_key in properties else _ARGUMENT_ALIASES.get(snake_key, snake_key)
+        if target in normalized and target != key:
+            raise NativeConnectorError(f"Duplicate values supplied for {target!r}")
+        normalized[target] = value
+    validate_module_arguments(manifest, operation, normalized)
+    return normalized

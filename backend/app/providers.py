@@ -505,6 +505,8 @@ class ProviderExecutor:
 
     def _headers(self) -> dict[str, str]:
         token = self.credentials.get("access_token") or self.credentials.get("api_key")
+        if not token:
+            return {"Content-Type": "application/json"}
         header = self.credentials.get("header", "Authorization")
         prefix = self.credentials.get("prefix", "Bearer")
         return {header: f"{prefix} {token}".strip(), "Content-Type": "application/json"}

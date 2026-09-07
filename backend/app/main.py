@@ -60,6 +60,7 @@ from .models import (
 from .native_connectors import (
     native_manifest,
     native_operations,
+    normalize_module_arguments,
     public_catalog,
     validate_module_arguments,
 )
@@ -74,8 +75,8 @@ from .providers import (
     PROVIDERS,
     exchange_oauth_code,
     idempotency_key,
-    oauth_callback_matches,
     oauth_authorization_url,
+    oauth_callback_matches,
     oauth_callback_url,
     oauth_exchange_callback_url,
     oauth_registry_errors,
@@ -2739,6 +2740,36 @@ async def approve_plan(
     if fixes:
         raise HTTPException(422, {"message": "Plan failed authorization", "fixes": fixes})
 
+    manifests = (
+        await session.scalars(
+            select(CapabilityManifest).where(
+                CapabilityManifest.tool_id.in_([tool.id for tool in tools]),
+                CapabilityManifest.status == "verified",
+            )
+        )
+    ).all()
+    manifests_by_tool_id = {manifest.tool_id: manifest.manifest for manifest in manifests}
+    tools_by_slug = {tool.slug: tool for tool in tools}
+    original_plan_json = plan.model_dump(mode="json")
+    argument_fixes: list[str] = []
+    for index, planned_step in enumerate(plan.steps, start=1):
+        tool = tools_by_slug.get(planned_step.tool_slug)
+        manifest = manifests_by_tool_id.get(tool.id) if tool else None
+        if not manifest:
+            argument_fixes.append(f"Step {index} connector schema is unavailable")
+            continue
+        try:
+            planned_step.arguments = normalize_module_arguments(
+                manifest, planned_step.operation, planned_step.arguments
+            )
+        except ValueError as exc:
+            argument_fixes.append(f"Step {index} has invalid connector inputs: {exc}")
+    if argument_fixes:
+        raise HTTPException(
+            422, {"message": "AURA is still preparing this workflow", "fixes": argument_fixes}
+        )
+    normalized_arguments = plan.model_dump(mode="json") != original_plan_json
+
     latest_version = await session.scalar(
         select(PlanVersion)
         .where(PlanVersion.run_id == run.id)
@@ -2747,7 +2778,7 @@ async def approve_plan(
     )
     plan_json = plan.model_dump(mode="json")
     plan_hash = canonical_plan_hash(plan_json)
-    if payload.edited_steps is not None or not latest_version:
+    if payload.edited_steps is not None or normalized_arguments or not latest_version:
         plan_version = PlanVersion(
             workspace_id=wid,
             run_id=run.id,
@@ -2790,8 +2821,8 @@ async def approve_plan(
     }:
         raise HTTPException(403, "Destructive plans require an administrator")
 
-    if payload.edited_steps is not None:
-        for stored, edited in zip(steps, payload.edited_steps, strict=True):
+    if payload.edited_steps is not None or normalized_arguments:
+        for stored, edited in zip(steps, plan.steps, strict=True):
             stored.step_key = edited.key
             stored.agent = edited.agent
             stored.tool_slug = edited.tool_slug
@@ -3057,6 +3088,14 @@ async def resume_run(
     else:
         step.status = StepStatus.pending
     step.error = None
+    execution_context = dict(run.execution_context or {})
+    recovery_counts = dict(execution_context.get("__aura_recovery__") or {})
+    recovery_count = int(recovery_counts.get(step.id, 0)) + 1
+    if recovery_count > 3:
+        raise HTTPException(409, "Automatic recovery attempts are exhausted")
+    recovery_counts[step.id] = recovery_count
+    execution_context["__aura_recovery__"] = recovery_counts
+    run.execution_context = execution_context
     dead_letter = await session.scalar(
         select(DeadLetterEntry).where(
             DeadLetterEntry.run_id == run.id,
@@ -3075,7 +3114,11 @@ async def resume_run(
             run_id=run.id,
             actor=context.subject,
             event_type="run.recovery_requested",
-            payload={"action": payload.action, "step_id": step.id},
+            payload={
+                "action": payload.action,
+                "step_id": step.id,
+                "recovery_attempt": recovery_count,
+            },
         )
     )
     await session.commit()
