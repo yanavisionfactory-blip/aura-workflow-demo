@@ -940,13 +940,27 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                     "Workflow output rejected run_id=%s step_id=%s detail=%s",
                     run.id, step.id, internal_error,
                 )
-                step.status = StepStatus.failed
-                step.error = _friendly_execution_error(internal_error)
-                run.status = RunStatus.waiting_for_action
-                run.error = step.error
-                run.result = _partial_result(outputs, step, step.error)
-                await session.commit()
-                return
+                if step.consequential:
+                    # The provider has already confirmed the external write. A
+                    # semantic-critic disagreement cannot safely undo it, and
+                    # replaying it could duplicate emails, issues, or events.
+                    criticism = criticism.model_copy(
+                        update={
+                            "action": "accept",
+                            "reasons": [
+                                "Provider confirmed the approved external action; "
+                                "post-write review was recorded without replaying it."
+                            ],
+                        }
+                    )
+                else:
+                    step.status = StepStatus.failed
+                    step.error = _friendly_execution_error(internal_error)
+                    run.status = RunStatus.waiting_for_action
+                    run.error = step.error
+                    run.result = _partial_result(outputs, step, step.error)
+                    await session.commit()
+                    return
 
             step.status = StepStatus.completed
             step.output = {
@@ -971,12 +985,6 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                     "Workflow output mapping failed run_id=%s step_id=%s",
                     run.id, step.id,
                 )
-                run.execution_context = context
-                step.status = StepStatus.failed
-                step.error = _friendly_execution_error(internal_error)
-                run.status = RunStatus.waiting_for_action
-                run.error = step.error
-                run.result = _partial_result(outputs, step, step.error)
                 await audit(
                     session,
                     workspace_id,
@@ -984,8 +992,25 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                     {"step_id": step.id, "internal_error": internal_error},
                     run.id,
                 )
-                await session.commit()
-                return
+                if step.consequential:
+                    # Output bookkeeping is internal and happens after the
+                    # external write. Preserve the confirmed result and never
+                    # replay the write merely to repair a missing alias.
+                    logger.warning(
+                        "Preserving completed consequential step after output "
+                        "mapping failure run_id=%s step_id=%s",
+                        run.id,
+                        step.id,
+                    )
+                else:
+                    run.execution_context = context
+                    step.status = StepStatus.failed
+                    step.error = _friendly_execution_error(internal_error)
+                    run.status = RunStatus.waiting_for_action
+                    run.error = step.error
+                    run.result = _partial_result(outputs, step, step.error)
+                    await session.commit()
+                    return
             run.execution_context = context
             session.add(
                 Artifact(
