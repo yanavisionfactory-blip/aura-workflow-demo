@@ -158,6 +158,14 @@ def test_notion_search_accepts_explicit_recency_sorting():
         )
 
 
+def test_notion_search_accepts_provider_filter_objects():
+    assert normalize_module_arguments(
+        native_manifest("notion"),
+        "notion.search",
+        {"filter": {"property": "object", "value": "page"}},
+    ) == {"filter": {"property": "object", "value": "page"}}
+
+
 def test_tiktok_catalog_separates_reads_from_approved_posts():
     manifest = native_manifest("tiktok")
     operations = native_operations("tiktok")
