@@ -172,6 +172,10 @@ def test_gmail_send_resolves_me_to_connected_account(monkeypatch):
     result = asyncio.run(executor._gmail_send({"to": "me", "body": "Forecast"}))
 
     assert result["recipient"] == "owner@example.com"
+    assert result["message_id"] == "message-1"
+    assert result["thread_id"] == "thread-1"
+    assert result["subject"] == "AURA workflow"
+    assert result["body"] == "Forecast"
     assert request.await_count == 2
     assert request.await_args_list[0].args[1].endswith("/users/me/profile")
 
