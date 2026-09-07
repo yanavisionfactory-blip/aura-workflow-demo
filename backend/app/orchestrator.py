@@ -97,6 +97,14 @@ def _accept_successful_read_after_critic(operation: str, criticism: object) -> b
     )
 
 
+def _current_capability_manifest(slug: str, stored: dict | None) -> dict:
+    """Prefer deployed built-in contracts over stale workspace snapshots."""
+    try:
+        return native_manifest(slug)
+    except NativeConnectorError:
+        return stored or {}
+
+
 def _has_confirmed_consequential_result(step: RunStep) -> bool:
     """Return true when replaying a failed write could duplicate external work."""
     return bool(
@@ -257,12 +265,12 @@ async def plan_run(run_id: str, workspace_id: str) -> None:
                 run.prompt, inventory, set((run.inputs or {}).keys())
             )
             for planned_step in plan.steps:
-                manifest = manifests_by_slug.get(planned_step.tool_slug)
+                manifest = _current_capability_manifest(
+                    planned_step.tool_slug,
+                    manifests_by_slug.get(planned_step.tool_slug),
+                )
                 if not manifest:
-                    try:
-                        manifest = native_manifest(planned_step.tool_slug)
-                    except NativeConnectorError:
-                        continue
+                    continue
                 planned_step.arguments = normalize_module_arguments(
                     manifest, planned_step.operation, planned_step.arguments
                 )
@@ -818,6 +826,10 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                         )
                         if not manifest_record:
                             raise RuntimeError("Capability provider is not verified")
+                        current_manifest = _current_capability_manifest(
+                            active_tool.slug,
+                            manifest_record.manifest if manifest_record else None,
+                        )
                         executor = ProviderExecutor(
                             credentials,
                             active_tool.base_url,
@@ -829,7 +841,7 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                                 ]
                             ),
                             provider_kind=active_tool.kind.value,
-                            capability_manifest=manifest_record.manifest if manifest_record else {},
+                            capability_manifest=current_manifest,
                         )
                         result = await asyncio.wait_for(
                             executor.execute(operation, arguments),
