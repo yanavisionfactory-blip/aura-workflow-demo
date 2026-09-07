@@ -90,11 +90,17 @@ def _required_read_arguments(manifest: dict, operation: str, arguments: dict) ->
 
 
 def _accept_successful_read_after_critic(operation: str, criticism: object) -> bool:
-    """Do not replay a valid deterministic read for a semantic-only disagreement."""
+    """Keep a provider-confirmed read when the model asks for a semantic retry."""
+    policy_notes = getattr(criticism, "policy_violations", []) or []
+    semantic_only_policy_notes = all(
+        "expected_output" in str(note).lower()
+        and "incomplete" in str(note).lower()
+        for note in policy_notes
+    )
     return bool(
         operation_scope(operation) == "read"
         and getattr(criticism, "action", None) == "retry"
-        and not getattr(criticism, "policy_violations", [])
+        and semantic_only_policy_notes
     )
 
 
