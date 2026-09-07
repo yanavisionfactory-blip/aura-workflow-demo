@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { motion } from "framer-motion";
 import {
   CheckCircle2,
@@ -23,7 +23,6 @@ import ProofLine from "./ProofLine";
 import AccessRequestModal from "./AccessRequestModal";
 import BreakdownTable from "./BreakdownTable";
 import ScheduleModal from "./ScheduleModal";
-import OutcomeDetailModal from "./OutcomeDetailModal";
 import FullActivityModal from "./FullActivityModal";
 import CreatorApprovalList from "./CreatorApprovalList";
 import { buildSummaryText } from "@/lib/auraSummary";
@@ -32,7 +31,7 @@ import { INTERFACE_TOOLS } from "@/lib/demoData";
 export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, workflowPrompt, activity, prompt, interpretation }) {
   const isFailure = results.status === "failed";
   const [showModal, setShowModal] = useState(false);
-  const [detailOutcome, setDetailOutcome] = useState(null);
+  const resultsSectionRef = useRef(null);
   const [showActivity, setShowActivity] = useState(false);
   const [showOutput, setShowOutput] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -95,6 +94,13 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   // Creators pending the manager's approval (creator-outreach runs only).
   const creatorsOutcome = (results.outcomes || []).find((o) => o.type === "creators" && o.items && o.items.length > 0);
 
+  const showInternalResult = () => {
+    setShowOutput(true);
+    requestAnimationFrame(() => {
+      resultsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  };
+
   // Distinct external tools that actually ran (from the live activity), with
   // their connection source. Interface tools are tagged "via AURA Interface"
   // so the difficult-connection arc is visible in the proof block.
@@ -155,7 +161,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
           <h3 className="text-sm font-medium mb-3">What happened</h3>
           <div className="space-y-2">
             {results.outcomes.map((outcome, i) => (
-              <ProofLine key={i} outcome={outcome} onDetails={() => setDetailOutcome(i)} />
+              <ProofLine key={i} outcome={outcome} onDetails={showInternalResult} />
             ))}
           </div>
         </motion.div>
@@ -205,6 +211,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
 
       {/* Results — the actual useful output (table / report / document) */}
       <motion.div
+        ref={resultsSectionRef}
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.35 }}
@@ -385,11 +392,6 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
         </motion.button>}
       </motion.div>
 
-      <OutcomeDetailModal
-        outcome={detailOutcome != null ? results.outcomes[detailOutcome] : null}
-        open={detailOutcome != null}
-        onClose={() => setDetailOutcome(null)}
-      />
       <FullActivityModal
         open={showActivity}
         onClose={() => setShowActivity(false)}
