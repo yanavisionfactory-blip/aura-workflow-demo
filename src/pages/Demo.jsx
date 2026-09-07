@@ -100,7 +100,10 @@ const resultLinkFromOutputs = (outputs = []) => {
 
 const resolvedPreviewStep = (planned, runtime) => {
   if (!runtime?.consequential) return planned;
-  const args = runtime.approval_preview?.arguments || runtime.arguments || {};
+  if (runtime.approval_status !== "pending" || runtime.approval_preview?.status !== "ready") {
+    return { ...planned, riskLevel: "read", preview: undefined, approvalPending: true };
+  }
+  const args = runtime.approval_preview.arguments;
   let preview;
   if (runtime.operation === "gmail.send") {
     preview = {
@@ -131,6 +134,7 @@ const resolvedPreviewStep = (planned, runtime) => {
   }
   return {
     ...planned,
+    riskLevel: "modify",
     arguments: args,
     resolvedArguments: args,
     approvalId: runtime.approval_id,
@@ -684,7 +688,10 @@ Rules:
     try {
       if (prepared) {
         const run = await getPythonRun(runId);
-        const pending = (run.steps || []).filter((step) => step.approval_status === "pending");
+        const pending = (run.steps || []).filter((step) =>
+          step.approval_status === "pending" && step.approval_preview?.status === "ready"
+        );
+        if (!pending.length) throw new Error("AURA is still preparing this approval.");
         for (const step of pending) {
           const uiStep = editedUiSteps?.[step.position] || approvedStepsRef.current[step.position];
           await decidePythonApproval(
@@ -723,6 +730,15 @@ Rules:
             }],
             nextSteps: [],
           }, null, "completed");
+          return;
+        }
+        if (run.status === "awaiting_approval") {
+          const preparedSteps = approvedStepsRef.current.map((step, index) =>
+            resolvedPreviewStep(step, run.steps?.[index])
+          );
+          approvedStepsRef.current = preparedSteps;
+          setApprovedSteps(preparedSteps);
+          setPhase("preview");
           return;
         }
         if (["failed", "cancelled", "blocked", "waiting_for_action"].includes(run.status)) {

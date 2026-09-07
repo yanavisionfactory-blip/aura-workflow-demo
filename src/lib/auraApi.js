@@ -48,7 +48,10 @@ async function request(path, options = {}) {
     result = await performRequest(token);
   }
 
-  if (result.response.status === 401) clearWorkspace();
+  // A transient/expired access token must not destroy the workspace identity.
+  // Connections are persisted against that workspace, so clearing it here made
+  // healthy apps look disconnected after a reload. Explicit sign-out remains
+  // responsible for calling clearWorkspace().
   if (!result.response.ok) throw new Error(messageFrom(result.data, result.response.status));
   return result.data;
 }
