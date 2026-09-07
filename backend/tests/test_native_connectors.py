@@ -1,6 +1,7 @@
 import pytest
 
 from app.native_connectors import (
+    coerce_module_arguments,
     NativeConnectorError,
     native_manifest,
     native_operations,
@@ -9,6 +10,19 @@ from app.native_connectors import (
     public_catalog,
     validate_module_arguments,
 )
+
+
+def test_resolved_structured_result_is_coerced_to_connector_text() -> None:
+    result = coerce_module_arguments(
+        native_manifest("google"),
+        "gmail.send",
+        {
+            "to": "me",
+            "body": {"summary": "Sunny in Munich", "temperature_max_c": 24},
+        },
+    )
+
+    assert result["body"] == "Sunny in Munich"
 
 
 def test_planning_catalog_includes_unconnected_native_connectors() -> None:
