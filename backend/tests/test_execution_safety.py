@@ -7,6 +7,7 @@ from app.models import DeadLetterEntry, WorkflowRun
 from app.native_connectors import NativeConnectorError
 from app.orchestrator import (
     _accept_successful_read_after_critic,
+    _current_capability_manifest,
     _failure_impacts_trust,
     _friendly_execution_error,
     _has_confirmed_consequential_result,
@@ -105,3 +106,21 @@ def test_semantic_retry_does_not_replay_successful_read():
         "notion.page.get", policy_retry
     ) is False
     assert _accept_successful_read_after_critic("gmail.send", semantic_retry) is False
+
+
+def test_builtin_connector_uses_current_manifest_over_stored_snapshot():
+    stale = {"name": "Notion", "catalog_version": 0, "capabilities": []}
+
+    current = _current_capability_manifest("notion", stale)
+
+    search = next(
+        item for item in current["capabilities"] if item["name"] == "notion.search"
+    )
+    assert current["catalog_version"] >= 1
+    assert "sort" in search["input_schema"]["properties"]
+
+
+def test_external_connector_keeps_verified_stored_manifest():
+    stored = {"name": "Acme MCP", "capabilities": [{"name": "acme.lookup"}]}
+
+    assert _current_capability_manifest("acme-private", stored) is stored
