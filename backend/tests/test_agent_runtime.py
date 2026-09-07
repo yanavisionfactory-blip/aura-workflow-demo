@@ -179,8 +179,59 @@ def test_synthesis_outage_preserves_successful_workflow(monkeypatch) -> None:
     )
 
     assert result.validation_passed is True
-    assert result.summary == "Workflow completed successfully."
+    assert result.summary == "Sunny, 18°C"
+    assert result.deliverable == "• Sunny, 18°C"
     assert result.traceability[0]["step_id"] == "weather-step"
+
+
+def test_synthesis_outage_returns_readable_provider_content(monkeypatch) -> None:
+    async def fail_run(*_args, **_kwargs):
+        raise RuntimeError("temporary structured-output outage")
+
+    async def no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(agent_runtime, "_run", fail_run)
+    monkeypatch.setattr(agent_runtime.asyncio, "sleep", no_sleep)
+
+    result = asyncio.run(
+        synthesize_result(
+            "Summarize my most recently edited Notion page",
+            [
+                {
+                    "step_id": "page-blocks",
+                    "operation": "notion.blocks.children.list",
+                    "provider_result": {
+                        "object": "list",
+                        "request_id": "internal-id",
+                        "results": [
+                            {
+                                "type": "paragraph",
+                                "paragraph": {
+                                    "rich_text": [
+                                        {"plain_text": "Launch the customer pilot next week."}
+                                    ]
+                                },
+                            },
+                            {
+                                "type": "bulleted_list_item",
+                                "bulleted_list_item": {
+                                    "rich_text": [
+                                        {"plain_text": "Confirm the onboarding checklist."}
+                                    ]
+                                },
+                            },
+                        ],
+                    },
+                }
+            ],
+        )
+    )
+
+    assert result.summary == "Launch the customer pilot next week."
+    assert "• Launch the customer pilot next week." in result.deliverable
+    assert "• Confirm the onboarding checklist." in result.deliverable
+    assert "internal-id" not in result.deliverable
 
 
 def test_create_plan_uses_one_model_round_trip_for_valid_plan(monkeypatch) -> None:
