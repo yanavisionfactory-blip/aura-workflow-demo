@@ -212,3 +212,11 @@ def test_canva_catalog_exposes_design_and_export_modules():
     assert "canva.export.create" in operations
     create = next(item for item in manifest["capabilities"] if item["name"] == "canva.design.create")
     assert create["requires_approval"] is True
+
+def test_notion_search_normalizes_common_limit_alias():
+    assert normalize_module_arguments(
+        native_manifest("notion"),
+        "notion.search",
+        {"query": "", "limit": 1},
+    ) == {"query": "", "page_size": 1}
+
