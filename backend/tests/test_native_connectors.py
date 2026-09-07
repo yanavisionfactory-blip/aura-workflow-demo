@@ -1,8 +1,8 @@
 import pytest
 
 from app.native_connectors import (
-    coerce_module_arguments,
     NativeConnectorError,
+    coerce_module_arguments,
     native_manifest,
     native_operations,
     normalize_module_arguments,
@@ -137,6 +137,25 @@ def test_notion_catalog_exposes_read_and_approved_write_modules():
         "notion.page.create",
         {"parent": {"page_id": "page"}, "properties": {"title": {"title": []}}},
     )
+
+
+def test_notion_search_accepts_explicit_recency_sorting():
+    assert normalize_module_arguments(
+        native_manifest("notion"),
+        "notion.search",
+        {"sort": "last_edited_time", "direction": "descending", "pageSize": 10},
+    ) == {
+        "sort": "last_edited_time",
+        "direction": "descending",
+        "page_size": 10,
+    }
+
+    with pytest.raises(NativeConnectorError, match="must be one of"):
+        normalize_module_arguments(
+            native_manifest("notion"),
+            "notion.search",
+            {"sort": "created_time", "direction": "newest"},
+        )
 
 
 def test_tiktok_catalog_separates_reads_from_approved_posts():
