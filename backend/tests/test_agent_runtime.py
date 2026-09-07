@@ -5,6 +5,7 @@ from app.agent_runtime import (
     create_plan,
     critique_step,
     deterministic_plan_fixes,
+    materialize_action_arguments,
     normalize_plan_graph,
     synthesize_result,
 )
@@ -232,6 +233,70 @@ def test_synthesis_outage_returns_readable_provider_content(monkeypatch) -> None
     assert "• Launch the customer pilot next week." in result.deliverable
     assert "• Confirm the onboarding checklist." in result.deliverable
     assert "internal-id" not in result.deliverable
+
+
+def test_materializer_retries_and_returns_concrete_approval_arguments(monkeypatch) -> None:
+    calls = 0
+
+    async def fake_run(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"arguments": {"summary": "{{steps.notes.item_1_summary}}"}}
+        return {
+            "arguments": {
+                "project_key": "AURA",
+                "summary": "Confirm onboarding checklist",
+                "description": "Prepare the checklist from the accepted Notion notes.",
+            }
+        }
+
+    async def no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+    monkeypatch.setattr(agent_runtime.asyncio, "sleep", no_sleep)
+
+    arguments = asyncio.run(
+        materialize_action_arguments(
+            "Turn my research notes into Jira tasks",
+            {"key": "create_task_1", "operation": "jira.issue.create"},
+            {
+                "steps": {
+                    "notes": {"results": [{"plain_text": "Confirm onboarding checklist"}]},
+                    "projects": {"results": [{"key": "AURA"}]},
+                }
+            },
+        )
+    )
+
+    assert calls == 2
+    assert arguments["project_key"] == "AURA"
+    assert "{{" not in str(arguments)
+
+
+def test_materializer_exhausts_recovery_without_exposing_model_output(monkeypatch) -> None:
+    async def fake_run(*_args, **_kwargs):
+        return {"arguments": {"to": "{{inputs.recipient}}"}}
+
+    async def no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+    monkeypatch.setattr(agent_runtime.asyncio, "sleep", no_sleep)
+
+    try:
+        asyncio.run(
+            materialize_action_arguments(
+                "Send it",
+                {"key": "send", "operation": "gmail.send"},
+                {"steps": {}},
+            )
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "Approval argument recovery exhausted"
+    else:
+        raise AssertionError("Expected bounded recovery to stop")
 
 
 def test_create_plan_uses_one_model_round_trip_for_valid_plan(monkeypatch) -> None:

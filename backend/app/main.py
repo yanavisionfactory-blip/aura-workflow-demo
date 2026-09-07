@@ -2878,17 +2878,14 @@ async def approve_plan(
             approval = Approval(
                 run_id=run.id,
                 step_id=step.id,
-                preview={"operation": step.operation, "arguments": step.arguments},
+                preview={"status": "preparing"},
             )
             session.add(approval)
             await session.flush()
             step.approval_id = approval.id
             approvals.append(approval)
         elif approval:
-            approval.preview = {
-                "operation": step.operation,
-                "arguments": step.arguments,
-            }
+            approval.preview = {"status": "preparing"}
     for approval in approvals:
         step = next(stored for stored in steps if stored.id == approval.step_id)
         if payload.approve_consequential:
@@ -3043,12 +3040,12 @@ async def decide_approval(
         step.status = StepStatus.pending
     else:
         step.status = StepStatus.skipped
-    remaining = await session.scalar(select(Approval).where(Approval.run_id == run.id, Approval.status == "pending").limit(1))
-    if not remaining:
-        run.status = RunStatus.running
+    # Staged review is sequential: after each decision the worker executes the
+    # approved action (or skips the rejected one), then prepares the next
+    # consequential action from the newly accepted context.
+    run.status = RunStatus.running
     await session.commit()
-    if not remaining:
-        execute_run_task.delay(run.id, wid)
+    execute_run_task.delay(run.id, wid)
     return {"approval_id": approval.id, "status": approval.status, "run_id": run.id}
 
 

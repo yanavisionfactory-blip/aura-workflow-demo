@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from .config import get_settings
 from .schemas import (
     CriticDecision,
+    MaterializedActionArguments,
     ObjectiveSpec,
     PlanEvaluation,
     ToolsetProposal,
@@ -119,6 +120,20 @@ def build_agents() -> dict[str, Agent]:
             be traceable to a step ID. Do not add narrative facts absent from artifacts. Apply a final
             grounding check and return actionable fixes if validation fails.""",
             UnifiedDeliverable,
+        ),
+        "argument_resolver": _agent(
+            "Approval Argument Resolver",
+            """Prepare concrete arguments for one consequential provider action using only the
+            original request, the step contract, and accepted outputs supplied in the execution
+            context. Replace every workflow reference with a real value. You may extract,
+            summarize, map, or draft content from accepted artifacts because these are internal
+            transformations, not provider calls. Never invent a provider identifier, project key,
+            recipient, assignee, page ID, issue key, or other external resource. When a list action
+            precedes the write, select only a value present in that list. When the step key or reason
+            identifies an ordinal item, use that item from the accepted source content. Preserve
+            literal values such as Gmail recipient `me`. Return only the complete concrete argument
+            object required by the operation; never return {{...}} references or commentary.""",
+            AgentOutputSchema(MaterializedActionArguments, strict_json_schema=False),
         ),
     }
 
@@ -499,3 +514,41 @@ async def synthesize_result(prompt: str, accepted_artifacts: list[dict]) -> Unif
         traceability=traceability,
         validation_passed=True,
     )
+
+
+async def materialize_action_arguments(
+    prompt: str,
+    step: dict,
+    execution_context: dict,
+) -> dict:
+    """Resolve planner-created semantic placeholders before asking for approval.
+
+    Provider reads have already completed at this boundary. The resolver is intentionally
+    bounded and its output is validated again against the connector schema by the caller.
+    """
+    payload = {
+        "original_request": prompt,
+        "action_step": step,
+        "accepted_execution_context": {
+            "inputs": execution_context.get("inputs", {}),
+            "vars": execution_context.get("vars", {}),
+            "steps": execution_context.get("steps", {}),
+        },
+    }
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            raw = await _run(build_agents()["argument_resolver"], payload, max_turns=8)
+            resolved = MaterializedActionArguments.model_validate(raw).arguments
+            if referenced_paths(resolved):
+                raise ValueError("Approval arguments still contain workflow references")
+            return resolved
+        except Exception as exc:  # noqa: BLE001 - model/SDK/schema failures are recoverable
+            last_error = exc
+            if attempt < 2:
+                await asyncio.sleep(attempt + 1)
+                payload["response_recovery"] = (
+                    f"Recovery attempt {attempt + 2} of 3. Return concrete arguments only; "
+                    "remove all workflow references and use only accepted artifacts."
+                )
+    raise RuntimeError("Approval argument recovery exhausted") from last_error

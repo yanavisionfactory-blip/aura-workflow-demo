@@ -276,6 +276,12 @@ class UnifiedDeliverable(BaseModel):
     required_fixes: list[str] = Field(default_factory=list)
 
 
+class MaterializedActionArguments(BaseModel):
+    """Concrete provider arguments prepared from accepted workflow artifacts."""
+
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
 class ApprovalDecision(BaseModel):
     approved: bool
     edited_arguments: dict[str, Any] | None = None

@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import httpx
 from sqlalchemy import UniqueConstraint
 
 from app.config import Settings
@@ -13,6 +14,7 @@ from app.orchestrator import (
     _friendly_execution_error,
     _has_confirmed_consequential_result,
     _has_empty_collection,
+    _provider_result_is_malformed,
     _required_read_arguments,
 )
 from app.schemas import CriticDecision, PlanApproval
@@ -44,6 +46,23 @@ def test_default_workspace_rate_limit_is_bounded():
 def test_schema_and_internal_errors_do_not_penalize_connector_trust():
     assert _failure_impacts_trust(NativeConnectorError("invalid arguments")) is False
     assert _failure_impacts_trust(RuntimeError("internal orchestration error")) is False
+
+
+def test_expired_authorization_does_not_penalize_provider_trust():
+    request = httpx.Request("GET", "https://api.example.com/items")
+    response = httpx.Response(401, request=request)
+    error = httpx.HTTPStatusError("401 Unauthorized", request=request, response=response)
+
+    assert _failure_impacts_trust(error) is False
+
+
+def test_rate_limits_and_timeouts_are_provider_availability_signals():
+    request = httpx.Request("GET", "https://api.example.com/items")
+    response = httpx.Response(429, request=request)
+    rate_limit = httpx.HTTPStatusError("429 Too Many Requests", request=request, response=response)
+
+    assert _failure_impacts_trust(rate_limit) is True
+    assert _failure_impacts_trust(httpx.TimeoutException("timed out")) is True
 
 
 def test_degraded_read_trust_recovery_is_bounded_to_three_attempts():
@@ -80,6 +99,14 @@ def test_empty_provider_collection_triggers_read_recovery():
     assert _has_empty_collection({"results": []}) is True
     assert _has_empty_collection({"results": [{"id": "page-1"}]}) is False
     assert _has_empty_collection({"status": "ok"}) is False
+
+
+def test_empty_or_malformed_provider_payload_is_not_accepted():
+    assert _provider_result_is_malformed(None) is True
+    assert _provider_result_is_malformed([]) is True
+    assert _provider_result_is_malformed({}) is True
+    assert _provider_result_is_malformed({"results": []}) is False
+    assert _provider_result_is_malformed({"status_code": 204}) is False
 
 
 def test_reduced_read_preserves_only_required_inputs():

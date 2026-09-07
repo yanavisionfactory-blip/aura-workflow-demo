@@ -6,7 +6,13 @@ from datetime import datetime, timezone
 import httpx
 from sqlalchemy import select
 
-from .agent_runtime import ConnectionRequiredError, create_plan, critique_step, synthesize_result
+from .agent_runtime import (
+    ConnectionRequiredError,
+    create_plan,
+    critique_step,
+    materialize_action_arguments,
+    synthesize_result,
+)
 from .config import get_settings
 from .db import SessionLocal, set_tenant_context
 from .managed_connectors import managed_connector_client
@@ -48,6 +54,7 @@ from .workflow_context import (
     WorkflowContextError,
     evaluate_condition,
     resolve_value,
+    referenced_paths,
     step_context_value,
 )
 
@@ -56,6 +63,8 @@ logger = logging.getLogger(__name__)
 
 def _failure_impacts_trust(exc: Exception) -> bool:
     """Only provider availability failures should affect connector reliability."""
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in {401, 403}:
+        return False
     return isinstance(exc, (asyncio.TimeoutError, httpx.HTTPError))
 
 
@@ -74,6 +83,11 @@ def _has_empty_collection(result: object) -> bool:
         key in result and isinstance(result[key], list) and not result[key]
         for key in ("results", "items", "records", "candidates", "data")
     )
+
+
+def _provider_result_is_malformed(result: object) -> bool:
+    """Reject transport-success responses that cannot satisfy any action contract."""
+    return not isinstance(result, dict) or not result
 
 
 def _required_read_arguments(manifest: dict, operation: str, arguments: dict) -> dict | None:
@@ -382,10 +396,7 @@ async def plan_run(run_id: str, workspace_id: str) -> None:
                     approval = Approval(
                         run_id=run.id,
                         step_id=step.id,
-                        preview={
-                            "operation": item.operation,
-                            "arguments": item.arguments,
-                        },
+                        preview={"status": "preparing"},
                     )
                     session.add(approval)
                     await session.flush()
@@ -734,24 +745,53 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                     continue
                 resolved_arguments = resolve_value(step.arguments, context)
             except WorkflowContextError as exc:
-                internal_error = str(exc)
-                logger.exception(
-                    "Workflow input resolution failed run_id=%s step_id=%s",
-                    run.id, step.id,
-                )
-                step.status = StepStatus.failed
-                step.error = _friendly_execution_error(internal_error)
-                run.status = RunStatus.waiting_for_action
-                run.error = step.error
-                await audit(
-                    session,
-                    workspace_id,
-                    "step.variable_resolution_failed",
-                    {"step_id": step.id, "internal_error": internal_error},
-                    run.id,
-                )
-                await session.commit()
-                return
+                if step.status == StepStatus.awaiting_approval:
+                    try:
+                        resolved_arguments = await materialize_action_arguments(
+                            run.prompt,
+                            plan_steps[step.position],
+                            context,
+                        )
+                    except Exception as recovery_exc:  # noqa: BLE001
+                        internal_error = str(exc)
+                        logger.exception(
+                            "Approval argument recovery failed run_id=%s step_id=%s error_type=%s",
+                            run.id,
+                            step.id,
+                            type(recovery_exc).__name__,
+                        )
+                        step.status = StepStatus.failed
+                        step.error = _friendly_execution_error(internal_error)
+                        run.status = RunStatus.waiting_for_action
+                        run.error = step.error
+                        await audit(
+                            session,
+                            workspace_id,
+                            "step.variable_resolution_recovery_exhausted",
+                            {"step_id": step.id, "internal_error": internal_error},
+                            run.id,
+                        )
+                        await session.commit()
+                        return
+                else:
+                    internal_error = str(exc)
+                    logger.exception(
+                        "Workflow input resolution failed run_id=%s step_id=%s",
+                        run.id, step.id,
+                    )
+                    step.status = StepStatus.failed
+                    step.error = _friendly_execution_error(internal_error)
+                    run.status = RunStatus.waiting_for_action
+                    run.error = step.error
+                    await audit(
+                        session,
+                        workspace_id,
+                        "step.variable_resolution_failed",
+                        {"step_id": step.id, "internal_error": internal_error},
+                        run.id,
+                    )
+                    await session.commit()
+                    return
 
             if step.status == StepStatus.awaiting_approval:
                 approval = await session.get(Approval, step.approval_id)
@@ -762,7 +802,55 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                     run.error = step.error
                     await session.commit()
                     return
+                tool = await session.scalar(
+                    select(ToolConnection).where(
+                        ToolConnection.workspace_id == workspace_id,
+                        ToolConnection.slug == step.tool_slug,
+                        ToolConnection.enabled.is_(True),
+                    )
+                )
+                if not tool:
+                    run.status = RunStatus.waiting_for_action
+                    run.error = "This app connection needs your attention before AURA can continue."
+                    await session.commit()
+                    return
+                manifest_record = await session.scalar(
+                    select(CapabilityManifest).where(
+                        CapabilityManifest.tool_id == tool.id,
+                        CapabilityManifest.status == "verified",
+                    )
+                )
+                manifest = _current_capability_manifest(
+                    step.tool_slug,
+                    manifest_record.manifest if manifest_record else None,
+                )
+                try:
+                    resolved_arguments = normalize_module_arguments(
+                        manifest, step.operation, resolved_arguments
+                    )
+                    if referenced_paths(resolved_arguments):
+                        raise NativeConnectorError("Approval arguments are not concrete")
+                except (NativeConnectorError, ValueError) as exc:
+                    logger.exception(
+                        "Approval argument validation failed run_id=%s step_id=%s",
+                        run.id,
+                        step.id,
+                    )
+                    step.status = StepStatus.failed
+                    step.error = _friendly_execution_error(str(exc))
+                    run.status = RunStatus.waiting_for_action
+                    run.error = step.error
+                    await audit(
+                        session,
+                        workspace_id,
+                        "step.approval_argument_validation_failed",
+                        {"step_id": step.id, "internal_error": str(exc)},
+                        run.id,
+                    )
+                    await session.commit()
+                    return
                 approval.preview = {
+                    "status": "ready",
                     "operation": step.operation,
                     "arguments": resolved_arguments,
                 }
@@ -977,6 +1065,8 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                                 snapshot.policy_snapshot["step_timeout_seconds"]
                             ),
                         )
+                        if _provider_result_is_malformed(result):
+                            raise ValueError("Provider returned an empty or malformed response")
                         latency = (time.perf_counter() - started) * 1000
                         attempt.status = "succeeded"
                         attempt.latency_ms = latency
