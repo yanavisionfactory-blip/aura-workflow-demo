@@ -258,7 +258,6 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         connections={effectiveConnections}
         connectingTool={connectingTool}
         errors={connectionErrors}
-        onConnect={handleConnect}
         onConnectAll={handleConnectAll}
       />
 
