@@ -63,11 +63,12 @@ class NangoClient:
         if not client_id or not client_secret:
             return {}
         credentials = {
+            "type": "OAUTH2",
             "client_id": client_id,
             "client_secret": client_secret,
         }
         if definition.scopes:
-            credentials["scopes"] = " ".join(definition.scopes)
+            credentials["scopes"] = ",".join(definition.scopes)
         return credentials
 
     async def integration_id(self, provider: str) -> str:
@@ -202,9 +203,9 @@ class NangoClient:
                             if not isinstance(item, dict):
                                 continue
                             path_value = item.get("path") or []
-                            path = ".".join(str(part) for part in path_value)
+                            field_path = ".".join(str(part) for part in path_value)
                             message = str(item.get("message") or item.get("code") or "")
-                            detail_parts.append(f"{path}:{message}")
+                            detail_parts.append(f"{field_path}:{message}")
                     detail = " | ".join(part for part in detail_parts if part)[:320]
                 except (ValueError, AttributeError):
                     pass
