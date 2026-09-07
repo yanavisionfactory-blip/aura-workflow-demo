@@ -1,4 +1,7 @@
 import asyncio
+import base64
+from email import policy
+from email.parser import BytesParser
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlsplit
 
@@ -178,6 +181,23 @@ def test_gmail_send_resolves_me_to_connected_account(monkeypatch):
     assert result["body"] == "Forecast"
     assert request.await_count == 2
     assert request.await_args_list[0].args[1].endswith("/users/me/profile")
+
+
+def test_gmail_send_mime_encodes_unicode_subject(monkeypatch):
+    executor = ProviderExecutor({"access_token": "token"})
+    request = AsyncMock(side_effect=[{"id": "message-1", "threadId": "thread-1"}])
+    monkeypatch.setattr(executor, "_request", request)
+
+    asyncio.run(
+        executor._gmail_send(
+            {"to": "owner@example.com", "subject": "Tomorrow’s weather", "body": "Sunny"}
+        )
+    )
+
+    raw = request.await_args.kwargs["json"]["raw"]
+    decoded = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
+    message = BytesParser(policy=policy.default).parsebytes(decoded)
+    assert message["Subject"] == "Tomorrow’s weather"
 
 
 def test_weather_forecast_returns_plain_language_summary(monkeypatch):
