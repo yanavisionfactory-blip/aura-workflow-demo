@@ -195,7 +195,17 @@ class NangoClient:
                 try:
                     payload = exc.response.json()
                     error = payload.get("error", payload) if isinstance(payload, dict) else {}
-                    detail = str(error.get("code") or error.get("message") or "")[:160]
+                    detail_parts = [str(error.get("code") or error.get("message") or "")]
+                    validation_errors = error.get("errors")
+                    if isinstance(validation_errors, list):
+                        for item in validation_errors[:3]:
+                            if not isinstance(item, dict):
+                                continue
+                            path_value = item.get("path") or []
+                            path = ".".join(str(part) for part in path_value)
+                            message = str(item.get("message") or item.get("code") or "")
+                            detail_parts.append(f"{path}:{message}")
+                    detail = " | ".join(part for part in detail_parts if part)[:320]
                 except (ValueError, AttributeError):
                     pass
                 logger.warning(
