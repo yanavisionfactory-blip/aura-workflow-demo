@@ -58,6 +58,7 @@ from .models import (
     WorkspaceRecord,
 )
 from .native_connectors import (
+    current_capability_manifest,
     native_manifest,
     native_operations,
     normalize_module_arguments,
@@ -2754,7 +2755,8 @@ async def approve_plan(
     argument_fixes: list[str] = []
     for index, planned_step in enumerate(plan.steps, start=1):
         tool = tools_by_slug.get(planned_step.tool_slug)
-        manifest = manifests_by_tool_id.get(tool.id) if tool else None
+        stored_manifest = manifests_by_tool_id.get(tool.id) if tool else None
+        manifest = current_capability_manifest(planned_step.tool_slug, stored_manifest)
         if not manifest:
             argument_fixes.append(f"Step {index} connector schema is unavailable")
             continue
