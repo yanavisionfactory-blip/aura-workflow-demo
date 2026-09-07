@@ -30,6 +30,7 @@ const planToolName = (step) => {
     return "Google Drive";
   }
   const names = {
+    aura: "AURA Intelligence",
     airtable: "Airtable",
     notion: "Notion",
     mailchimp: "Mailchimp",
@@ -66,6 +67,7 @@ const friendlyStepTitle = (step) => {
   const reason = String(step.reason || "").toLowerCase();
   const operation = String(step.operation || "");
 
+  if (operation === "weather.forecast") return "Check tomorrow's weather";
   if (operation === "gmail.send") return "Send the email";
   if (operation.startsWith("gmail.")) return "Review email context";
   if (operation.startsWith("calendar.")) return operation.includes("create") ? "Schedule the event" : "Check the calendar";
