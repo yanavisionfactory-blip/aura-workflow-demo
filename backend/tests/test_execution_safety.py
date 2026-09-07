@@ -3,7 +3,12 @@ from sqlalchemy import UniqueConstraint
 from app.config import Settings
 from app.models import DeadLetterEntry, WorkflowRun
 from app.native_connectors import NativeConnectorError
-from app.orchestrator import _failure_impacts_trust, _friendly_execution_error
+from app.orchestrator import (
+    _failure_impacts_trust,
+    _friendly_execution_error,
+    _has_confirmed_consequential_result,
+)
+from types import SimpleNamespace
 
 
 def test_workflow_run_request_key_is_workspace_scoped_unique():
@@ -38,3 +43,12 @@ def test_internal_error_is_replaced_with_friendly_recovery_copy():
     assert _friendly_execution_error("weather.forecast missing required inputs") == (
         "AURA is resolving an issue with this step automatically."
     )
+
+
+def test_confirmed_consequential_result_is_never_replayed():
+    step = SimpleNamespace(
+        consequential=True,
+        output={"provider_result": {"message_id": "gmail-1"}},
+    )
+
+    assert _has_confirmed_consequential_result(step) is True
