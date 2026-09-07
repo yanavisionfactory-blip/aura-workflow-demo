@@ -139,6 +139,17 @@ def test_step_result_exposes_operation_noun_as_a_summary_alias() -> None:
     assert resolve_value("{{steps.weather.forecast}}", context) == "Sunny, 24 C"
 
 
+def test_step_context_exposes_resource_alias_for_provider_objects() -> None:
+    provider_result = {"id": "page-123", "title": "Roadmap"}
+    context = {
+        "steps": {
+            "read_page": step_context_value(provider_result, "notion.page.get")
+        }
+    }
+
+    assert resolve_value("{{steps.read_page.page.id}}", context) == "page-123"
+
+
 def test_step_result_normalizes_provider_collection_aliases() -> None:
     provider_result = {"results": [{"id": "page-1"}]}
     context = {
