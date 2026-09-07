@@ -15,7 +15,7 @@ from app.orchestrator import (
     _has_empty_collection,
     _required_read_arguments,
 )
-from app.schemas import CriticDecision
+from app.schemas import CriticDecision, PlanApproval
 
 
 def test_workflow_run_request_key_is_workspace_scoped_unique():
@@ -56,6 +56,14 @@ def test_degraded_read_trust_recovery_is_bounded_to_three_attempts():
 def test_internal_error_is_replaced_with_friendly_recovery_copy():
     assert _friendly_execution_error("weather.forecast missing required inputs") == (
         "AURA is resolving an issue with this step automatically."
+    )
+
+
+def test_plan_approval_supports_staged_consequential_review():
+    assert PlanApproval(approved=True).approve_consequential is True
+    assert (
+        PlanApproval(approved=True, approve_consequential=False).approve_consequential
+        is False
     )
 
 

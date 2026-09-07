@@ -284,6 +284,11 @@ class ApprovalDecision(BaseModel):
 class PlanApproval(BaseModel):
     approved: bool
     edited_steps: list[PlanStep] | None = None
+    # Plan review and provider-action approval are separate user decisions.
+    # Existing clients keep the legacy one-click behavior by default, while
+    # staged clients can run safe preparation steps before showing a concrete
+    # write preview.
+    approve_consequential: bool = True
 
 
 class ResumeDecision(BaseModel):

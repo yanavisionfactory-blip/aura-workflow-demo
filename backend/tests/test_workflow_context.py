@@ -165,7 +165,7 @@ def test_step_context_exposes_all_nested_operation_resource_aliases() -> None:
 
 
 def test_step_result_normalizes_provider_collection_aliases() -> None:
-    provider_result = {"results": [{"object": "page", "id": "page-1"}]
+    provider_result = {"results": [{"object": "page", "id": "page-1"}]}
     context = {
         "steps": {
             "search": step_context_value(provider_result, "notion.search")

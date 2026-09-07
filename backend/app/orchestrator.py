@@ -634,10 +634,6 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                 await session.commit()
                 return
 
-        if any(step.status == StepStatus.awaiting_approval for step in steps):
-            run.status = RunStatus.awaiting_approval
-            await session.commit()
-            return
         run.status = RunStatus.running
         run.error = None
         await session.commit()
@@ -752,6 +748,31 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                     workspace_id,
                     "step.variable_resolution_failed",
                     {"step_id": step.id, "internal_error": internal_error},
+                    run.id,
+                )
+                await session.commit()
+                return
+
+            if step.status == StepStatus.awaiting_approval:
+                approval = await session.get(Approval, step.approval_id)
+                if not approval or approval.status != "pending":
+                    step.status = StepStatus.failed
+                    step.error = "AURA is safely rebuilding this approval."
+                    run.status = RunStatus.waiting_for_action
+                    run.error = step.error
+                    await session.commit()
+                    return
+                approval.preview = {
+                    "operation": step.operation,
+                    "arguments": resolved_arguments,
+                }
+                run.execution_context = context
+                run.status = RunStatus.awaiting_approval
+                await audit(
+                    session,
+                    workspace_id,
+                    "step.approval_preview_ready",
+                    {"step_id": step.id, "operation": step.operation},
                     run.id,
                 )
                 await session.commit()

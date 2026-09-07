@@ -2520,7 +2520,11 @@ async def get_run(
     if not run or run.workspace_id != wid:
         raise HTTPException(404, "Run not found")
     steps = (await session.scalars(select(RunStep).where(RunStep.run_id == run.id).order_by(RunStep.position))).all()
-    return {"id": run.id, "status": run.status.value, "prompt": run.prompt, "inputs": run.inputs, "execution_context": run.execution_context, "plan": run.plan, "plan_approved": run.plan_approved, "result": run.result, "error": run.error, "steps": [{"id": s.id, "key": s.step_key, "position": s.position, "agent": s.agent, "tool_slug": s.tool_slug, "operation": s.operation, "arguments": s.arguments, "depends_on": s.depends_on, "dependency_mode": s.dependency_mode, "condition": s.condition, "output_variables": s.output_variables, "status": s.status.value, "consequential": s.consequential, "approval_id": s.approval_id, "output": s.output, "error": s.error} for s in steps]}
+    approvals = (
+        await session.scalars(select(Approval).where(Approval.run_id == run.id))
+    ).all()
+    approvals_by_step = {approval.step_id: approval for approval in approvals}
+    return {"id": run.id, "status": run.status.value, "prompt": run.prompt, "inputs": run.inputs, "execution_context": run.execution_context, "plan": run.plan, "plan_approved": run.plan_approved, "result": run.result, "error": run.error, "steps": [{"id": s.id, "key": s.step_key, "position": s.position, "agent": s.agent, "tool_slug": s.tool_slug, "operation": s.operation, "arguments": s.arguments, "depends_on": s.depends_on, "dependency_mode": s.dependency_mode, "condition": s.condition, "output_variables": s.output_variables, "status": s.status.value, "consequential": s.consequential, "approval_id": s.approval_id, "approval_status": approvals_by_step[s.id].status if s.id in approvals_by_step else None, "approval_preview": approvals_by_step[s.id].preview if s.id in approvals_by_step else None, "output": s.output, "error": s.error} for s in steps]}
 
 
 @app.get("/v1/runs/{run_id}/governance")
@@ -2886,11 +2890,17 @@ async def approve_plan(
                 "arguments": step.arguments,
             }
     for approval in approvals:
-        approval.status = "approved"
-        approval.decided_by = context.subject
-        approval.decided_at = datetime.now(timezone.utc)
         step = next(stored for stored in steps if stored.id == approval.step_id)
-        step.status = StepStatus.pending
+        if payload.approve_consequential:
+            approval.status = "approved"
+            approval.decided_by = context.subject
+            approval.decided_at = datetime.now(timezone.utc)
+            step.status = StepStatus.pending
+        else:
+            approval.status = "pending"
+            approval.decided_by = None
+            approval.decided_at = None
+            step.status = StepStatus.awaiting_approval
     run.plan_approved = True
     run.status = RunStatus.running
     session.add(
@@ -2904,6 +2914,9 @@ async def approve_plan(
                 "version": plan_version.version,
                 "plan_hash": plan_hash,
                 "policy_decision": policy_decision,
+                "approval_mode": (
+                    "combined" if payload.approve_consequential else "staged"
+                ),
             },
         )
     )
@@ -2939,10 +2952,94 @@ async def decide_approval(
     approval.decided_at = datetime.now(timezone.utc)
     if payload.approved:
         if payload.edited_arguments is not None:
-            raise HTTPException(
-                409,
-                "Changing approved arguments requires a new immutable plan version",
+            tool = await session.scalar(
+                select(ToolConnection).where(
+                    ToolConnection.workspace_id == wid,
+                    ToolConnection.slug == step.tool_slug,
+                    ToolConnection.enabled.is_(True),
+                )
             )
+            if not tool:
+                raise HTTPException(409, "The selected app connection is unavailable")
+            manifest_record = await session.scalar(
+                select(CapabilityManifest).where(
+                    CapabilityManifest.tool_id == tool.id,
+                    CapabilityManifest.status == "verified",
+                )
+            )
+            manifest = current_capability_manifest(
+                step.tool_slug,
+                manifest_record.manifest if manifest_record else None,
+            )
+            if not manifest:
+                raise HTTPException(409, "AURA is still preparing this app action")
+            try:
+                edited_arguments = normalize_module_arguments(
+                    manifest, step.operation, payload.edited_arguments
+                )
+            except ValueError as exc:
+                raise HTTPException(422, f"The reviewed action is incomplete: {exc}") from exc
+
+            current_version = await session.scalar(
+                select(PlanVersion)
+                .where(PlanVersion.run_id == run.id, PlanVersion.status == "approved")
+                .order_by(PlanVersion.version.desc())
+                .limit(1)
+            )
+            current_snapshot = await session.scalar(
+                select(ApprovalSnapshot)
+                .where(ApprovalSnapshot.run_id == run.id)
+                .order_by(ApprovalSnapshot.approved_at.desc())
+                .limit(1)
+            )
+            if not current_version or not current_snapshot:
+                raise HTTPException(409, "AURA is rebuilding the reviewed plan")
+
+            plan_json = dict(run.plan)
+            plan_steps = [dict(item) for item in plan_json.get("steps", [])]
+            plan_steps[step.position] = {
+                **plan_steps[step.position],
+                "arguments": edited_arguments,
+            }
+            plan_json["steps"] = plan_steps
+            new_hash = canonical_plan_hash(plan_json)
+            current_version.status = "superseded"
+            new_version = PlanVersion(
+                workspace_id=wid,
+                run_id=run.id,
+                version=current_version.version + 1,
+                status="approved",
+                plan=plan_json,
+                plan_hash=new_hash,
+                derived_from_id=current_version.id,
+                created_by=context.subject,
+                approved_at=datetime.now(timezone.utc),
+            )
+            session.add(new_version)
+            await session.flush()
+            session.add(
+                ApprovalSnapshot(
+                    workspace_id=wid,
+                    run_id=run.id,
+                    plan_version_id=new_version.id,
+                    plan_hash=new_hash,
+                    approver_subject=context.subject,
+                    approver_role=context.role,
+                    policy_snapshot=current_snapshot.policy_snapshot,
+                    permission_snapshot=current_snapshot.permission_snapshot,
+                    risk_snapshot=current_snapshot.risk_snapshot,
+                    cost_snapshot=current_snapshot.cost_snapshot,
+                )
+            )
+            run.plan = plan_json
+            step.arguments = edited_arguments
+            step.idempotency_key = idempotency_key(
+                run.id, step.position, step.operation, edited_arguments
+            )
+            approval.preview = {
+                "operation": step.operation,
+                "arguments": edited_arguments,
+            }
         step.status = StepStatus.pending
     else:
         step.status = StepStatus.skipped
