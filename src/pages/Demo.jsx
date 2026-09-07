@@ -90,6 +90,14 @@ const friendlyStepTitle = (step) => {
   return `Use ${tool}`;
 };
 
+const resultLinkFromOutputs = (outputs = []) => {
+  for (const output of [...outputs].reverse()) {
+    const url = output?.provider_result?.result_url;
+    if (typeof url === "string" && url.startsWith("https://")) return url;
+  }
+  return null;
+};
+
 const INTERPRETATION_SCHEMA = {
   type: "object",
   properties: {
@@ -580,6 +588,7 @@ Rules:
           const outputs = run.result?.outputs || [];
           const synthesis = run.result?.unified_deliverable || {};
           const completedCount = run.result?.completed_steps ?? outputs.length;
+          const resultLink = resultLinkFromOutputs(outputs);
           finishExecution({
             title: run.plan?.name || "Workflow completed",
             summary: synthesis.summary || "AURA completed the requested workflow.",
@@ -592,6 +601,8 @@ Rules:
                 label: "Summary",
                 detail: synthesis.deliverable || synthesis.summary || "The workflow completed successfully.",
               }],
+              link: resultLink,
+              linkLabel: resultLink ? "View result" : undefined,
             }],
             nextSteps: [],
           }, null, "completed");
