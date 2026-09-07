@@ -49,6 +49,9 @@ def _lookup(context: dict[str, Any], path: str) -> Any:
         if isinstance(value, dict) and part in value:
             value = value[part]
             continue
+        if isinstance(value, dict) and part.endswith("_id") and "id" in value:
+            value = value["id"]
+            continue
         if isinstance(value, list) and part.isdigit() and int(part) < len(value):
             value = value[int(part)]
             continue
@@ -119,6 +122,12 @@ def step_context_value(result: Any, operation: str | None = None) -> Any:
         if collection is not None:
             for alias in ("results", "items", "records", "candidates"):
                 value.setdefault(alias, collection)
+            if collection and isinstance(collection[0], dict):
+                first = collection[0]
+                value.setdefault("item", first)
+                value.setdefault("candidate", first)
+                for key, item in first.items():
+                    value.setdefault(key, item)
     return value
 
 
