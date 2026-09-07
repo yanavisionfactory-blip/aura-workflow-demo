@@ -43,7 +43,12 @@ from .providers import (
     verify_oauth_credentials,
 )
 from .security import CredentialVault
-from .workflow_context import WorkflowContextError, evaluate_condition, resolve_value
+from .workflow_context import (
+    WorkflowContextError,
+    evaluate_condition,
+    resolve_value,
+    step_context_value,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -511,8 +516,8 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
         for step in steps:
             if step.status == StepStatus.completed:
                 outputs.append(step.output)
-                context.setdefault("steps", {})[step.step_key] = step.output.get(
-                    "provider_result", step.output
+                context.setdefault("steps", {})[step.step_key] = step_context_value(
+                    step.output.get("provider_result", step.output)
                 )
                 continue
             if step.status == StepStatus.skipped:
@@ -954,7 +959,7 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
             step.completed_at = datetime.now(timezone.utc)
             run.updated_at = step.completed_at
             outputs.append(step.output)
-            context.setdefault("steps", {})[step.step_key] = result
+            context.setdefault("steps", {})[step.step_key] = step_context_value(result)
             try:
                 for name, value in step.output_variables.items():
                     context.setdefault("vars", {})[name] = resolve_value(value, context)
