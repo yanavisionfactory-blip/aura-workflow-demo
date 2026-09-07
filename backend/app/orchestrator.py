@@ -105,6 +105,21 @@ def _current_capability_manifest(slug: str, stored: dict | None) -> dict:
         return stored or {}
 
 
+def _bounded_read_trust_score(
+    operation: str,
+    trust_score: float,
+    execution_floor: float,
+    recovery_count: int,
+) -> tuple[float, bool]:
+    """Allow at most three approved read attempts while connector trust recovers."""
+    allowed = (
+        operation_scope(operation) == "read"
+        and trust_score < execution_floor
+        and recovery_count < 3
+    )
+    return (execution_floor, True) if allowed else (trust_score, False)
+
+
 def _has_confirmed_consequential_result(step: RunStep) -> bool:
     """Return true when replaying a failed write could duplicate external work."""
     return bool(
@@ -724,6 +739,30 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                 for output in outputs
                 if isinstance(output.get("provider_result"), dict)
             )
+            trust_floor = float(snapshot.policy_snapshot["trust_execution_floor"])
+            recovery_count = int(recovery_counts.get(step.id, 0))
+            effective_trust, degraded_read_recovery = _bounded_read_trust_score(
+                step.operation,
+                trust.score,
+                trust_floor,
+                recovery_count,
+            )
+            if degraded_read_recovery:
+                recovery_counts[step.id] = recovery_count + 1
+                context["__aura_recovery__"] = recovery_counts
+                run.execution_context = context
+                await audit(
+                    session,
+                    workspace_id,
+                    "step.degraded_trust_read_recovery",
+                    {
+                        "step_id": step.id,
+                        "recovery_attempt": recovery_count + 1,
+                    },
+                    run.id,
+                    actor="policy-governor",
+                )
+                await session.commit()
             runtime_decision = runtime_policy_check(
                 approved_cost=float(
                     snapshot.cost_snapshot.get("estimated_cost_usd", 0.0)
@@ -735,7 +774,7 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                 trust_score=(
                     max(trust.score, float(snapshot.policy_snapshot["trust_execution_floor"]))
                     if is_bounded_recovery
-                    else trust.score
+                    else effective_trust
                 ),
                 policy=snapshot.policy_snapshot,
             )
