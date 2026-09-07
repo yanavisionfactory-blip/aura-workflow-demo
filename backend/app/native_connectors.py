@@ -514,8 +514,40 @@ _ARGUMENT_ALIASES = {
     "project": "project_key",
     "project_id": "project_key",
     "issue": "issue_key",
-    "limit": "page_size",
 }
+
+_SCHEMA_ALIAS_GROUPS = (
+    {"limit", "page_size", "max_results", "count"},
+    {"cursor", "start_cursor", "after", "continuation"},
+    {"query", "search", "search_query", "q"},
+)
+
+
+def _schema_argument_target(key: str, properties: dict[str, Any]) -> str:
+    if key in properties:
+        return key
+
+    explicit = _ARGUMENT_ALIASES.get(key)
+    if explicit in properties:
+        return explicit
+
+    compact_key = re.sub(r"[^a-z0-9]", "", key.lower())
+    compact_matches = [
+        property_name
+        for property_name in properties
+        if re.sub(r"[^a-z0-9]", "", property_name.lower()) == compact_key
+    ]
+    if len(compact_matches) == 1:
+        return compact_matches[0]
+
+    for aliases in _SCHEMA_ALIAS_GROUPS:
+        if key not in aliases:
+            continue
+        candidates = [property_name for property_name in properties if property_name in aliases]
+        if len(candidates) == 1:
+            return candidates[0]
+
+    return key
 
 
 def normalize_module_arguments(
@@ -532,7 +564,7 @@ def normalize_module_arguments(
     normalized: dict[str, Any] = {}
     for key, value in arguments.items():
         snake_key = re.sub(r"(?<!^)(?=[A-Z])", "_", key).lower()
-        target = snake_key if snake_key in properties else _ARGUMENT_ALIASES.get(snake_key, snake_key)
+        target = _schema_argument_target(snake_key, properties)
         if target in normalized and target != key:
             raise NativeConnectorError(f"Duplicate values supplied for {target!r}")
         normalized[target] = value
