@@ -72,6 +72,8 @@ def resolve_value(value: Any, context: dict[str, Any]) -> Any:
 
     def replace(reference: re.Match) -> str:
         resolved = _lookup(context, reference.group(1))
+        if isinstance(resolved, dict) and isinstance(resolved.get("summary"), str):
+            return resolved["summary"]
         if isinstance(resolved, (dict, list)):
             return json.dumps(resolved, separators=(",", ":"))
         if resolved is None:

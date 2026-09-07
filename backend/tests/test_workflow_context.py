@@ -139,6 +139,24 @@ def test_step_result_exposes_operation_noun_as_a_summary_alias() -> None:
     assert resolve_value("{{steps.weather.forecast}}", context) == "Sunny, 24 C"
 
 
+def test_embedded_provider_object_prefers_verified_summary_for_user_text() -> None:
+    context = {
+        "steps": {
+            "weather": {
+                "output": {
+                    "location": "Munich",
+                    "temperature_high": 24,
+                    "summary": "Munich: sunny, high of 24°C.",
+                }
+            }
+        }
+    }
+
+    assert resolve_value("Forecast: {{steps.weather.output}}", context) == (
+        "Forecast: Munich: sunny, high of 24°C."
+    )
+
+
 def test_step_context_exposes_resource_alias_for_provider_objects() -> None:
     provider_result = {"id": "page-123", "title": "Roadmap"}
     context = {
