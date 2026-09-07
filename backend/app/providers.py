@@ -5,6 +5,7 @@ import json
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from email.message import EmailMessage
 from typing import Any
 from urllib.parse import quote, urlencode, urlsplit
 
@@ -646,11 +647,11 @@ class ProviderExecutor:
             recipient = str(profile.get("emailAddress") or "").strip()
         if not recipient:
             raise ValueError("gmail.send could not resolve the approved recipient")
-        message = "\r\n".join([
-            f"To: {recipient}", f"Subject: {a.get('subject', 'AURA workflow')}",
-            "Content-Type: text/plain; charset=utf-8", "MIME-Version: 1.0", "", a.get("body", ""),
-        ])
-        raw = base64.urlsafe_b64encode(message.encode()).decode().rstrip("=")
+        message = EmailMessage()
+        message["To"] = recipient
+        message["Subject"] = str(a.get("subject") or "AURA workflow")
+        message.set_content(str(a.get("body") or ""), charset="utf-8")
+        raw = base64.urlsafe_b64encode(message.as_bytes()).decode().rstrip("=")
         result = await self._request("POST", "https://gmail.googleapis.com/gmail/v1/users/me/messages/send", json={"raw": raw})
         return {
             **result,
