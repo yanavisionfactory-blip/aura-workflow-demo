@@ -3,6 +3,7 @@ import pytest
 from app.native_connectors import (
     NativeConnectorError,
     coerce_module_arguments,
+    current_capability_manifest,
     native_manifest,
     native_operations,
     normalize_module_arguments,
@@ -227,3 +228,23 @@ def test_schema_guided_aliases_normalize_unseen_pagination_variants():
         "notion.search",
         {"maxResults": 5, "cursor": "next-page"},
     ) == {"page_size": 5, "start_cursor": "next-page"}
+
+
+def test_current_capability_manifest_replaces_stale_native_snapshots():
+    stale = {"schema_version": "0.1", "capabilities": []}
+
+    manifest = current_capability_manifest("notion", stale)
+
+    assert manifest["schema_version"] != "0.1"
+    assert any(
+        module["name"] == "notion.page.get" for module in manifest["capabilities"]
+    )
+
+
+def test_current_capability_manifest_keeps_discovered_connector_schema():
+    discovered = {
+        "schema_version": "9.0",
+        "capabilities": [{"name": "custom.read"}],
+    }
+
+    assert current_capability_manifest("custom", discovered) is discovered
