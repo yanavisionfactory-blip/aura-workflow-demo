@@ -171,6 +171,7 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                 "query": _TEXT,
                 "page_size": {**_POSITIVE_INTEGER, "maximum": 100},
                 "start_cursor": _TEXT,
+                "filter": {"type": "object"},
                 "sort": {"type": "string", "enum": ["last_edited_time"]},
                 "direction": {"type": "string", "enum": ["ascending", "descending"]},
             }),
