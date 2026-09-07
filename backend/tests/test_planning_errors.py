@@ -14,10 +14,35 @@ def test_exhausted_api_credits_are_explained_without_raw_provider_payload() -> N
     assert "{'error'" not in message
 
 
+def test_wrapped_exhausted_api_credits_keep_the_operational_category() -> None:
+    try:
+        try:
+            raise RuntimeError("credit_balance_exhausted")
+        except RuntimeError as provider_error:
+            raise RuntimeError("Planner recovery exhausted") from provider_error
+    except RuntimeError as wrapped_error:
+        message = planning_error_message(wrapped_error)
+
+    assert "credits are exhausted" in message
+    assert "Planner recovery exhausted" not in message
+
+
 def test_transient_rate_limit_has_retry_guidance() -> None:
     assert planning_error_message(RuntimeError("rate limit exceeded")) == (
         "AURA's AI planning service is temporarily busy. Please try again shortly."
     )
+
+
+def test_wrapped_rate_limit_keeps_retry_guidance() -> None:
+    try:
+        try:
+            raise RuntimeError("error code: 429")
+        except RuntimeError as provider_error:
+            raise RuntimeError("Planner recovery exhausted") from provider_error
+    except RuntimeError as wrapped_error:
+        message = planning_error_message(wrapped_error)
+
+    assert message == "AURA's AI planning service is temporarily busy. Please try again shortly."
 
 
 def test_invalid_json_does_not_leak_internal_parser_error() -> None:
