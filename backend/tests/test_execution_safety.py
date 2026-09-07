@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from sqlalchemy import UniqueConstraint
 
 from app.config import Settings
@@ -7,8 +9,9 @@ from app.orchestrator import (
     _failure_impacts_trust,
     _friendly_execution_error,
     _has_confirmed_consequential_result,
+    _has_empty_collection,
+    _required_read_arguments,
 )
-from types import SimpleNamespace
 
 
 def test_workflow_run_request_key_is_workspace_scoped_unique():
@@ -52,3 +55,32 @@ def test_confirmed_consequential_result_is_never_replayed():
     )
 
     assert _has_confirmed_consequential_result(step) is True
+
+
+def test_empty_provider_collection_triggers_read_recovery():
+    assert _has_empty_collection({"results": []}) is True
+    assert _has_empty_collection({"results": [{"id": "page-1"}]}) is False
+    assert _has_empty_collection({"status": "ok"}) is False
+
+
+def test_reduced_read_preserves_only_required_inputs():
+    manifest = {
+        "capabilities": [
+            {
+                "name": "crm.contacts.search",
+                "input_schema": {
+                    "required": ["workspace_id"],
+                    "properties": {
+                        "workspace_id": {"type": "string"},
+                        "query": {"type": "string"},
+                    },
+                },
+            }
+        ]
+    }
+
+    assert _required_read_arguments(
+        manifest,
+        "crm.contacts.search",
+        {"workspace_id": "acme", "query": "Ada"},
+    ) == {"workspace_id": "acme"}
