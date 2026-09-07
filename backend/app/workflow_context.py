@@ -4,7 +4,9 @@ from typing import Any
 
 from .schemas import StepCondition
 
-REFERENCE = re.compile(r"\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}")
+REFERENCE = re.compile(r"\{\{\s*([a-zA-Z0-9_.\-\[\]'\" ]+?)\s*\}\}")
+BRACKET_INDEX = re.compile(r"\[(\d+)\]")
+BRACKET_KEY = re.compile(r"\[['\"]([^'\"]+)['\"]\]")
 
 
 class WorkflowContextError(ValueError):
@@ -36,8 +38,14 @@ def referenced_step_keys(value: Any) -> set[str]:
 
 
 def _lookup(context: dict[str, Any], path: str) -> Any:
+    # Structured planners commonly use JavaScript-style paths such as
+    # ``steps.search.results[0].id``. Convert their safe bracket forms to the
+    # same dotted tokens the resolver already understands. This remains a
+    # data lookup only; arbitrary expressions are never evaluated.
+    normalized_path = BRACKET_KEY.sub(lambda match: f".{match.group(1)}", path)
+    normalized_path = BRACKET_INDEX.sub(lambda match: f".{match.group(1)}", normalized_path)
     value: Any = context
-    for part in path.split("."):
+    for part in normalized_path.split("."):
         if isinstance(value, dict) and part in value:
             value = value[part]
             continue
@@ -94,6 +102,23 @@ def step_context_value(result: Any, operation: str | None = None) -> Any:
     if operation_alias:
         alias_value = result.get("summary", result) if isinstance(result, dict) else result
         value.setdefault(operation_alias, alias_value)
+
+    # Search/list providers use different collection nouns (results, items,
+    # records, candidates). Expose stable compatibility aliases so a valid
+    # provider response can feed the next step without leaking those naming
+    # differences into planner reliability.
+    if isinstance(result, dict):
+        collection = next(
+            (
+                result.get(key)
+                for key in ("results", "items", "records", "candidates", "data")
+                if isinstance(result.get(key), list)
+            ),
+            None,
+        )
+        if collection is not None:
+            for alias in ("results", "items", "records", "candidates"):
+                value.setdefault(alias, collection)
     return value
 
 
