@@ -88,6 +88,15 @@ def _required_read_arguments(manifest: dict, operation: str, arguments: dict) ->
     return reduced if reduced != arguments else None
 
 
+def _accept_successful_read_after_critic(operation: str, criticism: object) -> bool:
+    """Do not replay a valid deterministic read for a semantic-only disagreement."""
+    return bool(
+        operation_scope(operation) == "read"
+        and getattr(criticism, "action", None) == "retry"
+        and not getattr(criticism, "policy_violations", [])
+    )
+
+
 def _has_confirmed_consequential_result(step: RunStep) -> bool:
     """Return true when replaying a failed write could duplicate external work."""
     return bool(
@@ -1025,7 +1034,17 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                     "Workflow output rejected run_id=%s step_id=%s detail=%s",
                     run.id, step.id, internal_error,
                 )
-                if step.consequential:
+                if _accept_successful_read_after_critic(step.operation, criticism):
+                    criticism = criticism.model_copy(
+                        update={
+                            "action": "accept",
+                            "reasons": [
+                                "Provider read passed deterministic checks; semantic "
+                                "review was recorded without replaying the same request."
+                            ],
+                        }
+                    )
+                elif step.consequential:
                     # The provider has already confirmed the external write. A
                     # semantic-critic disagreement cannot safely undo it, and
                     # replaying it could duplicate emails, issues, or events.
