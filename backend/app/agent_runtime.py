@@ -414,6 +414,63 @@ async def critique_step(step: dict, provider_result: object) -> CriticDecision:
     )
 
 
+def _artifact_user_text(value: object) -> list[str]:
+    """Extract readable provider content without leaking IDs or transport metadata."""
+    preferred_keys = ("plain_text", "text", "content", "title", "name", "summary")
+    ignored_keys = {
+        "id",
+        "object",
+        "type",
+        "url",
+        "href",
+        "request_id",
+        "created_time",
+        "last_edited_time",
+    }
+    found: list[str] = []
+
+    def visit(item: object) -> None:
+        if isinstance(item, dict):
+            for key in preferred_keys:
+                text = item.get(key)
+                if isinstance(text, str) and text.strip():
+                    found.append(text.strip())
+            for key, nested in item.items():
+                if key not in ignored_keys and key not in preferred_keys:
+                    visit(nested)
+                elif key in preferred_keys and not isinstance(nested, str):
+                    visit(nested)
+        elif isinstance(item, list):
+            for nested in item:
+                visit(nested)
+
+    visit(value)
+    unique: list[str] = []
+    for text in found:
+        normalized = " ".join(text.split())
+        if normalized and normalized not in unique:
+            unique.append(normalized)
+    return unique
+
+
+def _deterministic_deliverable(accepted_artifacts: list[dict]) -> tuple[str, str]:
+    """Preserve useful results when the optional synthesizer is unavailable."""
+    readable: list[str] = []
+    for artifact in reversed(accepted_artifacts):
+        for text in _artifact_user_text(artifact.get("provider_result")):
+            if text not in readable:
+                readable.append(text)
+    if not readable:
+        return (
+            "Workflow completed successfully.",
+            "AURA completed the requested workflow and verified every required step.",
+        )
+    primary = readable[0]
+    summary = primary if len(primary) <= 180 else primary[:177].rstrip() + "..."
+    details = "\n".join(f"• {text}" for text in readable[:12])
+    return summary, details
+
+
 async def synthesize_result(prompt: str, accepted_artifacts: list[dict]) -> UnifiedDeliverable:
     payload = {"original_request": prompt, "accepted_artifacts": accepted_artifacts}
     for attempt in range(3):
@@ -433,12 +490,10 @@ async def synthesize_result(prompt: str, accepted_artifacts: list[dict]) -> Unif
         }
         for artifact in accepted_artifacts
     ]
+    summary, deliverable = _deterministic_deliverable(accepted_artifacts)
     return UnifiedDeliverable(
-        summary="Workflow completed successfully.",
-        deliverable=(
-            "AURA completed the approved steps. The verified results are available "
-            "in this workflow's result view."
-        ),
+        summary=summary,
+        deliverable=deliverable,
         traceability=traceability,
         validation_passed=True,
     )
