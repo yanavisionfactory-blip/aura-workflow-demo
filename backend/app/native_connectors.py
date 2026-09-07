@@ -4,6 +4,7 @@ A connector exposes composable modules. The orchestrator chooses modules; it doe
 not encode provider-specific workflows.
 """
 
+import json
 import re
 from copy import deepcopy
 from typing import Any
@@ -475,6 +476,28 @@ def validate_module_arguments(manifest: dict[str, Any], operation: str, argument
     _validate_value(module.get("input_schema", {"type": "object"}), arguments, operation)
 
 
+def _coerce_value(schema: dict[str, Any], value: Any) -> Any:
+    """Coerce resolved workflow values to a connector's declared schema."""
+    schema_type = schema.get("type")
+    if schema_type == "string" and not isinstance(value, str):
+        if isinstance(value, dict) and isinstance(value.get("summary"), str):
+            return value["summary"]
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        if value is not None:
+            return str(value)
+    if schema_type == "object" and isinstance(value, dict):
+        properties = schema.get("properties", {})
+        return {
+            key: _coerce_value(properties.get(key, {}), item)
+            for key, item in value.items()
+        }
+    if schema_type == "array" and isinstance(value, list):
+        item_schema = schema.get("items", {})
+        return [_coerce_value(item_schema, item) for item in value]
+    return value
+
+
 _ARGUMENT_ALIASES = {
     "city": "location",
     "place": "location",
@@ -505,3 +528,22 @@ def normalize_module_arguments(
         normalized[target] = value
     validate_module_arguments(manifest, operation, normalized)
     return normalized
+
+
+def coerce_module_arguments(
+    manifest: dict[str, Any], operation: str, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    """Normalize resolved arguments and safely adapt values to declared types."""
+    module = next(
+        (item for item in manifest.get("capabilities", []) if item.get("name") == operation),
+        None,
+    )
+    if not module:
+        raise NativeConnectorError(f"Module {operation!r} is not declared")
+    properties = module.get("input_schema", {}).get("properties", {})
+    coerced = {
+        key: _coerce_value(properties.get(key, {}), value)
+        for key, value in arguments.items()
+    }
+    validate_module_arguments(manifest, operation, coerced)
+    return coerced
