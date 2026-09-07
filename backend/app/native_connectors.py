@@ -168,7 +168,11 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         "identity": {"provider": "notion"},
         "modules": [
             _module("notion.search", "search", "Search pages and data sources.", properties={
-                "query": _TEXT, "page_size": {**_POSITIVE_INTEGER, "maximum": 100}, "start_cursor": _TEXT
+                "query": _TEXT,
+                "page_size": {**_POSITIVE_INTEGER, "maximum": 100},
+                "start_cursor": _TEXT,
+                "sort": {"type": "string", "enum": ["last_edited_time"]},
+                "direction": {"type": "string", "enum": ["ascending", "descending"]},
             }),
             _module("notion.page.get", "search", "Read a Notion page.", required=("page_id",), properties={"page_id": _TEXT}),
             _module("notion.blocks.children.list", "search", "Read child blocks.", required=("block_id",), properties={
@@ -437,6 +441,10 @@ def _validate_value(schema: dict[str, Any], value: Any, path: str) -> None:
     expected = type_checks.get(schema_type)
     if expected and (not isinstance(value, expected) or schema_type == "integer" and isinstance(value, bool)):
         raise NativeConnectorError(f"{path} must be {schema_type}")
+    if "enum" in schema and value not in schema["enum"]:
+        raise NativeConnectorError(
+            f"{path} must be one of: {', '.join(map(str, schema['enum']))}"
+        )
     if schema_type == "object" and isinstance(value, dict):
         missing = [
             name
