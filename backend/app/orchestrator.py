@@ -65,6 +65,15 @@ def _friendly_execution_error(error: str | None) -> str:
     return "AURA is resolving an issue with this step automatically."
 
 
+def _has_confirmed_consequential_result(step: RunStep) -> bool:
+    """Return true when replaying a failed write could duplicate external work."""
+    return bool(
+        step.consequential
+        and isinstance(step.output, dict)
+        and step.output.get("provider_result") is not None
+    )
+
+
 async def audit(
     session,
     workspace_id: str,
@@ -514,11 +523,39 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
         }
         step_by_key = {step.step_key: step for step in steps}
         for step in steps:
-            if step.status == StepStatus.completed:
+            recovered_confirmed_write = (
+                step.status != StepStatus.completed
+                and _has_confirmed_consequential_result(step)
+            )
+            if step.status == StepStatus.completed or recovered_confirmed_write:
+                if recovered_confirmed_write:
+                    step.status = StepStatus.completed
+                    step.error = None
+                    step.completed_at = step.completed_at or datetime.now(timezone.utc)
+                    await audit(
+                        session,
+                        workspace_id,
+                        "step.recovered_without_replay",
+                        {"step_id": step.id},
+                        run.id,
+                    )
                 outputs.append(step.output)
                 context.setdefault("steps", {})[step.step_key] = step_context_value(
                     step.output.get("provider_result", step.output), step.operation
                 )
+                for name, value in step.output_variables.items():
+                    try:
+                        context.setdefault("vars", {})[name] = resolve_value(
+                            value, context
+                        )
+                    except WorkflowContextError:
+                        logger.warning(
+                            "Skipping unavailable output alias while preserving "
+                            "confirmed write run_id=%s step_id=%s alias=%s",
+                            run.id,
+                            step.id,
+                            name,
+                        )
                 continue
             if step.status == StepStatus.skipped:
                 continue
