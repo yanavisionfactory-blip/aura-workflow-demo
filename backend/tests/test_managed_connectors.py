@@ -7,6 +7,8 @@ def settings() -> Settings:
         credential_encryption_key="MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
         session_signing_key="test-session-signing-key-000000000",
         nango_api_key="secret",
+        atlassian_client_id="jira-client-id",
+        atlassian_client_secret="jira-client-secret",
         nango_integration_map='{"jira":"aura-jira","notion":"aura-notion"}',
     )
 
@@ -16,6 +18,8 @@ def dynamic_settings() -> Settings:
         credential_encryption_key="MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
         session_signing_key="test-session-signing-key-000000000",
         nango_api_key="secret",
+        atlassian_client_id="jira-client-id",
+        atlassian_client_secret="jira-client-secret",
     )
 
 
@@ -106,6 +110,12 @@ async def test_missing_integration_is_provisioned_on_first_use():
         "unique_key": "jira",
         "provider": "jira",
         "display_name": "Jira",
+        "credentials": {
+            "client_id": "jira-client-id",
+            "client_secret": "jira-client-secret",
+            "scopes": "read:jira-work write:jira-work read:jira-user offline_access",
+        },
+        "integration_config": {},
     }
     assert client.calls[3][2]["json"]["allowed_integrations"] == ["jira"]
 
