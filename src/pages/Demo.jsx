@@ -669,15 +669,25 @@ Rules:
       await approvePythonPlan(runId, reviewedPlan.steps);
       for (let attempt = 0; attempt < 600; attempt += 1) {
         const run = await getPythonRun(runId);
+        const failedStep = (run.steps || []).find((step) => step.status === "failed");
+        const recoveryCount = pythonRecoveryRef.current[runId] || 0;
+        const recoveringAutomatically =
+          failedStep &&
+          (run.status === "waiting_for_action" || run.status === "recovering") &&
+          recoveryCount < 3;
         setExecSteps((run.steps || []).map((step, index) => ({
           tool: approvedStepsRef.current[index]?.tool || planToolName(step),
           action: approvedStepsRef.current[index]?.title || approvedStepsRef.current[index]?.action || friendlyStepTitle(step),
           riskLevel: step.consequential ? "modify" : "read",
-          status: step.status,
-          liveOutput: humanExecutionOutput(step),
+          status: recoveringAutomatically && step.id === failedStep.id ? "recovering" : step.status,
+          liveOutput: recoveringAutomatically && step.id === failedStep.id
+            ? `AURA is resolving this automatically · attempt ${recoveryCount + 1} of 3`
+            : humanExecutionOutput(step),
           output: step.output,
         })));
-        const active = (run.steps || []).findIndex((step) => step.status === "running");
+        const active = (run.steps || []).findIndex((step) =>
+          step.status === "running" || (recoveringAutomatically && step.id === failedStep?.id)
+        );
         if (active >= 0) setCurrentStepIdx(active);
         if (run.status === "completed") {
           const outputs = run.result?.outputs || [];
@@ -691,12 +701,10 @@ Rules:
           return;
         }
         if (run.status === "waiting_for_action" || run.status === "failed") {
-          const failedStep = (run.steps || []).find((step) => step.status === "failed");
-          const recoveryCount = pythonRecoveryRef.current[runId] || 0;
           if (failedStep && recoveryCount < 3) {
             pythonRecoveryRef.current[runId] = recoveryCount + 1;
             setExecSteps((previous) => previous.map((step, index) => index === failedStep.position
-              ? { ...step, status: "running", liveOutput: "AURA is resolving this automatically…" }
+              ? { ...step, status: "recovering", liveOutput: `AURA is resolving this automatically · attempt ${recoveryCount + 1} of 3` }
               : step));
             await resumePythonRun(runId, failedStep.id);
             await new Promise((resolve) => setTimeout(resolve, 1200 * (recoveryCount + 1)));

@@ -7,6 +7,7 @@ const STEP_DURATION = 2.6; // seconds per step (for ETA)
 export default function ExecutionView({ steps, currentStepIndex, isReal }) {
   const completedCount = steps.filter((s) => s.status === "completed").length;
   const failed = steps.some((s) => s.status === "failed");
+  const recovering = steps.some((s) => s.status === "recovering");
   const progress = (completedCount / steps.length) * 100;
   const remaining = Math.max(0, steps.length - completedCount);
   const etaSecs = remaining > 0 && !failed ? remaining * STEP_DURATION : 0;
@@ -35,7 +36,9 @@ export default function ExecutionView({ steps, currentStepIndex, isReal }) {
             {failed ? null : <div className="absolute inset-0 rounded-xl bg-accent/20 animate-pulse" />}
           </div>
           <div>
-            <h2 className="text-lg font-semibold">{failed ? "Workflow paused" : "Running your workflow"}</h2>
+            <h2 className="text-lg font-semibold">
+              {failed ? "Workflow paused" : recovering ? "AURA is resolving a step" : "Running your workflow"}
+            </h2>
             <p className="text-xs text-muted-foreground">
               Step {Math.min(currentStepIndex + 1, steps.length)} of {steps.length}
               {eta ? ` · ${eta}` : ""}

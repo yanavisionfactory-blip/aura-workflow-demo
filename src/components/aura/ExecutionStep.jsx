@@ -16,6 +16,13 @@ const statusConfig = {
     label: "Executing",
     spin: true,
   },
+  recovering: {
+    icon: Loader2,
+    color: "text-accent",
+    bg: "bg-accent/10 border-accent/20 glow-accent",
+    label: "Resolving automatically",
+    spin: true,
+  },
   completed: {
     icon: Check,
     color: "text-emerald-400",
@@ -42,7 +49,7 @@ export default function ExecutionStep({ step, index, isLast }) {
   const displayAction =
     step.status === "completed"
       ? conjugateAction(step.action, "past")
-      : step.status === "running"
+      : step.status === "running" || step.status === "recovering"
       ? conjugateAction(step.action, "ing")
       : step.action;
   const isModify = step.riskLevel === "modify";
@@ -62,7 +69,7 @@ export default function ExecutionStep({ step, index, isLast }) {
           className={`relative z-10 flex-shrink-0 w-10 h-10 rounded-xl border flex items-center justify-center transition-all duration-500 ${config.bg}`}
         >
           <Icon className={`w-4 h-4 ${config.color} ${config.spin ? "animate-spin" : ""}`} />
-          {step.status === "running" && (
+          {(step.status === "running" || step.status === "recovering") && (
             <div className="absolute inset-0 rounded-xl border-2 border-accent/30 animate-pulse-ring" />
           )}
         </div>
@@ -72,7 +79,7 @@ export default function ExecutionStep({ step, index, isLast }) {
             className={`rounded-xl border transition-all duration-500 overflow-hidden ${
               step.status === "completed"
                 ? "border-emerald-400/10 bg-emerald-400/[0.02]"
-                : step.status === "running"
+                : step.status === "running" || step.status === "recovering"
                 ? "border-accent/20 bg-accent/[0.02]"
                 : step.status === "failed"
                 ? "border-amber-400/20 bg-amber-400/[0.02]"
