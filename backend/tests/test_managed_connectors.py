@@ -112,9 +112,10 @@ async def test_missing_integration_is_provisioned_on_first_use():
         "display_name": "Jira",
         "forward_webhooks": True,
         "credentials": {
+            "type": "OAUTH2",
             "client_id": "jira-client-id",
             "client_secret": "jira-client-secret",
-            "scopes": "read:jira-work write:jira-work read:jira-user offline_access",
+            "scopes": "read:jira-work,write:jira-work,read:jira-user,offline_access",
         },
         "integration_config": {},
     }
