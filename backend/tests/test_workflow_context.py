@@ -9,6 +9,7 @@ from app.workflow_context import (
     referenced_paths,
     referenced_step_keys,
     resolve_value,
+    step_context_value,
 )
 
 
@@ -88,6 +89,22 @@ def test_step_output_can_be_saved_as_a_reusable_variable() -> None:
         for name, value in step.output_variables.items()
     }
     assert saved == {"customer_email": "ada@example.com"}
+
+
+def test_whole_step_result_supports_output_and_result_compatibility_paths() -> None:
+    provider_result = {"summary": "Sunny", "temperature_max_c": 21}
+    context = {"steps": {"weather": step_context_value(provider_result)}}
+
+    assert resolve_value("{{steps.weather.summary}}", context) == "Sunny"
+    assert resolve_value("{{steps.weather.output}}", context) == provider_result
+    assert resolve_value("{{steps.weather.result}}", context) == provider_result
+
+
+def test_scalar_step_result_has_stable_whole_result_paths() -> None:
+    context = {"steps": {"count": step_context_value(3)}}
+
+    assert resolve_value("{{steps.count.output}}", context) == 3
+    assert resolve_value("{{steps.count.result}}", context) == 3
 
 
 def test_plan_rejects_dependencies_on_later_steps() -> None:
