@@ -30,6 +30,7 @@ from .models import (
 )
 from .native_connectors import (
     NativeConnectorError,
+    current_capability_manifest,
     native_manifest,
     native_operations,
     normalize_module_arguments,
@@ -99,10 +100,7 @@ def _accept_successful_read_after_critic(operation: str, criticism: object) -> b
 
 def _current_capability_manifest(slug: str, stored: dict | None) -> dict:
     """Prefer deployed built-in contracts over stale workspace snapshots."""
-    try:
-        return native_manifest(slug)
-    except NativeConnectorError:
-        return stored or {}
+    return current_capability_manifest(slug, stored)
 
 
 def _bounded_read_trust_score(
