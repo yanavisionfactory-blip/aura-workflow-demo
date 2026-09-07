@@ -194,6 +194,53 @@ async def ensure_aura_intelligence(session, workspace_id: str) -> ToolConnection
     return tool
 
 
+def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict]) -> None:
+    for planned_step in plan.steps:
+        manifest = _current_capability_manifest(
+            planned_step.tool_slug,
+            manifests_by_slug.get(planned_step.tool_slug),
+        )
+        if not manifest:
+            continue
+        planned_step.arguments = normalize_module_arguments(
+            manifest, planned_step.operation, planned_step.arguments
+        )
+        if planned_step.reduced_scope_arguments is None:
+            planned_step.reduced_scope_arguments = _required_read_arguments(
+                manifest, planned_step.operation, planned_step.arguments
+            )
+
+
+async def _create_compiled_plan(
+    prompt: str,
+    inventory: list[dict],
+    available_input_names: set[str],
+    manifests_by_slug: dict[str, dict],
+):
+    """Build a schema-valid plan, repairing internal connector mismatches silently."""
+    repair_requirements: list[str] = []
+    for attempt in range(3):
+        plan = await create_plan(
+            prompt,
+            inventory,
+            available_input_names,
+            planner_repair_requirements=list(repair_requirements),
+        )
+        try:
+            _normalize_planned_steps(plan, manifests_by_slug)
+            return plan
+        except NativeConnectorError as exc:
+            if attempt == 2:
+                raise
+            repair_requirements.append(str(exc))
+            logger.warning(
+                "Repairing plan connector contract attempt=%s error_type=%s",
+                attempt + 2,
+                type(exc).__name__,
+            )
+    raise RuntimeError("Plan connector-contract recovery exhausted")
+
+
 def planning_error_message(exc: Exception) -> str:
     """Return a user-facing planning failure without leaking provider payloads."""
     # Recovery wrappers intentionally replace raw provider messages. Walk the
@@ -276,23 +323,12 @@ async def plan_run(run_id: str, workspace_id: str) -> None:
         await session.commit()
 
         try:
-            plan = await create_plan(
-                run.prompt, inventory, set((run.inputs or {}).keys())
+            plan = await _create_compiled_plan(
+                run.prompt,
+                inventory,
+                set((run.inputs or {}).keys()),
+                manifests_by_slug,
             )
-            for planned_step in plan.steps:
-                manifest = _current_capability_manifest(
-                    planned_step.tool_slug,
-                    manifests_by_slug.get(planned_step.tool_slug),
-                )
-                if not manifest:
-                    continue
-                planned_step.arguments = normalize_module_arguments(
-                    manifest, planned_step.operation, planned_step.arguments
-                )
-                if planned_step.reduced_scope_arguments is None:
-                    planned_step.reduced_scope_arguments = _required_read_arguments(
-                        manifest, planned_step.operation, planned_step.arguments
-                    )
             run.plan = plan.model_dump(mode="json")
             logger.info(
                 "Workflow plan ready run_id=%s graph=%s",
