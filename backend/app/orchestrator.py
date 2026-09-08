@@ -16,6 +16,10 @@ from .agent_runtime import (
     verify_outcome,
 )
 from .config import get_settings
+from .outcome_runtime import check_provider_outcome
+from .replanning import maybe_replan_run
+from .semantic_memory import index_run_memory
+from .schemas import CriticDecision, OutcomeVerification
 from .db import SessionLocal, engine, set_tenant_context
 from .execution_lock import execution_lock
 from .agent_telemetry import trace_run
@@ -543,11 +547,27 @@ def _partial_result(outputs: list[dict], step: RunStep, error: str) -> dict:
     }
 
 
+async def review_recorded_result(session, run, step, snapshot, contract, result):
+    check = step.output.get("outcome_check", {})
+    if check.get("status") != "verified":
+        check = await check_provider_outcome(session, run, step, snapshot)
+        if check.get("status") != "unsupported":
+            step.output = {**step.output, "outcome_check": check}
+            await session.commit()
+    if check.get("status") not in {"verified", "unsupported"}:
+        return CriticDecision(action="escalate", reasons=check.get("reasons", ["Read-back is incomplete"]))
+    evidence = {**result, "__aura_readback__": check["observed"]} if check.get("observed") and isinstance(result, dict) else result
+    return await critique_step(contract, evidence)
+
+
 @trace_run
 async def execute_run(run_id: str, workspace_id: str) -> None:
     async with execution_lock(engine, workspace_id, run_id) as acquired:
         if acquired:
-            await _execute_run(run_id, workspace_id)
+            for _ in range(3):
+                await _execute_run(run_id, workspace_id)
+                if await maybe_replan_run(run_id, workspace_id) != "retry":
+                    break
 
 
 async def _execute_run(run_id: str, workspace_id: str) -> None:
@@ -676,7 +696,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             if recorded_result and step.output.get("critic", {}).get("action") != "accept":
                 contract = {**plan_steps[step.position], "step_id": step.id,
                             "arguments": step.output.get("resolved_arguments", step.arguments)}
-                criticism = await critique_step(contract, step.output["provider_result"])
+                criticism = await review_recorded_result(session, run, step, snapshot, contract, step.output["provider_result"])
                 step.output = {**step.output, "critic": criticism.model_dump(mode="json")}
                 await audit(session, workspace_id, "step.review_resumed",
                             {"step_id": step.id, "decision": criticism.model_dump(mode="json")}, run.id)
@@ -1316,7 +1336,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 "expected_output": approved_step.get("expected_output", ""),
                 "consequential": step.consequential,
             }
-            criticism = await critique_step(contract, result)
+            criticism = await review_recorded_result(session, run, step, snapshot, contract, result)
             await audit(
                 session,
                 workspace_id,
@@ -1352,6 +1372,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 "tool": step.tool_slug,
                 "operation": step.operation,
                 "critic": criticism.model_dump(mode="json"),
+                "outcome_check": step.output.get("outcome_check", {"status": "unsupported"}),
             }
             step.completed_at = datetime.now(timezone.utc)
             run.updated_at = step.completed_at
@@ -1455,7 +1476,23 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             await session.commit()
             return
 
-        verification = await verify_outcome(run.prompt, run.plan, outputs)
+        outcome_failures = []
+        for step in steps:
+            if step.status != StepStatus.completed:
+                continue
+            check = step.output.get("outcome_check", {})
+            if check.get("status") != "verified":
+                check = await check_provider_outcome(session, run, step, snapshot)
+                step.output = {**step.output, "outcome_check": check}
+                await session.commit()
+            if check.get("status") not in {"verified", "unsupported"}:
+                outcome_failures.append(step.step_key)
+        outputs = [step.output for step in steps if step.status == StepStatus.completed]
+        if outcome_failures:
+            verification = OutcomeVerification(status="unverified",
+                reasons=["Provider read-back could not confirm: " + ", ".join(outcome_failures)])
+        else:
+            verification = await verify_outcome(run.prompt, run.plan, outputs)
         verification_data = verification.model_dump(mode="json")
         await audit(session, workspace_id, "run.outcome_verified", verification_data,
                     run.id, actor="outcome-verifier")
@@ -1498,3 +1535,9 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
         }
         await audit(session, workspace_id, "run.completed", run.result, run.id)
         await session.commit()
+        try:
+            await index_run_memory(session, run)
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            logger.warning("Completed run memory indexing deferred", exc_info=True)
