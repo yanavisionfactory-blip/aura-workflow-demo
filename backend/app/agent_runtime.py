@@ -21,7 +21,7 @@ from .schemas import (
 )
 from .workflow_context import referenced_paths, referenced_step_keys
 from .agent_telemetry import record_agent_call
-from .model_inputs import canonical_execution_evidence, bounded_input, evidence_chunks, encoded, is_input_limit, ModelInputTooLarge
+from .model_inputs import canonical_execution_evidence, bounded_input, evidence_chunks, encoded, is_input_limit, ModelInputTooLarge, semantic_evidence
 
 
 class ConnectionRequiredError(RuntimeError):
@@ -806,6 +806,7 @@ async def _prepare_action_evidence(payload: dict, evidence_key: str = "accepted_
     proof of execution. Exact operation arguments and user constraints stay outside
     the summary. The existing delivery call/time budget also covers chunk work.
     """
+    payload = {**payload, evidence_key: semantic_evidence(payload[evidence_key])}
     try:
         bounded_input(payload)
         return payload

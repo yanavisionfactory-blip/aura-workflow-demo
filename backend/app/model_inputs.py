@@ -5,6 +5,7 @@ JSON pointers into this input, rather than copied into the model window repeated
 """
 import hashlib
 import json
+import base64
 
 MAX_INPUT_BYTES = 96_000
 CHUNK_BYTES = 24_000
@@ -23,6 +24,38 @@ def is_input_limit(exc):
     return isinstance(exc, ModelInputTooLarge) or any(marker in str(exc).lower() for marker in (
         "context_length_exceeded", "exceeds the context window", "maximum context length",
     ))
+
+
+def semantic_evidence(value):
+    """Project MIME transport bytes for model review without altering receipts.
+
+    Binary files are verified by byte hashes in provider read-back. Feeding their
+    base64 encoding to a text model wastes its budget and cannot establish content.
+    Keep names, MIME types, byte counts and hashes; decode textual MIME bodies.
+    """
+    if isinstance(value, list):
+        return [semantic_evidence(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    result = {key: semantic_evidence(item) for key, item in value.items()}
+    body = value.get("body")
+    mime = value.get("mimeType")
+    if isinstance(mime, str) and isinstance(body, dict) and isinstance(body.get("data"), str):
+        try:
+            raw = base64.b64decode(body["data"] + "=" * (-len(body["data"]) % 4), altchars=b"-_", validate=True)
+        except ValueError:
+            return result
+        if mime.lower().startswith("text/"):
+            try:
+                representation = {"decoded_text": raw.decode("utf-8")}
+            except UnicodeDecodeError:
+                return result
+        else:
+            representation = {"binary_evidence": {"sha256": hashlib.sha256(raw).hexdigest(),
+                "size": len(raw), "meaning": "Transport bytes; content is not inferred from this hash"}}
+        result["body"] = {key: item for key, item in result["body"].items() if key != "data"}
+        result["body"].update(representation)
+    return result
 
 
 def pack(value):
