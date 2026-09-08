@@ -38,6 +38,22 @@ def test_deterministic_validator_accepts_allow_listed_read() -> None:
     assert deterministic_plan_fixes(workflow, inventory) == []
 
 
+def test_preflight_rejects_narrative_placeholder_assigned_to_real_provider():
+    workflow = plan(PlanStep(key="summarize_blocks", agent="reader", tool_slug="notion",
+        operation="notion.page.get", arguments={"page_id": "page-1"},
+        reason="Internal summary only", optional=True,
+        expected_output="No tool call; summary will be produced from retrieved blocks only in post-processing."))
+    fixes = deterministic_plan_fixes(workflow, [{"slug": "notion", "allowed_operations": ["notion.page.get"]}])
+    assert any("narrative placeholder" in fix for fix in fixes)
+
+
+def test_preflight_does_not_treat_quoted_record_content_as_a_placeholder():
+    workflow = plan(PlanStep(key="read", agent="reader", tool_slug="notion",
+        operation="notion.page.get", arguments={"page_id": "page-1"},
+        reason="Read a page named No tool call", expected_output="A page titled No tool call"))
+    assert deterministic_plan_fixes(workflow, [{"slug": "notion", "allowed_operations": ["notion.page.get"]}]) == []
+
+
 def test_deterministic_validator_blocks_unavailable_operation() -> None:
     workflow = plan(
         PlanStep(
