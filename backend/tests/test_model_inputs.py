@@ -71,10 +71,10 @@ def test_large_evidence_processes_all_chunks_before_action_arguments(monkeypatch
 
 
 def test_incomplete_chunk_cannot_produce_action(monkeypatch):
-    async def run(*args, **kwargs):
-        return {"relevant_evidence": "partial", "omissions": ["missing final date"]}
+    async def run(agent, payload, **kwargs):
+        return {"relevant_evidence": "partial", "unprocessed_source_paths": [json.loads(payload["source_fragment"])[0]["path"]]}
     monkeypatch.setattr(agent_runtime, "_run", run)
-    with pytest.raises(ModelInputTooLarge, match="coverage"):
+    with pytest.raises(ModelInputTooLarge, match="unprocessed"):
         asyncio.run(agent_runtime.materialize_action_arguments("summarize", {"operation": "gmail.send"},
             {"steps": {"source": "x" * 100000}}))
 
@@ -93,3 +93,19 @@ def test_executor_aliases_do_not_multiply_model_source_size():
     assert canonical["__aura_context_aliases__"]["output"] == "."
     assert canonical["__aura_context_aliases__"]["records"] == "results"
     assert inflated["output"] == receipt  # original remains usable for deterministic resolution
+
+
+def test_source_caveats_and_long_but_bounded_summaries_do_not_block_drafting(monkeypatch):
+    seen = []
+    async def run(agent, payload, **kwargs):
+        seen.append(payload)
+        if agent.name == "Evidence Reader":
+            return {"relevant_evidence": "evidence " * 400,
+                    "source_limitations": ["No deadline supplied"], "unprocessed_source_paths": []}
+        return {"arguments": {"to": "me", "body": "Roadmap. Deadline not specified."}}
+    monkeypatch.setattr(agent_runtime, "_run", run)
+    result = asyncio.run(agent_runtime.materialize_action_arguments("summarize", {"operation": "gmail.send"},
+        {"steps": {"source": "x" * 100000}}))
+    assert "not specified" in result["body"]
+    summaries = seen[-1]["accepted_execution_context"]["evidence_summaries"]
+    assert all(summary["source_limitations"] == ["No deadline supplied"] for summary in summaries)
