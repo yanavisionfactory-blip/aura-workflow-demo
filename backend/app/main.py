@@ -1481,6 +1481,7 @@ async def replay_webhook_delivery(
         prompt=prompt,
         inputs={"event": delivery.payload},
         execution_context={
+            "execution_mode": "unattended",
             "inputs": {"event": delivery.payload},
             "vars": {},
             "steps": {},
@@ -1618,7 +1619,7 @@ async def receive_webhook(
         workspace_id=workspace_id,
         prompt=prompt,
         inputs={"event": payload},
-        execution_context={"inputs": {"event": payload}, "vars": {}, "steps": {}},
+        execution_context={"execution_mode": "unattended", "inputs": {"event": payload}, "vars": {}, "steps": {}},
         status=RunStatus.queued,
     )
     session.add(run)
@@ -3604,3 +3605,7 @@ async def forget_workflow_memory(
     memory.deleted, memory.text, memory.embedding = True, "", []
     await session.commit()
     return {"memory_id": memory.id, "deleted": True}
+
+
+from .assurance_api import install_routes as install_assurance_routes
+install_assurance_routes(app, tenant_context, tenant_session)

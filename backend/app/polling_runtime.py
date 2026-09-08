@@ -204,6 +204,7 @@ async def poll_subscription(subscription_id: str, workspace_id: str) -> dict:
         run = WorkflowRun(
             workspace_id=workspace_id,
             prompt=prompt,
+            execution_context={"execution_mode": "unattended", "inputs": {}, "vars": {}, "steps": {}},
             status=RunStatus.queued,
         )
         session.add(run)
@@ -235,3 +236,4 @@ async def poll_subscription(subscription_id: str, workspace_id: str) -> dict:
             "interval_seconds": subscription.interval_seconds,
             "run_id": run.id,
         }
+

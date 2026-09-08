@@ -1,11 +1,11 @@
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, or_, exists
 
 from .db import SessionLocal, engine, set_tenant_context
 from .execution_lock import execution_lock
 from .config import get_settings
-from .models import AuditEvent, RunStatus, Workflow, WorkflowRun, WorkflowSchedule, Workspace
+from .models import AuditEvent, RunStatus, Workflow, WorkflowRun, WorkflowSchedule, Workspace, RecoveryProbe
 
 
 async def _workspace_ids() -> list[str]:
@@ -53,6 +53,7 @@ async def dispatch_due_schedules(now: datetime | None = None) -> list[tuple[str,
                     prompt=workflow.prompt,
                     inputs=workflow.variables,
                     execution_context={
+                        "execution_mode": "unattended",
                         "inputs": workflow.variables,
                         "vars": workflow.variables,
                         "steps": {},
@@ -92,7 +93,9 @@ async def recover_stale_runs(
                     .where(
                         WorkflowRun.workspace_id == workspace_id,
                         WorkflowRun.status.in_([RunStatus.queued, RunStatus.planning, RunStatus.running, RunStatus.recovering]),
-                        WorkflowRun.updated_at < cutoff,
+                        or_(WorkflowRun.updated_at < cutoff, exists(select(RecoveryProbe.id).where(
+                            RecoveryProbe.run_id == WorkflowRun.id, RecoveryProbe.workspace_id == workspace_id,
+                            RecoveryProbe.yielded_at <= current - timedelta(seconds=get_settings().recovery_probe_delay_seconds), WorkflowRun.status == RunStatus.running))),
                     )
                     .with_for_update(skip_locked=True)
                 )
@@ -105,7 +108,10 @@ async def recover_stale_runs(
                     if not acquired:
                         continue  # A slow but live worker owns this run.
                     await session.refresh(run)
-                    if recovery_action(run.status) != action or run.updated_at >= cutoff:
+                    probe_due = await session.scalar(select(RecoveryProbe.id).where(RecoveryProbe.run_id == run.id,
+                        RecoveryProbe.workspace_id == workspace_id,
+                        RecoveryProbe.yielded_at <= current - timedelta(seconds=get_settings().recovery_probe_delay_seconds)))
+                    if recovery_action(run.status) != action or (run.updated_at >= cutoff and not probe_due):
                         continue
                     from .models import DispatchIntent
                     pending = await session.scalar(select(DispatchIntent.id).where(DispatchIntent.run_id == run.id, DispatchIntent.workspace_id == workspace_id, DispatchIntent.kind == action, DispatchIntent.status == "pending").limit(1))

@@ -557,7 +557,8 @@ def _partial_result(outputs: list[dict], step: RunStep, error: str) -> dict:
 
 async def review_recorded_result(session, run, step, snapshot, contract, result):
     from .operation_contracts import output_errors
-    errors = output_errors(step.operation, result)
+    from .completeness import incomplete_evidence
+    errors = ([] if step.output.get("reconciliation", {}).get("status") == "verified" else output_errors(step.operation, result)) + incomplete_evidence(step.operation, result, contract.get("required_evidence", []))
     if errors:
         return CriticDecision(action="escalate", reasons=errors)
     check = step.output.get("outcome_check", {})
@@ -596,6 +597,11 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
         run = await session.get(WorkflowRun, run_id)
         if not run or run.workspace_id != workspace_id:
             return
+        if not (run.execution_context or {}).get("execution_mode"):
+            automated_origin = await session.scalar(select(AuditEvent.id).where(AuditEvent.workspace_id == workspace_id,
+                AuditEvent.run_id == run_id, AuditEvent.event_type.in_(["schedule.dispatched", "polling.change_detected", "webhook.delivery_accepted", "webhook.delivery_replayed"])).limit(1))
+            if automated_origin:
+                run.execution_context = {**(run.execution_context or {}), "execution_mode": "unattended"}
         recovery_context = dict(run.execution_context or {})
         recovery_counts = dict(recovery_context.get("__aura_recovery__") or {})
         if run.status not in {RunStatus.running, RunStatus.recovering}:
@@ -986,6 +992,15 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 await session.commit()
                 return
 
+            if (run.execution_context or {}).get("execution_mode") == "unattended":
+                from .assurance import operation_readiness
+                readiness = await operation_readiness(session, workspace_id, tool, step.operation)
+                if not readiness["execution_ready"]:
+                    run.status = RunStatus.waiting_for_action
+                    run.error = "Operation certification is required for unattended execution"
+                    run.result = {**(run.result or {}), "readiness": readiness}
+                    await session.commit()
+                    return
             trust = await _trust_state(session, workspace_id, tool)
             if trust.incident_active:
                 run.status = RunStatus.waiting_for_action
@@ -1089,6 +1104,20 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     if (latest.error or "").startswith(("[authorization_required]", "[invalid_request]", "[contract_or_runtime_error]", "[budget_exhausted]", "[rate_limited]")):
                         return None, latest.error
                 if step.consequential and existing:
+                    if operation in {"notion.page.update", "jira.issue.update"}:
+                        # Confirm the requested state using the approved identifier; never repeat the write.
+                        step.output = {**step.output, "resolved_arguments": arguments}
+                        check = await check_provider_outcome(session, run, step, snapshot)
+                        if check.get("status") == "verified":
+                            observed = check["observed"]
+                            step.output = {"step_id": step.id, "provider_result": observed, "tool": active_tool.slug,
+                                "operation": operation, "resolved_arguments": arguments,
+                                "outcome_check": check, "reconciliation": {"status": "verified", "meaning": "requested_state_confirmed"},
+                                "critic": {"action": "escalate", "reasons": ["Review pending"]}}
+                            await audit(session, workspace_id, "step.uncertain_write_reconciled", {"step_id": step.id}, run.id)
+                            await session.commit()
+                            return observed, None
+                        await session.commit()
                     return None, "Previous action outcome is uncertain; reconcile provider state before a new approved action"
                 max_retries = (
                     0
@@ -1383,6 +1412,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 "operation": step.operation,
                 "arguments": resolved_arguments,
                 "expected_output": approved_step.get("expected_output", ""),
+                "required_evidence": approved_step.get("required_evidence", []),
                 "consequential": step.consequential,
             }
             criticism = await review_recorded_result(session, run, step, snapshot, contract, result)
@@ -1487,6 +1517,9 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 run.id,
             )
             await session.commit()
+            from .recovery_probe import yield_after_checkpoint
+            if await yield_after_checkpoint(session, run, step):
+                return
 
         required_incomplete = [
             step

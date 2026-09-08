@@ -37,6 +37,28 @@ KNOWN = {
     "jira.issue.create": ({"type": "object", "required": ["id", "key"],
         "properties": {"id": TEXT, "key": TEXT}}, ["write_receipt"]),
 }
+# Exact envelope guarantees; provider-specific nested fields remain open unless declared.
+def envelope(field, item=OBJECT):
+    return {"type": "object", "required": [field], "properties": {field: {"type": "array", "items": item}}}
+
+KNOWN.update({
+    "weather.forecast": ({"type": "object", "required": ["location", "date", "summary"], "properties": {"location": TEXT, "date": TEXT, "summary": TEXT}}, ["forecast"]),
+    "gmail.list": ({"type": "object", "properties": {"messages": {"type": "array", "items": {"type": "object", "required": ["id"], "properties": {"id": TEXT}}}, "nextPageToken": TEXT, "resultSizeEstimate": {"type": "integer"}}, "anyOf": [{"required": ["messages"]}, {"required": ["resultSizeEstimate"]}]}, ["message_metadata"]),
+    "calendar.list": (envelope("items"), ["event_state"]),
+    "sheets.read": ({"type": "object", "required": ["range"], "properties": {"range": TEXT, "values": {"type": "array", "items": {"type": "array"}}}}, ["cell_values"]),
+    "sheets.append": ({"type": "object", "required": ["spreadsheetId", "updates"], "properties": {"spreadsheetId": TEXT, "updates": {"type": "object", "required": ["updatedRange"], "properties": {"updatedRange": TEXT}}}}, ["write_receipt"]),
+    "airtable.list": (envelope("records"), ["record_fields"]),
+    "airtable.create": (envelope("records"), ["write_receipt"]),
+    "slack.channels.list": ({**envelope("channels"), "properties": {"channels": {"type": "array", "items": OBJECT}, "ok": {"const": True}}}, ["channel_metadata"]),
+    "slack.post": ({"type": "object", "required": ["ok", "channel", "ts"], "properties": {"ok": {"const": True}, "channel": TEXT, "ts": TEXT}}, ["write_receipt"]),
+    "notion.blocks.children.append": (COLLECTION, ["write_receipt"]),
+    "hubspot.contacts.list": (envelope("results"), ["record_fields"]),
+    "hubspot.companies.list": (envelope("results"), ["record_fields"]),
+    "hubspot.contact.update": ({"type": "object", "required": ["id", "properties"], "properties": {"id": TEXT, "properties": OBJECT}}, ["write_receipt"]),
+    "hubspot.company.update": ({"type": "object", "required": ["id", "properties"], "properties": {"id": TEXT, "properties": OBJECT}}, ["write_receipt"]),
+    "jira.issue.update": ({"type": "object", "required": ["status_code"], "properties": {"status_code": {"const": 204}}}, ["write_receipt"]),
+})
+
 READBACK = {"gmail.send": "gmail.get", "calendar.create": "calendar.get",
     "jira.issue.create": "jira.issue.get", "jira.issue.update": "jira.issue.get",
     "notion.page.create": "notion.page.get", "notion.page.update": "notion.page.get"}
@@ -53,6 +75,8 @@ def enrich_operation(module: dict) -> dict:
         "retry": {"max_attempts": 3 if read else 1,
             "retry_categories": ["timeout", "rate_limited", "provider_unavailable"] if read else [],
             "uncertain_write": "reconcile_before_retry"},
+        "pagination": "bounded_recursive" if operation == "notion.blocks.children.list" else "provider_cursor" if any(word in operation for word in ("list", "search")) else "not_applicable",
+        "reconciliation": "read_known_resource" if operation in {"notion.page.update", "jira.issue.update"} else "receipt_readback_or_pause" if operation in READBACK else "pause_if_uncertain",
         "concurrent_read": read and operation in KNOWN,
         "execution_ready": False, "certification": "live_conformance_required"}
     contract["hash"] = hashlib.sha256(json.dumps({"input": value.get("input_schema"),
@@ -110,6 +134,10 @@ def compile_contracts(plan, manifests: dict) -> dict:
                     break  # Explicitly open provider field, not an invented guarantee.
                 elif token in schema["properties"]:
                     schema = schema["properties"][token]
+                elif schema.get("additionalProperties") is not False and not (
+                    source["name"] in {"notion.search", "notion.page.get"} and token in {"body", "content", "blocks", "children"}
+                ):
+                    break  # Provider extensions are open; evidence tags carry the guarantee.
                 else:
                     failures.append(f"{step.key}: output reference {path} is outside the source contract")
                     break

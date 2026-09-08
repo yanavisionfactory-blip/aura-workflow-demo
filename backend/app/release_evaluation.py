@@ -58,14 +58,21 @@ async def evaluate(fixtures, ledger_path, report_path, allow_writes=False):
                 "arguments": arguments, "contract": row["contract_hash"]}, sort_keys=True).encode()).hexdigest()
             if saved and saved.get("fingerprint") != fingerprint:
                 raise ValueError("Fixture changed; use a new case id, preserving the old ledger")
-            if saved and "receipt" not in saved:
+            lost_response_resume = bool(saved and "witness_receipt" in saved)
+            if saved and "receipt" not in saved and not lost_response_resume:
                 raise ValueError("Unknown previous outcome; reconcile provider state before continuing")
             if saved:
-                receipt = saved["receipt"]
+                receipt = saved["witness_receipt"] if lost_response_resume else saved["receipt"]
             else:
                 ledger[fixture["id"]] = {"fingerprint": fingerprint, "state": "dispatched"}
                 save(ledger_path, ledger)
                 receipt = await asyncio.wait_for(executor.execute(fixture["operation"], arguments), 30)
+                if fixture.get("simulate_lost_response") and write:
+                    # Test observer keeps a witness. The execution ledger has no receipt;
+                    # a subsequent invocation must reconcile by reading, never write again.
+                    ledger[fixture["id"]]["witness_receipt"] = receipt
+                    save(ledger_path, ledger)
+                    raise TimeoutError("Injected response loss after dedicated fixture write")
                 ledger[fixture["id"]]["receipt"] = receipt
                 save(ledger_path, ledger)  # Save before schema checks or read-back.
             if output_errors(fixture["operation"], receipt):
@@ -78,7 +85,11 @@ async def evaluate(fixtures, ledger_path, report_path, allow_writes=False):
                 outcome = evaluate_outcome_check(check, observed)
                 if outcome.get("status") != "verified":
                     raise ValueError("Provider outcome was not verified")
-            row.update(status="passed", resumed_from_receipt=bool(saved), write=write)
+            scenarios = ["lost_response"] if lost_response_resume else ["receipt_resume"] if saved else ["execute"]
+            if write:
+                scenarios.append("read_back")
+            row.update(status="passed", resumed_from_receipt=bool(saved) and not lost_response_resume, write=write,
+                provider_account_id=expected, passed_scenarios=scenarios)
         except Exception as exc:
             # Diagnostics never include raw credentials, arguments or provider content.
             row["error_type"] = type(exc).__name__
