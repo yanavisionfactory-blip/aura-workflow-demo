@@ -417,6 +417,21 @@ class PlanVersion(Base):
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class WorkflowMemory(Base):
+    __tablename__ = "workflow_memories"
+    __table_args__ = (UniqueConstraint("workspace_id", "subject", "run_id", name="uq_owned_run_memory"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    subject: Mapped[str] = mapped_column(String(240), index=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("workflow_runs.id", ondelete="CASCADE"), index=True)
+    text: Mapped[str] = mapped_column(Text)
+    embedding: Mapped[list] = mapped_column(JSON)
+    embedding_model: Mapped[str] = mapped_column(String(120))
+    content_hash: Mapped[str] = mapped_column(String(64))
+    deleted: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
 class ApprovalSnapshot(Base):
     __tablename__ = "approval_snapshots"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
