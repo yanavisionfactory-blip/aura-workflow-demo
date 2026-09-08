@@ -125,6 +125,7 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
             _module("gmail.send", "action", "Send an approved email.", required=("to", "body"), properties={
                 "to": {"type": "string", "format": "email"}, "subject": _TEXT, "body": _TEXT
             }),
+            _module("gmail.get", "search", "Read a specific Gmail message for outcome verification.", required=("message_id",), properties={"message_id": _TEXT}),
             _module("calendar.list", "search", "Find calendar events.", properties={
                 "time_min": {"type": "string", "format": "date-time"},
                 "time_max": {"type": "string", "format": "date-time"},
@@ -134,6 +135,7 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                 "title": _TEXT, "description": _TEXT,
                 "start": {"type": "object"}, "end": {"type": "object"},
             }),
+            _module("calendar.get", "search", "Read a specific primary-calendar event.", required=("event_id",), properties={"event_id": _TEXT}),
             _module("sheets.read", "search", "Read a spreadsheet range.", required=("spreadsheet_id",), properties={
                 "spreadsheet_id": _TEXT, "range": _TEXT
             }),
