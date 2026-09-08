@@ -251,7 +251,7 @@ def test_current_capability_manifest_keeps_discovered_connector_schema():
 
 
 
-@pytest.mark.parametrize("value", ["2026-09-11T00:00:00", "2026-09-11", "2026-02-30T00:00:00Z"])
+@pytest.mark.parametrize("value", ["2026-02-30T00:00:00Z", "not a date"])
 def test_calendar_rejects_invalid_date_bounds_before_provider(value):
     with pytest.raises(NativeConnectorError, match="RFC3339"):
         normalize_module_arguments(native_manifest("google"), "calendar.list", {"time_min": value})
@@ -261,3 +261,8 @@ def test_calendar_rejects_invalid_date_bounds_before_provider(value):
 def test_calendar_accepts_offset_dates_and_declared_references(value):
     result = normalize_module_arguments(native_manifest("google"), "calendar.list", {"time_min": value, "query": "appointment"})
     assert result == {"time_min": value, "query": "appointment"}
+
+
+@pytest.mark.parametrize("value", ["2026-09-11T00:00:00", "2026-09-11"])
+def test_unzoned_calendar_bounds_normalize_to_explicit_utc(value):
+    assert normalize_module_arguments(native_manifest("google"), "calendar.list", {"time_min": value})["time_min"] == "2026-09-11T00:00:00+00:00"
