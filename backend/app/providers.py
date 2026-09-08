@@ -520,8 +520,10 @@ class ProviderExecutor:
         handlers = {
             "gmail.list": self._gmail_list,
             "gmail.send": self._gmail_send,
+            "gmail.get": self._gmail_get,
             "calendar.list": self._calendar_list,
             "calendar.create": self._calendar_create,
+            "calendar.get": self._calendar_get,
             "sheets.read": self._sheets_read,
             "sheets.append": self._sheets_append,
             "airtable.list": self._airtable_list,
@@ -729,6 +731,14 @@ class ProviderExecutor:
             "subject": a.get("subject", "AURA workflow"),
             "body": a.get("body", ""),
         }
+
+    async def _gmail_get(self, a: dict) -> dict:
+        return await self._request("GET", "https://gmail.googleapis.com/gmail/v1/users/me/messages/"
+                                   + quote(a["message_id"], safe=""), params={"format": "full"})
+
+    async def _calendar_get(self, a: dict) -> dict:
+        return await self._request("GET", "https://www.googleapis.com/calendar/v3/calendars/primary/events/"
+                                   + quote(a["event_id"], safe=""))
 
     async def _weather_forecast(self, a: dict) -> dict:
         location = str(a.get("location") or "").strip()

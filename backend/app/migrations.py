@@ -20,6 +20,7 @@ DIRECT_TENANT_TABLES = (
     "workflow_schedules",
     "workspace_records",
     "workflow_runs",
+    "workflow_memories",
     "plan_versions",
     "approval_snapshots",
     "step_attempts",

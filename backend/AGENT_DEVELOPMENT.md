@@ -1,5 +1,7 @@
 # Backend agent development: first implementation
 
+The subsequent repair, provider-check, and semantic-memory increment is documented in [AGENT_FOLLOWUP.md](AGENT_FOLLOWUP.md).
+
 This change extends the existing runtime on `python-control-plane`. It adds no
 schema migrations and does not change the deployed Railway branch.
 
