@@ -775,12 +775,21 @@ class ProviderExecutor:
         daily = forecast.get("daily") or {}
         dates = daily.get("time") or []
         requested = str(a.get("date") or "tomorrow").strip().lower()
-        target = (
-            (datetime.now(UTC).date() + timedelta(days=1)).isoformat()
-            if requested == "tomorrow"
-            else requested
-        )
-        index = dates.index(target) if target in dates else min(1, max(0, len(dates) - 1))
+        # Provider dates use the requested location's timezone. Never silently
+        # substitute another day when the requested date is outside the forecast.
+        if requested in {"today", "tomorrow"}:
+            index = 0 if requested == "today" else 1
+            if len(dates) <= index:
+                raise ValueError("Provider forecast does not cover the requested day")
+            target = dates[index]
+        else:
+            target = requested
+            if target not in dates:
+                raise ValueError("Requested date is outside the provider forecast range")
+            index = dates.index(target)
+        fields = ("temperature_2m_max", "temperature_2m_min", "precipitation_probability_max", "wind_speed_10m_max", "weather_code")
+        if any(len(daily.get(field) or []) <= index for field in fields):
+            raise ValueError("Provider forecast metrics do not cover the requested day")
         symbol = "°F" if units == "imperial" else "°C"
         wind_unit = "mph" if units == "imperial" else "km/h"
         result = {

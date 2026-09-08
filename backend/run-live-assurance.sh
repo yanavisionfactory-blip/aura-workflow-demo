@@ -9,6 +9,8 @@ trap 'runuser -u postgres -- "$assurance_pg_bin/pg_ctl" -D /tmp/aura-live-test -
 "$assurance_pg_bin/createdb" -h 127.0.0.1 -p 55432 -U postgres aura_live_test
 export AURA_TEST_POSTGRES_URL='postgresql+psycopg://postgres@127.0.0.1:55432/aura_live_test'
 export DATABASE_URL="$AURA_TEST_POSTGRES_URL"
+export MAX_MODEL_CALLS_PER_DELIVERY=8
+export DELIVERY_BUDGET_SECONDS=90
 # Hard whole-process deadline; clean exit prevents restart-driven duplicate benchmarks.
 set +e
 timeout 1200 python -m app.load_evaluation --live --concurrency 2 --samples 30 --report /tmp/live-load-report.json

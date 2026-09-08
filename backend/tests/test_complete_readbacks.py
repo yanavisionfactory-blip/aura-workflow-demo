@@ -217,3 +217,18 @@ async def test_simultaneous_first_runs_share_one_trust_record():
             assert await session.scalar(select(func.count()).select_from(ToolTrustState).where(ToolTrustState.workspace_id == workspace)) == 1
     finally:
         await engine.dispose()
+
+
+async def test_weather_reads_requested_local_day_and_never_substitutes_another_date(monkeypatch):
+    from app.providers import ProviderExecutor
+    async def request(self, method, url, **kwargs):
+        if "geocoding" in url:
+            return {"results": [{"name": "Fixture", "latitude": 1, "longitude": 2}]}
+        return {"daily": {"time": ["2026-09-08", "2026-09-09"],
+            **{key: [10, 20] for key in ["temperature_2m_max", "temperature_2m_min", "precipitation_probability_max", "wind_speed_10m_max", "weather_code"]}}}
+    monkeypatch.setattr(ProviderExecutor, "_request", request)
+    executor = ProviderExecutor({})
+    assert (await executor._weather_forecast({"location": "Fixture", "date": "today"}))["date"] == "2026-09-08"
+    assert (await executor._weather_forecast({"location": "Fixture", "date": "tomorrow"}))["date"] == "2026-09-09"
+    with pytest.raises(ValueError, match="outside"):
+        await executor._weather_forecast({"location": "Fixture", "date": "2027-01-01"})
