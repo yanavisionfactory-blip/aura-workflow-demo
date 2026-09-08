@@ -106,7 +106,8 @@ def _required_read_arguments(manifest: dict, operation: str, arguments: dict) ->
     )
     if not capability or operation_scope(operation) != "read":
         return None
-    required = set(capability.get("input_schema", {}).get("required", []))
+    schema = capability.get("input_schema", {})
+    required = set(schema.get("required", [])) | {key for key, value in schema.get("properties", {}).items() if value.get("x-preserve-on-recovery")}
     reduced = {key: value for key, value in arguments.items() if key in required}
     return reduced if reduced != arguments else None
 
@@ -579,7 +580,9 @@ async def review_recorded_result(session, run, step, snapshot, contract, result)
     if check.get("status") == "verified":
         return CriticDecision(action="accept", reasons=["Provider read-back matches the approved action fields"])
     evidence = {**result, "__aura_readback__": check["observed"]} if check.get("observed") and isinstance(result, dict) else result
-    return await critique_step(contract, evidence)
+    review_contract = {key: value for key, value in contract.items() if key != "required_evidence"}
+    review_contract["validated_capability_tags"] = contract.get("required_evidence", [])
+    return await critique_step(review_contract, evidence)
 
 
 @trace_run
@@ -1371,6 +1374,10 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     run.id,
                 )
                 resolved_reduced_arguments = resolve_value(reduced_arguments, context)
+                capability = next((m for m in _current_capability_manifest(tool.slug, None).get("capabilities", []) if m.get("name") == step.operation), {})
+                for key, schema in capability.get("input_schema", {}).get("properties", {}).items():
+                    if schema.get("x-preserve-on-recovery") and key in resolved_arguments:
+                        resolved_reduced_arguments[key] = resolved_arguments[key]
                 result, error = await call(
                     tool, step.operation, resolved_reduced_arguments
                 )
