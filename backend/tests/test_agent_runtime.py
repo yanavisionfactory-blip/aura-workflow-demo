@@ -153,7 +153,7 @@ def test_critic_outage_does_not_repeat_a_successful_provider_action(monkeypatch)
     )
 
     assert calls == 3
-    assert decision.action == "accept"
+    assert decision.action == "escalate"
 
 
 def test_synthesis_outage_preserves_successful_workflow(monkeypatch) -> None:
