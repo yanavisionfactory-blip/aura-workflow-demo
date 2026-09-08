@@ -47,14 +47,14 @@ export default function ProofLine({ outcome, onDetails }) {
           {outcome.attention ? <Eye className="w-3 h-3" /> : <ExternalLink className="w-3 h-3" />}
           {outcome.linkLabel || "Open"}
         </a>
-      ) : (
+      ) : !attention && outcome.items?.length > 0 && onDetails ? (
         <button
           onClick={onDetails}
           className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full border border-primary/20 text-primary hover:bg-primary/10 transition-colors flex-shrink-0"
         >
-          <Eye className="w-3 h-3" /> View result
+          <Eye className="w-3 h-3" /> View details
         </button>
-      )}
+      ) : null}
     </div>
   );
 }

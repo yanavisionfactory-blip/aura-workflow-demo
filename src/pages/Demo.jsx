@@ -662,14 +662,24 @@ Rules:
           setPhase("preview");
           return;
         }
-        if (["failed", "cancelled", "blocked", "waiting_for_action"].includes(run.status)) {
-          throw new Error(run.error || "AURA needs your help to continue this workflow.");
+        if (run.status === "waiting_for_action" || run.status === "blocked") {
+          finishExecution(
+            null,
+            run.error || "AURA paused safely because this step needs your attention.",
+            "needs_attention"
+          );
+          return;
+        }
+        if (["failed", "cancelled"].includes(run.status)) {
+          finishExecution(null, run.error || "AURA couldn't complete this workflow after retrying safely.", "failed");
+          return;
         }
         await new Promise((resolve) => setTimeout(resolve, 900));
       }
       throw new Error("AURA took too long to prepare the review.");
     } catch (error) {
-      finishExecution(null, error.message, "failed");
+      console.error("Python workflow preparation failed", error);
+      finishExecution(null, "AURA couldn't complete this workflow after retrying safely.", "failed");
     }
   };
 
@@ -743,14 +753,24 @@ Rules:
           setPhase("preview");
           return;
         }
-        if (["failed", "cancelled", "blocked", "waiting_for_action"].includes(run.status)) {
-          throw new Error(run.error || "AURA needs your help to continue this workflow.");
+        if (run.status === "waiting_for_action" || run.status === "blocked") {
+          finishExecution(
+            null,
+            run.error || "AURA paused safely because this step needs your attention.",
+            "needs_attention"
+          );
+          return;
+        }
+        if (["failed", "cancelled"].includes(run.status)) {
+          finishExecution(null, run.error || "AURA couldn't complete this workflow after retrying safely.", "failed");
+          return;
         }
         await new Promise((resolve) => setTimeout(resolve, 900));
       }
       throw new Error("Python workflow timed out");
     } catch (error) {
-      finishExecution(null, error.message, "failed");
+      console.error("Python workflow execution failed", error);
+      finishExecution(null, "AURA couldn't complete this workflow after retrying safely.", "failed");
     }
   };
 
@@ -916,11 +936,17 @@ Rules:
       // Legacy recovery path only; normal and example executions use the backend.
       res = mock.results;
     } else if (errorMsg) {
+      const needsAttention = executionStatus === "needs_attention";
       res = {
-        title: "Workflow failed",
+        title: needsAttention ? "Workflow needs attention" : "Workflow couldn't finish",
         summary: errorMsg,
         metrics: [],
-        outcomes: [{ type: "alert", title: "Execution error", detail: errorMsg, attention: true }],
+        outcomes: [{
+          type: "alert",
+          title: needsAttention ? "AURA paused safely" : "AURA stopped safely",
+          detail: errorMsg,
+          attention: true,
+        }],
         nextSteps: [],
       };
     } else {
@@ -939,11 +965,19 @@ Generate a results summary in plain, human-friendly language (not technical).
         response_json_schema: RESULTS_SCHEMA,
       });
     }
+    res = {
+      ...res,
+      status: executionStatus === "completed" && !errorMsg ? "completed" : executionStatus,
+    };
     setResults(res);
     setPhase("results");
     const stepCount = approvedStepsRef.current.length;
     const durationSec = startTime ? (Date.now() - startTime) / 1000 : 0;
-    notifyWorkflowComplete(res.title || originalPromptRef.current, durationSec, stepCount);
+    if (res.status === "completed") {
+      notifyWorkflowComplete(res.title || originalPromptRef.current, durationSec, stepCount);
+    } else {
+      notifyWorkflowError(res.title || originalPromptRef.current);
+    }
 
     if (currentRunIdRef.current && !resultsFromBackend) {
       try {

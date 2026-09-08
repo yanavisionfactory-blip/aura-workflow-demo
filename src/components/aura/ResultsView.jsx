@@ -29,7 +29,7 @@ import { buildSummaryText } from "@/lib/auraSummary";
 import { INTERFACE_TOOLS } from "@/lib/demoData";
 
 export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, workflowPrompt, activity, prompt, interpretation }) {
-  const isFailure = results.status === "failed";
+  const isFailure = results.status === "failed" || results.status === "needs_attention";
   const [showModal, setShowModal] = useState(false);
   const resultsSectionRef = useRef(null);
   const [showActivity, setShowActivity] = useState(false);
