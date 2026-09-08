@@ -207,6 +207,21 @@ def test_plan_rejects_dependencies_on_later_steps() -> None:
         )
 
 
+def test_plan_rejects_required_conditional_steps() -> None:
+    with pytest.raises(ValidationError, match="Conditional step .* must be optional"):
+        WorkflowPlan(
+            name="Invalid conditional",
+            interpretation="A required branch could be skipped",
+            steps=[
+                _step(
+                    key="maybe_notify",
+                    condition=StepCondition(left=True, operator="is_true"),
+                    optional=False,
+                )
+            ],
+        )
+
+
 def test_referenced_output_must_be_an_explicit_dependency() -> None:
     plan = WorkflowPlan(
         name="Lead notification",

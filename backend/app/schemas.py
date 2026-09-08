@@ -257,6 +257,11 @@ class WorkflowPlan(BaseModel):
                     f"Step {step.key} depends on missing or later steps: "
                     + ", ".join(sorted(unknown))
                 )
+            if step.condition is not None and not step.optional:
+                raise ValueError(
+                    f"Conditional step {step.key} must be optional so a false branch "
+                    "cannot fail the required workflow"
+                )
             known.add(step.key)
         return self
 
