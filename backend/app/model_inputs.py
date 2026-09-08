@@ -53,20 +53,45 @@ def bounded_input(payload):
 
 
 def evidence_chunks(value):
-    """Keep every character in ordered chunks; refuse work exceeding the run budget."""
-    raw = encoded(value)
-    chunks, current, size = [], [], 0
-    for char in raw:
-        length = len(char.encode())
-        if size + length > CHUNK_BYTES:
-            chunks.append("".join(current))
-            current, size = [], 0
-            if len(chunks) >= MAX_CHUNKS:
-                raise ModelInputTooLarge("Source information exceeds the bounded evidence processing budget")
-        current.append(char)
-        size += length
+    """Split at structural boundaries, with source paths and no incomplete JSON.
+
+    Ordinary records remain intact. Oversized containers are split into children;
+    only oversized strings are segmented, with offsets for exact reconstruction.
+    """
+    records = []
+    def visit(item, path):
+        record = {"path": path, "value": item}
+        if len(encoded(record).encode()) <= CHUNK_BYTES - 2:
+            records.append(record)
+        elif isinstance(item, dict):
+            for key, child in item.items():
+                visit(child, path + "/" + str(key).replace("~", "~0").replace("/", "~1"))
+        elif isinstance(item, list):
+            for index, child in enumerate(item):
+                visit(child, path + "/" + str(index))
+        elif isinstance(item, str):
+            offset = 0
+            while offset < len(item):
+                length = min(3000, len(item) - offset)
+                segment = {"path": path, "value": item[offset:offset + length],
+                           "offset": offset, "total_characters": len(item)}
+                if len(encoded(segment).encode()) > CHUNK_BYTES - 2:
+                    raise ModelInputTooLarge("Source path exceeds the evidence processing budget")
+                records.append(segment)
+                offset += length
+        else:
+            raise ModelInputTooLarge("Source value exceeds the evidence processing budget")
+    visit(value, "#")
+    chunks, current = [], []
+    for record in records:
+        if current and len(encoded([*current, record]).encode()) > CHUNK_BYTES:
+            chunks.append(encoded(current))
+            current = []
+        current.append(record)
     if current:
-        chunks.append("".join(current))
+        chunks.append(encoded(current))
+    if len(chunks) > MAX_CHUNKS:
+        raise ModelInputTooLarge("Source information exceeds the bounded evidence processing budget")
     return chunks
 
 

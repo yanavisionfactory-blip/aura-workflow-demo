@@ -611,3 +611,25 @@ async def test_recovery_description_uses_durable_dispatch_evidence(runtime, atte
         recovery = result["steps"][0]["recovery"]
         assert recovery["can_retry"] is expected
         assert recovery["phase"] == ("before_action" if expected else "after_dispatch")
+
+
+@pytest.mark.parametrize("approval_status,expected", [("pending", StepStatus.awaiting_approval), ("approved", StepStatus.pending)])
+async def test_retry_preserves_pending_approval_preparation(runtime, monkeypatch, approval_status, expected):
+    from app import main
+    from app.models import Approval
+    from app.schemas import ResumeDecision
+    async def no_dispatch(*args):
+        pass
+    monkeypatch.setattr(main, "dispatch_pending", no_dispatch)
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        run.status = RunStatus.waiting_for_action
+        step = await session.get(RunStep, "step")
+        step.status = StepStatus.failed
+        session.add(Approval(id="approval", run_id="run", step_id="step", status=approval_status))
+        step.approval_id = "approval"
+        await session.commit()
+        await main.resume_run("run", ResumeDecision(action="retry"), main.TenantContext("w", "alice", "owner"), session)
+        assert step.status == expected
+        assert (await session.get(Approval, "approval")).status == approval_status
+        assert not (await session.scalars(select(StepAttempt))).all()

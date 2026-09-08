@@ -3272,6 +3272,12 @@ async def resume_run(
         step.status = StepStatus.pending
     else:
         step.status = StepStatus.pending
+    if step.status == StepStatus.pending and step.approval_id:
+        pending_approval = await session.get(Approval, step.approval_id)
+        if pending_approval and pending_approval.status == "pending":
+            # A retry of failed drafting must return to drafting, not execution.
+            # Preserve the approval record and require the original human review.
+            step.status = StepStatus.awaiting_approval
     step.error = None
     execution_context = dict(run.execution_context or {})
     recovery_counts = dict(execution_context.get("__aura_recovery__") or {})
