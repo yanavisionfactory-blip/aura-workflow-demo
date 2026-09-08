@@ -1,0 +1,7 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "backend/Dockerfile.assurance"
+
+[deploy]
+startCommand = "bash /app/run-live-assurance.sh"
+restartPolicyType = "NEVER"
