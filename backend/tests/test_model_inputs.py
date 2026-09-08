@@ -1,4 +1,6 @@
 import asyncio
+import base64
+import hashlib
 import json
 import pytest
 from app import agent_runtime
@@ -109,3 +111,30 @@ def test_source_caveats_and_long_but_bounded_summaries_do_not_block_drafting(mon
     assert "not specified" in result["body"]
     summaries = seen[-1]["accepted_execution_context"]["evidence_summaries"]
     assert all(summary["source_limitations"] == ["No deadline supplied"] for summary in summaries)
+def test_binary_readback_projection_preserves_hash_and_original_receipt():
+    from app.model_inputs import semantic_evidence, bounded_input
+    raw = b"%PDF-" + b"binary-file-content" * 20000
+    data = base64.urlsafe_b64encode(raw).decode()
+    receipt = {"id": "message", "payload": {"parts": [
+        {"mimeType": "application/pdf", "filename": "roadmap.pdf", "body": {"data": data, "size": len(raw)}},
+        {"mimeType": "text/plain", "body": {"data": base64.urlsafe_b64encode(b"Attached roadmap").decode()}}]}}
+    projected = semantic_evidence(receipt)
+    part = projected["payload"]["parts"][0]
+    assert part["body"]["binary_evidence"]["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert part["body"]["binary_evidence"]["size"] == len(raw)
+    assert part["filename"] == "roadmap.pdf"
+    assert receipt["payload"]["parts"][0]["body"]["data"] == data
+    assert projected["payload"]["parts"][1]["body"]["decoded_text"] == "Attached roadmap"
+    assert len(bounded_input(projected)) < 1000
+
+
+def test_transport_bytes_do_not_trigger_source_reader_calls(monkeypatch):
+    from app import agent_runtime
+    async def unexpected(*args, **kwargs):
+        raise AssertionError("Binary transport must not be sent to evidence readers")
+    monkeypatch.setattr(agent_runtime, "_run", unexpected)
+    payload = {"accepted_artifacts": [{"mimeType": "application/pdf", "filename": "file.pdf",
+        "body": {"data": base64.urlsafe_b64encode(b"x" * 400000).decode()}}]}
+    result = asyncio.run(agent_runtime._prepare_action_evidence(payload, "accepted_artifacts"))
+    assert "binary_evidence" in result["accepted_artifacts"][0]["body"]
+
