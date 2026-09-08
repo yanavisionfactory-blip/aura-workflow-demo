@@ -529,6 +529,12 @@ async def materialize_action_arguments(
     payload = {
         "original_request": prompt,
         "action_step": step,
+        # Give the resolver a compact, provider-agnostic evidence index as well
+        # as the structured context. This keeps large/nested provider payloads
+        # from making simple drafting and extraction unnecessarily fragile.
+        "accepted_text_evidence": _artifact_user_text(
+            execution_context.get("steps", {})
+        )[:100],
         "accepted_execution_context": {
             "inputs": execution_context.get("inputs", {}),
             "vars": execution_context.get("vars", {}),
@@ -539,6 +545,11 @@ async def materialize_action_arguments(
     for attempt in range(3):
         try:
             raw = await _run(build_agents()["argument_resolver"], payload, max_turns=8)
+            # The SDK normally returns the declared wrapper, while some model
+            # providers legitimately return the requested argument object
+            # directly. Both shapes express the same contract.
+            if isinstance(raw, dict) and "arguments" not in raw:
+                raw = {"arguments": raw}
             resolved = MaterializedActionArguments.model_validate(raw).arguments
             if referenced_paths(resolved):
                 raise ValueError("Approval arguments still contain workflow references")

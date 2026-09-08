@@ -299,6 +299,38 @@ def test_materializer_exhausts_recovery_without_exposing_model_output(monkeypatc
         raise AssertionError("Expected bounded recovery to stop")
 
 
+def test_materializer_accepts_direct_argument_object_and_indexes_text(monkeypatch) -> None:
+    captured = {}
+
+    async def fake_run(_agent, payload, **_kwargs):
+        captured.update(payload)
+        return {"project_key": "AURA", "summary": "Confirm onboarding checklist"}
+
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    arguments = asyncio.run(
+        materialize_action_arguments(
+            "Create a Jira task from the first action item",
+            {"key": "create_task", "operation": "jira.issue.create"},
+            {
+                "steps": {
+                    "notes": {
+                        "results": [
+                            {"plain_text": "Confirm onboarding checklist"}
+                        ]
+                    }
+                }
+            },
+        )
+    )
+
+    assert arguments == {
+        "project_key": "AURA",
+        "summary": "Confirm onboarding checklist",
+    }
+    assert captured["accepted_text_evidence"] == ["Confirm onboarding checklist"]
+
+
 def test_create_plan_uses_one_model_round_trip_for_valid_plan(monkeypatch) -> None:
     calls = []
 
