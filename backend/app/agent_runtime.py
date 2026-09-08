@@ -1,6 +1,7 @@
 import asyncio
 import json
 from time import perf_counter
+from datetime import datetime, timedelta, timezone
 
 from agents import Agent, AgentOutputSchema, Runner
 from pydantic import BaseModel
@@ -63,6 +64,10 @@ def build_agents() -> dict[str, Agent]:
             perform those transformations between external calls. For public weather, use the listed
             AURA weather.forecast operation; it never requires a user connection. For Gmail requests
             addressed to "me" or "my Gmail", set the approved recipient to the literal value "me".
+            Resolve relative dates using temporal_context, never the model training date.
+            Use concrete date arguments, not invented date inputs. If the user timezone is unknown,
+            retrieve a sufficiently broad calendar window and select by the event local date/time;
+            do not assume UTC is the user timezone or invent an appointment.
             Never invent an {{inputs.*}} placeholder unless that exact input name is listed as available.
             Notion search and notion.page.get return metadata, not page body content. When a
             request requires summarizing page content, include a dependent notion.blocks.children.list
@@ -104,7 +109,9 @@ def build_agents() -> dict[str, Agent]:
             A join after alternative branches uses
             dependency_mode all_settled. For public weather, use AURA weather.forecast. For Gmail
             requests addressed to the user's own inbox, set `to` to the literal `me`. Never invent
-            an input placeholder that is not present in available_input_names. Notion page.get
+            an input placeholder that is not present in available_input_names. Resolve relative
+            dates from temporal_context using concrete arguments. An unknown user timezone
+            requires a broad read window followed by selection using event local dates/times. Notion page.get
             returns metadata only; page body summaries require notion.blocks.children.list.
             Do not promise page body content from a metadata operation.""",
             WorkflowPlan,
@@ -245,6 +252,7 @@ async def _run_staged_planner(
                 "objective": objective.model_dump(mode="json"),
                 "executable_tool_inventory": payload["executable_tool_inventory"],
                 "available_input_names": payload.get("available_input_names", []),
+                "temporal_context": payload.get("temporal_context", {}),
                 "required_fixes": payload.get("required_fixes", []),
                 "planner_repair_requirements": payload.get("planner_repair_requirements", []),
             },
@@ -259,6 +267,7 @@ async def _run_staged_planner(
                 "toolset_proposal": toolset.model_dump(mode="json"),
                 "executable_tool_inventory": payload["executable_tool_inventory"],
                 "available_input_names": payload.get("available_input_names", []),
+                "temporal_context": payload.get("temporal_context", {}),
                 "required_fixes": payload.get("required_fixes", []),
                 "planner_repair_requirements": payload.get("planner_repair_requirements", []),
             },
@@ -408,6 +417,25 @@ def normalize_plan_graph(plan: WorkflowPlan) -> WorkflowPlan:
     return plan
 
 
+def planning_temporal_context(now: datetime | None = None) -> dict:
+    """Trusted clock anchors for all planners; never masquerade as user inputs."""
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        raise ValueError("Planning clock must be timezone-aware")
+    now = now.astimezone(timezone.utc)
+    today = now.date()
+    monday = today - timedelta(days=today.weekday())
+    names = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+    return {
+        "current_time_utc": now.isoformat(),
+        "current_date_utc": today.isoformat(),
+        "user_timezone": None,
+        "this_week_dates": {name: (monday + timedelta(days=i)).isoformat() for i, name in enumerate(names)},
+        "next_occurrence_dates": {name: (today + timedelta(days=(i-today.weekday()) % 7)).isoformat() for i, name in enumerate(names)},
+        "guidance": "UTC is a clock reference, not the user's timezone. Use provider local dates to select events. Never invent meeting details or unavailable input references.",
+    }
+
+
 async def create_plan(
     prompt: str,
     tool_inventory: list[dict],
@@ -418,6 +446,7 @@ async def create_plan(
     agents = build_agents()
     request_payload = {
         "user_request": prompt,
+        "temporal_context": planning_temporal_context(),
         "executable_tool_inventory": tool_inventory,
         "available_input_names": sorted(available_input_names or set()),
         "planner_repair_requirements": planner_repair_requirements or [],
