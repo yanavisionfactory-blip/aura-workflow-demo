@@ -62,6 +62,33 @@ const cleanSentence = (value, fallback = "Complete this step") => {
   return text ? text.charAt(0).toUpperCase() + text.slice(1) : fallback;
 };
 
+const firstPersonStepCopy = (value, fallback = "complete this step") => {
+  const text = String(value || fallback)
+    .replace(/^aura\s+will\s+/i, "")
+    .replace(/^i(?:'|’)ll\s+/i, "")
+    .replace(/[.\s]+$/, "")
+    .trim();
+  const verbForms = {
+    checks: "check",
+    collects: "collect",
+    creates: "create",
+    delivers: "deliver",
+    fetches: "fetch",
+    finds: "find",
+    gets: "get",
+    identifies: "identify",
+    inspects: "inspect",
+    lists: "list",
+    locates: "locate",
+    posts: "post",
+    reads: "read",
+    retrieves: "retrieve",
+    sends: "send",
+    updates: "update",
+  };
+  return text.replace(/^([A-Za-z]+)/, (word) => verbForms[word.toLowerCase()] || word.toLowerCase());
+};
+
 const friendlyStepTitle = (step) => {
   const tool = planToolName(step);
   const reason = String(step.reason || "").toLowerCase();
@@ -456,7 +483,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               steps: run.plan.steps.map((step) => ({
                 tool: planToolName(step),
                 title: friendlyStepTitle(step),
-                iWill: cleanSentence(step.reason),
+                iWill: firstPersonStepCopy(step.reason),
                 action: cleanSentence(step.reason),
                 detail: JSON.stringify(step.arguments, null, 2), reason: step.reason, output: step.expected_output,
                 flow: [{ label: "Uses", value: planToolName(step) }, { label: "Creates", value: step.expected_output }],

@@ -41,6 +41,13 @@ const VERBS = {
   invite: { past: "invited", ing: "inviting" },
   log: { past: "logged", ing: "logging" },
   store: { past: "stored", ing: "storing" },
+  read: { past: "read", ing: "reading" },
+  locate: { past: "located", ing: "locating" },
+  inspect: { past: "inspected", ing: "inspecting" },
+  deliver: { past: "delivered", ing: "delivering" },
+  check: { past: "checked", ing: "checking" },
+  list: { past: "listed", ing: "listing" },
+  retrieve: { past: "retrieved", ing: "retrieving" },
 };
 
 function fallbackVerb(word, tense) {
