@@ -71,3 +71,20 @@ def test_budget_is_not_retryable_but_transient_failures_remain_retryable():
         exc = Exception()
         exc.status_code = status
         assert not agent_runtime._stop_model_retry(exc)
+
+
+async def test_verifier_output_is_bound_to_actual_receipts(monkeypatch):
+    from jsonschema import Draft202012Validator
+    async def run(agent, payload, **kwargs):
+        schema = agent.output_type.json_schema()
+        valid = {"status": "verified", "evidence_step_ids": ["receipt-1"], "reasons": [], "required_fixes": []}
+        validator = Draft202012Validator(schema)
+        assert validator.is_valid(valid)
+        assert not validator.is_valid({**valid, "evidence_step_ids": ["plan-step-name"]})
+        assert not validator.is_valid({**valid, "evidence_step_ids": []})
+        assert payload["accepted_evidence_index"][0]["step_id"] == "receipt-1"
+        return valid
+    monkeypatch.setattr(agent_runtime, "_run", run)
+    result = await agent_runtime.verify_outcome("Summarize", {}, [
+        {"step_id": "receipt-1", "operation": "notion.read", "critic": {"action": "accept"}}])
+    assert result.status == "verified"
