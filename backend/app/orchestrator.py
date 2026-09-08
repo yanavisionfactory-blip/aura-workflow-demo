@@ -149,7 +149,7 @@ def _bounded_read_trust_score(
 def _has_confirmed_consequential_result(step: RunStep) -> bool:
     """Return true when replaying a failed write could duplicate external work."""
     return bool(
-        step.consequential
+        (step.consequential or operation_scope(step.operation) != "read")
         and isinstance(step.output, dict)
         and step.output.get("provider_result") is not None
     )
@@ -721,6 +721,9 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             materialized_for_approval = False
             recorded_result = isinstance(step.output, dict) and "provider_result" in step.output
             if recorded_result and step.output.get("critic", {}).get("action") != "accept":
+                from .verification_recovery import verification_due
+                if not verification_due(step):
+                    return
                 contract = {**plan_steps[step.position], "step_id": step.id,
                             "arguments": step.output.get("resolved_arguments", step.arguments)}
                 criticism = await review_recorded_result(session, run, step, snapshot, contract, step.output["provider_result"])
@@ -728,6 +731,9 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 await audit(session, workspace_id, "step.review_resumed",
                             {"step_id": step.id, "decision": criticism.model_dump(mode="json")}, run.id)
                 if criticism.action != "accept":
+                    from .verification_recovery import defer_verification
+                    if await defer_verification(session, run, step):
+                        return
                     step.status = StepStatus.failed
                     run.status = RunStatus.waiting_for_action
                     step.error = run.error = "Recorded result needs review; no provider action was repeated."
@@ -1093,6 +1099,11 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             async def call(
                 active_tool: ToolConnection, operation: str, arguments: dict
             ) -> tuple[dict | None, str | None]:
+                consequential = step.consequential or operation_scope(operation) != "read"
+                from .extended_outcomes import required_reads
+                verification_reads = required_reads(operation, arguments)
+                if not verification_reads <= (set(active_tool.allowed_operations) & set(snapshot.permission_snapshot.get(active_tool.slug, []))):
+                    return None, "[authorization_required] Read-back permissions must be approved before the write"
                 active_trust = await _trust_state(session, workspace_id, active_tool)
                 existing = (
                     await session.scalars(
@@ -1103,8 +1114,8 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     latest = max(existing, key=lambda item: item.attempt_number)
                     if (latest.error or "").startswith(("[authorization_required]", "[invalid_request]", "[contract_or_runtime_error]", "[budget_exhausted]", "[rate_limited]")):
                         return None, latest.error
-                if step.consequential and existing:
-                    if operation in {"notion.page.update", "jira.issue.update"}:
+                if consequential and existing:
+                    if operation in {"notion.page.update", "jira.issue.update", "hubspot.contact.update", "hubspot.company.update", "mailchimp.campaign.send"}:
                         # Confirm the requested state using the approved identifier; never repeat the write.
                         step.output = {**step.output, "resolved_arguments": arguments}
                         check = await check_provider_outcome(session, run, step, snapshot)
@@ -1121,7 +1132,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     return None, "Previous action outcome is uncertain; reconcile provider state before a new approved action"
                 max_retries = (
                     0
-                    if step.consequential
+                    if consequential
                     else int(snapshot.policy_snapshot["max_retries_per_step"])
                 )
                 from .reliability import classify_failure
@@ -1241,7 +1252,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         await session.commit()
                         return result, None
                     except asyncio.TimeoutError as exc:
-                        failure = classify_failure(exc, read=not step.consequential)
+                        failure = classify_failure(exc, read=not consequential)
                         timed_out = True
                         last_error = "Step timed out"
                         failure_impacts_trust = _failure_impacts_trust(exc)
@@ -1250,7 +1261,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             run.id, step.id, active_tool.slug, operation,
                         )
                     except Exception as exc:
-                        failure = classify_failure(exc, read=not step.consequential)
+                        failure = classify_failure(exc, read=not consequential)
                         last_error = str(exc)
                         failure_impacts_trust = _failure_impacts_trust(exc)
                         logger.exception(
@@ -1425,6 +1436,9 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 actor="tool-output-critic",
             )
             if criticism.action != "accept":
+                from .verification_recovery import defer_verification
+                if await defer_verification(session, run, step):
+                    return
                 internal_error = f"Runtime critic {criticism.action}: " + "; ".join(
                     criticism.reasons
                     + criticism.contract_failures

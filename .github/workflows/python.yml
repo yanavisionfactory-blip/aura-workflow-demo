@@ -49,6 +49,14 @@ jobs:
         run: python -m compileall -q app
       - name: Test
         run: pytest -q --junitxml=release-evaluation.xml
+      - name: Evaluate isolated execution load
+        run: python -m app.load_evaluation --report engine-load.json
+      - name: Preserve engine load evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-load-evaluation
+          path: backend/engine-load.json
       - name: Preserve release evaluation
         if: always()
         uses: actions/upload-artifact@v4

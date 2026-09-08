@@ -43,7 +43,7 @@ def test_planning_catalog_includes_unconnected_native_connectors() -> None:
 def test_native_catalog_exposes_composable_module_types():
     slack = public_catalog("slack")
     assert {module["type"] for module in slack["modules"]} == {"search", "action"}
-    assert native_operations("slack") == ["slack.channels.list", "slack.post"]
+    assert native_operations("slack") == ["slack.channels.list", "slack.post", "slack.message.get"]
 
 
 def test_aura_weather_is_connection_free_and_read_only():
@@ -248,3 +248,4 @@ def test_current_capability_manifest_keeps_discovered_connector_schema():
     }
 
     assert current_capability_manifest("custom", discovered) is discovered
+

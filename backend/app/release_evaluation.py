@@ -15,6 +15,7 @@ from jsonschema import Draft202012Validator
 from .native_connectors import native_manifest
 from .operation_contracts import output_errors
 from .outcome_checks import build_outcome_check, evaluate_outcome_check
+from .extended_outcomes import observe_check
 from .providers import ProviderExecutor, verify_oauth_credentials
 
 
@@ -73,6 +74,7 @@ async def evaluate(fixtures, ledger_path, report_path, allow_writes=False):
                     ledger[fixture["id"]]["witness_receipt"] = receipt
                     save(ledger_path, ledger)
                     raise TimeoutError("Injected response loss after dedicated fixture write")
+                ledger[fixture["id"]]["provider_executed"] = True
                 ledger[fixture["id"]]["receipt"] = receipt
                 save(ledger_path, ledger)  # Save before schema checks or read-back.
             if output_errors(fixture["operation"], receipt):
@@ -81,11 +83,13 @@ async def evaluate(fixtures, ledger_path, report_path, allow_writes=False):
                 check = build_outcome_check(fixture["operation"], arguments, receipt)
                 if not check or not check.resource_id:
                     raise ValueError("Operation has no complete deterministic outcome check")
-                observed = await asyncio.wait_for(executor.execute(check.operation, check.arguments), 30)
+                observed = await asyncio.wait_for(observe_check(executor, check), 30)
                 outcome = evaluate_outcome_check(check, observed)
                 if outcome.get("status") != "verified":
                     raise ValueError("Provider outcome was not verified")
             scenarios = ["lost_response"] if lost_response_resume else ["receipt_resume"] if saved else ["execute"]
+            if saved and saved.get("provider_executed") and not lost_response_resume:
+                scenarios.append("execute")
             if write:
                 scenarios.append("read_back")
             row.update(status="passed", resumed_from_receipt=bool(saved) and not lost_response_resume, write=write,

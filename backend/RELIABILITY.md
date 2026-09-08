@@ -154,3 +154,58 @@ hundred active or blocked runs for administrator triage. Uncertain writes recomm
 reconciliation and explicitly prohibit repeating the write. These endpoints expose no
 credentials or raw provider error payloads. Existing provider/model duration, token and
 cost metrics remain available in the run evaluation endpoint.
+
+## Complete native write read-back and delayed verification
+
+Every native write now maps to a provider read-back operation. Batch Airtable writes
+check each returned record ID and its requested fields. Notion page creation also
+reads and compares requested child blocks; appends verify the receipt's exact block
+IDs, including nested children. Slack reads the exact channel/timestamp. HubSpot and
+Mailchimp read the approved CRM/contact/campaign resource. Canva exports and TikTok
+posting use recorded job IDs and require the requested completed provider state.
+A dispatch receipt alone does not pass final verification. Custom Canva geometry or
+asset content that metadata cannot establish remains explicitly unverified.
+
+Read-back permissions are checked before submitting a write and again before each
+verification delivery. New read operations do not grant themselves access to existing
+connections or approval snapshots. Authorization, provider trust and contract version
+remain enforced. Verification version 2 invalidates certifications of older checkers.
+
+Read-back has one 45-second delivery deadline covering credentials, all component
+reads and backoff. A still-processing job is deferred through the transactional outbox,
+with its receipt retained, at 15/30/60/120-second intervals. At most six deferred polls
+or ten minutes are allowed; exhausted or unverifiable jobs preserve evidence and stop.
+Repeated queue deliveries before the due time do not call the provider.
+
+## Dedicated account release suite
+
+`python -m app.certification_suite --fixtures fixtures.json --ledger-directory ledger
+--report certification-suite.json --allow-writes` runs the normal execution, read-back,
+receipt resume, injected response loss and reconciliation phases. It preserves initial
+execution evidence across interruptions and never repeats a saved write. The suite
+reports missing write-operation fixtures as uncertified rather than silently skipping
+them. Individual passed reports can be supplied to `app.certify_report` for signing.
+
+The fixture configuration must contain explicitly dedicated provider identities,
+credentials environment variable names, disposable parent/resource IDs, and approved
+test-only recipients/media where relevant. Missing credentials are a real prerequisite;
+customer accounts must not be inferred to be disposable test accounts. Supply secrets
+through the operator's secret store, never chat, reports, or repository files.
+
+## Execution-engine load release gate
+
+CI executes 600 workflow runs: 30 samples of single reads, dependent reads, independent
+reads, receipt resume, and verified writes at concurrency 1, 2, 4 and 8. PostgreSQL
+persistence, advisory locks, approvals, references, receipts, deterministic verification
+and completion paths are real; provider and model responses have controlled 25 ms and
+50 ms delays. Success requires all runs completed, one recorded attempt per step, and
+p95 active delivery below 5 seconds at concurrency 1/2 or 10 seconds at concurrency 4/8.
+These ceilings guard engine regressions; they are not measured production provider or
+model latency promises. The report retains p50/p95, first result, compilation time,
+throughput, workload, concurrency and failure evidence. CI archives it on every release.
+
+The runner refuses database names that are not dedicated test databases. Local SQLite
+reports explicitly state that PostgreSQL execution locks were not exercised. Production
+load certification requires repeating representative workflows with actual model/provider
+latencies in a dedicated staging environment; neither synthetic responses nor health
+endpoint traffic can substitute for that evidence.

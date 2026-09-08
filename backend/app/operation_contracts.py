@@ -94,9 +94,16 @@ KNOWN.update({
     "tiktok.post.status.get": (tiktok_data(["status"], {"status": TEXT, "fail_reason": TEXT}), ["job_status"]),
 })
 
-READBACK = {"gmail.send": "gmail.get", "calendar.create": "calendar.get",
-    "jira.issue.create": "jira.issue.get", "jira.issue.update": "jira.issue.get",
-    "notion.page.create": "notion.page.get", "notion.page.update": "notion.page.get"}
+KNOWN.update({
+    "airtable.record.get": ({"type": "object", "required": ["id", "fields"], "properties": {"id": TEXT, "fields": OBJECT}}, ["record_fields"]),
+    "slack.message.get": ({**envelope("messages"), "properties": {"messages": {"type": "array", "items": OBJECT}, "ok": {"const": True}, "channel": TEXT}}, ["message_content"]),
+    "hubspot.contact.get": ({"type": "object", "required": ["id", "properties"], "properties": {"id": TEXT, "properties": OBJECT}}, ["record_fields"]),
+    "hubspot.company.get": ({"type": "object", "required": ["id", "properties"], "properties": {"id": TEXT, "properties": OBJECT}}, ["record_fields"]),
+    "mailchimp.member.get": ({"type": "object", "required": ["id", "email_address", "status"], "properties": {"id": TEXT, "email_address": TEXT, "status": TEXT}}, ["record_fields"]),
+    "mailchimp.campaign.get": ({"type": "object", "required": ["id", "status"], "properties": {"id": TEXT, "status": TEXT}}, ["campaign_state"]),
+})
+
+from .outcome_checks import READBACK_OPERATIONS as READBACK
 
 
 def enrich_operation(module: dict) -> dict:
@@ -105,8 +112,9 @@ def enrich_operation(module: dict) -> dict:
     schema, evidence = KNOWN.get(operation, (value.get("output_schema", OBJECT), []))
     value["output_schema"] = deepcopy(schema)
     read = value.get("permission_scope") == "read"
-    contract = {"version": 1, "output_validation": "typed" if operation in KNOWN else "provisional",
+    contract = {"version": 2, "verification_version": 2, "output_validation": "typed" if operation in KNOWN else "provisional",
         "provides": evidence, "readback_operation": READBACK.get(operation),
+        "readback_operations": [READBACK[operation]] + (["notion.blocks.children.list"] if operation == "notion.page.create" else []) if operation in READBACK else [],
         "retry": {"max_attempts": 3 if read else 1,
             "retry_categories": ["timeout", "rate_limited", "provider_unavailable"] if read else [],
             "uncertain_write": "reconcile_before_retry"},

@@ -526,6 +526,12 @@ class ProviderExecutor:
             "calendar.get": self._calendar_get,
             "sheets.read": self._sheets_read,
             "sheets.append": self._sheets_append,
+            "airtable.record.get": self._airtable_record_get,
+            "slack.message.get": self._slack_message_get,
+            "hubspot.contact.get": self._hubspot_contact_get,
+            "hubspot.company.get": self._hubspot_company_get,
+            "mailchimp.member.get": self._mailchimp_member_get,
+            "mailchimp.campaign.get": self._mailchimp_campaign_get,
             "airtable.list": self._airtable_list,
             "airtable.create": self._airtable_create,
             "notion.search": self._notion_search,
@@ -1019,9 +1025,34 @@ class ProviderExecutor:
         )
 
     async def _tiktok_post_status_get(self, a: dict) -> dict:
-        return await self._tiktok_request(
+        result = await self._tiktok_request(
             "POST", "post/publish/status/fetch/", body={"publish_id": a["publish_id"]}
         )
+        return {**result, "_aura_requested_publish_id": a["publish_id"]}
+
+    async def _airtable_record_get(self, a):
+        return await self._request("GET", "https://api.airtable.com/v0/" + "/".join(quote(a[key], safe="") for key in ("base_id", "table_id", "record_id")))
+
+    async def _slack_message_get(self, a):
+        result = await self._request("GET", "https://slack.com/api/conversations.history", params={
+            "channel": a["channel"], "oldest": a["ts"], "latest": a["ts"], "inclusive": "true", "limit": 1})
+        if result.get("ok") is not True:
+            raise RuntimeError("Slack read-back was not authorized or available")
+        return {**result, "channel": a["channel"]}
+
+    async def _hubspot_contact_get(self, a):
+        return await self._request("GET", f"https://api.hubapi.com/crm/v3/objects/contacts/{quote(a['contact_id'], safe='')}",
+            params={"properties": ",".join(a.get("properties", []))})
+
+    async def _hubspot_company_get(self, a):
+        return await self._request("GET", f"https://api.hubapi.com/crm/v3/objects/companies/{quote(a['company_id'], safe='')}",
+            params={"properties": ",".join(a.get("properties", []))})
+
+    async def _mailchimp_member_get(self, a):
+        return await self._mailchimp_request("GET", f"lists/{quote(a['list_id'], safe='')}/members/{quote(a['subscriber_hash'], safe='')}")
+
+    async def _mailchimp_campaign_get(self, a):
+        return await self._mailchimp_request("GET", f"campaigns/{quote(a['campaign_id'], safe='')}")
 
     async def _slack_channels_list(self, a: dict) -> dict:
         params = {
