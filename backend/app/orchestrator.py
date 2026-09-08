@@ -72,7 +72,7 @@ def _friendly_execution_error(error: str | None) -> str:
     detail = (error or "").lower()
     if any(marker in detail for marker in ("unauthorized", "forbidden", "sign in", "token", "credential")):
         return "This app connection needs your attention before AURA can continue."
-    return "AURA is resolving an issue with this step automatically."
+    return "AURA couldn't complete this step safely after automatic recovery. Try again or adjust the workflow."
 
 
 def _has_empty_collection(result: object) -> bool:

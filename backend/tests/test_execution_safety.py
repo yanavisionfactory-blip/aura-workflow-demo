@@ -72,9 +72,10 @@ def test_degraded_read_trust_recovery_is_bounded_to_three_attempts():
     assert _bounded_read_trust_score("gmail.send", 0.5, 0.7, 0) == (0.5, False)
 
 
-def test_internal_error_is_replaced_with_friendly_recovery_copy():
+def test_internal_error_is_replaced_with_friendly_terminal_copy():
     assert _friendly_execution_error("weather.forecast missing required inputs") == (
-        "AURA is resolving an issue with this step automatically."
+        "AURA couldn't complete this step safely after automatic recovery. "
+        "Try again or adjust the workflow."
     )
 
 
