@@ -987,6 +987,11 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 return
 
             trust = await _trust_state(session, workspace_id, tool)
+            if trust.incident_active:
+                run.status = RunStatus.waiting_for_action
+                run.error = "Connector incident is active; execution is paused"
+                await session.commit()
+                return
             approved_permissions = snapshot.permission_snapshot.get(tool.slug, [])
             actual_cost = sum(
                 float(output.get("provider_result", {}).get("cost_usd", 0.0))

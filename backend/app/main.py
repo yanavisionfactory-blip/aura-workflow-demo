@@ -279,7 +279,7 @@ async def readiness() -> dict:
     if not all(checks.values()):
         raise HTTPException(503, {"status": "not_ready", "checks": checks})
     from .dispatch import scheduler_observation
-    return {"status": "ready", "checks": checks, "recovery_scheduler": {"enabled": settings.recovery_scheduler_enabled, **scheduler_observation}}
+    return {"status": "ready", "checks": checks, "recovery_scheduler": {"enabled": settings.recovery_scheduler_enabled, "last_tick_at": scheduler_observation["last_tick_at"], "leader": scheduler_observation["leader"]}}
 
 
 @app.post("/v1/workspaces")

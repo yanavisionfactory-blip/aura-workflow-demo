@@ -513,3 +513,31 @@ async def test_run_creation_rejects_other_users_memory(runtime):
                 session,
             )
         assert exc.value.status_code == 404
+
+
+async def test_active_connector_incident_pauses_before_provider_call(runtime, monkeypatch):
+    from app.models import ToolTrustState
+    async with runtime() as session:
+        session.add(ToolTrustState(workspace_id="w", tool_id="tool", score=1.0, incident_active=True))
+        await session.commit()
+    async def forbidden(*args, **kwargs):
+        pytest.fail("An active connector incident was bypassed")
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", forbidden)
+    await orchestrator._execute_run("run", "w")
+    async with runtime() as session:
+        assert (await session.get(WorkflowRun, "run")).status == RunStatus.waiting_for_action
+        assert not (await session.scalars(select(StepAttempt))).all()
+
+
+@pytest.mark.parametrize("state", [RunStatus.awaiting_approval, RunStatus.waiting_for_action, RunStatus.completed])
+async def test_stale_execution_delivery_leaves_paused_and_terminal_runs_untouched(runtime, monkeypatch, state):
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        run.status = state
+        await session.commit()
+    async def forbidden(*args, **kwargs):
+        pytest.fail("A stale delivery crossed a paused or terminal boundary")
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", forbidden)
+    await orchestrator._execute_run("run", "w")
+    async with runtime() as session:
+        assert (await session.get(WorkflowRun, "run")).status == state

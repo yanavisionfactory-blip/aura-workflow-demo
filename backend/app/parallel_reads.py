@@ -53,6 +53,8 @@ async def prefetch_ready_reads(session, run, steps, position, snapshot, context,
         if not module or not enrich_operation(module)["reliability"]["concurrent_read"]:
             continue
         trust = await _trust_state(session, run.workspace_id, tool)
+        if getattr(trust, "incident_active", False):
+            continue
         decision = runtime_policy_check(approved_cost=float(snapshot.cost_snapshot.get("estimated_cost_usd", 0)),
             actual_cost=sum(float(output.get("provider_result", {}).get("cost_usd", 0)) for output in outputs
                             if isinstance(output.get("provider_result"), dict)),
