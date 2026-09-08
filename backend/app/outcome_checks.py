@@ -45,10 +45,11 @@ def build_outcome_check(
             else arguments.get("to"),
             "subject": arguments.get("subject") or "AURA workflow",
             "body": arguments.get("body", ""),
+            "attachments": [{k: item.get(k) for k in ('filename', 'sha256', 'size')} for item in arguments.get('attachments', [])],
         }
         return OutcomeCheck(
             read,
-            {"message_id": str(resource_id or "")},
+            {"message_id": str(resource_id or ""), **({'verify_attachments': True} if arguments.get('attachments') else {})},
             str(resource_id or ""),
             expected,
             "gmail",
@@ -208,11 +209,18 @@ def evaluate_outcome_check(check: OutcomeCheck, observed: dict) -> dict:
             )
         except (ValueError, UnicodeError):
             body_matches = False
+        from .file_delivery import gmail_attachment_fingerprints
+        try:
+            attachments_match = gmail_attachment_fingerprints(observed.get('payload', {})) == sorted(
+                check.expected.get('attachments', []), key=lambda item: (item['filename'], item['sha256'] or ''))
+        except (ValueError, TypeError):
+            attachments_match = False
         matched = (
             actual_addresses == expected_addresses
             and bool(expected_addresses)
             and headers.get("subject", "") == check.expected["subject"]
             and body_matches
+            and attachments_match
             and "SENT" in observed.get("labelIds", [])
         )
     else:

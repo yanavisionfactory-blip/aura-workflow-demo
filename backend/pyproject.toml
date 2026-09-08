@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Durable Python agent orchestration and tool authorization for AURA"
 requires-python = ">=3.12"
 dependencies = [
+  "python-pptx>=1.0.2,<2",
   "jsonschema>=4.23,<5",
   "alembic>=1.14,<2",
   "celery[redis]>=5.4,<6",

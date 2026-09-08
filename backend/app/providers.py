@@ -558,6 +558,8 @@ class ProviderExecutor:
             "canva.designs.list": self._canva_designs_list,
             "canva.design.get": self._canva_design_get,
             "canva.design.create": self._canva_design_create,
+            "canva.presentation.create": self._canva_presentation_create,
+            "canva.import.get": self._canva_import_get,
             "canva.folder.items.list": self._canva_folder_items_list,
             "canva.export.create": self._canva_export_create,
             "canva.export.get": self._canva_export_get,
@@ -727,6 +729,19 @@ class ProviderExecutor:
         message["To"] = recipient
         message["Subject"] = str(a.get("subject") or "AURA workflow")
         message.set_content(str(a.get("body") or ""), charset="utf-8")
+        from .file_delivery import download_pdf, fingerprint, MAX_FILE_BYTES, ATTACHMENTS_SCHEMA
+        from jsonschema import validate
+        attachments = a.get('attachments', [])
+        validate(attachments, ATTACHMENTS_SCHEMA)
+        total = 0
+        for attachment in attachments:
+            if not attachment.get('sha256') or not attachment.get('size'):
+                raise ValueError('Attachment must be prepared and fingerprinted before sending')
+            data = await download_pdf(attachment['url'])
+            total += len(data)
+            if total > MAX_FILE_BYTES or fingerprint(data) != {k: attachment[k] for k in ('sha256', 'size')}:
+                raise ValueError('Attachment differs from the reviewed PDF or exceeds its budget')
+            message.add_attachment(data, maintype='application', subtype='pdf', filename=attachment['filename'])
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode().rstrip("=")
         result = await self._request("POST", "https://gmail.googleapis.com/gmail/v1/users/me/messages/send", json={"raw": raw})
         return {
@@ -736,11 +751,30 @@ class ProviderExecutor:
             "recipient": recipient,
             "subject": a.get("subject", "AURA workflow"),
             "body": a.get("body", ""),
+            "attachments": [{k: item[k] for k in ('filename', 'sha256', 'size')} for item in attachments],
         }
 
     async def _gmail_get(self, a: dict) -> dict:
-        return await self._request("GET", "https://gmail.googleapis.com/gmail/v1/users/me/messages/"
-                                   + quote(a["message_id"], safe=""), params={"format": "full"})
+        base = "https://gmail.googleapis.com/gmail/v1/users/me/messages/" + quote(a["message_id"], safe="")
+        result = await self._request("GET", base, params={"format": "full"})
+        if not a.get('verify_attachments'):
+            return result
+        # Read bytes only for attachments on this exact receipt's message, bounded
+        # independently of the mailbox. No account token reaches a download URL.
+        from .file_delivery import MAX_FILE_BYTES
+        pending, count, total = [result.get('payload', {})], 0, 0
+        while pending:
+            part = pending.pop()
+            pending.extend(part.get('parts', []))
+            if part.get('filename'):
+                count += 1
+                total += int(part.get('body', {}).get('size', 0))
+                if count > 3 or total > MAX_FILE_BYTES:
+                    raise ValueError('Message attachments exceed verification budget')
+                attachment_id = part.get('body', {}).get('attachmentId')
+                if attachment_id:
+                    part['body'] = await self._request('GET', base + '/attachments/' + quote(attachment_id, safe=''))
+        return result
 
     async def _calendar_get(self, a: dict) -> dict:
         return await self._request("GET", "https://www.googleapis.com/calendar/v3/calendars/primary/events/"
@@ -919,6 +953,21 @@ class ProviderExecutor:
         if a.get("title"): payload["title"] = a["title"]
         if a.get("asset_id"): payload["asset_id"] = a["asset_id"]
         return await self._canva_request("POST", "designs", json=payload)
+
+    async def _canva_presentation_create(self, a: dict) -> dict:
+        from .presentation_content import render_timeline
+        import hashlib
+        data = render_timeline(a)
+        headers = {**self._headers(), 'Content-Type': 'application/octet-stream',
+            'Import-Metadata': json.dumps({'title_base64': base64.b64encode(a['title'].encode()).decode(),
+                'mime_type': 'application/vnd.openxmlformats-officedocument.presentationml.presentation'})}
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+            response = await client.post('https://api.canva.com/rest/v1/imports', headers=headers, content=data)
+            response.raise_for_status()
+        return {**response.json(), 'source_sha256': hashlib.sha256(data).hexdigest(), 'page_count': 1}
+
+    async def _canva_import_get(self, a: dict) -> dict:
+        return await self._canva_request('GET', 'imports/' + quote(a['import_id'], safe=''))
 
     async def _canva_folder_items_list(self, a: dict) -> dict:
         params = {"limit": min(int(a.get("limit", 50)), 100)}

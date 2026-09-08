@@ -10,6 +10,7 @@ EXTRA_READBACK = {
     "mailchimp.member.upsert": "mailchimp.member.get",
     "mailchimp.campaign.create": "mailchimp.campaign.get", "mailchimp.campaign.send": "mailchimp.campaign.get",
     "canva.design.create": "canva.design.get", "canva.export.create": "canva.export.get",
+    "canva.presentation.create": "canva.import.get",
     "tiktok.video.upload.init": "tiktok.post.status.get", "tiktok.video.publish.init": "tiktok.post.status.get",
 }
 
@@ -66,6 +67,9 @@ def build_extended(operation, a, receipt):
     if operation == "canva.design.create":
         rid = receipt.get("design", {}).get("id", "")
         return OutcomeCheck(read, {"design_id": rid}, rid, {"title": a.get("title"), "design_type": a["design_type"], "asset_id": a.get("asset_id")}, "canva_design")
+    if operation == 'canva.presentation.create':
+        rid = receipt.get('job', {}).get('id', '')
+        return OutcomeCheck(read, {'import_id': rid}, rid, {'title': a['title']}, 'canva_import')
     if operation == "canva.export.create":
         rid = receipt.get("job", {}).get("id", "")
         return OutcomeCheck(read, {"export_id": rid}, rid, {}, "canva_export")
@@ -122,6 +126,14 @@ def evaluate_extended(check, observed):
             return result("unverified", "Design metadata cannot establish custom geometry or asset content")
         name = expected_type.get("name")
         matched = bool(name) and name in design.get("design_types", [])
+    elif check.kind == 'canva_import':
+        job = observed.get('job', {})
+        if job.get('id') != check.resource_id:
+            return result('failed', 'Import job differs from the saved receipt')
+        if job.get('status') != 'success':
+            return result('pending' if job.get('status') == 'in_progress' else 'failed', 'Import job has not completed')
+        designs = job.get('result', {}).get('designs', [])
+        matched = len(designs) == 1 and bool(designs[0].get('id')) and designs[0].get('title') == check.expected['title']
     elif check.kind == "canva_export":
         job = observed.get("job", {})
         if not _same_id(check.resource_id, job.get("id")):

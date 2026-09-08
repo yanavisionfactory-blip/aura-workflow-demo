@@ -113,7 +113,14 @@ def build_agents() -> dict[str, Agent]:
             dates from temporal_context using concrete arguments. An unknown user timezone
             requires a broad read window followed by selection using event local dates/times. Notion page.get
             returns metadata only; page body summaries require notion.blocks.children.list.
-            Do not promise page body content from a metadata operation.""",
+            Do not promise page body content from a metadata operation.
+            For populated Canva timelines or roadmaps, use canva.presentation.create with
+            structured phases grounded in prior reads. canva.design.create creates a blank
+            design and cannot satisfy populated slide requests. After presentation creation
+            use job.result.designs[0].id; after export use job.urls[0]. The executor waits
+            for verified job completion. For a PDF attachment, gmail.send must include
+            attachments: [{filename: 'roadmap.pdf', url: '{{steps.export.job.urls.0}}'}].
+            A link in the body does not satisfy a file attachment request. Never invent a file hash.""",
             WorkflowPlan,
         ),
         "evaluator": _agent(
