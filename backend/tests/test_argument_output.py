@@ -39,6 +39,9 @@ def test_open_provider_fields_keep_their_contract_and_nulls():
     args = {"metadata": {"custom": None, "other": "value"}}
     assert output.validate_json(json.dumps({"arguments": args}))["arguments"] == args
     assert output.json_schema()["properties"]["arguments"] == contract
+    nullable = ArgumentOutputSchema({"type": ["object", "null"]})
+    assert not nullable.is_strict_json_schema()
+    assert nullable.validate_json('{"arguments":null}') == {"arguments": None}
 
 
 def test_materializer_passes_the_operation_contract_to_the_model(monkeypatch):

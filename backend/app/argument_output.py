@@ -14,7 +14,7 @@ def _strict(schema: dict) -> dict:
                "description", "title", "enum", "minLength", "maxLength",
                "pattern", "format", "minimum", "maximum", "multipleOf",
                "minItems", "maxItems"}
-    if set(schema) - allowed or schema.get("type") not in {
+    if set(schema) - allowed or not isinstance(schema.get("type"), str) or schema.get("type") not in {
         "object", "array", "string", "integer", "number", "boolean", "null"
     }:
         raise ValueError("Contract requires non-strict output")
