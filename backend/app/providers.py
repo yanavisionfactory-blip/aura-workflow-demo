@@ -1086,6 +1086,8 @@ class ProviderExecutor:
 
     async def _jira_projects_list(self, a: dict) -> dict:
         params = {"maxResults": min(int(a.get("limit", 50)), 100)}
+        if "start_at" in a:
+            params["startAt"] = a["start_at"]
         if a.get("query"):
             params["query"] = a["query"]
         return await self._jira_request("GET", "project/search", params=params)
@@ -1096,6 +1098,8 @@ class ProviderExecutor:
             "maxResults": min(int(a.get("limit", 50)), 100),
             "fields": a.get("fields") or ["summary", "status", "assignee", "project", "issuetype", "updated"],
         }
+        if a.get("next_page_token"):
+            payload["nextPageToken"] = a["next_page_token"]
         return await self._jira_request("POST", "search/jql", json=payload)
 
     async def _jira_issue_get(self, a: dict) -> dict:

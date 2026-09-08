@@ -84,10 +84,12 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         "identity": {"provider": "atlassian"},
         "modules": [
             _module("jira.projects.list", "search", "Find Jira projects.", properties={
-                "query": _TEXT, "limit": {**_POSITIVE_INTEGER, "maximum": 100}
+                "query": _TEXT, "limit": {**_POSITIVE_INTEGER, "maximum": 100},
+                "start_at": {"type": "integer", "minimum": 0},
             }),
             _module("jira.issues.search", "search", "Find Jira issues with JQL.", properties={
                 "jql": _TEXT,
+                "next_page_token": _TEXT,
                 "limit": {**_POSITIVE_INTEGER, "maximum": 100},
                 "fields": {"type": "array", "items": _TEXT},
             }),

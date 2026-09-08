@@ -84,7 +84,8 @@ async def probe_evidence(session, probe):
         guards[expected] = bool(guard and guard.workspace_id == probe.workspace_id and guard.status.value == expected)
     counts = {step.step_key: sum(a.step_id == step.id for a in attempts) for step in steps}
     passed = (run.status == RunStatus.completed and bool(recovered) and bool(probe.yielded_at)
-        and len(steps) == 2 and all(value == 1 for value in counts.values()) and all(guards.values()))
+        and len(steps) == 2 and all(value == 1 for value in counts.values())
+        and set(guards) == {"awaiting_approval", "completed"} and all(guards.values()))
     return {"probe_id": probe.id, "run_id": run.id, "status": run.status.value,
         "yielded_at": probe.yielded_at.isoformat() if probe.yielded_at else None,
         "recovery_observed": bool(recovered), "provider_attempts": counts, "guards_unchanged": guards,
