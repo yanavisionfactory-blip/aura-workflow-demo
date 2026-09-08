@@ -335,10 +335,11 @@ export async function decidePythonApproval(approvalId, approved, editedArguments
   });
 }
 
-export async function resumePythonRun(runId, stepId = null) {
+export async function resumePythonRun(runId, stepId = null, action = "retry") {
   await ensureWorkspace();
   return request(`/v1/runs/${runId}/resume`, {
     method: "POST",
-    body: JSON.stringify({ action: "retry", step_id: stepId }),
+    body: JSON.stringify({ action, step_id: stepId }),
   });
 }
+

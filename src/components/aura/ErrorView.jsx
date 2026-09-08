@@ -4,7 +4,7 @@ import { AlertOctagon, Pencil, SkipForward, Check, ChevronRight, ArrowRight } fr
 import { Button } from "@/components/ui/button";
 import { conjugateAction } from "@/lib/auraVerbs";
 
-export default function ErrorView({ error, step, runSteps, onRetry, onEdit, onSkip }) {
+export default function ErrorView({ error, step, runSteps, onRetry, onEdit, onSkip, busy = false, message = "" }) {
   const [showDetails, setShowDetails] = useState(false);
   if (!error) return null;
 
@@ -29,7 +29,7 @@ export default function ErrorView({ error, step, runSteps, onRetry, onEdit, onSk
         </div>
         <div>
           <h2 className="text-lg font-semibold">AURA paused — something needs attention</h2>
-          <p className="text-xs text-muted-foreground/70">Nothing will continue until you choose what to do.</p>
+          <p className="text-xs text-muted-foreground/70">{error.subtitle || "Nothing will continue until you choose what to do."}</p>
         </div>
       </div>
 
@@ -108,25 +108,27 @@ export default function ErrorView({ error, step, runSteps, onRetry, onEdit, onSk
         </div>
       )}
 
+      {message && <p role="status" className="mb-4 text-sm text-amber-200">{message}</p>}
       {/* Actions */}
       <div className="flex flex-wrap items-center gap-2 pt-4 border-t border-white/6">
         <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
           <Button
             size="sm"
             onClick={onRetry}
+            disabled={busy}
             className="bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white border-0 gap-1.5"
           >
-            {buttonLabel}
+            {busy ? "Checking…" : buttonLabel}
           </Button>
         </motion.div>
-        <Button variant="outline" size="sm" onClick={onEdit} className="gap-1.5 border-white/10">
+        {onEdit && <Button disabled={busy} variant="outline" size="sm" onClick={onEdit} className="gap-1.5 border-white/10">
           <Pencil className="w-3.5 h-3.5" />
           Edit
-        </Button>
-        <Button variant="ghost" size="sm" onClick={onSkip} className="text-muted-foreground gap-1.5">
+        </Button>}
+        {onSkip && <Button disabled={busy} variant="ghost" size="sm" onClick={onSkip} className="text-muted-foreground gap-1.5">
           <SkipForward className="w-3.5 h-3.5" />
-          Skip
-        </Button>
+          Skip optional step
+        </Button>}
       </div>
     </motion.div>
   );
