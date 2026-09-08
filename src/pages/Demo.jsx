@@ -18,7 +18,9 @@ import { detectNewConsequential } from "@/lib/editRunDetect";
 import { requestNotifyPermission, notifyWorkflowComplete, notifyWorkflowError } from "@/lib/auraNotify";
 import { hydrateConnections } from "@/lib/connectService";
 import { getAllConnections } from "@/lib/connectionsStore";
-import { approvePythonPlan, createPythonRun, decidePythonApproval, getPythonRun } from "@/lib/auraApi";
+import { approvePythonPlan, createPythonRun, decidePythonApproval, getPythonRun, resumePythonRun } from "@/lib/auraApi";
+
+import { needsRecovery, recoveryForRun } from "@/lib/runRecovery.mjs";
 
 const STEP_DURATION = 2.6;
 
@@ -314,6 +316,10 @@ export default function Demo() {
   const [planLoading, setPlanLoading] = useState(false);
   const [plan, setPlan] = useState(null);
   const [results, setResults] = useState(null);
+  const [recoveryRun, setRecoveryRun] = useState(null);
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [recoveryMessage, setRecoveryMessage] = useState("");
+  const recoveryPendingRef = useRef(false);
   const [execSteps, setExecSteps] = useState([]);
   const [currentStepIdx, setCurrentStepIdx] = useState(0);
   const [approvedSteps, setApprovedSteps] = useState([]);
@@ -664,6 +670,59 @@ Rules:
     };
   });
 
+  const showRunRecovery = (run) => {
+    setRecoveryRun(run);
+    setRecoveryMessage("");
+    setExecSteps(mapRuntimeSteps(run));
+    setPhase("error");
+  };
+
+  const recoverRunStatus = async () => {
+    try {
+      const latest = await getPythonRun(pythonRunIdRef.current);
+      if (needsRecovery(latest.status)) showRunRecovery(latest);
+      else {
+        // A failed request is not proof that execution failed. Offer a read-only check.
+        setRecoveryRun(latest);
+        setPhase("error");
+      }
+    } catch {
+      setRecoveryRun((previous) => ({ ...previous, status: "unknown", steps: previous?.steps || [] }));
+      setPhase("error");
+    }
+  };
+
+  const handleRunRecovery = async (action = "retry") => {
+    if (recoveryPendingRef.current) return;
+    recoveryPendingRef.current = true;
+    setRecoveryBusy(true);
+    setRecoveryMessage("");
+    try {
+      const latest = await getPythonRun(pythonRunIdRef.current);
+      const options = recoveryForRun(latest);
+      if (needsRecovery(latest.status)) {
+        if (action === "skip" && options.canSkip) {
+          await resumePythonRun(latest.id, options.stepId, "skip");
+        } else if (action === "retry" && options.canRetry) {
+          await resumePythonRun(latest.id, options.stepId);
+        } else {
+          showRunRecovery(latest);
+          setRecoveryMessage("This workflow still needs attention. Completed work is saved.");
+          return;
+        }
+      }
+      setRecoveryRun(null);
+      await startPythonExecution(null, false, true);
+    } catch {
+      // Keep failures inline. Never claim a fix or duplicate a write to recover the UI.
+      await recoverRunStatus();
+      setRecoveryMessage("AURA couldn't continue yet. Check the app's access and the affected item, then check status again.");
+    } finally {
+      recoveryPendingRef.current = false;
+      setRecoveryBusy(false);
+    }
+  };
+
   const startPythonPreparation = async (reviewedUiSteps) => {
     const runId = pythonRunIdRef.current;
     if (!runId || !pythonPlanRef.current) return;
@@ -693,15 +752,11 @@ Rules:
           setPhase("preview");
           return;
         }
-        if (run.status === "waiting_for_action" || run.status === "blocked") {
-          finishExecution(
-            null,
-            run.error || "AURA paused safely because this step needs your attention.",
-            "needs_attention"
-          );
+        if (needsRecovery(run.status)) {
+          showRunRecovery(run);
           return;
         }
-        if (["failed", "cancelled"].includes(run.status)) {
+        if (run.status === "cancelled") {
           finishExecution(null, run.error || "AURA couldn't complete this workflow after retrying safely.", "failed");
           return;
         }
@@ -710,11 +765,11 @@ Rules:
       throw new Error("AURA took too long to prepare the review.");
     } catch (error) {
       console.error("Python workflow preparation failed", error);
-      finishExecution(null, "AURA couldn't complete this workflow after retrying safely.", "failed");
+      await recoverRunStatus();
     }
   };
 
-  const startPythonExecution = async (editedUiSteps = null, prepared = false) => {
+  const startPythonExecution = async (editedUiSteps = null, prepared = false, observeOnly = false) => {
     const runId = pythonRunIdRef.current;
     if (!runId || !pythonPlanRef.current) return;
     setPhase("executing");
@@ -729,7 +784,9 @@ Rules:
       }),
     };
     try {
-      if (prepared) {
+      if (observeOnly) {
+        // Resume has already dispatched this run. Only observe; do not approve again.
+      } else if (prepared) {
         const run = await getPythonRun(runId);
         const pending = (run.steps || []).filter((step) =>
           step.approval_status === "pending" && step.approval_preview?.status === "ready"
@@ -784,15 +841,11 @@ Rules:
           setPhase("preview");
           return;
         }
-        if (run.status === "waiting_for_action" || run.status === "blocked") {
-          finishExecution(
-            null,
-            run.error || "AURA paused safely because this step needs your attention.",
-            "needs_attention"
-          );
+        if (needsRecovery(run.status)) {
+          showRunRecovery(run);
           return;
         }
-        if (["failed", "cancelled"].includes(run.status)) {
+        if (run.status === "cancelled") {
           finishExecution(null, run.error || "AURA couldn't complete this workflow after retrying safely.", "failed");
           return;
         }
@@ -801,7 +854,7 @@ Rules:
       throw new Error("Python workflow timed out");
     } catch (error) {
       console.error("Python workflow execution failed", error);
-      finishExecution(null, "AURA couldn't complete this workflow after retrying safely.", "failed");
+      await recoverRunStatus();
     }
   };
 
@@ -1283,7 +1336,7 @@ Generate a results summary in plain, human-friendly language (not technical).
               </motion.div>
             )}
 
-            {phase === "error" && mock?.errorStep && (
+            {phase === "error" && (recoveryRun || mock?.errorStep) && (
               <motion.div
                 key="error"
                 initial={{ opacity: 0, y: 20 }}
@@ -1293,12 +1346,14 @@ Generate a results summary in plain, human-friendly language (not technical).
                 className="w-full flex justify-center"
               >
                 <ErrorView
-                  error={mock.errorStep}
-                  step={execSteps[mock.errorStep.index]}
+                  error={recoveryRun ? recoveryForRun(recoveryRun) : mock.errorStep}
+                  step={execSteps[recoveryRun ? recoveryForRun(recoveryRun).index : mock.errorStep.index]}
                   runSteps={execSteps}
-                  onRetry={handleRetry}
-                  onEdit={handleEditFromError}
-                  onSkip={handleSkip}
+                  busy={recoveryBusy}
+                  message={recoveryMessage}
+                  onRetry={recoveryRun ? () => handleRunRecovery(recoveryForRun(recoveryRun).canRetry ? "retry" : "check") : handleRetry}
+                  onEdit={recoveryRun ? undefined : handleEditFromError}
+                  onSkip={recoveryRun ? (recoveryForRun(recoveryRun).canSkip ? () => handleRunRecovery("skip") : undefined) : handleSkip}
                 />
               </motion.div>
             )}
@@ -1379,4 +1434,5 @@ function ThinkingAnimation() {
     </div>
   );
 }
+
 
