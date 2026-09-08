@@ -29,10 +29,10 @@ def canonical_plan_hash(plan: dict) -> str:
 
 def operation_scope(operation: str) -> str:
     normalized = operation.lower()
-    if normalized.endswith((".get", ".list", ".search", ".creator_info")):
-        return "read"
     if any(word in normalized for word in ("delete", "destroy", "purge", "revoke")):
         return "destructive"
+    if normalized.endswith((".get", ".list", ".search", ".creator_info")):
+        return "read"
     if any(
         word in normalized
         for word in ("send", "create", "update", "post", "append", "schedule", "purchase", "upsert", "publish", "upload")

@@ -181,3 +181,39 @@ async def test_pending_jobs_create_one_delayed_dispatch_and_exhaust_the_budget(d
         assert not await defer_verification(session, run, step, now+timedelta(seconds=20))
         assert step.output["outcome_check"]["status"] == "unverified"
         assert step.output["provider_result"]["job"]["id"] == "j"
+
+
+@pytest.mark.skipif(not __import__('os').getenv('AURA_TEST_POSTGRES_URL'), reason="Requires real PostgreSQL concurrency")
+async def test_simultaneous_first_runs_share_one_trust_record():
+    import asyncio, os, uuid
+    from sqlalchemy import select, func
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from app import orchestrator
+    from app.models import Workspace, ToolConnection, ToolKind, ToolTrustState
+    engine = create_async_engine(os.environ['AURA_TEST_POSTGRES_URL'])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    workspace, tool_id = str(uuid.uuid4()), str(uuid.uuid4())
+    try:
+        async with factory() as session:
+            session.add(Workspace(id=workspace, name="Concurrent trust fixture"))
+            await session.flush()
+            session.add(ToolConnection(id=tool_id, workspace_id=workspace, slug="fixture", display_name="Fixture", kind=ToolKind.api_key, config={}))
+            await session.commit()
+        ready = asyncio.Event()
+        entered = 0
+        async def initialize():
+            nonlocal entered
+            async with factory() as session:
+                tool = await session.get(ToolConnection, tool_id)
+                entered += 1
+                if entered == 8: ready.set()
+                await ready.wait()
+                state = await orchestrator._trust_state(session, workspace, tool)
+                await session.commit()
+                return state.id
+        identifiers = await asyncio.gather(*(initialize() for _ in range(8)))
+        assert len(set(identifiers)) == 1
+        async with factory() as session:
+            assert await session.scalar(select(func.count()).select_from(ToolTrustState).where(ToolTrustState.workspace_id == workspace)) == 1
+    finally:
+        await engine.dispose()

@@ -513,9 +513,16 @@ async def _trust_state(
         )
     )
     if not state:
-        state = ToolTrustState(workspace_id=workspace_id, tool_id=tool.id, score=1.0)
-        session.add(state)
-        await session.flush()
+        # Concurrent first runs may initialize the same connector. Resolve that
+        # race atomically without rolling back either workflow's checkpoints.
+        if session.get_bind().dialect.name == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert
+        else:
+            from sqlalchemy.dialects.sqlite import insert
+        await session.execute(insert(ToolTrustState).values(workspace_id=workspace_id, tool_id=tool.id, score=1.0)
+            .on_conflict_do_nothing(index_elements=["workspace_id", "tool_id"]))
+        state = await session.scalar(select(ToolTrustState).where(
+            ToolTrustState.workspace_id == workspace_id, ToolTrustState.tool_id == tool.id))
     return state
 
 
