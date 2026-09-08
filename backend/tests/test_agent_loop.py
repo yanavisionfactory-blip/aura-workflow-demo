@@ -591,3 +591,23 @@ async def test_uncertain_known_update_reconciles_without_repeating_write(runtime
     async with runtime() as session:
         assert (await session.get(WorkflowRun, "run")).status == RunStatus.completed
         assert len((await session.scalars(select(StepAttempt))).all()) == 1
+
+
+@pytest.mark.parametrize("attempted,receipt,expected", [(False,False,True),(True,False,False),(False,True,False)])
+async def test_recovery_description_uses_durable_dispatch_evidence(runtime, attempted, receipt, expected):
+    from app.main import TenantContext, get_run
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        run.status = RunStatus.waiting_for_action
+        step = await session.get(RunStep, "step")
+        step.status = StepStatus.failed
+        if receipt:
+            step.output = {"provider_result": {"id": "saved-record"}}
+        if attempted:
+            session.add(StepAttempt(workspace_id="w", run_id="run", step_id="step", attempt_number=1,
+                status="running", tool_slug="test", operation="records.create"))
+        await session.commit()
+        result = await get_run("run", TenantContext("w", "alice", "owner"), session)
+        recovery = result["steps"][0]["recovery"]
+        assert recovery["can_retry"] is expected
+        assert recovery["phase"] == ("before_action" if expected else "after_dispatch")
