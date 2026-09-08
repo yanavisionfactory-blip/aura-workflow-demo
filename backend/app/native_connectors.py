@@ -6,6 +6,7 @@ not encode provider-specific workflows.
 
 import json
 import re
+from datetime import datetime
 from copy import deepcopy
 from typing import Any
 
@@ -128,7 +129,8 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                 "to": {"type": "string", "format": "email"}, "subject": _TEXT, "body": _TEXT
             }),
             _module("gmail.get", "search", "Read a specific Gmail message for outcome verification.", required=("message_id",), properties={"message_id": _TEXT}),
-            _module("calendar.list", "search", "Find calendar events.", properties={
+            _module("calendar.list", "search", "Find calendar events. Returns an items list, not a selected event. Use query to filter by title/content; date bounds require RFC3339 offsets.", properties={
+                "query": _TEXT,
                 "time_min": {"type": "string", "format": "date-time"},
                 "time_max": {"type": "string", "format": "date-time"},
                 "limit": {**_POSITIVE_INTEGER, "maximum": 100},
@@ -467,6 +469,13 @@ def _validate_value(schema: dict[str, Any], value: Any, path: str) -> None:
     expected = type_checks.get(schema_type)
     if expected and (not isinstance(value, expected) or schema_type == "integer" and isinstance(value, bool)):
         raise NativeConnectorError(f"{path} must be {schema_type}")
+    if schema.get("format") == "date-time" and isinstance(value, str) and "{{" not in value:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if parsed.tzinfo is None or not re.fullmatch(r"\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})", value):
+                raise ValueError("offset required")
+        except ValueError as exc:
+            raise NativeConnectorError(f"{path} must be RFC3339 date-time with explicit Z or timezone offset; never assume the user's timezone") from exc
     if "enum" in schema and value not in schema["enum"]:
         raise NativeConnectorError(
             f"{path} must be one of: {', '.join(map(str, schema['enum']))}"

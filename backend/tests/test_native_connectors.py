@@ -249,3 +249,15 @@ def test_current_capability_manifest_keeps_discovered_connector_schema():
 
     assert current_capability_manifest("custom", discovered) is discovered
 
+
+
+@pytest.mark.parametrize("value", ["2026-09-11T00:00:00", "2026-09-11", "2026-02-30T00:00:00Z"])
+def test_calendar_rejects_invalid_date_bounds_before_provider(value):
+    with pytest.raises(NativeConnectorError, match="RFC3339"):
+        normalize_module_arguments(native_manifest("google"), "calendar.list", {"time_min": value})
+
+
+@pytest.mark.parametrize("value", ["2026-09-11T00:00:00Z", "2026-09-11T00:00:00+02:00", "{{inputs.start}}"])
+def test_calendar_accepts_offset_dates_and_declared_references(value):
+    result = normalize_module_arguments(native_manifest("google"), "calendar.list", {"time_min": value, "query": "appointment"})
+    assert result == {"time_min": value, "query": "appointment"}
