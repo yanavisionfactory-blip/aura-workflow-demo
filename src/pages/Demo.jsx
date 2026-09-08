@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { aura } from "@/api/auraClient";
 import { WORKFLOW_EXAMPLES } from "@/lib/demoData";
 import { CREATOR_APPROVALS_MOCK } from "@/lib/mockWorkflows";
+import WorkflowHealth from "@/components/aura/WorkflowHealth";
 import TopBar from "@/components/aura/TopBar";
 import CommandInput from "@/components/aura/CommandInput";
 import ConfirmView from "@/components/aura/ConfirmView";
@@ -308,6 +309,7 @@ const RESULTS_SCHEMA = {
 
 export default function Demo() {
   const [phase, setPhase] = useState("input");
+  const [healthOpen, setHealthOpen] = useState(false);
   const [originalPrompt, setOriginalPrompt] = useState("");
   const [interpretation, setInterpretation] = useState("");
   const [interpretationLoading, setInterpretationLoading] = useState(false);
@@ -1210,6 +1212,8 @@ Generate a results summary in plain, human-friendly language (not technical).
           onBack={phase === "input" ? null : handlePageBack}
         />
 
+        <div className="px-6 pt-2 flex justify-end"><button className="text-sm text-muted-foreground hover:text-foreground" onClick={() => setHealthOpen(true)}>Workflow health</button></div>
+        {healthOpen && <WorkflowHealth onClose={() => setHealthOpen(false)} />}
         <main className="flex-1 flex items-center justify-center px-4 py-8 md:py-12">
           <AnimatePresence mode="wait">
             {phase === "input" && (
@@ -1379,3 +1383,4 @@ function ThinkingAnimation() {
     </div>
   );
 }
+
