@@ -14,6 +14,8 @@ READBACK_OPERATIONS = {
     "notion.page.update": "notion.page.get",
 }
 
+from .extended_outcomes import EXTRA_READBACK
+READBACK_OPERATIONS.update(EXTRA_READBACK)
 
 @dataclass(frozen=True)
 class OutcomeCheck:
@@ -23,11 +25,15 @@ class OutcomeCheck:
     expected: dict
     kind: str = "fields"
     incomplete: bool = False
+    checks: tuple = ()
 
 
 def build_outcome_check(
     operation: str, arguments: dict, receipt: dict
 ) -> OutcomeCheck | None:
+    from .extended_outcomes import build_extended
+    if operation in EXTRA_READBACK:
+        return build_extended(operation, arguments, receipt)
     read = READBACK_OPERATIONS.get(operation)
     if not read:
         return None
@@ -65,7 +71,7 @@ def build_outcome_check(
     if operation.startswith("jira."):
         from .providers import ProviderExecutor
 
-        resource_id = resource_id or arguments.get("issue_id_or_key")
+        resource_id = arguments.get("issue_id_or_key") if operation.endswith("update") else resource_id
         if operation.endswith("create"):
             fields = {
                 "summary": arguments["summary"],
@@ -89,19 +95,25 @@ def build_outcome_check(
             str(resource_id or ""),
             {"fields": fields},
         )
-    resource_id = resource_id or arguments.get("page_id")
+    resource_id = arguments.get("page_id") if operation.endswith("update") else resource_id
     expected = {"properties": arguments.get("properties", {})}
     if "parent" in arguments:
         expected["parent"] = arguments["parent"]
     expected["archived"] = arguments.get("archived", False)
     # Page retrieval cannot establish block content. Do not claim it did.
-    return OutcomeCheck(
+    check = OutcomeCheck(
         read,
         {"page_id": str(resource_id or "")},
         str(resource_id or ""),
         expected,
-        incomplete=bool(arguments.get("children")),
+        incomplete=False,
     )
+    if arguments.get("children"):
+        from dataclasses import replace
+        body = OutcomeCheck("notion.blocks.children.list", {"block_id": str(resource_id)}, str(resource_id),
+            {"children": arguments["children"]}, "notion_children")
+        return replace(check, kind="compound", checks=(check, body))
+    return check
 
 
 def _same_id(left: Any, right: Any) -> bool:
@@ -162,6 +174,10 @@ def evaluate_outcome_check(check: OutcomeCheck, observed: dict) -> dict:
             "status": "unverified",
             "reasons": ["Provider receipt has no stable resource identifier"],
         }
+    from .extended_outcomes import evaluate_extended
+    extended = evaluate_extended(check, observed)
+    if extended is not None:
+        return extended
     if not any(_same_id(check.resource_id, observed.get(key)) for key in ("id", "key")):
         return {
             "status": "failed",

@@ -274,7 +274,7 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                 "cursor": {"type": "integer", "minimum": 0},
                 "max_count": {**_POSITIVE_INTEGER, "maximum": 20},
             }),
-            _module("tiktok.post.creator_info", "search", "Read current creator posting settings."),
+            _module("tiktok.post.creator_info", "search", "Read current creator posting settings.", permission_scope="read"),
             _module(
                 "tiktok.video.upload.init",
                 "action",
@@ -355,6 +355,18 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         ],
     },
 }
+
+# Resource-specific read-back operations require explicit current and approved permissions.
+for _slug, _name, _required, _properties in [
+    ("airtable", "airtable.record.get", ("base_id", "table_id", "record_id"), {"base_id": _TEXT, "table_id": _TEXT, "record_id": _TEXT}),
+    ("slack", "slack.message.get", ("channel", "ts"), {"channel": _TEXT, "ts": _TEXT}),
+    ("hubspot", "hubspot.contact.get", ("contact_id",), {"contact_id": _TEXT, "properties": {"type": "array", "items": _TEXT}}),
+    ("hubspot", "hubspot.company.get", ("company_id",), {"company_id": _TEXT, "properties": {"type": "array", "items": _TEXT}}),
+    ("mailchimp", "mailchimp.member.get", ("list_id", "subscriber_hash"), {"list_id": _TEXT, "subscriber_hash": _TEXT}),
+    ("mailchimp", "mailchimp.campaign.get", ("campaign_id",), {"campaign_id": _TEXT}),
+]:
+    NATIVE_CONNECTORS[_slug]["modules"].append(_module(_name, "search", "Read the exact recorded resource for outcome verification.",
+        required=_required, properties=_properties, permission_scope="read"))
 
 # Providers that use the universal connector lifecycle. Their detailed manifest
 # replaces this planning placeholder as soon as the user connects them.

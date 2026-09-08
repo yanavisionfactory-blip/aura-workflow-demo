@@ -526,6 +526,12 @@ class ProviderExecutor:
             "calendar.get": self._calendar_get,
             "sheets.read": self._sheets_read,
             "sheets.append": self._sheets_append,
+            "airtable.record.get": self._airtable_record_get,
+            "slack.message.get": self._slack_message_get,
+            "hubspot.contact.get": self._hubspot_contact_get,
+            "hubspot.company.get": self._hubspot_company_get,
+            "mailchimp.member.get": self._mailchimp_member_get,
+            "mailchimp.campaign.get": self._mailchimp_campaign_get,
             "airtable.list": self._airtable_list,
             "airtable.create": self._airtable_create,
             "notion.search": self._notion_search,
@@ -769,12 +775,21 @@ class ProviderExecutor:
         daily = forecast.get("daily") or {}
         dates = daily.get("time") or []
         requested = str(a.get("date") or "tomorrow").strip().lower()
-        target = (
-            (datetime.now(UTC).date() + timedelta(days=1)).isoformat()
-            if requested == "tomorrow"
-            else requested
-        )
-        index = dates.index(target) if target in dates else min(1, max(0, len(dates) - 1))
+        # Provider dates use the requested location's timezone. Never silently
+        # substitute another day when the requested date is outside the forecast.
+        if requested in {"today", "tomorrow"}:
+            index = 0 if requested == "today" else 1
+            if len(dates) <= index:
+                raise ValueError("Provider forecast does not cover the requested day")
+            target = dates[index]
+        else:
+            target = requested
+            if target not in dates:
+                raise ValueError("Requested date is outside the provider forecast range")
+            index = dates.index(target)
+        fields = ("temperature_2m_max", "temperature_2m_min", "precipitation_probability_max", "wind_speed_10m_max", "weather_code")
+        if any(len(daily.get(field) or []) <= index for field in fields):
+            raise ValueError("Provider forecast metrics do not cover the requested day")
         symbol = "°F" if units == "imperial" else "°C"
         wind_unit = "mph" if units == "imperial" else "km/h"
         result = {
@@ -1019,9 +1034,34 @@ class ProviderExecutor:
         )
 
     async def _tiktok_post_status_get(self, a: dict) -> dict:
-        return await self._tiktok_request(
+        result = await self._tiktok_request(
             "POST", "post/publish/status/fetch/", body={"publish_id": a["publish_id"]}
         )
+        return {**result, "_aura_requested_publish_id": a["publish_id"]}
+
+    async def _airtable_record_get(self, a):
+        return await self._request("GET", "https://api.airtable.com/v0/" + "/".join(quote(a[key], safe="") for key in ("base_id", "table_id", "record_id")))
+
+    async def _slack_message_get(self, a):
+        result = await self._request("GET", "https://slack.com/api/conversations.history", params={
+            "channel": a["channel"], "oldest": a["ts"], "latest": a["ts"], "inclusive": "true", "limit": 1})
+        if result.get("ok") is not True:
+            raise RuntimeError("Slack read-back was not authorized or available")
+        return {**result, "channel": a["channel"]}
+
+    async def _hubspot_contact_get(self, a):
+        return await self._request("GET", f"https://api.hubapi.com/crm/v3/objects/contacts/{quote(a['contact_id'], safe='')}",
+            params={"properties": ",".join(a.get("properties", []))})
+
+    async def _hubspot_company_get(self, a):
+        return await self._request("GET", f"https://api.hubapi.com/crm/v3/objects/companies/{quote(a['company_id'], safe='')}",
+            params={"properties": ",".join(a.get("properties", []))})
+
+    async def _mailchimp_member_get(self, a):
+        return await self._mailchimp_request("GET", f"lists/{quote(a['list_id'], safe='')}/members/{quote(a['subscriber_hash'], safe='')}")
+
+    async def _mailchimp_campaign_get(self, a):
+        return await self._mailchimp_request("GET", f"campaigns/{quote(a['campaign_id'], safe='')}")
 
     async def _slack_channels_list(self, a: dict) -> dict:
         params = {

@@ -19,6 +19,20 @@ from .security import CredentialVault
 
 
 async def check_provider_outcome(session, run, step, snapshot) -> dict:
+    # The deadline includes credential refresh, all child reads and provider backoff.
+    timeout = 45.0
+    from .reliability import model_budget
+    from time import monotonic
+    budget = model_budget.get()
+    if budget:
+        timeout = min(timeout, max(0.01, budget.deadline - monotonic()))
+    try:
+        return await asyncio.wait_for(_check_provider_outcome(session, run, step, snapshot), timeout)
+    except TimeoutError:
+        return {"status": "unverified", "reasons": ["Read-back time budget exhausted; saved write will not be repeated"]}
+
+
+async def _check_provider_outcome(session, run, step, snapshot) -> dict:
     receipt = step.output.get("provider_result", {})
     if not isinstance(receipt, dict):
         return {"status": "unsupported"}
@@ -47,11 +61,15 @@ async def check_provider_outcome(session, run, step, snapshot) -> dict:
             ToolConnection.enabled.is_(True),
         )
     )
+    from .extended_outcomes import leaves, observe_check
+    required = {leaf.operation for leaf in leaves(check)}
+    if len(leaves(check)) > 12:
+        return {"status": "unverified", "reasons": ["Read-back resource budget exceeded"]}
     approved = snapshot.permission_snapshot.get(step.tool_slug, [])
     if (
         not tool
-        or check.operation not in approved
-        or check.operation not in tool.allowed_operations
+        or not required <= set(approved)
+        or not required <= set(tool.allowed_operations)
     ):
         return {
             "status": "unverified",
@@ -117,7 +135,7 @@ async def check_provider_outcome(session, run, step, snapshot) -> dict:
                 ),
             )
             observed = await asyncio.wait_for(
-                executor.execute(check.operation, check.arguments), timeout=20
+                observe_check(executor, check), timeout=20
             )
             result = {
                 **evaluate_outcome_check(check, observed),
@@ -127,7 +145,7 @@ async def check_provider_outcome(session, run, step, snapshot) -> dict:
                 "attempts": attempt + 1,
             }
             # Eventual consistency can briefly expose old values; retry only the read.
-            if result["status"] == "verified":
+            if result["status"] in {"verified", "pending"}:
                 break
         except Exception as exc:
             from .reliability import classify_failure

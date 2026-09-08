@@ -60,6 +60,8 @@ async def operation_readiness(session, workspace_id, tool, operation, stored=Non
     reasons = []
     if not tool.enabled or operation not in tool.allowed_operations:
         reasons.append("Connection or operation permission is unavailable")
+    if any(read not in tool.allowed_operations for read in contract.get("readback_operations", [])):
+        reasons.append("Read-back operation permission is unavailable")
     if contract["output_validation"] != "typed":
         reasons.append("Output contract remains provisional")
     if module["permission_scope"] != "read" and not contract.get("readback_operation"):
