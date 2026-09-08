@@ -12,6 +12,7 @@ from .agent_runtime import (
     create_plan,
     critique_step,
     materialize_action_arguments,
+    prepare_final_review,
     synthesize_result,
     verify_outcome,
 )
@@ -1662,7 +1663,22 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             verification = OutcomeVerification(status="unverified",
                 reasons=["Provider read-back could not confirm: " + ", ".join(outcome_failures)])
         else:
-            synthesis = await synthesize_result(run.prompt, outputs)
+            review_started = time.perf_counter()
+            try:
+                prepared_evidence, evidence_cache, cache_hit = await prepare_final_review(
+                    run.prompt, run.plan, outputs, (run.execution_context or {}).get("final_review_evidence"))
+            except Exception as exc:
+                logger.warning("Final evidence preparation unavailable run_id=%s error_type=%s", run.id, type(exc).__name__)
+                run.status = RunStatus.waiting_for_action
+                run.error = "Delivery results are saved. Final review is temporarily unavailable; completed actions will not repeat."
+                run.result = {"partial": True, "completed_steps": len(outputs), "outputs": outputs,
+                              "verification": {"status": "unverified", "reasons": ["Final evidence preparation unavailable"]}}
+                await session.commit()
+                return
+            preparation_ms = round((time.perf_counter() - review_started) * 1000)
+            run.execution_context = {**(run.execution_context or {}), "final_review_evidence": evidence_cache}
+            await session.commit()
+            synthesis = await synthesize_result(run.prompt, outputs, prepared_evidence)
             if not synthesis.validation_passed:
                 verification = OutcomeVerification(status="unverified",
                     reasons=["Final response did not pass validation"],
@@ -1672,8 +1688,12 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             actor="tool-output-critic")
             else:
                 verification = await verify_outcome(
-                    run.prompt, run.plan, outputs, synthesis.model_dump(mode="json")
+                    run.prompt, run.plan, outputs, synthesis.model_dump(mode="json"), prepared_evidence
                 )
+            await audit(session, workspace_id, "run.final_review_metrics", {
+                "preparation_ms": preparation_ms, "evidence_cache_hit": cache_hit,
+                "total_ms": round((time.perf_counter() - review_started) * 1000),
+                "status": verification.status}, run.id)
         verification_data = verification.model_dump(mode="json")
         await audit(session, workspace_id, "run.outcome_verified", verification_data,
                     run.id, actor="outcome-verifier")

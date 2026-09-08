@@ -1,5 +1,6 @@
 import asyncio
 import json
+import hashlib
 from time import perf_counter
 from datetime import datetime, timedelta, timezone
 
@@ -28,6 +29,13 @@ class ConnectionRequiredError(RuntimeError):
     def __init__(self, missing_capabilities: list[str]):
         self.missing_capabilities = missing_capabilities
         super().__init__("Missing capability providers: " + ", ".join(missing_capabilities))
+
+
+def _stop_model_retry(exc: Exception) -> bool:
+    from .reliability import BudgetExceeded
+    status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+    return is_input_limit(exc) or isinstance(exc, BudgetExceeded) or (
+        isinstance(status, int) and 400 <= status < 500 and status not in {408, 409, 429})
 
 
 class PlanningBundle(BaseModel):
@@ -578,7 +586,7 @@ async def critique_step(step: dict, provider_result: object) -> CriticDecision:
                 decision.action = "escalate"
             return decision
         except Exception as exc:  # noqa: BLE001 - model/transport failures are transient here
-            if is_input_limit(exc):
+            if _stop_model_retry(exc):
                 break
             if attempt < 2:
                 await asyncio.sleep(attempt + 1)
@@ -590,13 +598,15 @@ async def critique_step(step: dict, provider_result: object) -> CriticDecision:
 
 
 async def verify_outcome(prompt: str, plan: dict, artifacts: list[dict],
-                         final_deliverable: dict | None = None) -> OutcomeVerification:
+                         final_deliverable: dict | None = None,
+                         prepared_evidence: object | None = None) -> OutcomeVerification:
     evidence_ids = {str(item.get("step_id", "")) for item in artifacts}
     if not artifacts or "" in evidence_ids or any(
         item.get("critic", {}).get("action") != "accept" for item in artifacts
     ):
         return OutcomeVerification(status="unverified", reasons=["Accepted evidence is missing"])
-    payload = {"original_request": prompt, "approved_plan": plan, "accepted_artifacts": artifacts}
+    payload = {"original_request": prompt, "approved_plan": plan,
+               "accepted_artifacts": artifacts if prepared_evidence is None else prepared_evidence}
     if final_deliverable is not None:
         payload["final_deliverable"] = final_deliverable
     for attempt in range(3):
@@ -611,7 +621,7 @@ async def verify_outcome(prompt: str, plan: dict, artifacts: list[dict],
                 return OutcomeVerification(status="unverified", reasons=["Verifier cited invalid or incomplete evidence"])
             return result
         except Exception as exc:
-            if is_input_limit(exc):
+            if _stop_model_retry(exc):
                 break
             if attempt < 2:
                 await asyncio.sleep(attempt + 1)
@@ -675,8 +685,10 @@ def _deterministic_deliverable(accepted_artifacts: list[dict]) -> tuple[str, str
     return summary, details
 
 
-async def synthesize_result(prompt: str, accepted_artifacts: list[dict]) -> UnifiedDeliverable:
-    payload = {"original_request": prompt, "accepted_artifacts": accepted_artifacts}
+async def synthesize_result(prompt: str, accepted_artifacts: list[dict],
+                            prepared_evidence: object | None = None) -> UnifiedDeliverable:
+    payload = {"original_request": prompt, "accepted_artifacts":
+               accepted_artifacts if prepared_evidence is None else prepared_evidence}
     for attempt in range(3):
         try:
             payload = await _prepare_action_evidence(payload, "accepted_artifacts")
@@ -685,7 +697,7 @@ async def synthesize_result(prompt: str, accepted_artifacts: list[dict]) -> Unif
             )
             return UnifiedDeliverable.model_validate(result)
         except Exception as exc:  # noqa: BLE001 - preserve successful work during AI outages
-            if is_input_limit(exc):
+            if _stop_model_retry(exc):
                 break
             if attempt < 2:
                 await asyncio.sleep(attempt + 1)
@@ -778,7 +790,7 @@ async def materialize_action_arguments(
             return resolved
         except Exception as exc:  # noqa: BLE001 - model/SDK/schema failures are recoverable
             last_error = exc
-            if is_input_limit(exc):
+            if _stop_model_retry(exc):
                 raise
             if attempt < 2:
                 await asyncio.sleep(attempt + 1)
@@ -797,6 +809,24 @@ class EvidenceDigest(BaseModel):
     relevant_evidence: str
     source_limitations: list[str] = Field(default_factory=list)
     unprocessed_source_paths: list[str] = Field(default_factory=list)
+
+
+async def prepare_final_review(prompt: str, plan: dict, artifacts: list[dict], cached: dict | None = None):
+    """Prepare once for synthesis and verification; cache only within the saved run.
+
+    The fingerprint covers the complete request, approved plan and receipts.
+    Neither a previous verdict nor authority to execute is cached.
+    """
+    source = {"original_request": prompt, "approved_plan": plan,
+              "accepted_artifacts": semantic_evidence(artifacts)}
+    fingerprint = hashlib.sha256(encoded({"version": 1, **source}).encode()).hexdigest()
+    if cached and cached.get("fingerprint") == fingerprint and "evidence" in cached:
+        return cached["evidence"], cached, True
+    prepared = await _prepare_action_evidence(source, "accepted_artifacts")
+    evidence = prepared["accepted_artifacts"]
+    # Small receipts require no reader calls and need no second durable copy.
+    cache = {"fingerprint": fingerprint, "evidence": evidence} if isinstance(evidence, dict) and "evidence_summaries" in evidence else {}
+    return evidence, cache, False
 
 
 async def _prepare_action_evidence(payload: dict, evidence_key: str = "accepted_execution_context") -> dict:
