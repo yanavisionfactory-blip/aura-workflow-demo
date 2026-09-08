@@ -198,6 +198,32 @@ def test_step_result_normalizes_provider_collection_aliases() -> None:
     assert resolve_value("{{steps.search.pages[0].id}}", context) == "page-1"
 
 
+def test_notion_title_handoff_uses_typed_property_and_preserves_evidence() -> None:
+    from copy import deepcopy
+
+    page = {"object": "page", "id": "page-1", "url": "https://example.test/page-1",
+            "properties": {"Custom heading": {"type": "title", "title": [
+                {"plain_text": "Validation "}, {"text": {"content": "report"}}
+            ]}}}
+    response = {"results": [page]}
+    original = deepcopy(response)
+    context = {"steps": {"search": step_context_value(response, "notion.search"),
+                         "read": step_context_value(page, "notion.page.get")}}
+    for path in ("search.title", "search.results[0].title", "search.page.title",
+                 "read.title", "read.page.title"):
+        assert resolve_value("{{steps." + path + "}}", context) == "Validation report"
+    assert resolve_value("{{steps.search.id}}", context) == "page-1"
+    assert context["steps"]["search"]["provider_result"] == original
+    assert response == original
+
+
+@pytest.mark.parametrize("properties", [{}, {"Name": {"type": "rich_text", "rich_text": []}},
+    {"Name": {"type": "title", "title": [{"unknown": "not evidence"}]}}])
+def test_notion_title_alias_does_not_invent_missing_evidence(properties) -> None:
+    value = step_context_value({"id": "page-1", "properties": properties}, "notion.page.get")
+    assert "title" not in value
+
+
 def test_plan_rejects_dependencies_on_later_steps() -> None:
     with pytest.raises(ValidationError, match="missing or later"):
         WorkflowPlan(
