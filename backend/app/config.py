@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-5.4-mini"
     memory_embedding_model: str = "text-embedding-3-small"
     memory_candidate_limit: int = Field(default=200, ge=1, le=1000)
+    performance_targets_json: str = "{}"
+    performance_minimum_samples: int = Field(default=30, ge=10, le=1000)
+    certification_signing_key: str = ""
+    recovery_probe_enabled: bool = False
+    recovery_probe_delay_seconds: int = Field(default=30, ge=15, le=120)
     recovery_scheduler_enabled: bool = False
     scheduler_interval_seconds: int = Field(default=15, ge=5, le=300)
     stale_run_seconds: int = Field(default=600, ge=120, le=3600)

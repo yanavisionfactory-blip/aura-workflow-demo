@@ -3,6 +3,8 @@ from sqlalchemy import text
 from .db import Base, engine
 
 DIRECT_TENANT_TABLES = (
+    "operation_certifications",
+    "recovery_probes",
     "dispatch_intents",
     "tenant_memberships",
     "policy_configs",

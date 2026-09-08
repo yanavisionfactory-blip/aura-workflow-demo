@@ -17,7 +17,7 @@ from .workflow_context import referenced_paths, resolve_value
 
 async def prefetch_ready_reads(session, run, steps, position, snapshot, context, outputs):
     settings = get_settings()
-    if not settings.parallel_reads_enabled:
+    if not settings.parallel_reads_enabled or (run.execution_context or {}).get("execution_mode") == "unattended":
         return
     await session.refresh(run, attribute_names=["cancellation_requested", "status"])
     if run.cancellation_requested or run.status != RunStatus.running:

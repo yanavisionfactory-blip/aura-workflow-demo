@@ -580,3 +580,27 @@ def enqueue_run_transitions(session, flush_context, instances):
         if kind:
             run.id = run.id or uuid4()
             session.add(DispatchIntent(workspace_id=run.workspace_id, run=run, kind=kind))
+
+
+class OperationCertification(Base):
+    __tablename__ = "operation_certifications"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    tool_id: Mapped[str] = mapped_column(ForeignKey("tool_connections.id", ondelete="CASCADE"), index=True)
+    operation: Mapped[str] = mapped_column(String(200), index=True)
+    contract_hash: Mapped[str] = mapped_column(String(64))
+    connection_fingerprint: Mapped[str] = mapped_column(String(64))
+    report: Mapped[dict] = mapped_column(JSON)
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class RecoveryProbe(Base):
+    __tablename__ = "recovery_probes"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("workflow_runs.id", ondelete="CASCADE"), unique=True)
+    guard_run_ids: Mapped[dict] = mapped_column(JSON, default=dict)
+    yielded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)

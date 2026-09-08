@@ -130,12 +130,18 @@ async def check_provider_outcome(session, run, step, snapshot) -> dict:
             if result["status"] == "verified":
                 break
         except Exception as exc:
+            from .reliability import classify_failure
+            failure = classify_failure(exc, read=True)
             result = {
                 "status": "unverified",
                 "reasons": ["Provider read-back is temporarily unavailable"],
                 "error_type": type(exc).__name__,
                 "attempts": attempt + 1,
             }
+            if not failure.retryable or failure.retry_after > 20:
+                break
+            if failure.retry_after:
+                await asyncio.sleep(failure.retry_after)
         if attempt < 2:
             await asyncio.sleep(attempt + 1)
     result["latency_ms"] = round((perf_counter() - started) * 1000)

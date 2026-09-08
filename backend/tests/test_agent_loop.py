@@ -541,3 +541,53 @@ async def test_stale_execution_delivery_leaves_paused_and_terminal_runs_untouche
     await orchestrator._execute_run("run", "w")
     async with runtime() as session:
         assert (await session.get(WorkflowRun, "run")).status == state
+
+
+async def test_unattended_execution_requires_operation_certification(runtime, monkeypatch):
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        run.execution_context = {"execution_mode": "unattended"}
+        await session.commit()
+    async def forbidden(*args, **kwargs):
+        pytest.fail("Uncertified unattended operation executed")
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", forbidden)
+    await orchestrator._execute_run("run", "w")
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        assert run.status == RunStatus.waiting_for_action
+        assert "certification" in run.error
+
+
+async def test_uncertain_known_update_reconciles_without_repeating_write(runtime, monkeypatch):
+    from app.native_connectors import native_manifest, native_operations
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        plan = WorkflowPlan(name="Update", interpretation="Set requested page fields", steps=[PlanStep(
+            key="write", agent="writer", tool_slug="notion", operation="notion.page.update",
+            arguments={"page_id": "page", "properties": {}}, reason="Update page", expected_output="Updated page", consequential=True)]).model_dump(mode="json")
+        run.plan = plan
+        digest = canonical_plan_hash(plan)
+        version = await session.get(PlanVersion, "version")
+        version.plan, version.plan_hash = plan, digest
+        snapshot = await session.get(ApprovalSnapshot, "snapshot")
+        snapshot.plan_hash = digest
+        snapshot.permission_snapshot = {"notion": native_operations("notion")}
+        step = await session.get(RunStep, "step")
+        step.tool_slug, step.operation, step.arguments = "notion", "notion.page.update", plan["steps"][0]["arguments"]
+        tool = await session.get(ToolConnection, "tool")
+        tool.slug, tool.allowed_operations = "notion", native_operations("notion")
+        manifest = await session.get(CapabilityManifest, "manifest")
+        manifest.manifest = native_manifest("notion")
+        session.add(StepAttempt(workspace_id="w", run_id="run", step_id="step", attempt_number=1,
+            status="running", tool_slug="notion", operation="notion.page.update"))
+        await session.commit()
+    async def forbidden(*args, **kwargs):
+        pytest.fail("Uncertain update was repeated")
+    async def readback(*args):
+        return {"status": "verified", "observed": {"id": "page", "properties": {}}, "resource_id": "page"}
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", forbidden)
+    monkeypatch.setattr(orchestrator, "check_provider_outcome", readback)
+    await orchestrator._execute_run("run", "w")
+    async with runtime() as session:
+        assert (await session.get(WorkflowRun, "run")).status == RunStatus.completed
+        assert len((await session.scalars(select(StepAttempt))).all()) == 1

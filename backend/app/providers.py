@@ -860,12 +860,11 @@ class ProviderExecutor:
         return await self._notion_request("GET", f"pages/{quote(a['page_id'], safe='')}")
 
     async def _notion_blocks_children_list(self, a: dict) -> dict:
-        params = {"page_size": min(int(a.get("page_size", 100)), 100)}
+        from .completeness import read_notion_tree
         if a.get("start_cursor"):
-            params["start_cursor"] = a["start_cursor"]
-        return await self._notion_request(
-            "GET", f"blocks/{quote(a['block_id'], safe='')}/children", params=params
-        )
+            return await self._notion_request("GET", f"blocks/{quote(a['block_id'], safe='')}/children",
+                params={"page_size": min(int(a.get("page_size", 100)), 100), "start_cursor": a["start_cursor"]})
+        return await read_notion_tree(self._notion_request, a["block_id"], page_size=min(int(a.get("page_size", 100)), 100))
 
     async def _notion_page_create(self, a: dict) -> dict:
         payload = {"parent": a["parent"], "properties": a["properties"]}
