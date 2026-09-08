@@ -19,7 +19,10 @@ def test_exact_repeated_provider_content_is_shared_without_losing_late_fields():
 def test_unicode_chunks_keep_every_character_and_enforce_total_budget():
     value = {"content": "计划📅" * 8000, "last": "critical last item"}
     chunks = evidence_chunks(value)
-    assert json.loads("".join(chunks)) == value
+    records = [record for chunk in chunks for record in json.loads(chunk)]
+    content = "".join(record["value"] for record in records if record["path"] == "#/content")
+    assert content == value["content"]
+    assert next(record["value"] for record in records if record["path"] == "#/last") == value["last"]
     assert all(len(chunk.encode()) <= 24000 for chunk in chunks)
     with pytest.raises(ModelInputTooLarge):
         evidence_chunks({"content": "x" * 300000})
