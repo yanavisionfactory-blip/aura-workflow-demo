@@ -390,7 +390,7 @@ async def test_verifier_checks_delivered_answer_and_preserves_receipts(runtime, 
     async def accept(*args):
         return CriticDecision(action="accept")
 
-    async def inspect_answer(prompt, plan, artifacts, final_deliverable):
+    async def inspect_answer(prompt, plan, artifacts, final_deliverable, prepared_evidence):
         assert artifacts[0]["provider_result"]["id"] == "record-1"
         assert final_deliverable["deliverable"] == "Created Example"
         return OutcomeVerification(status="unverified", reasons=["Requested ID absent from answer"])
