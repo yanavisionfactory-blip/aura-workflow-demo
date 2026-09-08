@@ -377,7 +377,8 @@ def native_manifest(slug: str) -> dict[str, Any]:
         raise NativeConnectorError(f"Unknown native connector: {slug}")
     manifest = deepcopy(definition)
     modules = manifest.pop("modules")
-    manifest["capabilities"] = modules
+    from .operation_contracts import enrich_operation
+    manifest["capabilities"] = [enrich_operation(module) for module in modules]
     return manifest
 
 

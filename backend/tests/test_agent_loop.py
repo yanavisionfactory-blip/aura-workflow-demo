@@ -315,6 +315,9 @@ async def test_review_resume_after_write_does_not_replay_provider(runtime, monke
         assert (
             await session.get(WorkflowRun, "run")
         ).status == RunStatus.waiting_for_action
+        run = await session.get(WorkflowRun, "run")
+        run.status = RunStatus.recovering  # Explicit user resume, not a duplicate delivery.
+        await session.commit()
     await orchestrator._execute_run("run", "w")
     async with runtime() as session:
         assert (await session.get(WorkflowRun, "run")).status == RunStatus.completed

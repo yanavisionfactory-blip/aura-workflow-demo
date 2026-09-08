@@ -52,7 +52,10 @@ def build_agents() -> dict[str, Agent]:
             toolset from the supplied connector catalog, and builds a finite auditable plan. Preserve
             explicit constraints and state assumptions. A catalog connector with connected=false is
             valid for plan review. Select only listed operations. Every step needs concrete inputs,
-            an output contract, a stable lowercase key, and explicit dependencies. Reads are normally
+            an output contract, a stable lowercase key, and explicit dependencies.
+            Use operation_contracts as authoritative input/output and evidence guarantees.
+            Declare required_evidence tags for content needed by each step; an operation
+            must provide those tags. Add dependent content reads when metadata is insufficient. Reads are normally
             not consequential. Sending, creating, updating, deleting, posting, scheduling, or
             purchasing is consequential. Use {{inputs.name}}, {{vars.name}}, or
             {{steps.key.field}} for reusable values. Plan only real external tool calls. Do not create
@@ -179,7 +182,11 @@ async def _run(agent: Agent, payload: dict, max_turns: int = 8):
     started = perf_counter()
     result = None
     try:
-        result = await Runner.run(agent, json.dumps(payload, indent=2, default=str), max_turns=max_turns)
+        from .reliability import bounded_model_call
+        result = await bounded_model_call(
+            lambda: Runner.run(agent, json.dumps(payload, separators=(",", ":"), default=str), max_turns=max_turns),
+            get_settings().model_call_timeout_seconds,
+        )
         return result.final_output
     finally:
         record_agent_call(agent.name, started, result)

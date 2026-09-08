@@ -207,6 +207,7 @@ class PlanStep(BaseModel):
     dependency_mode: Literal["all_succeeded", "all_settled"] = "all_succeeded"
     condition: StepCondition | None = None
     output_variables: dict[str, Any] = Field(default_factory=dict)
+    required_evidence: list[str] = Field(default_factory=list, max_length=10)
 
 
 class ObjectiveSpec(BaseModel):
