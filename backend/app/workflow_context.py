@@ -88,6 +88,42 @@ def resolve_value(value: Any, context: dict[str, Any]) -> Any:
     return REFERENCE.sub(replace, value)
 
 
+def _notion_context_value(value: Any) -> Any:
+    """Add a plain title alias without changing the provider evidence.
+
+    Notion page titles live in a property whose name is user-defined. Only
+    the provider's title-typed property is authoritative; never guess a name
+    or fabricate a title when that property was not returned.
+    """
+    if not isinstance(value, dict):
+        return value
+    normalized = dict(value)
+    if isinstance(value.get("results"), list):
+        normalized["results"] = [_notion_context_value(item) for item in value["results"]]
+    properties = value.get("properties")
+    if "title" not in value and isinstance(properties, dict):
+        for prop in properties.values():
+            if not isinstance(prop, dict) or prop.get("type") != "title":
+                continue
+            parts = prop.get("title")
+            if not isinstance(parts, list):
+                continue
+            texts = []
+            for part in parts:
+                if not isinstance(part, dict):
+                    break
+                text = part.get("plain_text")
+                if not isinstance(text, str) and isinstance(part.get("text"), dict):
+                    text = part["text"].get("content")
+                if not isinstance(text, str):
+                    break
+                texts.append(text)
+            else:
+                normalized["title"] = "".join(texts)
+            break
+    return normalized
+
+
 def step_context_value(result: Any, operation: str | None = None) -> Any:
     """Expose provider results through both canonical and compatibility paths.
 
@@ -96,13 +132,16 @@ def step_context_value(result: Any, operation: str | None = None) -> Any:
     or ``steps.key.result`` forms when they mean the entire provider response.
     Keep direct fields available while making those whole-result aliases safe.
     """
+    evidence = result
+    if (operation or "").startswith("notion."):
+        result = _notion_context_value(result)
     if not isinstance(result, dict):
         value = {"output": result, "result": result, "provider_result": result}
     else:
         value = dict(result)
         value.setdefault("output", result)
         value.setdefault("result", result)
-        value.setdefault("provider_result", result)
+        value.setdefault("provider_result", evidence)
 
     # Structured planners sometimes name a downstream value after the source
     # operation (for example ``steps.weather.forecast``). Expose that operation
