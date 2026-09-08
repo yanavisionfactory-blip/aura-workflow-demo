@@ -332,6 +332,9 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 )
             )
         ).all()
+        from .connection_permissions import refresh_granted_readbacks
+        for tool in tools:
+            refresh_granted_readbacks(tool)
         connected_inventory = [
             {
                 "slug": tool.slug,

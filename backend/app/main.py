@@ -2783,10 +2783,14 @@ async def approve_plan(
             )
         )
     ).all()
+    from .connection_permissions import refresh_granted_readbacks, verification_permission_fixes
+    for tool in tools:
+        refresh_granted_readbacks(tool)
     inventory = [
         {"slug": tool.slug, "allowed_operations": tool.allowed_operations} for tool in tools
     ]
     fixes = deterministic_plan_fixes(plan, inventory, set((run.inputs or {}).keys()))
+    fixes.extend(verification_permission_fixes(plan, inventory))
     if fixes:
         raise HTTPException(422, {"message": "Plan failed authorization", "fixes": fixes})
 
