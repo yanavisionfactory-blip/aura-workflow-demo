@@ -17,6 +17,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .agent_runtime import deterministic_plan_fixes
+from .workflow_memory import select_memory_inputs
 from .config import get_settings
 from .connector_sdk import ConnectorSDKError, validate_connector_definition
 from .db import engine, session_dependency, set_tenant_context
@@ -44,6 +45,7 @@ from .models import (
     PollingSubscription,
     RunStatus,
     RunStep,
+    StepAttempt,
     StepStatus,
     TenantMembership,
     ToolConnection,
@@ -2479,7 +2481,21 @@ async def create_run(
     workflow_inputs: dict = {}
     if payload.workflow_id:
         workflow_inputs = workflow.variables
-    inputs = {**workflow_inputs, **payload.inputs}
+    memory_inputs = {}
+    if payload.memory_run_id:
+        source = await session.get(WorkflowRun, payload.memory_run_id)
+        owner = await session.scalar(select(AuditEvent.actor).where(
+            AuditEvent.workspace_id == wid, AuditEvent.run_id == payload.memory_run_id,
+            AuditEvent.event_type == "run.created",
+        ).order_by(AuditEvent.created_at).limit(1))
+        if not source or source.workspace_id != wid or owner != context.subject:
+            raise HTTPException(404, "Memory source not found")
+        try:
+            memory_inputs = select_memory_inputs(source, owner, wid, context.subject,
+                                                 payload.memory_bindings)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+    inputs = {**workflow_inputs, **memory_inputs, **payload.inputs}
     run = WorkflowRun(
         workspace_id=wid,
         workflow_id=payload.workflow_id,
@@ -2491,6 +2507,12 @@ async def create_run(
     )
     session.add(run)
     try:
+        await session.flush()
+        session.add(AuditEvent(workspace_id=wid, run_id=run.id, actor=context.subject,
+                               event_type="run.created", payload={
+                                   "memory_run_id": payload.memory_run_id,
+                                   "memory_bindings": payload.memory_bindings,
+                               }))
         await session.commit()
     except IntegrityError:
         await session.rollback()
@@ -3144,7 +3166,21 @@ async def resume_run(
         None,
     )
     if not step:
+        if (payload.action == "retry" and payload.step_id is None and steps
+                and run.result.get("verification")
+                and all(item.status in {StepStatus.completed, StepStatus.skipped} for item in steps)):
+            run.status = RunStatus.recovering
+            run.error = None
+            await session.commit()
+            execute_run_task.delay(run.id, wid)
+            return {"id": run.id, "status": run.status.value, "review_only": True}
         raise HTTPException(404, "Failed step not found")
+    if step.consequential and payload.action in {"retry", "fallback"}:
+        attempted = await session.scalar(select(StepAttempt.id).where(
+            StepAttempt.step_id == step.id).limit(1))
+        recorded = isinstance(step.output, dict) and "provider_result" in step.output
+        if attempted and (not recorded or payload.action == "fallback"):
+            raise HTTPException(409, "Prior action may already have executed; reconcile its outcome before a new approved action")
     approved_step = (run.plan.get("steps") or [])[step.position]
     if payload.action == "skip":
         if not approved_step.get("optional", False):
@@ -3433,4 +3469,41 @@ async def analyze_interface(
                 *([{"kind": "change", "label": f"Use {buttons} visible action(s)"}] if buttons else []),
             ],
         }
+    }
+
+
+@app.get("/v1/runs/{run_id}/evaluation")
+async def get_run_evaluation(
+    run_id: str,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    run = await session.get(WorkflowRun, run_id)
+    if not run or run.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Run not found")
+    events = (await session.scalars(select(AuditEvent).where(
+        AuditEvent.workspace_id == context.workspace_id, AuditEvent.run_id == run_id,
+        AuditEvent.event_type == "run.agent_metrics",
+    ).order_by(AuditEvent.created_at))).all()
+    calls = [call for event in events for call in event.payload.get("calls", [])]
+    attempts = (await session.scalars(select(StepAttempt).where(
+        StepAttempt.workspace_id == context.workspace_id, StepAttempt.run_id == run_id,
+    ))).all()
+    return {
+        "run_id": run_id, "status": run.status.value,
+        "outcome_verified": run.result.get("verification", {}).get("status") == "verified",
+        "verification": run.result.get("verification"),
+        "agent_calls": calls, "agent_call_count": len(calls),
+        "agent_latency_ms": sum(call.get("latency_ms", 0) for call in calls),
+        "known_total_tokens": sum(call.get("total_tokens") or 0 for call in calls),
+        "token_usage_complete": bool(calls) and all(call.get("total_tokens") is not None for call in calls),
+        "agent_cost_usd": None,
+        "estimated_agent_cost_usd": (
+            sum(call["estimated_cost_usd"] for call in calls)
+            if calls and all(call.get("estimated_cost_usd") is not None for call in calls)
+            else None
+        ),
+        "provider_attempts": len(attempts),
+        "provider_latency_ms": sum(item.latency_ms or 0 for item in attempts),
+        "failed_provider_attempts": sum(item.status == "failed" for item in attempts),
     }
