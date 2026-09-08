@@ -116,6 +116,14 @@ class RunCreate(BaseModel):
     prompt: str = Field(min_length=3, max_length=20_000)
     workflow_id: str | None = None
     inputs: dict[str, Any] = Field(default_factory=dict)
+    memory_run_id: str | None = None
+    memory_bindings: dict[str, str] = Field(default_factory=dict, max_length=20)
+
+    @model_validator(mode="after")
+    def validate_memory_selection(self):
+        if bool(self.memory_run_id) != bool(self.memory_bindings):
+            raise ValueError("Memory requires a source run and explicit input bindings")
+        return self
 
 
 class WorkflowCreate(BaseModel):
@@ -278,6 +286,13 @@ class UnifiedDeliverable(BaseModel):
     deliverable: str
     traceability: list[dict[str, str]] = Field(default_factory=list)
     validation_passed: bool = True
+    required_fixes: list[str] = Field(default_factory=list)
+
+
+class OutcomeVerification(BaseModel):
+    status: Literal["verified", "unverified", "failed"]
+    evidence_step_ids: list[str] = Field(default_factory=list)
+    reasons: list[str] = Field(default_factory=list)
     required_fixes: list[str] = Field(default_factory=list)
 
 

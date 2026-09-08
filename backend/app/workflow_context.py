@@ -20,7 +20,12 @@ def referenced_paths(value: Any) -> set[str]:
         return set().union(*(referenced_paths(item) for item in value))
     if not isinstance(value, str):
         return set()
-    return {match.group(1) for match in REFERENCE.finditer(value)}
+    return {normalize_reference_path(match.group(1)) for match in REFERENCE.finditer(value)}
+
+
+def normalize_reference_path(path: str) -> str:
+    path = BRACKET_KEY.sub(lambda match: f".{match.group(1)}", path)
+    return BRACKET_INDEX.sub(lambda match: f".{match.group(1)}", path)
 
 
 def referenced_step_keys(value: Any) -> set[str]:
@@ -33,7 +38,7 @@ def referenced_step_keys(value: Any) -> set[str]:
     return {
         path.split(".", 2)[1]
         for path in referenced_paths(value)
-        if path.startswith("steps.") and len(path.split(".")) >= 3
+        if path.startswith("steps.") and len(path.split(".")) >= 2
     }
 
 
