@@ -1682,6 +1682,8 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
         if synthesis is not None:
             run.result["unified_deliverable"] = synthesis.model_dump(mode="json")
         if verification.status != "verified":
+            logger.warning("Workflow final verification unresolved run_id=%s status=%s reasons=%s fixes=%s",
+                           run.id, verification.status, verification.reasons, verification.required_fixes)
             run.status = RunStatus.waiting_for_action
             run.error = "The requested outcome is not yet verified. Recorded actions will not be replayed."
             await session.commit()
