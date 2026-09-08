@@ -42,6 +42,8 @@ def envelope(field, item=OBJECT):
     return {"type": "object", "required": [field], "properties": {field: {"type": "array", "items": item}}}
 
 KNOWN.update({
+    "jira.projects.list": ({**envelope("values"), "properties": {"values": {"type": "array", "items": {"type": "object", "required": ["id", "key"], "properties": {"id": TEXT, "key": TEXT}}}, "isLast": {"type": "boolean"}, "startAt": {"type": "integer"}, "total": {"type": "integer"}}}, ["project_metadata"]),
+    "jira.issues.search": ({**envelope("issues"), "properties": {"issues": {"type": "array", "items": {"type": "object", "required": ["id"], "properties": {"id": TEXT, "key": TEXT, "fields": OBJECT}}}, "isLast": {"type": "boolean"}, "nextPageToken": TEXT}}, ["issue_state"]),
     "weather.forecast": ({"type": "object", "required": ["location", "date", "summary"], "properties": {"location": TEXT, "date": TEXT, "summary": TEXT}}, ["forecast"]),
     "gmail.list": ({"type": "object", "properties": {"messages": {"type": "array", "items": {"type": "object", "required": ["id"], "properties": {"id": TEXT}}}, "nextPageToken": TEXT, "resultSizeEstimate": {"type": "integer"}}, "anyOf": [{"required": ["messages"]}, {"required": ["resultSizeEstimate"]}]}, ["message_metadata"]),
     "calendar.list": (envelope("items"), ["event_state"]),
@@ -57,6 +59,39 @@ KNOWN.update({
     "hubspot.contact.update": ({"type": "object", "required": ["id", "properties"], "properties": {"id": TEXT, "properties": OBJECT}}, ["write_receipt"]),
     "hubspot.company.update": ({"type": "object", "required": ["id", "properties"], "properties": {"id": TEXT, "properties": OBJECT}}, ["write_receipt"]),
     "jira.issue.update": ({"type": "object", "required": ["status_code"], "properties": {"status_code": {"const": 204}}}, ["write_receipt"]),
+})
+
+# Native provider envelopes. An accepted job is evidence of dispatch, not completion.
+IDENTIFIED = {"type": "object", "required": ["id"], "properties": {"id": TEXT}}
+DESIGN = {"type": "object", "required": ["design"], "properties": {"design": IDENTIFIED}}
+JOB = {"type": "object", "required": ["job"], "properties": {"job": {
+    "type": "object", "required": ["id", "status"], "properties": {"id": TEXT, "status": TEXT, "urls": {"type": "array", "items": TEXT}}}}}
+
+def tiktok_data(required, properties):
+    return {"type": "object", "required": ["data", "error"], "properties": {
+        "data": {"type": "object", "required": required, "properties": properties},
+        "error": {"type": "object", "required": ["code"], "properties": {"code": {"const": "ok"}}}}}
+
+KNOWN.update({
+    "mailchimp.audiences.list": (envelope("lists", IDENTIFIED), ["audience_metadata"]),
+    "mailchimp.members.list": (envelope("members", IDENTIFIED), ["record_fields"]),
+    "mailchimp.member.upsert": (IDENTIFIED, ["write_receipt"]),
+    "mailchimp.campaigns.list": (envelope("campaigns", IDENTIFIED), ["campaign_metadata"]),
+    "mailchimp.campaign.create": (IDENTIFIED, ["write_receipt"]),
+    "mailchimp.campaign.send": ({"type": "object", "required": ["status_code"], "properties": {"status_code": {"const": 204}}}, ["dispatch_receipt"]),
+    "mailchimp.reports.list": (envelope("reports", IDENTIFIED), ["campaign_metrics"]),
+    "canva.designs.list": (envelope("items", IDENTIFIED), ["design_metadata"]),
+    "canva.design.get": (DESIGN, ["design_metadata"]),
+    "canva.design.create": (DESIGN, ["write_receipt"]),
+    "canva.folder.items.list": (envelope("items"), ["resource_metadata"]),
+    "canva.export.create": (JOB, ["dispatch_receipt"]),
+    "canva.export.get": (JOB, ["job_status"]),
+    "tiktok.profile.get": (tiktok_data(["user"], {"user": OBJECT}), ["profile_metadata"]),
+    "tiktok.videos.list": (tiktok_data(["videos", "has_more"], {"videos": {"type": "array", "items": IDENTIFIED}, "has_more": {"type": "boolean"}, "cursor": {"type": "integer"}}), ["video_metadata"]),
+    "tiktok.post.creator_info": (tiktok_data(["creator_username"], {"creator_username": TEXT, "privacy_level_options": {"type": "array", "items": TEXT}}), ["posting_permissions"]),
+    "tiktok.video.upload.init": (tiktok_data(["publish_id"], {"publish_id": TEXT, "upload_url": TEXT}), ["dispatch_receipt"]),
+    "tiktok.video.publish.init": (tiktok_data(["publish_id"], {"publish_id": TEXT, "upload_url": TEXT}), ["dispatch_receipt"]),
+    "tiktok.post.status.get": (tiktok_data(["status"], {"status": TEXT, "fail_reason": TEXT}), ["job_status"]),
 })
 
 READBACK = {"gmail.send": "gmail.get", "calendar.create": "calendar.get",

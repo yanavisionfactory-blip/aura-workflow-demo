@@ -57,6 +57,6 @@ def incomplete_evidence(operation, result, required_evidence=()):
         cursor = (result.get("next_cursor") or result.get("nextPageToken") or result.get("offset")
                   or result.get("continuation") or result.get("paging", {}).get("next")
                   or result.get("response_metadata", {}).get("next_cursor"))
-        if cursor or result.get("has_more"):
+        if cursor or result.get("has_more") or result.get("isLast") is False:
             return ["Collection pagination is incomplete"]
     return []

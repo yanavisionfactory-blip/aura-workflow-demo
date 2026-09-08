@@ -204,3 +204,67 @@ async def test_postgres_canary_recovers_at_its_private_deadline_and_preserves_gu
         assert calls == ["read", "read"]
     finally:
         await engine.dispose()
+
+
+async def test_jira_collection_contracts_and_continuation_are_preserved(monkeypatch):
+    from app.providers import ProviderExecutor
+    from app.operation_contracts import output_errors
+    calls = []
+    async def request(self, method, path, **kwargs):
+        calls.append((path, kwargs))
+        return {"values": [], "isLast": True} if path == "project/search" else {"issues": [], "isLast": True}
+    monkeypatch.setattr(ProviderExecutor, "_jira_request", request)
+    executor = ProviderExecutor({}, "provider-managed", provider_kind="oauth", timeout_seconds=30)
+    projects = await executor._jira_projects_list({"start_at": 50})
+    issues = await executor._jira_issues_search({"next_page_token": "cursor"})
+    assert calls[0][1]["params"]["startAt"] == 50
+    assert calls[1][1]["json"]["nextPageToken"] == "cursor"
+    assert not output_errors("jira.projects.list", projects)
+    assert not output_errors("jira.issues.search", issues)
+    assert output_errors("jira.issues.search", {"issues": "invalid"})
+    assert incomplete_evidence("jira.projects.list", {"values": [], "isLast": False}, ["complete_collection"])
+
+
+async def test_injected_lost_response_reconciles_witness_without_second_write(tmp_path, monkeypatch):
+    import json
+    from app import release_evaluation
+    monkeypatch.setenv("FIXTURE_CREDS", '{"access_token":"fixture"}')
+    async def identity(*args):
+        return {"identity": {"id": "dedicated-account"}}
+    monkeypatch.setattr(release_evaluation, "verify_oauth_credentials", identity)
+    calls = []
+    async def execute(self, operation, arguments):
+        calls.append(operation)
+        return {"id": "page", "properties": {}, "parent": {"page_id": "parent"}, "archived": False}
+    monkeypatch.setattr(release_evaluation.ProviderExecutor, "execute", execute)
+    fixtures = [{"id": "lost", "connector": "notion", "operation": "notion.page.create",
+        "dedicated_test_account": True, "expected_account_id": "dedicated-account",
+        "credentials_env": "FIXTURE_CREDS", "simulate_lost_response": True,
+        "arguments": {"parent": {"page_id": "parent"}, "properties": {}}}]
+    ledger, report = tmp_path / "ledger.json", tmp_path / "report.json"
+    assert not await release_evaluation.evaluate(fixtures, ledger, report, True)
+    assert "receipt" not in json.loads(ledger.read_text())["lost"]
+    assert await release_evaluation.evaluate(fixtures, ledger, report, True)
+    assert calls == ["notion.page.create", "notion.page.get"]
+    assert set(json.loads(report.read_text())["cases"][0]["passed_scenarios"]) == {"lost_response", "read_back"}
+
+
+def test_native_catalog_cannot_advertise_missing_output_contracts():
+    from app.native_connectors import NATIVE_CONNECTORS
+    from app.operation_contracts import output_errors
+    from jsonschema import Draft202012Validator
+    for slug in NATIVE_CONNECTORS:
+        for module in native_manifest(slug)["capabilities"]:
+            Draft202012Validator.check_schema(module["output_schema"])
+            assert module["reliability"]["output_validation"] == "typed", module["name"]
+            assert output_errors(module["name"], {}), module["name"]
+            assert module["reliability"]["execution_ready"] is False
+
+
+def test_dispatch_receipts_cannot_supply_completed_outcome_evidence():
+    from app.operation_contracts import output_errors
+    from app.native_connectors import native_manifest
+    module = next(m for m in native_manifest("tiktok")["capabilities"] if m["name"] == "tiktok.video.publish.init")
+    assert module["reliability"]["provides"] == ["dispatch_receipt"]
+    assert not output_errors(module["name"], {"data": {"publish_id": "p"}, "error": {"code": "ok"}})
+    assert output_errors(module["name"], {"data": {"publish_id": "p"}, "error": {"code": "access_denied"}})
