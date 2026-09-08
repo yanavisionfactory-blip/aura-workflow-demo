@@ -16,6 +16,13 @@ def plan(*steps: PlanStep) -> WorkflowPlan:
     return WorkflowPlan(name="Test", interpretation="Test", steps=list(steps))
 
 
+def test_synthesizer_schema_is_accepted_by_the_real_agents_sdk():
+    from agents import AgentOutputSchema
+    agent = agent_runtime.build_agents()["synthesizer"]
+    schema = AgentOutputSchema(agent.output_type).json_schema()
+    assert schema["$defs"]["ClaimEvidence"]["additionalProperties"] is False
+
+
 def test_deterministic_validator_accepts_allow_listed_read() -> None:
     workflow = plan(
         PlanStep(
@@ -156,7 +163,7 @@ def test_critic_outage_does_not_repeat_a_successful_provider_action(monkeypatch)
     assert decision.action == "escalate"
 
 
-def test_synthesis_outage_preserves_successful_workflow(monkeypatch) -> None:
+def test_synthesis_outage_preserves_evidence_without_claiming_success(monkeypatch) -> None:
     async def fail_run(*_args, **_kwargs):
         raise RuntimeError("temporary structured-output outage")
 
@@ -179,10 +186,11 @@ def test_synthesis_outage_preserves_successful_workflow(monkeypatch) -> None:
         )
     )
 
-    assert result.validation_passed is True
+    assert result.validation_passed is False
+    assert result.required_fixes
     assert result.summary == "Sunny, 18°C"
     assert result.deliverable == "• Sunny, 18°C"
-    assert result.traceability[0]["step_id"] == "weather-step"
+    assert result.traceability[0].step_id == "weather-step"
 
 
 def test_synthesis_outage_returns_readable_provider_content(monkeypatch) -> None:

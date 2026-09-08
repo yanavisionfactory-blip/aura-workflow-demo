@@ -281,10 +281,15 @@ class CriticDecision(BaseModel):
     policy_violations: list[str] = Field(default_factory=list)
 
 
+class ClaimEvidence(BaseModel):
+    step_id: str
+    claim: str
+
+
 class UnifiedDeliverable(BaseModel):
     summary: str
     deliverable: str
-    traceability: list[dict[str, str]] = Field(default_factory=list)
+    traceability: list[ClaimEvidence] = Field(default_factory=list)
     validation_passed: bool = True
     required_fixes: list[str] = Field(default_factory=list)
 

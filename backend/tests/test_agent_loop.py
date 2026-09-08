@@ -376,6 +376,61 @@ async def test_final_verification_retry_does_not_repeat_completed_action(
     assert count == 1
 
 
+async def test_verifier_checks_delivered_answer_and_preserves_receipts(runtime, monkeypatch):
+    count = 0
+
+    async def execute(*args, **kwargs):
+        nonlocal count
+        count += 1
+        return {"id": "record-1"}
+
+    async def accept(*args):
+        return CriticDecision(action="accept")
+
+    async def inspect_answer(prompt, plan, artifacts, final_deliverable):
+        assert artifacts[0]["provider_result"]["id"] == "record-1"
+        assert final_deliverable["deliverable"] == "Created Example"
+        return OutcomeVerification(status="unverified", reasons=["Requested ID absent from answer"])
+
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", execute)
+    monkeypatch.setattr(orchestrator, "critique_step", accept)
+    monkeypatch.setattr(orchestrator, "verify_outcome", inspect_answer)
+    await orchestrator._execute_run("run", "w")
+    await orchestrator._execute_run("run", "w")
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        assert run.status == RunStatus.waiting_for_action
+        assert run.result["verification"]["status"] == "unverified"
+        assert run.result["unified_deliverable"]["deliverable"] == "Created Example"
+    assert count == 1
+
+
+async def test_synthesis_outage_cannot_complete_or_index_run(runtime, monkeypatch):
+    async def execute(*args, **kwargs):
+        return {"id": "record-1"}
+
+    async def accept(*args):
+        return CriticDecision(action="accept")
+
+    async def unavailable(*args):
+        return UnifiedDeliverable(summary="Receipt saved", deliverable="Partial extract",
+                                  validation_passed=False, required_fixes=["Retry synthesis"])
+
+    async def forbidden(*args):
+        pytest.fail("Unvalidated deliverable must not be verified or indexed")
+
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", execute)
+    monkeypatch.setattr(orchestrator, "critique_step", accept)
+    monkeypatch.setattr(orchestrator, "synthesize_result", unavailable)
+    monkeypatch.setattr(orchestrator, "verify_outcome", forbidden)
+    monkeypatch.setattr(orchestrator, "index_run_memory", forbidden)
+    await orchestrator._execute_run("run", "w")
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        assert run.status == RunStatus.waiting_for_action
+        assert run.result["verification"]["status"] == "unverified"
+
+
 async def test_recovery_api_does_not_allow_unknown_write_fallback(runtime):
     from app.main import TenantContext, resume_run
     from app.schemas import ResumeDecision
