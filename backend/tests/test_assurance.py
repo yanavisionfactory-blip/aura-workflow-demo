@@ -247,3 +247,24 @@ async def test_injected_lost_response_reconciles_witness_without_second_write(tm
     assert await release_evaluation.evaluate(fixtures, ledger, report, True)
     assert calls == ["notion.page.create", "notion.page.get"]
     assert set(json.loads(report.read_text())["cases"][0]["passed_scenarios"]) == {"lost_response", "read_back"}
+
+
+def test_native_catalog_cannot_advertise_missing_output_contracts():
+    from app.native_connectors import NATIVE_CONNECTORS
+    from app.operation_contracts import output_errors
+    from jsonschema import Draft202012Validator
+    for slug in NATIVE_CONNECTORS:
+        for module in native_manifest(slug)["capabilities"]:
+            Draft202012Validator.check_schema(module["output_schema"])
+            assert module["reliability"]["output_validation"] == "typed", module["name"]
+            assert output_errors(module["name"], {}), module["name"]
+            assert module["reliability"]["execution_ready"] is False
+
+
+def test_dispatch_receipts_cannot_supply_completed_outcome_evidence():
+    from app.operation_contracts import output_errors
+    from app.native_connectors import native_manifest
+    module = next(m for m in native_manifest("tiktok")["capabilities"] if m["name"] == "tiktok.video.publish.init")
+    assert module["reliability"]["provides"] == ["dispatch_receipt"]
+    assert not output_errors(module["name"], {"data": {"publish_id": "p"}, "error": {"code": "ok"}})
+    assert output_errors(module["name"], {"data": {"publish_id": "p"}, "error": {"code": "access_denied"}})
