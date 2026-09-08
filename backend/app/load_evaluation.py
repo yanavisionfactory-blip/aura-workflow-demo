@@ -161,7 +161,7 @@ async def evaluate(url, *, samples=30, concurrencies=(1, 2, 4, 8), provider_dela
                                 permission_snapshot={"aura": ["weather.forecast"], "notion": [m["name"] for m in native_manifest("notion")["capabilities"]]}, risk_snapshot={}, cost_snapshot={"estimated_cost_usd": 0}))
                             for i, spec in enumerate(plan.steps):
                                 step = RunStep(run_id=rid, position=i, step_key=spec.key, tool_slug=spec.tool_slug, agent=spec.agent, consequential=spec.consequential,
-                                    operation=spec.operation, arguments=spec.arguments, depends_on=spec.depends_on,
+                                    operation=spec.operation, arguments=spec.arguments, depends_on=spec.depends_on, output_variables=spec.output_variables,
                                     status=StepStatus.pending, idempotency_key=f"{rid}:{i}")
                                 session.add(step); await session.flush()
                                 if workload == "receipt_resume" and i == 0:
