@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     redis_url: str = "redis://redis:6379/0"
     openai_api_key: str = ""
     openai_model: str = "gpt-5.4-mini"
+    agent_input_cost_per_million_usd: float | None = Field(default=None, ge=0)
+    agent_output_cost_per_million_usd: float | None = Field(default=None, ge=0)
     credential_encryption_key: str = Field(
         description="URL-safe Fernet key; generate with Fernet.generate_key().decode()"
     )
