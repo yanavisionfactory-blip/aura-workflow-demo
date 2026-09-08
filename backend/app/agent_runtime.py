@@ -719,7 +719,7 @@ async def materialize_action_arguments(
     # Native and Nango-backed catalog operations share the same capability
     # contract. Supplying it here prevents a resolver from producing semantically
     # sensible but provider-invalid field names or value types.
-    from .native_connectors import current_capability_manifest
+    from .native_connectors import current_capability_manifest, normalize_module_arguments
 
     operation = str(step.get("operation", ""))
     manifest = current_capability_manifest(str(step.get("tool_slug", "")), None)
@@ -769,6 +769,8 @@ async def materialize_action_arguments(
             resolved = MaterializedActionArguments.model_validate(raw).arguments
             if referenced_paths(resolved):
                 raise ValueError("Approval arguments still contain workflow references")
+            if capability:
+                resolved = normalize_module_arguments(manifest, operation, resolved)
             return resolved
         except Exception as exc:  # noqa: BLE001 - model/SDK/schema failures are recoverable
             last_error = exc
@@ -778,8 +780,12 @@ async def materialize_action_arguments(
                 await asyncio.sleep(attempt + 1)
                 payload["response_recovery"] = (
                     f"Recovery attempt {attempt + 2} of 3. Return concrete arguments only; "
-                    "remove all workflow references and use only accepted artifacts."
+                    "remove all workflow references and use only accepted artifacts. "
+                    "Correct the supplied argument_validation_error while preserving the requested scope. "
+                    "Check every field against required_argument_contract, including all array and string limits. "
+                    "Summarize content to fit layout limits; do not blindly truncate source facts."
                 )
+                payload["argument_validation_error"] = str(exc)[:2000]
     raise RuntimeError("Approval argument recovery exhausted") from last_error
 
 
