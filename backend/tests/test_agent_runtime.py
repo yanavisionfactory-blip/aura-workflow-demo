@@ -675,3 +675,20 @@ def test_planning_clock_resolves_weekdays_across_year_boundary():
     assert context["this_week_dates"]["friday"] == "2027-01-01"
     assert context["next_occurrence_dates"]["monday"] == "2027-01-04"
     assert context["user_timezone"] is None
+
+
+def test_materializer_repairs_layout_contract_before_returning_for_approval(monkeypatch):
+    calls = []
+    async def fake_run(agent, payload, **kwargs):
+        calls.append(dict(payload))
+        items = ["Grounded milestone"] * (6 if len(calls) == 1 else 5)
+        return {"arguments": {"title": "Roadmap", "phases": [{"period": "Days 1–30", "title": "Foundation", "items": items}]}}
+    async def no_sleep(delay):
+        pass
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+    monkeypatch.setattr(agent_runtime.asyncio, "sleep", no_sleep)
+    result = asyncio.run(materialize_action_arguments("Create one roadmap slide",
+        {"tool_slug": "canva", "operation": "canva.presentation.create"}, {"steps": {}}))
+    assert len(calls) == 2
+    assert "at most 5 items" in calls[1]["argument_validation_error"]
+    assert len(result["phases"][0]["items"]) == 5
