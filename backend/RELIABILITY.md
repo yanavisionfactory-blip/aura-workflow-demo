@@ -209,3 +209,14 @@ reports explicitly state that PostgreSQL execution locks were not exercised. Pro
 load certification requires repeating representative workflows with actual model/provider
 latencies in a dedicated staging environment; neither synthetic responses nor health
 endpoint traffic can substitute for that evidence.
+
+
+A separate `--live` load profile runs the real planner and executor against public
+weather with the configured model. `Dockerfile.assurance` and `run-live-assurance.sh`
+provide a one-off container with a private temporary PostgreSQL instance, no customer
+connections, a 20-minute overall deadline and no automatic restart. Its 90 workflows
+cover single, dependent and independent reads at concurrency two. Per-profile p95
+active delivery ceilings are 30/60/45 seconds; planning p95 must remain below 45 seconds.
+This proves only the evaluated public-read/model profile, not all connector write SLAs.
+Deploying that new service was blocked by automatic approval review pending explicit
+user approval for the new deployment and model costs. No benchmark service was created.
