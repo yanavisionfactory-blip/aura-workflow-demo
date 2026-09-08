@@ -258,10 +258,10 @@ class WorkflowPlan(BaseModel):
                     + ", ".join(sorted(unknown))
                 )
             if step.condition is not None and not step.optional:
-                raise ValueError(
-                    f"Conditional step {step.key} must be optional so a false branch "
-                    "cannot fail the required workflow"
-                )
+                # A required step may never be skipped. Normalize this occasional
+                # planner contradiction at the contract boundary instead of
+                # allowing a silent skip or retrying a mechanical repair.
+                step.condition = None
             known.add(step.key)
         return self
 
