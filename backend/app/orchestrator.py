@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+from copy import deepcopy
 from datetime import datetime, timezone
 
 import httpx
@@ -12,9 +13,12 @@ from .agent_runtime import (
     critique_step,
     materialize_action_arguments,
     synthesize_result,
+    verify_outcome,
 )
 from .config import get_settings
-from .db import SessionLocal, set_tenant_context
+from .db import SessionLocal, engine, set_tenant_context
+from .execution_lock import execution_lock
+from .agent_telemetry import trace_run
 from .managed_connectors import managed_connector_client
 from .models import (
     Approval,
@@ -288,7 +292,14 @@ def planning_error_message(exc: Exception) -> str:
     return "AURA couldn't build the plan right now. Please try again."
 
 
+@trace_run
 async def plan_run(run_id: str, workspace_id: str) -> None:
+    async with execution_lock(engine, workspace_id, run_id) as acquired:
+        if acquired:
+            await _plan_run(run_id, workspace_id)
+
+
+async def _plan_run(run_id: str, workspace_id: str) -> None:
     async with SessionLocal() as session:
         await set_tenant_context(session, workspace_id)
         run = await session.get(WorkflowRun, run_id)
@@ -532,7 +543,14 @@ def _partial_result(outputs: list[dict], step: RunStep, error: str) -> dict:
     }
 
 
+@trace_run
 async def execute_run(run_id: str, workspace_id: str) -> None:
+    async with execution_lock(engine, workspace_id, run_id) as acquired:
+        if acquired:
+            await _execute_run(run_id, workspace_id)
+
+
+async def _execute_run(run_id: str, workspace_id: str) -> None:
     vault = CredentialVault()
     async with SessionLocal() as session:
         await set_tenant_context(session, workspace_id)
@@ -541,10 +559,6 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
             return
         recovery_context = dict(run.execution_context or {})
         recovery_counts = dict(recovery_context.get("__aura_recovery__") or {})
-        is_bounded_recovery = (
-            run.status == RunStatus.recovering
-            and max((int(value) for value in recovery_counts.values()), default=0) <= 3
-        )
         if run.status in {RunStatus.completed, RunStatus.cancelled, RunStatus.blocked}:
             return
         if run.cancellation_requested:
@@ -650,7 +664,7 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
         await session.commit()
 
         outputs: list[dict] = []
-        context = run.execution_context or {
+        context = deepcopy(run.execution_context) or {
             "inputs": run.inputs or {},
             "vars": run.inputs or {},
             "steps": {},
@@ -658,22 +672,32 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
         step_by_key = {step.step_key: step for step in steps}
         for step in steps:
             materialized_for_approval = False
-            recovered_confirmed_write = (
-                step.status != StepStatus.completed
-                and _has_confirmed_consequential_result(step)
-            )
-            if step.status == StepStatus.completed or recovered_confirmed_write:
-                if recovered_confirmed_write:
-                    step.status = StepStatus.completed
-                    step.error = None
-                    step.completed_at = step.completed_at or datetime.now(timezone.utc)
-                    await audit(
-                        session,
-                        workspace_id,
-                        "step.recovered_without_replay",
-                        {"step_id": step.id},
-                        run.id,
-                    )
+            recorded_result = isinstance(step.output, dict) and "provider_result" in step.output
+            if recorded_result and step.output.get("critic", {}).get("action") != "accept":
+                contract = {**plan_steps[step.position], "step_id": step.id,
+                            "arguments": step.output.get("resolved_arguments", step.arguments)}
+                criticism = await critique_step(contract, step.output["provider_result"])
+                step.output = {**step.output, "critic": criticism.model_dump(mode="json")}
+                await audit(session, workspace_id, "step.review_resumed",
+                            {"step_id": step.id, "decision": criticism.model_dump(mode="json")}, run.id)
+                if criticism.action != "accept":
+                    step.status = StepStatus.failed
+                    run.status = RunStatus.waiting_for_action
+                    step.error = run.error = "Recorded result needs review; no provider action was repeated."
+                    run.result = _partial_result(outputs, step, run.error)
+                    await session.commit()
+                    return
+                step.status = StepStatus.completed
+                step.error = None
+                step.completed_at = datetime.now(timezone.utc)
+                session.add(Artifact(workspace_id=workspace_id, run_id=run.id,
+                                     step_id=step.id, accepted=True,
+                                     provenance={"plan_hash": snapshot.plan_hash, "review_resumed": True},
+                                     content=step.output))
+                await session.commit()
+            if recorded_result:
+                step.status = StepStatus.completed
+            if step.status == StepStatus.completed:
                 outputs.append(step.output)
                 context.setdefault("steps", {})[step.step_key] = step_context_value(
                     step.output.get("provider_result", step.output), step.operation
@@ -691,6 +715,8 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                             step.id,
                             name,
                         )
+                run.execution_context = deepcopy(context)
+                await session.commit()
                 continue
             if step.status == StepStatus.skipped:
                 continue
@@ -892,7 +918,7 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                     "operation": step.operation,
                     "arguments": resolved_arguments,
                 }
-                run.execution_context = context
+                run.execution_context = deepcopy(context)
                 run.status = RunStatus.awaiting_approval
                 await audit(
                     session,
@@ -937,7 +963,7 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
             if degraded_read_recovery:
                 recovery_counts[step.id] = recovery_count + 1
                 context["__aura_recovery__"] = recovery_counts
-                run.execution_context = context
+                run.execution_context = deepcopy(context)
                 await audit(
                     session,
                     workspace_id,
@@ -958,11 +984,7 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                 approved_permissions=approved_permissions,
                 current_permissions=tool.allowed_operations,
                 operation=step.operation,
-                trust_score=(
-                    max(trust.score, float(snapshot.policy_snapshot["trust_execution_floor"]))
-                    if is_bounded_recovery
-                    else effective_trust
-                ),
+                trust_score=effective_trust,
                 policy=snapshot.policy_snapshot,
             )
             if runtime_decision["action"] in {"pause", "block"}:
@@ -1016,6 +1038,8 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                         select(StepAttempt).where(StepAttempt.step_id == step.id)
                     )
                 ).all()
+                if step.consequential and existing:
+                    return None, "Previous action outcome is uncertain; reconcile provider state before a new approved action"
                 max_retries = (
                     0
                     if step.consequential
@@ -1115,6 +1139,15 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                             timed_out=False,
                             latency_ms=latency,
                         )
+                        step.output = {
+                            "step_id": step.id, "provider_result": result,
+                            "tool": active_tool.slug, "operation": operation,
+                            "resolved_arguments": arguments,
+                            "critic": {"action": "escalate", "reasons": ["Review pending"]},
+                        }
+                        # Fallback identity must survive the same crash boundary as its receipt.
+                        step.tool_slug = active_tool.slug
+                        step.operation = operation
                         await session.commit()
                         return result, None
                     except asyncio.TimeoutError as exc:
@@ -1302,42 +1335,20 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                     "Workflow output rejected run_id=%s step_id=%s detail=%s",
                     run.id, step.id, internal_error,
                 )
-                if _accept_successful_read_after_critic(step.operation, criticism):
-                    criticism = criticism.model_copy(
-                        update={
-                            "action": "accept",
-                            "reasons": [
-                                "Provider read passed deterministic checks; semantic "
-                                "review was recorded without replaying the same request."
-                            ],
-                        }
-                    )
-                elif step.consequential:
-                    # The provider has already confirmed the external write. A
-                    # semantic-critic disagreement cannot safely undo it, and
-                    # replaying it could duplicate emails, issues, or events.
-                    criticism = criticism.model_copy(
-                        update={
-                            "action": "accept",
-                            "reasons": [
-                                "Provider confirmed the approved external action; "
-                                "post-write review was recorded without replaying it."
-                            ],
-                        }
-                    )
-                else:
-                    step.status = StepStatus.failed
-                    step.error = _friendly_execution_error(internal_error)
-                    run.status = RunStatus.waiting_for_action
-                    run.error = step.error
-                    run.result = _partial_result(outputs, step, step.error)
-                    await session.commit()
-                    return
+                step.output = {**step.output, "critic": criticism.model_dump(mode="json")}
+                step.status = StepStatus.failed
+                step.error = "Provider result was recorded but did not pass review."
+                run.status = RunStatus.waiting_for_action
+                run.error = step.error
+                run.result = _partial_result(outputs, step, step.error)
+                await session.commit()
+                return
 
             step.status = StepStatus.completed
             step.output = {
                 "step_id": step.id,
                 "provider_result": result,
+                "resolved_arguments": resolved_arguments,
                 "tool": step.tool_slug,
                 "operation": step.operation,
                 "critic": criticism.model_dump(mode="json"),
@@ -1375,7 +1386,7 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                         step.id,
                     )
                 else:
-                    run.execution_context = context
+                    run.execution_context = deepcopy(context)
                     step.status = StepStatus.failed
                     step.error = _friendly_execution_error(internal_error)
                     run.status = RunStatus.waiting_for_action
@@ -1383,7 +1394,7 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                     run.result = _partial_result(outputs, step, step.error)
                     await session.commit()
                     return
-            run.execution_context = context
+            run.execution_context = deepcopy(context)
             session.add(
                 Artifact(
                     workspace_id=workspace_id,
@@ -1444,6 +1455,18 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
             await session.commit()
             return
 
+        verification = await verify_outcome(run.prompt, run.plan, outputs)
+        verification_data = verification.model_dump(mode="json")
+        await audit(session, workspace_id, "run.outcome_verified", verification_data,
+                    run.id, actor="outcome-verifier")
+        run.result = {"partial": verification.status != "verified", "completed_steps": len(outputs),
+                      "outputs": outputs, "verification": verification_data}
+        if verification.status != "verified":
+            run.status = RunStatus.waiting_for_action
+            run.error = "The requested outcome is not yet verified. Recorded actions will not be replayed."
+            await session.commit()
+            return
+        await session.commit()
         synthesis = await synthesize_result(run.prompt, outputs)
         if not synthesis.validation_passed:
             run.status = RunStatus.waiting_for_action
@@ -1453,6 +1476,7 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
             run.result = {
                 **_partial_result(outputs, steps[-1], run.error),
                 "required_fixes": synthesis.required_fixes,
+                "verification": verification_data,
             }
             await audit(
                 session,
@@ -1470,6 +1494,7 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
             "completed_steps": len(outputs),
             "outputs": outputs,
             "unified_deliverable": synthesis.model_dump(mode="json"),
+            "verification": verification_data,
         }
         await audit(session, workspace_id, "run.completed", run.result, run.id)
         await session.commit()
