@@ -194,16 +194,16 @@ def test_read_review_distinguishes_capability_tags_from_provider_fields(monkeypa
 
     async def critic(contract, evidence):
         seen.append((contract, evidence))
-        return CriticDecision(action="accept", reasons=["Valid event list"])
+        return CriticDecision(action="accept", reasons=["Valid message list"])
 
     monkeypatch.setattr(orchestrator, "check_provider_outcome", unsupported)
     monkeypatch.setattr(orchestrator, "critique_step", critic)
-    result = {"items": []}
-    step = SimpleNamespace(operation="calendar.list", output={})
-    contract = {"required_evidence": ["event_state"], "expected_output": "Calendar event list"}
+    result = {"messages": []}
+    step = SimpleNamespace(operation="gmail.list", output={})
+    contract = {"required_evidence": ["message_state"], "expected_output": "Gmail message list"}
     decision = asyncio.run(orchestrator.review_recorded_result(None, None, step, None, contract, result))
     assert decision.action == "accept"
     assert "required_evidence" not in seen[0][0]
-    assert seen[0][0]["validated_capability_tags"] == ["event_state"]
+    assert seen[0][0]["validated_capability_tags"] == ["message_state"]
     assert seen[0][1] == result
-    assert contract["required_evidence"] == ["event_state"]
+    assert contract["required_evidence"] == ["message_state"]
