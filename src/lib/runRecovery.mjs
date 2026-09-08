@@ -12,7 +12,7 @@ export function recoveryForRun(run = {}) {
   const reviewOnly = !step && steps.length > 0 && Boolean(run.result?.verification)
     && steps.every((s) => ["completed", "skipped"].includes(s.status));
   let retry = recoverable && attempts < 3 &&
-    ((step?.status === "failed" && step.consequential === false) || reviewOnly);
+    ((step?.status === "failed" && (step.consequential === false || step.recovery?.can_retry === true)) || reviewOnly);
   const optional = run.plan?.steps?.[step?.position ?? index]?.optional === true;
   const skip = recoverable && attempts < 3 && step?.status === "failed" && optional;
   let what = "AURA couldn't finish this step.";
@@ -46,7 +46,15 @@ export function recoveryForRun(run = {}) {
     why = "The requested item may be missing or unavailable to the connected account.";
     fix = "Check that the item exists and is shared with the connected account, then try again.";
   }
-  if (step?.consequential && step.status === "failed" && !/connection|configuration/.test(text)) {
+  if (step?.status === "failed" && step.recovery?.phase === "before_action" && !/connection|configuration/.test(text)) {
+    what = "AURA stopped before sending this action to the app.";
+    why = /processing limit/.test(text)
+      ? "The source content could not be fully prepared within this run's processing limit."
+      : "AURA couldn't finish preparing this step.";
+    fix = retry
+      ? "Retry this step. AURA will reuse the completed work and prepare the action for your review."
+      : "Your completed work is saved. This preparation problem needs resolving before you continue.";
+  } else if (step?.consequential && step.status === "failed" && !/connection|configuration/.test(text)) {
     fix = "Check the result in the connected app. AURA won't automatically repeat an action that could already have happened.";
   }
   if (attempts >= 3) fix = "This step has reached its retry limit. The underlying problem needs checking before another attempt.";
