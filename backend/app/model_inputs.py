@@ -68,3 +68,50 @@ def evidence_chunks(value):
     if current:
         chunks.append("".join(current))
     return chunks
+
+
+def canonical_execution_evidence(context):
+    """Remove executor compatibility copies from model evidence, not from storage.
+
+    step_context_value exposes whole receipts and collections under several paths
+    for deterministic reference resolution. Those aliases are not new evidence.
+    Preserve the provider fields, computed additions and a small alias map instead.
+    """
+    steps = {}
+    for step_key, value in context.get("steps", {}).items():
+        if not isinstance(value, dict) or "provider_result" not in value:
+            steps[step_key] = value
+            continue
+        receipt = value["provider_result"]
+        if not isinstance(receipt, dict):
+            steps[step_key] = {"provider_result": receipt}
+            continue
+        canonical = dict(receipt)
+        aliases = {"provider_result": "."}
+        known_values = {}
+        for field, original in receipt.items():
+            known_values.setdefault(encoded(original), field)
+            if isinstance(original, list) and original:
+                known_values.setdefault(encoded(original[0]), field + ".0")
+                if isinstance(original[0], dict):
+                    for subfield, subvalue in original[0].items():
+                        known_values.setdefault(encoded(subvalue), field + ".0." + subfield)
+        for key, item in value.items():
+            if key == "provider_result":
+                continue
+            if key in receipt:
+                # Keep computed normalization such as a Notion title.
+                canonical[key] = item
+                continue
+            if item == receipt or (isinstance(item, dict) and item == value.get("output")):
+                aliases[key] = "."
+                continue
+            target = known_values.get(encoded(item))
+            if target is not None:
+                aliases[key] = target
+                continue
+            canonical[key] = item
+        if aliases:
+            canonical["__aura_context_aliases__"] = aliases
+        steps[step_key] = canonical
+    return {"inputs": context.get("inputs", {}), "vars": context.get("vars", {}), "steps": steps}

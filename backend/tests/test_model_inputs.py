@@ -74,3 +74,19 @@ def test_incomplete_chunk_cannot_produce_action(monkeypatch):
     with pytest.raises(ModelInputTooLarge, match="coverage"):
         asyncio.run(agent_runtime.materialize_action_arguments("summarize", {"operation": "gmail.send"},
             {"steps": {"source": "x" * 100000}}))
+
+
+def test_executor_aliases_do_not_multiply_model_source_size():
+    from app.workflow_context import step_context_value
+    from app.model_inputs import canonical_execution_evidence, encoded
+    receipt = {"results": [{"id": "record-1", "content": "milestone " * 3000}], "complete": True}
+    inflated = step_context_value(receipt, "notion.blocks.children.list")
+    assert len(encoded(inflated)) > 288000
+    context = canonical_execution_evidence({"steps": {"read": inflated}})
+    assert len(encoded(context)) < 96000
+    canonical = context["steps"]["read"]
+    assert canonical["results"] == receipt["results"]
+    assert canonical["complete"] is True
+    assert canonical["__aura_context_aliases__"]["output"] == "."
+    assert canonical["__aura_context_aliases__"]["records"] == "results"
+    assert inflated["output"] == receipt  # original remains usable for deterministic resolution
