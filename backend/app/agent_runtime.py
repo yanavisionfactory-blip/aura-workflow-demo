@@ -181,7 +181,9 @@ def build_agents() -> dict[str, Agent]:
             transformations, not provider calls. Compose clear human-readable content that answers
             the original request; do not paste raw provider JSON unless explicitly requested.
             Convert event instants to the relevant named local timezone when reporting appointment
-            times. Combine duplicate entries only when evidence supports it and disclose conflicting
+            times. When calendar evidence includes canonical_time_summary, use its precomputed
+            explicit timezone display; do not calculate offsets yourself. A missing or unspecified
+            end time must not become a claimed duration. Combine duplicate entries only when evidence supports it and disclose conflicting
             details. Omit internal metadata and token-bearing management links unless requested.
             Never invent a provider identifier, project key,
             recipient, assignee, page ID, issue key, or other external resource. When a list action

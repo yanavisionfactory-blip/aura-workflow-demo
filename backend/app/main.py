@@ -159,6 +159,8 @@ app.add_middleware(CORSMiddleware, allow_origins=[frontend_origin], allow_creden
 @app.on_event("startup")
 async def startup() -> None:
     await migrate_database()
+    from .internal_diagnostics import log_recent_stops_safely
+    await log_recent_stops_safely()
     if settings.recovery_scheduler_enabled:
         import asyncio
         app.state.recovery_task = asyncio.create_task(recovery_loop())

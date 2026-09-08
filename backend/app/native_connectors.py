@@ -6,7 +6,7 @@ not encode provider-specific workflows.
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from copy import deepcopy
 from typing import Any
 
@@ -129,7 +129,7 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                 "to": {"type": "string", "format": "email"}, "subject": _TEXT, "body": _TEXT
             }),
             _module("gmail.get", "search", "Read a specific Gmail message for outcome verification.", required=("message_id",), properties={"message_id": _TEXT}),
-            _module("calendar.list", "search", "Find calendar events. Returns an items list, not a selected event. Use query to filter by title/content; date bounds require RFC3339 offsets.", properties={
+            _module("calendar.list", "search", "Find calendar events. Returns an items list, not a selected event. Use query to filter by title/content; date bounds use RFC3339 offsets. Unzoned query bounds default to explicitly labeled UTC. canonical_time_summary supplies deterministic UTC and named-zone displays.", properties={
                 "query": _TEXT,
                 "time_min": {"type": "string", "format": "date-time", "x-preserve-on-recovery": True},
                 "time_max": {"type": "string", "format": "date-time", "x-preserve-on-recovery": True},
@@ -601,6 +601,15 @@ def normalize_module_arguments(
         target = _schema_argument_target(snake_key, properties)
         if target in normalized and target != key:
             raise NativeConnectorError(f"Duplicate values supplied for {target!r}")
+        if properties.get(target, {}).get("format") == "date-time" and isinstance(value, str) and "{{" not in value:
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    # A labeled UTC query window is preferable to a blocked plan.
+                    # Explicit offsets are preserved; this is not the user's timezone.
+                    value = parsed.replace(tzinfo=timezone.utc).isoformat()
+            except ValueError:
+                pass  # Normal validation explains genuinely invalid dates.
         normalized[target] = value
     validate_module_arguments(manifest, operation, normalized)
     return normalized

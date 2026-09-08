@@ -813,7 +813,8 @@ class ProviderExecutor:
         if a.get("query"): params["q"] = a["query"]
         if a.get("time_min"): params["timeMin"] = a["time_min"]
         if a.get("time_max"): params["timeMax"] = a["time_max"]
-        return await self._request("GET", "https://www.googleapis.com/calendar/v3/calendars/primary/events", params=params)
+        from .calendar_time import annotate_calendar_times
+        return annotate_calendar_times(await self._request("GET", "https://www.googleapis.com/calendar/v3/calendars/primary/events", params=params))
 
     async def _calendar_create(self, a: dict) -> dict:
         if not a.get("start") or not a.get("end"):
