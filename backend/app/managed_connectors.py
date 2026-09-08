@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from functools import lru_cache
 from typing import Any
 from urllib.parse import quote
@@ -23,6 +24,40 @@ logger = logging.getLogger(__name__)
 
 class ManagedConnectorError(RuntimeError):
     """A safe boundary error for the managed connector control plane."""
+
+
+class ConnectorConfigurationError(ManagedConnectorError):
+    """Operator-owned setup failure, never a request for user credentials."""
+
+    def __init__(self, code: str):
+        self.code = code
+        logger.warning("managed_connector_configuration_error code=%s", code)
+        super().__init__(
+            "This app's connection setup needs an administrator correction "
+            f"({code}). Your workflow is preserved; signing in again will not fix it."
+        )
+
+
+def validate_oauth_configuration(provider: str, credentials: dict) -> None:
+    """Structural checks only; success is not provider-side OAuth certification.
+
+    Nango owns existing app credentials. Never replace them with possibly stale
+    process environment values or log credential values.
+    """
+    if credentials.get("type") != "OAUTH2":
+        raise ConnectorConfigurationError("oauth_credentials_unavailable")
+    for field in ("client_id", "client_secret"):
+        value = credentials.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ConnectorConfigurationError(f"missing_{field}")
+        if value != value.strip() or any(c.isspace() for c in value):
+            raise ConnectorConfigurationError(f"invalid_{field}")
+        if value.lower() in {"changeme", "placeholder", "your_client_id", "your_client_secret"}:
+            raise ConnectorConfigurationError(f"placeholder_{field}")
+    if credentials["client_id"] == credentials["client_secret"]:
+        raise ConnectorConfigurationError("client_id_equals_secret")
+    if provider == "canva" and not re.fullmatch(r"OC-[A-Za-z0-9_-]+", credentials["client_id"]):
+        raise ConnectorConfigurationError("invalid_canva_client_id")
 
 
 class NangoClient:
@@ -101,6 +136,10 @@ class NangoClient:
             ),
             key=lambda item: str(item["unique_key"]),
         )
+        if exact and str(exact.get("provider", "")).lower() != provider:
+            raise ConnectorConfigurationError("integration_provider_mismatch")
+        if not exact and len(matching) > 1:
+            raise ConnectorConfigurationError("ambiguous_integration_mapping")
         selected = exact or (matching[0] if matching else None)
         if selected:
             resolved = str(selected["unique_key"])
@@ -123,6 +162,7 @@ class NangoClient:
             logger.warning("managed_connector_missing_oauth_app provider=%s", provider)
             raise ManagedConnectorError("This app is not available right now")
 
+        validate_oauth_configuration(provider, credentials)
         try:
             created = await self._request(
                 "POST",
@@ -192,29 +232,11 @@ class NangoClient:
                 return response.json() if response.content else {}
             except httpx.HTTPStatusError as exc:
                 last_error = exc
-                detail = ""
-                try:
-                    payload = exc.response.json()
-                    error = payload.get("error", payload) if isinstance(payload, dict) else {}
-                    detail_parts = [str(error.get("code") or error.get("message") or "")]
-                    validation_errors = error.get("errors")
-                    if isinstance(validation_errors, list):
-                        for item in validation_errors[:3]:
-                            if not isinstance(item, dict):
-                                continue
-                            path_value = item.get("path") or []
-                            field_path = ".".join(str(part) for part in path_value)
-                            message = str(item.get("message") or item.get("code") or "")
-                            detail_parts.append(f"{field_path}:{message}")
-                    detail = " | ".join(part for part in detail_parts if part)[:320]
-                except (ValueError, AttributeError):
-                    pass
+                # Upstream error bodies can echo submitted credentials. Log only
+                # status and a fixed category, never raw messages or values.
                 logger.warning(
-                    "managed_connector_upstream_http method=%s path=%s status=%s detail=%s",
-                    method,
-                    path,
-                    exc.response.status_code,
-                    detail,
+                    "managed_connector_upstream_http method=%s status=%s",
+                    method, exc.response.status_code,
                 )
                 break
             except (httpx.TransportError, ValueError) as exc:
@@ -233,8 +255,42 @@ class NangoClient:
             "The secure connection service is temporarily unavailable"
         ) from last_error
 
+    async def preflight(self, provider: str) -> str:
+        """Fresh, bounded validation before issuing any user authorization link.
+
+        No positive cache: admin repairs and credential edits take effect on the
+        next attempt. Runs with healthy existing connections do not pay this cost.
+        """
+        provider = provider.strip().lower()
+        self._integration_cache.pop(provider, None)
+        try:
+            async with asyncio.timeout(10):
+                integration_id = await self.integration_id(provider)
+                result = await self._request(
+                    "GET", f"/integrations/{quote(integration_id, safe='')}",
+                    params={"include": "credentials"},
+                )
+                data = result.get("data", {})
+                if not isinstance(data, dict) or data.get("unique_key") != integration_id:
+                    raise ConnectorConfigurationError("integration_identity_mismatch")
+                if data.get("provider") != provider:
+                    raise ConnectorConfigurationError("integration_provider_mismatch")
+                credentials = data.get("credentials")
+                if not isinstance(credentials, dict):
+                    raise ConnectorConfigurationError("oauth_credentials_unavailable")
+                validate_oauth_configuration(provider, credentials)
+                logger.info("managed_connector_preflight_passed provider=%s", provider)
+                return integration_id
+        except ConnectorConfigurationError as exc:
+            logger.warning("managed_connector_preflight_failed provider=%s code=%s", provider, exc.code)
+            raise
+        except TimeoutError:
+            raise ManagedConnectorError(
+                "Connection setup could not be checked in time. Please try again shortly."
+            ) from None
+
     async def create_session(self, provider: str, workspace_id: str, subject: str) -> dict:
-        integration_id = await self.integration_id(provider)
+        integration_id = await self.preflight(provider)
         payload = {
             "allowed_integrations": [integration_id],
             "tags": {
@@ -253,7 +309,7 @@ class NangoClient:
         workspace_id: str,
         subject: str,
     ) -> dict:
-        integration_id = await self.integration_id(provider)
+        integration_id = await self.preflight(provider)
         result = await self._request(
             "POST",
             "/connect/sessions/reconnect",
