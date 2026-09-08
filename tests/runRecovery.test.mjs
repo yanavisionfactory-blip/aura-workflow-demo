@@ -46,3 +46,19 @@ test('generic failures do not invent a cause or an applied fix', () => {
   assert.match(r.why, /doesn't identify a specific cause/);
   assert.equal(r.buttonLabel.includes('Apply fix'), false);
 });
+
+test("backend proof of no dispatch allows a consequential preparation retry", () => {
+  const run = {status: "waiting_for_action", steps: [{id: "s", status: "failed", consequential: true,
+    recovery: {phase: "before_action", can_retry: true}}]};
+  const result = recoveryForRun(run);
+  assert.equal(result.canRetry, true);
+  assert.match(result.what, /before sending/);
+  assert.doesNotMatch(result.fix, /already have happened/);
+});
+
+test("a dispatched write remains protected from duplicate retry", () => {
+  const result = recoveryForRun({status: "waiting_for_action", steps: [{id: "s", status: "failed", consequential: true,
+    recovery: {phase: "after_dispatch", can_retry: false}}]});
+  assert.equal(result.canRetry, false);
+  assert.match(result.fix, /already have happened/);
+});
