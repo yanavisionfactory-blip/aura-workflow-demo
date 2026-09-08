@@ -3056,7 +3056,7 @@ async def decide_approval(
             }
             plan_json["steps"] = plan_steps
             new_hash = canonical_plan_hash(plan_json)
-            current_version.status = "superseded"
+            # Approved versions are immutable; lineage and the newest snapshot identify the current version.
             new_version = PlanVersion(
                 workspace_id=wid,
                 run_id=run.id,
