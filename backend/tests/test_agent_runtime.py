@@ -311,7 +311,11 @@ def test_materializer_accepts_direct_argument_object_and_indexes_text(monkeypatc
     arguments = asyncio.run(
         materialize_action_arguments(
             "Create a Jira task from the first action item",
-            {"key": "create_task", "operation": "jira.issue.create"},
+            {
+                "key": "create_task",
+                "tool_slug": "jira",
+                "operation": "jira.issue.create",
+            },
             {
                 "steps": {
                     "notes": {
@@ -329,6 +333,10 @@ def test_materializer_accepts_direct_argument_object_and_indexes_text(monkeypatc
         "summary": "Confirm onboarding checklist",
     }
     assert captured["accepted_text_evidence"] == ["Confirm onboarding checklist"]
+    assert captured["required_argument_contract"]["required"] == [
+        "project_key",
+        "summary",
+    ]
 
 
 def test_create_plan_uses_one_model_round_trip_for_valid_plan(monkeypatch) -> None:

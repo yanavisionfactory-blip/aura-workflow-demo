@@ -526,9 +526,27 @@ async def materialize_action_arguments(
     Provider reads have already completed at this boundary. The resolver is intentionally
     bounded and its output is validated again against the connector schema by the caller.
     """
+    # Native and Nango-backed catalog operations share the same capability
+    # contract. Supplying it here prevents a resolver from producing semantically
+    # sensible but provider-invalid field names or value types.
+    from .native_connectors import current_capability_manifest
+
+    operation = str(step.get("operation", ""))
+    manifest = current_capability_manifest(str(step.get("tool_slug", "")), None)
+    capability = next(
+        (
+            item
+            for item in manifest.get("capabilities", [])
+            if item.get("name") == operation
+        ),
+        None,
+    )
     payload = {
         "original_request": prompt,
         "action_step": step,
+        "required_argument_contract": (
+            capability.get("input_schema", {}) if capability else {}
+        ),
         # Give the resolver a compact, provider-agnostic evidence index as well
         # as the structured context. This keeps large/nested provider payloads
         # from making simple drafting and extraction unnecessarily fragile.
