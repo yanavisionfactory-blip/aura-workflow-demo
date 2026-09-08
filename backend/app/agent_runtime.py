@@ -178,7 +178,12 @@ def build_agents() -> dict[str, Agent]:
             original request, the step contract, and accepted outputs supplied in the execution
             context. Replace every workflow reference with a real value. You may extract,
             summarize, map, or draft content from accepted artifacts because these are internal
-            transformations, not provider calls. Never invent a provider identifier, project key,
+            transformations, not provider calls. Compose clear human-readable content that answers
+            the original request; do not paste raw provider JSON unless explicitly requested.
+            Convert event instants to the relevant named local timezone when reporting appointment
+            times. Combine duplicate entries only when evidence supports it and disclose conflicting
+            details. Omit internal metadata and token-bearing management links unless requested.
+            Never invent a provider identifier, project key,
             recipient, assignee, page ID, issue key, or other external resource. When a list action
             precedes the write, select only a value present in that list. When the step key or reason
             identifies an ordinal item, use that item from the accepted source content. Preserve

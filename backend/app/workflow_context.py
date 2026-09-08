@@ -249,3 +249,14 @@ def evaluate_condition(condition: StepCondition | dict, context: dict[str, Any])
             f"Condition {operator!r} cannot compare these workflow values"
         ) from exc
     raise WorkflowContextError(f"Unsupported condition operator: {operator}")
+
+
+def requires_content_composition(arguments: dict, input_schema: dict, context: dict) -> bool:
+    """Structured evidence used as text needs composition, not JSON interpolation."""
+    for name, value in arguments.items():
+        if input_schema.get("properties", {}).get(name, {}).get("type") != "string":
+            continue
+        for path in referenced_paths(value):
+            if isinstance(resolve_value("{{" + path + "}}", context), (dict, list)):
+                return True
+    return False

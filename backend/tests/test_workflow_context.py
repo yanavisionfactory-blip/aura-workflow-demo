@@ -271,3 +271,13 @@ def test_referenced_output_must_be_an_explicit_dependency() -> None:
     )
     assert any("declare referenced steps" in fix for fix in fixes)
     assert referenced_step_keys(plan.steps[1].arguments) == {"lookup"}
+
+
+def test_structured_source_text_requires_composition_but_literal_text_does_not():
+    from app.workflow_context import requires_content_composition
+    schema = {"properties": {"body": {"type": "string"}, "payload": {"type": "object"}}}
+    context = {"steps": {"read": {"items": [{"summary": "Meeting"}], "id": "abc"}}}
+    assert requires_content_composition({"body": "Details: {{steps.read.items}}"}, schema, context)
+    assert not requires_content_composition({"body": "ID: {{steps.read.id}}"}, schema, context)
+    assert not requires_content_composition({"body": '{"literal":"requested JSON"}'}, schema, context)
+    assert not requires_content_composition({"payload": "{{steps.read.items}}"}, schema, context)
