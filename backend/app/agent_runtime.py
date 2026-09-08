@@ -7,6 +7,7 @@ from agents import Agent, AgentOutputSchema, Runner
 from pydantic import BaseModel, Field
 
 from .config import get_settings
+from .argument_output import ArgumentOutputSchema
 from .schemas import (
     CriticDecision,
     MaterializedActionArguments,
@@ -757,10 +758,13 @@ async def materialize_action_arguments(
     if len(encoded(payload["accepted_text_evidence"]).encode()) > 4000:
         payload["accepted_text_evidence"] = []
     payload = await _prepare_action_evidence(payload)
+    resolver = build_agents()["argument_resolver"]
+    if capability and capability.get("input_schema"):
+        resolver = resolver.clone(output_type=ArgumentOutputSchema(capability["input_schema"]))
     last_error: Exception | None = None
     for attempt in range(3):
         try:
-            raw = await _run(build_agents()["argument_resolver"], payload, max_turns=8)
+            raw = await _run(resolver, payload, max_turns=8)
             # The SDK normally returns the declared wrapper, while some model
             # providers legitimately return the requested argument object
             # directly. Both shapes express the same contract.
