@@ -572,6 +572,11 @@ async def review_recorded_result(session, run, step, snapshot, contract, result)
     errors = ([] if step.output.get("reconciliation", {}).get("status") == "verified" else output_errors(step.operation, result)) + incomplete_evidence(step.operation, result, contract.get("required_evidence", []))
     if errors:
         return CriticDecision(action="escalate", reasons=errors)
+    if step.operation == "calendar.list":
+        from .calendar_time import calendar_list_errors
+        errors = calendar_list_errors(contract.get("arguments", {}), result)
+        return CriticDecision(action="escalate" if errors else "accept",
+            reasons=errors or ["Calendar event structure and query interval verified deterministically; semantic appointment selection remains downstream"])
     check = step.output.get("outcome_check", {})
     if check.get("status") != "verified":
         check = await check_provider_outcome(session, run, step, snapshot)
