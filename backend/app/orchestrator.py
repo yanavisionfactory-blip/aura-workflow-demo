@@ -657,6 +657,7 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
         }
         step_by_key = {step.step_key: step for step in steps}
         for step in steps:
+            materialized_for_approval = False
             recovered_confirmed_write = (
                 step.status != StepStatus.completed
                 and _has_confirmed_consequential_result(step)
@@ -752,6 +753,7 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                             plan_steps[step.position],
                             context,
                         )
+                        materialized_for_approval = True
                     except Exception as recovery_exc:  # noqa: BLE001
                         internal_error = str(exc)
                         logger.exception(
@@ -831,24 +833,60 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                     if referenced_paths(resolved_arguments):
                         raise NativeConnectorError("Approval arguments are not concrete")
                 except (NativeConnectorError, ValueError) as exc:
-                    logger.exception(
-                        "Approval argument validation failed run_id=%s step_id=%s",
-                        run.id,
-                        step.id,
-                    )
-                    step.status = StepStatus.failed
-                    step.error = _friendly_execution_error(str(exc))
-                    run.status = RunStatus.waiting_for_action
-                    run.error = step.error
-                    await audit(
-                        session,
-                        workspace_id,
-                        "step.approval_argument_validation_failed",
-                        {"step_id": step.id, "internal_error": str(exc)},
-                        run.id,
-                    )
-                    await session.commit()
-                    return
+                    if not materialized_for_approval:
+                        try:
+                            resolved_arguments = await materialize_action_arguments(
+                                run.prompt,
+                                plan_steps[step.position],
+                                context,
+                            )
+                            resolved_arguments = normalize_module_arguments(
+                                manifest, step.operation, resolved_arguments
+                            )
+                            if referenced_paths(resolved_arguments):
+                                raise NativeConnectorError(
+                                    "Approval arguments are not concrete"
+                                )
+                        except Exception as recovery_exc:  # noqa: BLE001
+                            logger.exception(
+                                "Approval argument validation recovery failed "
+                                "run_id=%s step_id=%s error_type=%s",
+                                run.id,
+                                step.id,
+                                type(recovery_exc).__name__,
+                            )
+                            step.status = StepStatus.failed
+                            step.error = _friendly_execution_error(str(exc))
+                            run.status = RunStatus.waiting_for_action
+                            run.error = step.error
+                            await audit(
+                                session,
+                                workspace_id,
+                                "step.approval_argument_validation_recovery_exhausted",
+                                {"step_id": step.id, "internal_error": str(exc)},
+                                run.id,
+                            )
+                            await session.commit()
+                            return
+                    else:
+                        logger.exception(
+                            "Approval argument validation failed run_id=%s step_id=%s",
+                            run.id,
+                            step.id,
+                        )
+                        step.status = StepStatus.failed
+                        step.error = _friendly_execution_error(str(exc))
+                        run.status = RunStatus.waiting_for_action
+                        run.error = step.error
+                        await audit(
+                            session,
+                            workspace_id,
+                            "step.approval_argument_validation_failed",
+                            {"step_id": step.id, "internal_error": str(exc)},
+                            run.id,
+                        )
+                        await session.commit()
+                        return
                 approval.preview = {
                     "status": "ready",
                     "operation": step.operation,
