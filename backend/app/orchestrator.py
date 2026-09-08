@@ -916,6 +916,12 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     manifest_record.manifest if manifest_record else None,
                 )
                 try:
+                    from .workflow_context import requires_content_composition
+                    capability = next((m for m in manifest.get("capabilities", []) if m.get("name") == step.operation), {})
+                    if not materialized_for_approval and requires_content_composition(
+                        plan_steps[step.position].get("arguments", {}), capability.get("input_schema", {}), context
+                    ):
+                        raise NativeConnectorError("Structured source evidence requires readable content composition before approval")
                     resolved_arguments = normalize_module_arguments(
                         manifest, step.operation, resolved_arguments
                     )
