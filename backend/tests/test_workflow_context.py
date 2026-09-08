@@ -198,6 +198,29 @@ def test_step_result_normalizes_provider_collection_aliases() -> None:
     assert resolve_value("{{steps.search.pages[0].id}}", context) == "page-1"
 
 
+def test_missing_resource_id_never_falls_back_to_an_unrelated_id():
+    import pytest
+    from app.workflow_context import WorkflowContextError
+    with pytest.raises(WorkflowContextError):
+        resolve_value("{{steps.create.job.design_id}}", {"steps": {"create": {"job": {"id": "job-1"}}}})
+
+
+def test_completed_job_resource_binding_preserves_other_designs():
+    from app.workflow_context import canonical_action_arguments, WorkflowContextError
+    import pytest
+    receipt = {"job": {"id": "job-1", "status": "success",
+                       "result": {"designs": [{"id": "design-1"}]}}}
+    context = {"steps": {"create": step_context_value(receipt, "canva.presentation.create")}}
+    args = {"design_id": "job-1", "format": "pdf"}
+    assert canonical_action_arguments("canva.export.create", args, context) == {"design_id": "design-1", "format": "pdf"}
+    assert args["design_id"] == "job-1"
+    other = {"design_id": "other", "format": "pdf"}
+    assert canonical_action_arguments("canva.export.create", other, context) == other
+    receipt["job"]["result"]["designs"].append({"id": "design-2"})
+    with pytest.raises(WorkflowContextError):
+        canonical_action_arguments("canva.export.create", args, context)
+
+
 def test_notion_title_handoff_uses_typed_property_and_preserves_evidence() -> None:
     from copy import deepcopy
 

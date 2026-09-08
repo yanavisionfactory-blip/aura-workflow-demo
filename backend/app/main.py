@@ -3019,6 +3019,20 @@ async def decide_approval(
         raise HTTPException(404, "Approval not found")
     if approval.status != "pending":
         raise HTTPException(409, "Approval already decided")
+    if payload.approved:
+        from .workflow_context import canonical_action_arguments, WorkflowContextError
+        proposed = payload.edited_arguments if payload.edited_arguments is not None else approval.preview.get("arguments", {})
+        try:
+            canonical = canonical_action_arguments(step.operation, proposed, run.execution_context or {})
+        except WorkflowContextError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        if canonical != proposed:
+            # Existing pending previews may predate a reference-resolution fix.
+            # Refresh for review; do not approve a different argument silently.
+            approval.preview = {"status": "ready", "operation": step.operation, "arguments": canonical}
+            await session.commit()
+            return {"approval_id": approval.id, "status": "pending", "run_id": run.id,
+                    "message": "The completed resource is ready. Review the updated action before continuing."}
     approval.status = "approved" if payload.approved else "rejected"
     approval.decided_by = context.subject
     approval.decided_at = datetime.now(timezone.utc)
