@@ -78,6 +78,8 @@ def _failure_impacts_trust(exc: Exception) -> bool:
 
 def _friendly_execution_error(error: str | None) -> str:
     detail = (error or "").lower()
+    if any(marker in detail for marker in ("input budget", "evidence budget", "evidence processing budget", "context_length_exceeded")):
+        return "AURA could not prepare all the source content within this run’s processing limit."
     if any(marker in detail for marker in ("unauthorized", "forbidden", "sign in", "token", "credential")):
         return "This app connection needs your attention before AURA can continue."
     return "AURA couldn't complete this step safely after automatic recovery. Try again or adjust the workflow."
@@ -874,7 +876,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         )
                         materialized_for_approval = True
                     except Exception as recovery_exc:  # noqa: BLE001
-                        internal_error = str(exc)
+                        internal_error = str(recovery_exc)
                         logger.exception(
                             "Approval argument recovery failed run_id=%s step_id=%s error_type=%s",
                             run.id,
@@ -981,14 +983,14 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                                 type(recovery_exc).__name__,
                             )
                             step.status = StepStatus.failed
-                            step.error = _friendly_execution_error(str(exc))
+                            step.error = _friendly_execution_error(str(recovery_exc))
                             run.status = RunStatus.waiting_for_action
                             run.error = step.error
                             await audit(
                                 session,
                                 workspace_id,
                                 "step.approval_argument_validation_recovery_exhausted",
-                                {"step_id": step.id, "internal_error": str(exc)},
+                                {"step_id": step.id, "internal_error": str(recovery_exc), "phase": "preparing_arguments"},
                                 run.id,
                             )
                             await session.commit()

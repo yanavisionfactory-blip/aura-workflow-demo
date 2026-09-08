@@ -2569,7 +2569,20 @@ async def get_run(
         await session.scalars(select(Approval).where(Approval.run_id == run.id))
     ).all()
     approvals_by_step = {approval.step_id: approval for approval in approvals}
-    return {"id": run.id, "status": run.status.value, "prompt": run.prompt, "inputs": run.inputs, "execution_context": run.execution_context, "plan": run.plan, "plan_approved": run.plan_approved, "result": run.result, "error": run.error, "steps": [{"id": s.id, "key": s.step_key, "position": s.position, "agent": s.agent, "tool_slug": s.tool_slug, "operation": s.operation, "arguments": s.arguments, "depends_on": s.depends_on, "dependency_mode": s.dependency_mode, "condition": s.condition, "output_variables": s.output_variables, "status": s.status.value, "consequential": s.consequential, "approval_id": s.approval_id, "approval_status": approvals_by_step[s.id].status if s.id in approvals_by_step else None, "approval_preview": approvals_by_step[s.id].preview if s.id in approvals_by_step else None, "output": s.output, "error": s.error} for s in steps]}
+    attempted_steps = set((await session.scalars(
+        select(StepAttempt.step_id).where(StepAttempt.run_id == run.id)
+    )).all())
+    def recovery_state(step):
+        # Attempts are durably recorded before dispatch. Absence plus no receipt
+        # proves that this step never reached its provider; frontend guesses do not.
+        before_action = step.id not in attempted_steps and not (
+            isinstance(step.output, dict) and "provider_result" in step.output
+        )
+        return {"phase": "before_action" if before_action else "after_dispatch",
+                "can_retry": step.status == StepStatus.failed and
+                run.status in (RunStatus.waiting_for_action, RunStatus.failed) and
+                (not step.consequential or before_action)}
+    return {"id": run.id, "status": run.status.value, "prompt": run.prompt, "inputs": run.inputs, "execution_context": run.execution_context, "plan": run.plan, "plan_approved": run.plan_approved, "result": run.result, "error": run.error, "steps": [{"id": s.id, "key": s.step_key, "position": s.position, "agent": s.agent, "tool_slug": s.tool_slug, "operation": s.operation, "arguments": s.arguments, "depends_on": s.depends_on, "dependency_mode": s.dependency_mode, "condition": s.condition, "output_variables": s.output_variables, "status": s.status.value, "consequential": s.consequential, "recovery": recovery_state(s), "approval_id": s.approval_id, "approval_status": approvals_by_step[s.id].status if s.id in approvals_by_step else None, "approval_preview": approvals_by_step[s.id].preview if s.id in approvals_by_step else None, "output": s.output, "error": s.error} for s in steps]}
 
 
 @app.get("/v1/runs/{run_id}/governance")
