@@ -1488,41 +1488,33 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             if check.get("status") not in {"verified", "unsupported"}:
                 outcome_failures.append(step.step_key)
         outputs = [step.output for step in steps if step.status == StepStatus.completed]
+        synthesis = None
         if outcome_failures:
             verification = OutcomeVerification(status="unverified",
                 reasons=["Provider read-back could not confirm: " + ", ".join(outcome_failures)])
         else:
-            verification = await verify_outcome(run.prompt, run.plan, outputs)
+            synthesis = await synthesize_result(run.prompt, outputs)
+            if not synthesis.validation_passed:
+                verification = OutcomeVerification(status="unverified",
+                    reasons=["Final response did not pass validation"],
+                    required_fixes=synthesis.required_fixes)
+                await audit(session, workspace_id, "run.synthesis_rejected",
+                            {"required_fixes": synthesis.required_fixes}, run.id,
+                            actor="tool-output-critic")
+            else:
+                verification = await verify_outcome(
+                    run.prompt, run.plan, outputs, synthesis.model_dump(mode="json")
+                )
         verification_data = verification.model_dump(mode="json")
         await audit(session, workspace_id, "run.outcome_verified", verification_data,
                     run.id, actor="outcome-verifier")
         run.result = {"partial": verification.status != "verified", "completed_steps": len(outputs),
                       "outputs": outputs, "verification": verification_data}
+        if synthesis is not None:
+            run.result["unified_deliverable"] = synthesis.model_dump(mode="json")
         if verification.status != "verified":
             run.status = RunStatus.waiting_for_action
             run.error = "The requested outcome is not yet verified. Recorded actions will not be replayed."
-            await session.commit()
-            return
-        await session.commit()
-        synthesis = await synthesize_result(run.prompt, outputs)
-        if not synthesis.validation_passed:
-            run.status = RunStatus.waiting_for_action
-            run.error = "Final-output validation failed: " + "; ".join(
-                synthesis.required_fixes
-            )
-            run.result = {
-                **_partial_result(outputs, steps[-1], run.error),
-                "required_fixes": synthesis.required_fixes,
-                "verification": verification_data,
-            }
-            await audit(
-                session,
-                workspace_id,
-                "run.synthesis_rejected",
-                {"required_fixes": synthesis.required_fixes},
-                run.id,
-                actor="tool-output-critic",
-            )
             await session.commit()
             return
         run.status = RunStatus.completed
