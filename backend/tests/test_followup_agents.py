@@ -437,7 +437,8 @@ async def test_repaired_plan_approval_preserves_completed_write(runtime, monkeyp
     from app.main import TenantContext, approve_plan
     from app.models import Approval
     from app.schemas import PlanApproval
-    from app import main
+    from app import main, dispatch
+    monkeypatch.setattr(dispatch, "SessionLocal", runtime)
     from fastapi import HTTPException
 
     async with runtime() as session:

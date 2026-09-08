@@ -244,6 +244,12 @@ async def _create_compiled_plan(
     manifests_by_slug: dict[str, dict],
 ):
     """Build a schema-valid plan, repairing internal connector mismatches silently."""
+    manifests_by_slug = {item["slug"]: _current_capability_manifest(item["slug"], manifests_by_slug.get(item["slug"])) for item in inventory}
+    inventory = [{**item, "operation_contracts": [
+        {key: module.get(key) for key in ("name", "input_schema", "output_schema", "permission_scope", "reliability")}
+        for module in manifests_by_slug[item["slug"]].get("capabilities", [])
+        if module.get("name") in item.get("allowed_operations", [])
+    ]} for item in inventory]
     repair_requirements: list[str] = []
     for attempt in range(3):
         plan = await create_plan(
@@ -254,8 +260,10 @@ async def _create_compiled_plan(
         )
         try:
             _normalize_planned_steps(plan, manifests_by_slug)
+            from .operation_contracts import compile_contracts
+            plan.planning_artifacts["compiled_contracts"] = compile_contracts(plan, manifests_by_slug)
             return plan
-        except NativeConnectorError as exc:
+        except (NativeConnectorError, ValueError) as exc:
             if attempt == 2:
                 raise
             repair_requirements.append(str(exc))
@@ -356,12 +364,12 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
         await session.commit()
 
         try:
-            plan = await _create_compiled_plan(
-                run.prompt,
-                inventory,
-                set((run.inputs or {}).keys()),
-                manifests_by_slug,
-            )
+            from .plan_reuse import reuse_saved_plan
+            plan = await reuse_saved_plan(session, run, connected_inventory, manifests_by_slug)
+            if plan is None:
+                plan = await _create_compiled_plan(
+                    run.prompt, inventory, set((run.inputs or {}).keys()), manifests_by_slug,
+                )
             run.plan = plan.model_dump(mode="json")
             logger.info(
                 "Workflow plan ready run_id=%s graph=%s",
@@ -548,6 +556,10 @@ def _partial_result(outputs: list[dict], step: RunStep, error: str) -> dict:
 
 
 async def review_recorded_result(session, run, step, snapshot, contract, result):
+    from .operation_contracts import output_errors
+    errors = output_errors(step.operation, result)
+    if errors:
+        return CriticDecision(action="escalate", reasons=errors)
     check = step.output.get("outcome_check", {})
     if check.get("status") != "verified":
         check = await check_provider_outcome(session, run, step, snapshot)
@@ -556,6 +568,8 @@ async def review_recorded_result(session, run, step, snapshot, contract, result)
             await session.commit()
     if check.get("status") not in {"verified", "unsupported"}:
         return CriticDecision(action="escalate", reasons=check.get("reasons", ["Read-back is incomplete"]))
+    if check.get("status") == "verified":
+        return CriticDecision(action="accept", reasons=["Provider read-back matches the approved action fields"])
     evidence = {**result, "__aura_readback__": check["observed"]} if check.get("observed") and isinstance(result, dict) else result
     return await critique_step(contract, evidence)
 
@@ -564,6 +578,11 @@ async def review_recorded_result(session, run, step, snapshot, contract, result)
 async def execute_run(run_id: str, workspace_id: str) -> None:
     async with execution_lock(engine, workspace_id, run_id) as acquired:
         if acquired:
+            async with SessionLocal() as session:
+                await set_tenant_context(session, workspace_id)
+                state = await session.scalar(select(WorkflowRun.status).where(WorkflowRun.id == run_id, WorkflowRun.workspace_id == workspace_id))
+                if state not in {RunStatus.running, RunStatus.recovering}:
+                    return
             for _ in range(3):
                 await _execute_run(run_id, workspace_id)
                 if await maybe_replan_run(run_id, workspace_id) != "retry":
@@ -579,7 +598,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             return
         recovery_context = dict(run.execution_context or {})
         recovery_counts = dict(recovery_context.get("__aura_recovery__") or {})
-        if run.status in {RunStatus.completed, RunStatus.cancelled, RunStatus.blocked}:
+        if run.status not in {RunStatus.running, RunStatus.recovering}:
             return
         if run.cancellation_requested:
             run.status = RunStatus.cancelled
@@ -691,6 +710,8 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
         }
         step_by_key = {step.step_key: step for step in steps}
         for step in steps:
+            from .parallel_reads import prefetch_ready_reads
+            await prefetch_ready_reads(session, run, steps, step.position, snapshot, context, outputs)
             materialized_for_approval = False
             recorded_result = isinstance(step.output, dict) and "provider_result" in step.output
             if recorded_result and step.output.get("critic", {}).get("action") != "accept":
@@ -966,6 +987,11 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 return
 
             trust = await _trust_state(session, workspace_id, tool)
+            if trust.incident_active:
+                run.status = RunStatus.waiting_for_action
+                run.error = "Connector incident is active; execution is paused"
+                await session.commit()
+                return
             approved_permissions = snapshot.permission_snapshot.get(tool.slug, [])
             actual_cost = sum(
                 float(output.get("provider_result", {}).get("cost_usd", 0.0))
@@ -1058,6 +1084,10 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         select(StepAttempt).where(StepAttempt.step_id == step.id)
                     )
                 ).all()
+                if existing:
+                    latest = max(existing, key=lambda item: item.attempt_number)
+                    if (latest.error or "").startswith(("[authorization_required]", "[invalid_request]", "[contract_or_runtime_error]", "[budget_exhausted]", "[rate_limited]")):
+                        return None, latest.error
                 if step.consequential and existing:
                     return None, "Previous action outcome is uncertain; reconcile provider state before a new approved action"
                 max_retries = (
@@ -1065,15 +1095,23 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     if step.consequential
                     else int(snapshot.policy_snapshot["max_retries_per_step"])
                 )
-                backoffs = list(snapshot.policy_snapshot["retry_backoff_seconds"])
+                from .reliability import classify_failure
+                remaining = min(max_retries + 1, get_settings().max_provider_attempts) - len(existing)
+                if remaining <= 0:
+                    return None, "Provider attempt budget exhausted; recorded work is preserved"
+                backoffs = list(snapshot.policy_snapshot["retry_backoff_seconds"]) or [1]
+                retry_after = 0.0
                 last_error: str | None = None
-                for retry_index in range(max_retries + 1):
+                for retry_index in range(remaining):
                     await session.refresh(run, attribute_names=["cancellation_requested"])
                     if run.cancellation_requested:
                         return None, "Run cancellation requested"
                     if retry_index:
                         delay = backoffs[min(retry_index - 1, len(backoffs) - 1)]
-                        await asyncio.sleep(float(delay))
+                        delay = max(float(delay), retry_after)
+                        if delay > 30:
+                            return None, "Provider rate limit exceeds immediate retry budget"
+                        await asyncio.sleep(delay)
                     attempt = StepAttempt(
                         workspace_id=workspace_id,
                         run_id=run.id,
@@ -1088,6 +1126,10 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     started = time.perf_counter()
                     timed_out = False
                     try:
+                        from .reliability import model_budget, BudgetExceeded
+                        budget = model_budget.get()
+                        if budget and time.monotonic() >= budget.deadline:
+                            raise BudgetExceeded("Delivery time budget exhausted")
                         if active_tool.config.get("managed_by") == "nango":
                             credentials = await managed_connector_client().get_credentials(
                                 active_tool.config["connection_id"],
@@ -1143,9 +1185,8 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         )
                         result = await asyncio.wait_for(
                             executor.execute(operation, arguments),
-                            timeout=float(
-                                snapshot.policy_snapshot["step_timeout_seconds"]
-                            ),
+                            timeout=min(float(snapshot.policy_snapshot["step_timeout_seconds"]),
+                                        max(0.01, budget.deadline - time.monotonic())) if budget else float(snapshot.policy_snapshot["step_timeout_seconds"]),
                         )
                         if _provider_result_is_malformed(result):
                             raise ValueError("Provider returned an empty or malformed response")
@@ -1171,6 +1212,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         await session.commit()
                         return result, None
                     except asyncio.TimeoutError as exc:
+                        failure = classify_failure(exc, read=not step.consequential)
                         timed_out = True
                         last_error = "Step timed out"
                         failure_impacts_trust = _failure_impacts_trust(exc)
@@ -1179,6 +1221,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             run.id, step.id, active_tool.slug, operation,
                         )
                     except Exception as exc:
+                        failure = classify_failure(exc, read=not step.consequential)
                         last_error = str(exc)
                         failure_impacts_trust = _failure_impacts_trust(exc)
                         logger.exception(
@@ -1187,6 +1230,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         )
                     latency = (time.perf_counter() - started) * 1000
                     attempt.status = "failed"
+                    last_error = f"[{failure.category}] {last_error}"
                     attempt.error = last_error
                     attempt.latency_ms = latency
                     attempt.completed_at = datetime.now(timezone.utc)
@@ -1198,6 +1242,9 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             latency_ms=latency,
                         )
                     await session.commit()
+                    if not failure.retryable:
+                        break
+                    retry_after = failure.retry_after
                 return None, last_error
 
             result, error = await call(tool, step.operation, resolved_arguments)
@@ -1211,7 +1258,8 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 error = "The narrow read returned no matching items"
             fallback_slug = approved_step.get("fallback_tool_slug")
             fallback_operation = approved_step.get("fallback_operation")
-            if error and fallback_slug and fallback_operation:
+            recovery_blocked = bool(error and error.startswith(("[authorization_required]", "[uncertain_write]", "[budget_exhausted]", "[invalid_request]", "[contract_or_runtime_error]")))
+            if error and not recovery_blocked and fallback_slug and fallback_operation:
                 fallback = await session.scalar(
                     select(ToolConnection).where(
                         ToolConnection.workspace_id == workspace_id,
@@ -1263,6 +1311,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             reduced_arguments = approved_step.get("reduced_scope_arguments")
             if (
                 error
+                and not recovery_blocked
                 and reduced_arguments is not None
                 and operation_scope(step.operation) == "read"
                 and reduced_arguments != step.arguments
@@ -1527,9 +1576,4 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
         }
         await audit(session, workspace_id, "run.completed", run.result, run.id)
         await session.commit()
-        try:
-            await index_run_memory(session, run)
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            logger.warning("Completed run memory indexing deferred", exc_info=True)
+        # Completion atomically enqueues memory indexing off the response path.

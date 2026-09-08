@@ -17,6 +17,16 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-5.4-mini"
     memory_embedding_model: str = "text-embedding-3-small"
     memory_candidate_limit: int = Field(default=200, ge=1, le=1000)
+    recovery_scheduler_enabled: bool = False
+    scheduler_interval_seconds: int = Field(default=15, ge=5, le=300)
+    stale_run_seconds: int = Field(default=600, ge=120, le=3600)
+    max_restart_recoveries: int = Field(default=3, ge=1, le=10)
+    max_provider_attempts: int = Field(default=3, ge=1, le=5)
+    max_model_calls_per_delivery: int = Field(default=16, ge=1, le=40)
+    delivery_budget_seconds: int = Field(default=180, ge=30, le=600)
+    model_call_timeout_seconds: int = Field(default=30, ge=5, le=90)
+    parallel_read_limit: int = Field(default=3, ge=1, le=5)
+    parallel_reads_enabled: bool = False
     agent_input_cost_per_million_usd: float | None = Field(default=None, ge=0)
     agent_output_cost_per_million_usd: float | None = Field(default=None, ge=0)
     credential_encryption_key: str = Field(

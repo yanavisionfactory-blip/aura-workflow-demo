@@ -539,3 +539,44 @@ class AuditEvent(Base):
     event_type: Mapped[str] = mapped_column(String(160), index=True)
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, index=True)
+
+
+class DispatchIntent(Base):
+    """Committed with run transitions; at-least-once delivery."""
+    __tablename__ = "dispatch_intents"
+    run: Mapped["WorkflowRun"] = relationship()
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("workflow_runs.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(20))
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+from sqlalchemy import event, inspect
+from sqlalchemy.orm import Session
+
+
+@event.listens_for(Session, "before_flush")
+def enqueue_run_transitions(session, flush_context, instances):
+    for run in list(session.new) + list(session.dirty):
+        if not isinstance(run, WorkflowRun):
+            continue
+        history = inspect(run).attrs.status.history
+        fresh = run in session.new
+        if not fresh and not history.has_changes():
+            continue
+        status = run.status or RunStatus.queued
+        previous = history.deleted[0] if history.deleted else None
+        kind = None
+        if status == RunStatus.queued:
+            kind = "plan"
+        elif status == RunStatus.recovering or (status == RunStatus.running and previous in (RunStatus.awaiting_approval, RunStatus.waiting_for_action)):
+            kind = "execute"
+        elif status == RunStatus.completed:
+            kind = "memory"
+        if kind:
+            run.id = run.id or uuid4()
+            session.add(DispatchIntent(workspace_id=run.workspace_id, run=run, kind=kind))

@@ -64,6 +64,9 @@ def derive_repaired_plan(
     fixes = deterministic_plan_fixes(plan, inventory, inputs)
     if fixes:
         raise ValueError("; ".join(fixes))
+    from .operation_contracts import compile_contracts
+    compile_contracts(plan, manifests)
+    original = WorkflowPlan.model_validate(original).model_dump(mode="json")
     serialized = plan.model_dump(mode="json")
     if any(
         serialized["steps"][i] != original["steps"][i]
@@ -117,6 +120,8 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
             (event for event in events if event.payload.get("step_id") == step.id), None
         )
         if not failure or failure.event_type not in ELIGIBLE_FAILURES:
+            return False
+        if str(failure.payload.get("internal_error", "")).startswith(("[authorization_required]", "[uncertain_write]", "[budget_exhausted]")):
             return False
         if failure.event_type == "step.criticized" and failure.payload.get(
             "decision", {}

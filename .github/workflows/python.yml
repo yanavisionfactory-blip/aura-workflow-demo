@@ -48,7 +48,13 @@ jobs:
       - name: Compile
         run: python -m compileall -q app
       - name: Test
-        run: pytest -q
+        run: pytest -q --junitxml=release-evaluation.xml
+      - name: Preserve release evaluation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-release-evaluation
+          path: backend/release-evaluation.xml
 
 
   frontend:

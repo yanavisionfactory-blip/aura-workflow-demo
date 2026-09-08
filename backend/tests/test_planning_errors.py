@@ -84,6 +84,12 @@ def test_connector_contract_mismatch_is_replanned_before_reaching_user(monkeypat
             )
         ]
     )
+    for candidate in (invalid, repaired):
+        candidate.planning_artifacts = {}
+        candidate.steps[0].key = "weather"
+        candidate.steps[0].required_evidence = []
+        candidate.steps[0].output_variables = {}
+        candidate.steps[0].depends_on = []
     plans = [invalid, repaired]
     calls = []
 
@@ -105,3 +111,4 @@ def test_connector_contract_mismatch_is_replanned_before_reaching_user(monkeypat
     assert result is repaired
     assert calls[0] == []
     assert "unknown inputs" in calls[1][0]
+

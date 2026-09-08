@@ -51,28 +51,33 @@ def trace_run(function):
         from .models import AuditEvent
 
         records: list[dict] = []
+        from .reliability import CallBudget, model_budget
+        from time import monotonic
+        settings = get_settings()
+        started = perf_counter()
+        budget_token = model_budget.set(CallBudget(monotonic() + settings.delivery_budget_seconds, settings.max_model_calls_per_delivery))
         token = calls.set(records)
         try:
             return await function(run_id, workspace_id)
         finally:
             calls.reset(token)
-            if records:
-                try:
-                    async with SessionLocal() as session:
-                        await set_tenant_context(session, workspace_id)
-                        session.add(
-                            AuditEvent(
-                                workspace_id=workspace_id,
-                                run_id=run_id,
-                                actor="agent-runtime",
-                                event_type="run.agent_metrics",
-                                payload={"phase": function.__name__, "calls": records},
-                            )
+            model_budget.reset(budget_token)
+            try:
+                async with SessionLocal() as session:
+                    await set_tenant_context(session, workspace_id)
+                    session.add(
+                        AuditEvent(
+                            workspace_id=workspace_id,
+                            run_id=run_id,
+                            actor="agent-runtime",
+                            event_type="run.agent_metrics",
+                            payload={"phase": function.__name__, "calls": records, "duration_ms": round((perf_counter() - started) * 1000)},
                         )
-                        await session.commit()
-                except Exception:
-                    logging.getLogger(__name__).exception(
-                        "Unable to persist agent metrics"
                     )
+                    await session.commit()
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Unable to persist agent metrics"
+                )
 
     return wrapped

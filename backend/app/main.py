@@ -103,6 +103,7 @@ from .schemas import (
     CustomOAuthStart,
     InterfaceAnalyzeRequest,
     PlanApproval,
+    PlanStep,
     PolicyUpdate,
     PollingSubscriptionCreate,
     ResumeDecision,
@@ -145,6 +146,7 @@ from .universal_connectors import (
     allowed_operations as discovered_operations,
 )
 from .worker import execute_run_task, plan_run_task, poll_subscription_task
+from .dispatch import dispatch_pending, recovery_loop
 
 settings = get_settings()
 app = FastAPI(title="AURA Control Plane", version="0.1.0")
@@ -157,6 +159,20 @@ app.add_middleware(CORSMiddleware, allow_origins=[frontend_origin], allow_creden
 @app.on_event("startup")
 async def startup() -> None:
     await migrate_database()
+    if settings.recovery_scheduler_enabled:
+        import asyncio
+        app.state.recovery_task = asyncio.create_task(recovery_loop())
+
+
+@app.on_event("shutdown")
+async def shutdown_recovery() -> None:
+    import asyncio
+    from contextlib import suppress
+    task = getattr(app.state, "recovery_task", None)
+    if task:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
 
 @dataclass
@@ -262,7 +278,8 @@ async def readiness() -> dict:
         await cache.aclose()
     if not all(checks.values()):
         raise HTTPException(503, {"status": "not_ready", "checks": checks})
-    return {"status": "ready", "checks": checks}
+    from .dispatch import scheduler_observation
+    return {"status": "ready", "checks": checks, "recovery_scheduler": {"enabled": settings.recovery_scheduler_enabled, "last_tick_at": scheduler_observation["last_tick_at"], "leader": scheduler_observation["leader"]}}
 
 
 @app.post("/v1/workspaces")
@@ -1497,7 +1514,7 @@ async def replay_webhook_delivery(
         )
     )
     await session.commit()
-    plan_run_task.delay(run.id, context.workspace_id)
+    await dispatch_pending(context.workspace_id)
     return {"delivery_id": replay.id, "run_id": run.id, "status": "queued"}
 
 
@@ -1623,7 +1640,7 @@ async def receive_webhook(
         )
     )
     await session.commit()
-    plan_run_task.delay(run.id, workspace_id)
+    await dispatch_pending(workspace_id)
     return {"delivery_id": delivery.id, "run_id": run.id, "status": "queued"}
 
 
@@ -2530,7 +2547,7 @@ async def create_run(
         if not existing:
             raise
         return {"id": existing.id, "status": existing.status.value, "replayed": True}
-    plan_run_task.delay(run.id, wid)
+    await dispatch_pending(wid)
     return {"id": run.id, "status": run.status.value}
 
 
@@ -2713,7 +2730,7 @@ async def resume_after_connection(
         payload={"connection_id": tool.id if tool else None},
     ))
     await session.commit()
-    plan_run_task.delay(run.id, context.workspace_id)
+    await dispatch_pending(context.workspace_id)
     return {"id": run.id, "status": run.status.value}
 
 
@@ -2795,13 +2812,18 @@ async def approve_plan(
             )
         except ValueError as exc:
             argument_fixes.append(f"Step {index} has invalid connector inputs: {exc}")
+    from .operation_contracts import compile_contracts
+    try:
+        compile_contracts(plan, {slug: current_capability_manifest(slug, manifests_by_tool_id.get(tool.id)) for slug, tool in tools_by_slug.items()})
+    except ValueError as exc:
+        argument_fixes.append(str(exc))
     if argument_fixes:
         raise HTTPException(
             422, {"message": "AURA is still preparing this workflow", "fixes": argument_fixes}
         )
     for stored, planned in zip(steps, plan.steps, strict=True):
         if stored.output.get("provider_result") is not None:
-            if planned.model_dump(mode="json") != run.plan["steps"][stored.position]:
+            if planned.model_dump(mode="json") != PlanStep.model_validate(run.plan["steps"][stored.position]).model_dump(mode="json"):
                 raise HTTPException(409, "A revised plan cannot change a step with a recorded provider result")
     normalized_arguments = plan.model_dump(mode="json") != original_plan_json
 
@@ -2951,7 +2973,7 @@ async def approve_plan(
         )
     )
     await session.commit()
-    execute_run_task.delay(run.id, wid)
+    await dispatch_pending(wid)
     return {
         "id": run.id,
         "status": run.status.value,
@@ -3078,7 +3100,7 @@ async def decide_approval(
     # consequential action from the newly accepted context.
     run.status = RunStatus.running
     await session.commit()
-    execute_run_task.delay(run.id, wid)
+    await dispatch_pending(wid)
     return {"approval_id": approval.id, "status": approval.status, "run_id": run.id}
 
 
@@ -3183,7 +3205,7 @@ async def resume_run(
             run.status = RunStatus.recovering
             run.error = None
             await session.commit()
-            execute_run_task.delay(run.id, wid)
+            await dispatch_pending(wid)
             return {"id": run.id, "status": run.status.value, "review_only": True}
         raise HTTPException(404, "Failed step not found")
     if step.consequential and payload.action in {"retry", "fallback"}:
@@ -3265,7 +3287,7 @@ async def resume_run(
         )
     )
     await session.commit()
-    execute_run_task.delay(run.id, wid)
+    await dispatch_pending(wid)
     return {"id": run.id, "status": run.status.value, "resumed_from_step": step.id}
 
 
@@ -3500,7 +3522,18 @@ async def get_run_evaluation(
     attempts = (await session.scalars(select(StepAttempt).where(
         StepAttempt.workspace_id == context.workspace_id, StepAttempt.run_id == run_id,
     ))).all()
+    completed_steps = (await session.scalars(select(RunStep).where(RunStep.run_id == run_id, RunStep.completed_at.is_not(None)))).all()
+    def elapsed_ms(end, start):
+        return max(0, round((end - start).total_seconds() * 1000)) if end and start else None
+    first_result = min((step.completed_at for step in completed_steps), default=None)
+    terminal = run.status in {RunStatus.completed, RunStatus.failed, RunStatus.cancelled, RunStatus.blocked}
     return {
+        "planning_time_ms": sum(event.payload.get("duration_ms", 0) for event in events if event.payload.get("phase") == "plan_run"),
+        "time_to_first_useful_result_ms": elapsed_ms(first_result, run.created_at),
+        "total_completion_time_ms": elapsed_ms(run.updated_at, run.created_at) if terminal else None,
+        "execution_delivery_time_ms": sum(event.payload.get("duration_ms", 0) for event in events if event.payload.get("phase") == "execute_run"),
+        "restart_recoveries": (run.execution_context or {}).get("restart_recoveries", 0),
+        "replanning_attempts": (run.execution_context or {}).get("__aura_replanning__", {}).get("attempts", 0),
         "run_id": run_id, "status": run.status.value,
         "outcome_verified": run.result.get("verification", {}).get("status") == "verified",
         "verification": run.result.get("verification"),
