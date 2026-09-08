@@ -1,17 +1,24 @@
 import { motion, AnimatePresence } from "framer-motion";
-import { X, CheckCircle2, Clock, FileDown } from "lucide-react";
+import { X, CheckCircle2, Clock, FileDown, AlertCircle } from "lucide-react";
 import { buildSummaryText } from "@/lib/auraSummary";
 import { conjugateAction } from "@/lib/auraVerbs";
 import { INTERFACE_TOOLS } from "@/lib/demoData";
 
-// Compute a compact wall-clock label for a step. Steps may carry an explicit
-// `time` (e.g. "10:03") from the mock; otherwise derive one from the order.
-function stepTime(s, i) {
+// Only show timestamps supplied by the runtime; never synthesize clock times.
+function stepTime(s) {
   if (s.time) return s.time;
-  const total = 2 + i; // start ~10:02, +1 min each
-  const h = 10 + Math.floor(total / 60);
-  const m = total % 60;
-  return `${h}:${String(m).padStart(2, "0")}`;
+  const timestamp = s.completed_at || s.started_at;
+  if (!timestamp) return null;
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? null : date.toLocaleTimeString();
+}
+
+function stepStatus(s) {
+  return ({
+    completed: "Completed", failed: "Failed", skipped: "Skipped",
+    running: "Running", pending: "Not run", awaiting_approval: "Awaiting approval",
+    waiting_for_approval: "Awaiting approval", blocked: "Blocked",
+  })[s.status] || "Unconfirmed";
 }
 
 // A start-to-finish timeline of everything AURA did, with a downloadable recap.
@@ -26,8 +33,10 @@ export default function FullActivityModal({
   outcomes,
   metrics,
   nextSteps,
+  status,
 }) {
   const steps = activity || [];
+  const succeeded = status === "completed";
 
   const handleDownload = () => {
     const text = buildSummaryText({
@@ -76,7 +85,7 @@ export default function FullActivityModal({
                 <Clock className="w-4 h-4 text-primary" />
                 <h3 className="text-sm font-semibold">Full activity</h3>
                 <span className="text-[10px] text-muted-foreground/50">
-                  {steps.length} steps · start to finish
+                  {steps.filter((step) => step.status === "completed").length} of {steps.length} steps completed
                 </span>
                 <button
                   onClick={onClose}
@@ -89,7 +98,7 @@ export default function FullActivityModal({
               <div className="flex-1 overflow-y-auto p-4">
                 {summary && (
                   <div className="mb-4 p-3 rounded-xl bg-emerald-400/5 border border-emerald-400/15 flex items-start gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+                    {succeeded ? <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" /> : <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />}
                     <div>
                       <p className="text-sm font-medium">{title}</p>
                       <p className="text-xs text-muted-foreground mt-0.5">{summary}</p>
@@ -100,6 +109,9 @@ export default function FullActivityModal({
                 <ol className="space-y-3">
                   {steps.map((s, i) => {
                     const isModify = s.riskLevel === "modify";
+                    const completed = s.status === "completed";
+                    const failed = s.status === "failed" || s.status === "blocked";
+                    const StatusIcon = completed ? CheckCircle2 : failed ? AlertCircle : Clock;
                     return (
                       <motion.li
                         key={i}
@@ -109,8 +121,8 @@ export default function FullActivityModal({
                         className="flex gap-3"
                       >
                         <div className="flex flex-col items-center flex-shrink-0">
-                          <div className="w-6 h-6 rounded-full bg-emerald-400/15 border border-emerald-400/30 flex items-center justify-center">
-                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                          <div className={`w-6 h-6 rounded-full border flex items-center justify-center ${completed ? "bg-emerald-400/15 border-emerald-400/30" : "bg-secondary/40 border-white/10"}`}>
+                            <StatusIcon className={`w-3.5 h-3.5 ${completed ? "text-emerald-400" : failed ? "text-amber-400" : "text-muted-foreground"}`} />
                           </div>
                           {i < steps.length - 1 && (
                             <div className="w-px flex-1 bg-white/8 mt-1" />
@@ -119,7 +131,7 @@ export default function FullActivityModal({
                         <div className="flex-1 min-w-0 pb-1">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-[10px] tabular-nums text-muted-foreground/45">
-                              {stepTime(s, i)}
+                              {stepTime(s)}
                             </span>
                             <span className="text-[11px] font-medium text-muted-foreground/60">
                               {s.tool}
@@ -141,7 +153,8 @@ export default function FullActivityModal({
                             )}
                           </div>
                           <p className="text-sm mt-0.5">
-                            {conjugateAction(String(s.action).replace(/…$/, ""), "past")}
+                            {completed ? conjugateAction(String(s.action).replace(/…$/, ""), "past") : String(s.action).replace(/…$/, "")}
+                            <span className="ml-2 text-xs text-muted-foreground">{stepStatus(s)}</span>
                           </p>
                           {s.note && (
                             <p className="text-[11px] text-muted-foreground/70 mt-1 flex items-center gap-1">
@@ -158,7 +171,7 @@ export default function FullActivityModal({
 
               <div className="px-4 py-3 border-t border-white/6 flex items-center justify-between gap-2">
                 <span className="text-[11px] text-muted-foreground/50">
-                  A complete record of everything AURA did.
+                  Recorded step states for this workflow.
                 </span>
                 <button
                   onClick={handleDownload}

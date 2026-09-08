@@ -1,0 +1,22 @@
+name: Frontend validation
+on:
+  pull_request:
+    paths: ["src/**", "package*.json", ".github/workflows/frontend.yml"]
+  push:
+    branches: [main]
+    paths: ["src/**", "package*.json", ".github/workflows/frontend.yml"]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install
+      - run: npm run build
+        env:
+          VITE_AURA_API_URL: https://api.example.invalid
+          VITE_CLERK_PUBLISHABLE_KEY: pk_test_ci_placeholder

@@ -651,11 +651,15 @@ Rules:
       action: planned?.title || planned?.action || friendlyStepTitle(step),
       riskLevel: step.consequential ? "modify" : "read",
       status: step.status,
-      liveOutput: step.output?.provider_result
-        ? `→ ${planned?.output || "Completed successfully"}`
-        : step.error
-          ? `→ ${step.error}`
-          : "",
+      started_at: step.started_at,
+      completed_at: step.completed_at,
+      liveOutput: step.error
+        ? `→ ${step.error}`
+        : step.status === "completed"
+          ? `→ ${planned?.output || "Completed successfully"}`
+          : step.output?.provider_result
+            ? "→ Provider response recorded; step not yet completed."
+            : "",
       output: step.output,
     };
   });

@@ -41,7 +41,7 @@ export function buildSummaryText({
   if (activity && activity.length) {
     lines.push("Step-by-step activity:");
     activity.forEach((s, i) => {
-      lines.push(`  ${i + 1}. [${s.tool}] ${String(s.action).replace(/…$/, "")}`);
+      lines.push(`  ${i + 1}. [${s.tool}] ${String(s.action).replace(/…$/, "")} — ${s.status || "unconfirmed"}`);
       if (s.liveOutput) lines.push(`     ${s.liveOutput}`);
     });
     lines.push("");
