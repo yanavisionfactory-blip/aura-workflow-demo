@@ -203,6 +203,8 @@ def evaluate_outcome_check(check: OutcomeCheck, observed: dict) -> dict:
         matched = _matches(check.expected, observed)
         if check.kind == "calendar" and observed.get("status") == "cancelled":
             matched = False
+        if check.expected.get("archived") is False and observed.get("in_trash") is True:
+            matched = False
     if not matched:
         return {
             "status": "failed",
