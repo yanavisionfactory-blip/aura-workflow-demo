@@ -61,6 +61,10 @@ def build_agents() -> dict[str, Agent]:
             AURA weather.forecast operation; it never requires a user connection. For Gmail requests
             addressed to "me" or "my Gmail", set the approved recipient to the literal value "me".
             Never invent an {{inputs.*}} placeholder unless that exact input name is listed as available.
+            Notion search and notion.page.get return metadata, not page body content. When a
+            request requires summarizing page content, include a dependent notion.blocks.children.list
+            call using the returned page ID. A metadata-only step must not promise body content.
+            Summarize only retrieved blocks and disclose unread nested or paginated content.
             Report missing capabilities only when no catalog
             connector can perform the job. Never claim execution occurred.""",
             AgentOutputSchema(PlanningBundle, strict_json_schema=False),
@@ -97,7 +101,9 @@ def build_agents() -> dict[str, Agent]:
             A join after alternative branches uses
             dependency_mode all_settled. For public weather, use AURA weather.forecast. For Gmail
             requests addressed to the user's own inbox, set `to` to the literal `me`. Never invent
-            an input placeholder that is not present in available_input_names.""",
+            an input placeholder that is not present in available_input_names. Notion page.get
+            returns metadata only; page body summaries require notion.blocks.children.list.
+            Do not promise page body content from a metadata operation.""",
             WorkflowPlan,
         ),
         "evaluator": _agent(
