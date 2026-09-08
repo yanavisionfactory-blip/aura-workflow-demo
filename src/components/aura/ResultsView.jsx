@@ -393,6 +393,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
       </motion.div>
 
       <FullActivityModal
+        status={results.status}
         open={showActivity}
         onClose={() => setShowActivity(false)}
         activity={activity}
