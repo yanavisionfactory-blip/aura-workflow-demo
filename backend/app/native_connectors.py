@@ -131,8 +131,8 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
             _module("gmail.get", "search", "Read a specific Gmail message for outcome verification.", required=("message_id",), properties={"message_id": _TEXT}),
             _module("calendar.list", "search", "Find calendar events. Returns an items list, not a selected event. Use query to filter by title/content; date bounds require RFC3339 offsets.", properties={
                 "query": _TEXT,
-                "time_min": {"type": "string", "format": "date-time"},
-                "time_max": {"type": "string", "format": "date-time"},
+                "time_min": {"type": "string", "format": "date-time", "x-preserve-on-recovery": True},
+                "time_max": {"type": "string", "format": "date-time", "x-preserve-on-recovery": True},
                 "limit": {**_POSITIVE_INTEGER, "maximum": 100},
             }),
             _module("calendar.create", "action", "Create an approved calendar event.", required=("start", "end"), properties={

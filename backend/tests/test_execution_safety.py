@@ -175,3 +175,35 @@ def test_external_connector_keeps_verified_stored_manifest():
     stored = {"name": "Acme MCP", "capabilities": [{"name": "acme.lookup"}]}
 
     assert _current_capability_manifest("acme-private", stored) is stored
+
+
+
+def test_reduced_calendar_search_keeps_date_scope():
+    from app.native_connectors import native_manifest
+    arguments = {"query": "appointment", "time_min": "2026-09-10T00:00:00Z", "time_max": "2026-09-12T00:00:00Z"}
+    assert _required_read_arguments(native_manifest("google"), "calendar.list", arguments) == {key: value for key, value in arguments.items() if key != "query"}
+
+
+def test_read_review_distinguishes_capability_tags_from_provider_fields(monkeypatch):
+    import asyncio
+    from app import orchestrator
+    seen = []
+
+    async def unsupported(*args):
+        return {"status": "unsupported"}
+
+    async def critic(contract, evidence):
+        seen.append((contract, evidence))
+        return CriticDecision(action="accept", reasons=["Valid event list"])
+
+    monkeypatch.setattr(orchestrator, "check_provider_outcome", unsupported)
+    monkeypatch.setattr(orchestrator, "critique_step", critic)
+    result = {"items": []}
+    step = SimpleNamespace(operation="calendar.list", output={})
+    contract = {"required_evidence": ["event_state"], "expected_output": "Calendar event list"}
+    decision = asyncio.run(orchestrator.review_recorded_result(None, None, step, None, contract, result))
+    assert decision.action == "accept"
+    assert "required_evidence" not in seen[0][0]
+    assert seen[0][0]["validated_capability_tags"] == ["event_state"]
+    assert seen[0][1] == result
+    assert contract["required_evidence"] == ["event_state"]

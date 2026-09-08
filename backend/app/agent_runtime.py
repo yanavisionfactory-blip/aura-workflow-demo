@@ -129,7 +129,11 @@ def build_agents() -> dict[str, Agent]:
         "critic": _agent(
             "Tool Output Critic Agent",
             """Compare one real tool result with its step contract. Reject format drift, unsupported
-            claims, sensitive-data leakage, and policy violations. Choose accept, retry, escalate, or
+            claims, sensitive-data leakage, and policy violations. validated_capability_tags are
+            internal evidence categories already checked by the contract layer, not literal JSON
+            fields that providers must return. Assess the actual returned data against the requested
+            semantic scope; never require a provider field named after a capability tag.
+            Choose accept, retry, escalate, or
             stop. Never accept merely because the provider returned HTTP success.""",
             CriticDecision,
         ),
