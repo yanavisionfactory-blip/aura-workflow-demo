@@ -413,6 +413,8 @@ def test_create_plan_uses_one_model_round_trip_for_valid_plan(monkeypatch) -> No
     )
 
     assert len(calls) == 1
+    assert calls[0][1]["temporal_context"]["current_time_utc"]
+    assert calls[0][1]["temporal_context"]["user_timezone"] is None
     assert result.steps[0].operation == "records.read"
     assert result.planning_artifacts["connection_requirements"] == ["crm"]
     assert result.planning_artifacts["preflight_evaluation"]["passed"] is True
@@ -665,3 +667,11 @@ def test_create_plan_does_not_reprompt_for_mechanical_graph_repairs(monkeypatch)
     assert result.steps[1].depends_on == ["draft_emails"]
     assert result.steps[1].consequential is True
     assert result.planning_artifacts["timings_ms"]["repair"] == 0
+
+
+def test_planning_clock_resolves_weekdays_across_year_boundary():
+    from datetime import datetime, timezone
+    context = agent_runtime.planning_temporal_context(datetime(2026, 12, 31, 12, tzinfo=timezone.utc))
+    assert context["this_week_dates"]["friday"] == "2027-01-01"
+    assert context["next_occurrence_dates"]["monday"] == "2027-01-04"
+    assert context["user_timezone"] is None
