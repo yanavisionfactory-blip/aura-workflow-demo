@@ -3,9 +3,10 @@ import json
 import hashlib
 from time import perf_counter
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 
 from agents import Agent, AgentOutputSchema, Runner
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 
 from .config import get_settings
 from .argument_output import ArgumentOutputSchema
@@ -606,19 +607,24 @@ async def verify_outcome(prompt: str, plan: dict, artifacts: list[dict],
     ):
         return OutcomeVerification(status="unverified", reasons=["Accepted evidence is missing"])
     payload = {"original_request": prompt, "approved_plan": plan,
-               "accepted_artifacts": artifacts if prepared_evidence is None else prepared_evidence}
+               "accepted_artifacts": artifacts if prepared_evidence is None else prepared_evidence,
+               "accepted_evidence_index": [{"step_id": item["step_id"], "operation": item.get("operation"),
+                   "provider_check": item.get("outcome_check", {}).get("status", "unsupported")} for item in artifacts]}
+    bound_verification = create_model("ReceiptBoundVerification", __base__=OutcomeVerification,
+        evidence_step_ids=(list[Literal[tuple(sorted(evidence_ids))]], Field(min_length=1)))
+    verifier = build_agents()["verifier"].clone(output_type=AgentOutputSchema(bound_verification))
     if final_deliverable is not None:
         payload["final_deliverable"] = final_deliverable
     for attempt in range(3):
         try:
             payload = await _prepare_action_evidence(payload, "accepted_artifacts")
-            result = OutcomeVerification.model_validate(await _run(build_agents()["verifier"], payload))
-            if result.status == "verified" and (
-                not result.evidence_step_ids
-                or not set(result.evidence_step_ids).issubset(evidence_ids)
-                or result.required_fixes
-            ):
-                return OutcomeVerification(status="unverified", reasons=["Verifier cited invalid or incomplete evidence"])
+            result = OutcomeVerification.model_validate(await _run(verifier, payload))
+            if result.status == "verified":
+                if not result.evidence_step_ids or not set(result.evidence_step_ids).issubset(evidence_ids):
+                    return OutcomeVerification(status="unverified", reasons=["Verifier did not cite valid accepted receipt IDs"])
+                if result.required_fixes:
+                    return OutcomeVerification(status="unverified", evidence_step_ids=result.evidence_step_ids,
+                        reasons=result.reasons + ["Verifier identified unresolved corrections"], required_fixes=result.required_fixes)
             return result
         except Exception as exc:
             if _stop_model_retry(exc):
