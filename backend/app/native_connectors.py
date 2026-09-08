@@ -11,6 +11,8 @@ from copy import deepcopy
 from typing import Any
 
 from .policy import operation_scope
+from .file_delivery import ATTACHMENTS_SCHEMA
+from .presentation_content import PRESENTATION_SCHEMA
 
 
 class NativeConnectorError(ValueError):
@@ -126,9 +128,10 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                 "query": _TEXT, "limit": {**_POSITIVE_INTEGER, "maximum": 50}
             }),
             _module("gmail.send", "action", "Send an approved email.", required=("to", "body"), properties={
-                "to": {"type": "string", "format": "email"}, "subject": _TEXT, "body": _TEXT
+                "to": {"type": "string", "format": "email"}, "subject": _TEXT, "body": _TEXT,
+                "attachments": ATTACHMENTS_SCHEMA,
             }),
-            _module("gmail.get", "search", "Read a specific Gmail message for outcome verification.", required=("message_id",), properties={"message_id": _TEXT}),
+            _module("gmail.get", "search", "Read a specific Gmail message for outcome verification.", required=("message_id",), properties={"message_id": _TEXT, "verify_attachments": {"type": "boolean"}}),
             _module("calendar.list", "search", "Find calendar events. Returns an items list, not a selected event. Use query to filter by title/content; date bounds use RFC3339 offsets. Unzoned query bounds default to explicitly labeled UTC. canonical_time_summary supplies deterministic UTC and named-zone displays.", properties={
                 "query": _TEXT,
                 "time_min": {"type": "string", "format": "date-time", "x-preserve-on-recovery": True},
@@ -254,6 +257,8 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         "name": "Canva", "description": "Find, create, organize, and export Canva designs.",
         "base_url": "provider-managed", "identity": {"provider": "canva"},
         "modules": [
+            _module("canva.presentation.create", "action", "Create a populated one-slide roadmap or timeline by importing structured content into Canva. Supply grounded phases, titles and items. Returns a job; after verified completion use job.result.designs[0].id for export. Never use blank design.create for a content-filled presentation.", required=("title", "phases"), properties=PRESENTATION_SCHEMA['properties']),
+            _module("canva.import.get", "search", "Read a saved Canva import job; completed results contain job.result.designs.", required=("import_id",), properties={"import_id": _TEXT}),
             _module("canva.designs.list", "search", "Find Canva designs.", properties={"query": _TEXT, "continuation": _TEXT, "ownership": {"type": "string", "enum": ["any", "owned", "shared"]}}),
             _module("canva.design.get", "search", "Read Canva design metadata.", required=("design_id",), properties={"design_id": _TEXT}),
             _module("canva.design.create", "action", "Create an approved Canva design.", required=("design_type",), properties={"design_type": {"type": "object"}, "title": _TEXT, "asset_id": _TEXT}),
@@ -500,6 +505,9 @@ def _validate_value(schema: dict[str, Any], value: Any, path: str) -> None:
             if name in properties:
                 _validate_value(properties[name], item, f"{path}.{name}")
     if schema_type == "array" and isinstance(value, list):
+        maximum = schema.get('maxItems')
+        if maximum is not None and len(value) > maximum:
+            raise NativeConnectorError(f'{path} must contain at most {maximum} items')
         minimum = schema.get("minItems")
         if minimum is not None and len(value) < int(minimum):
             raise NativeConnectorError(f"{path} must contain at least {minimum} items")
@@ -507,6 +515,11 @@ def _validate_value(schema: dict[str, Any], value: Any, path: str) -> None:
         if item_schema:
             for index, item in enumerate(value):
                 _validate_value(item_schema, item, f"{path}[{index}]")
+    if schema_type == 'string' and isinstance(value, str) and '{{' not in value:
+        if len(value) < schema.get('minLength', 0) or len(value) > schema.get('maxLength', len(value)):
+            raise NativeConnectorError(f'{path} exceeds the supported text length')
+        if schema.get('pattern') and not re.search(schema['pattern'], value):
+            raise NativeConnectorError(f'{path} has an invalid format')
 
 
 def validate_module_arguments(manifest: dict[str, Any], operation: str, arguments: dict[str, Any]) -> None:

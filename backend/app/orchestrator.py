@@ -260,6 +260,12 @@ async def _create_compiled_plan(
             planner_repair_requirements=list(repair_requirements),
         )
         try:
+            requested = prompt.casefold()
+            if ('roadmap' in requested or 'timeline' in requested) and any(
+                    s.operation == 'canva.design.create' for s in plan.steps):
+                raise NativeConnectorError('A populated roadmap requires canva.presentation.create; blank design creation cannot satisfy this request')
+            if 'attach' in requested and any(s.operation == 'gmail.send' and not s.arguments.get('attachments') for s in plan.steps):
+                raise NativeConnectorError('The requested file attachment must be present in gmail.send attachments, not substituted with a body link')
             _normalize_planned_steps(plan, manifests_by_slug)
             from .operation_contracts import compile_contracts
             plan.planning_artifacts["compiled_contracts"] = compile_contracts(plan, manifests_by_slug)
@@ -374,6 +380,15 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 plan = await _create_compiled_plan(
                     run.prompt, inventory, set((run.inputs or {}).keys()), manifests_by_slug,
                 )
+            missing = list(plan.planning_artifacts.get('connection_requirements', []))
+            if missing:
+                from .connection_recovery import reuse_managed_connection
+                from .semantic_memory import source_owner
+                owner = await source_owner(session, workspace_id, run.id)
+                for slug in missing[:3]:
+                    if await reuse_managed_connection(session, managed_connector_client(), slug, workspace_id, owner):
+                        missing.remove(slug)
+                plan.planning_artifacts['connection_requirements'] = missing
             run.plan = plan.model_dump(mode="json")
             logger.info(
                 "Workflow plan ready run_id=%s graph=%s",
@@ -586,6 +601,13 @@ async def review_recorded_result(session, run, step, snapshot, contract, result)
     if check.get("status") not in {"verified", "unsupported"}:
         return CriticDecision(action="escalate", reasons=check.get("reasons", ["Read-back is incomplete"]))
     if check.get("status") == "verified":
+        # Job polling observes the terminal provider response. Pass that response
+        # downstream instead of the original in_progress receipt, including on resume.
+        if step.operation in {'canva.presentation.create', 'canva.export.create'}:
+            observed_job = check.get('observed', {}).get('job')
+            if observed_job and observed_job.get('id') == result.get('job', {}).get('id'):
+                result.update(job=observed_job)
+                step.output = {**step.output, 'provider_result': dict(result)}
         return CriticDecision(action="accept", reasons=["Provider read-back matches the approved action fields"])
     evidence = {**result, "__aura_readback__": check["observed"]} if check.get("observed") and isinstance(result, dict) else result
     review_contract = {key: value for key, value in contract.items() if key != "required_evidence"}
@@ -926,9 +948,9 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 try:
                     from .workflow_context import requires_content_composition
                     capability = next((m for m in manifest.get("capabilities", []) if m.get("name") == step.operation), {})
-                    if not materialized_for_approval and requires_content_composition(
+                    if not materialized_for_approval and (step.operation == 'canva.presentation.create' or requires_content_composition(
                         plan_steps[step.position].get("arguments", {}), capability.get("input_schema", {}), context
-                    ):
+                    )):
                         raise NativeConnectorError("Structured source evidence requires readable content composition before approval")
                     resolved_arguments = normalize_module_arguments(
                         manifest, step.operation, resolved_arguments
@@ -988,6 +1010,19 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             {"step_id": step.id, "internal_error": str(exc)},
                             run.id,
                         )
+                        await session.commit()
+                        return
+                if step.operation == 'gmail.send' and resolved_arguments.get('attachments'):
+                    from .file_delivery import prepare_attachments
+                    # Exact URLs from verified completed exports in this tenant/run.
+                    exports = [s.output for s in steps if s.status == StepStatus.completed
+                        and s.operation == 'canva.export.create' and s.output.get('outcome_check', {}).get('status') == 'verified']
+                    urls = {url for output in exports for url in output.get('outcome_check', {}).get('observed', {}).get('job', {}).get('urls', [])}
+                    try:
+                        resolved_arguments = await prepare_attachments(resolved_arguments, urls)
+                    except Exception:
+                        run.status = RunStatus.waiting_for_action
+                        run.error = 'PDF preparation failed before sending. The completed Canva export is preserved; retry file preparation.'
                         await session.commit()
                         return
                 approval.preview = {
@@ -1124,6 +1159,12 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 active_tool: ToolConnection, operation: str, arguments: dict
             ) -> tuple[dict | None, str | None]:
                 consequential = step.consequential or operation_scope(operation) != "read"
+                if operation == 'gmail.send' and arguments.get('attachments'):
+                    permitted_urls = {url for s in steps if s.operation == 'canva.export.create'
+                        and s.status == StepStatus.completed and s.output.get('outcome_check', {}).get('status') == 'verified'
+                        for url in s.output.get('outcome_check', {}).get('observed', {}).get('job', {}).get('urls', [])}
+                    if any(item.get('url') not in permitted_urls for item in arguments['attachments']):
+                        return None, '[invalid_request] Attachments must come from verified exports in this run'
                 from .extended_outcomes import required_reads
                 verification_reads = required_reads(operation, arguments)
                 if not verification_reads <= (set(active_tool.allowed_operations) & set(snapshot.permission_snapshot.get(active_tool.slug, []))):

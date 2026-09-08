@@ -86,6 +86,8 @@ KNOWN.update({
     "canva.folder.items.list": (envelope("items"), ["resource_metadata"]),
     "canva.export.create": (JOB, ["dispatch_receipt"]),
     "canva.export.get": (JOB, ["job_status"]),
+    "canva.presentation.create": (JOB, ["dispatch_receipt", "populated_presentation"]),
+    "canva.import.get": (JOB, ["job_status"]),
     "tiktok.profile.get": (tiktok_data(["user"], {"user": OBJECT}), ["profile_metadata"]),
     "tiktok.videos.list": (tiktok_data(["videos", "has_more"], {"videos": {"type": "array", "items": IDENTIFIED}, "has_more": {"type": "boolean"}, "cursor": {"type": "integer"}}), ["video_metadata"]),
     "tiktok.post.creator_info": (tiktok_data(["creator_username"], {"creator_username": TEXT, "privacy_level_options": {"type": "array", "items": TEXT}}), ["posting_permissions"]),

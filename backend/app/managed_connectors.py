@@ -279,6 +279,7 @@ class NangoClient:
                 "tags[end_user_id]": subject,
             },
         )
+        matches = []
         for connection in result.get("connections", []):
             tags = connection.get("tags") or {}
             if (
@@ -287,8 +288,10 @@ class NangoClient:
                 and tags.get("end_user_id") == subject
                 and tags.get("aura_provider", provider) == provider
             ):
-                return connection
-        return None
+                if not connection.get('errors'):
+                    matches.append(connection)
+        # Multiple connected accounts require a real account choice, not guessing.
+        return matches[0] if len(matches) == 1 else None
 
     async def get_credentials(self, connection_id: str, integration_id: str) -> dict:
         result = await self._request(
