@@ -810,6 +810,7 @@ class ProviderExecutor:
 
     async def _calendar_list(self, a: dict) -> dict:
         params = {"singleEvents": "true", "orderBy": "startTime", "maxResults": min(int(a.get("limit", 20)), 100)}
+        if a.get("query"): params["q"] = a["query"]
         if a.get("time_min"): params["timeMin"] = a["time_min"]
         if a.get("time_max"): params["timeMax"] = a["time_max"]
         return await self._request("GET", "https://www.googleapis.com/calendar/v3/calendars/primary/events", params=params)
