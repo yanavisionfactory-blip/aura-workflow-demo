@@ -949,6 +949,8 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 )
                 try:
                     from .workflow_context import requires_content_composition
+                    from .workflow_context import canonical_action_arguments
+                    resolved_arguments = canonical_action_arguments(step.operation, resolved_arguments, context)
                     capability = next((m for m in manifest.get("capabilities", []) if m.get("name") == step.operation), {})
                     if not materialized_for_approval and (step.operation == 'canva.presentation.create' or requires_content_composition(
                         plan_steps[step.position].get("arguments", {}), capability.get("input_schema", {}), context

@@ -54,9 +54,6 @@ def _lookup(context: dict[str, Any], path: str) -> Any:
         if isinstance(value, dict) and part in value:
             value = value[part]
             continue
-        if isinstance(value, dict) and part.endswith("_id") and "id" in value:
-            value = value["id"]
-            continue
         if isinstance(value, list) and part.isdigit() and int(part) < len(value):
             value = value[int(part)]
             continue
@@ -197,10 +194,43 @@ def step_context_value(result: Any, operation: str | None = None) -> Any:
                     else:
                         plural = f"{singular}s"
                     value.setdefault(singular, first)
+                    if first.get("id"):
+                        value.setdefault(f"{singular}_id", first["id"])
                     value.setdefault(plural, collection)
                 for key, item in first.items():
                     value.setdefault(key, item)
     return value
+
+
+def canonical_action_arguments(operation: str, arguments: dict, context: dict) -> dict:
+    """Bind job-backed resource inputs to their completed provider result.
+
+    A job ID and the resource it created are distinct identities. Repair only
+    an exact receipt match from this run; never substitute an unrelated design.
+    """
+    if operation != "canva.export.create":
+        return arguments
+    requested = arguments.get("design_id")
+    candidates = set()
+    matched_job = False
+    for output in context.get("steps", {}).values():
+        if not isinstance(output, dict):
+            continue
+        receipt = output.get("provider_result", output)
+        if not isinstance(receipt, dict):
+            continue
+        job = receipt.get("job", {})
+        if not isinstance(job, dict) or job.get("id") != requested:
+            continue
+        matched_job = True
+        designs = job.get("result", {}).get("designs", [])
+        if job.get("status") == "success" and len(designs) == 1 and designs[0].get("id"):
+            candidates.add(designs[0]["id"])
+    if matched_job:
+        if len(candidates) != 1:
+            raise WorkflowContextError("The saved import job does not identify one completed design")
+        return {**arguments, "design_id": candidates.pop()}
+    return arguments
 
 
 def evaluate_condition(condition: StepCondition | dict, context: dict[str, Any]) -> bool:
