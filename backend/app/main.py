@@ -18,6 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .agent_runtime import deterministic_plan_fixes
 from .workflow_memory import select_memory_inputs
+from .semantic_memory import MemoryUnavailable, index_run_memory, search_memory, source_owner
+from .schemas import MemorySearch
 from .config import get_settings
 from .connector_sdk import ConnectorSDKError, validate_connector_definition
 from .db import engine, session_dependency, set_tenant_context
@@ -55,6 +57,7 @@ from .models import (
     WebhookSubscription,
     Workflow,
     WorkflowRun,
+    WorkflowMemory,
     WorkflowSchedule,
     Workspace,
     WorkspaceRecord,
@@ -2796,6 +2799,10 @@ async def approve_plan(
         raise HTTPException(
             422, {"message": "AURA is still preparing this workflow", "fixes": argument_fixes}
         )
+    for stored, planned in zip(steps, plan.steps, strict=True):
+        if stored.output.get("provider_result") is not None:
+            if planned.model_dump(mode="json") != run.plan["steps"][stored.position]:
+                raise HTTPException(409, "A revised plan cannot change a step with a recorded provider result")
     normalized_arguments = plan.model_dump(mode="json") != original_plan_json
 
     latest_version = await session.scalar(
@@ -2895,6 +2902,8 @@ async def approve_plan(
     ).all()
     approvals_by_step = {approval.step_id: approval for approval in approvals}
     for step in steps:
+        if step.status == StepStatus.completed:
+            continue
         approval = approvals_by_step.get(step.id)
         if step.consequential and not approval:
             approval = Approval(
@@ -2910,6 +2919,8 @@ async def approve_plan(
             approval.preview = {"status": "preparing"}
     for approval in approvals:
         step = next(stored for stored in steps if stored.id == approval.step_id)
+        if step.status == StepStatus.completed:
+            continue
         if payload.approve_consequential:
             approval.status = "approved"
             approval.decided_by = context.subject
@@ -3507,3 +3518,56 @@ async def get_run_evaluation(
         "provider_latency_ms": sum(item.latency_ms or 0 for item in attempts),
         "failed_provider_attempts": sum(item.status == "failed" for item in attempts),
     }
+
+
+@app.post("/v1/memory/search")
+async def search_workflow_memory(
+    payload: MemorySearch,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    try:
+        results = await search_memory(session, context.workspace_id, context.subject,
+                                      payload.query, payload.limit, payload.minimum_score)
+    except MemoryUnavailable as exc:
+        raise HTTPException(503, str(exc)) from exc
+    return {"results": results, "candidate_limit": settings.memory_candidate_limit,
+            "embedding_model": settings.memory_embedding_model}
+
+
+@app.post("/v1/memory/index/{run_id}")
+async def index_workflow_memory(
+    run_id: str,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    run = await session.get(WorkflowRun, run_id)
+    if (not run or run.workspace_id != context.workspace_id
+            or await source_owner(session, context.workspace_id, run_id) != context.subject):
+        raise HTTPException(404, "Memory source not found")
+    try:
+        memory = await index_run_memory(session, run, context.subject)
+    except MemoryUnavailable as exc:
+        await session.rollback()
+        raise HTTPException(503, str(exc)) from exc
+    if memory is None:
+        raise HTTPException(409, "Source is unverified or its memory was deleted")
+    await session.commit()
+    return {"memory_id": memory.id, "run_id": run.id}
+
+
+@app.delete("/v1/memory/{memory_id}")
+async def forget_workflow_memory(
+    memory_id: str,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    memory = await session.scalar(select(WorkflowMemory).where(
+        WorkflowMemory.id == memory_id, WorkflowMemory.workspace_id == context.workspace_id,
+        WorkflowMemory.subject == context.subject,
+    ).with_for_update())
+    if not memory:
+        raise HTTPException(404, "Memory not found")
+    memory.deleted, memory.text, memory.embedding = True, "", []
+    await session.commit()
+    return {"memory_id": memory.id, "deleted": True}
