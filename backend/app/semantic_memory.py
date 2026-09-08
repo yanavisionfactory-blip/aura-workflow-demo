@@ -76,11 +76,13 @@ async def index_run_memory(
     ):
         return None
     existing = await session.scalar(
-        select(WorkflowMemory).where(
+        select(WorkflowMemory)
+        .where(
             WorkflowMemory.workspace_id == run.workspace_id,
             WorkflowMemory.subject == owner,
             WorkflowMemory.run_id == run.id,
         )
+        .with_for_update()
     )
     if existing and existing.deleted:
         return None  # A forgotten memory is never silently recreated.
