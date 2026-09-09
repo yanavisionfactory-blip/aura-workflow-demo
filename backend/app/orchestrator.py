@@ -12,18 +12,16 @@ from .agent_runtime import (
     create_plan,
     critique_step,
     materialize_action_arguments,
+    prepare_execution_directive,
     prepare_final_review,
+    supervise_execution,
     synthesize_result,
     verify_outcome,
 )
+from .agent_telemetry import trace_run
 from .config import get_settings
-from .outcome_runtime import check_provider_outcome
-from .replanning import maybe_replan_run
-from .semantic_memory import index_run_memory
-from .schemas import CriticDecision, OutcomeVerification
 from .db import SessionLocal, engine, set_tenant_context
 from .execution_lock import execution_lock
-from .agent_telemetry import trace_run
 from .managed_connectors import managed_connection_reference, managed_connector_client
 from .models import (
     Approval,
@@ -51,6 +49,7 @@ from .native_connectors import (
     normalize_module_arguments,
     planning_catalog,
 )
+from .outcome_runtime import check_provider_outcome
 from .policy import canonical_plan_hash, operation_scope, runtime_policy_check
 from .providers import (
     ProviderExecutor,
@@ -58,12 +57,15 @@ from .providers import (
     refresh_oauth_credentials,
     verify_oauth_credentials,
 )
+from .replanning import maybe_replan_run
+from .schemas import CriticDecision, OutcomeVerification
 from .security import CredentialVault
+from .semantic_memory import index_run_memory
 from .workflow_context import (
     WorkflowContextError,
     evaluate_condition,
-    resolve_value,
     referenced_paths,
+    resolve_value,
     step_context_value,
 )
 
@@ -79,6 +81,8 @@ def _failure_impacts_trust(exc: Exception) -> bool:
 
 def _friendly_execution_error(error: str | None) -> str:
     detail = (error or "").lower()
+    if "[execution_agent_escalated]" in detail:
+        return "The Execution Agent paused this step for review. Your completed work is preserved."
     if any(marker in detail for marker in ("input budget", "evidence budget", "evidence processing budget", "context_length_exceeded")):
         return "AURA could not prepare all the source content within this run’s processing limit."
     if any(marker in detail for marker in ("unauthorized", "forbidden", "sign in", "token", "credential")):
@@ -585,8 +589,8 @@ def _partial_result(outputs: list[dict], step: RunStep, error: str) -> dict:
 
 
 async def review_recorded_result(session, run, step, snapshot, contract, result):
-    from .operation_contracts import output_errors
     from .completeness import incomplete_evidence
+    from .operation_contracts import output_errors
     errors = ([] if step.output.get("reconciliation", {}).get("status") == "verified" else output_errors(step.operation, result)) + incomplete_evidence(step.operation, result, contract.get("required_evidence", []))
     if errors:
         return CriticDecision(action="escalate", reasons=errors)
@@ -757,6 +761,59 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             "vars": run.inputs or {},
             "steps": {},
         }
+        supervision, supervision_source = await supervise_execution(
+            run.prompt,
+            run.plan,
+            [
+                {
+                    "key": step.step_key,
+                    "status": step.status.value,
+                    "tool_slug": step.tool_slug,
+                    "operation": step.operation,
+                    "depends_on": step.depends_on,
+                    "consequential": step.consequential,
+                }
+                for step in steps
+            ],
+        )
+        context["agent_supervision"] = {
+            "orchestrator": "AURA Senior Orchestrator",
+            "action": supervision.action,
+            "reason": supervision.reason,
+            "source": supervision_source,
+            "delegations": [
+                delegation.model_dump(mode="json")
+                for delegation in supervision.delegations
+            ],
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        run.execution_context = deepcopy(context)
+        await audit(
+            session,
+            workspace_id,
+            "run.execution_supervised",
+            {
+                "action": supervision.action,
+                "reason": supervision.reason,
+                "source": supervision_source,
+                "delegation_count": len(supervision.delegations),
+            },
+            run.id,
+            actor="senior-orchestrator",
+        )
+        if supervision.action == "pause":
+            run.status = RunStatus.waiting_for_action
+            run.error = (
+                "The Senior Orchestrator paused execution for review: "
+                f"{supervision.reason}"
+            )
+            await session.commit()
+            return
+        delegations = {
+            delegation.step_key: delegation
+            for delegation in supervision.delegations
+        }
+        await session.commit()
         step_by_key = {step.step_key: step for step in steps}
         for step in steps:
             from .parallel_reads import prefetch_ready_reads
@@ -949,8 +1006,10 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     manifest_record.manifest if manifest_record else None,
                 )
                 try:
-                    from .workflow_context import requires_content_composition
-                    from .workflow_context import canonical_action_arguments
+                    from .workflow_context import (
+                        canonical_action_arguments,
+                        requires_content_composition,
+                    )
                     resolved_arguments = canonical_action_arguments(step.operation, resolved_arguments, context)
                     capability = next((m for m in manifest.get("capabilities", []) if m.get("name") == step.operation), {})
                     if not materialized_for_approval and (step.operation == 'canva.presentation.create' or requires_content_composition(
@@ -1236,7 +1295,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     started = time.perf_counter()
                     timed_out = False
                     try:
-                        from .reliability import model_budget, BudgetExceeded
+                        from .reliability import BudgetExceeded, model_budget
                         budget = model_budget.get()
                         if budget and time.monotonic() >= budget.deadline:
                             raise BudgetExceeded("Delivery time budget exhausted")
@@ -1358,8 +1417,55 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     retry_after = failure.retry_after
                 return None, last_error
 
-            result, error = await call(tool, step.operation, resolved_arguments)
             approved_step = plan_steps[step.position]
+
+            async def delegated_call(
+                active_tool: ToolConnection, operation: str, arguments: dict
+            ) -> tuple[dict | None, str | None]:
+                delegation = delegations.get(step.step_key)
+                execution_agent = (
+                    delegation.execution_agent
+                    if delegation
+                    else f"{active_tool.slug.replace('-', ' ').title()} Execution Agent"
+                )
+                directive, directive_source = await prepare_execution_directive(
+                    run.prompt,
+                    {
+                        **approved_step,
+                        "key": step.step_key,
+                        "tool_slug": active_tool.slug,
+                        "operation": operation,
+                    },
+                    arguments,
+                    execution_agent,
+                )
+                await audit(
+                    session,
+                    workspace_id,
+                    "step.execution_agent_decision",
+                    {
+                        "step_id": step.id,
+                        "agent": execution_agent,
+                        "action": directive.action,
+                        "reason": directive.reason,
+                        "source": directive_source,
+                        "tool_slug": active_tool.slug,
+                        "operation": operation,
+                    },
+                    run.id,
+                    actor=execution_agent,
+                )
+                if directive.action != "execute":
+                    return None, f"[execution_agent_escalated] {directive.reason}"
+                return await call(
+                    active_tool,
+                    directive.operation,
+                    directive.arguments,
+                )
+
+            result, error = await delegated_call(
+                tool, step.operation, resolved_arguments
+            )
             if (
                 not error
                 and result is not None
@@ -1369,7 +1475,17 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 error = "The narrow read returned no matching items"
             fallback_slug = approved_step.get("fallback_tool_slug")
             fallback_operation = approved_step.get("fallback_operation")
-            recovery_blocked = bool(error and error.startswith(("[authorization_required]", "[uncertain_write]", "[budget_exhausted]", "[invalid_request]", "[contract_or_runtime_error]")))
+            recovery_blocked_prefixes = (
+                "[authorization_required]",
+                "[uncertain_write]",
+                "[budget_exhausted]",
+                "[invalid_request]",
+                "[contract_or_runtime_error]",
+                "[execution_agent_escalated]",
+            )
+            recovery_blocked = bool(
+                error and error.startswith(recovery_blocked_prefixes)
+            )
             if error and not recovery_blocked and fallback_slug and fallback_operation:
                 fallback = await session.scalar(
                     select(ToolConnection).where(
@@ -1406,7 +1522,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         },
                         run.id,
                     )
-                    result, error = await call(
+                    result, error = await delegated_call(
                         fallback, fallback_operation, resolved_arguments
                     )
                     if not error:
@@ -1418,6 +1534,10 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             fallback_operation,
                             resolved_arguments,
                         )
+
+            recovery_blocked = bool(
+                error and error.startswith(recovery_blocked_prefixes)
+            )
 
             reduced_arguments = approved_step.get("reduced_scope_arguments")
             if (
@@ -1439,7 +1559,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 for key, schema in capability.get("input_schema", {}).get("properties", {}).items():
                     if schema.get("x-preserve-on-recovery") and key in resolved_arguments:
                         resolved_reduced_arguments[key] = resolved_arguments[key]
-                result, error = await call(
+                result, error = await delegated_call(
                     tool, step.operation, resolved_reduced_arguments
                 )
                 if not error:

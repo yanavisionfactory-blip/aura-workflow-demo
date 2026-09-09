@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     max_model_calls_per_delivery: int = Field(default=16, ge=1, le=40)
     delivery_budget_seconds: int = Field(default=180, ge=30, le=600)
     model_call_timeout_seconds: int = Field(default=30, ge=5, le=90)
+    agent_managed_execution_enabled: bool = True
     parallel_read_limit: int = Field(default=3, ge=1, le=5)
     parallel_reads_enabled: bool = False
     agent_input_cost_per_million_usd: float | None = Field(default=None, ge=0)

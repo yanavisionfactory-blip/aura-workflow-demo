@@ -1,5 +1,5 @@
-from types import SimpleNamespace
 from time import perf_counter
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
@@ -29,6 +29,7 @@ from app.models import (
 from app.policy import DEFAULT_POLICY, canonical_plan_hash
 from app.schemas import (
     CriticDecision,
+    ExecutionDirective,
     OutcomeVerification,
     PlanStep,
     UnifiedDeliverable,
@@ -435,9 +436,10 @@ async def test_synthesis_outage_cannot_complete_or_index_run(runtime, monkeypatc
 
 
 async def test_recovery_api_does_not_allow_unknown_write_fallback(runtime):
+    from fastapi import HTTPException
+
     from app.main import TenantContext, resume_run
     from app.schemas import ResumeDecision
-    from fastapi import HTTPException
 
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
@@ -468,8 +470,9 @@ async def test_recovery_api_does_not_allow_unknown_write_fallback(runtime):
 
 
 async def test_evaluation_endpoint_is_tenant_scoped(runtime):
-    from app.main import TenantContext, get_run_evaluation
     from fastapi import HTTPException
+
+    from app.main import TenantContext, get_run_evaluation
 
     async with runtime() as session:
         with pytest.raises(HTTPException) as exc:
@@ -485,10 +488,11 @@ async def test_evaluation_endpoint_is_tenant_scoped(runtime):
 
 
 async def test_run_creation_rejects_other_users_memory(runtime):
+    from fastapi import HTTPException
+
     from app.main import TenantContext, create_run
     from app.models import AuditEvent
     from app.schemas import RunCreate
-    from fastapi import HTTPException
 
     async with runtime() as session:
         session.add(
@@ -527,6 +531,47 @@ async def test_active_connector_incident_pauses_before_provider_call(runtime, mo
     async with runtime() as session:
         assert (await session.get(WorkflowRun, "run")).status == RunStatus.waiting_for_action
         assert not (await session.scalars(select(StepAttempt))).all()
+
+
+async def test_execution_agent_escalation_prevents_provider_dispatch(
+    runtime, monkeypatch
+):
+    async def escalate(_prompt, approved_step, arguments, execution_agent):
+        assert approved_step["key"] == "write"
+        assert approved_step["tool_slug"] == "test"
+        assert approved_step["operation"] == "records.create"
+        assert arguments == {"title": "Example"}
+        assert execution_agent == "Writer Execution Agent"
+        return (
+            ExecutionDirective(
+                action="escalate",
+                step_key="write",
+                tool_slug="test",
+                operation="records.create",
+                arguments=arguments,
+                reason="The destination requires review",
+            ),
+            "agent",
+        )
+
+    async def forbidden(*_args, **_kwargs):
+        pytest.fail("The provider ran after the Execution Agent escalated")
+
+    monkeypatch.setattr(orchestrator, "prepare_execution_directive", escalate)
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", forbidden)
+
+    await orchestrator._execute_run("run", "w")
+
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        step = await session.get(RunStep, "step")
+        assert run.status == RunStatus.waiting_for_action
+        assert "Execution Agent paused" in run.error
+        assert step.status == StepStatus.failed
+        assert not (await session.scalars(select(StepAttempt))).all()
+        assert run.execution_context["agent_supervision"]["orchestrator"] == (
+            "AURA Senior Orchestrator"
+        )
 
 
 @pytest.mark.parametrize("state", [RunStatus.awaiting_approval, RunStatus.waiting_for_action, RunStatus.completed])

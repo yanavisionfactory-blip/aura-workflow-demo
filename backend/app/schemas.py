@@ -246,6 +246,38 @@ class PlanEvaluation(BaseModel):
     permission_scope: Literal["read", "write", "destructive"] = "read"
 
 
+class PlanSupervisionDecision(BaseModel):
+    action: Literal["approve", "repair"]
+    reason: str = Field(min_length=1, max_length=1000)
+    required_fixes: list[str] = Field(default_factory=list, max_length=10)
+
+
+class StepDelegation(BaseModel):
+    step_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,119}$")
+    execution_agent: str = Field(
+        min_length=2,
+        max_length=100,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9 _-]*$",
+    )
+    tool_slug: str
+    operation: str
+
+
+class ExecutionSupervision(BaseModel):
+    action: Literal["continue", "pause"]
+    reason: str = Field(min_length=1, max_length=1000)
+    delegations: list[StepDelegation] = Field(default_factory=list, max_length=20)
+
+
+class ExecutionDirective(BaseModel):
+    action: Literal["execute", "escalate"]
+    step_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,119}$")
+    tool_slug: str
+    operation: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
 class WorkflowPlan(BaseModel):
     name: str
     interpretation: str

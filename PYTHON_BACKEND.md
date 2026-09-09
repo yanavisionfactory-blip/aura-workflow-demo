@@ -8,11 +8,18 @@ The GitHub Pages site is only the React client. Real execution is provided by `b
 - PostgreSQL stores workflows, steps, approvals, encrypted tool connections, and audit events.
 - Redis and Celery provide recoverable background planning and execution.
 - OpenAI Agents SDK runs structured, role-specific agents behind the control-plane API.
-- The backend uses seven explicit runtime roles from the AURA orchestration design:
-  Intent & Scope, Tool Router, Plan Builder, Static Plan Evaluator, deterministic Workflow
-  State Manager, Tool Output Critic, and Unified Response Synthesizer.
-- Planning is separated into Propose and Authorize phases. Execution cannot begin until the
-  deterministic capability check, model-based preflight evaluation, and human plan approval pass.
+- The agent hierarchy includes an Intent & Scope Agent, Tool Router, Plan Builder, Static Plan
+  Evaluator, AURA Senior Orchestrator, named Execution Agents, Tool Output Critic, Unified Response
+  Synthesizer, Outcome Verifier, bounded Replanner, and Approval Argument Resolver. A deterministic
+  workflow state manager remains the durable source of truth around those model roles.
+- Planning is separated into Propose, Supervise, and Authorize phases. The Senior Orchestrator
+  reviews a deterministically valid plan and can require one bounded planner repair. Execution cannot
+  begin until capability checks and human approval pass.
+- Before execution, the Senior Orchestrator assigns every incomplete approved step to a named
+  Execution Agent. That agent's exact `execute` directive triggers the credential-isolated provider
+  gateway. It cannot change the approved step key, tool, operation, arguments, permissions, or
+  destination; invalid widening is discarded and logged. The same boundary applies to approved
+  fallback and reduced-scope recovery calls.
 - Each real provider result is evaluated against its step contract. Safe reads may be retried once;
   consequential actions are never automatically replayed after an uncertain result.
 - Final synthesis uses only critic-accepted artifacts and includes step-level traceability.
@@ -94,6 +101,9 @@ passwords or presenting a theatrical success state.
 - Provider credentials are encrypted with Fernet and are never passed into model context.
 - Provider writes pause for approval. Approved payloads may be edited before execution.
 - Idempotency keys prevent an already-completed provider action from being treated as a new step.
+- `AGENT_MANAGED_EXECUTION_ENABLED=true` enables senior supervision and per-call execution-agent
+  decisions. Production agent-managed runs remain sequential so parallel prefetch cannot bypass the
+  delegation boundary. Every supervision and execution decision is written to the audit trail.
 
 ## Supported real operations
 

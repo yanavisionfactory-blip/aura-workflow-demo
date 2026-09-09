@@ -18,12 +18,21 @@ from .workflow_context import referenced_paths, resolve_value
 
 async def prefetch_ready_reads(session, run, steps, position, snapshot, context, outputs):
     settings = get_settings()
+    # Agent-managed deliveries remain sequential so every provider dispatch is
+    # explicitly delegated to and authorized by its named Execution Agent.
+    if settings.agent_managed_execution_enabled:
+        return
     if not settings.parallel_reads_enabled or (run.execution_context or {}).get("execution_mode") == "unattended":
         return
     await session.refresh(run, attribute_names=["cancellation_requested", "status"])
     if run.cancellation_requested or run.status != RunStatus.running:
         return
-    from .orchestrator import _trust_state, _update_trust, managed_connector_client, _failure_impacts_trust
+    from .orchestrator import (
+        _failure_impacts_trust,
+        _trust_state,
+        _update_trust,
+        managed_connector_client,
+    )
     from .security import CredentialVault
     vault = CredentialVault()
     prepared = []
