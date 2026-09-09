@@ -78,6 +78,22 @@ from .workflow_context import (
 logger = logging.getLogger(__name__)
 
 
+def refresh_native_connection_contract(tool: ToolConnection) -> list[str]:
+    """Keep persisted native allow-lists aligned with the deployed connector.
+
+    Native capability contracts are application code, while the database row is a
+    cached snapshot created at connection time. Refreshing that snapshot prevents a
+    newly deployed safe capability from forcing the user through an unrelated OAuth
+    loop. Provider credentials and approval policy remain independently enforced.
+    """
+    try:
+        operations = native_operations(tool.slug)
+    except NativeConnectorError:
+        return list(tool.allowed_operations or [])
+    tool.allowed_operations = operations
+    return operations
+
+
 def _failure_impacts_trust(exc: Exception) -> bool:
     """Only provider availability failures should affect connector reliability."""
     if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in {401, 403}:
@@ -353,6 +369,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
         ).all()
         from .connection_permissions import refresh_granted_readbacks
         for tool in tools:
+            refresh_native_connection_contract(tool)
             refresh_granted_readbacks(tool)
         connected_inventory = [
             {

@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 
 from app.native_connectors import (
@@ -11,6 +13,7 @@ from app.native_connectors import (
     public_catalog,
     validate_module_arguments,
 )
+from app.orchestrator import refresh_native_connection_contract
 
 
 def test_resolved_structured_result_is_coerced_to_connector_text() -> None:
@@ -73,6 +76,20 @@ def test_google_catalog_can_resolve_and_update_named_spreadsheets():
     assert "sheets.read" in capabilities["sheets.append"]["reliability"][
         "readback_operations"
     ]
+
+
+def test_planning_refreshes_stale_native_capabilities_without_touching_custom_tools():
+    google = SimpleNamespace(slug="google", allowed_operations=["sheets.read"])
+    custom = SimpleNamespace(slug="creator-approvals", allowed_operations=["submit"])
+
+    refreshed = refresh_native_connection_contract(google)
+
+    assert refreshed == native_operations("google")
+    assert google.allowed_operations == native_operations("google")
+    assert "drive.files.search" in google.allowed_operations
+    assert "sheets.append" in google.allowed_operations
+    assert refresh_native_connection_contract(custom) == ["submit"]
+    assert custom.allowed_operations == ["submit"]
 
 
 def test_module_arguments_normalize_common_model_variants_before_approval():
