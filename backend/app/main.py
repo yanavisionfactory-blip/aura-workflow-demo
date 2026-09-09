@@ -17,12 +17,11 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .agent_runtime import deterministic_plan_fixes
-from .workflow_memory import select_memory_inputs
-from .semantic_memory import MemoryUnavailable, index_run_memory, search_memory, source_owner
-from .schemas import MemorySearch
+from .autonomous_delivery import reset_read_attempt_cycle
 from .config import get_settings
 from .connector_sdk import ConnectorSDKError, validate_connector_definition
 from .db import engine, session_dependency, set_tenant_context
+from .dispatch import dispatch_pending, recovery_loop
 from .identity import IdentityError, organization_claims, verify_clerk_session
 from .installation_runtime import (
     ConnectorInstallationError,
@@ -61,8 +60,8 @@ from .models import (
     WebhookDelivery,
     WebhookSubscription,
     Workflow,
-    WorkflowRun,
     WorkflowMemory,
+    WorkflowRun,
     WorkflowSchedule,
     Workspace,
     WorkspaceRecord,
@@ -107,6 +106,7 @@ from .schemas import (
     ConnectorPackageSubmit,
     CustomOAuthStart,
     InterfaceAnalyzeRequest,
+    MemorySearch,
     PlanApproval,
     PlanStep,
     PolicyUpdate,
@@ -135,6 +135,7 @@ from .security import (
     decode_webhook_token,
     verify_webhook_signature,
 )
+from .semantic_memory import MemoryUnavailable, index_run_memory, search_memory, source_owner
 from .trigger_runtime import (
     classify_delivery,
     delivery_can_be_replayed,
@@ -151,7 +152,7 @@ from .universal_connectors import (
     allowed_operations as discovered_operations,
 )
 from .worker import execute_run_task, plan_run_task, poll_subscription_task
-from .dispatch import dispatch_pending, recovery_loop
+from .workflow_memory import select_memory_inputs
 
 settings = get_settings()
 app = FastAPI(title="AURA Control Plane", version="0.1.0")
@@ -3218,7 +3219,7 @@ async def decide_approval(
     if approval.status != "pending":
         raise HTTPException(409, "Approval already decided")
     if payload.approved:
-        from .workflow_context import canonical_action_arguments, WorkflowContextError
+        from .workflow_context import WorkflowContextError, canonical_action_arguments
         proposed = payload.edited_arguments if payload.edited_arguments is not None else approval.preview.get("arguments", {})
         try:
             canonical = canonical_action_arguments(step.operation, proposed, run.execution_context or {})
@@ -3492,6 +3493,22 @@ async def resume_run(
             step.status = StepStatus.awaiting_approval
     step.error = None
     execution_context = dict(run.execution_context or {})
+    if (
+        payload.action in {"retry", "fallback"}
+        and not step.consequential
+        and operation_scope(step.operation) == "read"
+    ):
+        attempt_count = int(
+            await session.scalar(
+                select(func.count(StepAttempt.id)).where(
+                    StepAttempt.step_id == step.id
+                )
+            )
+            or 0
+        )
+        execution_context = reset_read_attempt_cycle(
+            execution_context, step.id, attempt_count
+        )
     recovery_counts = dict(execution_context.get("__aura_recovery__") or {})
     recovery_count = int(recovery_counts.get(step.id, 0)) + 1
     if recovery_count > 3:
@@ -3772,6 +3789,8 @@ async def get_run_evaluation(
         "execution_delivery_time_ms": sum(event.payload.get("duration_ms", 0) for event in events if event.payload.get("phase") == "execute_run"),
         "restart_recoveries": (run.execution_context or {}).get("restart_recoveries", 0),
         "replanning_attempts": (run.execution_context or {}).get("__aura_replanning__", {}).get("attempts", 0),
+        "autonomous_recovery_rounds": (run.execution_context or {}).get("__aura_autonomy__", {}).get("rounds", 0),
+        "autonomous_last_action": (run.execution_context or {}).get("__aura_autonomy__", {}).get("last_action"),
         "run_id": run_id, "status": run.status.value,
         "outcome_verified": run.result.get("verification", {}).get("status") == "verified",
         "verification": run.result.get("verification"),
@@ -3845,4 +3864,5 @@ async def forget_workflow_memory(
 
 
 from .assurance_api import install_routes as install_assurance_routes
+
 install_assurance_routes(app, tenant_context, tenant_session)

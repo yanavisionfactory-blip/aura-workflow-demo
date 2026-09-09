@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
+from test_agent_loop import runtime  # shared real-database fixture
 
 from app import replanning, semantic_memory
 from app.models import (
@@ -12,6 +13,7 @@ from app.models import (
     PlanVersion,
     RunStatus,
     RunStep,
+    StepAttempt,
     StepStatus,
     ToolConnection,
     ToolKind,
@@ -24,7 +26,6 @@ from app.policy import canonical_plan_hash
 from app.replanning import derive_repaired_plan, maybe_replan_run
 from app.schemas import PlanStep, StepRepair, WorkflowPlan
 from app.semantic_memory import index_run_memory, search_memory, unit_vector
-from test_agent_loop import runtime  # shared real-database fixture
 
 
 def notion_plan():
@@ -141,6 +142,18 @@ async def test_automatic_replanning_stages_a_reviewable_version(
                 payload={"step_id": "step", "error": "Search query failed"},
             )
         )
+        session.add(
+            StepAttempt(
+                workspace_id="w",
+                run_id="run",
+                step_id="step",
+                attempt_number=1,
+                status="failed",
+                tool_slug="notion",
+                operation="notion.search",
+                error="[invalid_request] Search query failed",
+            )
+        )
         await session.commit()
 
     async def proposal(*args):
@@ -160,6 +173,7 @@ async def test_automatic_replanning_stages_a_reviewable_version(
         )
         assert run.plan_approved is preapproved
         assert run.execution_context["__aura_replanning__"]["attempts"] == 1
+        assert run.execution_context["__aura_autonomy__"]["attempt_offsets"]["step"] == 1
         assert (await session.get(RunStep, "step")).arguments == {
             "query": "quarterly report"
         }
@@ -367,8 +381,8 @@ def test_invalid_embeddings_are_rejected(vector):
 
 
 async def test_provider_readback_requires_approved_permission(runtime, monkeypatch):
-    from app.outcome_runtime import check_provider_outcome
     from app.models import ApprovalSnapshot
+    from app.outcome_runtime import check_provider_outcome
     from app.providers import ProviderExecutor
 
     async def forbidden(*args, **kwargs):
@@ -389,9 +403,9 @@ async def test_provider_readback_requires_approved_permission(runtime, monkeypat
 
 
 async def test_readback_retries_only_read_operations(runtime, monkeypatch):
-    from app.outcome_runtime import check_provider_outcome
     from app import outcome_runtime
     from app.models import ApprovalSnapshot
+    from app.outcome_runtime import check_provider_outcome
     from app.providers import ProviderExecutor
 
     operations = []
@@ -434,10 +448,10 @@ async def test_readback_retries_only_read_operations(runtime, monkeypatch):
 
 
 async def test_repaired_plan_approval_preserves_completed_write(runtime, monkeypatch):
+    from app import dispatch, main
     from app.main import TenantContext, approve_plan
     from app.models import Approval
     from app.schemas import PlanApproval
-    from app import main, dispatch
     monkeypatch.setattr(dispatch, "SessionLocal", runtime)
     from fastapi import HTTPException
 

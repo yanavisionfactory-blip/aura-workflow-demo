@@ -278,6 +278,25 @@ class ExecutionDirective(BaseModel):
     reason: str = Field(min_length=1, max_length=1000)
 
 
+class AutonomousRecoveryOption(BaseModel):
+    key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,119}$")
+    action: Literal[
+        "retry_step",
+        "retry_recorded_review",
+        "retry_final_review",
+        "reconcile_write",
+        "revalidate_connection",
+    ]
+    step_id: str | None = None
+    reason_code: str = Field(pattern=r"^[a-z][a-z0-9_]{0,119}$")
+    delay_seconds: int = Field(default=0, ge=0, le=600)
+
+
+class AutonomousRecoveryDecision(BaseModel):
+    option_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,119}$")
+    reason: str = Field(min_length=1, max_length=1000)
+
+
 class WorkflowPlan(BaseModel):
     name: str
     interpretation: str

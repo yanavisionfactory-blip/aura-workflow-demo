@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from .agent_runtime import (
     _run,
@@ -10,6 +10,7 @@ from .agent_runtime import (
     deterministic_plan_fixes,
     normalize_plan_graph,
 )
+from .autonomous_delivery import reset_read_attempt_cycle
 from .db import SessionLocal, set_tenant_context
 from .models import (
     AuditEvent,
@@ -17,6 +18,7 @@ from .models import (
     PlanVersion,
     RunStatus,
     RunStep,
+    StepAttempt,
     StepStatus,
     ToolConnection,
     WorkflowRun,
@@ -25,7 +27,6 @@ from .native_connectors import current_capability_manifest, normalize_module_arg
 from .policy import canonical_plan_hash, operation_scope
 from .providers import idempotency_key
 from .schemas import StepRepair, WorkflowPlan
-
 
 ELIGIBLE_FAILURES = {
     "step.recovery_exhausted",
@@ -220,6 +221,14 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
             and approved_arguments
             and replacement.depends_on == approved_step.get("depends_on", [])
         ):
+            attempt_count = int(
+                await session.scalar(
+                    select(func.count(StepAttempt.id)).where(
+                        StepAttempt.step_id == step.id
+                    )
+                )
+                or 0
+            )
             step.tool_slug, step.operation, step.arguments = (
                 replacement.tool_slug,
                 replacement.operation,
@@ -232,7 +241,9 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
             context.setdefault("steps", {}).pop(step.step_key, None)
             for name in step.output_variables:
                 context.setdefault("vars", {}).pop(name, None)
-            run.execution_context = context
+            run.execution_context = reset_read_attempt_cycle(
+                context, step.id, attempt_count
+            )
             run.status, run.error = RunStatus.recovering, None
             session.add(
                 AuditEvent(
@@ -269,6 +280,12 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
             )
         )
         replacement = plan.steps[step.position]
+        attempt_count = int(
+            await session.scalar(
+                select(func.count(StepAttempt.id)).where(StepAttempt.step_id == step.id)
+            )
+            or 0
+        )
         step.tool_slug, step.operation, step.arguments = (
             replacement.tool_slug,
             replacement.operation,
@@ -282,7 +299,9 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
         context.setdefault("steps", {}).pop(step.step_key, None)
         for name in step.output_variables:
             context.setdefault("vars", {}).pop(name, None)
-        run.execution_context = context
+        run.execution_context = reset_read_attempt_cycle(
+            context, step.id, attempt_count
+        )
         run.plan, run.plan_approved = candidate, False
         run.status = RunStatus.awaiting_approval
         run.error = None
