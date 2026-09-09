@@ -19,6 +19,12 @@ from .agent_runtime import (
     verify_outcome,
 )
 from .agent_telemetry import trace_run
+from .autonomous_delivery import (
+    RECONCILIABLE_WRITES,
+    attempts_for_current_cycle,
+    autonomously_recover_run,
+    mark_autonomous_handoff,
+)
 from .config import get_settings
 from .db import SessionLocal, engine, set_tenant_context
 from .execution_lock import execution_lock
@@ -633,7 +639,15 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                     return
             for _ in range(3):
                 await _execute_run(run_id, workspace_id)
-                if await maybe_replan_run(run_id, workspace_id) != "retry":
+                if await autonomously_recover_run(run_id, workspace_id) in {
+                    "scheduled",
+                    "handoff",
+                }:
+                    break
+                replanning = await maybe_replan_run(run_id, workspace_id)
+                if replanning != "retry":
+                    if replanning is False:
+                        await mark_autonomous_handoff(run_id, workspace_id)
                     break
 
 
@@ -668,6 +682,26 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             run.status = RunStatus.awaiting_approval
             await session.commit()
             return
+        autonomy = deepcopy((run.execution_context or {}).get("__aura_autonomy__") or {})
+        if run.status == RunStatus.recovering and autonomy.get("next_attempt_at"):
+            autonomy["next_attempt_at"] = None
+            autonomy["last_started_at"] = datetime.now(timezone.utc).isoformat()
+            run.execution_context = {
+                **(run.execution_context or {}),
+                "__aura_autonomy__": autonomy,
+            }
+            await audit(
+                session,
+                workspace_id,
+                "run.autonomous_recovery_started",
+                {
+                    "action": autonomy.get("last_action"),
+                    "recovery_round": autonomy.get("rounds"),
+                },
+                run.id,
+                actor="senior-orchestrator",
+            )
+            await session.commit()
 
         plan_version = await session.scalar(
             select(PlanVersion)
@@ -1234,17 +1268,25 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 if not verification_reads <= (set(active_tool.allowed_operations) & set(snapshot.permission_snapshot.get(active_tool.slug, []))):
                     return None, "[authorization_required] Read-back permissions must be approved before the write"
                 active_trust = await _trust_state(session, workspace_id, active_tool)
-                existing = (
+                all_existing = (
                     await session.scalars(
-                        select(StepAttempt).where(StepAttempt.step_id == step.id)
+                        select(StepAttempt)
+                        .where(StepAttempt.step_id == step.id)
+                        .order_by(StepAttempt.attempt_number)
                     )
                 ).all()
+                existing = attempts_for_current_cycle(
+                    all_existing,
+                    run.execution_context or {},
+                    step.id,
+                    consequential,
+                )
                 if existing:
                     latest = max(existing, key=lambda item: item.attempt_number)
                     if (latest.error or "").startswith(("[authorization_required]", "[invalid_request]", "[contract_or_runtime_error]", "[budget_exhausted]", "[rate_limited]")):
                         return None, latest.error
                 if consequential and existing:
-                    if operation in {"notion.page.update", "jira.issue.update", "hubspot.contact.update", "hubspot.company.update", "mailchimp.campaign.send"}:
+                    if operation in RECONCILIABLE_WRITES:
                         # Confirm the requested state using the approved identifier; never repeat the write.
                         step.output = {**step.output, "resolved_arguments": arguments}
                         check = await check_provider_outcome(session, run, step, snapshot)
@@ -1285,7 +1327,11 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         workspace_id=workspace_id,
                         run_id=run.id,
                         step_id=step.id,
-                        attempt_number=len(existing) + retry_index + 1,
+                        attempt_number=(
+                            max((item.attempt_number for item in all_existing), default=0)
+                            + retry_index
+                            + 1
+                        ),
                         status="running",
                         tool_slug=active_tool.slug,
                         operation=operation,

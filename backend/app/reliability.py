@@ -29,6 +29,11 @@ def classify_failure(exc: Exception, *, read: bool) -> Failure:
         return Failure("budget_exhausted", False)
     if not read:
         return Failure("uncertain_write", False)
+    if exc.__class__.__name__ in {"ManagedConnectorError", "ConnectorConfigurationError"}:
+        return Failure(
+            "provider_unavailable" if getattr(exc, "retryable", False) else "authorization_required",
+            bool(getattr(exc, "retryable", False)),
+        )
     if status == 429:
         value = getattr(response, "headers", {}).get("retry-after", "1")
         try:

@@ -20,6 +20,12 @@ The GitHub Pages site is only the React client. Real execution is provided by `b
   gateway. It cannot change the approved step key, tool, operation, arguments, permissions, or
   destination; invalid widening is discarded and logged. The same boundary applies to approved
   fallback and reduced-scope recovery calls.
+- After a delivery stops, an Autonomous Delivery Supervisor selects only from policy-generated safe
+  recovery options. It can retry transient reads on a fresh durable delivery, resume review from a
+  saved provider receipt, repeat final verification, revalidate an existing managed connection, or
+  reconcile a supported uncertain update through read-back. Recovery state, attempt boundaries and
+  the next dispatch time are persisted in the run. It cannot approve work, change arguments, create
+  a login session, reactivate an explicitly revoked connection, or repeat an uncertain write.
 - Each real provider result is evaluated against its step contract. Safe reads may be retried once;
   consequential actions are never automatically replayed after an uncertain result.
 - Final synthesis uses only critic-accepted artifacts and includes step-level traceability.
@@ -38,9 +44,11 @@ The GitHub Pages site is only the React client. Real execution is provided by `b
 - Tool health is updated from successes, failures, timeouts and latency. Policy is rechecked at every
   step boundary against current trust and permissions; revoked access blocks and expanded access
   pauses for re-approval.
-- Non-consequential steps use persisted attempts with three retries and 1s/2s/4s backoff. Approved
-  read-only fallback tools and reduced-scope arguments may recover automatically. Consequential
-  actions are never automatically replayed after an uncertain outcome.
+- Non-consequential steps use persisted attempts with three retries and 1s/2s/4s backoff per bounded
+  recovery cycle. Approved read-only fallback tools and reduced-scope arguments may recover
+  automatically. Attempt numbers remain globally monotonic for auditability. Consequential actions
+  always inspect their complete attempt history and are never automatically replayed after an
+  uncertain outcome.
 - Accepted outputs are stored as versioned artifacts. Exhausted recovery returns an explicit partial
   result and `waiting_for_action`; `/v1/runs/{run_id}/resume` supports retry, approved fallback,
   optional-step skip, or cancellation without rerunning completed steps.

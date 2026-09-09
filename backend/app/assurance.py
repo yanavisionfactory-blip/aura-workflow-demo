@@ -3,7 +3,9 @@ import hashlib
 import hmac
 import json
 from datetime import datetime, timedelta, timezone
+
 from sqlalchemy import select
+
 from .config import get_settings
 from .managed_connectors import managed_connection_reference
 from .models import OperationCertification
@@ -86,8 +88,13 @@ async def operation_readiness(session, workspace_id, tool, operation, stored=Non
 def diagnostic(run, attempts=(), pending_dispatches=0):
     errors = " ".join([run.error or "", *(item.error or "" for item in attempts)]).lower()
     code, action, owner = "none", None, None
+    autonomy = (getattr(run, "execution_context", None) or {}).get(
+        "__aura_autonomy__", {}
+    )
     if run.status.value == "awaiting_approval":
         code, action, owner = "approval_required", "Review and approve the saved plan or action.", "customer"
+    elif autonomy.get("next_attempt_at") and run.status.value == "recovering":
+        code, action, owner = "autonomous_recovery", "AURA is diagnosing and retrying the saved workflow automatically.", "system"
     elif "uncertain" in errors:
         code, action, owner = "uncertain_write", "Check the provider resource or reconcile the saved action; do not repeat the write.", "support"
     elif "authorization_required" in errors or "credential" in errors:
@@ -103,4 +110,5 @@ def diagnostic(run, attempts=(), pending_dispatches=0):
     elif pending_dispatches:
         code, action, owner = "dispatch_pending", "Work is saved and awaiting worker dispatch.", "system"
     return {"code": code, "next_action": action, "owner": owner, "run_id": run.id,
-            "saved_progress_preserved": True, "pending_dispatches": pending_dispatches}
+            "saved_progress_preserved": True, "pending_dispatches": pending_dispatches,
+            "autonomy": autonomy}

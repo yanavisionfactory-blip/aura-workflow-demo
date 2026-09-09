@@ -16,8 +16,9 @@ JUnit results as `workflow-release-evaluation`.
 - Database transitions atomically create tenant-scoped dispatch intents. Publish failures
   remain pending with capped backoff. Delivery is at least once; per-run ownership and
   provider receipts prevent replay of known or uncertain writes.
-- `MAX_PROVIDER_ATTEMPTS=3`: shared across a step's deliveries and alternative reads.
-  Writes have one attempt. Authorization and invalid requests do not auto-retry.
+- `MAX_PROVIDER_ATTEMPTS=3`: shared across a read's current bounded recovery cycle. Every prior
+  attempt stays in the ledger and numbering remains monotonic. Writes inspect their complete history
+  and have one attempt. Authorization and invalid requests do not auto-retry.
 - `DELIVERY_BUDGET_SECONDS=180`, `MAX_MODEL_CALLS_PER_DELIVERY=16`,
   `MODEL_CALL_TIMEOUT_SECONDS=30`: model and provider work have bounded budgets.
 - `AGENT_MANAGED_EXECUTION_ENABLED=true`: a Senior Orchestrator reviews plans and assigns all
@@ -25,6 +26,13 @@ JUnit results as `workflow-release-evaluation`.
   before the gateway dispatches it. Model outages fall back to the same exact deterministic directive;
   they never widen permissions or arguments. Explicit agent escalation pauses the step with receipts
   and completed work preserved.
+- `AUTONOMOUS_DELIVERY_ENABLED=true`: after an approved run pauses, the Autonomous Delivery
+  Supervisor chooses one exact option from a deterministic safe-recovery set. Default limits are
+  eight recovery rounds, three rounds per step and three final-review rounds. Each round is committed
+  before a delayed outbox dispatch, so worker/model restarts do not reset the budget or lose progress.
+  `MAX_AUTONOMOUS_RECOVERY_ROUNDS`, `MAX_AUTONOMOUS_STEP_RECOVERIES`,
+  `MAX_AUTONOMOUS_REVIEW_RECOVERIES`, `AUTONOMOUS_RECOVERY_BASE_DELAY_SECONDS`, and
+  `AUTONOMOUS_RECOVERY_MAX_DELAY_SECONDS` can tighten operational bounds.
 - `PARALLEL_READS_ENABLED=true`: up to three independent typed native reads, at most
   two per connector. No write/approval barrier crossing; attempts commit before IO.
   Schema, trust and permission checks remain required. Database operations are serial. Parallel
@@ -37,6 +45,21 @@ JUnit results as `workflow-release-evaluation`.
 wall time (including approval waits), active execution time, calls, provider attempts,
 recoveries, replans, tokens and configured cost estimates. Unknown costs remain null.
 Latency targets should be set from observed distributions, not mocked test timings.
+
+### Autonomous delivery boundaries
+
+The supervisor automatically handles transient read/provider failures, delivery-budget exhaustion,
+review of an already recorded receipt, final synthesis/verification retries, and verification of the
+same managed connection reference. Supported updates with an uncertain response use approved
+resource identifiers and read-back; the original write is not called again. A read recovery opens a
+new bounded attempt cycle while retaining globally increasing attempt numbers and every old receipt.
+
+The system hands off only when no safe option remains: a new or changed approval is required, a
+connection was explicitly revoked or genuinely needs login, certification or policy blocks execution,
+the approved plan no longer matches its snapshot, or an uncertain write lacks deterministic
+reconciliation. Agents never see credentials and cannot manufacture a recovery action outside the
+allow-list. Diagnostics report `owner=system` and `code=autonomous_recovery` while a durable retry is
+scheduled; recovery rounds and the last action are also exposed by the run evaluation endpoint.
 
 ## Connector certification
 
