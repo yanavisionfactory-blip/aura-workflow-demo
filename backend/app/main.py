@@ -30,7 +30,12 @@ from .installation_runtime import (
     installed_oauth_url,
     normalized_credentials,
 )
-from .managed_connectors import ManagedConnectorError, managed_connector_client
+from .managed_connectors import (
+    ManagedConnectorError,
+    external_account_reference,
+    managed_connection_reference,
+    managed_connector_client,
+)
 from .migrations import migrate_database
 from .models import (
     Approval,
@@ -419,6 +424,8 @@ async def list_tools(
                 "kind": tool.kind.value,
                 "base_url": tool.base_url,
                 "enabled": tool.enabled,
+                "external_connection_id": tool.external_connection_id,
+                "external_account_id": tool.external_account_id,
                 "status": manifest.status if manifest else ("connected" if tool.enabled else "disabled"),
                 "allowed_operations": tool.allowed_operations,
                 "capabilities": (manifest.manifest or {}).get("capabilities", []) if manifest else [],
@@ -458,23 +465,125 @@ async def managed_connector_status(
 @app.post("/v1/managed-connectors/{provider}/session", status_code=201)
 async def create_managed_connector_session(
     provider: str,
+    connection_id: str | None = None,
+    external_connection_id: str | None = None,
     context: TenantContext = Depends(tenant_context),
     session: AsyncSession = Depends(tenant_session),
 ) -> dict:
     provider = provider.lower()
     if provider not in PROVIDERS:
         raise HTTPException(404, "Unknown app")
-    try:
-        result = await managed_connector_client().create_session(
-            provider, context.workspace_id, context.subject
+    client = managed_connector_client()
+    selected_tool = None
+    if connection_id:
+        selected_tool = await session.get(ToolConnection, connection_id)
+        if (
+            not selected_tool
+            or selected_tool.workspace_id != context.workspace_id
+            or selected_tool.slug != provider
+            or selected_tool.config.get("managed_by") != "nango"
+        ):
+            raise HTTPException(404, "Connection not found")
+    else:
+        selected_tool = await session.scalar(
+            select(ToolConnection).where(
+                ToolConnection.workspace_id == context.workspace_id,
+                ToolConnection.slug == provider,
+            )
         )
+    try:
+        selected_reference = external_connection_id or (
+            managed_connection_reference(selected_tool) if selected_tool else None
+        )
+        if selected_reference:
+            if not selected_tool:
+                scoped = await client.find_connection(
+                    provider,
+                    context.workspace_id,
+                    context.subject,
+                    selected_reference,
+                    include_errors=True,
+                )
+                if not scoped:
+                    raise HTTPException(404, "Connection not found")
+            result = await client.create_reconnect_session(
+                provider,
+                selected_reference,
+                context.workspace_id,
+                context.subject,
+            )
+            result.update(
+                {
+                    "mode": "reconnect",
+                    "connection_id": selected_tool.id if selected_tool else None,
+                    "tool_connection_id": selected_tool.id if selected_tool else None,
+                    "external_connection_id": selected_reference,
+                }
+            )
+        else:
+            matches = await client.find_connections(
+                provider, context.workspace_id, context.subject
+            )
+            if len(matches) > 1:
+                raise HTTPException(
+                    409,
+                    {
+                        "message": "Choose the account you want AURA to reconnect.",
+                        "code": "account_selection_required",
+                        "accounts": [
+                            {
+                                "external_connection_id": item.get("connection_id"),
+                                "identity": item.get("metadata") or {},
+                            }
+                            for item in matches
+                        ],
+                    },
+                )
+            if matches:
+                existing = matches[0]
+                integration_id, verification = await client.verify_connection(
+                    provider, existing
+                )
+                if verification.get("ok"):
+                    result = {
+                        "already_connected": True,
+                        "mode": "reuse",
+                        "tool_connection_id": None,
+                        "external_connection_id": existing.get("connection_id"),
+                        "integration_id": integration_id,
+                    }
+                else:
+                    result = await client.create_reconnect_session(
+                        provider,
+                        existing["connection_id"],
+                        context.workspace_id,
+                        context.subject,
+                    )
+                    result.update(
+                        {
+                            "mode": "reconnect",
+                            "external_connection_id": existing["connection_id"],
+                        }
+                    )
+            else:
+                result = await client.create_session(
+                    provider, context.workspace_id, context.subject
+                )
+                result["mode"] = "connect"
     except ManagedConnectorError as exc:
         raise HTTPException(503, str(exc)) from exc
     session.add(AuditEvent(
         workspace_id=context.workspace_id,
         actor=context.subject,
-        event_type="connector.managed_authorization_started",
-        payload={"provider": provider},
+        event_type={
+            "reconnect": "connector.managed_reauthorization_started",
+            "reuse": "connector.managed_authorization_reused",
+        }.get(result.get("mode"), "connector.managed_authorization_started"),
+        payload={
+            "provider": provider,
+            "connection_id": selected_tool.id if selected_tool else None,
+            "mode": result.get("mode"),
+        },
     ))
     await session.commit()
     return result
@@ -483,40 +592,107 @@ async def create_managed_connector_session(
 @app.post("/v1/managed-connectors/{provider}/sync")
 async def sync_managed_connector(
     provider: str,
+    connection_id: str | None = None,
+    external_connection_id: str | None = None,
     context: TenantContext = Depends(tenant_context),
     session: AsyncSession = Depends(tenant_session),
 ) -> dict:
-    """Import only a durable Nango reference after hosted authorization succeeds."""
+    """Import a managed reference only after credentials and provider access verify."""
     provider = provider.lower()
     definition = PROVIDERS.get(provider)
     if not definition:
         raise HTTPException(404, "Unknown app")
     client = managed_connector_client()
+    tool = None
+    if connection_id:
+        tool = await session.get(ToolConnection, connection_id)
+        if not tool or tool.workspace_id != context.workspace_id or tool.slug != provider:
+            raise HTTPException(404, "Connection not found")
+    else:
+        tool = await session.scalar(select(ToolConnection).where(
+            ToolConnection.workspace_id == context.workspace_id,
+            ToolConnection.slug == provider,
+        ))
+    selected_reference = (
+        external_connection_id
+        or (managed_connection_reference(tool) if tool else None)
+    )
     try:
         connection = await client.find_connection(
-            provider, context.workspace_id, context.subject
+            provider,
+            context.workspace_id,
+            context.subject,
+            selected_reference,
+            include_errors=True,
         )
     except ManagedConnectorError as exc:
         raise HTTPException(503, str(exc)) from exc
     if not connection:
         return {"connected": False, "status": "waiting"}
     if connection.get("errors"):
-        return {"connected": False, "status": "authorization_required"}
-    integration_id = await client.integration_id(provider)
-    tool = await session.scalar(select(ToolConnection).where(
-        ToolConnection.workspace_id == context.workspace_id,
-        ToolConnection.slug == provider,
-    ))
+        verification = {
+            "ok": False,
+            "reason": "authorization_required",
+            "retryable": False,
+        }
+        if tool:
+            tool.enabled = False
+            record = await session.scalar(
+                select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id)
+            )
+            if record:
+                record.status = "degraded"
+                record.verification = verification
+                record.verified_at = datetime.now(timezone.utc)
+            await session.commit()
+        return {
+            "connected": False,
+            "status": "degraded",
+            "reason": "authorization_required",
+            "retryable": False,
+            "connection_id": tool.id if tool else None,
+        }
+    try:
+        integration_id, verification = await client.verify_connection(
+            provider, connection
+        )
+    except ManagedConnectorError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    if not verification.get("ok"):
+        status = "verification_pending" if verification.get("retryable") else "degraded"
+        if tool:
+            tool.enabled = False
+            record = await session.scalar(
+                select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id)
+            )
+            if record:
+                record.status = status
+                record.verification = verification
+                record.verified_at = datetime.now(timezone.utc)
+            await session.commit()
+        return {
+            "connected": False,
+            "status": status,
+            "reason": verification.get("reason"),
+            "retryable": bool(verification.get("retryable")),
+            "connection_id": tool.id if tool else None,
+        }
+    external_account_id = external_account_reference(
+        provider, connection, verification
+    )
     config = {
         "managed_by": "nango",
         "connection_id": connection["connection_id"],
         "integration_id": integration_id,
+        "external_account_id": external_account_id,
     }
     if tool:
         tool.display_name = definition.display_name
         tool.kind = ToolKind.oauth
         tool.config = config
         tool.encrypted_credentials = CredentialVault().encrypt({})
+        tool.external_connection_id = connection["connection_id"]
+        tool.external_account_id = external_account_id
         tool.allowed_operations = native_operations(provider)
         tool.enabled = True
     else:
@@ -526,6 +702,8 @@ async def sync_managed_connector(
             display_name=definition.display_name,
             kind=ToolKind.oauth,
             encrypted_credentials=CredentialVault().encrypt({}),
+            external_connection_id=connection["connection_id"],
+            external_account_id=external_account_id,
             config=config,
             allowed_operations=native_operations(provider),
             enabled=True,
@@ -544,12 +722,13 @@ async def sync_managed_connector(
         session.add(record)
     record.status = "verified"
     record.manifest = native_manifest(provider)
-    record.verification = {
-        "ok": True,
-        "source": "managed_connector",
-        "identity": connection.get("metadata") or {},
-    }
+    record.verification = {**verification, "source": "managed_connector"}
     record.verified_at = datetime.now(timezone.utc)
+    client.clear_authorization_sessions(
+        provider,
+        context.workspace_id,
+        context.subject,
+    )
     session.add(AuditEvent(
         workspace_id=context.workspace_id,
         actor=context.subject,
@@ -557,7 +736,15 @@ async def sync_managed_connector(
         payload={"tool_id": tool.id, "provider": provider},
     ))
     await session.commit()
-    return {"connected": True, "status": "verified", "tool_id": tool.id}
+    return {
+        "connected": True,
+        "status": "verified",
+        "tool_id": tool.id,
+        "connection_id": tool.id,
+        "external_connection_id": tool.external_connection_id,
+        "external_account_id": tool.external_account_id,
+        "verification": record.verification,
+    }
 
 
 @app.post("/v1/tools", status_code=201)
@@ -1727,16 +1914,23 @@ async def test_connection(
         raise HTTPException(409, "Connection has no discovered capability manifest")
     if tool.config.get("managed_by") == "nango":
         try:
-            credentials = await managed_connector_client().get_credentials(
-                tool.config["connection_id"], tool.config["integration_id"]
+            selected_reference = (
+                managed_connection_reference(tool) or tool.config["connection_id"]
             )
-            result = await verify_oauth_credentials(tool.slug, credentials)
-            if result.get("reason") == "unsupported_oauth_provider":
-                result = {"ok": True, "source": "managed_connector"}
+            _, result = await managed_connector_client().verify_connection(
+                tool.slug, {"connection_id": selected_reference}
+            )
         except (ManagedConnectorError, KeyError):
             result = {"ok": False, "reason": "authorization_required"}
         manifest.verification = result
         manifest.status = "verified" if result["ok"] else "degraded"
+        tool.enabled = bool(result["ok"])
+        if result.get("ok"):
+            tool.external_connection_id = selected_reference
+            if not tool.external_account_id:
+                tool.external_account_id = external_account_reference(
+                    tool.slug, {}, result
+                )
         manifest.verified_at = datetime.now(timezone.utc)
         await session.commit()
         return {"id": tool.id, "status": manifest.status, "verification": result}
@@ -1773,7 +1967,8 @@ async def disconnect_connection(
         revocation = {"attempted": True, "ok": True, "managed": True}
         try:
             await managed_connector_client().delete_connection(
-                tool.config["connection_id"], tool.config["integration_id"]
+                managed_connection_reference(tool) or tool.config["connection_id"],
+                tool.config["integration_id"],
             )
         except (ManagedConnectorError, KeyError):
             revocation["ok"] = False
@@ -1846,9 +2041,12 @@ async def reconnect_connection(
     previous_updated_at = tool.updated_at.isoformat() if tool.updated_at else None
     if tool.config.get("managed_by") == "nango":
         try:
+            selected_reference = managed_connection_reference(tool)
+            if not selected_reference:
+                raise KeyError("external_connection_id")
             managed = await managed_connector_client().create_reconnect_session(
                 tool.slug,
-                tool.config["connection_id"],
+                selected_reference,
                 context.workspace_id,
                 context.subject,
             )

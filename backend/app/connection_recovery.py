@@ -7,6 +7,7 @@ from .models import ToolConnection, ToolKind, CapabilityManifest, AuditEvent
 from .native_connectors import native_manifest, native_operations
 from .providers import PROVIDERS
 from .security import CredentialVault
+from .managed_connectors import external_account_reference
 
 
 async def reuse_managed_connection(session, client, provider, workspace_id, subject):
@@ -20,10 +21,10 @@ async def reuse_managed_connection(session, client, provider, workspace_id, subj
         connection = await asyncio.wait_for(client.find_connection(provider, workspace_id, subject), 8)
         if not connection or connection.get('errors'):
             return False
-        integration_id = await client.integration_id(provider)
-        # Nango validates/refreshes the grant, without requesting credentials from the user.
-        credentials = await asyncio.wait_for(client.get_credentials(connection['connection_id'], integration_id), 8)
-        if not credentials.get('access_token'):
+        integration_id, verification = await asyncio.wait_for(
+            client.verify_connection(provider, connection), 8
+        )
+        if not verification.get('ok'):
             return False
     except (RuntimeError, TimeoutError, KeyError):
         return False
@@ -31,14 +32,17 @@ async def reuse_managed_connection(session, client, provider, workspace_id, subj
         display_name=PROVIDERS[provider].display_name, kind=ToolKind.oauth,
         enabled=True, allowed_operations=native_operations(provider),
         encrypted_credentials=CredentialVault().encrypt({}),
-        config={'managed_by': 'nango', 'connection_id': connection['connection_id'], 'integration_id': integration_id})
+        external_connection_id=connection['connection_id'],
+        external_account_id=external_account_reference(provider, connection, verification),
+        config={'managed_by': 'nango', 'connection_id': connection['connection_id'], 'integration_id': integration_id,
+            'external_account_id': external_account_reference(provider, connection, verification)})
     try:
         async with session.begin_nested():
             session.add(tool)
             await session.flush()
             session.add(CapabilityManifest(workspace_id=workspace_id, tool_id=tool.id,
                 provider_type='oauth', status='verified', manifest=native_manifest(provider),
-                verification={'ok': True, 'source': 'existing_managed_authorization'},
+                verification={**verification, 'source': 'existing_managed_authorization'},
                 verified_at=datetime.now(timezone.utc)))
             session.add(AuditEvent(workspace_id=workspace_id, actor=subject,
                 event_type='connector.authorization_reused', payload={'provider': provider}))

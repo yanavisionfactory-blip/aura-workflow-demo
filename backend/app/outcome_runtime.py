@@ -6,7 +6,7 @@ from time import perf_counter
 from sqlalchemy import select
 
 from .config import get_settings
-from .managed_connectors import managed_connector_client
+from .managed_connectors import managed_connection_reference, managed_connector_client
 from .models import AuditEvent, CapabilityManifest, ToolConnection, ToolTrustState
 from .native_connectors import current_capability_manifest
 from .outcome_checks import build_outcome_check, evaluate_outcome_check
@@ -112,7 +112,8 @@ async def _check_provider_outcome(session, run, step, snapshot) -> dict:
             vault = CredentialVault()
             if tool.config.get("managed_by") == "nango":
                 credentials = await managed_connector_client().get_credentials(
-                    tool.config["connection_id"], tool.config["integration_id"]
+                    managed_connection_reference(tool) or tool.config["connection_id"],
+                    tool.config["integration_id"],
                 )
                 if tool.slug == "jira" and not credentials.get("cloud_id"):
                     identity = await verify_oauth_credentials("jira", credentials)

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 
 from .config import get_settings
+from .managed_connectors import managed_connection_reference
 from .models import CapabilityManifest, RunStatus, StepAttempt, StepStatus, ToolConnection
 from .native_connectors import current_capability_manifest, normalize_module_arguments
 from .operation_contracts import enrich_operation
@@ -68,7 +69,10 @@ async def prefetch_ready_reads(session, run, steps, position, snapshot, context,
             if referenced_paths(arguments):
                 continue
             if tool.config.get("managed_by") == "nango":
-                credentials = await managed_connector_client().get_credentials(tool.config["connection_id"], tool.config["integration_id"])
+                credentials = await managed_connector_client().get_credentials(
+                    managed_connection_reference(tool) or tool.config["connection_id"],
+                    tool.config["integration_id"],
+                )
                 if tool.slug == "jira" and not credentials.get("cloud_id"):
                     continue  # Sequential path resolves account routing.
             else:

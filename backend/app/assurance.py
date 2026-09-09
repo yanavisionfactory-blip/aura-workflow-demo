@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from .config import get_settings
+from .managed_connectors import managed_connection_reference
 from .models import OperationCertification
 from .native_connectors import current_capability_manifest
 from .operation_contracts import enrich_operation
@@ -19,10 +20,10 @@ def canonical(value):
 
 def connection_fingerprint(tool):
     # Include the secret's digest for unmanaged connections, never the secret itself.
-    identity = tool.config.get("connection_id") or hashlib.sha256((tool.encrypted_credentials or "").encode()).hexdigest()
+    identity = managed_connection_reference(tool) or hashlib.sha256((tool.encrypted_credentials or "").encode()).hexdigest()
     return hashlib.sha256(canonical({"id": tool.id, "slug": tool.slug, "connection": identity,
         "integration": tool.config.get("integration_id"), "base_url": tool.base_url,
-        "connection_revision": str(getattr(tool, "updated_at", "")) if tool.config.get("connection_id") else None})).hexdigest()
+        "connection_revision": str(getattr(tool, "updated_at", "")) if managed_connection_reference(tool) else None})).hexdigest()
 
 
 def validate_attestation(report, signature, key, *, workspace_id, tool, contract, now=None):
