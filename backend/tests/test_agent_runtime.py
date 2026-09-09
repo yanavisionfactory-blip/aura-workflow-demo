@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from app import agent_runtime
 from app.agent_runtime import (
+    autonomous_resource_resolution_context,
     create_plan,
     critique_step,
     deterministic_plan_fixes,
@@ -249,6 +250,163 @@ def test_deterministic_validator_accepts_allow_listed_read() -> None:
     inventory = [{"slug": "crm", "allowed_operations": ["records.read"]}]
 
     assert deterministic_plan_fixes(workflow, inventory) == []
+
+
+def test_resource_resolution_context_prefers_safe_discovery_over_user_ids() -> None:
+    workflow = plan(
+        PlanStep(
+            key="read_sheet",
+            agent="data",
+            tool_slug="google",
+            operation="sheets.read",
+            arguments={"spreadsheet_id": "{{inputs.creator_outreach_sheet_id}}"},
+            reason="Read the named sheet",
+            expected_output="Spreadsheet rows",
+        )
+    )
+    inventory = [
+        {
+            "slug": "google",
+            "allowed_operations": ["drive.files.search"],
+            "operation_contracts": [
+                {
+                    "name": "drive.files.search",
+                    "permission_scope": "read",
+                    "input_schema": {
+                        "type": "object",
+                        "required": ["query"],
+                        "properties": {"query": {"type": "string"}},
+                    },
+                }
+            ],
+        }
+    ]
+
+    context = autonomous_resource_resolution_context(workflow, inventory, set())
+
+    assert context["unavailable_input_references"] == [
+        "inputs.creator_outreach_sheet_id"
+    ]
+    assert context["eligible_read_only_discovery_operations"] == [
+        {
+            "tool_slug": "google",
+            "operation": "drive.files.search",
+            "required_arguments": ["query"],
+        }
+    ]
+    assert "do not invent an input" in context["required_behavior"]
+
+
+def test_create_plan_repairs_named_resource_ids_with_discovery(monkeypatch) -> None:
+    calls = []
+
+    async def fake_run(agent, payload, max_turns=8):
+        calls.append(payload)
+        if len(calls) == 1:
+            return {
+                "objective": {"goal": "Read Creator Outreach"},
+                "toolset": {
+                    "tools": [
+                        {
+                            "slug": "google",
+                            "role": "source",
+                            "rationale": "Find and read the sheet",
+                        },
+                    ]
+                },
+                "plan": {
+                    "name": "Read Creator Outreach",
+                    "interpretation": "Read the named spreadsheet",
+                    "steps": [
+                        {
+                            "key": "read_sheet",
+                            "agent": "data",
+                            "tool_slug": "google",
+                            "operation": "sheets.read",
+                            "arguments": {
+                                "spreadsheet_id": "{{inputs.creator_outreach_sheet_id}}"
+                            },
+                            "reason": "Read the named spreadsheet",
+                            "expected_output": "Spreadsheet rows",
+                        }
+                    ],
+                },
+            }
+
+        resolution = payload["autonomous_resource_resolution"]
+        assert resolution["unavailable_input_references"] == [
+            "inputs.creator_outreach_sheet_id"
+        ]
+        assert resolution["eligible_read_only_discovery_operations"][0]["operation"] == (
+            "drive.files.search"
+        )
+        return {
+            "objective": {"goal": "Read Creator Outreach"},
+            "toolset": {
+                "tools": [
+                    {
+                        "slug": "google",
+                        "role": "source",
+                        "rationale": "Find and read the sheet",
+                    },
+                ]
+            },
+            "plan": {
+                "name": "Read Creator Outreach",
+                "interpretation": "Discover and read the named spreadsheet",
+                "steps": [
+                    {
+                        "key": "find_sheet",
+                        "agent": "data",
+                        "tool_slug": "google",
+                        "operation": "drive.files.search",
+                        "arguments": {"query": "Creator Outreach"},
+                        "reason": "Resolve the named spreadsheet",
+                        "expected_output": "Matching files with IDs",
+                    },
+                    {
+                        "key": "read_sheet",
+                        "agent": "data",
+                        "tool_slug": "google",
+                        "operation": "sheets.read",
+                        "arguments": {
+                            "spreadsheet_id": "{{steps.find_sheet.files.0.id}}"
+                        },
+                        "reason": "Read the exact discovered spreadsheet",
+                        "expected_output": "Spreadsheet rows",
+                    },
+                ],
+            },
+        }
+
+    inventory = [
+        {
+            "slug": "google",
+            "allowed_operations": ["drive.files.search", "sheets.read"],
+            "connected": True,
+            "operation_contracts": [
+                {
+                    "name": "drive.files.search",
+                    "permission_scope": "read",
+                    "input_schema": {
+                        "type": "object",
+                        "required": ["query"],
+                        "properties": {"query": {"type": "string"}},
+                    },
+                }
+            ],
+        },
+    ]
+
+    monkeypatch.setattr(agent_runtime, "build_agents", lambda: {"planner": object()})
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    result = asyncio.run(create_plan("Read Creator Outreach", inventory, set()))
+
+    assert len(calls) == 2
+    assert result.steps[0].operation == "drive.files.search"
+    assert result.steps[1].depends_on == ["find_sheet"]
+    assert "inputs." not in str(result.model_dump(mode="json"))
 
 
 def test_preflight_rejects_narrative_placeholder_assigned_to_real_provider():

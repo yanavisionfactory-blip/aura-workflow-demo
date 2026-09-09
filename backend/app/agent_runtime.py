@@ -95,6 +95,12 @@ def build_agents() -> dict[str, Agent]:
             retrieve a sufficiently broad calendar window and select by the event local date/time;
             do not assume UTC is the user timezone or invent an appointment.
             Never invent an {{inputs.*}} placeholder unless that exact input name is listed as available.
+            When the user names a provider resource but does not supply its opaque ID, resolve it
+            yourself with an available read-only search, find, or list operation. Add that discovery
+            step using the user's literal name, then pass its returned ID to dependent reads or writes.
+            Do not turn a named resource into a required user input merely because a later API needs
+            an ID. If an exact match cannot be established at execution time, pause with the preserved
+            search evidence instead of asking the user to look up an implementation identifier.
             Notion search and notion.page.get return metadata, not page body content. When a
             request requires summarizing page content, include a dependent notion.blocks.children.list
             call using the returned page ID. A metadata-only step must not promise body content.
@@ -135,7 +141,11 @@ def build_agents() -> dict[str, Agent]:
             A join after alternative branches uses
             dependency_mode all_settled. For public weather, use AURA weather.forecast. For Gmail
             requests addressed to the user's own inbox, set `to` to the literal `me`. Never invent
-            an input placeholder that is not present in available_input_names. Resolve relative
+            an input placeholder that is not present in available_input_names. Resolve named
+            provider resources through an available read-only search, find, or list step before an
+            operation that requires an opaque ID. Reference the discovery step's output and declare
+            the dependency; never ask the user to supply an ID for a resource they already named.
+            Resolve relative
             dates from temporal_context using concrete arguments. An unknown user timezone
             requires a broad read window followed by selection using event local dates/times. Notion page.get
             returns metadata only; page body summaries require notion.blocks.children.list.
@@ -338,6 +348,10 @@ async def _run_staged_planner(
                 "temporal_context": payload.get("temporal_context", {}),
                 "required_fixes": payload.get("required_fixes", []),
                 "planner_repair_requirements": payload.get("planner_repair_requirements", []),
+                "autonomous_resource_resolution": payload.get(
+                    "autonomous_resource_resolution", {}
+                ),
+                "response_recovery": payload.get("response_recovery"),
             },
             max_turns=max_turns,
         )
@@ -353,6 +367,10 @@ async def _run_staged_planner(
                 "temporal_context": payload.get("temporal_context", {}),
                 "required_fixes": payload.get("required_fixes", []),
                 "planner_repair_requirements": payload.get("planner_repair_requirements", []),
+                "autonomous_resource_resolution": payload.get(
+                    "autonomous_resource_resolution", {}
+                ),
+                "response_recovery": payload.get("response_recovery"),
             },
             max_turns=max_turns,
         )
@@ -462,6 +480,64 @@ def deterministic_plan_fixes(
                     + ", ".join(missing_inputs)
                 )
     return fixes
+
+
+def autonomous_resource_resolution_context(
+    plan: WorkflowPlan,
+    tool_inventory: list[dict],
+    available_input_names: set[str] | None,
+) -> dict:
+    """Give a repair planner concrete, safe ways to resolve named provider resources.
+
+    Provider IDs are implementation details. When the user supplied a human-readable
+    resource name, planning should discover the ID through an allow-listed read instead
+    of failing or pushing that lookup back to the user.
+    """
+    available = available_input_names or set()
+    missing_references = sorted(
+        {
+            path
+            for step in plan.steps
+            for path in referenced_paths(
+                {
+                    "arguments": step.arguments,
+                    "condition": step.condition.model_dump() if step.condition else None,
+                    "reduced_scope_arguments": step.reduced_scope_arguments,
+                    "output_variables": step.output_variables,
+                }
+            )
+            if path.startswith("inputs.")
+            and path.split(".", 1)[1].split(".", 1)[0] not in available
+        }
+    )
+    discovery_operations: list[dict] = []
+    discovery_markers = ("search", "find", "list", "lookup")
+    for tool in tool_inventory:
+        for contract in tool.get("operation_contracts", []):
+            operation = str(contract.get("name", ""))
+            required = set(contract.get("input_schema", {}).get("required", []))
+            if (
+                contract.get("permission_scope") == "read"
+                and any(marker in operation.casefold() for marker in discovery_markers)
+                and not any(str(field).casefold().endswith("_id") for field in required)
+            ):
+                discovery_operations.append(
+                    {
+                        "tool_slug": tool.get("slug"),
+                        "operation": operation,
+                        "required_arguments": sorted(required),
+                    }
+                )
+    return {
+        "unavailable_input_references": missing_references,
+        "eligible_read_only_discovery_operations": discovery_operations,
+        "required_behavior": (
+            "Remove every unavailable inputs.* reference. For each provider resource the user "
+            "named, add an eligible read-only discovery step using that literal name and pass the "
+            "returned opaque ID through a steps.* reference. If the catalog truly has no discovery "
+            "operation, report the missing capability; do not invent an input or resource ID."
+        ),
+    }
 
 
 def normalize_plan_graph(plan: WorkflowPlan) -> WorkflowPlan:
@@ -761,6 +837,9 @@ async def create_plan(
             **request_payload,
             "rejected_bundle": bundle.model_dump(),
             "required_fixes": deterministic_fixes,
+            "autonomous_resource_resolution": autonomous_resource_resolution_context(
+                plan, tool_inventory, available_input_names
+            ),
         }
         repair_started_at = perf_counter()
         try:
@@ -770,7 +849,34 @@ async def create_plan(
         except Exception:  # noqa: BLE001 - repair needs the same independent recovery path
             bundle = await _run_staged_planner(agents, repaired_payload, max_turns=8)
             recovery_mode = "staged_repair"
-        repair_ms = round((perf_counter() - repair_started_at) * 1000)
+        repair_ms += round((perf_counter() - repair_started_at) * 1000)
+        objective = bundle.objective
+        toolset = bundle.toolset
+        plan = normalize_plan_graph(bundle.plan)
+        deterministic_fixes = deterministic_plan_fixes(
+            plan, tool_inventory, available_input_names
+        )
+    if deterministic_fixes:
+        # A repeated invented ID is a planning defect, not a user blocker. Give the
+        # smaller staged agents one final bounded recovery with machine-readable
+        # discovery choices before surfacing a failure.
+        repaired_payload = {
+            **request_payload,
+            "rejected_bundle": bundle.model_dump(),
+            "required_fixes": deterministic_fixes,
+            "autonomous_resource_resolution": autonomous_resource_resolution_context(
+                plan, tool_inventory, available_input_names
+            ),
+            "response_recovery": (
+                "The previous repair repeated unavailable inputs.* references. Remove them. "
+                "Resolve named resources with an eligible read-only discovery operation and "
+                "reference that step's returned ID. Never ask the user for a provider ID."
+            ),
+        }
+        repair_started_at = perf_counter()
+        bundle = await _run_staged_planner(agents, repaired_payload, max_turns=8)
+        recovery_mode = "staged_authorization_repair"
+        repair_ms += round((perf_counter() - repair_started_at) * 1000)
         objective = bundle.objective
         toolset = bundle.toolset
         plan = normalize_plan_graph(bundle.plan)

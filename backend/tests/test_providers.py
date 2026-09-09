@@ -227,6 +227,35 @@ def test_gmail_send_mime_encodes_unicode_subject(monkeypatch):
     assert message["Subject"] == "Tomorrow’s weather"
 
 
+def test_google_connection_requests_sheet_write_scope():
+    scopes = PROVIDERS["google"].scopes
+
+    assert "https://www.googleapis.com/auth/drive.readonly" in scopes
+    assert "https://www.googleapis.com/auth/spreadsheets" in scopes
+    assert "https://www.googleapis.com/auth/spreadsheets.readonly" not in scopes
+
+
+def test_drive_file_search_uses_an_escaped_exact_name(monkeypatch):
+    executor = ProviderExecutor({"access_token": "token"})
+    request = AsyncMock(return_value={"files": []})
+    monkeypatch.setattr(executor, "_request", request)
+
+    result = asyncio.run(
+        executor._drive_files_search({"query": "Creator's Outreach", "page_size": 5})
+    )
+
+    assert result == {"files": []}
+    request.assert_awaited_once_with(
+        "GET",
+        "https://www.googleapis.com/drive/v3/files",
+        params={
+            "q": "name = 'Creator\\'s Outreach' and trashed = false",
+            "pageSize": 5,
+            "fields": "nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink)",
+        },
+    )
+
+
 def test_weather_forecast_returns_plain_language_summary(monkeypatch):
     executor = ProviderExecutor({})
     request = AsyncMock(side_effect=[
