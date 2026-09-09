@@ -56,6 +56,32 @@ async def migrate_database() -> None:
                 text("CREATE INDEX IF NOT EXISTS ix_workspaces_external_organization_id ON workspaces (external_organization_id)")
             )
             await connection.execute(
+                text("ALTER TABLE tool_connections ADD COLUMN IF NOT EXISTS external_connection_id VARCHAR(500)")
+            )
+            await connection.execute(
+                text("ALTER TABLE tool_connections ADD COLUMN IF NOT EXISTS external_account_id VARCHAR(500)")
+            )
+            await connection.execute(
+                text(
+                    "UPDATE tool_connections SET external_connection_id = config->>'connection_id' "
+                    "WHERE external_connection_id IS NULL AND config->>'managed_by' = 'nango'"
+                )
+            )
+            await connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_workspace_external_connection "
+                    "ON tool_connections (workspace_id, external_connection_id) "
+                    "WHERE external_connection_id IS NOT NULL"
+                )
+            )
+            await connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_workspace_provider_external_account "
+                    "ON tool_connections (workspace_id, slug, external_account_id) "
+                    "WHERE external_account_id IS NOT NULL"
+                )
+            )
+            await connection.execute(
                 text("ALTER TABLE workflows ADD COLUMN IF NOT EXISTS variables JSON DEFAULT '{}'::json")
             )
             await connection.execute(

@@ -11,19 +11,24 @@ import asyncio
 import logging
 import re
 from functools import lru_cache
-from typing import Any
+from time import monotonic
+from typing import Any, Awaitable, Callable
 from urllib.parse import quote
 
 import httpx
 
 from .config import Settings, get_settings
-from .providers import PROVIDERS
+from .providers import PROVIDERS, verify_oauth_credentials
 
 logger = logging.getLogger(__name__)
 
 
 class ManagedConnectorError(RuntimeError):
     """A safe boundary error for the managed connector control plane."""
+
+    def __init__(self, message: str, *, retryable: bool = True):
+        self.retryable = retryable
+        super().__init__(message)
 
 
 class ConnectorConfigurationError(ManagedConnectorError):
@@ -34,7 +39,8 @@ class ConnectorConfigurationError(ManagedConnectorError):
         logger.warning("managed_connector_configuration_error code=%s", code)
         super().__init__(
             "This app's connection setup needs an administrator correction "
-            f"({code}). Your workflow is preserved; signing in again will not fix it."
+            f"({code}). Your workflow is preserved; signing in again will not fix it.",
+            retryable=False,
         )
 
 
@@ -67,6 +73,8 @@ class NangoClient:
         self.base_url = settings.nango_base_url.rstrip("/")
         self.integrations = settings.managed_integrations
         self._integration_cache: dict[str, str] = {}
+        self._authorization_sessions: dict[tuple[str, ...], tuple[float, dict]] = {}
+        self._authorization_locks: dict[tuple[str, ...], asyncio.Lock] = {}
 
     @property
     def configured(self) -> bool:
@@ -251,8 +259,13 @@ class NangoClient:
                     type(exc).__name__,
                 )
                 break
+        retryable = not isinstance(last_error, httpx.HTTPStatusError) or (
+            last_error.response.status_code == 429
+            or last_error.response.status_code >= 500
+        )
         raise ManagedConnectorError(
-            "The secure connection service is temporarily unavailable"
+            "The secure connection service is temporarily unavailable",
+            retryable=retryable,
         ) from last_error
 
     async def preflight(self, provider: str) -> str:
@@ -289,18 +302,52 @@ class NangoClient:
                 "Connection setup could not be checked in time. Please try again shortly."
             ) from None
 
+    async def _cached_authorization_session(
+        self,
+        key: tuple[str, ...],
+        create: Callable[[], Awaitable[dict]],
+    ) -> dict:
+        """Reuse a still-live login link when the UI retries or double-submits."""
+        lock = self._authorization_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            cached = self._authorization_sessions.get(key)
+            if cached and cached[0] > monotonic():
+                return dict(cached[1])
+            result = await create()
+            self._authorization_sessions[key] = (monotonic() + 120, dict(result))
+            return dict(result)
+
+    def clear_authorization_sessions(
+        self,
+        provider: str,
+        workspace_id: str,
+        subject: str,
+        connection_id: str | None = None,
+    ) -> None:
+        prefix = (provider, workspace_id, subject)
+        keys = set(self._authorization_sessions) | set(self._authorization_locks)
+        for key in keys:
+            if key[:3] == prefix and (connection_id is None or key[-1] == connection_id):
+                self._authorization_sessions.pop(key, None)
+                self._authorization_locks.pop(key, None)
+
     async def create_session(self, provider: str, workspace_id: str, subject: str) -> dict:
-        integration_id = await self.preflight(provider)
-        payload = {
-            "allowed_integrations": [integration_id],
-            "tags": {
-                "organization_id": workspace_id,
-                "end_user_id": subject,
-                "aura_provider": provider,
-            },
-        }
-        result = await self._request("POST", "/connect/sessions", json=payload)
-        return result.get("data", result)
+        async def create() -> dict:
+            integration_id = await self.preflight(provider)
+            payload = {
+                "allowed_integrations": [integration_id],
+                "tags": {
+                    "organization_id": workspace_id,
+                    "end_user_id": subject,
+                    "aura_provider": provider,
+                },
+            }
+            result = await self._request("POST", "/connect/sessions", json=payload)
+            return result.get("data", result)
+
+        return await self._cached_authorization_session(
+            (provider, workspace_id, subject, "new"), create
+        )
 
     async def create_reconnect_session(
         self,
@@ -309,23 +356,33 @@ class NangoClient:
         workspace_id: str,
         subject: str,
     ) -> dict:
-        integration_id = await self.preflight(provider)
-        result = await self._request(
-            "POST",
-            "/connect/sessions/reconnect",
-            json={
-                "connection_id": connection_id,
-                "integration_id": integration_id,
-                "tags": {
-                    "organization_id": workspace_id,
-                    "end_user_id": subject,
-                    "aura_provider": provider,
+        async def create() -> dict:
+            integration_id = await self.preflight(provider)
+            result = await self._request(
+                "POST",
+                "/connect/sessions/reconnect",
+                json={
+                    "connection_id": connection_id,
+                    "integration_id": integration_id,
+                    "tags": {
+                        "organization_id": workspace_id,
+                        "end_user_id": subject,
+                        "aura_provider": provider,
+                    },
                 },
-            },
-        )
-        return result.get("data", result)
+            )
+            return result.get("data", result)
 
-    async def find_connection(self, provider: str, workspace_id: str, subject: str) -> dict | None:
+        return await self._cached_authorization_session(
+            (provider, workspace_id, subject, connection_id), create
+        )
+
+    async def find_connections(
+        self,
+        provider: str,
+        workspace_id: str,
+        subject: str,
+    ) -> list[dict]:
         integration_id = await self.integration_id(provider)
         result = await self._request(
             "GET",
@@ -344,10 +401,34 @@ class NangoClient:
                 and tags.get("end_user_id") == subject
                 and tags.get("aura_provider", provider) == provider
             ):
-                if not connection.get('errors'):
-                    matches.append(connection)
+                matches.append(connection)
+        return matches
+
+    async def find_connection(
+        self,
+        provider: str,
+        workspace_id: str,
+        subject: str,
+        connection_id: str | None = None,
+        *,
+        include_errors: bool = False,
+    ) -> dict | None:
+        matches = await self.find_connections(provider, workspace_id, subject)
+        if connection_id:
+            selected = next(
+                (
+                    item
+                    for item in matches
+                    if str(item.get("connection_id", "")) == connection_id
+                ),
+                None,
+            )
+            if selected and (include_errors or not selected.get("errors")):
+                return selected
+            return None
+        healthy = [item for item in matches if not item.get("errors")]
         # Multiple connected accounts require a real account choice, not guessing.
-        return matches[0] if len(matches) == 1 else None
+        return healthy[0] if len(healthy) == 1 else None
 
     async def get_credentials(self, connection_id: str, integration_id: str) -> dict:
         result = await self._request(
@@ -356,7 +437,9 @@ class NangoClient:
             params={"provider_config_key": integration_id},
         )
         if result.get("errors"):
-            raise ManagedConnectorError("This app needs to be reconnected")
+            raise ManagedConnectorError(
+                "This app needs to be reconnected", retryable=False
+            )
         source = result.get("credentials") or {}
         raw = source.get("raw") if isinstance(source.get("raw"), dict) else {}
         credentials = {**raw, **source}
@@ -367,6 +450,52 @@ class NangoClient:
             for key, value in metadata.items():
                 credentials.setdefault(key, value)
         return credentials
+
+    async def verify_connection(self, provider: str, connection: dict) -> tuple[str, dict]:
+        """Prove that a managed reference yields usable provider credentials."""
+        connection_id = str(connection.get("connection_id", "")).strip()
+        if not connection_id:
+            return "", {"ok": False, "reason": "missing_connection_id"}
+        integration_id = await self.integration_id(provider)
+        try:
+            credentials = await self.get_credentials(connection_id, integration_id)
+        except ManagedConnectorError as exc:
+            return integration_id, {
+                "ok": False,
+                "reason": (
+                    "provider_temporarily_unavailable"
+                    if exc.retryable
+                    else "authorization_required"
+                ),
+                "retryable": exc.retryable,
+            }
+        if not credentials.get("access_token"):
+            return integration_id, {
+                "ok": False,
+                "reason": "missing_access_token",
+                "retryable": True,
+            }
+        try:
+            verification = await verify_oauth_credentials(provider, credentials)
+        except (httpx.HTTPError, ValueError):
+            return integration_id, {
+                "ok": False,
+                "reason": "provider_temporarily_unavailable",
+                "retryable": True,
+            }
+        if not verification.get("ok"):
+            status_code = int(verification.get("status_code") or 0)
+            retryable = status_code == 429 or status_code >= 500
+            verification.setdefault(
+                "reason",
+                "provider_temporarily_unavailable"
+                if retryable
+                else "authorization_required",
+            )
+            verification["retryable"] = retryable
+            return integration_id, verification
+        verification.setdefault("retryable", False)
+        return integration_id, verification
 
     async def delete_connection(self, connection_id: str, integration_id: str) -> None:
         await self._request(
@@ -380,3 +509,27 @@ class NangoClient:
 def managed_connector_client() -> NangoClient:
     """One client per process so resolved provider IDs survive UI sync polling."""
     return NangoClient(get_settings())
+
+
+def managed_connection_reference(tool: Any) -> str | None:
+    """Read the typed reference first while supporting pre-migration records."""
+    return getattr(tool, "external_connection_id", None) or (tool.config or {}).get(
+        "connection_id"
+    )
+
+
+def external_account_reference(provider: str, connection: dict, verification: dict) -> str | None:
+    """Return a stable provider account identifier without exposing credentials."""
+    identity = verification.get("identity") or {}
+    if provider == "slack" and identity.get("team_id") and identity.get("user_id"):
+        return f"{identity['team_id']}:{identity['user_id']}"
+    for key in ("sub", "open_id", "user_id", "id", "union_id"):
+        value = identity.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    metadata = connection.get("metadata") or {}
+    for key in ("external_account_id", "account_id", "user_id", "team_id", "id"):
+        value = metadata.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return None

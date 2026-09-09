@@ -1,7 +1,13 @@
 import pytest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 from app.config import Settings
-from app.managed_connectors import NangoClient, ConnectorConfigurationError
+from app.managed_connectors import (
+    NangoClient,
+    ConnectorConfigurationError,
+    external_account_reference,
+)
 from app.providers import PROVIDERS
 
 
@@ -164,6 +170,141 @@ async def test_find_connection_never_crosses_tenant_tags():
     connection = await client.find_connection("jira", "workspace-1", "user-1")
 
     assert connection["connection_id"] == "correct"
+
+
+async def test_find_connection_uses_the_selected_account_when_multiple_exist():
+    def item(connection_id):
+        return {
+            "connection_id": connection_id,
+            "provider_config_key": "aura-jira",
+            "tags": {
+                "organization_id": "workspace-1",
+                "end_user_id": "user-1",
+                "aura_provider": "jira",
+            },
+            "errors": [],
+        }
+
+    client = FakeNango([{"connections": [item("first"), item("selected")]}])
+
+    connection = await client.find_connection(
+        "jira", "workspace-1", "user-1", "selected"
+    )
+
+    assert connection["connection_id"] == "selected"
+
+
+async def test_managed_connection_is_not_verified_without_usable_credentials():
+    client = FakeNango(
+        [{"credentials": {"type": "OAUTH2"}, "metadata": {}, "errors": []}]
+    )
+    client._integration_cache["jira"] = "aura-jira"
+
+    integration_id, verification = await client.verify_connection(
+        "jira", {"connection_id": "connection-1"}
+    )
+
+    assert integration_id == "aura-jira"
+    assert verification == {
+        "ok": False,
+        "reason": "missing_access_token",
+        "retryable": True,
+    }
+
+
+async def test_duplicate_connect_requests_reuse_the_pending_session():
+    client = FakeNango(
+        [
+            integration(),
+            {"data": {"connect_link": "https://connect/session-1"}},
+        ]
+    )
+    client._integration_cache["jira"] = "aura-jira"
+
+    first = await client.create_session("jira", "workspace-1", "user-1")
+    second = await client.create_session("jira", "workspace-1", "user-1")
+
+    assert first == second == {"connect_link": "https://connect/session-1"}
+    assert len(client.calls) == 2
+
+
+async def test_session_reconnects_the_selected_existing_connection(monkeypatch):
+    from app import main
+
+    tool = SimpleNamespace(
+        id="tool-1",
+        workspace_id="workspace-1",
+        slug="jira",
+        config={"managed_by": "nango", "connection_id": "nango-1"},
+        external_connection_id="nango-1",
+    )
+    session = SimpleNamespace(get=AsyncMock(return_value=tool), add=Mock(), commit=AsyncMock())
+    client = SimpleNamespace(
+        create_reconnect_session=AsyncMock(
+            return_value={"connect_link": "https://connect/reconnect"}
+        )
+    )
+    monkeypatch.setattr(main, "managed_connector_client", lambda: client)
+
+    result = await main.create_managed_connector_session(
+        "jira",
+        connection_id="tool-1",
+        context=main.TenantContext("workspace-1", "user-1", "owner"),
+        session=session,
+    )
+
+    client.create_reconnect_session.assert_awaited_once_with(
+        "jira", "nango-1", "workspace-1", "user-1"
+    )
+    assert result["mode"] == "reconnect"
+    assert result["connection_id"] == "tool-1"
+
+
+async def test_sync_does_not_create_ready_connection_before_verification(monkeypatch):
+    from app import main
+
+    session = SimpleNamespace(
+        scalar=AsyncMock(return_value=None),
+        get=AsyncMock(return_value=None),
+        add=Mock(),
+        commit=AsyncMock(),
+    )
+    connection = {"connection_id": "nango-1", "errors": []}
+    client = SimpleNamespace(
+        find_connection=AsyncMock(return_value=connection),
+        verify_connection=AsyncMock(
+            return_value=(
+                "aura-jira",
+                {
+                    "ok": False,
+                    "reason": "missing_access_token",
+                    "retryable": True,
+                },
+            )
+        ),
+    )
+    monkeypatch.setattr(main, "managed_connector_client", lambda: client)
+
+    result = await main.sync_managed_connector(
+        "jira",
+        connection_id=None,
+        external_connection_id="nango-1",
+        context=main.TenantContext("workspace-1", "user-1", "owner"),
+        session=session,
+    )
+
+    assert result["connected"] is False
+    assert result["status"] == "verification_pending"
+    assert result["reason"] == "missing_access_token"
+    session.add.assert_not_called()
+
+
+def test_external_account_reference_prefers_provider_identity():
+    assert external_account_reference(
+        "slack",
+        {"metadata": {"account_id": "metadata-account"}},
+        {"identity": {"team_id": "team-1", "user_id": "user-1"}},
+    ) == "team-1:user-1"
 
 
 async def test_credentials_are_normalized_only_at_execution_boundary():

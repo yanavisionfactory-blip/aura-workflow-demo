@@ -89,7 +89,20 @@ class PolicyConfig(Base):
 
 class ToolConnection(Base):
     __tablename__ = "tool_connections"
-    __table_args__ = (UniqueConstraint("workspace_id", "slug", name="uq_workspace_tool_slug"),)
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "slug", name="uq_workspace_tool_slug"),
+        UniqueConstraint(
+            "workspace_id",
+            "external_connection_id",
+            name="uq_workspace_external_connection",
+        ),
+        UniqueConstraint(
+            "workspace_id",
+            "slug",
+            "external_account_id",
+            name="uq_workspace_provider_external_account",
+        ),
+    )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
     workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
     slug: Mapped[str] = mapped_column(String(120))
@@ -97,6 +110,12 @@ class ToolConnection(Base):
     kind: Mapped[ToolKind] = mapped_column(Enum(ToolKind))
     base_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     encrypted_credentials: Mapped[str | None] = mapped_column(Text, nullable=True)
+    external_connection_id: Mapped[str | None] = mapped_column(
+        String(500), nullable=True, index=True
+    )
+    external_account_id: Mapped[str | None] = mapped_column(
+        String(500), nullable=True, index=True
+    )
     config: Mapped[dict] = mapped_column(JSON, default=dict)
     allowed_operations: Mapped[list] = mapped_column(JSON, default=list)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)

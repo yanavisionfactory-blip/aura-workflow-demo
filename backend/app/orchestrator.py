@@ -24,7 +24,7 @@ from .schemas import CriticDecision, OutcomeVerification
 from .db import SessionLocal, engine, set_tenant_context
 from .execution_lock import execution_lock
 from .agent_telemetry import trace_run
-from .managed_connectors import managed_connector_client
+from .managed_connectors import managed_connection_reference, managed_connector_client
 from .models import (
     Approval,
     ApprovalSnapshot,
@@ -1242,7 +1242,8 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             raise BudgetExceeded("Delivery time budget exhausted")
                         if active_tool.config.get("managed_by") == "nango":
                             credentials = await managed_connector_client().get_credentials(
-                                active_tool.config["connection_id"],
+                                managed_connection_reference(active_tool)
+                                or active_tool.config["connection_id"],
                                 active_tool.config["integration_id"],
                             )
                             if active_tool.slug == "jira" and not credentials.get("cloud_id"):

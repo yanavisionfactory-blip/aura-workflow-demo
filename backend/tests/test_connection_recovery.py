@@ -8,12 +8,16 @@ from app.managed_connectors import NangoClient
 async def test_reuses_only_an_existing_same_owner_grant_and_refreshes_it():
     session = SimpleNamespace(scalar=AsyncMock(return_value=None), add=Mock(), flush=AsyncMock(), begin_nested=MagicMock(return_value=MagicMock()))
     client = SimpleNamespace(configured=True, find_connection=AsyncMock(return_value={'connection_id': 'saved'}),
-        integration_id=AsyncMock(return_value='canva'), get_credentials=AsyncMock(return_value={'access_token': 'private'}))
+        verify_connection=AsyncMock(return_value=('canva', {
+            'ok': True, 'identity': {'id': 'account-1'}, 'private': 'not-a-credential'
+        })))
     assert await reuse_managed_connection(session, client, 'canva', 'workspace', 'owner')
     client.find_connection.assert_awaited_once_with('canva', 'workspace', 'owner')
-    client.get_credentials.assert_awaited_once_with('saved', 'canva')
+    client.verify_connection.assert_awaited_once_with('canva', {'connection_id': 'saved'})
     tool = session.add.call_args_list[0].args[0]
     assert tool.workspace_id == 'workspace' and tool.config['connection_id'] == 'saved'
+    assert tool.external_connection_id == 'saved'
+    assert tool.external_account_id == 'account-1'
     assert 'private' not in str(tool.config)
 
 
