@@ -19,6 +19,10 @@ def _strict(schema: dict) -> dict:
     }:
         raise ValueError("Contract requires non-strict output")
     result = copy.deepcopy(schema)
+    # OpenAI Structured Outputs accepts only a JSON Schema subset. Generation can
+    # omit semantic format hints because validate_json and downstream connector
+    # guards still validate the original, unmodified contract.
+    result.pop("format", None)
     if schema["type"] == "object":
         if schema.get("additionalProperties") is not False:
             raise ValueError("Open object contract")
@@ -32,6 +36,19 @@ def _strict(schema: dict) -> dict:
     elif schema["type"] == "array":
         result["items"] = _strict(schema.get("items", {}))
     return result
+
+
+def _model_schema(schema):
+    """Remove unsupported annotations only from the model-facing schema."""
+    if isinstance(schema, dict):
+        return {
+            key: _model_schema(value)
+            for key, value in schema.items()
+            if key != "format"
+        }
+    if isinstance(schema, list):
+        return [_model_schema(value) for value in schema]
+    return copy.deepcopy(schema)
 
 
 def _omit_absent(value, schema):
@@ -54,7 +71,7 @@ class ArgumentOutputSchema(AgentOutputSchemaBase):
             arguments = _strict(contract)
             self.strict = True
         except ValueError:
-            arguments = copy.deepcopy(contract)
+            arguments = _model_schema(contract)
             self.strict = False
         self.schema = {"type": "object", "additionalProperties": False,
                        "required": ["arguments"], "properties": {"arguments": arguments}}
