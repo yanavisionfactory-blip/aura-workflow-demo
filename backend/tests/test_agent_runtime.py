@@ -797,6 +797,13 @@ def test_combined_planner_allows_flexible_workflow_arguments() -> None:
     assert planner.output_type.is_strict_json_schema() is False
 
 
+def test_staged_planner_agents_allow_flexible_workflow_schemas() -> None:
+    agents = agent_runtime.build_agents()
+
+    for key in ("intent", "router", "builder"):
+        assert agents[key].output_type.is_strict_json_schema() is False
+
+
 def test_combined_planner_retries_invalid_json_once(monkeypatch) -> None:
     calls = []
 

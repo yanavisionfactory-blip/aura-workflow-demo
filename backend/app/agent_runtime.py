@@ -114,7 +114,7 @@ def build_agents() -> dict[str, Agent]:
             """Normalize the request into an ObjectiveSpec. Preserve explicit user constraints.
             State assumptions rather than silently inventing facts. Mark sensitive data categories.
             Put genuinely blocking missing information in required_inputs.""",
-            ObjectiveSpec,
+            AgentOutputSchema(ObjectiveSpec, strict_json_schema=False),
         ),
         "router": _agent(
             "Tool Router Agent",
@@ -123,7 +123,7 @@ def build_agents() -> dict[str, Agent]:
             is false: explain its role normally and let the application request connection after the
             user reviews the plan. Report missing_capabilities only when no catalog connector can
             perform the job, never merely because a suitable connector is not connected yet.""",
-            ToolsetProposal,
+            AgentOutputSchema(ToolsetProposal, strict_json_schema=False),
         ),
         "builder": _agent(
             "Plan Builder Agent",
@@ -157,7 +157,7 @@ def build_agents() -> dict[str, Agent]:
             for verified job completion. For a PDF attachment, gmail.send must include
             attachments: [{filename: 'roadmap.pdf', url: '{{steps.export.job.urls.0}}'}].
             A link in the body does not satisfy a file attachment request. Never invent a file hash.""",
-            WorkflowPlan,
+            AgentOutputSchema(WorkflowPlan, strict_json_schema=False),
         ),
         "evaluator": _agent(
             "Static Plan Evaluator Agent",
