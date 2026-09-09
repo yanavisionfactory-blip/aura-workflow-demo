@@ -47,6 +47,26 @@ KNOWN.update({
     "weather.forecast": ({"type": "object", "required": ["location", "date", "summary"], "properties": {"location": TEXT, "date": TEXT, "summary": TEXT}}, ["forecast"]),
     "gmail.list": ({"type": "object", "properties": {"messages": {"type": "array", "items": {"type": "object", "required": ["id"], "properties": {"id": TEXT}}}, "nextPageToken": TEXT, "resultSizeEstimate": {"type": "integer"}}, "anyOf": [{"required": ["messages"]}, {"required": ["resultSizeEstimate"]}]}, ["message_metadata"]),
     "calendar.list": (envelope("items"), ["event_state"]),
+    "drive.files.search": ({
+        **envelope("files"),
+        "properties": {
+            "files": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["id", "name"],
+                    "properties": {
+                        "id": TEXT,
+                        "name": TEXT,
+                        "mimeType": TEXT,
+                        "modifiedTime": TEXT,
+                        "webViewLink": TEXT,
+                    },
+                },
+            },
+            "nextPageToken": TEXT,
+        },
+    }, ["resource_metadata"]),
     "sheets.read": ({"type": "object", "required": ["range"], "properties": {"range": TEXT, "values": {"type": "array", "items": {"type": "array"}}}}, ["cell_values"]),
     "sheets.append": ({"type": "object", "required": ["spreadsheetId", "updates"], "properties": {"spreadsheetId": TEXT, "updates": {"type": "object", "required": ["updatedRange"], "properties": {"updatedRange": TEXT}}}}, ["write_receipt"]),
     "airtable.list": (envelope("records"), ["record_fields"]),

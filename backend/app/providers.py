@@ -43,7 +43,7 @@ PROVIDERS = {
             "https://www.googleapis.com/auth/gmail.send",
             "https://www.googleapis.com/auth/drive.readonly",
             "https://www.googleapis.com/auth/calendar",
-            "https://www.googleapis.com/auth/spreadsheets.readonly",
+            "https://www.googleapis.com/auth/spreadsheets",
         ),
         client_id_attr="google_client_id",
         client_secret_attr="google_client_secret",
@@ -524,6 +524,7 @@ class ProviderExecutor:
             "calendar.list": self._calendar_list,
             "calendar.create": self._calendar_create,
             "calendar.get": self._calendar_get,
+            "drive.files.search": self._drive_files_search,
             "sheets.read": self._sheets_read,
             "sheets.append": self._sheets_append,
             "airtable.record.get": self._airtable_record_get,
@@ -855,6 +856,23 @@ class ProviderExecutor:
             raise ValueError("calendar.create requires approved start and end")
         payload = {"summary": a.get("title", "AURA event"), "description": a.get("description", ""), "start": a["start"], "end": a["end"]}
         return await self._request("POST", "https://www.googleapis.com/calendar/v3/calendars/primary/events", json=payload)
+
+    async def _drive_files_search(self, a: dict) -> dict:
+        query = str(a.get("query", "")).strip()
+        if not query:
+            raise ValueError("drive.files.search requires query")
+        escaped = query.replace("\\", "\\\\").replace("'", "\\'")
+        return await self._request(
+            "GET",
+            "https://www.googleapis.com/drive/v3/files",
+            params={
+                "q": f"name = '{escaped}' and trashed = false",
+                "pageSize": min(int(a.get("page_size", 20)), 100),
+                "fields": (
+                    "nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink)"
+                ),
+            },
+        )
 
     async def _sheets_read(self, a: dict) -> dict:
         sid, cell_range = a.get("spreadsheet_id"), a.get("range", "A1:Z100")

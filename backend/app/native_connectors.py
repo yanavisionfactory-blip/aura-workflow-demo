@@ -120,7 +120,7 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         "catalog_version": 1,
         "provider_type": "oauth",
         "name": "Google Workspace",
-        "description": "Composable Gmail, Calendar, and Sheets modules.",
+        "description": "Composable Gmail, Calendar, Drive, and Sheets modules.",
         "base_url": "provider-managed",
         "identity": {"provider": "google"},
         "modules": [
@@ -143,9 +143,35 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                 "start": {"type": "object"}, "end": {"type": "object"},
             }),
             _module("calendar.get", "search", "Read a specific primary-calendar event.", required=("event_id",), properties={"event_id": _TEXT}),
+            _module(
+                "drive.files.search",
+                "search",
+                "Resolve a named Google Drive file to its exact ID and metadata.",
+                required=("query",),
+                properties={
+                    "query": _TEXT,
+                    "page_size": {**_POSITIVE_INTEGER, "maximum": 100},
+                },
+            ),
             _module("sheets.read", "search", "Read a spreadsheet range.", required=("spreadsheet_id",), properties={
                 "spreadsheet_id": _TEXT, "range": _TEXT
             }),
+            _module(
+                "sheets.append",
+                "action",
+                "Append approved rows to a spreadsheet.",
+                required=("spreadsheet_id", "values"),
+                properties={
+                    "spreadsheet_id": _TEXT,
+                    "range": _TEXT,
+                    "values": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {"type": "array"},
+                    },
+                },
+                permission_scope="write",
+            ),
         ],
     },
     "airtable": {
