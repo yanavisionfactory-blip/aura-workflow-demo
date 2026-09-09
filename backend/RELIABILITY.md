@@ -20,9 +20,15 @@ JUnit results as `workflow-release-evaluation`.
   Writes have one attempt. Authorization and invalid requests do not auto-retry.
 - `DELIVERY_BUDGET_SECONDS=180`, `MAX_MODEL_CALLS_PER_DELIVERY=16`,
   `MODEL_CALL_TIMEOUT_SECONDS=30`: model and provider work have bounded budgets.
+- `AGENT_MANAGED_EXECUTION_ENABLED=true`: a Senior Orchestrator reviews plans and assigns all
+  incomplete approved steps. A named Execution Agent must return the exact approved capability call
+  before the gateway dispatches it. Model outages fall back to the same exact deterministic directive;
+  they never widen permissions or arguments. Explicit agent escalation pauses the step with receipts
+  and completed work preserved.
 - `PARALLEL_READS_ENABLED=true`: up to three independent typed native reads, at most
   two per connector. No write/approval barrier crossing; attempts commit before IO.
-  Schema, trust and permission checks remain required. Database operations are serial.
+  Schema, trust and permission checks remain required. Database operations are serial. Parallel
+  prefetch is disabled while agent-managed execution is enabled so it cannot bypass delegation.
 - Completion enqueues owner-scoped memory indexing separately. Explicit saved workflows
   can reuse a verified plan only for the same owner, prompt, inputs and contract hashes;
   current capability validation and a fresh approval still apply.

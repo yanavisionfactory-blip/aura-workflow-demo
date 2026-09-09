@@ -226,6 +226,7 @@ async def test_parallel_reads_checkpoint_before_io_and_do_not_replay(database, m
     from app.native_connectors import native_operations
     from app.config import get_settings
     monkeypatch.setattr(get_settings(), "parallel_reads_enabled", True)
+    monkeypatch.setattr(get_settings(), "agent_managed_execution_enabled", False)
     monkeypatch.setattr(orchestrator.CredentialVault, "decrypt", lambda self, value: {"access_token": "fixture"})
     async def credentials(*args):
         return {"access_token": "fixture"}, False

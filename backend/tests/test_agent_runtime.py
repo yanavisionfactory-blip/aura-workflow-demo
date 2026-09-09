@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 
 from app import agent_runtime
 from app.agent_runtime import (
@@ -7,13 +8,225 @@ from app.agent_runtime import (
     deterministic_plan_fixes,
     materialize_action_arguments,
     normalize_plan_graph,
+    prepare_execution_directive,
+    supervise_execution,
+    supervise_plan,
     synthesize_result,
 )
-from app.schemas import PlanStep, WorkflowPlan
+from app.schemas import (
+    ExecutionDirective,
+    ExecutionSupervision,
+    ObjectiveSpec,
+    PlanStep,
+    PlanSupervisionDecision,
+    StepDelegation,
+    ToolSelection,
+    ToolsetProposal,
+    WorkflowPlan,
+)
 
 
 def plan(*steps: PlanStep) -> WorkflowPlan:
     return WorkflowPlan(name="Test", interpretation="Test", steps=list(steps))
+
+
+def agent_settings() -> SimpleNamespace:
+    return SimpleNamespace(
+        agent_managed_execution_enabled=True,
+        openai_api_key="configured",
+        openai_model="test-model",
+    )
+
+
+def approved_read_plan() -> dict:
+    return plan(
+        PlanStep(
+            key="read_records",
+            agent="data",
+            tool_slug="crm",
+            operation="records.read",
+            arguments={"limit": 10},
+            reason="Retrieve records",
+            expected_output="CRM records",
+        )
+    ).model_dump(mode="json")
+
+
+def test_senior_orchestrator_assigns_every_incomplete_step(monkeypatch) -> None:
+    async def fake_run(*_args, **_kwargs):
+        return ExecutionSupervision(
+            action="continue",
+            reason="The approved work is ready",
+            delegations=[
+                StepDelegation(
+                    step_key="read_records",
+                    execution_agent="CRM Execution Agent",
+                    tool_slug="crm",
+                    operation="records.read",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(agent_runtime, "get_settings", agent_settings)
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    decision, source = asyncio.run(
+        supervise_execution(
+            "Read CRM records",
+            approved_read_plan(),
+            [{"key": "read_records", "status": "pending"}],
+        )
+    )
+
+    assert source == "agent"
+    assert [item.step_key for item in decision.delegations] == ["read_records"]
+    assert decision.delegations[0].execution_agent == "CRM Execution Agent"
+
+
+def test_senior_orchestrator_cannot_retarget_an_approved_step(monkeypatch) -> None:
+    async def fake_run(*_args, **_kwargs):
+        return ExecutionSupervision(
+            action="continue",
+            reason="Use another connector",
+            delegations=[
+                StepDelegation(
+                    step_key="read_records",
+                    execution_agent="Other Execution Agent",
+                    tool_slug="unapproved-crm",
+                    operation="records.read",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(agent_runtime, "get_settings", agent_settings)
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    decision, source = asyncio.run(
+        supervise_execution(
+            "Read CRM records",
+            approved_read_plan(),
+            [{"key": "read_records", "status": "pending"}],
+        )
+    )
+
+    assert source == "deterministic_fallback"
+    assert decision.delegations[0].tool_slug == "crm"
+    assert decision.delegations[0].operation == "records.read"
+
+
+def test_execution_agent_triggers_the_exact_approved_call(monkeypatch) -> None:
+    async def fake_run(*_args, **_kwargs):
+        return ExecutionDirective(
+            action="execute",
+            step_key="read_records",
+            tool_slug="crm",
+            operation="records.read",
+            arguments={"limit": 10},
+            reason="The call matches the approved step",
+        )
+
+    monkeypatch.setattr(agent_runtime, "get_settings", agent_settings)
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    directive, source = asyncio.run(
+        prepare_execution_directive(
+            "Read CRM records",
+            approved_read_plan()["steps"][0],
+            {"limit": 10},
+            "CRM Execution Agent",
+        )
+    )
+
+    assert source == "agent"
+    assert directive.action == "execute"
+    assert directive.arguments == {"limit": 10}
+
+
+def test_execution_agent_cannot_expand_approved_arguments(monkeypatch) -> None:
+    async def fake_run(*_args, **_kwargs):
+        return ExecutionDirective(
+            action="execute",
+            step_key="read_records",
+            tool_slug="crm",
+            operation="records.read",
+            arguments={"limit": 1000},
+            reason="Read more",
+        )
+
+    monkeypatch.setattr(agent_runtime, "get_settings", agent_settings)
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    directive, source = asyncio.run(
+        prepare_execution_directive(
+            "Read CRM records",
+            approved_read_plan()["steps"][0],
+            {"limit": 10},
+            "CRM Execution Agent",
+        )
+    )
+
+    assert source == "deterministic_fallback"
+    assert directive.action == "execute"
+    assert directive.arguments == {"limit": 10}
+
+
+def test_execution_agent_can_escalate_instead_of_dispatching(monkeypatch) -> None:
+    async def fake_run(*_args, **_kwargs):
+        return ExecutionDirective(
+            action="escalate",
+            step_key="read_records",
+            tool_slug="crm",
+            operation="records.read",
+            arguments={"limit": 10},
+            reason="The destination is ambiguous",
+        )
+
+    monkeypatch.setattr(agent_runtime, "get_settings", agent_settings)
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    directive, source = asyncio.run(
+        prepare_execution_directive(
+            "Read CRM records",
+            approved_read_plan()["steps"][0],
+            {"limit": 10},
+            "CRM Execution Agent",
+        )
+    )
+
+    assert source == "agent"
+    assert directive.action == "escalate"
+
+
+def test_senior_orchestrator_reviews_a_valid_plan(monkeypatch) -> None:
+    async def fake_run(*_args, **_kwargs):
+        return PlanSupervisionDecision(
+            action="approve",
+            reason="The plan is bounded and executable",
+        )
+
+    monkeypatch.setattr(agent_runtime, "get_settings", agent_settings)
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    workflow = WorkflowPlan.model_validate(approved_read_plan())
+    decision, source = asyncio.run(
+        supervise_plan(
+            "Read CRM records",
+            ObjectiveSpec(goal="Read CRM records"),
+            ToolsetProposal(
+                tools=[
+                    ToolSelection(
+                        slug="crm",
+                        role="source",
+                        rationale="Contains the requested records",
+                    )
+                ]
+            ),
+            workflow,
+        )
+    )
+
+    assert source == "agent"
+    assert decision.action == "approve"
 
 
 def test_synthesizer_schema_is_accepted_by_the_real_agents_sdk():
