@@ -1,39 +1,26 @@
-**Welcome to your Base44 project** 
+# AURA workflow demo
 
-**About**
+AURA is a React workflow client backed by a separately deployed Python control plane.
 
-View and Edit  your app on [Base44.com](http://Base44.com) 
+- The production frontend is built from `main` and published with GitHub Pages.
+- The production FastAPI service and Celery worker are built from
+  [`python-control-plane`](https://github.com/yanavisionfactory-blip/aura-workflow-demo/tree/python-control-plane/backend).
+- Railway deploys the `backend/` directory from that branch. Backend fixes must target
+  `python-control-plane`; frontend fixes must target `main`.
 
-This project contains everything you need to run your app locally.
+This branch split is intentional. It is documented here so reviews and deployments use the same
+source revision instead of treating the older `backend/` snapshot on `main` as production code.
 
-**Edit the code in your local development environment**
+## Frontend development
 
-Any change pushed to the repo will also be reflected in the Base44 Builder.
-
-**Prerequisites:** 
-
-1. Clone the repository using the project's Git URL 
-2. Navigate to the project directory
-3. Install dependencies: `npm install`
-4. Create an `.env.local` file and set the right environment variables
-
-```
-VITE_BASE44_APP_ID=your_app_id
-VITE_BASE44_APP_BASE_URL=your_backend_url
-
-e.g.
-VITE_BASE44_APP_ID=cbef744a8545c389ef439ea6
-VITE_BASE44_APP_BASE_URL=https://my-to-do-list-81bfaad7.base44.app
+```bash
+npm install
+npm run dev
 ```
 
-Run the app: `npm run dev`
+Set `VITE_AURA_API_URL` to the deployed control-plane URL. Authentication settings are described in
+the environment examples committed with each deployment branch.
 
-**Publish your changes**
+## Backend development
 
-Open [Base44.com](http://Base44.com) and click on Publish.
-
-**Docs & Support**
-
-Documentation: [https://docs.base44.com/Integrations/Using-GitHub](https://docs.base44.com/Integrations/Using-GitHub)
-
-Support: [https://app.base44.com/support](https://app.base44.com/support)
+Check out `python-control-plane`, then follow its `README.md` and `backend/RELIABILITY.md`.
