@@ -109,6 +109,16 @@ async def test_scheduler_sweeps_approved_runs_paused_before_supervision(
 
     monkeypatch.setattr(scheduler_runtime, "execution_lock", acquired)
     await _failed_read(runtime)
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        run.execution_context = {
+            "__aura_autonomy__": {
+                "version": 1,
+                "rounds": 0,
+                "handoff_reason_code": "no_safe_recovery",
+            }
+        }
+        await session.commit()
 
     assert await scheduler_runtime.recover_waiting_runs() == [
         ("run", "w", "recovery")
@@ -139,6 +149,40 @@ async def test_completed_provider_work_retries_only_final_review(runtime, monkey
         assert step.output["provider_result"] == {"id": "saved"}
         assert state["last_action"] == "retry_final_review"
         assert state["review_recoveries"] == 1
+
+
+async def test_repaired_platform_schema_retries_before_any_write(runtime, monkeypatch):
+    monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        run.status = RunStatus.waiting_for_action
+        step = await session.get(RunStep, "step")
+        step.status = StepStatus.failed
+        step.error = "AURA could not prepare the approved action."
+        session.add(
+            AuditEvent(
+                workspace_id="w",
+                run_id="run",
+                actor="system",
+                event_type="step.approval_argument_validation_recovery_exhausted",
+                payload={
+                    "step_id": "step",
+                    "internal_error": "Invalid schema for response_format: uri is not a valid format",
+                },
+            )
+        )
+        await session.commit()
+
+    assert await autonomously_recover_run("run", "w") == "scheduled"
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        attempts = (
+            await session.scalars(select(StepAttempt).where(StepAttempt.step_id == "step"))
+        ).all()
+        assert attempts == []
+        assert run.execution_context["__aura_autonomy__"]["last_reason_code"] == (
+            "provider_not_called"
+        )
 
 
 async def test_uncertain_create_is_never_automatically_replayed(runtime, monkeypatch):

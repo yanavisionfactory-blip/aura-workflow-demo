@@ -6,9 +6,9 @@ import pytest
 from agents.exceptions import ModelBehaviorError
 from jsonschema import Draft202012Validator
 
+from app import agent_runtime
 from app.argument_output import ArgumentOutputSchema
 from app.presentation_content import PRESENTATION_SCHEMA
-from app import agent_runtime
 
 
 def test_closed_contract_enforces_nested_layout_limits_and_optional_fields():
@@ -42,6 +42,32 @@ def test_open_provider_fields_keep_their_contract_and_nulls():
     nullable = ArgumentOutputSchema({"type": ["object", "null"]})
     assert not nullable.is_strict_json_schema()
     assert nullable.validate_json('{"arguments":null}') == {"arguments": None}
+
+
+def test_model_schema_omits_unsupported_uri_format_but_keeps_contract():
+    contract = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["attachment"],
+        "properties": {
+            "attachment": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["url"],
+                "properties": {"url": {"type": "string", "format": "uri"}},
+            }
+        },
+    }
+    output = ArgumentOutputSchema(contract)
+    assert output.is_strict_json_schema()
+    model_url = output.json_schema()["properties"]["arguments"]["properties"][
+        "attachment"
+    ]["properties"]["url"]
+    assert "format" not in model_url
+    assert output.contract["properties"]["attachment"]["properties"]["url"] == {
+        "type": "string",
+        "format": "uri",
+    }
 
 
 def test_materializer_passes_the_operation_contract_to_the_model(monkeypatch):

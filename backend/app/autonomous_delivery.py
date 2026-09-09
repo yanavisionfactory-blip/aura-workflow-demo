@@ -35,6 +35,10 @@ RECOVERABLE_READ_FAILURES = {
     "rate_limited",
     "budget_exhausted",
 }
+RECOVERABLE_PREDISPATCH_FAILURES = {
+    *RECOVERABLE_READ_FAILURES,
+    "platform_schema_error",
+}
 RECONCILIABLE_WRITES = {
     "notion.page.update",
     "jira.issue.update",
@@ -42,11 +46,16 @@ RECONCILIABLE_WRITES = {
     "hubspot.company.update",
     "mailchimp.campaign.send",
 }
+AUTONOMY_VERSION = 2
 
 
 def _autonomy(context: dict) -> dict:
     state = deepcopy(context.get("__aura_autonomy__") or {})
-    state.setdefault("version", 1)
+    if int(state.get("version", 0)) < AUTONOMY_VERSION:
+        # A newer recovery engine may safely reconsider a prior platform-limited
+        # handoff. Existing attempt counts and receipts remain authoritative.
+        state.pop("handoff_reason_code", None)
+    state["version"] = AUTONOMY_VERSION
     state.setdefault("rounds", 0)
     state.setdefault("step_recoveries", {})
     state.setdefault("attempt_offsets", {})
@@ -93,6 +102,8 @@ def _category(error: str | None) -> str:
         return "authorization_required"
     if "connection needs" in value or ("tool " in value and " unavailable" in value):
         return "authorization_required"
+    if "invalid schema for response_format" in value:
+        return "platform_schema_error"
     if "uncertain" in value or "may already have executed" in value:
         return "uncertain_write"
     return "unknown"
@@ -193,7 +204,7 @@ async def _safe_options(session, run, steps, state) -> list[AutonomousRecoveryOp
                     delay_seconds=delay,
                 )
             ]
-        if not attempts and category in RECOVERABLE_READ_FAILURES:
+        if not attempts and category in RECOVERABLE_PREDISPATCH_FAILURES:
             return [
                 AutonomousRecoveryOption(
                     key="retry_predispatch_step",

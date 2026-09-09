@@ -156,6 +156,7 @@ async def recover_waiting_runs() -> list[tuple[str, str, str]]:
     supervisor. Per-run advisory ownership prevents racing a live execution delivery.
     """
     from .autonomous_delivery import (
+        AUTONOMY_VERSION,
         autonomously_recover_run,
         mark_autonomous_handoff,
     )
@@ -183,9 +184,17 @@ async def recover_waiting_runs() -> list[tuple[str, str, str]]:
             candidate_ids = [
                 run.id
                 for run in candidates
-                if not (run.execution_context or {})
-                .get("__aura_autonomy__", {})
-                .get("handoff_reason_code")
+                if not (
+                    (run.execution_context or {})
+                    .get("__aura_autonomy__", {})
+                    .get("handoff_reason_code")
+                    and int(
+                        (run.execution_context or {})
+                        .get("__aura_autonomy__", {})
+                        .get("version", 0)
+                    )
+                    >= AUTONOMY_VERSION
+                )
             ]
         for run_id in candidate_ids:
             async with execution_lock(engine, workspace_id, run_id) as acquired:
