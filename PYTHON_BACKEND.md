@@ -1,6 +1,9 @@
 # AURA Python control plane
 
-The GitHub Pages site is only the React client. Real execution is provided by `backend/`, a separately deployed Python service.
+The GitHub Pages site is only the React client. Real execution is provided by the
+`backend/` directory on the repository's `python-control-plane` branch, which Railway deploys as
+separate API and worker services. That branch is the production backend source of truth; the
+snapshot in `main` is retained only for history.
 
 ## Runtime architecture
 

@@ -105,9 +105,13 @@ export async function getManagedConnectorStatus() {
   return managedConnectorStatus;
 }
 
-export async function syncManagedConnector(provider) {
+export async function syncManagedConnector(provider, connection = {}) {
   await ensureWorkspace();
-  return request(`/v1/managed-connectors/${provider}/sync`, { method: "POST" });
+  const params = new URLSearchParams();
+  if (connection.connectionId) params.set("connection_id", connection.connectionId);
+  if (connection.externalConnectionId) params.set("external_connection_id", connection.externalConnectionId);
+  const query = params.size ? `?${params.toString()}` : "";
+  return request(`/v1/managed-connectors/${provider}/sync${query}`, { method: "POST" });
 }
 
 export async function authorizeManagedConnector(provider, timeoutMs = 120000) {
@@ -121,25 +125,29 @@ export async function authorizeManagedConnector(provider, timeoutMs = 120000) {
   try {
     await ensureWorkspace();
     session = await request(`/v1/managed-connectors/${provider}/session`, { method: "POST" });
-    popup.location.assign(session.connect_link);
+    if (session.connect_link) popup.location.assign(session.connect_link);
+    else if (!session.already_connected) throw new Error("AURA could not prepare this connection.");
   } catch (error) {
     popup.close();
     throw error;
   }
   const startedAt = Date.now();
-  let closedAt = null;
   while (Date.now() - startedAt < timeoutMs) {
     await new Promise((resolve) => window.setTimeout(resolve, 1000));
-    const result = await syncManagedConnector(provider).catch(() => null);
+    const result = await syncManagedConnector(provider, {
+      connectionId: session.tool_connection_id,
+      externalConnectionId: session.external_connection_id,
+    }).catch(() => null);
     if (result?.connected) {
-      if (!popup.closed) popup.close();
-      const tools = await listPythonTools();
-      return { connected: true, managed: true, tool: tools.find((tool) => tool.slug === provider) };
-    }
-    if (popup.closed) {
-      closedAt ||= Date.now();
-      if (Date.now() - closedAt > 10000) {
-        throw new Error("The app did not grant access. AURA kept your plan unchanged.");
+      const verification = await testPythonConnection(result.tool_id || result.connection_id).catch(() => null);
+      if (verification?.status === "verified" && verification.verification?.ok === true) {
+        if (!popup.closed) popup.close();
+        const tools = await listPythonTools();
+        return {
+          connected: true,
+          managed: true,
+          tool: tools.find((tool) => tool.id === (result.tool_id || result.connection_id)),
+        };
       }
     }
   }
@@ -288,14 +296,21 @@ export async function reconnectPythonConnection(connection, timeoutMs = 120000) 
   }
   const baseline = started.previous_updated_at || connection.updated_at || null;
   const startedAt = Date.now();
+  let closedAt = null;
   while (Date.now() - startedAt < timeoutMs) {
     await new Promise((resolve) => window.setTimeout(resolve, 1000));
     if (started.managed) {
-      const synced = await syncManagedConnector(connection.slug).catch(() => null);
+      const synced = await syncManagedConnector(connection.slug, {
+        connectionId: connection.id,
+        externalConnectionId: connection.external_connection_id,
+      }).catch(() => null);
       if (synced?.connected) {
-        if (!popup.closed) popup.close();
-        const tools = await listPythonTools();
-        return { connected: true, managed: true, tool: tools.find((tool) => tool.id === connection.id) };
+        const verification = await testPythonConnection(connection.id).catch(() => null);
+        if (verification?.status === "verified" && verification.verification?.ok === true) {
+          if (!popup.closed) popup.close();
+          const tools = await listPythonTools();
+          return { connected: true, managed: true, tool: tools.find((tool) => tool.id === connection.id) };
+        }
       }
     }
     const tools = await listPythonTools().catch(() => []);
@@ -306,7 +321,12 @@ export async function reconnectPythonConnection(connection, timeoutMs = 120000) 
       if (!popup.closed) popup.close();
       return { connected: true, tool: updated };
     }
-    if (popup.closed) throw new Error("Reauthorization was cancelled before completion.");
+    if (popup.closed && !started.managed) {
+      closedAt ||= Date.now();
+      if (Date.now() - closedAt > 15000) {
+        throw new Error("AURA could not verify the restored access. Your work is preserved.");
+      }
+    }
   }
   if (!popup.closed) popup.close();
   throw new Error("Reauthorization timed out. Please try again.");
@@ -342,4 +362,3 @@ export async function resumePythonRun(runId, stepId = null, action = "retry") {
     body: JSON.stringify({ action, step_id: stepId }),
   });
 }
-

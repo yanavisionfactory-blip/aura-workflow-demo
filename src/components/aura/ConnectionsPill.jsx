@@ -103,14 +103,14 @@ export default function ConnectionsPill() {
     setError("");
     try {
       if (action === "disconnect") {
-        await disconnectTool(name);
+        await disconnectTool(name, managedConnection.id);
         setManagedConnection(null);
       } else if (action === "reconnect") {
-        const result = await reconnectTool(name);
+        const result = await reconnectTool(name, managedConnection.id);
         setManagedConnection({ ...result.tool, uiName: name });
       } else {
-        await testToolConnection(name);
-        const refreshed = await getToolConnection(name);
+        await testToolConnection(name, managedConnection.id);
+        const refreshed = await getToolConnection(name, managedConnection.id);
         if (refreshed) setManagedConnection({ ...refreshed, uiName: name });
       }
     } catch (e) {

@@ -1,5 +1,6 @@
 import { base44 } from "@/api/base44Client";
 import { setConnection, replaceConnections } from "@/lib/connectionsStore";
+import { isVerifiedConnection, selectConnection } from "@/lib/connectionSelection.mjs";
 import {
   addPythonTool,
   authorizeManagedConnector,
@@ -45,13 +46,26 @@ export async function connectTool(toolName, opts = {}) {
   if (pythonRuntimeEnabled) {
     const provider = PYTHON_OAUTH[toolName];
     if (provider) {
+      const existing = await getToolConnection(toolName, opts.connectionId);
       const managed = await getManagedConnectorStatus().catch(() => ({ configured: false, providers: [] }));
-      const result = managed.configured && managed.providers.includes(provider)
-        ? await authorizeManagedConnector(provider)
-        : await authorizeOAuth(provider);
+      const result = existing
+        ? await reconnectPythonConnection(existing)
+        : managed.configured && managed.providers.includes(provider)
+          ? await authorizeManagedConnector(provider)
+          : await authorizeOAuth(provider);
       if (result.redirecting) return { method: "oauth", connected: false, authorizationStarted: true, provider };
+      if (!result.tool?.id) throw new Error(`${toolName} access could not be verified.`);
+      const verification = await testPythonConnection(result.tool.id);
+      if (!isVerifiedConnection(verification)) {
+        throw new Error(`AURA is still restoring ${toolName} access. Your work is preserved.`);
+      }
       await hydrateConnections();
-      return { method: result.managed ? "managed" : "oauth", connected: true, provider, connection: result.tool };
+      return {
+        method: result.managed ? "managed" : "oauth",
+        connected: true,
+        provider,
+        connection: result.tool,
+      };
     }
 
     if (opts.connectionKind === "oauth2") {
@@ -148,35 +162,31 @@ export async function hydrateConnections() {
   return [];
 }
 
-export async function getToolConnection(toolName) {
+export async function getToolConnection(toolName, connectionId = null) {
   const tools = await listPythonTools();
   const provider = PYTHON_OAUTH[toolName];
-  return tools.find((tool) =>
-    tool.display_name === toolName ||
-    tool.slug === slugify(toolName) ||
-    (provider && (tool.slug === provider || tool.display_name === "Google Workspace"))
-  );
+  return selectConnection(tools, { toolName, provider, connectionId });
 }
 
-export async function testToolConnection(toolName) {
+export async function testToolConnection(toolName, connectionId = null) {
   if (!pythonRuntimeEnabled) throw new Error("Connection testing requires the Python control plane.");
-  const tool = await getToolConnection(toolName);
+  const tool = await getToolConnection(toolName, connectionId);
   if (!tool) throw new Error(`${toolName} is not connected.`);
   return testPythonConnection(tool.id);
 }
 
-export async function disconnectTool(toolName) {
+export async function disconnectTool(toolName, connectionId = null) {
   if (!pythonRuntimeEnabled) throw new Error("Revoking connections requires the Python control plane.");
-  const tool = await getToolConnection(toolName);
+  const tool = await getToolConnection(toolName, connectionId);
   if (!tool) throw new Error(`${toolName} is not connected.`);
   await disconnectPythonConnection(tool.id);
   await hydrateConnections();
   return { disconnected: true };
 }
 
-export async function reconnectTool(toolName) {
+export async function reconnectTool(toolName, connectionId = null) {
   if (!pythonRuntimeEnabled) throw new Error("Reauthorization requires the Python control plane.");
-  const tool = await getToolConnection(toolName);
+  const tool = await getToolConnection(toolName, connectionId);
   if (!tool) throw new Error(`${toolName} is not connected.`);
   const result = await reconnectPythonConnection(tool);
   await hydrateConnections();
