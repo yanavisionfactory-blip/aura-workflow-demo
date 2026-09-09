@@ -1,11 +1,19 @@
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, or_, exists
+from sqlalchemy import exists, or_, select
 
+from .config import get_settings
 from .db import SessionLocal, engine, set_tenant_context
 from .execution_lock import execution_lock
-from .config import get_settings
-from .models import AuditEvent, RunStatus, Workflow, WorkflowRun, WorkflowSchedule, Workspace, RecoveryProbe
+from .models import (
+    AuditEvent,
+    RecoveryProbe,
+    RunStatus,
+    Workflow,
+    WorkflowRun,
+    WorkflowSchedule,
+    Workspace,
+)
 
 
 async def _workspace_ids() -> list[str]:
@@ -140,3 +148,61 @@ async def recover_stale_runs(
             await session.commit()
     return recovered
 
+
+async def recover_waiting_runs() -> list[tuple[str, str, str]]:
+    """Wake approved paused runs that need the autonomous delivery supervisor.
+
+    This closes the crash/deploy window between committing a safe pause and invoking the
+    supervisor. Per-run advisory ownership prevents racing a live execution delivery.
+    """
+    from .autonomous_delivery import (
+        autonomously_recover_run,
+        mark_autonomous_handoff,
+    )
+    from .replanning import maybe_replan_run
+
+    recovered: list[tuple[str, str, str]] = []
+    for workspace_id in await _workspace_ids():
+        async with SessionLocal() as session:
+            await set_tenant_context(session, workspace_id)
+            candidates = (
+                await session.scalars(
+                    select(WorkflowRun)
+                    .where(
+                        WorkflowRun.workspace_id == workspace_id,
+                        WorkflowRun.plan_approved.is_(True),
+                        WorkflowRun.cancellation_requested.is_(False),
+                        WorkflowRun.status.in_(
+                            [RunStatus.failed, RunStatus.waiting_for_action]
+                        ),
+                    )
+                    .order_by(WorkflowRun.updated_at)
+                    .limit(5)
+                )
+            ).all()
+            candidate_ids = [
+                run.id
+                for run in candidates
+                if not (run.execution_context or {})
+                .get("__aura_autonomy__", {})
+                .get("handoff_reason_code")
+            ]
+        for run_id in candidate_ids:
+            async with execution_lock(engine, workspace_id, run_id) as acquired:
+                if not acquired:
+                    continue
+                outcome = await autonomously_recover_run(run_id, workspace_id)
+                if outcome == "scheduled":
+                    recovered.append((run_id, workspace_id, "recovery"))
+                    continue
+                if outcome == "handoff":
+                    recovered.append((run_id, workspace_id, "handoff"))
+                    continue
+                replanning = await maybe_replan_run(run_id, workspace_id)
+                if replanning == "retry":
+                    recovered.append((run_id, workspace_id, "replan"))
+                elif replanning is True:
+                    recovered.append((run_id, workspace_id, "approval"))
+                elif await mark_autonomous_handoff(run_id, workspace_id):
+                    recovered.append((run_id, workspace_id, "handoff"))
+    return recovered

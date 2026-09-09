@@ -54,14 +54,22 @@ async def dispatch_pending(workspace_id: str | None = None) -> int:
 
 
 async def recovery_tick() -> dict:
-    from .scheduler_runtime import recover_stale_runs
+    from .scheduler_runtime import recover_stale_runs, recover_waiting_runs
     settings = get_settings()
     async with execution_lock(engine, "system", "recovery-scheduler") as acquired:
         if not acquired:
             return {"leader": False}
         recovered = await recover_stale_runs(stale_after_seconds=settings.stale_run_seconds)
+        # Never make normal outbox delivery wait behind optional model-assisted recovery.
         published = await dispatch_pending()
-        result = {"leader": True, "recovered": len(recovered), "published": published}
+        supervised = await recover_waiting_runs()
+        published += await dispatch_pending()
+        result = {
+            "leader": True,
+            "recovered": len(recovered),
+            "supervised": len(supervised),
+            "published": published,
+        }
         logger.info("Recovery scheduler tick %s", result)
         return result
 

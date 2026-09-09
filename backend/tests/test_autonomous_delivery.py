@@ -1,10 +1,11 @@
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from types import SimpleNamespace
 
 from sqlalchemy import select
 from test_agent_loop import runtime  # shared real-database fixture
 
-from app import agent_runtime, autonomous_delivery, orchestrator
+from app import agent_runtime, autonomous_delivery, orchestrator, scheduler_runtime
 from app.autonomous_delivery import (
     attempts_for_current_cycle,
     autonomously_recover_run,
@@ -94,6 +95,28 @@ async def test_transient_read_is_recovered_on_a_fresh_durable_delivery(
         )
         assert event.actor == "senior-orchestrator"
         assert event.payload["action"] == "retry_step"
+
+
+async def test_scheduler_sweeps_approved_runs_paused_before_supervision(
+    runtime, monkeypatch
+):
+    monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
+    monkeypatch.setattr(scheduler_runtime, "SessionLocal", runtime)
+
+    @asynccontextmanager
+    async def acquired(*args):
+        yield True
+
+    monkeypatch.setattr(scheduler_runtime, "execution_lock", acquired)
+    await _failed_read(runtime)
+
+    assert await scheduler_runtime.recover_waiting_runs() == [
+        ("run", "w", "recovery")
+    ]
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        assert run.status == RunStatus.recovering
+        assert run.execution_context["__aura_autonomy__"]["rounds"] == 1
 
 
 async def test_completed_provider_work_retries_only_final_review(runtime, monkeypatch):

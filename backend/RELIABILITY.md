@@ -33,6 +33,9 @@ JUnit results as `workflow-release-evaluation`.
   `MAX_AUTONOMOUS_RECOVERY_ROUNDS`, `MAX_AUTONOMOUS_STEP_RECOVERIES`,
   `MAX_AUTONOMOUS_REVIEW_RECOVERIES`, `AUTONOMOUS_RECOVERY_BASE_DELAY_SECONDS`, and
   `AUTONOMOUS_RECOVERY_MAX_DELAY_SECONDS` can tighten operational bounds.
+  The elected recovery loop also sweeps up to five approved paused runs per workspace per tick. This
+  closes the crash/deploy window between saving a failure and invoking the supervisor; a per-run
+  advisory lock prevents it from racing a live worker.
 - `PARALLEL_READS_ENABLED=true`: up to three independent typed native reads, at most
   two per connector. No write/approval barrier crossing; attempts commit before IO.
   Schema, trust and permission checks remain required. Database operations are serial. Parallel
