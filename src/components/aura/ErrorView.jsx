@@ -1,11 +1,28 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { AlertOctagon, Pencil, SkipForward, Check, ChevronRight, ArrowRight } from "lucide-react";
+import { AlertOctagon, Pencil, SkipForward, Check, ChevronRight, ArrowRight, Clock3, Lightbulb, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { conjugateAction } from "@/lib/auraVerbs";
 
-export default function ErrorView({ error, step, runSteps, onRetry, onEdit, onSkip, busy = false, message = "" }) {
+export default function ErrorView({
+  error,
+  step,
+  runSteps,
+  onRetry,
+  onCheck,
+  onEdit,
+  onSkip,
+  onAlternative,
+  onSuggest,
+  onLater,
+  onCancel,
+  busy = false,
+  message = "",
+}) {
   const [showDetails, setShowDetails] = useState(false);
+  const [showSuggestion, setShowSuggestion] = useState(false);
+  const [suggestion, setSuggestion] = useState("");
+  const [confirmCancel, setConfirmCancel] = useState(false);
   if (!error) return null;
 
   const steps = runSteps || [];
@@ -123,6 +140,22 @@ export default function ErrorView({ error, step, runSteps, onRetry, onEdit, onSk
             </Button>
           </motion.div>
         )}
+        {onCheck && error.canRetry === false && (
+          <Button size="sm" onClick={onCheck} disabled={busy}>
+            {busy ? "Checking…" : "Check latest status"}
+          </Button>
+        )}
+        {onAlternative && (
+          <Button variant="outline" size="sm" onClick={onAlternative} disabled={busy} className="gap-1.5 border-white/10">
+            <Lightbulb className="w-3.5 h-3.5" />
+            Ask AURA for another solution
+          </Button>
+        )}
+        {onSuggest && (
+          <Button variant="ghost" size="sm" onClick={() => setShowSuggestion((value) => !value)} disabled={busy}>
+            Suggest my own
+          </Button>
+        )}
         {onEdit && <Button disabled={busy} variant="outline" size="sm" onClick={onEdit} className="gap-1.5 border-white/10">
           <Pencil className="w-3.5 h-3.5" />
           Edit
@@ -131,7 +164,67 @@ export default function ErrorView({ error, step, runSteps, onRetry, onEdit, onSk
           <SkipForward className="w-3.5 h-3.5" />
           Skip optional step
         </Button>}
+        {onLater && (
+          <Button disabled={busy} variant="ghost" size="sm" onClick={onLater} className="text-muted-foreground gap-1.5">
+            <Clock3 className="w-3.5 h-3.5" />
+            Keep for later
+          </Button>
+        )}
       </div>
+
+      <AnimatePresence initial={false}>
+        {showSuggestion && onSuggest && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="overflow-hidden"
+          >
+            <div className="mt-3 rounded-xl border border-white/8 bg-card/50 p-3">
+              <label htmlFor="error-recovery-suggestion" className="text-xs font-medium">
+                How should AURA approach it instead?
+              </label>
+              <textarea
+                id="error-recovery-suggestion"
+                value={suggestion}
+                onChange={(event) => setSuggestion(event.target.value)}
+                rows={2}
+                autoFocus
+                placeholder="Describe a different account, source, or safe approach…"
+                className="mt-2 w-full resize-none rounded-lg border border-white/10 bg-background/50 px-3 py-2 text-sm outline-none placeholder:text-muted-foreground/50 focus:border-primary/50"
+              />
+              <div className="mt-2 flex justify-end gap-2">
+                <Button size="sm" variant="ghost" onClick={() => setShowSuggestion(false)} disabled={busy}>Cancel</Button>
+                <Button size="sm" onClick={() => onSuggest(suggestion.trim())} disabled={busy || !suggestion.trim()}>
+                  Build revised plan
+                </Button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {onCancel && (
+        <div className="mt-3 border-t border-white/6 pt-3">
+          {confirmCancel ? (
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span>Cancel this saved run? Completed provider work will not be undone.</span>
+              <Button size="sm" variant="destructive" onClick={onCancel} disabled={busy}>Cancel run</Button>
+              <Button size="sm" variant="ghost" onClick={() => setConfirmCancel(false)} disabled={busy}>Keep it</Button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirmCancel(true)}
+              disabled={busy}
+              className="flex items-center gap-1.5 text-xs text-muted-foreground/70 transition-colors hover:text-red-300 disabled:opacity-40"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Cancel saved run
+            </button>
+          )}
+        </div>
+      )}
     </motion.div>
   );
 }
