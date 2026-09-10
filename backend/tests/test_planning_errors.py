@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import app.orchestrator as orchestrator
 from app.native_connectors import native_manifest
-from app.orchestrator import planning_error_message
+from app.orchestrator import explicit_disconnected_capabilities, planning_error_message
 
 
 def test_exhausted_api_credits_are_explained_without_raw_provider_payload() -> None:
@@ -61,6 +61,21 @@ def test_unknown_internal_error_is_never_exposed() -> None:
 
     assert message == "AURA couldn't build the plan right now. Please try again."
     assert "provider trace" not in message
+
+
+def test_explicit_disconnected_capabilities_matches_named_provider_only() -> None:
+    inventory = [
+        {"slug": "meta-ads", "name": "Meta Ads", "connected": False},
+        {"slug": "google", "name": "Gmail", "connected": True},
+        {"slug": "slack", "name": "Slack", "connected": False},
+    ]
+
+    assert explicit_disconnected_capabilities(
+        "Build a Facebook Ads report and send it with Gmail", inventory
+    ) == ["meta-ads"]
+    assert explicit_disconnected_capabilities(
+        "Build an advertising report and email it", inventory
+    ) == []
 
 
 def test_connector_contract_mismatch_is_replanned_before_reaching_user(monkeypatch) -> None:

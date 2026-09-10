@@ -203,6 +203,7 @@ export default function PlanView({
     ? planTools.filter((tool) => !effectiveConnections[tool.name])
     : [];
   const connectionOnly = steps.length === 0 && (plan.connectionRequirements || []).length > 0;
+  const planningFailure = steps.length === 0 && Boolean(plan.error) && !connectionOnly;
 
   const onDragEnd = (res) => {
     if (!res.destination || res.source.index === res.destination.index) return;
@@ -316,12 +317,18 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
             <Brain className="w-4 h-4 text-primary" />
           </div>
           <h2 className="text-lg font-semibold">
-            {connectionOnly ? "Connect one tool so Aura can finish the plan" : "Here's how Aura plans to complete your task"}
+            {connectionOnly
+              ? "Connect one tool so Aura can finish the plan"
+              : planningFailure
+                ? "Aura couldn't finish this plan yet"
+                : "Here's how Aura plans to complete your task"}
           </h2>
         </div>
         <p className="text-xs text-muted-foreground ml-9 leading-relaxed">
           {connectionOnly
             ? "Your task is saved. Planning resumes automatically after the connection is verified."
+            : planningFailure
+              ? "Nothing was executed. Retry planning when you're ready."
             : "Review the steps and change anything that doesn't look right."}
         </p>
       </motion.div>
@@ -366,7 +373,7 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         </div>
       )}
 
-      {!connectionOnly && <>
+      {!connectionOnly && !planningFailure && <>
 
       {/* Steps */}
       <DragDropContext onDragEnd={onDragEnd}>

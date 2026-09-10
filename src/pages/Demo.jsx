@@ -18,6 +18,7 @@ import { detectNewConsequential } from "@/lib/editRunDetect";
 import { requestNotifyPermission, notifyWorkflowComplete, notifyWorkflowError } from "@/lib/auraNotify";
 import { connectTool, hydrateConnections } from "@/lib/connectService";
 import { getAllConnections } from "@/lib/connectionsStore";
+import { CATALOG } from "@/lib/toolCatalog";
 import {
   approvePythonPlan,
   cancelPythonRun,
@@ -34,7 +35,11 @@ import {
   needsRecovery,
   recoveryForRun,
 } from "@/lib/runRecovery.mjs";
-import { planningConnectionRequirements, planningDisposition } from "@/lib/planningFlow.mjs";
+import {
+  planningConnectionRequirements,
+  planningDisposition,
+  promptConnectionRequirements,
+} from "@/lib/planningFlow.mjs";
 import { hasDurablePlan, planningRequestPrompt } from "@/lib/runtimePlan.mjs";
 
 const STEP_DURATION = 2.6;
@@ -613,13 +618,29 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             pythonRunIdRef.current = null;
             pythonPlanRef.current = null;
             runRequestKeyRef.current = null;
-            setPlan({
-              interpretation: editedInterpretation,
-              workflowName: "",
-              estimatedTime: "",
-              steps: [],
-              error: error?.message || "AURA couldn't build the plan right now.",
-            });
+            const explicitRequirements = promptConnectionRequirements(
+              editedInterpretation || originalPromptRef.current,
+              CATALOG.map((tool) => ({
+                ...tool,
+                slug: tool.name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+              })),
+              getAllConnections()
+            );
+            setPlan(explicitRequirements.length
+              ? {
+                interpretation: editedInterpretation,
+                workflowName: "",
+                estimatedTime: "Planning resumes after the connection is verified",
+                steps: [],
+                connectionRequirements: explicitRequirements,
+              }
+              : {
+                interpretation: editedInterpretation,
+                workflowName: "",
+                estimatedTime: "",
+                steps: [],
+                error: error?.message || "AURA couldn't build the plan right now.",
+              });
           } finally {
             setPlanLoading(false);
           }

@@ -17,6 +17,32 @@ export function planningConnectionRequirements(run = {}) {
   return [...new Set(values)];
 }
 
+const PROMPT_TOOL_ALIASES = {
+  "meta-ads": ["meta ads", "facebook ads", "meta advertising"],
+};
+
+const normalizedWords = (value) => String(value || "")
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, " ")
+  .trim();
+
+export function promptConnectionRequirements(prompt = "", catalog = [], connections = {}) {
+  const text = ` ${normalizedWords(prompt)} `;
+  if (!text.trim()) return [];
+  return catalog
+    .filter((tool) => {
+      if (!tool?.name || connections[tool.name]) return false;
+      const slug = normalizedWords(tool.slug || tool.name);
+      const aliases = [
+        normalizedWords(tool.name),
+        slug,
+        ...(PROMPT_TOOL_ALIASES[slug.replace(/ /g, "-")] || []),
+      ];
+      return aliases.some((alias) => alias && text.includes(` ${normalizedWords(alias)} `));
+    })
+    .map((tool) => tool.slug || tool.name);
+}
+
 // Planning is only a proposal stage. A runtime blocker must remain an inline,
 // retryable planning error; it must never manufacture an executable fallback.
 export function planningDisposition(run = {}) {

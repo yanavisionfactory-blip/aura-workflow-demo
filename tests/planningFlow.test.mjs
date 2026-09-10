@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { planningConnectionRequirements, planningDisposition } from "../src/lib/planningFlow.mjs";
+import {
+  planningConnectionRequirements,
+  planningDisposition,
+  promptConnectionRequirements,
+} from "../src/lib/planningFlow.mjs";
 
 test("a completed backend plan proceeds to user review", () => {
   assert.equal(planningDisposition({
@@ -34,4 +38,29 @@ test("unfinished planning remains on the plan loader", () => {
   for (const status of ["queued", "planning", "recovering", undefined]) {
     assert.equal(planningDisposition({ status }), "wait");
   }
+});
+
+test("an explicitly named disconnected provider becomes a connection requirement", () => {
+  assert.deepEqual(
+    promptConnectionRequirements(
+      "Build a report from Facebook Ads and send it with Gmail",
+      [
+        { name: "Meta Ads", slug: "meta-ads" },
+        { name: "Gmail", slug: "gmail" },
+      ],
+      { Gmail: true, "Meta Ads": false }
+    ),
+    ["meta-ads"]
+  );
+});
+
+test("generic intent does not guess a provider", () => {
+  assert.deepEqual(
+    promptConnectionRequirements(
+      "Email a weekly advertising report",
+      [{ name: "Meta Ads", slug: "meta-ads" }, { name: "Gmail", slug: "gmail" }],
+      {}
+    ),
+    []
+  );
 });
