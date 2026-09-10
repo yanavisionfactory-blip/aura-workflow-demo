@@ -25,6 +25,14 @@ async def execute_delivery(run_id, workspace_id):
     await dispatch_pending(workspace_id)
 
 
+async def plan_delivery(run_id, workspace_id):
+    from .dispatch import dispatch_pending
+    await plan_run(run_id, workspace_id)
+    # A planning failure can atomically create a delayed supervisor intent.
+    # Publishing is browser-independent and never relies on the request thread.
+    await dispatch_pending(workspace_id)
+
+
 settings = get_settings()
 celery = Celery("aura", broker=settings.redis_url, backend=settings.redis_url)
 celery.conf.update(task_acks_late=True, task_reject_on_worker_lost=True, worker_prefetch_multiplier=1, task_track_started=True, broker_connection_timeout=3, task_publish_retry=False, broker_transport_options={"visibility_timeout": 3600, "socket_connect_timeout": 3, "socket_timeout": 3})
@@ -42,7 +50,7 @@ celery.conf.beat_schedule = {
 
 @celery.task(name="aura.plan_run", autoretry_for=(Exception,), retry_backoff=True, max_retries=3)
 def plan_run_task(run_id: str, workspace_id: str) -> None:
-    _run_async(plan_run(run_id, workspace_id))
+    _run_async(plan_delivery(run_id, workspace_id))
 
 
 @celery.task(name="aura.execute_run", autoretry_for=(Exception,), retry_backoff=True, max_retries=3)

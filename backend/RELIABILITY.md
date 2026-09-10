@@ -9,10 +9,26 @@ JUnit results as `workflow-release-evaluation`.
 
 ### Unattended-run contract
 
-An approved run is owned by the control plane, not by the browser tab. The UI may
+Every run is owned by the Run Supervisor from creation through verified completion,
+including planning and connection recovery before approval. It is owned by the
+control plane, not by the browser tab. The UI may
 disconnect at any time; PostgreSQL remains the source of truth and the transactional
 outbox, worker and elected recovery loop continue the run. On return, the client restores
 the newest active run and its exact approval or blocker state.
+
+Planner, model, connector-contract, broker and worker failures are internal supervisor
+states. A failed planning delivery records only a category and fingerprint, chooses a
+bounded repair mode, commits a delayed plan intent, and retries independently of the
+browser. Malformed plans use the existing schema/argument repair routes; capability
+drift is rediscovered from current manifests. Exhausting the cost/recovery budget opens
+an internal isolated-repair incident instead of exposing a technical Retry button.
+The public run projection publishes `recovering` while this happens and strips raw
+provider errors and internal supervisor history.
+
+Only an unavoidable decision may become a public blocker: OAuth/CAPTCHA, ambiguous
+account or resource selection, approval of a plan or exact consequential payload, or
+an unreconciled external effect. The deterministic gateway continues to own credential
+isolation, permissions, idempotency keys, write receipts and replay prevention.
 
 Before the first workflow operation, the execution preflight proves that each selected
 connection is enabled, has a current verified capability manifest, allows every approved
