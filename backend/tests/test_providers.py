@@ -2,9 +2,11 @@ import asyncio
 import base64
 from email import policy
 from email.parser import BytesParser
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlsplit
 
+from app import providers
 from app.config import Settings
 from app.providers import (
     PROVIDERS,
@@ -286,6 +288,46 @@ def test_spreadsheet_resolver_never_guesses_between_duplicate_names(monkeypatch)
     assert result["status"] == "ambiguous"
     assert result["match_count"] == 2
     assert result["spreadsheet"] is None
+
+
+def test_spreadsheet_resolver_verifies_configured_resource_alias(monkeypatch):
+    executor = ProviderExecutor({"access_token": "token"})
+    search = AsyncMock(return_value={"files": []})
+    request = AsyncMock(
+        return_value={
+            "id": "sheet-123",
+            "name": "Creator Outreach",
+            "mimeType": "application/vnd.google-apps.spreadsheet",
+            "modifiedTime": "2026-09-10T01:00:00Z",
+        }
+    )
+    monkeypatch.setattr(executor, "_drive_files_search", search)
+    monkeypatch.setattr(executor, "_request", request)
+    monkeypatch.setattr(
+        providers,
+        "get_settings",
+        lambda: SimpleNamespace(
+            resource_aliases={"creator outreach": "sheet-123"}
+        ),
+    )
+
+    result = asyncio.run(
+        executor._drive_spreadsheet_resolve({"name": "Creator Outreach"})
+    )
+
+    assert result["status"] == "resolved"
+    assert result["resolution_source"] == "verified_resource_alias"
+    assert result["spreadsheet"]["id"] == "sheet-123"
+    request.assert_awaited_once_with(
+        "GET",
+        "https://www.googleapis.com/drive/v3/files/sheet-123",
+        params={
+            "fields": (
+                "id,name,mimeType,createdTime,modifiedTime,parents,driveId,"
+                "owners(displayName,emailAddress,me),webViewLink"
+            )
+        },
+    )
 
 
 def test_google_identity_reads_current_connected_account(monkeypatch):
