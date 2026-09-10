@@ -115,6 +115,39 @@ def test_senior_orchestrator_cannot_retarget_an_approved_step(monkeypatch) -> No
     assert decision.delegations[0].operation == "records.read"
 
 
+def test_senior_orchestrator_cannot_strand_a_fresh_approved_run(monkeypatch) -> None:
+    async def fake_run(*_args, **_kwargs):
+        return ExecutionSupervision(
+            action="pause",
+            reason="The source name may be ambiguous",
+            delegations=[],
+        )
+
+    monkeypatch.setattr(agent_runtime, "get_settings", agent_settings)
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    decision, source = asyncio.run(
+        supervise_execution(
+            "Resolve the named spreadsheet",
+            approved_read_plan(),
+            [
+                {
+                    "key": "read_records",
+                    "status": "pending",
+                    "tool_slug": "crm",
+                    "operation": "records.read",
+                    "depends_on": [],
+                    "consequential": False,
+                }
+            ],
+        )
+    )
+
+    assert source == "deterministic_pause_fallback"
+    assert decision.action == "continue"
+    assert decision.delegations[0].step_key == "read_records"
+
+
 def test_execution_agent_triggers_the_exact_approved_call(monkeypatch) -> None:
     async def fake_run(*_args, **_kwargs):
         return ExecutionDirective(
@@ -171,7 +204,43 @@ def test_execution_agent_cannot_expand_approved_arguments(monkeypatch) -> None:
     assert directive.arguments == {"limit": 10}
 
 
-def test_execution_agent_can_escalate_instead_of_dispatching(monkeypatch) -> None:
+def test_execution_agent_can_escalate_a_consequential_call(monkeypatch) -> None:
+    approved_step = approved_read_plan()["steps"][0]
+    approved_step.update(
+        {
+            "operation": "records.create",
+            "arguments": {"title": "Example"},
+            "consequential": True,
+        }
+    )
+
+    async def fake_run(*_args, **_kwargs):
+        return ExecutionDirective(
+            action="escalate",
+            step_key="read_records",
+            tool_slug="crm",
+            operation="records.create",
+            arguments={"title": "Example"},
+            reason="The destination is ambiguous",
+        )
+
+    monkeypatch.setattr(agent_runtime, "get_settings", agent_settings)
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    directive, source = asyncio.run(
+        prepare_execution_directive(
+            "Create a CRM record",
+            approved_step,
+            {"title": "Example"},
+            "CRM Execution Agent",
+        )
+    )
+
+    assert source == "agent"
+    assert directive.action == "escalate"
+
+
+def test_execution_agent_escalation_cannot_block_an_approved_read(monkeypatch) -> None:
     async def fake_run(*_args, **_kwargs):
         return ExecutionDirective(
             action="escalate",
@@ -179,7 +248,7 @@ def test_execution_agent_can_escalate_instead_of_dispatching(monkeypatch) -> Non
             tool_slug="crm",
             operation="records.read",
             arguments={"limit": 10},
-            reason="The destination is ambiguous",
+            reason="The source name may be ambiguous",
         )
 
     monkeypatch.setattr(agent_runtime, "get_settings", agent_settings)
@@ -194,8 +263,9 @@ def test_execution_agent_can_escalate_instead_of_dispatching(monkeypatch) -> Non
         )
     )
 
-    assert source == "agent"
-    assert directive.action == "escalate"
+    assert source == "deterministic_read_fallback"
+    assert directive.action == "execute"
+    assert directive.arguments == {"limit": 10}
 
 
 def test_senior_orchestrator_reviews_a_valid_plan(monkeypatch) -> None:

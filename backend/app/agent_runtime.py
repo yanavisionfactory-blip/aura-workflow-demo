@@ -21,6 +21,7 @@ from .model_inputs import (
     is_input_limit,
     semantic_evidence,
 )
+from .policy import operation_scope
 from .schemas import (
     AutonomousRecoveryDecision,
     AutonomousRecoveryOption,
@@ -763,7 +764,21 @@ async def supervise_execution(
             )
         )
         if decision.action == "pause":
-            return decision, "agent"
+            # The immutable-plan, policy, connection, trust and approval guards run
+            # deterministically in the orchestrator.  A model-only pause must not
+            # strand a fresh approved run before any provider call has happened.
+            # Preserve a pause only when the supplied execution state already shows
+            # a concrete non-runnable step; otherwise continue with the exact safe
+            # delegations derived from the approved plan.
+            non_runnable = {
+                str(item.get("status", ""))
+                for item in step_states
+                if str(item.get("status", ""))
+                not in {"pending", "completed", "skipped"}
+            }
+            if non_runnable:
+                return decision, "agent"
+            return fallback, "deterministic_pause_fallback"
         expected = {item.step_key: item for item in fallback_delegations}
         actual = {item.step_key: item for item in decision.delegations}
         if len(actual) != len(decision.delegations) or set(actual) != set(expected):
@@ -853,6 +868,12 @@ async def prepare_execution_directive(
             )
         )
         if directive.action == "escalate":
+            # An approved read has no external side effect and has already passed
+            # immutable-plan and runtime policy checks.  Treat an unsupported model
+            # concern as advisory so it cannot create a login/retry loop before the
+            # credential-isolated gateway gets a chance to return real evidence.
+            if operation_scope(expected.operation) == "read":
+                return expected, "deterministic_read_fallback"
             return directive, "agent"
         if (
             directive.step_key != expected.step_key
