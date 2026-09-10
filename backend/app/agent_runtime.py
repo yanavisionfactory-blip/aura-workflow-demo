@@ -278,6 +278,13 @@ def build_agents() -> dict[str, Agent]:
             explicit timezone display; do not calculate offsets yourself. A missing or unspecified
             end time must not become a claimed duration. Combine duplicate entries only when evidence supports it and disclose conflicting
             details. Omit internal metadata and token-bearing management links unless requested.
+            For browser.form.batch.submit, map every candidate in the referenced eligible array
+            to the discovered named record fields; use the connected identity evidence for the
+            manager email, the candidate handle/profile for creatorUsername, the public profile
+            email when present, and concise evidence-grounded notes. Do not reintroduce excluded
+            candidates. For sheets.append fed by approved_records, create rows only from explicit
+            approved records in the existing requested range layout; never include rejected,
+            pending, absent, or unknown statuses.
             Never invent a provider identifier, project key,
             recipient, assignee, page ID, issue key, or other external resource. When a list action
             precedes the write, select only a value present in that list. When the step key or reason

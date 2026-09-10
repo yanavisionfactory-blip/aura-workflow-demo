@@ -79,6 +79,46 @@ KNOWN.update({
         },
         ["public_page_content"],
     ),
+    "browser.page.read": (
+        {
+            "type": "object",
+            "required": ["url", "title", "text"],
+            "properties": {
+                "url": TEXT,
+                "title": TEXT,
+                "text": TEXT,
+                "links": {"type": "array", "items": OBJECT},
+            },
+        },
+        ["public_page_content"],
+    ),
+    "browser.form.submit": (
+        {
+            "type": "object",
+            "required": ["submitted", "status", "url", "text"],
+            "properties": {
+                "submitted": {"const": True},
+                "status": {
+                    "type": "string",
+                    "enum": ["approved", "rejected", "unknown"],
+                },
+                "url": TEXT,
+                "text": TEXT,
+            },
+        },
+        ["write_receipt", "creator_policy_decision"],
+    ),
+    "browser.form.batch.submit": (
+        {
+            "type": "object",
+            "required": ["results", "approved_records"],
+            "properties": {
+                "results": {"type": "array", "items": OBJECT},
+                "approved_records": {"type": "array", "items": OBJECT},
+            },
+        },
+        ["write_receipt", "creator_policy_decision"],
+    ),
     "creator.tiktok.screen": (
         {
             "type": "object",
@@ -130,6 +170,24 @@ KNOWN.update({
             "creator_recency",
             "creator_bio_management_signals",
         ],
+    ),
+    "creator.candidates.exclude_existing": (
+        {
+            "type": "object",
+            "required": [
+                "eligible_candidates",
+                "excluded_candidates",
+                "input_count",
+                "eligible_count",
+            ],
+            "properties": {
+                "eligible_candidates": {"type": "array", "items": OBJECT},
+                "excluded_candidates": {"type": "array", "items": OBJECT},
+                "input_count": {"type": "integer", "minimum": 0},
+                "eligible_count": {"type": "integer", "minimum": 0},
+            },
+        },
+        ["candidate_deduplication"],
     ),
     "gmail.list": ({"type": "object", "properties": {"messages": {"type": "array", "items": {"type": "object", "required": ["id"], "properties": {"id": TEXT}}}, "nextPageToken": TEXT, "resultSizeEstimate": {"type": "integer"}}, "anyOf": [{"required": ["messages"]}, {"required": ["resultSizeEstimate"]}]}, ["message_metadata"]),
     "calendar.list": (envelope("items"), ["event_state"]),

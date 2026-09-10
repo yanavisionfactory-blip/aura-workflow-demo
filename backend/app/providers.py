@@ -2,6 +2,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -579,6 +580,9 @@ class ProviderExecutor:
             "web.search": self._web_search,
             "web.page.read": self._web_page_read,
             "creator.tiktok.screen": self._creator_tiktok_screen,
+            "creator.candidates.exclude_existing": (
+                self._creator_candidates_exclude_existing
+            ),
             "http.request": self._http_request,
             "mcp.call": self._mcp_call,
         }
@@ -889,6 +893,76 @@ class ProviderExecutor:
             if key in a
         }
         return await self._browser_worker_request("/v1/tiktok/screen", payload)
+
+    async def _creator_candidates_exclude_existing(self, a: dict) -> dict:
+        candidates = a.get("candidates") or []
+        outreach_rows = a.get("creator_outreach_rows") or []
+        my_creator_rows = a.get("my_creator_rows") or []
+
+        def cells(rows: list) -> list[str]:
+            return [
+                str(cell).strip()
+                for row in rows
+                if isinstance(row, list)
+                for cell in row
+                if cell not in (None, "")
+            ]
+
+        def handle(value: object) -> str | None:
+            text = str(value or "").strip().casefold()
+            url_match = re.search(r"tiktok\.com/@([^/?#]+)", text)
+            if url_match:
+                return url_match.group(1).strip().casefold()
+            direct = text.removeprefix("@").strip()
+            return direct if re.fullmatch(r"[a-z0-9._-]+", direct) else None
+
+        def email(value: object) -> str | None:
+            text = str(value or "").strip().casefold()
+            return text if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", text) else None
+
+        indexed_sources = {
+            "creator_outreach": cells(outreach_rows),
+            "my_creators": cells(my_creator_rows),
+        }
+        source_handles = {
+            name: {found for value in values if (found := handle(value))}
+            for name, values in indexed_sources.items()
+        }
+        source_emails = {
+            name: {found for value in values if (found := email(value))}
+            for name, values in indexed_sources.items()
+        }
+        eligible: list[dict] = []
+        excluded: list[dict] = []
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            candidate_handle = handle(
+                candidate.get("handle") or candidate.get("profile_url")
+            )
+            candidate_email = email(candidate.get("public_email"))
+            matches = [
+                source
+                for source in indexed_sources
+                if (
+                    candidate_handle
+                    and candidate_handle in source_handles[source]
+                )
+                or (
+                    candidate_email
+                    and candidate_email in source_emails[source]
+                )
+            ]
+            if matches:
+                excluded.append({**candidate, "duplicate_sources": matches})
+            else:
+                eligible.append(candidate)
+        return {
+            "eligible_candidates": eligible,
+            "excluded_candidates": excluded,
+            "input_count": len(candidates),
+            "eligible_count": len(eligible),
+        }
 
     async def _calendar_list(self, a: dict) -> dict:
         params = {"singleEvents": "true", "orderBy": "startTime", "maxResults": min(int(a.get("limit", 20)), 100)}

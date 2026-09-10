@@ -352,6 +352,47 @@ def test_creator_screen_delegates_typed_thresholds_to_browser_worker(monkeypatch
     )
 
 
+def test_creator_exclusion_matches_handles_urls_and_public_emails():
+    executor = ProviderExecutor({})
+
+    result = asyncio.run(
+        executor._creator_candidates_exclude_existing(
+            {
+                "candidates": [
+                    {
+                        "handle": "alice",
+                        "profile_url": "https://www.tiktok.com/@alice",
+                        "public_email": "alice@example.com",
+                    },
+                    {
+                        "handle": "bob",
+                        "profile_url": "https://www.tiktok.com/@bob",
+                        "public_email": "bob@example.com",
+                    },
+                    {
+                        "handle": "carol",
+                        "profile_url": "https://www.tiktok.com/@carol",
+                        "public_email": "carol@example.com",
+                    },
+                ],
+                "creator_outreach_rows": [
+                    ["Creator", "TikTok URL", "Email"],
+                    ["Alice", "https://www.tiktok.com/@Alice?lang=en", "other@example.com"],
+                ],
+                "my_creator_rows": [["@someone_else", "BOB@EXAMPLE.COM"]],
+            }
+        )
+    )
+
+    assert [item["handle"] for item in result["eligible_candidates"]] == ["carol"]
+    assert result["excluded_candidates"][0]["duplicate_sources"] == [
+        "creator_outreach"
+    ]
+    assert result["excluded_candidates"][1]["duplicate_sources"] == ["my_creators"]
+    assert result["input_count"] == 3
+    assert result["eligible_count"] == 1
+
+
 def test_weather_forecast_returns_plain_language_summary(monkeypatch):
     executor = ProviderExecutor({})
     request = AsyncMock(side_effect=[

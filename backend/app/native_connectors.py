@@ -118,6 +118,27 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                 },
             ),
             _module(
+                "creator.candidates.exclude_existing",
+                "search",
+                (
+                    "Compare an evidence-qualified creator array with two current sheet row "
+                    "arrays. Exclude exact normalized TikTok handle, TikTok profile URL, or "
+                    "public-email matches and preserve per-candidate exclusion evidence."
+                ),
+                required=("candidates", "creator_outreach_rows", "my_creator_rows"),
+                properties={
+                    "candidates": {"type": "array", "items": {"type": "object"}},
+                    "creator_outreach_rows": {
+                        "type": "array",
+                        "items": {"type": "array"},
+                    },
+                    "my_creator_rows": {
+                        "type": "array",
+                        "items": {"type": "array"},
+                    },
+                },
+            ),
+            _module(
                 "weather.forecast",
                 "search",
                 "Fetch a current public weather forecast for a named location.",

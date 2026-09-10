@@ -283,6 +283,17 @@ async def _create_compiled_plan(
         for module in manifests_by_slug[item["slug"]].get("capabilities", [])
         if module.get("name") in item.get("allowed_operations", [])
     ]} for item in inventory]
+    from .workflow_templates import creator_outreach_template
+
+    audited_plan = creator_outreach_template(prompt, inventory)
+    if audited_plan is not None:
+        _normalize_planned_steps(audited_plan, manifests_by_slug)
+        from .operation_contracts import compile_contracts
+
+        audited_plan.planning_artifacts["compiled_contracts"] = compile_contracts(
+            audited_plan, manifests_by_slug
+        )
+        return audited_plan
     repair_requirements: list[str] = []
     for attempt in range(3):
         plan = await create_plan(
