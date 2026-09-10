@@ -34,7 +34,7 @@ import {
   needsRecovery,
   recoveryForRun,
 } from "@/lib/runRecovery.mjs";
-import { planningDisposition } from "@/lib/planningFlow.mjs";
+import { planningConnectionRequirements, planningDisposition } from "@/lib/planningFlow.mjs";
 import { hasDurablePlan, planningRequestPrompt } from "@/lib/runtimePlan.mjs";
 
 const STEP_DURATION = 2.6;
@@ -242,6 +242,14 @@ const uiPlanFromRun = (run) => ({
       })),
     } : undefined,
   })),
+});
+
+const uiConnectionPlanFromRun = (run, interpretation) => ({
+  workflowName: "",
+  interpretation: run.plan?.interpretation || interpretation || run.prompt,
+  estimatedTime: "Planning resumes after the connection is verified",
+  steps: [],
+  connectionRequirements: planningConnectionRequirements(run),
 });
 
 const INTERPRETATION_SCHEMA = {
@@ -585,6 +593,10 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               if (!run) return;
               const disposition = planningDisposition(run);
               if (disposition === "review") break;
+              if (disposition === "connection") {
+                setPlan(uiConnectionPlanFromRun(run, editedInterpretation));
+                return;
+              }
               if (disposition === "unavailable") throw new Error(
                 run.error || "The execution backend needs more setup before it can build this plan."
               );
@@ -724,6 +736,48 @@ Rules:
     runRequestKeyRef.current = null;
     return handleConfirm(interpretation);
   }, [handleConfirm, interpretation]);
+
+  const handlePlanningConnectionRecovered = async (_toolName, connectionId) => {
+    const runId = pythonRunIdRef.current;
+    if (!runId || !connectionId) return handleRetryPlanning();
+    setPlanLoading(true);
+    try {
+      await resumePythonRunAfterConnection(runId, connectionId);
+      const generation = ++pythonPollGenerationRef.current;
+      const planningDeadline = Date.now() + 90000;
+      for (;;) {
+        const run = await getPythonRunResilient(runId, generation);
+        if (!run) return;
+        const disposition = planningDisposition(run);
+        if (disposition === "review") {
+          pythonPlanRef.current = run.plan;
+          setPlan(uiPlanFromRun(run));
+          return;
+        }
+        if (disposition === "connection") {
+          setPlan(uiConnectionPlanFromRun(run, interpretation));
+          return;
+        }
+        if (disposition === "unavailable") {
+          throw new Error(run.error || "AURA could not resume planning after the connection was verified.");
+        }
+        if (Date.now() >= planningDeadline) {
+          throw new Error("Planning is taking longer than expected. Your saved task is safe to retry.");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    } catch (error) {
+      setPlan({
+        interpretation,
+        workflowName: "",
+        estimatedTime: "",
+        steps: [],
+        error: error?.message || "AURA couldn't resume planning right now.",
+      });
+    } finally {
+      setPlanLoading(false);
+    }
+  };
 
   const keepPlanInReview = useCallback((message) => {
     setPlan((previous) => ({
@@ -1420,6 +1474,7 @@ Generate a results summary in plain, human-friendly language (not technical).
                     onApprove={handleApprove}
                     onRevisePlan={handlePlanRevision}
                     onRetryPlan={handleRetryPlanning}
+                    onConnectionRecovered={handlePlanningConnectionRecovered}
                     onBack={() => setPhase("confirm")}
                     approveLabel={editRunMode ? "Review changes" : "Start"}
                   />
