@@ -40,6 +40,16 @@ test("unfinished planning remains on the plan loader", () => {
   }
 });
 
+test("an internal terminal state stays behind the run supervisor", () => {
+  for (const status of ["failed", "blocked"]) {
+    assert.equal(planningDisposition({
+      status,
+      public_status: "recovering",
+      supervisor_state: { owner: "run_supervisor", status: "background_attention" },
+    }), "wait");
+  }
+});
+
 test("an explicitly named disconnected provider becomes a connection requirement", () => {
   assert.deepEqual(
     promptConnectionRequirements(

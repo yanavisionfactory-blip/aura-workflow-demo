@@ -46,6 +46,10 @@ export function promptConnectionRequirements(prompt = "", catalog = [], connecti
 // Planning is only a proposal stage. A runtime blocker must remain an inline,
 // retryable planning error; it must never manufacture an executable fallback.
 export function planningDisposition(run = {}) {
+  // The backend owns technical recovery.  Its public projection takes
+  // precedence over the internal persistence status (which may be blocked or
+  // failed while an incident is quarantined backstage).
+  if (run.public_status === "recovering") return "wait";
   if (run.status === "awaiting_approval" && run.plan?.steps?.length) {
     return "review";
   }

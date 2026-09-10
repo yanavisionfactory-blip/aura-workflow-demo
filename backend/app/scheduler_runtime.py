@@ -25,8 +25,12 @@ def next_occurrence(current: datetime, interval_seconds: int) -> datetime:
     return current + timedelta(seconds=interval_seconds)
 
 
-def recovery_action(status: RunStatus) -> str | None:
+def recovery_action(status: RunStatus, execution_context: dict | None = None) -> str | None:
     if status in (RunStatus.queued, RunStatus.planning):
+        return "plan"
+    if status == RunStatus.recovering and (
+        (execution_context or {}).get("__aura_supervisor__", {}).get("phase") == "planning"
+    ):
         return "plan"
     if status in (RunStatus.running, RunStatus.recovering):
         return "execute"
@@ -65,6 +69,14 @@ async def dispatch_due_schedules(now: datetime | None = None) -> list[tuple[str,
                         "inputs": workflow.variables,
                         "vars": workflow.variables,
                         "steps": {},
+                        "__aura_supervisor__": {
+                            "version": 1,
+                            "owner": "run_supervisor",
+                            "phase": "planning",
+                            "status": "active",
+                            "attempts": {},
+                            "failure_history": [],
+                        },
                     },
                     status=RunStatus.queued,
                 )
@@ -109,7 +121,7 @@ async def recover_stale_runs(
                 )
             ).all()
             for run in runs:
-                action = recovery_action(run.status)
+                action = recovery_action(run.status, run.execution_context)
                 if action is None:
                     continue
                 async with execution_lock(engine, workspace_id, run.id) as acquired:
@@ -119,7 +131,7 @@ async def recover_stale_runs(
                     probe_due = await session.scalar(select(RecoveryProbe.id).where(RecoveryProbe.run_id == run.id,
                         RecoveryProbe.workspace_id == workspace_id,
                         RecoveryProbe.yielded_at <= current - timedelta(seconds=get_settings().recovery_probe_delay_seconds)))
-                    if recovery_action(run.status) != action or (run.updated_at >= cutoff and not probe_due):
+                    if recovery_action(run.status, run.execution_context) != action or (run.updated_at >= cutoff and not probe_due):
                         continue
                     from .models import DispatchIntent
                     pending = await session.scalar(select(DispatchIntent.id).where(DispatchIntent.run_id == run.id, DispatchIntent.workspace_id == workspace_id, DispatchIntent.kind == action, DispatchIntent.status == "pending").limit(1))
