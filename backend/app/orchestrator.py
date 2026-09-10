@@ -67,6 +67,11 @@ from .replanning import maybe_replan_run
 from .schemas import CriticDecision, OutcomeVerification
 from .security import CredentialVault
 from .semantic_memory import index_run_memory
+from .universal_connectors import (
+    ConnectorError,
+    allowed_operations as discovered_operations,
+    discover_provider,
+)
 from .workflow_context import (
     WorkflowContextError,
     evaluate_condition,
@@ -92,6 +97,52 @@ def refresh_native_connection_contract(tool: ToolConnection) -> list[str]:
         return list(tool.allowed_operations or [])
     tool.allowed_operations = operations
     return operations
+
+
+async def refresh_browser_connection_contract(
+    tool: ToolConnection,
+    manifest: CapabilityManifest | None,
+) -> list[str]:
+    """Refresh a browser connector's discovered schema before planning.
+
+    Browser apps can add fields and batch capabilities without changing the user's
+    connection identity. Discovery is read-only and credential-isolated. A temporary
+    discovery failure preserves the last verified contract so planning can still use
+    known-good capabilities; it never disables the account or starts a login loop.
+    """
+
+    if (
+        tool.kind != ToolKind.browser
+        or manifest is None
+        or not tool.base_url
+        or not tool.encrypted_credentials
+    ):
+        return list(tool.allowed_operations or [])
+    try:
+        credentials = CredentialVault().decrypt(tool.encrypted_credentials)
+        refreshed = await discover_provider(
+            tool.kind.value,
+            str(tool.base_url),
+            credentials,
+            tool.config or {},
+        )
+    except (ConnectorError, httpx.HTTPError, ValueError) as exc:
+        logger.warning(
+            "Browser capability refresh deferred tool_id=%s error_type=%s",
+            tool.id,
+            type(exc).__name__,
+        )
+        return list(tool.allowed_operations or [])
+    manifest.manifest = refreshed
+    manifest.status = "verified"
+    manifest.verification = {
+        **(manifest.verification or {}),
+        "ok": True,
+        "source": "planning_discovery_refresh",
+    }
+    manifest.verified_at = datetime.now(timezone.utc)
+    tool.allowed_operations = discovered_operations(refreshed)
+    return list(tool.allowed_operations)
 
 
 def _failure_impacts_trust(exc: Exception) -> bool:
@@ -381,10 +432,22 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 )
             )
         ).all()
+        manifests = (
+            await session.scalars(
+                select(CapabilityManifest).where(
+                    CapabilityManifest.tool_id.in_([tool.id for tool in tools]),
+                    CapabilityManifest.status == "verified",
+                )
+            )
+        ).all()
+        manifests_by_tool = {manifest.tool_id: manifest for manifest in manifests}
         from .connection_permissions import refresh_granted_readbacks
         for tool in tools:
             refresh_native_connection_contract(tool)
             refresh_granted_readbacks(tool)
+            await refresh_browser_connection_contract(
+                tool, manifests_by_tool.get(tool.id)
+            )
         connected_inventory = [
             {
                 "slug": tool.slug,
@@ -401,14 +464,6 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
         }
         inventory_by_slug.update({item["slug"]: item for item in connected_inventory})
         inventory = list(inventory_by_slug.values())
-        manifests = (
-            await session.scalars(
-                select(CapabilityManifest).where(
-                    CapabilityManifest.tool_id.in_([tool.id for tool in tools]),
-                    CapabilityManifest.status == "verified",
-                )
-            )
-        ).all()
         manifests_by_slug = {
             tool.slug: manifest.manifest
             for tool in tools
