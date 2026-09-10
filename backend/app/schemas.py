@@ -286,6 +286,7 @@ class AutonomousRecoveryOption(BaseModel):
         "retry_final_review",
         "reconcile_write",
         "revalidate_connection",
+        "refresh_capabilities",
     ]
     step_id: str | None = None
     reason_code: str = Field(pattern=r"^[a-z][a-z0-9_]{0,119}$")
@@ -295,6 +296,29 @@ class AutonomousRecoveryOption(BaseModel):
 class AutonomousRecoveryDecision(BaseModel):
     option_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,119}$")
     reason: str = Field(min_length=1, max_length=1000)
+
+
+class RecoveryDiagnosis(BaseModel):
+    """A diagnosis may rank authority already granted by deterministic policy.
+
+    It deliberately cannot propose a tool call or provider arguments.  The recovery
+    supervisor receives only option keys minted by the application.
+    """
+
+    category: Literal[
+        "transient_provider",
+        "authorization",
+        "capability_drift",
+        "workflow_context",
+        "verification",
+        "uncertain_write",
+        "policy",
+        "unknown",
+    ] = "unknown"
+    likely_cause: str = Field(min_length=1, max_length=1000)
+    evidence: list[str] = Field(default_factory=list, max_length=10)
+    ranked_option_keys: list[str] = Field(default_factory=list, max_length=10)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 class WorkflowPlan(BaseModel):
@@ -385,6 +409,11 @@ class PlanApproval(BaseModel):
     # staged clients can run safe preparation steps before showing a concrete
     # write preview.
     approve_consequential: bool = True
+    # The approval snapshot already grants operation-level read permissions.  This
+    # flag lets AURA repair a failed read inside that exact permission envelope;
+    # writes, new tools, new operations and new literal resource targets still need
+    # a new human approval.
+    allow_autonomous_read_repairs: bool = True
 
 
 class ResumeDecision(BaseModel):
