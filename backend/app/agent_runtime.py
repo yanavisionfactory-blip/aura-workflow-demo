@@ -774,7 +774,7 @@ async def supervise_execution(
                 str(item.get("status", ""))
                 for item in step_states
                 if str(item.get("status", ""))
-                not in {"pending", "completed", "skipped"}
+                not in {"pending", "awaiting_approval", "completed", "skipped"}
             }
             if non_runnable:
                 return decision, "agent"

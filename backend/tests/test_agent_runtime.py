@@ -148,6 +148,38 @@ def test_senior_orchestrator_cannot_strand_a_fresh_approved_run(monkeypatch) -> 
     assert decision.delegations[0].step_key == "read_records"
 
 
+def test_staged_action_approval_is_not_a_manager_pause_reason(monkeypatch) -> None:
+    async def fake_run(*_args, **_kwargs):
+        return ExecutionSupervision(
+            action="pause",
+            reason="A later action still needs approval",
+            delegations=[],
+        )
+
+    monkeypatch.setattr(agent_runtime, "get_settings", agent_settings)
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    decision, source = asyncio.run(
+        supervise_execution(
+            "Read first and ask before writing",
+            approved_read_plan(),
+            [
+                {
+                    "key": "read_records",
+                    "status": "awaiting_approval",
+                    "tool_slug": "crm",
+                    "operation": "records.read",
+                    "depends_on": [],
+                    "consequential": False,
+                }
+            ],
+        )
+    )
+
+    assert source == "deterministic_pause_fallback"
+    assert decision.action == "continue"
+
+
 def test_execution_agent_triggers_the_exact_approved_call(monkeypatch) -> None:
     async def fake_run(*_args, **_kwargs):
         return ExecutionDirective(
