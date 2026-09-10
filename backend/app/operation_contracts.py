@@ -45,6 +45,37 @@ KNOWN.update({
     "jira.projects.list": ({**envelope("values"), "properties": {"values": {"type": "array", "items": {"type": "object", "required": ["id", "key"], "properties": {"id": TEXT, "key": TEXT}}}, "isLast": {"type": "boolean"}, "startAt": {"type": "integer"}, "total": {"type": "integer"}}}, ["project_metadata"]),
     "jira.issues.search": ({**envelope("issues"), "properties": {"issues": {"type": "array", "items": {"type": "object", "required": ["id"], "properties": {"id": TEXT, "key": TEXT, "fields": OBJECT}}}, "isLast": {"type": "boolean"}, "nextPageToken": TEXT}}, ["issue_state"]),
     "weather.forecast": ({"type": "object", "required": ["location", "date", "summary"], "properties": {"location": TEXT, "date": TEXT, "summary": TEXT}}, ["forecast"]),
+    "web.search": (
+        {
+            "type": "object",
+            "required": ["query", "results"],
+            "properties": {
+                "query": TEXT,
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["title", "url"],
+                        "properties": {"title": TEXT, "url": TEXT, "snippet": TEXT},
+                    },
+                },
+            },
+        },
+        ["public_search_results"],
+    ),
+    "web.page.read": (
+        {
+            "type": "object",
+            "required": ["url", "title", "text"],
+            "properties": {
+                "url": TEXT,
+                "title": TEXT,
+                "text": TEXT,
+                "links": {"type": "array", "items": OBJECT},
+            },
+        },
+        ["public_page_content"],
+    ),
     "gmail.list": ({"type": "object", "properties": {"messages": {"type": "array", "items": {"type": "object", "required": ["id"], "properties": {"id": TEXT}}}, "nextPageToken": TEXT, "resultSizeEstimate": {"type": "integer"}}, "anyOf": [{"required": ["messages"]}, {"required": ["resultSizeEstimate"]}]}, ["message_metadata"]),
     "calendar.list": (envelope("items"), ["event_state"]),
     "drive.files.search": ({

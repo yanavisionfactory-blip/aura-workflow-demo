@@ -574,6 +574,8 @@ class ProviderExecutor:
             "jira.issue.create": self._jira_issue_create,
             "jira.issue.update": self._jira_issue_update,
             "weather.forecast": self._weather_forecast,
+            "web.search": self._web_search,
+            "web.page.read": self._web_page_read,
             "http.request": self._http_request,
             "mcp.call": self._mcp_call,
         }
@@ -659,11 +661,12 @@ class ProviderExecutor:
         if not self.base_url:
             raise ValueError("Capability provider has no endpoint")
         if self.provider_kind == "browser":
-            worker = get_settings().browser_connector_url
-            if not worker:
+            settings = get_settings()
+            worker = settings.browser_connector_url
+            if not worker or not settings.browser_connector_token:
                 raise ValueError("Browser connector worker is not configured")
             return await ProviderExecutor(
-                self.credentials,
+                {"api_key": settings.browser_connector_token},
                 worker,
                 self.timeout_seconds,
             )._request(
@@ -842,6 +845,30 @@ class ProviderExecutor:
             f"of precipitation, wind up to {result['wind_speed']} {wind_unit}."
         )
         return result
+
+    async def _browser_worker_request(self, path: str, payload: dict) -> dict:
+        settings = get_settings()
+        if not settings.browser_connector_url or not settings.browser_connector_token:
+            raise ValueError("Public web execution is not configured")
+        executor = ProviderExecutor(
+            {"api_key": settings.browser_connector_token},
+            settings.browser_connector_url,
+            self.timeout_seconds,
+        )
+        return await executor._request(
+            "POST",
+            f"{settings.browser_connector_url.rstrip('/')}/{path.lstrip('/')}",
+            json=payload,
+        )
+
+    async def _web_search(self, a: dict) -> dict:
+        return await self._browser_worker_request(
+            "/v1/search",
+            {"query": a["query"], "limit": min(int(a.get("limit", 10)), 20)},
+        )
+
+    async def _web_page_read(self, a: dict) -> dict:
+        return await self._browser_worker_request("/v1/read", {"url": a["url"]})
 
     async def _calendar_list(self, a: dict) -> dict:
         params = {"singleEvents": "true", "orderBy": "startTime", "maxResults": min(int(a.get("limit", 20)), 100)}

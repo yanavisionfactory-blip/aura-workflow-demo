@@ -64,6 +64,12 @@ def test_aura_weather_is_connection_free_and_read_only():
         manifest, "weather.forecast", {"location": "Munich", "date": "tomorrow"}
     )
 
+    capabilities = {item["name"]: item for item in manifest["capabilities"]}
+    assert capabilities["web.search"]["permission_scope"] == "read"
+    assert capabilities["web.page.read"]["permission_scope"] == "read"
+    assert capabilities["web.search"]["requires_approval"] is False
+    assert capabilities["web.page.read"]["requires_approval"] is False
+
 
 def test_google_catalog_can_resolve_and_update_named_spreadsheets():
     manifest = native_manifest("google")

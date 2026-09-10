@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     atlassian_client_secret: str = ""
     oauth_callback_overrides: str = ""
     browser_connector_url: str = ""
+    browser_connector_token: str = ""
     # Clerk is the production identity provider. The PEM key avoids a network
     # request on every API call; JWKS is supported for key rotation.
     clerk_jwt_key: str = ""

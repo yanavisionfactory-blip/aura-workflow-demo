@@ -65,6 +65,23 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         "identity": {"provider": "aura"},
         "modules": [
             _module(
+                "web.search",
+                "search",
+                "Search the current public web and return source URLs and snippets.",
+                required=("query",),
+                properties={
+                    "query": _TEXT,
+                    "limit": {**_POSITIVE_INTEGER, "maximum": 20},
+                },
+            ),
+            _module(
+                "web.page.read",
+                "search",
+                "Render and read a public HTTPS page, including client-rendered content.",
+                required=("url",),
+                properties={"url": {"type": "string", "format": "uri"}},
+            ),
+            _module(
                 "weather.forecast",
                 "search",
                 "Fetch a current public weather forecast for a named location.",
