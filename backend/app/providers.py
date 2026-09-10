@@ -576,6 +576,7 @@ class ProviderExecutor:
             "weather.forecast": self._weather_forecast,
             "web.search": self._web_search,
             "web.page.read": self._web_page_read,
+            "creator.tiktok.screen": self._creator_tiktok_screen,
             "http.request": self._http_request,
             "mcp.call": self._mcp_call,
         }
@@ -869,6 +870,23 @@ class ProviderExecutor:
 
     async def _web_page_read(self, a: dict) -> dict:
         return await self._browser_worker_request("/v1/read", {"url": a["url"]})
+
+    async def _creator_tiktok_screen(self, a: dict) -> dict:
+        payload = {
+            key: a[key]
+            for key in (
+                "query",
+                "max_candidates",
+                "videos_per_creator",
+                "min_followers",
+                "min_videos",
+                "min_trimmed_mean_views",
+                "min_original_audio_ratio",
+                "recency_days",
+            )
+            if key in a
+        }
+        return await self._browser_worker_request("/v1/tiktok/screen", payload)
 
     async def _calendar_list(self, a: dict) -> dict:
         params = {"singleEvents": "true", "orderBy": "startTime", "maxResults": min(int(a.get("limit", 20)), 100)}
