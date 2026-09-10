@@ -16,6 +16,7 @@ from mcp.client.streamable_http import streamablehttp_client
 
 from .config import Settings, get_settings
 from .native_connectors import coerce_module_arguments
+from .reliability import AuthorizationRequired
 from .universal_connectors import capability_for
 
 
@@ -1015,17 +1016,25 @@ class ProviderExecutor:
         resolution_source = "exact_name_search"
         alias_id = get_settings().resource_aliases.get(name.casefold())
         if len(matches) != 1 and alias_id:
-            verified = await self._request(
-                "GET",
-                "https://www.googleapis.com/drive/v3/files/"
-                + quote(alias_id, safe=""),
-                params={
-                    "fields": (
-                        "id,name,mimeType,createdTime,modifiedTime,parents,driveId,"
-                        "owners(displayName,emailAddress,me),webViewLink"
-                    )
-                },
-            )
+            try:
+                verified = await self._request(
+                    "GET",
+                    "https://www.googleapis.com/drive/v3/files/"
+                    + quote(alias_id, safe=""),
+                    params={
+                        "fields": (
+                            "id,name,mimeType,createdTime,modifiedTime,parents,driveId,"
+                            "owners(displayName,emailAddress,me),webViewLink"
+                        )
+                    },
+                )
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code in {403, 404}:
+                    raise AuthorizationRequired(
+                        "authorization_required: the connected Google account cannot access "
+                        f"the configured original named {name!r}"
+                    ) from exc
+                raise
             if (
                 verified.get("id") == alias_id
                 and verified.get("name") == name
