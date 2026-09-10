@@ -10,6 +10,7 @@ import PlanView from "@/components/aura/PlanView";
 import PreviewView from "@/components/aura/PreviewView";
 import ExecutionView from "@/components/aura/ExecutionView";
 import ErrorView from "@/components/aura/ErrorView";
+import RunAttentionNotice from "@/components/aura/RunAttentionNotice";
 import ResultsView from "@/components/aura/ResultsView";
 import AmbientBackground from "@/components/aura/AmbientBackground";
 import HistoryPanel from "@/components/aura/HistoryPanel";
@@ -20,6 +21,7 @@ import { connectTool, hydrateConnections } from "@/lib/connectService";
 import { getAllConnections } from "@/lib/connectionsStore";
 import {
   approvePythonPlan,
+  cancelPythonRun,
   createPythonRun,
   decidePythonApproval,
   forgetActivePythonRun,
@@ -29,7 +31,12 @@ import {
   resumePythonRunAfterConnection,
 } from "@/lib/auraApi";
 
-import { needsRecovery, recoveryForRun } from "@/lib/runRecovery.mjs";
+import {
+  alternativeRecoveryPrompt,
+  needsRecovery,
+  recoveryForRun,
+  startupRunDisposition,
+} from "@/lib/runRecovery.mjs";
 
 const STEP_DURATION = 2.6;
 
@@ -362,6 +369,9 @@ export default function Demo() {
   const [recoveryRun, setRecoveryRun] = useState(null);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   const [recoveryMessage, setRecoveryMessage] = useState("");
+  const [attentionRun, setAttentionRun] = useState(null);
+  const [attentionBusy, setAttentionBusy] = useState(false);
+  const [attentionMessage, setAttentionMessage] = useState("");
   const recoveryPendingRef = useRef(false);
   const [execSteps, setExecSteps] = useState([]);
   const [currentStepIdx, setCurrentStepIdx] = useState(0);
@@ -449,6 +459,12 @@ export default function Demo() {
     setInterpretation("");
     setPlan(null);
     setResults(null);
+    setRecoveryRun(null);
+    setRecoveryBusy(false);
+    setRecoveryMessage("");
+    setAttentionRun(null);
+    setAttentionBusy(false);
+    setAttentionMessage("");
     setExecSteps([]);
     setCurrentStepIdx(0);
     setStartTime(null);
@@ -470,6 +486,8 @@ export default function Demo() {
   // ---- Submit (input) ----
   const handleSubmit = useCallback((prompt, pinnedTools = [], resources = null, mock = null) => {
     clearTimeouts();
+    setAttentionRun(null);
+    setAttentionMessage("");
     requestNotifyPermission();
     setOriginalPrompt(prompt);
     originalPromptRef.current = prompt;
@@ -490,6 +508,13 @@ export default function Demo() {
     setInterpretation(prompt);
     setInterpretationLoading(false);
   }, []);
+
+  const startAlternativePlan = useCallback((run, userApproach = "") => {
+    if (!run) return;
+    const prompt = alternativeRecoveryPrompt(run, userApproach);
+    reset();
+    window.setTimeout(() => handleSubmit(prompt), 0);
+  }, [handleSubmit, reset]);
 
   const handlePickExample = useCallback(
     (i) => {
@@ -740,6 +765,7 @@ Rules:
   };
 
   const showRunRecovery = (run) => {
+    setAttentionRun(null);
     setRecoveryRun(run);
     setRecoveryMessage("");
     setExecSteps(mapRuntimeSteps(run));
@@ -770,7 +796,11 @@ Rules:
       const latest = await getPythonRun(pythonRunIdRef.current);
       const options = recoveryForRun(latest);
       if (needsRecovery(latest.status)) {
-        if (action === "connect" && options.canRetry) {
+        if (action === "check") {
+          showRunRecovery(latest);
+          setRecoveryMessage("Status refreshed. Choose another safe approach or keep this workflow for later.");
+          return;
+        } else if (action === "connect" && options.canRetry) {
           const toolName = planToolName({ tool_slug: options.toolSlug || "", operation: "" });
           const connected = await connectTool(toolName, { connectionId: options.connectionId });
           const connectionId = connected.connection?.id || connected.tool?.id;
@@ -829,6 +859,77 @@ Rules:
     } finally {
       recoveryPendingRef.current = false;
       setRecoveryBusy(false);
+    }
+  };
+
+  const openAttentionRun = async () => {
+    const run = attentionRun;
+    if (!run || attentionBusy) return;
+    setAttentionBusy(true);
+    setAttentionMessage("");
+    try {
+      const latest = await getPythonRun(run.id);
+      if (["completed", "cancelled"].includes(latest.status)) {
+        forgetActivePythonRun(latest.id);
+        setAttentionRun(null);
+        return;
+      }
+      pythonRunIdRef.current = latest.id;
+      pythonPlanRef.current = latest.plan;
+      setOriginalPrompt(latest.prompt || "");
+      originalPromptRef.current = latest.prompt || "";
+      setInterpretation(latest.plan?.interpretation || latest.prompt || "");
+      setStartTime(latest.created_at ? new Date(latest.created_at).getTime() : Date.now());
+      const restoredPlan = uiPlanFromRun(latest);
+      setPlan(restoredPlan);
+      setWorkflowName(restoredPlan.workflowName);
+      approvedStepsRef.current = restoredPlan.steps;
+      setApprovedSteps(restoredPlan.steps);
+      setExecSteps(mapRuntimeSteps(latest));
+
+      if (latest.status === "awaiting_approval" && !latest.plan_approved) {
+        setAttentionRun(null);
+        setPhase("plan");
+      } else if (latest.status === "awaiting_approval") {
+        setAttentionRun(null);
+        await startPythonExecution(null, false, true);
+      } else if (needsRecovery(latest.status)) {
+        showRunRecovery(latest);
+      } else {
+        setAttentionRun(null);
+        await startPythonExecution(null, false, true);
+      }
+    } catch (error) {
+      setAttentionMessage(error.message || "AURA could not refresh this saved workflow yet.");
+    } finally {
+      setAttentionBusy(false);
+    }
+  };
+
+  const keepRunForLater = (run = recoveryRun || attentionRun) => {
+    reset();
+    if (run && recoveryRun) setAttentionRun(run);
+  };
+
+  const cancelSavedRun = async (run = recoveryRun || attentionRun) => {
+    if (!run || recoveryPendingRef.current) return;
+    recoveryPendingRef.current = true;
+    setRecoveryBusy(true);
+    setAttentionBusy(true);
+    setRecoveryMessage("");
+    setAttentionMessage("");
+    try {
+      await cancelPythonRun(run.id);
+      forgetActivePythonRun(run.id);
+      reset();
+    } catch (error) {
+      const message = error.message || "AURA could not cancel this saved workflow yet.";
+      if (recoveryRun) setRecoveryMessage(message);
+      else setAttentionMessage(message);
+    } finally {
+      recoveryPendingRef.current = false;
+      setRecoveryBusy(false);
+      setAttentionBusy(false);
     }
   };
 
@@ -1347,6 +1448,14 @@ Generate a results summary in plain, human-friendly language (not technical).
       let run = await getResumablePythonRun();
       if (cancelled || !run) return;
 
+      const startupDisposition = startupRunDisposition(run);
+      if (startupDisposition === "attention") {
+        setAttentionRun(run);
+        setAttentionMessage("");
+        return;
+      }
+      if (startupDisposition === "ignore") return;
+
       pythonRunIdRef.current = run.id;
       setOriginalPrompt(run.prompt || "");
       originalPromptRef.current = run.prompt || "";
@@ -1360,10 +1469,16 @@ Generate a results summary in plain, human-friendly language (not technical).
         for (;;) {
           run = await getPythonRunResilient(run.id, generation);
           if (cancelled || !run) return;
-          if (run.plan?.steps?.length && run.status === "awaiting_approval") break;
+          if (run.plan?.steps?.length && run.status === "awaiting_approval") {
+            setPlanLoading(false);
+            setAttentionRun(run);
+            setPhase("input");
+            return;
+          }
           if (needsRecovery(run.status)) {
             setPlanLoading(false);
-            showRunRecovery(run);
+            setAttentionRun(run);
+            setPhase("input");
             return;
           }
           if (run.status === "cancelled") {
@@ -1385,9 +1500,11 @@ Generate a results summary in plain, human-friendly language (not technical).
       setExecSteps(mapRuntimeSteps(run));
 
       if (!run.plan_approved && run.status === "awaiting_approval") {
-        setPhase("plan");
+        setAttentionRun(run);
+        setPhase("input");
       } else if (needsRecovery(run.status)) {
-        showRunRecovery(run);
+        setAttentionRun(run);
+        setPhase("input");
       } else {
         await startPythonExecution(null, false, true);
       }
@@ -1424,6 +1541,8 @@ Generate a results summary in plain, human-friendly language (not technical).
       };
     }
   }
+  const attentionRecovery = attentionRun ? recoveryForRun(attentionRun) : null;
+  const activeRecovery = recoveryRun ? recoveryForRun(recoveryRun) : null;
 
   return (
     <div className="min-h-screen bg-background font-inter relative">
@@ -1439,7 +1558,22 @@ Generate a results summary in plain, human-friendly language (not technical).
           <AnimatePresence mode="wait">
             {phase === "input" && (
               <motion.div key="input" exit={{ opacity: 0, y: -20 }} transition={{ duration: 0.3 }} className="w-full">
-                <CommandInput onSubmit={handleSubmit} examples={WORKFLOW_EXAMPLES} onPickExample={handlePickExample} />
+                <div className="mx-auto w-full max-w-3xl">
+                  {attentionRun && attentionRecovery && (
+                    <RunAttentionNotice
+                      run={attentionRun}
+                      recovery={attentionRecovery}
+                      busy={attentionBusy}
+                      message={attentionMessage}
+                      onReview={openAttentionRun}
+                      onAlternative={() => startAlternativePlan(attentionRun)}
+                      onSuggest={(suggestion) => startAlternativePlan(attentionRun, suggestion)}
+                      onLater={() => keepRunForLater(attentionRun)}
+                      onCancel={() => cancelSavedRun(attentionRun)}
+                    />
+                  )}
+                  <CommandInput onSubmit={handleSubmit} examples={WORKFLOW_EXAMPLES} onPickExample={handlePickExample} />
+                </div>
               </motion.div>
             )}
 
@@ -1518,22 +1652,27 @@ Generate a results summary in plain, human-friendly language (not technical).
                 className="w-full flex justify-center"
               >
                 <ErrorView
-                  error={recoveryRun ? recoveryForRun(recoveryRun) : mock.errorStep}
-                  step={execSteps[recoveryRun ? recoveryForRun(recoveryRun).index : mock.errorStep.index]}
+                  error={activeRecovery || mock.errorStep}
+                  step={execSteps[recoveryRun ? activeRecovery.index : mock.errorStep.index]}
                   runSteps={execSteps}
                   busy={recoveryBusy}
                   message={recoveryMessage}
                   onRetry={recoveryRun
-                    ? (recoveryForRun(recoveryRun).canRetry
+                    ? (activeRecovery.canRetry
                       ? () => handleRunRecovery(
-                        ["connect_account", "reconnect_account"].includes(recoveryForRun(recoveryRun).blockerAction)
+                        ["connect_account", "reconnect_account"].includes(activeRecovery.blockerAction)
                           ? "connect"
                           : "retry"
                       )
                       : undefined)
                     : handleRetry}
+                  onCheck={recoveryRun && !activeRecovery.canRetry ? () => handleRunRecovery("check") : undefined}
+                  onAlternative={recoveryRun ? () => startAlternativePlan(recoveryRun) : undefined}
+                  onSuggest={recoveryRun ? (suggestion) => startAlternativePlan(recoveryRun, suggestion) : undefined}
+                  onLater={recoveryRun ? () => keepRunForLater(recoveryRun) : undefined}
+                  onCancel={recoveryRun ? () => cancelSavedRun(recoveryRun) : undefined}
                   onEdit={recoveryRun ? undefined : handleEditFromError}
-                  onSkip={recoveryRun ? (recoveryForRun(recoveryRun).canSkip ? () => handleRunRecovery("skip") : undefined) : handleSkip}
+                  onSkip={recoveryRun ? (activeRecovery.canSkip ? () => handleRunRecovery("skip") : undefined) : handleSkip}
                 />
               </motion.div>
             )}
