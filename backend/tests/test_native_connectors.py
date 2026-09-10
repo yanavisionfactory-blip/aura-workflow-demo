@@ -122,6 +122,41 @@ def test_module_argument_normalization_still_rejects_unknown_inputs():
         )
 
 
+def test_planning_accepts_structured_step_reference_for_array_input():
+    manifest = {
+        "capabilities": [
+            {
+                "name": "browser.form.batch.submit",
+                "input_schema": {
+                    "type": "object",
+                    "required": ["records"],
+                    "properties": {
+                        "records": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {"type": "object"},
+                        }
+                    },
+                    "additionalProperties": False,
+                },
+            }
+        ]
+    }
+
+    assert normalize_module_arguments(
+        manifest,
+        "browser.form.batch.submit",
+        {"records": "{{steps.screen.qualified_candidates}}"},
+    ) == {"records": "{{steps.screen.qualified_candidates}}"}
+
+    with pytest.raises(NativeConnectorError, match="must be array"):
+        normalize_module_arguments(
+            manifest,
+            "browser.form.batch.submit",
+            {"records": "not a workflow reference"},
+        )
+
+
 def test_jira_catalog_requires_approval_for_issue_writes():
     manifest = native_manifest("jira")
     create = next(item for item in manifest["capabilities"] if item["name"] == "jira.issue.create")
