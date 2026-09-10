@@ -1258,6 +1258,90 @@ def test_create_plan_falls_back_to_staged_agents_after_combined_recovery(monkeyp
     assert result.planning_artifacts["connection_requirements"] == ["jira"]
 
 
+def test_create_plan_repairs_false_missing_capability_from_catalog(monkeypatch) -> None:
+    planner = object()
+    intent = object()
+    router = object()
+    builder = object()
+    calls = []
+
+    async def fake_run(agent, payload, max_turns=8):
+        calls.append(agent)
+        if agent is planner:
+            return {
+                "objective": {"goal": "Read Meta Ads campaign performance"},
+                "toolset": {
+                    "tools": [],
+                    "missing_capabilities": ["Meta Ads campaign reporting"],
+                },
+                "plan": {
+                    "name": "Campaign report",
+                    "interpretation": "Read campaign performance",
+                    "steps": [{
+                        "key": "read_campaigns",
+                        "agent": "data",
+                        "tool_slug": "meta-ads",
+                        "operation": "api.request",
+                        "reason": "Read campaign performance",
+                        "expected_output": "Campaign metrics",
+                    }],
+                },
+            }
+        if agent is intent:
+            return {"goal": "Read Meta Ads campaign performance"}
+        if agent is router:
+            assert payload["response_recovery"]
+            return {
+                "tools": [{
+                    "slug": "meta-ads",
+                    "role": "source",
+                    "rationale": "Provides campaign performance",
+                }],
+                "missing_capabilities": [],
+            }
+        return {
+            "name": "Campaign report",
+            "interpretation": "Read campaign performance",
+            "steps": [{
+                "key": "read_campaigns",
+                "agent": "data",
+                "tool_slug": "meta-ads",
+                "operation": "api.request",
+                "arguments": {},
+                "reason": "Read campaign performance",
+                "expected_output": "Campaign metrics",
+            }],
+        }
+
+    monkeypatch.setattr(
+        agent_runtime,
+        "build_agents",
+        lambda: {
+            "planner": planner,
+            "intent": intent,
+            "router": router,
+            "builder": builder,
+        },
+    )
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    result = asyncio.run(create_plan(
+        "Build a Meta Ads campaign report",
+        [{
+            "slug": "meta-ads",
+            "name": "Meta Ads",
+            "kind": "universal",
+            "allowed_operations": ["api.request"],
+            "connected": False,
+        }],
+    ))
+
+    assert calls[:4] == [planner, intent, router, builder]
+    assert result.steps[0].tool_slug == "meta-ads"
+    assert result.planning_artifacts["connection_requirements"] == ["meta-ads"]
+    assert result.planning_artifacts["planner_recovery_mode"] == "staged_capability_repair"
+
+
 def test_create_plan_compacts_staged_recovery_after_input_limit(monkeypatch) -> None:
     planner = object()
     intent = object()
