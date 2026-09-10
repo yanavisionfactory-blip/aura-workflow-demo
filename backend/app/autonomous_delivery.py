@@ -4,6 +4,9 @@ The supervisor may choose only deterministic, policy-safe recovery options. It n
 approves a plan, expands scope, or repeats an uncertain provider write.
 """
 
+import hashlib
+import json
+import re
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 
@@ -26,8 +29,16 @@ from .models import (
     ToolConnection,
     WorkflowRun,
 )
+from .native_connectors import (
+    NativeConnectorError,
+    native_manifest,
+    native_operations,
+)
 from .policy import operation_scope
+from .providers import PROVIDERS
 from .schemas import AutonomousRecoveryOption
+from .security import CredentialVault
+from .universal_connectors import ConnectorError, discover_provider
 
 RECOVERABLE_READ_FAILURES = {
     "timeout",
@@ -39,6 +50,11 @@ RECOVERABLE_PREDISPATCH_FAILURES = {
     *RECOVERABLE_READ_FAILURES,
     "platform_schema_error",
 }
+CAPABILITY_DRIFT_FAILURES = {
+    "invalid_request",
+    "contract_or_runtime_error",
+    "platform_schema_error",
+}
 RECONCILIABLE_WRITES = {
     "notion.page.update",
     "jira.issue.update",
@@ -46,7 +62,7 @@ RECONCILIABLE_WRITES = {
     "hubspot.company.update",
     "mailchimp.campaign.send",
 }
-AUTONOMY_VERSION = 2
+AUTONOMY_VERSION = 3
 
 
 def _autonomy(context: dict) -> dict:
@@ -60,6 +76,8 @@ def _autonomy(context: dict) -> dict:
     state.setdefault("step_recoveries", {})
     state.setdefault("attempt_offsets", {})
     state.setdefault("review_recoveries", 0)
+    state.setdefault("failure_history", [])
+    state.setdefault("actions_by_failure", {})
     return state
 
 
@@ -109,6 +127,93 @@ def _category(error: str | None) -> str:
     return "unknown"
 
 
+def _failure_fingerprint(step: RunStep | None, category: str, event_type: str | None) -> str:
+    """Identify a repeated failure without retaining provider or customer data."""
+    material = {
+        "category": category,
+        "event_type": event_type or "unknown",
+        "tool_slug": step.tool_slug if step else None,
+        "operation": step.operation if step else None,
+        "step_id": step.id if step else None,
+    }
+    return hashlib.sha256(
+        json.dumps(material, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()[:20]
+
+
+async def _failure_evidence(session, run, step) -> dict:
+    """Return a bounded, sanitized incident record for policy and agent diagnosis."""
+    attempts = (
+        await session.scalars(
+            select(StepAttempt)
+            .where(StepAttempt.step_id == step.id)
+            .order_by(StepAttempt.attempt_number.desc())
+            .limit(5)
+        )
+    ).all()
+    events = (
+        await session.scalars(
+            select(AuditEvent)
+            .where(
+                AuditEvent.run_id == run.id,
+                AuditEvent.workspace_id == run.workspace_id,
+            )
+            .order_by(AuditEvent.created_at.desc())
+            .limit(40)
+        )
+    ).all()
+    event = next(
+        (
+            item
+            for item in events
+            if item.payload.get("step_id") == step.id
+            and item.event_type
+            in {
+                "step.recovery_exhausted",
+                "step.variable_resolution_failed",
+                "step.variable_resolution_recovery_exhausted",
+                "step.output_mapping_failed",
+                "step.criticized",
+                "step.approval_argument_validation_recovery_exhausted",
+            }
+        ),
+        None,
+    )
+    latest_error = (
+        attempts[0].error
+        if attempts
+        else str((event.payload if event else {}).get("internal_error") or step.error or run.error or "")
+    )
+    category = _category(latest_error)
+    if event:
+        if "variable_resolution" in event.event_type or event.event_type == "step.output_mapping_failed":
+            category = "workflow_context_error"
+        elif event.event_type == "step.criticized" and category == "unknown":
+            category = "verification_failed"
+    # Error text may contain provider payload fragments.  The model only needs a
+    # bounded diagnostic clue; strip obvious credential-like assignments.
+    sanitized = re.sub(
+        r"(?i)(token|secret|password|authorization|api[-_ ]?key)\s*[:=]\s*\S+",
+        r"\1=[redacted]",
+        latest_error,
+    )[:1200]
+    fingerprint = _failure_fingerprint(step, category, event.event_type if event else None)
+    return {
+        "category": category,
+        "error": sanitized,
+        "event_type": event.event_type if event else None,
+        "fingerprint": fingerprint,
+        "attempts": [
+            {
+                "number": item.attempt_number,
+                "status": item.status,
+                "error_category": _category(item.error),
+            }
+            for item in attempts
+        ],
+    }
+
+
 def _delay(round_number: int) -> int:
     settings = get_settings()
     return min(
@@ -126,7 +231,9 @@ async def _attempt_count(session, step_id: str) -> int:
     )
 
 
-async def _safe_options(session, run, steps, state) -> list[AutonomousRecoveryOption]:
+async def _safe_options(
+    session, run, steps, state, failure: dict | None = None
+) -> list[AutonomousRecoveryOption]:
     settings = get_settings()
     delay = _delay(int(state["rounds"]) + 1)
     if steps and all(
@@ -173,25 +280,10 @@ async def _safe_options(session, run, steps, state) -> list[AutonomousRecoveryOp
             .order_by(StepAttempt.attempt_number)
         )
     ).all()
-    latest_error = attempts[-1].error if attempts else step.error or run.error
-    if not attempts and _category(latest_error) == "unknown":
-        events = (
-            await session.scalars(
-                select(AuditEvent)
-                .where(
-                    AuditEvent.run_id == run.id,
-                    AuditEvent.workspace_id == run.workspace_id,
-                )
-                .order_by(AuditEvent.created_at.desc())
-                .limit(30)
-            )
-        ).all()
-        event = next(
-            (item for item in events if item.payload.get("step_id") == step.id), None
-        )
-        if event:
-            latest_error = str(event.payload.get("internal_error") or latest_error or "")
-    category = _category(latest_error)
+    failure = failure or await _failure_evidence(session, run, step)
+    category = str(failure["category"])
+    fingerprint = str(failure["fingerprint"])
+    tried_for_failure = set(state["actions_by_failure"].get(fingerprint, []))
     consequential = step.consequential or operation_scope(step.operation) != "read"
     if consequential:
         if attempts and step.operation in RECONCILIABLE_WRITES:
@@ -246,6 +338,23 @@ async def _safe_options(session, run, steps, state) -> list[AutonomousRecoveryOp
                 )
             ]
         return []
+    if category in CAPABILITY_DRIFT_FAILURES and "refresh_capabilities" not in tried_for_failure:
+        tool = await session.scalar(
+            select(ToolConnection).where(
+                ToolConnection.workspace_id == run.workspace_id,
+                ToolConnection.slug == step.tool_slug,
+            )
+        )
+        if tool:
+            return [
+                AutonomousRecoveryOption(
+                    key="refresh_capabilities",
+                    action="refresh_capabilities",
+                    step_id=step.id,
+                    reason_code="capability_contract_may_have_changed",
+                    delay_seconds=0,
+                )
+            ]
     if category in RECOVERABLE_READ_FAILURES:
         return [
             AutonomousRecoveryOption(
@@ -257,6 +366,69 @@ async def _safe_options(session, run, steps, state) -> list[AutonomousRecoveryOp
             )
         ]
     return []
+
+
+async def _refresh_capabilities(session, run, step) -> tuple[bool, bool]:
+    """Refresh a connector contract without widening the approved permission set.
+
+    Returns (operation_still_available, retryable_failure).  Discovery is a read-only
+    control-plane action.  The next execution still passes the immutable approval,
+    permission and runtime-policy gates.
+    """
+    tool = await session.scalar(
+        select(ToolConnection).where(
+            ToolConnection.workspace_id == run.workspace_id,
+            ToolConnection.slug == step.tool_slug,
+        )
+    )
+    if not tool:
+        return False, False
+    manifest = await session.scalar(
+        select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id)
+    )
+    if not manifest or manifest.status == "revoked":
+        return False, False
+    try:
+        if tool.slug in PROVIDERS:
+            refreshed = native_manifest(tool.slug)
+            operations = native_operations(tool.slug)
+        else:
+            if not tool.base_url or not tool.encrypted_credentials:
+                return False, False
+            credentials = CredentialVault().decrypt(tool.encrypted_credentials)
+            refreshed = await discover_provider(
+                tool.kind.value,
+                str(tool.base_url),
+                credentials,
+                tool.config or {},
+            )
+            operations = [
+                str(item.get("name"))
+                for item in refreshed.get("capabilities", [])
+                if item.get("name")
+            ]
+    except (ConnectorError, NativeConnectorError, ValueError) as exc:
+        return False, bool(getattr(exc, "retryable", False))
+    except Exception as exc:  # noqa: BLE001 - transport implementations vary
+        status = getattr(exc, "status_code", None) or getattr(
+            getattr(exc, "response", None), "status_code", None
+        )
+        return False, bool(status == 429 or (isinstance(status, int) and status >= 500))
+
+    # Never turn discovery into a permission grant.  Newly advertised operations
+    # remain unavailable until a future explicit connection/plan approval.
+    previously_allowed = set(tool.allowed_operations or [])
+    tool.allowed_operations = sorted(previously_allowed & set(operations))
+    manifest.manifest = refreshed
+    manifest.status = "verified"
+    manifest.verification = {
+        **(manifest.verification or {}),
+        "ok": True,
+        "source": "adaptive_recovery_refresh",
+    }
+    manifest.verified_at = datetime.now(timezone.utc)
+    await session.flush()
+    return step.operation in tool.allowed_operations, False
 
 
 async def _revalidate_connection(session, run, step) -> tuple[bool, bool]:
@@ -333,7 +505,15 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
                 .order_by(RunStep.position)
             )
         ).all()
-        options = await _safe_options(session, run, steps, state)
+        failed_step = next(
+            (item for item in steps if item.status == StepStatus.failed), None
+        )
+        failure = (
+            await _failure_evidence(session, run, failed_step)
+            if failed_step
+            else None
+        )
+        options = await _safe_options(session, run, steps, state, failure)
         if not options:
             return "not_applicable"
         selected, source, reason = await supervise_recovery(
@@ -342,6 +522,19 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
                 "completed_steps": sum(step.status == StepStatus.completed for step in steps),
                 "failed_step_ids": [step.id for step in steps if step.status == StepStatus.failed],
                 "recovery_round": int(state["rounds"]) + 1,
+                "failed_step": (
+                    {
+                        "id": failed_step.id,
+                        "key": failed_step.step_key,
+                        "tool_slug": failed_step.tool_slug,
+                        "operation": failed_step.operation,
+                        "consequential": failed_step.consequential,
+                    }
+                    if failed_step
+                    else None
+                ),
+                "failure": failure,
+                "recovery_history": state["failure_history"][-8:],
             },
             options,
         )
@@ -354,11 +547,70 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
                 await _handoff(session, run, state, "connection_authorization_required")
                 await session.commit()
                 return "handoff"
+        if selected.action == "refresh_capabilities":
+            if not step:
+                return "not_applicable"
+            available, retryable = await _refresh_capabilities(session, run, step)
+            if not available and not retryable:
+                fingerprint = str((failure or {}).get("fingerprint") or "unknown")
+                state["actions_by_failure"] = {
+                    **state["actions_by_failure"],
+                    fingerprint: sorted(
+                        set(state["actions_by_failure"].get(fingerprint, []))
+                        | {selected.action}
+                    ),
+                }
+                state["failure_history"] = [
+                    *state["failure_history"][-19:],
+                    {
+                        "fingerprint": fingerprint,
+                        "action": selected.action,
+                        "outcome": "operation_unavailable",
+                    },
+                ]
+                context["__aura_autonomy__"] = state
+                run.execution_context = context
+                session.add(
+                    AuditEvent(
+                        workspace_id=workspace_id,
+                        run_id=run.id,
+                        actor="recovery-capability-agent",
+                        event_type="run.capability_refresh_requires_replan",
+                        payload={
+                            "step_id": step.id,
+                            "tool_slug": step.tool_slug,
+                            "operation": step.operation,
+                            "failure_fingerprint": fingerprint,
+                        },
+                    )
+                )
+                await session.commit()
+                return "not_applicable"
 
         state["rounds"] = int(state["rounds"]) + 1
         state["last_action"] = selected.action
         state["last_reason_code"] = selected.reason_code
         state["last_decision_source"] = source
+        fingerprint = str((failure or {}).get("fingerprint") or "final_review")
+        state["last_failure_fingerprint"] = fingerprint
+        state["last_step_id"] = selected.step_id
+        state["actions_by_failure"] = {
+            **state["actions_by_failure"],
+            fingerprint: sorted(
+                set(state["actions_by_failure"].get(fingerprint, []))
+                | {selected.action}
+            ),
+        }
+        state["failure_history"] = [
+            *state["failure_history"][-19:],
+            {
+                "fingerprint": fingerprint,
+                "category": (failure or {}).get("category", "verification"),
+                "action": selected.action,
+                "outcome": "scheduled",
+                "round": state["rounds"],
+            },
+        ]
         state["next_attempt_at"] = (
             datetime.now(timezone.utc) + timedelta(seconds=selected.delay_seconds)
         ).isoformat()
@@ -440,6 +692,7 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
                     "decision_source": source,
                     "decision_reason": reason,
                     "recovery_round": state["rounds"],
+                    "failure_fingerprint": fingerprint,
                     "available_at": available_at.isoformat(),
                 },
             )
@@ -467,6 +720,47 @@ async def mark_autonomous_handoff(
         await _handoff(session, run, state, reason_code)
         await session.commit()
         return True
+
+
+async def mark_recovery_checkpoint_succeeded(session, run, step) -> bool:
+    """Teach the persisted supervisor which bounded recovery actually worked."""
+    context = deepcopy(run.execution_context or {})
+    state = _autonomy(context)
+    if state.get("last_step_id") != step.id or not state.get("last_action"):
+        return False
+    history = list(state.get("failure_history", []))
+    for item in reversed(history):
+        if (
+            item.get("fingerprint") == state.get("last_failure_fingerprint")
+            and item.get("action") == state.get("last_action")
+            and item.get("outcome") == "scheduled"
+        ):
+            item["outcome"] = "succeeded"
+            item["completed_at"] = datetime.now(timezone.utc).isoformat()
+            break
+    else:
+        return False
+    state["failure_history"] = history[-20:]
+    state["last_successful_action"] = state.get("last_action")
+    state["last_success_at"] = datetime.now(timezone.utc).isoformat()
+    context["__aura_autonomy__"] = state
+    run.execution_context = context
+    session.add(
+        AuditEvent(
+            workspace_id=run.workspace_id,
+            run_id=run.id,
+            actor="senior-orchestrator",
+            event_type="run.autonomous_recovery_succeeded",
+            payload={
+                "step_id": step.id,
+                "tool_slug": step.tool_slug,
+                "operation": step.operation,
+                "action": state.get("last_action"),
+                "failure_fingerprint": state.get("last_failure_fingerprint"),
+            },
+        )
+    )
+    return True
 
 
 async def _handoff(session, run, state: dict, reason_code: str) -> None:
