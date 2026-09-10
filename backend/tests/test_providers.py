@@ -1,4 +1,120 @@
-from app.providers import idempotency_key
+import asyncio
+import base64
+from email import policy
+from email.parser import BytesParser
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from urllib.parse import parse_qs, urlsplit
+
+import httpx
+import pytest
+
+from app import providers
+from app.config import Settings
+from app.providers import (
+    PROVIDERS,
+    ProviderExecutor,
+    idempotency_key,
+    oauth_authorization_url,
+    oauth_callback_matches,
+    oauth_callback_route_provider,
+    oauth_callback_url,
+    oauth_exchange_callback_url,
+    oauth_registry_errors,
+    oauth_route_callback_url,
+)
+from app.reliability import AuthorizationRequired
+
+
+def _settings() -> Settings:
+    return Settings(
+        credential_encryption_key="MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+        session_signing_key="x" * 32,
+        public_url="https://api.example.com",
+        notion_client_id="notion-client",
+        notion_client_secret="notion-secret",
+        tiktok_client_id="tiktok-client",
+        tiktok_client_secret="tiktok-secret",
+        mailchimp_client_id="mailchimp-client",
+        mailchimp_client_secret="mailchimp-secret",
+        canva_client_id="canva-client",
+        canva_client_secret="canva-secret",
+        hubspot_client_id="hubspot-client",
+        hubspot_client_secret="hubspot-secret",
+        atlassian_client_id="atlassian-client",
+        atlassian_client_secret="atlassian-secret",
+        google_client_id="google-client",
+        google_client_secret="google-secret",
+        airtable_client_id="airtable-client",
+        airtable_client_secret="airtable-secret",
+        slack_client_id="slack-client",
+        slack_client_secret="slack-secret",
+    )
+
+
+def test_notion_uses_shared_callback_and_owner_authorization():
+    provider = PROVIDERS["notion"]
+    settings = _settings()
+    assert oauth_callback_url(settings, provider) == "https://api.example.com/v1/oauth/installation/callback"
+    url = oauth_authorization_url(settings, provider, "signed-state")
+    assert "owner=user" in url
+    assert "client_id=notion-client" in url
+
+
+def test_notion_search_forwards_filter_and_sort(monkeypatch):
+    executor = ProviderExecutor({"access_token": "token"})
+    request = AsyncMock(return_value={"results": []})
+    monkeypatch.setattr(executor, "_notion_request", request)
+
+    result = asyncio.run(
+        executor._notion_search(
+            {
+                "filter": {"property": "object", "value": "page"},
+                "sort": "last_edited_time",
+                "direction": "descending",
+            }
+        )
+    )
+
+    assert result == {"results": []}
+    request.assert_awaited_once_with(
+        "POST",
+        "search",
+        json={
+            "page_size": 20,
+            "filter": {"property": "object", "value": "page"},
+            "sort": {"timestamp": "last_edited_time", "direction": "descending"},
+        },
+    )
+
+
+def test_mailchimp_authorization_omits_scope_when_provider_has_none():
+    provider = PROVIDERS["mailchimp"]
+    url = oauth_authorization_url(_settings(), provider, "signed-state")
+    assert "client_id=mailchimp-client" in url
+    assert "scope=" not in url
+    assert oauth_callback_url(_settings(), provider) == "https://api.example.com/v1/oauth/installation/callback"
+
+
+def test_tiktok_uses_shared_callback_and_client_key():
+    provider = PROVIDERS["tiktok"]
+    settings = _settings()
+    assert oauth_callback_url(settings, provider) == "https://api.example.com/v1/oauth/installation/callback"
+    url = oauth_authorization_url(settings, provider, "signed-state")
+    assert "client_key=tiktok-client" in url
+    assert "client_id=" not in url
+    assert "scope=user.info.basic%2Cvideo.list%2Cvideo.upload%2Cvideo.publish" in url
+
+
+def test_canva_uses_shared_callback_and_pkce():
+    provider = PROVIDERS["canva"]
+    settings = _settings()
+    assert oauth_callback_url(settings, provider) == "https://api.example.com/v1/oauth/installation/callback"
+    url = oauth_authorization_url(settings, provider, "signed-state")
+    assert "client_id=canva-client" in url
+    assert "code_challenge_method=S256" in url
+    assert "code_challenge=" in url
+    assert "profile%3Aread" in url
 
 
 def test_idempotency_is_stable_for_argument_order():
@@ -7,7 +123,445 @@ def test_idempotency_is_stable_for_argument_order():
     assert left == right
 
 
+def test_hubspot_uses_managed_oauth_callback_and_crm_scopes():
+    provider = PROVIDERS["hubspot"]
+    settings = _settings()
+    assert oauth_callback_url(settings, provider) == "https://api.example.com/v1/oauth/hubspot/callback"
+    url = oauth_authorization_url(settings, provider, "signed-state")
+    assert "client_id=hubspot-client" in url
+    assert "crm.objects.contacts.read" in url
+
+
 def test_idempotency_changes_with_step_position():
     left = idempotency_key("run", 1, "gmail.send", {"to": "a@example.com"})
     right = idempotency_key("run", 2, "gmail.send", {"to": "a@example.com"})
     assert left != right
+
+
+def test_jira_uses_managed_atlassian_oauth():
+    provider = PROVIDERS["jira"]
+    settings = _settings()
+    assert oauth_callback_url(settings, provider) == "https://api.example.com/v1/oauth/jira/callback"
+    url = oauth_authorization_url(settings, provider, "signed-state")
+    assert "client_id=atlassian-client" in url
+    assert "audience=api.atlassian.com" in url
+    assert "prompt=consent" in url
+    assert "read%3Ajira-work" in url
+    assert "write%3Ajira-work" in url
+    assert "offline_access" in url
+
+
+def test_every_managed_provider_uses_one_explicit_callback_contract():
+    settings = _settings()
+
+    for slug, provider in PROVIDERS.items():
+        callback = oauth_callback_url(settings, provider)
+        authorization = parse_qs(urlsplit(oauth_authorization_url(settings, provider, "state")).query)
+
+        assert authorization["redirect_uri"] == [callback]
+        assert oauth_callback_matches(
+            settings, slug, oauth_callback_route_provider(settings, provider)
+        )
+
+
+def test_callback_override_changes_authorization_and_callback_matching_without_code_change():
+    settings = _settings()
+    settings.oauth_callback_overrides = (
+        '{"jira":"https://oauth.example.com/v1/oauth/atlassian/callback"}'
+    )
+    provider = PROVIDERS["jira"]
+
+    callback = oauth_callback_url(settings, provider)
+    authorization = parse_qs(urlsplit(oauth_authorization_url(settings, provider, "state")).query)
+
+    assert callback == "https://oauth.example.com/v1/oauth/atlassian/callback"
+    assert authorization["redirect_uri"] == [callback]
+    assert oauth_callback_matches(settings, "jira", "atlassian")
+
+
+def test_registry_validation_rejects_invalid_override_before_oauth_starts():
+    settings = _settings()
+    settings.environment = "production"
+    settings.oauth_callback_overrides = '{"jira":"http://api.example.com/not-a-callback"}'
+
+    errors = oauth_registry_errors(settings)
+
+    assert errors
+    assert any("Invalid OAuth callback contract for jira" in error for error in errors)
+
+
+def test_default_registry_is_valid():
+    settings = _settings()
+    settings.environment = "production"
+
+    assert oauth_registry_errors(settings) == []
+
+
+def test_gmail_send_resolves_me_to_connected_account(monkeypatch):
+    executor = ProviderExecutor({"access_token": "token"})
+    request = AsyncMock(side_effect=[
+        {"emailAddress": "owner@example.com"},
+        {"id": "message-1", "threadId": "thread-1"},
+    ])
+    monkeypatch.setattr(executor, "_request", request)
+
+    result = asyncio.run(executor._gmail_send({"to": "me", "body": "Forecast"}))
+
+    assert result["recipient"] == "owner@example.com"
+    assert result["message_id"] == "message-1"
+    assert result["thread_id"] == "thread-1"
+    assert result["subject"] == "AURA workflow"
+    assert result["body"] == "Forecast"
+    assert request.await_count == 2
+    assert request.await_args_list[0].args[1].endswith("/users/me/profile")
+
+
+def test_gmail_send_mime_encodes_unicode_subject(monkeypatch):
+    executor = ProviderExecutor({"access_token": "token"})
+    request = AsyncMock(side_effect=[{"id": "message-1", "threadId": "thread-1"}])
+    monkeypatch.setattr(executor, "_request", request)
+
+    asyncio.run(
+        executor._gmail_send(
+            {"to": "owner@example.com", "subject": "Tomorrow’s weather", "body": "Sunny"}
+        )
+    )
+
+    raw = request.await_args.kwargs["json"]["raw"]
+    decoded = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
+    message = BytesParser(policy=policy.default).parsebytes(decoded)
+    assert message["Subject"] == "Tomorrow’s weather"
+
+
+def test_google_connection_requests_sheet_write_scope():
+    scopes = PROVIDERS["google"].scopes
+
+    assert "https://www.googleapis.com/auth/drive.readonly" in scopes
+    assert "https://www.googleapis.com/auth/spreadsheets" in scopes
+    assert "https://www.googleapis.com/auth/spreadsheets.readonly" not in scopes
+
+
+def test_drive_file_search_uses_an_escaped_exact_name(monkeypatch):
+    executor = ProviderExecutor({"access_token": "token"})
+    request = AsyncMock(return_value={"files": []})
+    monkeypatch.setattr(executor, "_request", request)
+
+    result = asyncio.run(
+        executor._drive_files_search({"query": "Creator's Outreach", "page_size": 5})
+    )
+
+    assert result == {"files": []}
+    request.assert_awaited_once_with(
+        "GET",
+        "https://www.googleapis.com/drive/v3/files",
+        params={
+            "q": "name = 'Creator\\'s Outreach' and trashed = false",
+            "pageSize": 5,
+            "fields": (
+                "nextPageToken,files(id,name,mimeType,createdTime,modifiedTime,"
+                "parents,driveId,owners(displayName,emailAddress,me),webViewLink)"
+            ),
+        },
+    )
+
+
+def test_spreadsheet_resolver_never_guesses_between_duplicate_names(monkeypatch):
+    executor = ProviderExecutor({"access_token": "token"})
+    search = AsyncMock(
+        return_value={
+            "files": [
+                {
+                    "id": "one",
+                    "name": "Creator Outreach",
+                    "mimeType": "application/vnd.google-apps.spreadsheet",
+                },
+                {
+                    "id": "two",
+                    "name": "Creator Outreach",
+                    "mimeType": "application/vnd.google-apps.spreadsheet",
+                },
+            ]
+        }
+    )
+    monkeypatch.setattr(executor, "_drive_files_search", search)
+
+    result = asyncio.run(
+        executor._drive_spreadsheet_resolve({"name": "Creator Outreach"})
+    )
+
+    assert result["status"] == "ambiguous"
+    assert result["match_count"] == 2
+    assert result["spreadsheet"] is None
+
+
+def test_spreadsheet_resolver_verifies_configured_resource_alias(monkeypatch):
+    executor = ProviderExecutor({"access_token": "token"})
+    search = AsyncMock(return_value={"files": []})
+    request = AsyncMock(
+        return_value={
+            "id": "sheet-123",
+            "name": "Creator Outreach ",
+            "mimeType": "application/vnd.google-apps.spreadsheet",
+            "modifiedTime": "2026-09-10T01:00:00Z",
+        }
+    )
+    monkeypatch.setattr(executor, "_drive_files_search", search)
+    monkeypatch.setattr(executor, "_request", request)
+    monkeypatch.setattr(
+        providers,
+        "get_settings",
+        lambda: SimpleNamespace(
+            resource_aliases={"creator outreach": "sheet-123"}
+        ),
+    )
+
+    result = asyncio.run(
+        executor._drive_spreadsheet_resolve({"name": "Creator Outreach"})
+    )
+
+    assert result["status"] == "resolved"
+    assert result["resolution_source"] == "verified_resource_alias"
+    assert result["spreadsheet"]["id"] == "sheet-123"
+    request.assert_awaited_once_with(
+        "GET",
+        "https://www.googleapis.com/drive/v3/files/sheet-123",
+        params={
+            "fields": (
+                "id,name,mimeType,createdTime,modifiedTime,parents,driveId,"
+                "owners(displayName,emailAddress,me),webViewLink"
+            )
+        },
+    )
+
+
+def test_spreadsheet_alias_reports_wrong_connected_account(monkeypatch):
+    executor = ProviderExecutor({"access_token": "token"})
+    monkeypatch.setattr(
+        executor, "_drive_files_search", AsyncMock(return_value={"files": []})
+    )
+    response = httpx.Response(
+        404,
+        request=httpx.Request(
+            "GET", "https://www.googleapis.com/drive/v3/files/sheet-123"
+        ),
+    )
+    monkeypatch.setattr(
+        executor,
+        "_request",
+        AsyncMock(
+            side_effect=httpx.HTTPStatusError(
+                "not found", request=response.request, response=response
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        providers,
+        "get_settings",
+        lambda: SimpleNamespace(
+            resource_aliases={"creator outreach": "sheet-123"}
+        ),
+    )
+
+    with pytest.raises(AuthorizationRequired, match="connected Google account"):
+        asyncio.run(
+            executor._drive_spreadsheet_resolve({"name": "Creator Outreach"})
+        )
+
+
+def test_google_identity_reads_current_connected_account(monkeypatch):
+    executor = ProviderExecutor({"access_token": "token"})
+    request = AsyncMock(return_value={"sub": "1", "email": "manager@example.com"})
+    monkeypatch.setattr(executor, "_request", request)
+
+    result = asyncio.run(executor._google_identity_get({}))
+
+    assert result["email"] == "manager@example.com"
+    request.assert_awaited_once_with(
+        "GET", "https://openidconnect.googleapis.com/v1/userinfo"
+    )
+
+
+def test_public_web_operations_delegate_to_the_isolated_worker(monkeypatch):
+    executor = ProviderExecutor({})
+    request = AsyncMock(side_effect=[{"results": []}, {"text": "Creator profile"}])
+    monkeypatch.setattr(executor, "_browser_worker_request", request)
+
+    search = asyncio.run(executor._web_search({"query": "TikTok creators", "limit": 50}))
+    page = asyncio.run(executor._web_page_read({"url": "https://www.tiktok.com/@creator"}))
+
+    assert search == {"results": []}
+    assert page == {"text": "Creator profile"}
+    assert request.await_args_list[0].args == (
+        "/v1/search",
+        {"query": "TikTok creators", "limit": 20},
+    )
+    assert request.await_args_list[1].args == (
+        "/v1/read",
+        {"url": "https://www.tiktok.com/@creator"},
+    )
+
+
+def test_creator_screen_delegates_typed_thresholds_to_browser_worker(monkeypatch):
+    executor = ProviderExecutor({})
+    request = AsyncMock(return_value={"qualified_candidates": []})
+    monkeypatch.setattr(executor, "_browser_worker_request", request)
+
+    result = asyncio.run(
+        executor._creator_tiktok_screen(
+            {
+                "query": "lifestyle creators",
+                "max_candidates": 5,
+                "videos_per_creator": 12,
+                "min_followers": 15_000,
+                "min_trimmed_mean_views": 15_000,
+                "ignored": "not forwarded",
+            }
+        )
+    )
+
+    assert result == {"qualified_candidates": []}
+    request.assert_awaited_once_with(
+        "/v1/tiktok/screen",
+        {
+            "query": "lifestyle creators",
+            "max_candidates": 5,
+            "videos_per_creator": 12,
+            "min_followers": 15_000,
+            "min_trimmed_mean_views": 15_000,
+        },
+    )
+
+
+def test_creator_exclusion_matches_handles_urls_and_public_emails():
+    executor = ProviderExecutor({})
+
+    result = asyncio.run(
+        executor._creator_candidates_exclude_existing(
+            {
+                "candidates": [
+                    {
+                        "handle": "alice",
+                        "profile_url": "https://www.tiktok.com/@alice",
+                        "public_email": "alice@example.com",
+                    },
+                    {
+                        "handle": "bob",
+                        "profile_url": "https://www.tiktok.com/@bob",
+                        "public_email": "bob@example.com",
+                    },
+                    {
+                        "handle": "carol",
+                        "profile_url": "https://www.tiktok.com/@carol",
+                        "public_email": "carol@example.com",
+                    },
+                ],
+                "creator_outreach_rows": [
+                    ["Creator", "TikTok URL", "Email"],
+                    ["Alice", "https://www.tiktok.com/@Alice?lang=en", "other@example.com"],
+                ],
+                "my_creator_rows": [["@someone_else", "BOB@EXAMPLE.COM"]],
+            }
+        )
+    )
+
+    assert [item["handle"] for item in result["eligible_candidates"]] == ["carol"]
+    assert result["excluded_candidates"][0]["duplicate_sources"] == [
+        "creator_outreach"
+    ]
+    assert result["excluded_candidates"][1]["duplicate_sources"] == ["my_creators"]
+    assert result["input_count"] == 3
+    assert result["eligible_count"] == 1
+
+
+def test_weather_forecast_returns_plain_language_summary(monkeypatch):
+    executor = ProviderExecutor({})
+    request = AsyncMock(side_effect=[
+        {"results": [{"name": "Munich", "admin1": "Bavaria", "country": "Germany", "latitude": 48.1, "longitude": 11.6}]},
+        {"daily": {
+            "time": ["2026-09-06", "2026-09-07"],
+            "weather_code": [1, 2],
+            "temperature_2m_max": [20, 22],
+            "temperature_2m_min": [10, 12],
+            "precipitation_probability_max": [5, 30],
+            "wind_speed_10m_max": [8, 14],
+        }},
+    ])
+    monkeypatch.setattr(executor, "_request", request)
+
+    result = asyncio.run(executor._weather_forecast({"location": "Munich"}))
+
+    assert result["location"] == "Munich, Bavaria, Germany"
+    assert "12°C to 22°C" in result["summary"]
+    assert "30% chance" in result["summary"]
+
+
+def test_connection_free_provider_does_not_send_fake_authorization_header():
+    executor = ProviderExecutor({})
+
+    assert executor._headers() == {"Content-Type": "application/json"}
+
+
+def test_provider_results_include_user_facing_deep_links():
+    notion = ProviderExecutor({})._attach_result_url(
+        "notion.search",
+        {},
+        {"results": [{"id": "page-1", "url": "https://www.notion.so/page-1"}]},
+    )
+    gmail = ProviderExecutor({})._attach_result_url(
+        "gmail.send", {}, {"message_id": "message-1"}
+    )
+    jira = ProviderExecutor({"site_url": "https://acme.atlassian.net"})._attach_result_url(
+        "jira.issue.create", {}, {"key": "AURA-42"}
+    )
+    slack = ProviderExecutor({"team": {"id": "T123"}})._attach_result_url(
+        "slack.post", {}, {"channel": "C456", "ts": "1234.5678"}
+    )
+
+    assert notion["result_url"] == "https://www.notion.so/page-1"
+    assert gmail["result_url"] == "https://mail.google.com/mail/u/0/#all/message-1"
+    assert jira["result_url"] == "https://acme.atlassian.net/browse/AURA-42"
+    assert slack["result_url"] == (
+        "https://app.slack.com/client/T123/C456/thread/C456-12345678"
+    )
+
+
+def test_provider_result_link_rejects_non_https_urls():
+    result = ProviderExecutor({})._attach_result_url(
+        "calendar.create", {}, {"htmlLink": "javascript:alert(1)"}
+    )
+
+    assert "result_url" not in result
+
+
+def test_custom_and_installation_callbacks_use_the_same_validated_resolver():
+    settings = _settings()
+    settings.public_url = "https://api.example.com/"
+
+    assert oauth_route_callback_url(settings, "custom") == (
+        "https://api.example.com/v1/oauth/custom/callback"
+    )
+    assert oauth_route_callback_url(settings, "installation") == (
+        "https://api.example.com/v1/oauth/installation/callback"
+    )
+
+
+def test_shared_route_override_applies_without_provider_code_changes():
+    settings = _settings()
+    settings.oauth_callback_overrides = (
+        '{"installation":"https://oauth.example.com/v1/oauth/installation/callback"}'
+    )
+
+    assert oauth_callback_url(settings, PROVIDERS["notion"]) == (
+        "https://oauth.example.com/v1/oauth/installation/callback"
+    )
+    assert oauth_callback_url(settings, PROVIDERS["canva"]) == (
+        "https://oauth.example.com/v1/oauth/installation/callback"
+    )
+
+
+def test_legacy_callback_keeps_the_same_uri_during_token_exchange():
+    settings = _settings()
+
+    assert oauth_exchange_callback_url(
+        settings, PROVIDERS["jira"], "atlassian"
+    ) == "https://api.example.com/v1/oauth/atlassian/callback"

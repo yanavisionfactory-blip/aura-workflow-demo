@@ -1,0 +1,306 @@
+import pytest
+from pydantic import ValidationError
+
+from app.agent_runtime import deterministic_plan_fixes
+from app.schemas import PlanStep, StepCondition, WorkflowPlan
+from app.workflow_context import (
+    WorkflowContextError,
+    evaluate_condition,
+    referenced_paths,
+    referenced_step_keys,
+    resolve_value,
+    step_context_value,
+)
+
+
+def test_referenced_paths_includes_all_template_roots() -> None:
+    assert referenced_paths({"to": "{{inputs.email}}", "body": "{{weather_facts}}"}) == {
+        "inputs.email",
+        "weather_facts",
+    }
+
+
+def _step(**changes) -> PlanStep:
+    values = {
+        "agent": "operator",
+        "tool_slug": "slack",
+        "operation": "send_message",
+        "arguments": {},
+        "reason": "Notify the team",
+        "expected_output": "Message identifier",
+        "consequential": True,
+    }
+    values.update(changes)
+    return PlanStep(**values)
+
+
+def test_resolves_typed_outputs_and_interpolated_variables() -> None:
+    context = {
+        "inputs": {"minimum": 500},
+        "vars": {"channel": "sales"},
+        "steps": {"order": {"total": 725, "customer": {"name": "Ada"}}},
+    }
+    resolved = resolve_value(
+        {
+            "amount": "{{steps.order.total}}",
+            "message": "{{steps.order.customer.name}} ordered {{steps.order.total}}",
+            "channel": "{{vars.channel}}",
+        },
+        context,
+    )
+    assert resolved == {
+        "amount": 725,
+        "message": "Ada ordered 725",
+        "channel": "sales",
+    }
+
+
+def test_resolves_safe_array_and_quoted_key_paths() -> None:
+    context = {
+        "steps": {
+            "search": {
+                "candidates": [
+                    {"id": "page-1", "properties": {"Page title": "Roadmap"}}
+                ]
+            }
+        }
+    }
+
+    assert resolve_value("{{steps.search.candidates[0].id}}", context) == "page-1"
+    assert (
+        resolve_value(
+            "{{steps.search.candidates[0].properties['Page title']}}", context
+        )
+        == "Roadmap"
+    )
+    assert referenced_step_keys("{{steps.search.candidates[0].id}}") == {"search"}
+
+
+def test_missing_variable_fails_without_executing_code() -> None:
+    with pytest.raises(WorkflowContextError, match="unavailable"):
+        resolve_value("{{steps.unknown.token}}", {"steps": {}})
+
+
+def test_structured_condition_controls_a_branch() -> None:
+    condition = StepCondition(
+        left="{{steps.order.total}}",
+        operator="greater_than_or_equal",
+        right="{{inputs.minimum}}",
+    )
+    context = {"inputs": {"minimum": 500}, "steps": {"order": {"total": 725}}}
+    assert evaluate_condition(condition, context)
+
+
+def test_exists_condition_treats_an_unavailable_optional_value_as_false() -> None:
+    condition = StepCondition(
+        left="{{steps.lookup.optional_value}}",
+        operator="exists",
+    )
+    assert not evaluate_condition(condition, {"steps": {"lookup": {}}})
+
+
+def test_step_output_can_be_saved_as_a_reusable_variable() -> None:
+    step = _step(
+        key="lookup",
+        output_variables={"customer_email": "{{steps.lookup.email}}"},
+    )
+    context = {"steps": {"lookup": {"email": "ada@example.com"}}}
+    saved = {
+        name: resolve_value(value, context)
+        for name, value in step.output_variables.items()
+    }
+    assert saved == {"customer_email": "ada@example.com"}
+
+
+def test_whole_step_result_supports_output_and_result_compatibility_paths() -> None:
+    provider_result = {"summary": "Sunny", "temperature_max_c": 21}
+    context = {"steps": {"weather": step_context_value(provider_result)}}
+
+    assert resolve_value("{{steps.weather.summary}}", context) == "Sunny"
+    assert resolve_value("{{steps.weather.output}}", context) == provider_result
+    assert resolve_value("{{steps.weather.result}}", context) == provider_result
+
+
+def test_scalar_step_result_has_stable_whole_result_paths() -> None:
+    context = {"steps": {"count": step_context_value(3)}}
+
+    assert resolve_value("{{steps.count.output}}", context) == 3
+    assert resolve_value("{{steps.count.result}}", context) == 3
+
+
+def test_step_result_exposes_operation_noun_as_a_summary_alias() -> None:
+    provider_result = {"location": "Munich", "summary": "Sunny, 24 C"}
+    context = {
+        "steps": {
+            "weather": step_context_value(provider_result, "weather.forecast")
+        }
+    }
+
+    assert resolve_value("{{steps.weather.forecast}}", context) == "Sunny, 24 C"
+
+
+def test_embedded_provider_object_prefers_verified_summary_for_user_text() -> None:
+    context = {
+        "steps": {
+            "weather": {
+                "output": {
+                    "location": "Munich",
+                    "temperature_high": 24,
+                    "summary": "Munich: sunny, high of 24°C.",
+                }
+            }
+        }
+    }
+
+    assert resolve_value("Forecast: {{steps.weather.output}}", context) == (
+        "Forecast: Munich: sunny, high of 24°C."
+    )
+
+
+def test_step_context_exposes_resource_alias_for_provider_objects() -> None:
+    provider_result = {"id": "page-123", "title": "Roadmap"}
+    context = {
+        "steps": {
+            "read_page": step_context_value(provider_result, "notion.page.get")
+        }
+    }
+
+    assert resolve_value("{{steps.read_page.page.id}}", context) == "page-123"
+
+
+def test_step_context_exposes_all_nested_operation_resource_aliases() -> None:
+    provider_result = {"results": [{"id": "block-123"}]}
+    context = {
+        "steps": {
+            "read_blocks": step_context_value(
+                provider_result, "notion.blocks.children.list"
+            )
+        }
+    }
+
+    assert resolve_value("{{steps.read_blocks.blocks}}", context) == provider_result
+    assert resolve_value("{{steps.read_blocks.children}}", context) == provider_result
+
+
+def test_step_result_normalizes_provider_collection_aliases() -> None:
+    provider_result = {"results": [{"object": "page", "id": "page-1"}]}
+    context = {
+        "steps": {
+            "search": step_context_value(provider_result, "notion.search")
+        }
+    }
+
+    assert resolve_value("{{steps.search.candidates[0].id}}", context) == "page-1"
+    assert resolve_value("{{steps.search.items[0].id}}", context) == "page-1"
+    assert resolve_value("{{steps.search.id}}", context) == "page-1"
+    assert resolve_value("{{steps.search.page_id}}", context) == "page-1"
+    assert resolve_value("{{steps.search.page.id}}", context) == "page-1"
+    assert resolve_value("{{steps.search.pages[0].id}}", context) == "page-1"
+
+
+def test_missing_resource_id_never_falls_back_to_an_unrelated_id():
+    import pytest
+    from app.workflow_context import WorkflowContextError
+    with pytest.raises(WorkflowContextError):
+        resolve_value("{{steps.create.job.design_id}}", {"steps": {"create": {"job": {"id": "job-1"}}}})
+
+
+def test_completed_job_resource_binding_preserves_other_designs():
+    from app.workflow_context import canonical_action_arguments, WorkflowContextError
+    import pytest
+    receipt = {"job": {"id": "job-1", "status": "success",
+                       "result": {"designs": [{"id": "design-1"}]}}}
+    context = {"steps": {"create": step_context_value(receipt, "canva.presentation.create")}}
+    args = {"design_id": "job-1", "format": "pdf"}
+    assert canonical_action_arguments("canva.export.create", args, context) == {"design_id": "design-1", "format": "pdf"}
+    assert args["design_id"] == "job-1"
+    other = {"design_id": "other", "format": "pdf"}
+    assert canonical_action_arguments("canva.export.create", other, context) == other
+    receipt["job"]["result"]["designs"].append({"id": "design-2"})
+    with pytest.raises(WorkflowContextError):
+        canonical_action_arguments("canva.export.create", args, context)
+
+
+def test_notion_title_handoff_uses_typed_property_and_preserves_evidence() -> None:
+    from copy import deepcopy
+
+    page = {"object": "page", "id": "page-1", "url": "https://example.test/page-1",
+            "properties": {"Custom heading": {"type": "title", "title": [
+                {"plain_text": "Validation "}, {"text": {"content": "report"}}
+            ]}}}
+    response = {"results": [page]}
+    original = deepcopy(response)
+    context = {"steps": {"search": step_context_value(response, "notion.search"),
+                         "read": step_context_value(page, "notion.page.get")}}
+    for path in ("search.title", "search.results[0].title", "search.page.title",
+                 "read.title", "read.page.title"):
+        assert resolve_value("{{steps." + path + "}}", context) == "Validation report"
+    assert resolve_value("{{steps.search.id}}", context) == "page-1"
+    assert context["steps"]["search"]["provider_result"] == original
+    assert response == original
+
+
+@pytest.mark.parametrize("properties", [{}, {"Name": {"type": "rich_text", "rich_text": []}},
+    {"Name": {"type": "title", "title": [{"unknown": "not evidence"}]}}])
+def test_notion_title_alias_does_not_invent_missing_evidence(properties) -> None:
+    value = step_context_value({"id": "page-1", "properties": properties}, "notion.page.get")
+    assert "title" not in value
+
+
+def test_plan_rejects_dependencies_on_later_steps() -> None:
+    with pytest.raises(ValidationError, match="missing or later"):
+        WorkflowPlan(
+            name="Invalid graph",
+            interpretation="Invalid dependency order",
+            steps=[_step(key="notify", depends_on=["lookup"])],
+        )
+
+
+def test_plan_removes_condition_from_required_steps() -> None:
+    plan = WorkflowPlan(
+        name="Repair conditional",
+        interpretation="A required branch cannot be skipped",
+        steps=[
+            _step(
+                key="maybe_notify",
+                condition=StepCondition(left=True, operator="is_true"),
+                optional=False,
+            )
+        ],
+    )
+
+    assert plan.steps[0].condition is None
+
+
+def test_referenced_output_must_be_an_explicit_dependency() -> None:
+    plan = WorkflowPlan(
+        name="Lead notification",
+        interpretation="Notify with lead data",
+        steps=[
+            _step(
+                key="lookup",
+                operation="get_message",
+                consequential=False,
+            ),
+            _step(
+                key="notify",
+                arguments={"text": "Lead: {{steps.lookup.name}}"},
+            ),
+        ],
+    )
+    fixes = deterministic_plan_fixes(
+        plan,
+        [{"slug": "slack", "allowed_operations": ["get_message", "send_message"]}],
+    )
+    assert any("declare referenced steps" in fix for fix in fixes)
+    assert referenced_step_keys(plan.steps[1].arguments) == {"lookup"}
+
+
+def test_structured_source_text_requires_composition_but_literal_text_does_not():
+    from app.workflow_context import requires_content_composition
+    schema = {"properties": {"body": {"type": "string"}, "payload": {"type": "object"}}}
+    context = {"steps": {"read": {"items": [{"summary": "Meeting"}], "id": "abc"}}}
+    assert requires_content_composition({"body": "Details: {{steps.read.items}}"}, schema, context)
+    assert not requires_content_composition({"body": "ID: {{steps.read.id}}"}, schema, context)
+    assert not requires_content_composition({"body": '{"literal":"requested JSON"}'}, schema, context)
+    assert not requires_content_composition({"payload": "{{steps.read.items}}"}, schema, context)

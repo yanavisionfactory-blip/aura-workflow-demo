@@ -1,3 +1,4 @@
+import json
 from functools import lru_cache
 
 from pydantic import Field
@@ -14,9 +15,37 @@ class Settings(BaseSettings):
     redis_url: str = "redis://redis:6379/0"
     openai_api_key: str = ""
     openai_model: str = "gpt-5.4-mini"
+    memory_embedding_model: str = "text-embedding-3-small"
+    memory_candidate_limit: int = Field(default=200, ge=1, le=1000)
+    performance_targets_json: str = "{}"
+    performance_minimum_samples: int = Field(default=30, ge=10, le=1000)
+    certification_signing_key: str = ""
+    recovery_probe_enabled: bool = False
+    recovery_probe_delay_seconds: int = Field(default=30, ge=15, le=120)
+    recovery_scheduler_enabled: bool = False
+    scheduler_interval_seconds: int = Field(default=15, ge=5, le=300)
+    stale_run_seconds: int = Field(default=600, ge=120, le=3600)
+    max_restart_recoveries: int = Field(default=3, ge=1, le=10)
+    max_provider_attempts: int = Field(default=3, ge=1, le=5)
+    max_model_calls_per_delivery: int = Field(default=16, ge=1, le=40)
+    delivery_budget_seconds: int = Field(default=180, ge=30, le=600)
+    model_call_timeout_seconds: int = Field(default=30, ge=5, le=90)
+    agent_managed_execution_enabled: bool = True
+    autonomous_delivery_enabled: bool = True
+    max_autonomous_recovery_rounds: int = Field(default=8, ge=1, le=20)
+    max_autonomous_step_recoveries: int = Field(default=3, ge=1, le=8)
+    max_autonomous_review_recoveries: int = Field(default=3, ge=1, le=8)
+    max_autonomous_read_repairs: int = Field(default=3, ge=0, le=8)
+    autonomous_recovery_base_delay_seconds: int = Field(default=5, ge=1, le=60)
+    autonomous_recovery_max_delay_seconds: int = Field(default=120, ge=5, le=600)
+    parallel_read_limit: int = Field(default=3, ge=1, le=5)
+    parallel_reads_enabled: bool = False
+    agent_input_cost_per_million_usd: float | None = Field(default=None, ge=0)
+    agent_output_cost_per_million_usd: float | None = Field(default=None, ge=0)
     credential_encryption_key: str = Field(
         description="URL-safe Fernet key; generate with Fernet.generate_key().decode()"
     )
+    credential_encryption_previous_keys: str = ""
     session_signing_key: str = Field(min_length=32)
     google_client_id: str = ""
     google_client_secret: str = ""
@@ -24,7 +53,91 @@ class Settings(BaseSettings):
     airtable_client_secret: str = ""
     slack_client_id: str = ""
     slack_client_secret: str = ""
+    notion_client_id: str = ""
+    notion_client_secret: str = ""
+    tiktok_client_id: str = ""
+    tiktok_client_secret: str = ""
+    mailchimp_client_id: str = ""
+    mailchimp_client_secret: str = ""
+    canva_client_id: str = ""
+    canva_client_secret: str = ""
+    hubspot_client_id: str = ""
+    hubspot_client_secret: str = ""
+    atlassian_client_id: str = ""
+    atlassian_client_secret: str = ""
+    oauth_callback_overrides: str = ""
     browser_connector_url: str = ""
+    browser_connector_token: str = ""
+    resource_aliases_json: str = "{}"
+    # Clerk is the production identity provider. The PEM key avoids a network
+    # request on every API call; JWKS is supported for key rotation.
+    clerk_jwt_key: str = ""
+    clerk_jwks_url: str = ""
+    clerk_issuer: str = ""
+    clerk_authorized_parties: str = ""
+    allow_legacy_workspace_tokens: bool = False
+    run_rate_limit_per_minute: int = 60
+    # Optional managed connector control plane. When configured, AURA delegates
+    # OAuth storage and refresh to Nango and keeps only connection references.
+    # Integrations are discovered and provisioned on demand; the map is only an
+    # escape hatch for environments that use non-standard integration IDs.
+    nango_api_key: str = ""
+    nango_base_url: str = "https://api.nango.dev"
+    nango_integration_map: str = "{}"
+    nango_auto_provision_integrations: bool = True
+
+    @property
+    def clerk_enabled(self) -> bool:
+        return bool(self.clerk_jwt_key or self.clerk_jwks_url)
+
+    @property
+    def clerk_parties(self) -> set[str]:
+        return {
+            item.strip().rstrip("/")
+            for item in self.clerk_authorized_parties.split(",")
+            if item.strip()
+        }
+
+    @property
+    def credential_keyring(self) -> list[str]:
+        return [
+            self.credential_encryption_key,
+            *[
+                key.strip()
+                for key in self.credential_encryption_previous_keys.split(",")
+                if key.strip()
+            ],
+        ]
+
+
+    @property
+    def managed_integrations(self) -> dict[str, str]:
+        try:
+            value = json.loads(self.nango_integration_map or "{}")
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(value, dict):
+            return {}
+        return {
+            str(provider).strip().lower(): str(integration).strip()
+            for provider, integration in value.items()
+            if str(provider).strip() and str(integration).strip()
+        }
+
+    @property
+    def resource_aliases(self) -> dict[str, str]:
+        """Return operator-provisioned exact resource IDs keyed by display name."""
+        try:
+            value = json.loads(self.resource_aliases_json or "{}")
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(value, dict):
+            return {}
+        return {
+            str(name).strip().casefold(): str(resource_id).strip()
+            for name, resource_id in value.items()
+            if str(name).strip() and str(resource_id).strip()
+        }
 
 
 @lru_cache
