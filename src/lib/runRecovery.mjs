@@ -15,6 +15,9 @@ export function recoveryForRun(run = {}) {
     ((step?.status === "failed" && (step.consequential === false || step.recovery?.can_retry === true)) || reviewOnly);
   const optional = run.plan?.steps?.[step?.position ?? index]?.optional === true;
   const skip = recoverable && attempts < 3 && step?.status === "failed" && optional;
+  const connectionBlocked = /authorization_required|connection needs your attention|reconnect|authorization|access.*expired/.test(text);
+  const googleResourceBlocked = connectionBlocked &&
+    (step?.tool_slug === "google" || /google|spreadsheet|sheet/.test(`${step?.operation || ""} ${text}`));
   let what = "AURA couldn't finish this step.";
   let why = "The available information doesn't identify a specific cause yet.";
   let fix = retry
@@ -25,7 +28,11 @@ export function recoveryForRun(run = {}) {
     what = "This app's connection setup needs correcting.";
     why = "The problem is with the app's setup. Signing in again won't fix it.";
     fix = "An administrator needs to check the app configuration before you continue.";
-  } else if (/connection|reconnect|authorization|access.*expired/.test(text)) {
+  } else if (googleResourceBlocked) {
+    what = "AURA can't access a required Google Drive resource.";
+    why = "The connected Google account cannot open the original spreadsheet needed for this workflow.";
+    fix = "Open Connections, manage Google Drive, and reconnect with the account that can open both original sheets. Then return here and retry this step.";
+  } else if (connectionBlocked || /connection/.test(text)) {
     what = "An app connection needs attention.";
     why = "AURA couldn't use the access needed for this step.";
     fix = "Open Connections at the top of the page and check this app's access, then return here.";
@@ -60,7 +67,9 @@ export function recoveryForRun(run = {}) {
   if (attempts >= 3) fix = "This step has reached its retry limit. The underlying problem needs checking before another attempt.";
   return { index: index >= 0 ? index : null, stepId: step?.id || null,
     what, why, fix, canRetry: retry, canSkip: skip,
-    buttonLabel: retry ? (reviewOnly ? "Check the final result again" : "Retry this step") : "Check status",
+    buttonLabel: retry
+      ? (reviewOnly ? "Check the final result again" : connectionBlocked ? "Retry after reconnecting" : "Retry this step")
+      : "Check status",
     subtitle: needsRecovery(run.status) ? "Your completed work is saved. Choose the next step below."
       : "AURA couldn't refresh the workflow status. Check before starting anything again.",
   };
