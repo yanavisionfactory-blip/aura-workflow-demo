@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import time
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -418,6 +419,30 @@ def planning_error_message(exc: Exception) -> str:
     return "AURA couldn't build the plan right now. Please try again."
 
 
+_PROMPT_CAPABILITY_ALIASES = {
+    "meta-ads": {"meta ads", "facebook ads", "meta advertising"},
+}
+
+
+def explicit_disconnected_capabilities(prompt: str, inventory: list[dict]) -> list[str]:
+    """Find explicitly named catalog providers without guessing user intent."""
+    text = " " + re.sub(r"[^a-z0-9]+", " ", prompt.casefold()).strip() + " "
+    missing: list[str] = []
+    for item in inventory:
+        if item.get("connected", False):
+            continue
+        slug = str(item.get("slug") or "").strip().casefold()
+        name = str(item.get("name") or "").strip().casefold()
+        aliases = {
+            re.sub(r"[^a-z0-9]+", " ", value).strip()
+            for value in {slug, name, *_PROMPT_CAPABILITY_ALIASES.get(slug, set())}
+            if value
+        }
+        if any(alias and f" {alias} " in text for alias in aliases):
+            missing.append(slug or name)
+    return list(dict.fromkeys(missing))
+
+
 @trace_run
 async def plan_run(run_id: str, workspace_id: str) -> None:
     async with execution_lock(engine, workspace_id, run_id) as acquired:
@@ -623,6 +648,45 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 run.id,
                 type(exc).__name__,
             )
+            missing = explicit_disconnected_capabilities(run.prompt, inventory)
+            if missing:
+                for capability in missing:
+                    session.add(
+                        ConnectionRequirement(
+                            workspace_id=workspace_id,
+                            run_id=run.id,
+                            capability=capability,
+                            provider_hint=capability,
+                            reason=f"Connect {capability} so AURA can finish the saved plan",
+                            required_permissions=next(
+                                (
+                                    item["allowed_operations"]
+                                    for item in inventory
+                                    if item["slug"] == capability
+                                ),
+                                [],
+                            ),
+                        )
+                    )
+                run.status = RunStatus.waiting_for_action
+                run.error = "One or more capability providers must be connected"
+                run.result = {
+                    "status": "waiting_for_connection",
+                    "missing_capabilities": missing,
+                }
+                await audit(
+                    session,
+                    workspace_id,
+                    "run.connection_required",
+                    {
+                        "missing_capabilities": missing,
+                        "recovery": "explicit_catalog_provider_after_planning_failure",
+                    },
+                    run.id,
+                    actor="planner-recovery",
+                )
+                await session.commit()
+                return
             run.status = RunStatus.failed
             run.error = planning_error_message(exc)
             await audit(
