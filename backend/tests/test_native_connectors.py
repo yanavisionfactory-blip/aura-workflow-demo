@@ -77,8 +77,11 @@ def test_google_catalog_can_resolve_and_update_named_spreadsheets():
     manifest = native_manifest("google")
     capabilities = {item["name"]: item for item in manifest["capabilities"]}
 
+    assert capabilities["google.identity.get"]["permission_scope"] == "read"
     assert capabilities["drive.files.search"]["permission_scope"] == "read"
     assert capabilities["drive.files.search"]["requires_approval"] is False
+    assert capabilities["drive.spreadsheet.resolve"]["permission_scope"] == "read"
+    assert capabilities["drive.spreadsheet.resolve"]["requires_approval"] is False
     assert capabilities["sheets.append"]["permission_scope"] == "write"
     assert capabilities["sheets.append"]["requires_approval"] is True
     assert "sheets.read" in capabilities["sheets.append"]["reliability"][

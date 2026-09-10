@@ -87,7 +87,8 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                 (
                     "Discover public TikTok profiles and verify follower count, public access, "
                     "published-video count, per-video views with a 10% high/low trimmed mean, "
-                    "original-audio ratio, posting recency, and management signals in the bio. "
+                    "original-audio ratio, posting recency, public profile email when present, "
+                    "and management signals in the bio. "
                     "Returns evidence-complete candidates separately from qualified candidates. "
                     "Internal DNC, management, prior-approval, and outreach-window checks still "
                     "require the current workspace sheets."
@@ -176,6 +177,11 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         "base_url": "provider-managed",
         "identity": {"provider": "google"},
         "modules": [
+            _module(
+                "google.identity.get",
+                "search",
+                "Read the connected Google account identity, including its verified email.",
+            ),
             _module("gmail.list", "search", "Find Gmail messages.", properties={
                 "query": _TEXT, "limit": {**_POSITIVE_INTEGER, "maximum": 50}
             }),
@@ -204,6 +210,17 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                     "query": _TEXT,
                     "page_size": {**_POSITIVE_INTEGER, "maximum": 100},
                 },
+            ),
+            _module(
+                "drive.spreadsheet.resolve",
+                "search",
+                (
+                    "Resolve a spreadsheet by exact current Drive name only when there is one "
+                    "unambiguous Google Sheets match. Returns status=resolved plus spreadsheet "
+                    "metadata, otherwise not_found or ambiguous without guessing an ID."
+                ),
+                required=("name",),
+                properties={"name": _TEXT},
             ),
             _module("sheets.read", "search", "Read a spreadsheet range.", required=("spreadsheet_id",), properties={
                 "spreadsheet_id": _TEXT, "range": _TEXT

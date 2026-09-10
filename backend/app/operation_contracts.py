@@ -42,6 +42,9 @@ def envelope(field, item=OBJECT):
     return {"type": "object", "required": [field], "properties": {field: {"type": "array", "items": item}}}
 
 KNOWN.update({
+    "google.identity.get": ({"type": "object", "required": ["sub", "email"], "properties": {
+        "sub": TEXT, "email": TEXT, "email_verified": {"type": "boolean"}, "name": TEXT,
+    }}, ["account_identity"]),
     "jira.projects.list": ({**envelope("values"), "properties": {"values": {"type": "array", "items": {"type": "object", "required": ["id", "key"], "properties": {"id": TEXT, "key": TEXT}}}, "isLast": {"type": "boolean"}, "startAt": {"type": "integer"}, "total": {"type": "integer"}}}, ["project_metadata"]),
     "jira.issues.search": ({**envelope("issues"), "properties": {"issues": {"type": "array", "items": {"type": "object", "required": ["id"], "properties": {"id": TEXT, "key": TEXT, "fields": OBJECT}}}, "isLast": {"type": "boolean"}, "nextPageToken": TEXT}}, ["issue_state"]),
     "weather.forecast": ({"type": "object", "required": ["location", "date", "summary"], "properties": {"location": TEXT, "date": TEXT, "summary": TEXT}}, ["forecast"]),
@@ -104,6 +107,7 @@ KNOWN.update({
                         "properties": {
                             "handle": TEXT,
                             "profile_url": TEXT,
+                            "public_email": {"type": ["string", "null"]},
                             "followers": {"type": "integer"},
                             "published_videos": {"type": "integer"},
                             "analyzed_videos": {"type": "integer"},
@@ -149,6 +153,26 @@ KNOWN.update({
             "nextPageToken": TEXT,
         },
     }, ["resource_metadata"]),
+    "drive.spreadsheet.resolve": ({
+        "type": "object",
+        "required": ["query", "status", "match_count", "matches", "spreadsheet"],
+        "properties": {
+            "query": TEXT,
+            "status": {"type": "string", "enum": ["resolved", "not_found", "ambiguous"]},
+            "match_count": {"type": "integer", "minimum": 0},
+            "matches": {"type": "array", "items": OBJECT},
+            "spreadsheet": {
+                "type": ["object", "null"],
+                "properties": {
+                    "id": TEXT, "name": TEXT, "mimeType": TEXT,
+                    "createdTime": TEXT, "modifiedTime": TEXT,
+                    "parents": {"type": "array", "items": TEXT},
+                    "driveId": TEXT, "owners": {"type": "array", "items": OBJECT},
+                    "webViewLink": TEXT,
+                },
+            },
+        },
+    }, ["resource_metadata", "unambiguous_resource_identity"]),
     "sheets.read": ({"type": "object", "required": ["range"], "properties": {"range": TEXT, "values": {"type": "array", "items": {"type": "array"}}}}, ["cell_values"]),
     "sheets.append": ({"type": "object", "required": ["spreadsheetId", "updates"], "properties": {"spreadsheetId": TEXT, "updates": {"type": "object", "required": ["updatedRange"], "properties": {"updatedRange": TEXT}}}}, ["write_receipt"]),
     "airtable.list": (envelope("records"), ["record_fields"]),

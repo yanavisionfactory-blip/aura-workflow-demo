@@ -326,6 +326,14 @@ def _management_contact(signature: str) -> bool:
     )
 
 
+def _public_email(signature: str) -> str | None:
+    match = re.search(
+        r"(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})",
+        signature,
+    )
+    return match.group(1) if match else None
+
+
 def _creator_metrics(
     profile_url: str,
     user: dict,
@@ -386,6 +394,7 @@ def _creator_metrics(
         "profile_url": profile_url,
         "display_name": str(user.get("nickname") or user.get("display_name") or handle),
         "bio": signature,
+        "public_email": _public_email(signature),
         "followers": followers,
         "published_videos": published,
         "analyzed_videos": len(items),
@@ -475,6 +484,88 @@ async def _inspect_tiktok_profile(
     )
 
 
+async def _form_field_contract(page: Page) -> tuple[dict, list[str]]:
+    controls = page.locator("form input[name], form textarea[name], form select[name]")
+    properties: dict[str, dict] = {}
+    required: list[str] = []
+    for index in range(await controls.count()):
+        control = controls.nth(index)
+        name = str(await control.get_attribute("name") or "").strip()
+        if not name:
+            continue
+        control_type = str(await control.get_attribute("type") or "").casefold()
+        schema: dict = {"type": "boolean" if control_type == "checkbox" else "string"}
+        if control_type == "email":
+            schema["format"] = "email"
+        placeholder = str(await control.get_attribute("placeholder") or "").strip()
+        if placeholder:
+            schema["description"] = placeholder[:300]
+        properties[name] = schema
+        if await control.get_attribute("required") is not None:
+            required.append(name)
+    return properties, required
+
+
+def _approval_status(text: str) -> str:
+    normalized = re.sub(r"\s+", " ", text).casefold()
+    rejected = (
+        "not approved",
+        "rejected",
+        "do not contact",
+        "already contacted",
+        "cannot reach out",
+        "can't reach out",
+        "not able to reach out",
+    )
+    approved = (
+        "approved",
+        "can reach out",
+        "able to reach out",
+        "eligible to contact",
+        "submission accepted",
+    )
+    if any(marker in normalized for marker in rejected):
+        return "rejected"
+    if any(marker in normalized for marker in approved):
+        return "approved"
+    return "unknown"
+
+
+async def _submit_form_page(
+    page: Page,
+    fields: dict,
+    submit_text: str,
+) -> dict:
+    form = page.locator("form").first
+    if await form.count() == 0:
+        raise HTTPException(422, "No form was found")
+    action = str(await form.get_attribute("action") or "").strip()
+    if action and _origin(urljoin(page.url, action)) != _origin(page.url):
+        raise HTTPException(422, "Form submission must stay on the configured origin")
+    filled = await fill_form(page, fields)
+    button = (
+        page.get_by_role("button", name=submit_text, exact=False)
+        if submit_text
+        else page.locator('button[type="submit"], input[type="submit"]').first
+    )
+    if await button.count() == 0:
+        button = page.get_by_role("button", name=re.compile("submit", re.I)).first
+    if await button.count() == 0:
+        raise HTTPException(422, "No submit control was found")
+    await button.click(timeout=10_000)
+    try:
+        await page.wait_for_load_state("networkidle", timeout=10_000)
+    except Exception:
+        await page.wait_for_timeout(1_000)
+    evidence = await page_evidence(page)
+    return {
+        "submitted": True,
+        "filled_fields": filled,
+        "status": _approval_status(evidence["text"]),
+        **evidence,
+    }
+
+
 @app.get("/health")
 async def health() -> dict:
     return {"ok": True, "configured": bool(WORKER_TOKEN)}
@@ -485,6 +576,16 @@ async def discover(payload: DiscoverRequest) -> dict:
     target = str(payload.target_url)
     async with rendered_page(target) as page:
         form_count = await page.locator("form").count()
+        field_properties, required_fields = (
+            await _form_field_contract(page) if form_count else ({}, [])
+        )
+        record_schema = {
+            "type": "object",
+            "properties": field_properties,
+            "additionalProperties": False,
+        }
+        if required_fields:
+            record_schema["required"] = required_fields
         capabilities = [
             {
                 "name": "browser.page.read",
@@ -504,7 +605,9 @@ async def discover(payload: DiscoverRequest) -> dict:
                 {
                     "name": "browser.form.submit",
                     "description": (
-                        "Fill named fields and submit a form after explicit workflow approval."
+                        "Fill one record using the discovered named fields and submit it after "
+                        "explicit workflow approval. Returns page evidence and an approval status "
+                        "parsed from the creator-specific response."
                     ),
                     "permission_scope": "write",
                     "requires_approval": True,
@@ -512,12 +615,63 @@ async def discover(payload: DiscoverRequest) -> dict:
                         "type": "object",
                         "required": ["fields"],
                         "properties": {
-                            "fields": {"type": "object"},
+                            "fields": record_schema,
                             "submit_text": {"type": "string"},
                         },
                         "additionalProperties": False,
                     },
-                    "output_schema": {"type": "object"},
+                    "output_schema": {
+                        "type": "object",
+                        "required": ["submitted", "status", "url", "text"],
+                        "properties": {
+                            "submitted": {"const": True},
+                            "status": {
+                                "type": "string",
+                                "enum": ["approved", "rejected", "unknown"],
+                            },
+                            "url": {"type": "string"},
+                            "text": {"type": "string"},
+                        },
+                    },
+                }
+            )
+            capabilities.append(
+                {
+                    "name": "browser.form.batch.submit",
+                    "description": (
+                        "Submit every record in one finite approved batch. Opens a fresh form for "
+                        "each record, preserves a creator-specific receipt, classifies each response "
+                        "as approved, rejected, or unknown, and returns approved_records separately. "
+                        "Unknown results must never be treated as approval or written downstream."
+                    ),
+                    "permission_scope": "write",
+                    "requires_approval": True,
+                    "input_schema": {
+                        "type": "object",
+                        "required": ["records"],
+                        "properties": {
+                            "records": {
+                                "type": "array",
+                                "minItems": 1,
+                                "maxItems": 25,
+                                "items": record_schema,
+                            },
+                            "submit_text": {"type": "string"},
+                            "identity_field": {"type": "string"},
+                        },
+                        "additionalProperties": False,
+                    },
+                    "output_schema": {
+                        "type": "object",
+                        "required": ["results", "approved_records"],
+                        "properties": {
+                            "results": {"type": "array", "items": {"type": "object"}},
+                            "approved_records": {
+                                "type": "array",
+                                "items": record_schema,
+                            },
+                        },
+                    },
                 }
             )
         return {
@@ -530,6 +684,39 @@ async def discover(payload: DiscoverRequest) -> dict:
 @app.post("/v1/execute", dependencies=[Depends(require_worker_token)])
 async def execute(payload: ExecuteRequest) -> dict:
     target = await _connector_url(str(payload.target_url), payload.input.get("path"))
+    if payload.capability == "browser.form.batch.submit":
+        records = payload.input.get("records")
+        if not isinstance(records, list) or not records or len(records) > 25:
+            raise HTTPException(422, "Batch submission requires 1 to 25 records")
+        if not all(isinstance(record, dict) and record for record in records):
+            raise HTTPException(422, "Every batch record must contain named fields")
+        submit_text = str(payload.input.get("submit_text") or "").strip()
+        identity_field = str(payload.input.get("identity_field") or "").strip()
+        results: list[dict] = []
+        async with public_browser_context() as context:
+            for index, record in enumerate(records):
+                page = await open_public_page(context, target)
+                try:
+                    receipt = await _submit_form_page(page, record, submit_text)
+                finally:
+                    await page.close()
+                identity = record.get(identity_field) if identity_field else None
+                if identity is None:
+                    identity = next((value for value in record.values() if value), index)
+                results.append(
+                    {
+                        "index": index,
+                        "identity": str(identity),
+                        "record": record,
+                        **receipt,
+                    }
+                )
+        return {
+            "results": results,
+            "approved_records": [
+                item["record"] for item in results if item["status"] == "approved"
+            ],
+        }
     async with rendered_page(target) as page:
         if payload.capability == "browser.page.read":
             return await page_evidence(page)
@@ -538,27 +725,8 @@ async def execute(payload: ExecuteRequest) -> dict:
         fields = payload.input.get("fields")
         if not isinstance(fields, dict) or not fields:
             raise HTTPException(422, "browser.form.submit requires named fields")
-        filled = await fill_form(page, fields)
         submit_text = str(payload.input.get("submit_text") or "").strip()
-        button = (
-            page.get_by_role("button", name=submit_text, exact=False)
-            if submit_text
-            else page.locator('button[type="submit"], input[type="submit"]').first
-        )
-        if await button.count() == 0:
-            button = page.get_by_role("button", name=re.compile("submit", re.I)).first
-        if await button.count() == 0:
-            raise HTTPException(422, "No submit control was found")
-        await button.click(timeout=10_000)
-        try:
-            await page.wait_for_load_state("networkidle", timeout=10_000)
-        except Exception:
-            await page.wait_for_timeout(1_000)
-        return {
-            "submitted": True,
-            "filled_fields": filled,
-            **(await page_evidence(page)),
-        }
+        return await _submit_form_page(page, fields, submit_text)
 
 
 @app.post("/v1/search", dependencies=[Depends(require_worker_token)])

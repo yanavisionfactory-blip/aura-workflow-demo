@@ -251,8 +251,53 @@ def test_drive_file_search_uses_an_escaped_exact_name(monkeypatch):
         params={
             "q": "name = 'Creator\\'s Outreach' and trashed = false",
             "pageSize": 5,
-            "fields": "nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink)",
+            "fields": (
+                "nextPageToken,files(id,name,mimeType,createdTime,modifiedTime,"
+                "parents,driveId,owners(displayName,emailAddress,me),webViewLink)"
+            ),
         },
+    )
+
+
+def test_spreadsheet_resolver_never_guesses_between_duplicate_names(monkeypatch):
+    executor = ProviderExecutor({"access_token": "token"})
+    search = AsyncMock(
+        return_value={
+            "files": [
+                {
+                    "id": "one",
+                    "name": "Creator Outreach",
+                    "mimeType": "application/vnd.google-apps.spreadsheet",
+                },
+                {
+                    "id": "two",
+                    "name": "Creator Outreach",
+                    "mimeType": "application/vnd.google-apps.spreadsheet",
+                },
+            ]
+        }
+    )
+    monkeypatch.setattr(executor, "_drive_files_search", search)
+
+    result = asyncio.run(
+        executor._drive_spreadsheet_resolve({"name": "Creator Outreach"})
+    )
+
+    assert result["status"] == "ambiguous"
+    assert result["match_count"] == 2
+    assert result["spreadsheet"] is None
+
+
+def test_google_identity_reads_current_connected_account(monkeypatch):
+    executor = ProviderExecutor({"access_token": "token"})
+    request = AsyncMock(return_value={"sub": "1", "email": "manager@example.com"})
+    monkeypatch.setattr(executor, "_request", request)
+
+    result = asyncio.run(executor._google_identity_get({}))
+
+    assert result["email"] == "manager@example.com"
+    request.assert_awaited_once_with(
+        "GET", "https://openidconnect.googleapis.com/v1/userinfo"
     )
 
 

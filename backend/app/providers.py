@@ -521,10 +521,12 @@ class ProviderExecutor:
             "gmail.list": self._gmail_list,
             "gmail.send": self._gmail_send,
             "gmail.get": self._gmail_get,
+            "google.identity.get": self._google_identity_get,
             "calendar.list": self._calendar_list,
             "calendar.create": self._calendar_create,
             "calendar.get": self._calendar_get,
             "drive.files.search": self._drive_files_search,
+            "drive.spreadsheet.resolve": self._drive_spreadsheet_resolve,
             "sheets.read": self._sheets_read,
             "sheets.append": self._sheets_append,
             "airtable.record.get": self._airtable_record_get,
@@ -902,6 +904,11 @@ class ProviderExecutor:
         payload = {"summary": a.get("title", "AURA event"), "description": a.get("description", ""), "start": a["start"], "end": a["end"]}
         return await self._request("POST", "https://www.googleapis.com/calendar/v3/calendars/primary/events", json=payload)
 
+    async def _google_identity_get(self, a: dict) -> dict:
+        return await self._request(
+            "GET", "https://openidconnect.googleapis.com/v1/userinfo"
+        )
+
     async def _drive_files_search(self, a: dict) -> dict:
         query = str(a.get("query", "")).strip()
         if not query:
@@ -914,10 +921,31 @@ class ProviderExecutor:
                 "q": f"name = '{escaped}' and trashed = false",
                 "pageSize": min(int(a.get("page_size", 20)), 100),
                 "fields": (
-                    "nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink)"
+                    "nextPageToken,files(id,name,mimeType,createdTime,modifiedTime,"
+                    "parents,driveId,owners(displayName,emailAddress,me),webViewLink)"
                 ),
             },
         )
+
+    async def _drive_spreadsheet_resolve(self, a: dict) -> dict:
+        name = str(a.get("name", "")).strip()
+        if not name:
+            raise ValueError("drive.spreadsheet.resolve requires name")
+        result = await self._drive_files_search({"query": name, "page_size": 10})
+        matches = [
+            item
+            for item in result.get("files", [])
+            if item.get("name") == name
+            and item.get("mimeType") == "application/vnd.google-apps.spreadsheet"
+        ]
+        resolved = len(matches) == 1
+        return {
+            "query": name,
+            "status": "resolved" if resolved else "not_found" if not matches else "ambiguous",
+            "match_count": len(matches),
+            "matches": matches,
+            "spreadsheet": matches[0] if resolved else None,
+        }
 
     async def _sheets_read(self, a: dict) -> dict:
         sid, cell_range = a.get("spreadsheet_id"), a.get("range", "A1:Z100")

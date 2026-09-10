@@ -89,3 +89,10 @@ def test_creator_metrics_apply_trim_and_original_audio_thresholds():
 def test_management_bio_signal_is_conservatively_disqualifying():
     assert worker._management_contact("Management: team@example.com") is True
     assert worker._management_contact("Cooking and comedy") is False
+    assert worker._public_email("collabs alice@example.com") == "alice@example.com"
+
+
+def test_approval_status_never_treats_negative_receipt_as_approved():
+    assert worker._approval_status("Already contacted — you cannot reach out") == "rejected"
+    assert worker._approval_status("Approved: you are able to reach out") == "approved"
+    assert worker._approval_status("Submission received") == "unknown"
