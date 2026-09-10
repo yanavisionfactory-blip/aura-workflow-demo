@@ -10,7 +10,6 @@ import PlanView from "@/components/aura/PlanView";
 import PreviewView from "@/components/aura/PreviewView";
 import ExecutionView from "@/components/aura/ExecutionView";
 import ErrorView from "@/components/aura/ErrorView";
-import RunAttentionNotice from "@/components/aura/RunAttentionNotice";
 import ResultsView from "@/components/aura/ResultsView";
 import AmbientBackground from "@/components/aura/AmbientBackground";
 import HistoryPanel from "@/components/aura/HistoryPanel";
@@ -26,7 +25,6 @@ import {
   decidePythonApproval,
   forgetActivePythonRun,
   getPythonRun,
-  getResumablePythonRun,
   resumePythonRun,
   resumePythonRunAfterConnection,
 } from "@/lib/auraApi";
@@ -35,7 +33,6 @@ import {
   alternativeRecoveryPrompt,
   needsRecovery,
   recoveryForRun,
-  startupRunDisposition,
 } from "@/lib/runRecovery.mjs";
 
 const STEP_DURATION = 2.6;
@@ -369,9 +366,6 @@ export default function Demo() {
   const [recoveryRun, setRecoveryRun] = useState(null);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   const [recoveryMessage, setRecoveryMessage] = useState("");
-  const [attentionRun, setAttentionRun] = useState(null);
-  const [attentionBusy, setAttentionBusy] = useState(false);
-  const [attentionMessage, setAttentionMessage] = useState("");
   const recoveryPendingRef = useRef(false);
   const [execSteps, setExecSteps] = useState([]);
   const [currentStepIdx, setCurrentStepIdx] = useState(0);
@@ -462,9 +456,6 @@ export default function Demo() {
     setRecoveryRun(null);
     setRecoveryBusy(false);
     setRecoveryMessage("");
-    setAttentionRun(null);
-    setAttentionBusy(false);
-    setAttentionMessage("");
     setExecSteps([]);
     setCurrentStepIdx(0);
     setStartTime(null);
@@ -486,8 +477,6 @@ export default function Demo() {
   // ---- Submit (input) ----
   const handleSubmit = useCallback((prompt, pinnedTools = [], resources = null, mock = null) => {
     clearTimeouts();
-    setAttentionRun(null);
-    setAttentionMessage("");
     requestNotifyPermission();
     setOriginalPrompt(prompt);
     originalPromptRef.current = prompt;
@@ -765,7 +754,6 @@ Rules:
   };
 
   const showRunRecovery = (run) => {
-    setAttentionRun(null);
     setRecoveryRun(run);
     setRecoveryMessage("");
     setExecSteps(mapRuntimeSteps(run));
@@ -862,74 +850,22 @@ Rules:
     }
   };
 
-  const openAttentionRun = async () => {
-    const run = attentionRun;
-    if (!run || attentionBusy) return;
-    setAttentionBusy(true);
-    setAttentionMessage("");
-    try {
-      const latest = await getPythonRun(run.id);
-      if (["completed", "cancelled"].includes(latest.status)) {
-        forgetActivePythonRun(latest.id);
-        setAttentionRun(null);
-        return;
-      }
-      pythonRunIdRef.current = latest.id;
-      pythonPlanRef.current = latest.plan;
-      setOriginalPrompt(latest.prompt || "");
-      originalPromptRef.current = latest.prompt || "";
-      setInterpretation(latest.plan?.interpretation || latest.prompt || "");
-      setStartTime(latest.created_at ? new Date(latest.created_at).getTime() : Date.now());
-      const restoredPlan = uiPlanFromRun(latest);
-      setPlan(restoredPlan);
-      setWorkflowName(restoredPlan.workflowName);
-      approvedStepsRef.current = restoredPlan.steps;
-      setApprovedSteps(restoredPlan.steps);
-      setExecSteps(mapRuntimeSteps(latest));
+  const keepRunForLater = () => reset();
 
-      if (latest.status === "awaiting_approval" && !latest.plan_approved) {
-        setAttentionRun(null);
-        setPhase("plan");
-      } else if (latest.status === "awaiting_approval") {
-        setAttentionRun(null);
-        await startPythonExecution(null, false, true);
-      } else if (needsRecovery(latest.status)) {
-        showRunRecovery(latest);
-      } else {
-        setAttentionRun(null);
-        await startPythonExecution(null, false, true);
-      }
-    } catch (error) {
-      setAttentionMessage(error.message || "AURA could not refresh this saved workflow yet.");
-    } finally {
-      setAttentionBusy(false);
-    }
-  };
-
-  const keepRunForLater = (run = recoveryRun || attentionRun) => {
-    reset();
-    if (run && recoveryRun) setAttentionRun(run);
-  };
-
-  const cancelSavedRun = async (run = recoveryRun || attentionRun) => {
+  const cancelSavedRun = async (run = recoveryRun) => {
     if (!run || recoveryPendingRef.current) return;
     recoveryPendingRef.current = true;
     setRecoveryBusy(true);
-    setAttentionBusy(true);
     setRecoveryMessage("");
-    setAttentionMessage("");
     try {
       await cancelPythonRun(run.id);
       forgetActivePythonRun(run.id);
       reset();
     } catch (error) {
-      const message = error.message || "AURA could not cancel this saved workflow yet.";
-      if (recoveryRun) setRecoveryMessage(message);
-      else setAttentionMessage(message);
+      setRecoveryMessage(error.message || "AURA could not cancel this saved workflow yet.");
     } finally {
       recoveryPendingRef.current = false;
       setRecoveryBusy(false);
-      setAttentionBusy(false);
     }
   };
 
@@ -1442,77 +1378,8 @@ Generate a results summary in plain, human-friendly language (not technical).
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      await hydrateConnections().catch(() => null);
-      let run = await getResumablePythonRun();
-      if (cancelled || !run) return;
-
-      const startupDisposition = startupRunDisposition(run);
-      if (startupDisposition === "attention") {
-        setAttentionRun(run);
-        setAttentionMessage("");
-        return;
-      }
-      if (startupDisposition === "ignore") return;
-
-      pythonRunIdRef.current = run.id;
-      setOriginalPrompt(run.prompt || "");
-      originalPromptRef.current = run.prompt || "";
-      setInterpretation(run.plan?.interpretation || run.prompt || "");
-      setStartTime(run.created_at ? new Date(run.created_at).getTime() : Date.now());
-
-      if (!run.plan?.steps?.length && ["queued", "planning"].includes(run.status)) {
-        setPlanLoading(true);
-        setPhase("plan");
-        const generation = ++pythonPollGenerationRef.current;
-        for (;;) {
-          run = await getPythonRunResilient(run.id, generation);
-          if (cancelled || !run) return;
-          if (run.plan?.steps?.length && run.status === "awaiting_approval") {
-            setPlanLoading(false);
-            setAttentionRun(run);
-            setPhase("input");
-            return;
-          }
-          if (needsRecovery(run.status)) {
-            setPlanLoading(false);
-            setAttentionRun(run);
-            setPhase("input");
-            return;
-          }
-          if (run.status === "cancelled") {
-            forgetActivePythonRun(run.id);
-            setPlanLoading(false);
-            return;
-          }
-          await new Promise((resolve) => window.setTimeout(resolve, 1000));
-        }
-      }
-
-      pythonPlanRef.current = run.plan;
-      const restoredPlan = uiPlanFromRun(run);
-      setPlan(restoredPlan);
-      setPlanLoading(false);
-      setWorkflowName(restoredPlan.workflowName);
-      approvedStepsRef.current = restoredPlan.steps;
-      setApprovedSteps(restoredPlan.steps);
-      setExecSteps(mapRuntimeSteps(run));
-
-      if (!run.plan_approved && run.status === "awaiting_approval") {
-        setAttentionRun(run);
-        setPhase("input");
-      } else if (needsRecovery(run.status)) {
-        setAttentionRun(run);
-        setPhase("input");
-      } else {
-        await startPythonExecution(null, false, true);
-      }
-    })().catch((error) => {
-      if (!cancelled) console.error("Could not restore the saved AURA run", error);
-    });
+    hydrateConnections().catch(() => null);
     return () => {
-      cancelled = true;
       pythonPollGenerationRef.current += 1;
       clearTimeouts();
     };
@@ -1541,7 +1408,6 @@ Generate a results summary in plain, human-friendly language (not technical).
       };
     }
   }
-  const attentionRecovery = attentionRun ? recoveryForRun(attentionRun) : null;
   const activeRecovery = recoveryRun ? recoveryForRun(recoveryRun) : null;
 
   return (
@@ -1558,22 +1424,7 @@ Generate a results summary in plain, human-friendly language (not technical).
           <AnimatePresence mode="wait">
             {phase === "input" && (
               <motion.div key="input" exit={{ opacity: 0, y: -20 }} transition={{ duration: 0.3 }} className="w-full">
-                <div className="mx-auto w-full max-w-3xl">
-                  {attentionRun && attentionRecovery && (
-                    <RunAttentionNotice
-                      run={attentionRun}
-                      recovery={attentionRecovery}
-                      busy={attentionBusy}
-                      message={attentionMessage}
-                      onReview={openAttentionRun}
-                      onAlternative={() => startAlternativePlan(attentionRun)}
-                      onSuggest={(suggestion) => startAlternativePlan(attentionRun, suggestion)}
-                      onLater={() => keepRunForLater(attentionRun)}
-                      onCancel={() => cancelSavedRun(attentionRun)}
-                    />
-                  )}
-                  <CommandInput onSubmit={handleSubmit} examples={WORKFLOW_EXAMPLES} onPickExample={handlePickExample} />
-                </div>
+                <CommandInput onSubmit={handleSubmit} examples={WORKFLOW_EXAMPLES} onPickExample={handlePickExample} />
               </motion.div>
             )}
 
