@@ -642,7 +642,11 @@ async def discover(payload: DiscoverRequest) -> dict:
                         "Submit every record in one finite approved batch. Opens a fresh form for "
                         "each record, preserves a creator-specific receipt, classifies each response "
                         "as approved, rejected, or unknown, and returns approved_records separately. "
-                        "Unknown results must never be treated as approval or written downstream."
+                        "The destination form's explicit status is the authoritative policy-gate "
+                        "decision for each submitted record, including any private DNC, active-"
+                        "management, prior-approval, or protected-outreach checks implemented by "
+                        "that form. Unknown results must never be treated as approval or written "
+                        "downstream."
                     ),
                     "permission_scope": "write",
                     "requires_approval": True,
