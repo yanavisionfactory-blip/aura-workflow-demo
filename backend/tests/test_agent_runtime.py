@@ -1,9 +1,342 @@
-from app.agent_runtime import deterministic_plan_fixes
-from app.schemas import PlanStep, WorkflowPlan
+import asyncio
+from types import SimpleNamespace
+
+from app import agent_runtime
+from app.agent_runtime import (
+    autonomous_resource_resolution_context,
+    create_plan,
+    critique_step,
+    deterministic_plan_fixes,
+    materialize_action_arguments,
+    normalize_plan_graph,
+    prepare_execution_directive,
+    supervise_execution,
+    supervise_plan,
+    synthesize_result,
+)
+from app.schemas import (
+    ExecutionDirective,
+    ExecutionSupervision,
+    ObjectiveSpec,
+    PlanStep,
+    PlanSupervisionDecision,
+    StepDelegation,
+    ToolSelection,
+    ToolsetProposal,
+    WorkflowPlan,
+)
 
 
 def plan(*steps: PlanStep) -> WorkflowPlan:
     return WorkflowPlan(name="Test", interpretation="Test", steps=list(steps))
+
+
+def agent_settings() -> SimpleNamespace:
+    return SimpleNamespace(
+        agent_managed_execution_enabled=True,
+        openai_api_key="configured",
+        openai_model="test-model",
+    )
+
+
+def approved_read_plan() -> dict:
+    return plan(
+        PlanStep(
+            key="read_records",
+            agent="data",
+            tool_slug="crm",
+            operation="records.read",
+            arguments={"limit": 10},
+            reason="Retrieve records",
+            expected_output="CRM records",
+        )
+    ).model_dump(mode="json")
+
+
+def test_senior_orchestrator_assigns_every_incomplete_step(monkeypatch) -> None:
+    async def fake_run(*_args, **_kwargs):
+        return ExecutionSupervision(
+            action="continue",
+            reason="The approved work is ready",
+            delegations=[
+                StepDelegation(
+                    step_key="read_records",
+                    execution_agent="CRM Execution Agent",
+                    tool_slug="crm",
+                    operation="records.read",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(agent_runtime, "get_settings", agent_settings)
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    decision, source = asyncio.run(
+        supervise_execution(
+            "Read CRM records",
+            approved_read_plan(),
+            [{"key": "read_records", "status": "pending"}],
+        )
+    )
+
+    assert source == "agent"
+    assert [item.step_key for item in decision.delegations] == ["read_records"]
+    assert decision.delegations[0].execution_agent == "CRM Execution Agent"
+
+
+def test_senior_orchestrator_cannot_retarget_an_approved_step(monkeypatch) -> None:
+    async def fake_run(*_args, **_kwargs):
+        return ExecutionSupervision(
+            action="continue",
+            reason="Use another connector",
+            delegations=[
+                StepDelegation(
+                    step_key="read_records",
+                    execution_agent="Other Execution Agent",
+                    tool_slug="unapproved-crm",
+                    operation="records.read",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(agent_runtime, "get_settings", agent_settings)
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    decision, source = asyncio.run(
+        supervise_execution(
+            "Read CRM records",
+            approved_read_plan(),
+            [{"key": "read_records", "status": "pending"}],
+        )
+    )
+
+    assert source == "deterministic_fallback"
+    assert decision.delegations[0].tool_slug == "crm"
+    assert decision.delegations[0].operation == "records.read"
+
+
+def test_senior_orchestrator_cannot_strand_a_fresh_approved_run(monkeypatch) -> None:
+    async def fake_run(*_args, **_kwargs):
+        return ExecutionSupervision(
+            action="pause",
+            reason="The source name may be ambiguous",
+            delegations=[],
+        )
+
+    monkeypatch.setattr(agent_runtime, "get_settings", agent_settings)
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    decision, source = asyncio.run(
+        supervise_execution(
+            "Resolve the named spreadsheet",
+            approved_read_plan(),
+            [
+                {
+                    "key": "read_records",
+                    "status": "pending",
+                    "tool_slug": "crm",
+                    "operation": "records.read",
+                    "depends_on": [],
+                    "consequential": False,
+                }
+            ],
+        )
+    )
+
+    assert source == "deterministic_pause_fallback"
+    assert decision.action == "continue"
+    assert decision.delegations[0].step_key == "read_records"
+
+
+def test_staged_action_approval_is_not_a_manager_pause_reason(monkeypatch) -> None:
+    async def fake_run(*_args, **_kwargs):
+        return ExecutionSupervision(
+            action="pause",
+            reason="A later action still needs approval",
+            delegations=[],
+        )
+
+    monkeypatch.setattr(agent_runtime, "get_settings", agent_settings)
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    decision, source = asyncio.run(
+        supervise_execution(
+            "Read first and ask before writing",
+            approved_read_plan(),
+            [
+                {
+                    "key": "read_records",
+                    "status": "awaiting_approval",
+                    "tool_slug": "crm",
+                    "operation": "records.read",
+                    "depends_on": [],
+                    "consequential": False,
+                }
+            ],
+        )
+    )
+
+    assert source == "deterministic_pause_fallback"
+    assert decision.action == "continue"
+
+
+def test_execution_agent_triggers_the_exact_approved_call(monkeypatch) -> None:
+    async def fake_run(*_args, **_kwargs):
+        return ExecutionDirective(
+            action="execute",
+            step_key="read_records",
+            tool_slug="crm",
+            operation="records.read",
+            arguments={"limit": 10},
+            reason="The call matches the approved step",
+        )
+
+    monkeypatch.setattr(agent_runtime, "get_settings", agent_settings)
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    directive, source = asyncio.run(
+        prepare_execution_directive(
+            "Read CRM records",
+            approved_read_plan()["steps"][0],
+            {"limit": 10},
+            "CRM Execution Agent",
+        )
+    )
+
+    assert source == "agent"
+    assert directive.action == "execute"
+    assert directive.arguments == {"limit": 10}
+
+
+def test_execution_agent_cannot_expand_approved_arguments(monkeypatch) -> None:
+    async def fake_run(*_args, **_kwargs):
+        return ExecutionDirective(
+            action="execute",
+            step_key="read_records",
+            tool_slug="crm",
+            operation="records.read",
+            arguments={"limit": 1000},
+            reason="Read more",
+        )
+
+    monkeypatch.setattr(agent_runtime, "get_settings", agent_settings)
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    directive, source = asyncio.run(
+        prepare_execution_directive(
+            "Read CRM records",
+            approved_read_plan()["steps"][0],
+            {"limit": 10},
+            "CRM Execution Agent",
+        )
+    )
+
+    assert source == "deterministic_fallback"
+    assert directive.action == "execute"
+    assert directive.arguments == {"limit": 10}
+
+
+def test_execution_agent_can_escalate_a_consequential_call(monkeypatch) -> None:
+    approved_step = approved_read_plan()["steps"][0]
+    approved_step.update(
+        {
+            "operation": "records.create",
+            "arguments": {"title": "Example"},
+            "consequential": True,
+        }
+    )
+
+    async def fake_run(*_args, **_kwargs):
+        return ExecutionDirective(
+            action="escalate",
+            step_key="read_records",
+            tool_slug="crm",
+            operation="records.create",
+            arguments={"title": "Example"},
+            reason="The destination is ambiguous",
+        )
+
+    monkeypatch.setattr(agent_runtime, "get_settings", agent_settings)
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    directive, source = asyncio.run(
+        prepare_execution_directive(
+            "Create a CRM record",
+            approved_step,
+            {"title": "Example"},
+            "CRM Execution Agent",
+        )
+    )
+
+    assert source == "agent"
+    assert directive.action == "escalate"
+
+
+def test_execution_agent_escalation_cannot_block_an_approved_read(monkeypatch) -> None:
+    async def fake_run(*_args, **_kwargs):
+        return ExecutionDirective(
+            action="escalate",
+            step_key="read_records",
+            tool_slug="crm",
+            operation="records.read",
+            arguments={"limit": 10},
+            reason="The source name may be ambiguous",
+        )
+
+    monkeypatch.setattr(agent_runtime, "get_settings", agent_settings)
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    directive, source = asyncio.run(
+        prepare_execution_directive(
+            "Read CRM records",
+            approved_read_plan()["steps"][0],
+            {"limit": 10},
+            "CRM Execution Agent",
+        )
+    )
+
+    assert source == "deterministic_read_fallback"
+    assert directive.action == "execute"
+    assert directive.arguments == {"limit": 10}
+
+
+def test_senior_orchestrator_reviews_a_valid_plan(monkeypatch) -> None:
+    async def fake_run(*_args, **_kwargs):
+        return PlanSupervisionDecision(
+            action="approve",
+            reason="The plan is bounded and executable",
+        )
+
+    monkeypatch.setattr(agent_runtime, "get_settings", agent_settings)
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    workflow = WorkflowPlan.model_validate(approved_read_plan())
+    decision, source = asyncio.run(
+        supervise_plan(
+            "Read CRM records",
+            ObjectiveSpec(goal="Read CRM records"),
+            ToolsetProposal(
+                tools=[
+                    ToolSelection(
+                        slug="crm",
+                        role="source",
+                        rationale="Contains the requested records",
+                    )
+                ]
+            ),
+            workflow,
+        )
+    )
+
+    assert source == "agent"
+    assert decision.action == "approve"
+
+
+def test_synthesizer_schema_is_accepted_by_the_real_agents_sdk():
+    from agents import AgentOutputSchema
+    agent = agent_runtime.build_agents()["synthesizer"]
+    schema = AgentOutputSchema(agent.output_type).json_schema()
+    assert schema["$defs"]["ClaimEvidence"]["additionalProperties"] is False
 
 
 def test_deterministic_validator_accepts_allow_listed_read() -> None:
@@ -19,6 +352,179 @@ def test_deterministic_validator_accepts_allow_listed_read() -> None:
     inventory = [{"slug": "crm", "allowed_operations": ["records.read"]}]
 
     assert deterministic_plan_fixes(workflow, inventory) == []
+
+
+def test_resource_resolution_context_prefers_safe_discovery_over_user_ids() -> None:
+    workflow = plan(
+        PlanStep(
+            key="read_sheet",
+            agent="data",
+            tool_slug="google",
+            operation="sheets.read",
+            arguments={"spreadsheet_id": "{{inputs.creator_outreach_sheet_id}}"},
+            reason="Read the named sheet",
+            expected_output="Spreadsheet rows",
+        )
+    )
+    inventory = [
+        {
+            "slug": "google",
+            "allowed_operations": ["drive.files.search"],
+            "operation_contracts": [
+                {
+                    "name": "drive.files.search",
+                    "permission_scope": "read",
+                    "input_schema": {
+                        "type": "object",
+                        "required": ["query"],
+                        "properties": {"query": {"type": "string"}},
+                    },
+                }
+            ],
+        }
+    ]
+
+    context = autonomous_resource_resolution_context(workflow, inventory, set())
+
+    assert context["unavailable_input_references"] == [
+        "inputs.creator_outreach_sheet_id"
+    ]
+    assert context["eligible_read_only_discovery_operations"] == [
+        {
+            "tool_slug": "google",
+            "operation": "drive.files.search",
+            "required_arguments": ["query"],
+        }
+    ]
+    assert "do not invent an input" in context["required_behavior"]
+
+
+def test_create_plan_repairs_named_resource_ids_with_discovery(monkeypatch) -> None:
+    calls = []
+
+    async def fake_run(agent, payload, max_turns=8):
+        calls.append(payload)
+        if len(calls) == 1:
+            return {
+                "objective": {"goal": "Read Creator Outreach"},
+                "toolset": {
+                    "tools": [
+                        {
+                            "slug": "google",
+                            "role": "source",
+                            "rationale": "Find and read the sheet",
+                        },
+                    ]
+                },
+                "plan": {
+                    "name": "Read Creator Outreach",
+                    "interpretation": "Read the named spreadsheet",
+                    "steps": [
+                        {
+                            "key": "read_sheet",
+                            "agent": "data",
+                            "tool_slug": "google",
+                            "operation": "sheets.read",
+                            "arguments": {
+                                "spreadsheet_id": "{{inputs.creator_outreach_sheet_id}}"
+                            },
+                            "reason": "Read the named spreadsheet",
+                            "expected_output": "Spreadsheet rows",
+                        }
+                    ],
+                },
+            }
+
+        resolution = payload["autonomous_resource_resolution"]
+        assert resolution["unavailable_input_references"] == [
+            "inputs.creator_outreach_sheet_id"
+        ]
+        assert resolution["eligible_read_only_discovery_operations"][0]["operation"] == (
+            "drive.files.search"
+        )
+        return {
+            "objective": {"goal": "Read Creator Outreach"},
+            "toolset": {
+                "tools": [
+                    {
+                        "slug": "google",
+                        "role": "source",
+                        "rationale": "Find and read the sheet",
+                    },
+                ]
+            },
+            "plan": {
+                "name": "Read Creator Outreach",
+                "interpretation": "Discover and read the named spreadsheet",
+                "steps": [
+                    {
+                        "key": "find_sheet",
+                        "agent": "data",
+                        "tool_slug": "google",
+                        "operation": "drive.files.search",
+                        "arguments": {"query": "Creator Outreach"},
+                        "reason": "Resolve the named spreadsheet",
+                        "expected_output": "Matching files with IDs",
+                    },
+                    {
+                        "key": "read_sheet",
+                        "agent": "data",
+                        "tool_slug": "google",
+                        "operation": "sheets.read",
+                        "arguments": {
+                            "spreadsheet_id": "{{steps.find_sheet.files.0.id}}"
+                        },
+                        "reason": "Read the exact discovered spreadsheet",
+                        "expected_output": "Spreadsheet rows",
+                    },
+                ],
+            },
+        }
+
+    inventory = [
+        {
+            "slug": "google",
+            "allowed_operations": ["drive.files.search", "sheets.read"],
+            "connected": True,
+            "operation_contracts": [
+                {
+                    "name": "drive.files.search",
+                    "permission_scope": "read",
+                    "input_schema": {
+                        "type": "object",
+                        "required": ["query"],
+                        "properties": {"query": {"type": "string"}},
+                    },
+                }
+            ],
+        },
+    ]
+
+    monkeypatch.setattr(agent_runtime, "build_agents", lambda: {"planner": object()})
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    result = asyncio.run(create_plan("Read Creator Outreach", inventory, set()))
+
+    assert len(calls) == 2
+    assert result.steps[0].operation == "drive.files.search"
+    assert result.steps[1].depends_on == ["find_sheet"]
+    assert "inputs." not in str(result.model_dump(mode="json"))
+
+
+def test_preflight_rejects_narrative_placeholder_assigned_to_real_provider():
+    workflow = plan(PlanStep(key="summarize_blocks", agent="reader", tool_slug="notion",
+        operation="notion.page.get", arguments={"page_id": "page-1"},
+        reason="Internal summary only", optional=True,
+        expected_output="No tool call; summary will be produced from retrieved blocks only in post-processing."))
+    fixes = deterministic_plan_fixes(workflow, [{"slug": "notion", "allowed_operations": ["notion.page.get"]}])
+    assert any("narrative placeholder" in fix for fix in fixes)
+
+
+def test_preflight_does_not_treat_quoted_record_content_as_a_placeholder():
+    workflow = plan(PlanStep(key="read", agent="reader", tool_slug="notion",
+        operation="notion.page.get", arguments={"page_id": "page-1"},
+        reason="Read a page named No tool call", expected_output="A page titled No tool call"))
+    assert deterministic_plan_fixes(workflow, [{"slug": "notion", "allowed_operations": ["notion.page.get"]}]) == []
 
 
 def test_deterministic_validator_blocks_unavailable_operation() -> None:
@@ -75,3 +581,870 @@ def test_deterministic_validator_rejects_unavailable_fallback() -> None:
         "unavailable fallback" in fix
         for fix in deterministic_plan_fixes(workflow, inventory)
     )
+
+
+def test_output_variable_references_infer_prior_step_dependencies() -> None:
+    workflow = plan(
+        PlanStep(
+            key="weather",
+            agent="data",
+            tool_slug="aura",
+            operation="weather.forecast",
+            reason="Check the weather",
+            expected_output="Forecast",
+        ),
+        PlanStep(
+            key="email",
+            agent="communications",
+            tool_slug="google",
+            operation="gmail.send",
+            reason="Send the forecast",
+            expected_output="Sent message",
+            consequential=True,
+            output_variables={"forecast": "{{steps.weather.output}}"},
+        ),
+    )
+
+    normalized = normalize_plan_graph(workflow)
+
+    assert normalized.steps[1].depends_on == ["weather"]
+
+
+def test_output_variable_self_reference_does_not_require_dependency() -> None:
+    workflow = plan(
+        PlanStep(
+            key="weather",
+            agent="data",
+            tool_slug="aura",
+            operation="weather.forecast",
+            reason="Check the weather",
+            expected_output="Forecast",
+            output_variables={"forecast": "{{steps.weather.output}}"},
+        )
+    )
+    inventory = [{"slug": "aura", "allowed_operations": ["weather.forecast"]}]
+
+    assert deterministic_plan_fixes(workflow, inventory) == []
+
+
+def test_critic_outage_does_not_repeat_a_successful_provider_action(monkeypatch) -> None:
+    calls = 0
+
+    async def fail_run(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("temporary structured-output outage")
+
+    async def no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(agent_runtime, "_run", fail_run)
+    monkeypatch.setattr(agent_runtime.asyncio, "sleep", no_sleep)
+
+    decision = asyncio.run(
+        critique_step(
+            {"operation": "gmail.send", "expected_output": "message id"},
+            {"id": "sent-message"},
+        )
+    )
+
+    assert calls == 3
+    assert decision.action == "escalate"
+
+
+def test_synthesis_outage_preserves_evidence_without_claiming_success(monkeypatch) -> None:
+    async def fail_run(*_args, **_kwargs):
+        raise RuntimeError("temporary structured-output outage")
+
+    async def no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(agent_runtime, "_run", fail_run)
+    monkeypatch.setattr(agent_runtime.asyncio, "sleep", no_sleep)
+
+    result = asyncio.run(
+        synthesize_result(
+            "Send tomorrow's weather to me",
+            [
+                {
+                    "step_id": "weather-step",
+                    "operation": "weather.forecast",
+                    "provider_result": {"summary": "Sunny, 18°C"},
+                }
+            ],
+        )
+    )
+
+    assert result.validation_passed is False
+    assert result.required_fixes
+    assert result.summary == "Sunny, 18°C"
+    assert result.deliverable == "• Sunny, 18°C"
+    assert result.traceability[0].step_id == "weather-step"
+
+
+def test_synthesis_outage_returns_readable_provider_content(monkeypatch) -> None:
+    async def fail_run(*_args, **_kwargs):
+        raise RuntimeError("temporary structured-output outage")
+
+    async def no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(agent_runtime, "_run", fail_run)
+    monkeypatch.setattr(agent_runtime.asyncio, "sleep", no_sleep)
+
+    result = asyncio.run(
+        synthesize_result(
+            "Summarize my most recently edited Notion page",
+            [
+                {
+                    "step_id": "page-blocks",
+                    "operation": "notion.blocks.children.list",
+                    "provider_result": {
+                        "object": "list",
+                        "request_id": "internal-id",
+                        "results": [
+                            {
+                                "type": "paragraph",
+                                "paragraph": {
+                                    "rich_text": [
+                                        {"plain_text": "Launch the customer pilot next week."}
+                                    ]
+                                },
+                            },
+                            {
+                                "type": "bulleted_list_item",
+                                "bulleted_list_item": {
+                                    "rich_text": [
+                                        {"plain_text": "Confirm the onboarding checklist."}
+                                    ]
+                                },
+                            },
+                        ],
+                    },
+                }
+            ],
+        )
+    )
+
+    assert result.summary == "Launch the customer pilot next week."
+    assert "• Launch the customer pilot next week." in result.deliverable
+    assert "• Confirm the onboarding checklist." in result.deliverable
+    assert "internal-id" not in result.deliverable
+
+
+def test_materializer_retries_and_returns_concrete_approval_arguments(monkeypatch) -> None:
+    calls = 0
+
+    async def fake_run(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"arguments": {"summary": "{{steps.notes.item_1_summary}}"}}
+        return {
+            "arguments": {
+                "project_key": "AURA",
+                "summary": "Confirm onboarding checklist",
+                "description": "Prepare the checklist from the accepted Notion notes.",
+            }
+        }
+
+    async def no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+    monkeypatch.setattr(agent_runtime.asyncio, "sleep", no_sleep)
+
+    arguments = asyncio.run(
+        materialize_action_arguments(
+            "Turn my research notes into Jira tasks",
+            {"key": "create_task_1", "operation": "jira.issue.create"},
+            {
+                "steps": {
+                    "notes": {"results": [{"plain_text": "Confirm onboarding checklist"}]},
+                    "projects": {"results": [{"key": "AURA"}]},
+                }
+            },
+        )
+    )
+
+    assert calls == 2
+    assert arguments["project_key"] == "AURA"
+    assert "{{" not in str(arguments)
+
+
+def test_materializer_exhausts_recovery_without_exposing_model_output(monkeypatch) -> None:
+    async def fake_run(*_args, **_kwargs):
+        return {"arguments": {"to": "{{inputs.recipient}}"}}
+
+    async def no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+    monkeypatch.setattr(agent_runtime.asyncio, "sleep", no_sleep)
+
+    try:
+        asyncio.run(
+            materialize_action_arguments(
+                "Send it",
+                {"key": "send", "operation": "gmail.send"},
+                {"steps": {}},
+            )
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "Approval argument recovery exhausted"
+    else:
+        raise AssertionError("Expected bounded recovery to stop")
+
+
+def test_materializer_accepts_direct_argument_object_and_indexes_text(monkeypatch) -> None:
+    captured = {}
+
+    async def fake_run(_agent, payload, **_kwargs):
+        captured.update(payload)
+        return {"project_key": "AURA", "summary": "Confirm onboarding checklist"}
+
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    arguments = asyncio.run(
+        materialize_action_arguments(
+            "Create a Jira task from the first action item",
+            {
+                "key": "create_task",
+                "tool_slug": "jira",
+                "operation": "jira.issue.create",
+            },
+            {
+                "steps": {
+                    "notes": {
+                        "results": [
+                            {"plain_text": "Confirm onboarding checklist"}
+                        ]
+                    }
+                }
+            },
+        )
+    )
+
+    assert arguments == {
+        "project_key": "AURA",
+        "summary": "Confirm onboarding checklist",
+    }
+    assert captured["accepted_text_evidence"] == ["Confirm onboarding checklist"]
+    assert captured["required_argument_contract"]["required"] == [
+        "project_key",
+        "summary",
+    ]
+
+
+def test_create_plan_uses_one_model_round_trip_for_valid_plan(monkeypatch) -> None:
+    calls = []
+
+    async def fake_run(agent, payload, max_turns=8):
+        calls.append((agent, payload, max_turns))
+        return {
+            "objective": {"goal": "Read CRM records"},
+            "toolset": {
+                "tools": [
+                    {
+                        "slug": "crm",
+                        "role": "source",
+                        "rationale": "Contains the requested records",
+                        "required_permissions": ["records.read"],
+                    }
+                ]
+            },
+            "plan": {
+                "name": "Read CRM",
+                "interpretation": "Read the requested CRM records",
+                "steps": [
+                    {
+                        "key": "read_records",
+                        "agent": "data",
+                        "tool_slug": "crm",
+                        "operation": "records.read",
+                        "reason": "Retrieve the records",
+                        "expected_output": "CRM records",
+                    }
+                ],
+            },
+        }
+
+    monkeypatch.setattr(agent_runtime, "build_agents", lambda: {"planner": object()})
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    result = asyncio.run(
+        create_plan(
+            "Read CRM records",
+            [
+                {
+                    "slug": "crm",
+                    "allowed_operations": ["records.read"],
+                    "connected": False,
+                }
+            ],
+        )
+    )
+
+    assert len(calls) == 1
+    assert calls[0][1]["temporal_context"]["current_time_utc"]
+    assert calls[0][1]["temporal_context"]["user_timezone"] is None
+    assert result.steps[0].operation == "records.read"
+    assert result.planning_artifacts["connection_requirements"] == ["crm"]
+    assert result.planning_artifacts["preflight_evaluation"]["passed"] is True
+
+
+def test_senior_repair_gets_bounded_graph_recovery_for_synthetic_variables(
+    monkeypatch,
+) -> None:
+    search_step = PlanStep(
+        key="search",
+        agent="research",
+        tool_slug="aura",
+        operation="web.search",
+        arguments={"query": "TikTok creators"},
+        reason="Find public candidate profiles",
+        expected_output="Search results",
+    )
+    initial = agent_runtime.PlanningBundle(
+        objective=ObjectiveSpec(goal="Research public creators"),
+        toolset=ToolsetProposal(
+            tools=[
+                ToolSelection(
+                    slug="aura", role="research", rationale="Searches public pages"
+                )
+            ]
+        ),
+        plan=plan(search_step),
+    )
+    invalid_manager_repair = initial.model_copy(
+        update={
+            "plan": plan(
+                search_step,
+                PlanStep(
+                    key="read_candidate",
+                    agent="research",
+                    tool_slug="aura",
+                    operation="web.page.read",
+                    arguments={"url": "{{vars.candidate_url}}"},
+                    reason="Inspect a candidate",
+                    expected_output="Rendered public profile",
+                ),
+            )
+        }
+    )
+    valid_graph_repair = initial.model_copy(
+        update={
+            "plan": plan(
+                search_step,
+                PlanStep(
+                    key="read_candidate",
+                    agent="research",
+                    tool_slug="aura",
+                    operation="web.page.read",
+                    arguments={"url": "{{steps.search.results.0.url}}"},
+                    reason="Inspect the first candidate",
+                    expected_output="Rendered public profile",
+                ),
+            )
+        }
+    )
+    planner_results = iter([initial, invalid_manager_repair])
+    staged_payloads = []
+    supervision_calls = 0
+
+    async def fake_planner(*_args, **_kwargs):
+        return next(planner_results)
+
+    async def fake_staged(_agents, payload, **_kwargs):
+        staged_payloads.append(payload)
+        return valid_graph_repair
+
+    async def fake_supervision(*_args, **_kwargs):
+        nonlocal supervision_calls
+        supervision_calls += 1
+        if supervision_calls == 1:
+            return (
+                PlanSupervisionDecision(
+                    action="repair",
+                    reason="Inspect at least one candidate",
+                    required_fixes=["Add a bounded candidate inspection"],
+                ),
+                "agent",
+            )
+        return PlanSupervisionDecision(action="approve", reason="Executable"), "agent"
+
+    monkeypatch.setattr(agent_runtime, "build_agents", lambda: {"planner": object()})
+    monkeypatch.setattr(agent_runtime, "_run_planner", fake_planner)
+    monkeypatch.setattr(agent_runtime, "_run_staged_planner", fake_staged)
+    monkeypatch.setattr(agent_runtime, "supervise_plan", fake_supervision)
+
+    result = asyncio.run(
+        create_plan(
+            "Research public creators",
+            [
+                {
+                    "slug": "aura",
+                    "allowed_operations": ["web.search", "web.page.read"],
+                    "connected": True,
+                }
+            ],
+            available_input_names=set(),
+        )
+    )
+
+    assert result.steps[1].depends_on == ["search"]
+    assert result.planning_artifacts["planner_recovery_mode"] == (
+        "staged_manager_authorization_repair"
+    )
+    assert staged_payloads[0]["required_fixes"] == [
+        "Step 2 references unavailable variable candidate_url"
+    ]
+    assert "implicit foreach" in staged_payloads[0]["response_recovery"]
+
+
+def test_senior_can_request_two_bounded_semantic_repairs(monkeypatch) -> None:
+    def bundle(key: str) -> agent_runtime.PlanningBundle:
+        return agent_runtime.PlanningBundle(
+            objective=ObjectiveSpec(goal="Read CRM records"),
+            toolset=ToolsetProposal(
+                tools=[
+                    ToolSelection(
+                        slug="crm", role="source", rationale="Reads CRM records"
+                    )
+                ]
+            ),
+            plan=plan(
+                PlanStep(
+                    key=key,
+                    agent="data",
+                    tool_slug="crm",
+                    operation="records.read",
+                    reason="Retrieve the records",
+                    expected_output="CRM records",
+                )
+            ),
+        )
+
+    planner_results = iter([bundle("initial"), bundle("first_repair"), bundle("final")])
+    repair_payloads = []
+    supervision_calls = 0
+
+    async def fake_planner(_agent, payload, **_kwargs):
+        if payload.get("required_fixes"):
+            repair_payloads.append(payload)
+        return next(planner_results)
+
+    async def fake_supervision(*_args, **_kwargs):
+        nonlocal supervision_calls
+        supervision_calls += 1
+        if supervision_calls < 3:
+            return (
+                PlanSupervisionDecision(
+                    action="repair",
+                    reason="Needs another bounded correction",
+                    required_fixes=[f"repair {supervision_calls}"],
+                ),
+                "agent",
+            )
+        return PlanSupervisionDecision(action="approve", reason="Executable"), "agent"
+
+    monkeypatch.setattr(agent_runtime, "build_agents", lambda: {"planner": object()})
+    monkeypatch.setattr(agent_runtime, "_run_planner", fake_planner)
+    monkeypatch.setattr(agent_runtime, "supervise_plan", fake_supervision)
+
+    result = asyncio.run(
+        create_plan(
+            "Read CRM records",
+            [
+                {
+                    "slug": "crm",
+                    "allowed_operations": ["records.read"],
+                    "connected": True,
+                }
+            ],
+            available_input_names=set(),
+        )
+    )
+
+    assert result.steps[0].key == "final"
+    assert supervision_calls == 3
+    assert repair_payloads[0]["required_fixes"] == ["repair 1"]
+    assert repair_payloads[1]["required_fixes"] == ["repair 2"]
+    assert "Final bounded senior repair" in repair_payloads[1]["response_recovery"]
+
+
+def test_combined_planner_allows_flexible_workflow_arguments() -> None:
+    planner = agent_runtime.build_agents()["planner"]
+
+    assert planner.output_type.is_strict_json_schema() is False
+
+
+def test_staged_planner_agents_allow_flexible_workflow_schemas() -> None:
+    agents = agent_runtime.build_agents()
+
+    for key in ("intent", "router", "builder"):
+        assert agents[key].output_type.is_strict_json_schema() is False
+
+
+def test_combined_planner_retries_invalid_json_once(monkeypatch) -> None:
+    calls = []
+
+    async def fake_run(agent, payload, max_turns=8):
+        calls.append(payload)
+        if len(calls) == 1:
+            raise RuntimeError("Invalid JSON when parsing model output")
+        return {
+            "objective": {"goal": "Read CRM records"},
+            "toolset": {
+                "tools": [
+                    {"slug": "crm", "role": "source", "rationale": "Reads records"}
+                ]
+            },
+            "plan": {
+                "name": "Read CRM",
+                "interpretation": "Read the requested CRM records",
+                "steps": [
+                    {
+                        "key": "read_records",
+                        "agent": "data",
+                        "tool_slug": "crm",
+                        "operation": "records.read",
+                        "reason": "Retrieve the records",
+                        "expected_output": "CRM records",
+                    }
+                ],
+            },
+        }
+
+    monkeypatch.setattr(agent_runtime, "build_agents", lambda: {"planner": object()})
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    result = asyncio.run(create_plan("Read CRM records", [
+        {"slug": "crm", "allowed_operations": ["records.read"], "connected": True}
+    ]))
+
+    assert len(calls) == 2
+    assert "response_recovery" in calls[1]
+    assert result.steps[0].operation == "records.read"
+
+
+def test_combined_planner_retries_schema_validation_failure(monkeypatch) -> None:
+    calls = []
+
+    async def no_sleep(_delay):
+        return None
+
+    async def fake_run(agent, payload, max_turns=8):
+        calls.append(payload)
+        if len(calls) == 1:
+            return {"not": "a planning bundle"}
+        return {
+            "objective": {"goal": "Read CRM records"},
+            "toolset": {
+                "tools": [
+                    {"slug": "crm", "role": "source", "rationale": "Reads records"}
+                ]
+            },
+            "plan": {
+                "name": "Read CRM",
+                "interpretation": "Read the requested CRM records",
+                "steps": [
+                    {
+                        "key": "read_records",
+                        "agent": "data",
+                        "tool_slug": "crm",
+                        "operation": "records.read",
+                        "reason": "Retrieve the records",
+                        "expected_output": "CRM records",
+                    }
+                ],
+            },
+        }
+
+    monkeypatch.setattr(agent_runtime, "build_agents", lambda: {"planner": object()})
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+    monkeypatch.setattr(agent_runtime.asyncio, "sleep", no_sleep)
+
+    result = asyncio.run(create_plan("Read CRM records", [
+        {"slug": "crm", "allowed_operations": ["records.read"], "connected": True}
+    ]))
+
+    assert len(calls) == 2
+    assert result.steps[0].operation == "records.read"
+
+
+def test_create_plan_falls_back_to_staged_agents_after_combined_recovery(monkeypatch) -> None:
+    planner = object()
+    intent = object()
+    router = object()
+    builder = object()
+    calls = []
+
+    async def no_sleep(_delay):
+        return None
+
+    async def fake_run(agent, payload, max_turns=8):
+        calls.append(agent)
+        if agent is planner:
+            raise RuntimeError("combined structured output failed")
+        if agent is intent:
+            return {"goal": "Turn research notes into Jira tasks"}
+        if agent is router:
+            return {
+                "tools": [
+                    {"slug": "notion", "role": "source", "rationale": "Find notes"},
+                    {"slug": "jira", "role": "destination", "rationale": "Create tasks"},
+                ]
+            }
+        return {
+            "name": "Research notes to Jira",
+            "interpretation": "Turn research notes into reviewed Jira tasks",
+            "steps": [
+                {
+                    "key": "find_notes",
+                    "agent": "research",
+                    "tool_slug": "notion",
+                    "operation": "notion.search",
+                    "arguments": {"query": "research notes"},
+                    "reason": "Find the research notes",
+                    "expected_output": "Matching research notes",
+                },
+                {
+                    "key": "create_task",
+                    "agent": "delivery",
+                    "tool_slug": "jira",
+                    "operation": "jira.issue.create",
+                    "arguments": {
+                        "project_key": "{{inputs.project_key}}",
+                        "summary": "{{steps.find_notes.title}}",
+                    },
+                    "reason": "Create a reviewed Jira task",
+                    "expected_output": "Created Jira task",
+                    "consequential": True,
+                    "depends_on": ["find_notes"],
+                },
+            ],
+        }
+
+    monkeypatch.setattr(
+        agent_runtime,
+        "build_agents",
+        lambda: {"planner": planner, "intent": intent, "router": router, "builder": builder},
+    )
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+    monkeypatch.setattr(agent_runtime.asyncio, "sleep", no_sleep)
+
+    result = asyncio.run(
+        create_plan(
+            "Turn action items from my research notes into Jira tasks",
+            [
+                {
+                    "slug": "notion",
+                    "allowed_operations": ["notion.search"],
+                    "connected": True,
+                },
+                {
+                    "slug": "jira",
+                    "allowed_operations": ["jira.issue.create"],
+                    "connected": False,
+                },
+            ],
+        )
+    )
+
+    assert calls.count(planner) == 3
+    assert calls[-3:] == [intent, router, builder]
+    assert result.planning_artifacts["planner_recovery_mode"] == "staged"
+    assert result.planning_artifacts["connection_requirements"] == ["jira"]
+
+
+def test_create_plan_compacts_staged_recovery_after_input_limit(monkeypatch) -> None:
+    planner = object()
+    intent = object()
+    router = object()
+    builder = object()
+    staged_payloads = {}
+
+    async def fake_run(agent, payload, max_turns=8):
+        if agent is planner:
+            raise agent_runtime.ModelInputTooLarge("context_length_exceeded")
+        if agent is intent:
+            staged_payloads["intent"] = payload
+            return {"goal": "Read CRM records"}
+        if agent is router:
+            staged_payloads["router"] = payload
+            return {
+                "tools": [
+                    {"slug": "crm", "role": "source", "rationale": "Read records"}
+                ]
+            }
+        staged_payloads["builder"] = payload
+        return {
+            "name": "Read CRM records",
+            "interpretation": "Read current CRM records",
+            "steps": [
+                {
+                    "key": "read_records",
+                    "agent": "research",
+                    "tool_slug": "crm",
+                    "operation": "records.read",
+                    "arguments": {},
+                    "reason": "Read current records",
+                    "expected_output": "Current records",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(
+        agent_runtime,
+        "build_agents",
+        lambda: {
+            "planner": planner,
+            "intent": intent,
+            "router": router,
+            "builder": builder,
+        },
+    )
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    result = asyncio.run(
+        create_plan(
+            "Read CRM records",
+            [
+                {
+                    "slug": "crm",
+                    "name": "CRM",
+                    "kind": "api",
+                    "allowed_operations": ["records.read"],
+                    "connected": True,
+                    "operation_contracts": [
+                        {
+                            "name": "records.read",
+                            "input_schema": {"type": "object", "properties": {}},
+                            "output_schema": {"description": "large provider schema"},
+                        }
+                    ],
+                },
+                {
+                    "slug": "unused",
+                    "name": "Unused",
+                    "kind": "api",
+                    "allowed_operations": ["unused.read"],
+                    "connected": True,
+                    "operation_contracts": [
+                        {
+                            "name": "unused.read",
+                            "output_schema": {"description": "must not reach builder"},
+                        }
+                    ],
+                },
+            ],
+        )
+    )
+
+    assert "executable_tool_inventory" not in staged_payloads["intent"]
+    assert all(
+        "operation_contracts" not in item
+        for item in staged_payloads["router"]["executable_tool_inventory"]
+    )
+    assert [
+        item["slug"]
+        for item in staged_payloads["builder"]["executable_tool_inventory"]
+    ] == ["crm"]
+    assert result.planning_artifacts["planner_recovery_mode"] == "staged_input_limit"
+
+
+def test_normalizer_infers_prior_step_dependencies_and_write_safety() -> None:
+    workflow = plan(
+        PlanStep(
+            key="draft_emails",
+            agent="writer",
+            tool_slug="openai",
+            operation="text.generate",
+            reason="Draft emails",
+            expected_output="Email drafts",
+        ),
+        PlanStep(
+            key="send_emails",
+            agent="communications",
+            tool_slug="gmail",
+            operation="gmail.send",
+            arguments={"drafts": "{{steps.draft_emails.items}}"},
+            reason="Send approved drafts",
+            expected_output="Send receipts",
+        ),
+    )
+
+    normalized = normalize_plan_graph(workflow)
+
+    assert normalized.steps[1].depends_on == ["draft_emails"]
+    assert normalized.steps[1].consequential is True
+
+
+def test_create_plan_does_not_reprompt_for_mechanical_graph_repairs(monkeypatch) -> None:
+    calls = []
+
+    async def fake_run(agent, payload, max_turns=8):
+        calls.append(payload)
+        return {
+            "objective": {"goal": "Draft and send email"},
+            "toolset": {
+                "tools": [
+                    {"slug": "writer", "role": "draft", "rationale": "Writes the draft"},
+                    {"slug": "gmail", "role": "send", "rationale": "Sends the email"},
+                ]
+            },
+            "plan": {
+                "name": "Draft and send",
+                "interpretation": "Draft and send an email",
+                "steps": [
+                    {
+                        "key": "draft_emails", "agent": "writer", "tool_slug": "writer",
+                        "operation": "text.generate", "reason": "Draft it", "expected_output": "Drafts",
+                    },
+                    {
+                        "key": "send_emails", "agent": "communications", "tool_slug": "gmail",
+                        "operation": "gmail.send", "arguments": {"drafts": "{{steps.draft_emails.items}}"},
+                        "reason": "Send it", "expected_output": "Receipts",
+                    },
+                ],
+            },
+        }
+
+    monkeypatch.setattr(agent_runtime, "build_agents", lambda: {"planner": object()})
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    result = asyncio.run(create_plan("Draft and send", [
+        {"slug": "writer", "allowed_operations": ["text.generate"], "connected": True},
+        {"slug": "gmail", "allowed_operations": ["gmail.send"], "connected": True},
+    ]))
+
+    assert len(calls) == 1
+    assert result.steps[1].depends_on == ["draft_emails"]
+    assert result.steps[1].consequential is True
+    assert result.planning_artifacts["timings_ms"]["repair"] == 0
+
+
+def test_planning_clock_resolves_weekdays_across_year_boundary():
+    from datetime import datetime, timezone
+    context = agent_runtime.planning_temporal_context(datetime(2026, 12, 31, 12, tzinfo=timezone.utc))
+    assert context["this_week_dates"]["friday"] == "2027-01-01"
+    assert context["next_occurrence_dates"]["monday"] == "2027-01-04"
+    assert context["user_timezone"] is None
+
+
+def test_materializer_repairs_layout_contract_before_returning_for_approval(monkeypatch):
+    calls = []
+    async def fake_run(agent, payload, **kwargs):
+        calls.append(dict(payload))
+        items = ["Grounded milestone"] * (6 if len(calls) == 1 else 5)
+        return {"arguments": {"title": "Roadmap", "phases": [{"period": "Days 1–30", "title": "Foundation", "items": items}]}}
+    async def no_sleep(delay):
+        pass
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+    monkeypatch.setattr(agent_runtime.asyncio, "sleep", no_sleep)
+    result = asyncio.run(materialize_action_arguments("Create one roadmap slide",
+        {"tool_slug": "canva", "operation": "canva.presentation.create"}, {"steps": {}}))
+    assert len(calls) == 2
+    assert "at most 5 items" in calls[1]["argument_validation_error"]
+    assert len(result["phases"][0]["items"]) == 5

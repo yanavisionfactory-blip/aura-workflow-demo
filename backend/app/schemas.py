@@ -1,6 +1,7 @@
+from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, HttpUrl, field_validator
+from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
 
 class ToolCreate(BaseModel):
@@ -49,6 +50,58 @@ class CustomOAuthStart(BaseModel):
         return value
 
 
+class ConnectorInstallationCreate(BaseModel):
+    package_id: str
+    authentication_type: Literal["oauth2", "api_key", "bearer", "basic", "none"]
+    credentials: dict[str, str] = Field(default_factory=dict)
+    configuration: dict[str, Any] = Field(default_factory=dict)
+
+
+class ConnectorInstallationUpgrade(BaseModel):
+    package_id: str
+
+
+class ConnectorInstallationRollback(BaseModel):
+    package_id: str | None = None
+
+
+class ConnectorPackageSubmit(BaseModel):
+    definition: dict[str, Any]
+
+
+class PollingSubscriptionCreate(BaseModel):
+    tool_slug: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,119}$")
+    operation: str = Field(min_length=2, max_length=160)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    interval_seconds: int = Field(default=300, ge=60, le=86_400)
+    prompt_template: str = Field(min_length=3, max_length=10_000)
+    trigger_on_first_result: bool = False
+    checkpoint_path: str | None = Field(default=None, min_length=1, max_length=500)
+    cursor_argument: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def checkpoint_fields_are_paired(self):
+        if bool(self.checkpoint_path) != bool(self.cursor_argument):
+            raise ValueError("checkpoint_path and cursor_argument must be configured together")
+        return self
+
+
+class ConnectorDefinitionValidate(BaseModel):
+    definition: dict[str, Any]
+
+
+class WebhookSubscriptionCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=200)
+    event_type: str = Field(
+        default="event.received", pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.:-]{1,159}$"
+    )
+    prompt_template: str = Field(min_length=3, max_length=10_000)
+
+
+class WebhookReplayRequest(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+
+
 class ToolView(BaseModel):
     id: str
     slug: str
@@ -62,9 +115,83 @@ class ToolView(BaseModel):
 class RunCreate(BaseModel):
     prompt: str = Field(min_length=3, max_length=20_000)
     workflow_id: str | None = None
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    memory_run_id: str | None = None
+    memory_bindings: dict[str, str] = Field(default_factory=dict, max_length=20)
+
+    @model_validator(mode="after")
+    def validate_memory_selection(self):
+        if bool(self.memory_run_id) != bool(self.memory_bindings):
+            raise ValueError("Memory requires a source run and explicit input bindings")
+        return self
+
+
+class WorkflowCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=240)
+    prompt: str = Field(min_length=3, max_length=20_000)
+    variables: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+
+
+class WorkflowUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=240)
+    prompt: str | None = Field(default=None, min_length=3, max_length=20_000)
+    variables: dict[str, Any] | None = None
+    enabled: bool | None = None
+
+
+class WorkflowScheduleCreate(BaseModel):
+    workflow_id: str
+    name: str = Field(min_length=2, max_length=240)
+    interval_seconds: int = Field(ge=60, le=2_592_000)
+    start_at: datetime | None = None
+
+
+class WorkflowScheduleUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=240)
+    interval_seconds: int | None = Field(default=None, ge=60, le=2_592_000)
+    enabled: bool | None = None
+    next_run_at: datetime | None = None
+
+
+class WorkspaceRecordCreate(BaseModel):
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkspaceRecordUpdate(BaseModel):
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class AiGenerateRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=50_000)
+    response_json_schema: dict[str, Any] | None = None
+
+
+class InterfaceAnalyzeRequest(BaseModel):
+    url: HttpUrl
+
+
+class StepCondition(BaseModel):
+    left: Any
+    operator: Literal[
+        "equals",
+        "not_equals",
+        "greater_than",
+        "greater_than_or_equal",
+        "less_than",
+        "less_than_or_equal",
+        "contains",
+        "not_contains",
+        "exists",
+        "not_exists",
+        "is_true",
+        "is_false",
+    ]
+    right: Any = None
 
 
 class PlanStep(BaseModel):
+    key: str = Field(default="", pattern=r"^[a-z][a-z0-9_]{0,119}$")
     agent: str
     tool_slug: str
     operation: str
@@ -76,6 +203,11 @@ class PlanStep(BaseModel):
     fallback_tool_slug: str | None = None
     fallback_operation: str | None = None
     reduced_scope_arguments: dict[str, Any] | None = None
+    depends_on: list[str] = Field(default_factory=list, max_length=20)
+    dependency_mode: Literal["all_succeeded", "all_settled"] = "all_succeeded"
+    condition: StepCondition | None = None
+    output_variables: dict[str, Any] = Field(default_factory=dict)
+    required_evidence: list[str] = Field(default_factory=list, max_length=10)
 
 
 class ObjectiveSpec(BaseModel):
@@ -114,11 +246,108 @@ class PlanEvaluation(BaseModel):
     permission_scope: Literal["read", "write", "destructive"] = "read"
 
 
+class PlanSupervisionDecision(BaseModel):
+    action: Literal["approve", "repair"]
+    reason: str = Field(min_length=1, max_length=1000)
+    required_fixes: list[str] = Field(default_factory=list, max_length=10)
+
+
+class StepDelegation(BaseModel):
+    step_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,119}$")
+    execution_agent: str = Field(
+        min_length=2,
+        max_length=100,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9 _-]*$",
+    )
+    tool_slug: str
+    operation: str
+
+
+class ExecutionSupervision(BaseModel):
+    action: Literal["continue", "pause"]
+    reason: str = Field(min_length=1, max_length=1000)
+    delegations: list[StepDelegation] = Field(default_factory=list, max_length=20)
+
+
+class ExecutionDirective(BaseModel):
+    action: Literal["execute", "escalate"]
+    step_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,119}$")
+    tool_slug: str
+    operation: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class AutonomousRecoveryOption(BaseModel):
+    key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,119}$")
+    action: Literal[
+        "retry_step",
+        "retry_recorded_review",
+        "retry_final_review",
+        "reconcile_write",
+        "revalidate_connection",
+        "refresh_capabilities",
+    ]
+    step_id: str | None = None
+    reason_code: str = Field(pattern=r"^[a-z][a-z0-9_]{0,119}$")
+    delay_seconds: int = Field(default=0, ge=0, le=600)
+
+
+class AutonomousRecoveryDecision(BaseModel):
+    option_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,119}$")
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class RecoveryDiagnosis(BaseModel):
+    """A diagnosis may rank authority already granted by deterministic policy.
+
+    It deliberately cannot propose a tool call or provider arguments.  The recovery
+    supervisor receives only option keys minted by the application.
+    """
+
+    category: Literal[
+        "transient_provider",
+        "authorization",
+        "capability_drift",
+        "workflow_context",
+        "verification",
+        "uncertain_write",
+        "policy",
+        "unknown",
+    ] = "unknown"
+    likely_cause: str = Field(min_length=1, max_length=1000)
+    evidence: list[str] = Field(default_factory=list, max_length=10)
+    ranked_option_keys: list[str] = Field(default_factory=list, max_length=10)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
 class WorkflowPlan(BaseModel):
     name: str
     interpretation: str
     steps: list[PlanStep] = Field(min_length=1, max_length=20)
     planning_artifacts: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_execution_graph(self):
+        known: set[str] = set()
+        for index, step in enumerate(self.steps, start=1):
+            if not step.key:
+                step.key = f"step_{index}"
+            if step.key in known:
+                raise ValueError(f"Duplicate workflow step key: {step.key}")
+            unknown = set(step.depends_on) - known
+            if unknown:
+                raise ValueError(
+                    f"Step {step.key} depends on missing or later steps: "
+                    + ", ".join(sorted(unknown))
+                )
+            if step.condition is not None and not step.optional:
+                # A required step may never be skipped. Normalize this occasional
+                # planner contradiction at the contract boundary instead of
+                # allowing a silent skip or retrying a mechanical repair.
+                step.condition = None
+            known.add(step.key)
+        return self
 
 
 class CriticDecision(BaseModel):
@@ -128,12 +357,43 @@ class CriticDecision(BaseModel):
     policy_violations: list[str] = Field(default_factory=list)
 
 
+class ClaimEvidence(BaseModel):
+    step_id: str
+    claim: str
+
+
 class UnifiedDeliverable(BaseModel):
     summary: str
     deliverable: str
-    traceability: list[dict[str, str]] = Field(default_factory=list)
+    traceability: list[ClaimEvidence] = Field(default_factory=list)
     validation_passed: bool = True
     required_fixes: list[str] = Field(default_factory=list)
+
+
+class OutcomeVerification(BaseModel):
+    status: Literal["verified", "unverified", "failed"]
+    evidence_step_ids: list[str] = Field(default_factory=list)
+    reasons: list[str] = Field(default_factory=list)
+    required_fixes: list[str] = Field(default_factory=list)
+
+
+class StepRepair(BaseModel):
+    tool_slug: str
+    operation: str
+    arguments: dict[str, Any]
+    reason: str
+
+
+class MemorySearch(BaseModel):
+    query: str = Field(min_length=3, max_length=2000)
+    limit: int = Field(default=5, ge=1, le=20)
+    minimum_score: float = Field(default=0.25, ge=-1, le=1)
+
+
+class MaterializedActionArguments(BaseModel):
+    """Concrete provider arguments prepared from accepted workflow artifacts."""
+
+    arguments: dict[str, Any] = Field(default_factory=dict)
 
 
 class ApprovalDecision(BaseModel):
@@ -144,6 +404,16 @@ class ApprovalDecision(BaseModel):
 class PlanApproval(BaseModel):
     approved: bool
     edited_steps: list[PlanStep] | None = None
+    # Plan review and provider-action approval are separate user decisions.
+    # Existing clients keep the legacy one-click behavior by default, while
+    # staged clients can run safe preparation steps before showing a concrete
+    # write preview.
+    approve_consequential: bool = True
+    # The approval snapshot already grants operation-level read permissions.  This
+    # flag lets AURA repair a failed read inside that exact permission envelope;
+    # writes, new tools, new operations and new literal resource targets still need
+    # a new human approval.
+    allow_autonomous_read_repairs: bool = True
 
 
 class ResumeDecision(BaseModel):

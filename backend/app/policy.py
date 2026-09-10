@@ -31,9 +31,11 @@ def operation_scope(operation: str) -> str:
     normalized = operation.lower()
     if any(word in normalized for word in ("delete", "destroy", "purge", "revoke")):
         return "destructive"
+    if normalized.endswith((".get", ".list", ".search", ".creator_info")):
+        return "read"
     if any(
         word in normalized
-        for word in ("send", "create", "update", "post", "append", "schedule", "purchase")
+        for word in ("send", "create", "update", "post", "append", "schedule", "purchase", "upsert", "publish", "upload")
     ):
         return "write"
     return "read"
@@ -131,3 +133,4 @@ def runtime_policy_check(
         elif ratio > float(policy["cost_soft_ratio"]):
             reasons.append("Actual cost exceeded the soft-warning threshold")
     return {"action": action, "reasons": reasons}
+
