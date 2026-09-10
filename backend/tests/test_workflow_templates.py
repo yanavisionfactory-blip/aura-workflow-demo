@@ -84,6 +84,15 @@ def test_creator_outreach_template_is_narrow_and_capability_complete():
     assert creator_outreach_template(PROMPT, missing_batch) is None
 
 
+def test_creator_outreach_template_accepts_explicit_tiktok_metric_contract():
+    prompt = """
+    Run the Creator Outreach workflow, require followers, videos, and original audio,
+    submit to https://mgr-approver.vercel.app/, and document approvals in my creators.
+    """
+
+    assert creator_outreach_template(prompt, inventory()) is not None
+
+
 def test_creator_outreach_template_rejects_ambiguous_capability_owners():
     ambiguous = inventory()
     ambiguous.append({**ambiguous[-1], "slug": "second-approval-form"})

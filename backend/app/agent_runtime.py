@@ -349,6 +349,32 @@ async def _run_planner(agent: Agent, payload: dict, max_turns: int = 8) -> Plann
     raise RuntimeError("Planner recovery exhausted")
 
 
+def _routing_inventory(inventory: list[dict]) -> list[dict]:
+    """Keep routing input small while preserving every executable choice.
+
+    The router needs operation names and connection state, not full JSON schemas,
+    output contracts, or reliability metadata. Those contracts are supplied only
+    to the builder after the router has selected a bounded toolset.
+    """
+    keys = ("slug", "name", "kind", "allowed_operations", "connected")
+    return [{key: item.get(key) for key in keys if key in item} for item in inventory]
+
+
+def _builder_inventory(inventory: list[dict], selected_slugs: set[str]) -> list[dict]:
+    """Return contracts only for tools selected by the staged router."""
+    selected = [item for item in inventory if item.get("slug") in selected_slugs]
+    source = selected or inventory
+    keys = (
+        "slug",
+        "name",
+        "kind",
+        "allowed_operations",
+        "connected",
+        "operation_contracts",
+    )
+    return [{key: item.get(key) for key in keys if key in item} for item in source]
+
+
 async def _run_staged_planner(
     agents: dict[str, Agent], payload: dict, max_turns: int = 8
 ) -> PlanningBundle:
@@ -358,15 +384,28 @@ async def _run_staged_planner(
     source of the provider failure. The staged route gives each model call a much
     smaller output contract while preserving the same inventory and safety checks.
     """
+    intent_payload = {
+        key: payload[key]
+        for key in (
+            "user_request",
+            "temporal_context",
+            "available_input_names",
+            "planner_repair_requirements",
+            "required_fixes",
+            "response_recovery",
+        )
+        if key in payload
+    }
     objective = ObjectiveSpec.model_validate(
-        await _run(agents["intent"], payload, max_turns=max_turns)
+        await _run(agents["intent"], intent_payload, max_turns=max_turns)
     )
+    routing_inventory = _routing_inventory(payload["executable_tool_inventory"])
     toolset = ToolsetProposal.model_validate(
         await _run(
             agents["router"],
             {
                 "objective": objective.model_dump(mode="json"),
-                "executable_tool_inventory": payload["executable_tool_inventory"],
+                "executable_tool_inventory": routing_inventory,
                 "available_input_names": payload.get("available_input_names", []),
                 "temporal_context": payload.get("temporal_context", {}),
                 "required_fixes": payload.get("required_fixes", []),
@@ -379,13 +418,16 @@ async def _run_staged_planner(
             max_turns=max_turns,
         )
     )
+    selected_slugs = {selection.slug for selection in toolset.tools}
     plan = WorkflowPlan.model_validate(
         await _run(
             agents["builder"],
             {
                 "objective": objective.model_dump(mode="json"),
                 "toolset_proposal": toolset.model_dump(mode="json"),
-                "executable_tool_inventory": payload["executable_tool_inventory"],
+                "executable_tool_inventory": _builder_inventory(
+                    payload["executable_tool_inventory"], selected_slugs
+                ),
                 "available_input_names": payload.get("available_input_names", []),
                 "temporal_context": payload.get("temporal_context", {}),
                 "required_fixes": payload.get("required_fixes", []),
@@ -844,7 +886,13 @@ async def create_plan(
     try:
         bundle = await _run_planner(agents["planner"], request_payload, max_turns=8)
     except ModelInputTooLarge:
-        raise
+        try:
+            bundle = await _run_staged_planner(agents, request_payload, max_turns=8)
+            recovery_mode = "staged_input_limit"
+        except Exception as staged_error:
+            raise RuntimeError(
+                "Planner compact recovery exhausted after an input-limit failure"
+            ) from staged_error
     except Exception:  # noqa: BLE001 - provider/SDK failures all use the staged route
         try:
             bundle = await _run_staged_planner(agents, request_payload, max_turns=8)
@@ -877,11 +925,13 @@ async def create_plan(
         repair_started_at = perf_counter()
         try:
             bundle = await _run_planner(agents["planner"], repaired_payload, max_turns=8)
-        except ModelInputTooLarge:
-            raise
-        except Exception:  # noqa: BLE001 - repair needs the same independent recovery path
+        except Exception as repair_error:  # noqa: BLE001 - bounded staged recovery
             bundle = await _run_staged_planner(agents, repaired_payload, max_turns=8)
-            recovery_mode = "staged_repair"
+            recovery_mode = (
+                "staged_input_limit_repair"
+                if is_input_limit(repair_error)
+                else "staged_repair"
+            )
         repair_ms += round((perf_counter() - repair_started_at) * 1000)
         objective = bundle.objective
         toolset = bundle.toolset
@@ -951,11 +1001,13 @@ async def create_plan(
         manager_repair_started = perf_counter()
         try:
             bundle = await _run_planner(agents["planner"], repaired_payload, max_turns=8)
-        except ModelInputTooLarge:
-            raise
-        except Exception:  # noqa: BLE001 - use the same bounded staged recovery
+        except Exception as repair_error:  # noqa: BLE001 - bounded staged recovery
             bundle = await _run_staged_planner(agents, repaired_payload, max_turns=8)
-            recovery_mode = "staged_manager_repair"
+            recovery_mode = (
+                "staged_input_limit_manager_repair"
+                if is_input_limit(repair_error)
+                else "staged_manager_repair"
+            )
         repair_ms += round((perf_counter() - manager_repair_started) * 1000)
         objective = bundle.objective
         toolset = bundle.toolset

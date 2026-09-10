@@ -1156,6 +1156,102 @@ def test_create_plan_falls_back_to_staged_agents_after_combined_recovery(monkeyp
     assert result.planning_artifacts["connection_requirements"] == ["jira"]
 
 
+def test_create_plan_compacts_staged_recovery_after_input_limit(monkeypatch) -> None:
+    planner = object()
+    intent = object()
+    router = object()
+    builder = object()
+    staged_payloads = {}
+
+    async def fake_run(agent, payload, max_turns=8):
+        if agent is planner:
+            raise agent_runtime.ModelInputTooLarge("context_length_exceeded")
+        if agent is intent:
+            staged_payloads["intent"] = payload
+            return {"goal": "Read CRM records"}
+        if agent is router:
+            staged_payloads["router"] = payload
+            return {
+                "tools": [
+                    {"slug": "crm", "role": "source", "rationale": "Read records"}
+                ]
+            }
+        staged_payloads["builder"] = payload
+        return {
+            "name": "Read CRM records",
+            "interpretation": "Read current CRM records",
+            "steps": [
+                {
+                    "key": "read_records",
+                    "agent": "research",
+                    "tool_slug": "crm",
+                    "operation": "records.read",
+                    "arguments": {},
+                    "reason": "Read current records",
+                    "expected_output": "Current records",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(
+        agent_runtime,
+        "build_agents",
+        lambda: {
+            "planner": planner,
+            "intent": intent,
+            "router": router,
+            "builder": builder,
+        },
+    )
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    result = asyncio.run(
+        create_plan(
+            "Read CRM records",
+            [
+                {
+                    "slug": "crm",
+                    "name": "CRM",
+                    "kind": "api",
+                    "allowed_operations": ["records.read"],
+                    "connected": True,
+                    "operation_contracts": [
+                        {
+                            "name": "records.read",
+                            "input_schema": {"type": "object", "properties": {}},
+                            "output_schema": {"description": "large provider schema"},
+                        }
+                    ],
+                },
+                {
+                    "slug": "unused",
+                    "name": "Unused",
+                    "kind": "api",
+                    "allowed_operations": ["unused.read"],
+                    "connected": True,
+                    "operation_contracts": [
+                        {
+                            "name": "unused.read",
+                            "output_schema": {"description": "must not reach builder"},
+                        }
+                    ],
+                },
+            ],
+        )
+    )
+
+    assert "executable_tool_inventory" not in staged_payloads["intent"]
+    assert all(
+        "operation_contracts" not in item
+        for item in staged_payloads["router"]["executable_tool_inventory"]
+    )
+    assert [
+        item["slug"]
+        for item in staged_payloads["builder"]["executable_tool_inventory"]
+    ] == ["crm"]
+    assert result.planning_artifacts["planner_recovery_mode"] == "staged_input_limit"
+
+
 def test_normalizer_infers_prior_step_dependencies_and_write_safety() -> None:
     workflow = plan(
         PlanStep(

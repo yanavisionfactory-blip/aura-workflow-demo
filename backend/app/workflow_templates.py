@@ -28,12 +28,14 @@ def creator_outreach_template(
 
     requested = prompt.casefold()
     markers = (
-        "tiktok",
         "creator outreach",
         "my creators",
         "mgr-approver.vercel.app",
     )
-    if not all(marker in requested for marker in markers):
+    platform_signal = "tiktok" in requested or all(
+        marker in requested for marker in ("followers", "videos", "original audio")
+    )
+    if not platform_signal or not all(marker in requested for marker in markers):
         return None
 
     google = _owner(
