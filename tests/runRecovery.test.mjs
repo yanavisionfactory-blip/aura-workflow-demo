@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { needsRecovery, recoveryForRun } from '../src/lib/runRecovery.mjs';
+import {
+  alternativeRecoveryPrompt,
+  needsRecovery,
+  recoveryForRun,
+  startupRunDisposition,
+} from '../src/lib/runRecovery.mjs';
 
 const run = (patch = {}) => ({ id: 'saved-run', status: 'waiting_for_action',
   steps: [{ id: 'done', status: 'completed', consequential: false },
@@ -10,6 +15,33 @@ const run = (patch = {}) => ({ id: 'saved-run', status: 'waiting_for_action',
 test('all real interrupted states route to recovery, not final results', () => {
   for (const status of ['waiting_for_action', 'blocked', 'failed']) assert.equal(needsRecovery(status), true);
   for (const status of ['completed', 'awaiting_approval', 'running', 'cancelled']) assert.equal(needsRecovery(status), false);
+});
+
+test('startup monitors active work without hijacking the home screen for human decisions', () => {
+  for (const status of ['queued', 'planning', 'running']) {
+    assert.equal(startupRunDisposition({ status }), 'monitor');
+  }
+  for (const status of ['awaiting_approval', 'waiting_for_action', 'blocked', 'failed']) {
+    assert.equal(startupRunDisposition({ status }), 'attention');
+  }
+  for (const status of ['completed', 'cancelled', 'unknown']) {
+    assert.equal(startupRunDisposition({ status }), 'ignore');
+  }
+});
+
+test('alternative recovery plans preserve safety boundaries and user direction', () => {
+  const saved = run({
+    prompt: 'Review creator candidates',
+    error: 'client_id=SECRET-EXAMPLE',
+  });
+  const automatic = alternativeRecoveryPrompt(saved);
+  assert.match(automatic, /different policy-safe approach/);
+  assert.match(automatic, /do not repeat any external action whose outcome is uncertain/);
+  assert.equal(automatic.includes('SECRET-EXAMPLE'), false);
+
+  const userDirected = alternativeRecoveryPrompt(saved, 'Use the second verified Google account');
+  assert.match(userDirected, /Use the second verified Google account/);
+  assert.match(userDirected, /ask for approval before every new consequential action/);
 });
 test('read retries target the saved failed step and keep completed work', () => {
   const r = recoveryForRun(run());
