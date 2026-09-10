@@ -9,9 +9,10 @@ The GitHub Pages site is only the React client. Real execution is provided by `b
 - Redis and Celery provide recoverable background planning and execution.
 - OpenAI Agents SDK runs structured, role-specific agents behind the control-plane API.
 - The agent hierarchy includes an Intent & Scope Agent, Tool Router, Plan Builder, Static Plan
-  Evaluator, AURA Senior Orchestrator, named Execution Agents, Tool Output Critic, Unified Response
-  Synthesizer, Outcome Verifier, bounded Replanner, and Approval Argument Resolver. A deterministic
-  workflow state manager remains the durable source of truth around those model roles.
+  Evaluator, AURA Senior Orchestrator, named Execution Agents, Failure Diagnostician, Autonomous
+  Delivery Supervisor, Tool Output Critic, Unified Response Synthesizer, Outcome Verifier, bounded
+  Replanner, and Approval Argument Resolver. A deterministic workflow state manager remains the
+  durable source of truth around those model roles.
 - Planning is separated into Propose, Supervise, and Authorize phases. The Senior Orchestrator
   reviews a deterministically valid plan and can require one bounded planner repair. Execution cannot
   begin until capability checks and human approval pass.
@@ -20,12 +21,18 @@ The GitHub Pages site is only the React client. Real execution is provided by `b
   gateway. It cannot change the approved step key, tool, operation, arguments, permissions, or
   destination; invalid widening is discarded and logged. The same boundary applies to approved
   fallback and reduced-scope recovery calls.
-- After a delivery stops, an Autonomous Delivery Supervisor selects only from policy-generated safe
-  recovery options. It can retry transient reads on a fresh durable delivery, resume review from a
-  saved provider receipt, repeat final verification, revalidate an existing managed connection, or
-  reconcile a supported uncertain update through read-back. Recovery state, attempt boundaries and
-  the next dispatch time are persisted in the run. It cannot approve work, change arguments, create
-  a login session, reactivate an explicitly revoked connection, or repeat an uncertain write.
+- After a delivery stops, a Failure Diagnostician independently classifies the saved failure and an
+  Autonomous Delivery Supervisor selects only from policy-generated safe recovery options. They can
+  retry transient reads on a fresh durable delivery, refresh a drifted capability contract, resume
+  review from a saved provider receipt, repeat final verification, revalidate an existing managed
+  connection, or reconcile a supported uncertain update through read-back. Failure fingerprints,
+  attempted actions, successful repairs, attempt boundaries and the next dispatch time are persisted,
+  so the same ineffective recovery does not loop forever.
+- Plan approval captures a bounded read-repair authority flag. The Replanner may automatically correct
+  a failed read only when its tool and operation were already approved, dependencies stay unchanged,
+  and no literal account, destination, resource ID, URL, email, range or other resource target changes.
+  The derived plan and system authority are recorded as a new immutable plan version and approval
+  snapshot. Writes, new tools, new operations and target changes still require human approval.
 - Each real provider result is evaluated against its step contract. Safe reads may be retried once;
   consequential actions are never automatically replayed after an uncertain result.
 - Final synthesis uses only critic-accepted artifacts and includes step-level traceability.
