@@ -24,6 +24,7 @@ from .autonomous_delivery import (
     attempts_for_current_cycle,
     autonomously_recover_run,
     mark_autonomous_handoff,
+    mark_recovery_checkpoint_succeeded,
 )
 from .config import get_settings
 from .db import SessionLocal, engine, set_tenant_context
@@ -1011,6 +1012,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             name,
                         )
                 run.execution_context = deepcopy(context)
+                await mark_recovery_checkpoint_succeeded(session, run, step)
                 await session.commit()
                 continue
             if step.status == StepStatus.skipped:
@@ -1858,6 +1860,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     await session.commit()
                     return
             run.execution_context = deepcopy(context)
+            await mark_recovery_checkpoint_succeeded(session, run, step)
             session.add(
                 Artifact(
                     workspace_id=workspace_id,

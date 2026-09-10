@@ -88,6 +88,7 @@ def test_authorization_error_is_replaced_with_connection_guidance():
 
 def test_plan_approval_supports_staged_consequential_review():
     assert PlanApproval(approved=True).approve_consequential is True
+    assert PlanApproval(approved=True).allow_autonomous_read_repairs is True
     assert (
         PlanApproval(approved=True, approve_consequential=False).approve_consequential
         is False

@@ -23,7 +23,11 @@ from app.models import (
 from app.native_connectors import native_manifest, native_operations
 from app.outcome_checks import build_outcome_check, evaluate_outcome_check
 from app.policy import canonical_plan_hash
-from app.replanning import derive_repaired_plan, maybe_replan_run
+from app.replanning import (
+    delegated_read_repair_allowed,
+    derive_repaired_plan,
+    maybe_replan_run,
+)
 from app.schemas import PlanStep, StepRepair, WorkflowPlan
 from app.semantic_memory import index_run_memory, search_memory, unit_vector
 
@@ -187,6 +191,123 @@ async def test_automatic_replanning_stages_a_reviewable_version(
             assert len(versions) == 2 and versions[-1].status == "draft"
             assert versions[-1].plan_hash == canonical_plan_hash(run.plan)
     assert await maybe_replan_run("run", "w") is False  # Must wait for approval.
+
+
+async def test_delegated_read_repair_auto_applies_inside_permission_envelope(
+    runtime, monkeypatch
+):
+    monkeypatch.setattr(replanning, "SessionLocal", runtime)
+    original = notion_plan()
+    digest = canonical_plan_hash(original)
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        run.plan, run.status = original, RunStatus.waiting_for_action
+        run.execution_context = {
+            "__aura_authority__": {
+                "version": 1,
+                "approved_plan_hash": digest,
+                "allow_autonomous_read_repairs": True,
+                "read_repair_count": 0,
+            }
+        }
+        version = await session.get(PlanVersion, "version")
+        version.plan, version.plan_hash = original, digest
+        snapshot = await session.get(replanning.ApprovalSnapshot, "snapshot")
+        snapshot.plan_hash = digest
+        snapshot.permission_snapshot = {"notion": native_operations("notion")}
+        step = await session.get(RunStep, "step")
+        step.consequential, step.tool_slug, step.operation = False, "notion", "notion.search"
+        step.step_key, step.arguments, step.status = "find", {"query": "report"}, StepStatus.failed
+        session.add(
+            ToolConnection(
+                id="notion-tool",
+                workspace_id="w",
+                slug="notion",
+                display_name="Notion",
+                kind=ToolKind.oauth,
+                allowed_operations=native_operations("notion"),
+                config={},
+            )
+        )
+        session.add(
+            CapabilityManifest(
+                id="notion-manifest",
+                workspace_id="w",
+                tool_id="notion-tool",
+                status="verified",
+                provider_type="oauth",
+                manifest=native_manifest("notion"),
+            )
+        )
+        session.add(
+            AuditEvent(
+                workspace_id="w",
+                run_id="run",
+                actor="executor",
+                event_type="step.variable_resolution_failed",
+                payload={"step_id": "step", "internal_error": "results path changed"},
+            )
+        )
+        await session.commit()
+
+    async def proposal(*args):
+        return StepRepair(
+            tool_slug="notion",
+            operation="notion.search",
+            arguments={"query": "quarterly report"},
+            reason="Repair the read query without changing its resource target",
+        )
+
+    monkeypatch.setattr(replanning, "_run", proposal)
+    assert await maybe_replan_run("run", "w") == "retry"
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        step = await session.get(RunStep, "step")
+        snapshots = (
+            await session.scalars(
+                select(replanning.ApprovalSnapshot).where(
+                    replanning.ApprovalSnapshot.run_id == "run"
+                )
+            )
+        ).all()
+        assert run.status == RunStatus.recovering
+        assert run.plan_approved is True
+        assert step.arguments == {"query": "quarterly report"}
+        assert run.execution_context["__aura_authority__"]["read_repair_count"] == 1
+        assert len(snapshots) == 2
+        assert snapshots[-1].approver_subject == "aura-delegated-read-repair"
+
+
+def test_delegated_read_repair_cannot_change_literal_resource_target(monkeypatch):
+    monkeypatch.setattr(
+        replanning,
+        "get_settings",
+        lambda: SimpleNamespace(max_autonomous_read_repairs=3),
+    )
+    run = SimpleNamespace(
+        execution_context={
+            "__aura_authority__": {
+                "version": 1,
+                "allow_autonomous_read_repairs": True,
+                "read_repair_count": 0,
+            }
+        }
+    )
+    snapshot = SimpleNamespace(permission_snapshot={"notion": ["notion.page.get"]})
+    approved = {
+        "tool_slug": "notion",
+        "operation": "notion.page.get",
+        "arguments": {"page_id": "approved-page"},
+        "depends_on": [],
+    }
+    replacement = SimpleNamespace(
+        tool_slug="notion",
+        operation="notion.page.get",
+        arguments={"page_id": "different-page"},
+        depends_on=[],
+        consequential=False,
+    )
+    assert delegated_read_repair_allowed(run, snapshot, approved, replacement) is False
 
 
 async def test_automatic_replanning_never_rewrites_an_attempted_write(

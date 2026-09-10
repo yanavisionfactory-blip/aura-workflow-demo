@@ -1,6 +1,7 @@
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from datetime import datetime, timezone
 
 import pytest
 from fastapi import HTTPException
@@ -96,3 +97,91 @@ def test_approval_status_never_treats_negative_receipt_as_approved():
     assert worker._approval_status("Already contacted — you cannot reach out") == "rejected"
     assert worker._approval_status("Approved: you are able to reach out") == "approved"
     assert worker._approval_status("Submission received") == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_batch_returns_only_explicit_approvals(monkeypatch):
+    @asynccontextmanager
+    async def context():
+        yield object()
+
+    async def target(url, path):
+        return str(url)
+
+    monkeypatch.setattr(worker, "public_browser_context", context)
+    monkeypatch.setattr(worker, "_connector_url", target)
+    monkeypatch.setattr(
+        worker,
+        "open_public_page",
+        AsyncMock(side_effect=[
+            SimpleNamespace(close=AsyncMock()),
+            SimpleNamespace(close=AsyncMock()),
+            SimpleNamespace(close=AsyncMock()),
+        ]),
+    )
+    monkeypatch.setattr(
+        worker,
+        "_submit_form_page",
+        AsyncMock(side_effect=[
+            {"submitted": True, "status": "approved", "url": "https://example.com", "text": "Approved"},
+            {"submitted": True, "status": "rejected", "url": "https://example.com", "text": "Do not contact"},
+            {"submitted": True, "status": "unknown", "url": "https://example.com", "text": "Received"},
+        ]),
+    )
+    records = [
+        {"creatorUsername": "approved_creator"},
+        {"creatorUsername": "rejected_creator"},
+        {"creatorUsername": "unknown_creator"},
+    ]
+
+    result = await worker.execute(worker.ExecuteRequest(
+        target_url="https://example.com",
+        capability="browser.form.batch.submit",
+        input={"records": records, "identity_field": "creatorUsername"},
+    ))
+
+    assert result["approved_records"] == [records[0]]
+    assert [item["status"] for item in result["results"]] == [
+        "approved",
+        "rejected",
+        "unknown",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_batch_isolates_uncertain_submission_without_replaying_it(monkeypatch):
+    @asynccontextmanager
+    async def context():
+        yield object()
+
+    async def target(url, path):
+        return str(url)
+
+    monkeypatch.setattr(worker, "public_browser_context", context)
+    monkeypatch.setattr(worker, "_connector_url", target)
+    pages = [SimpleNamespace(close=AsyncMock()) for _ in range(3)]
+    monkeypatch.setattr(worker, "open_public_page", AsyncMock(side_effect=pages))
+    submit = AsyncMock(side_effect=[
+        {"submitted": True, "status": "approved", "url": "https://example.com", "text": "Approved"},
+        TimeoutError("provider response lost"),
+        {"submitted": True, "status": "rejected", "url": "https://example.com", "text": "Rejected"},
+    ])
+    monkeypatch.setattr(worker, "_submit_form_page", submit)
+    records = [
+        {"creatorUsername": "approved_creator"},
+        {"creatorUsername": "uncertain_creator"},
+        {"creatorUsername": "rejected_creator"},
+    ]
+
+    result = await worker.execute(worker.ExecuteRequest(
+        target_url="https://example.com",
+        capability="browser.form.batch.submit",
+        input={"records": records, "identity_field": "creatorUsername"},
+    ))
+
+    assert submit.await_count == 3
+    assert result["approved_records"] == [records[0]]
+    assert result["results"][1]["identity"] == "uncertain_creator"
+    assert result["results"][1]["status"] == "unknown"
+    assert result["results"][1]["submitted"] is False
+    assert result["results"][1]["error_code"] == "TimeoutError"

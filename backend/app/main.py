@@ -2917,7 +2917,7 @@ async def _run_view(session: AsyncSession, run: WorkflowRun) -> dict:
     attempted_steps = set((await session.scalars(
         select(StepAttempt.step_id).where(StepAttempt.run_id == run.id)
     )).all())
-    return {"id": run.id, "status": run.status.value, "prompt": run.prompt, "inputs": run.inputs, "execution_context": run.execution_context, "plan": run.plan, "plan_approved": run.plan_approved, "result": run.result, "error": run.error, "blocker": _run_blocker(run, steps, approvals_by_step, requirements, attempted_steps), "automation_state": (run.execution_context or {}).get("__aura_preflight__"), "created_at": run.created_at, "updated_at": run.updated_at, "steps": [{"id": s.id, "key": s.step_key, "position": s.position, "agent": s.agent, "tool_slug": s.tool_slug, "operation": s.operation, "arguments": s.arguments, "depends_on": s.depends_on, "dependency_mode": s.dependency_mode, "condition": s.condition, "output_variables": s.output_variables, "status": s.status.value, "consequential": s.consequential, "recovery": _step_recovery_state(run, s, attempted_steps), "approval_id": s.approval_id, "approval_status": approvals_by_step[s.id].status if s.id in approvals_by_step else None, "approval_preview": approvals_by_step[s.id].preview if s.id in approvals_by_step else None, "output": s.output, "error": s.error} for s in steps]}
+    return {"id": run.id, "status": run.status.value, "prompt": run.prompt, "inputs": run.inputs, "execution_context": run.execution_context, "plan": run.plan, "plan_approved": run.plan_approved, "result": run.result, "error": run.error, "blocker": _run_blocker(run, steps, approvals_by_step, requirements, attempted_steps), "automation_state": (run.execution_context or {}).get("__aura_preflight__"), "autonomy_state": (run.execution_context or {}).get("__aura_autonomy__"), "autonomy_authority": (run.execution_context or {}).get("__aura_authority__"), "created_at": run.created_at, "updated_at": run.updated_at, "steps": [{"id": s.id, "key": s.step_key, "position": s.position, "agent": s.agent, "tool_slug": s.tool_slug, "operation": s.operation, "arguments": s.arguments, "depends_on": s.depends_on, "dependency_mode": s.dependency_mode, "condition": s.condition, "output_variables": s.output_variables, "status": s.status.value, "consequential": s.consequential, "recovery": _step_recovery_state(run, s, attempted_steps), "approval_id": s.approval_id, "approval_status": approvals_by_step[s.id].status if s.id in approvals_by_step else None, "approval_preview": approvals_by_step[s.id].preview if s.id in approvals_by_step else None, "output": s.output, "error": s.error} for s in steps]}
 
 
 @app.get("/v1/runs")
@@ -3285,6 +3285,14 @@ async def approve_plan(
                 run.id, stored.position, edited.operation, edited.arguments
             )
     run.plan = plan_json
+    execution_context = dict(run.execution_context or {})
+    execution_context["__aura_authority__"] = {
+        "version": 1,
+        "approved_plan_hash": plan_hash,
+        "allow_autonomous_read_repairs": payload.allow_autonomous_read_repairs,
+        "read_repair_count": 0,
+    }
+    run.execution_context = execution_context
     plan_version.status = "approved"
     plan_version.approved_at = datetime.now(timezone.utc)
     permission_snapshot = {tool.slug: list(tool.allowed_operations) for tool in tools}
@@ -3358,6 +3366,7 @@ async def approve_plan(
                 "approval_mode": (
                     "combined" if payload.approve_consequential else "staged"
                 ),
+                "allow_autonomous_read_repairs": payload.allow_autonomous_read_repairs,
             },
         )
     )
