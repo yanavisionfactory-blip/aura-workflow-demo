@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     oauth_callback_overrides: str = ""
     browser_connector_url: str = ""
     browser_connector_token: str = ""
+    resource_aliases_json: str = "{}"
     # Clerk is the production identity provider. The PEM key avoids a network
     # request on every API call; JWKS is supported for key rotation.
     clerk_jwt_key: str = ""
@@ -120,6 +121,21 @@ class Settings(BaseSettings):
             str(provider).strip().lower(): str(integration).strip()
             for provider, integration in value.items()
             if str(provider).strip() and str(integration).strip()
+        }
+
+    @property
+    def resource_aliases(self) -> dict[str, str]:
+        """Return operator-provisioned exact resource IDs keyed by display name."""
+        try:
+            value = json.loads(self.resource_aliases_json or "{}")
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(value, dict):
+            return {}
+        return {
+            str(name).strip().casefold(): str(resource_id).strip()
+            for name, resource_id in value.items()
+            if str(name).strip() and str(resource_id).strip()
         }
 
 

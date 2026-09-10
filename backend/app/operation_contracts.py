@@ -217,6 +217,10 @@ KNOWN.update({
         "properties": {
             "query": TEXT,
             "status": {"type": "string", "enum": ["resolved", "not_found", "ambiguous"]},
+            "resolution_source": {
+                "type": "string",
+                "enum": ["exact_name_search", "verified_resource_alias"],
+            },
             "match_count": {"type": "integer", "minimum": 0},
             "matches": {"type": "array", "items": OBJECT},
             "spreadsheet": {
