@@ -699,11 +699,25 @@ async def execute(payload: ExecuteRequest) -> dict:
         results: list[dict] = []
         async with public_browser_context() as context:
             for index, record in enumerate(records):
-                page = await open_public_page(context, target)
+                page = None
                 try:
+                    page = await open_public_page(context, target)
                     receipt = await _submit_form_page(page, record, submit_text)
+                except Exception as exc:
+                    # A timeout after clicking submit has an uncertain external
+                    # effect. Preserve that creator as unknown and continue the
+                    # finite batch; never retry it or promote it to approved.
+                    receipt = {
+                        "submitted": False,
+                        "filled_fields": [],
+                        "status": "unknown",
+                        "url": target,
+                        "text": "Submission result unavailable.",
+                        "error_code": type(exc).__name__,
+                    }
                 finally:
-                    await page.close()
+                    if page is not None:
+                        await page.close()
                 identity = record.get(identity_field) if identity_field else None
                 if identity is None:
                     identity = next((value for value in record.values() if value), index)
