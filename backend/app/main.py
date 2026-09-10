@@ -2738,7 +2738,19 @@ async def create_run(
         workflow_id=payload.workflow_id,
         prompt=payload.prompt,
         inputs=inputs,
-        execution_context={"inputs": inputs, "vars": inputs, "steps": {}},
+        execution_context={
+            "inputs": inputs,
+            "vars": inputs,
+            "steps": {},
+            "__aura_supervisor__": {
+                "version": 1,
+                "owner": "run_supervisor",
+                "phase": "planning",
+                "status": "active",
+                "attempts": {},
+                "failure_history": [],
+            },
+        },
         status=RunStatus.queued,
         request_key=idempotency_key_header,
     )
@@ -2917,7 +2929,12 @@ async def _run_view(session: AsyncSession, run: WorkflowRun) -> dict:
     attempted_steps = set((await session.scalars(
         select(StepAttempt.step_id).where(StepAttempt.run_id == run.id)
     )).all())
-    return {"id": run.id, "status": run.status.value, "prompt": run.prompt, "inputs": run.inputs, "execution_context": run.execution_context, "plan": run.plan, "plan_approved": run.plan_approved, "result": run.result, "error": run.error, "blocker": _run_blocker(run, steps, approvals_by_step, requirements, attempted_steps), "automation_state": (run.execution_context or {}).get("__aura_preflight__"), "autonomy_state": (run.execution_context or {}).get("__aura_autonomy__"), "autonomy_authority": (run.execution_context or {}).get("__aura_authority__"), "created_at": run.created_at, "updated_at": run.updated_at, "steps": [{"id": s.id, "key": s.step_key, "position": s.position, "agent": s.agent, "tool_slug": s.tool_slug, "operation": s.operation, "arguments": s.arguments, "depends_on": s.depends_on, "dependency_mode": s.dependency_mode, "condition": s.condition, "output_variables": s.output_variables, "status": s.status.value, "consequential": s.consequential, "recovery": _step_recovery_state(run, s, attempted_steps), "approval_id": s.approval_id, "approval_status": approvals_by_step[s.id].status if s.id in approvals_by_step else None, "approval_preview": approvals_by_step[s.id].preview if s.id in approvals_by_step else None, "output": s.output, "error": s.error} for s in steps]}
+    blocker = _run_blocker(run, steps, approvals_by_step, requirements, attempted_steps)
+    from .run_supervisor import public_run_projection
+    public = public_run_projection(run, blocker)
+    public_context = dict(run.execution_context or {})
+    public_context.pop("__aura_supervisor__", None)
+    return {"id": run.id, "status": public["public_status"], "public_status": public["public_status"], "prompt": run.prompt, "inputs": run.inputs, "execution_context": public_context, "plan": run.plan, "plan_approved": run.plan_approved, "result": run.result, "error": public["public_error"], "blocker": public["public_blocker"], "supervisor_state": public["supervisor"], "automation_state": (run.execution_context or {}).get("__aura_preflight__"), "autonomy_state": (run.execution_context or {}).get("__aura_autonomy__"), "autonomy_authority": (run.execution_context or {}).get("__aura_authority__"), "created_at": run.created_at, "updated_at": run.updated_at, "steps": [{"id": s.id, "key": s.step_key, "position": s.position, "agent": s.agent, "tool_slug": s.tool_slug, "operation": s.operation, "arguments": s.arguments, "depends_on": s.depends_on, "dependency_mode": s.dependency_mode, "condition": s.condition, "output_variables": s.output_variables, "status": s.status.value, "consequential": s.consequential, "recovery": _step_recovery_state(run, s, attempted_steps), "approval_id": s.approval_id, "approval_status": approvals_by_step[s.id].status if s.id in approvals_by_step else None, "approval_preview": approvals_by_step[s.id].preview if s.id in approvals_by_step else None, "output": s.output, "error": s.error} for s in steps]}
 
 
 @app.get("/v1/runs")
@@ -3352,6 +3369,8 @@ async def approve_plan(
             step.status = StepStatus.awaiting_approval
     run.plan_approved = True
     run.status = RunStatus.running
+    from .run_supervisor import mark_supervisor_phase
+    mark_supervisor_phase(run, "execution", "active")
     session.add(
         AuditEvent(
             workspace_id=wid,

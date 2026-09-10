@@ -22,7 +22,9 @@ class Settings(BaseSettings):
     certification_signing_key: str = ""
     recovery_probe_enabled: bool = False
     recovery_probe_delay_seconds: int = Field(default=30, ge=15, le=120)
-    recovery_scheduler_enabled: bool = False
+    # Recovery is part of the runtime, not an optional demo feature.  It may be
+    # disabled explicitly for isolated maintenance, but production defaults to on.
+    recovery_scheduler_enabled: bool = True
     scheduler_interval_seconds: int = Field(default=15, ge=5, le=300)
     stale_run_seconds: int = Field(default=600, ge=120, le=3600)
     max_restart_recoveries: int = Field(default=3, ge=1, le=10)
@@ -33,6 +35,7 @@ class Settings(BaseSettings):
     agent_managed_execution_enabled: bool = True
     autonomous_delivery_enabled: bool = True
     max_autonomous_recovery_rounds: int = Field(default=8, ge=1, le=20)
+    max_planning_recovery_rounds: int = Field(default=8, ge=1, le=20)
     max_autonomous_step_recoveries: int = Field(default=3, ge=1, le=8)
     max_autonomous_review_recoveries: int = Field(default=3, ge=1, le=8)
     max_autonomous_read_repairs: int = Field(default=3, ge=0, le=8)

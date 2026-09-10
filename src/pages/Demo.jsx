@@ -438,7 +438,7 @@ export default function Demo() {
   };
   const pushT = (t) => timeoutRefs.current.push(t);
 
-  const getPythonRunResilient = async (runId, generation, maxTransientFailures = 6) => {
+  const getPythonRunResilient = async (runId, generation, maxTransientFailures = Number.POSITIVE_INFINITY) => {
     let transientFailures = 0;
     while (pythonPollGenerationRef.current === generation) {
       try {
@@ -453,6 +453,21 @@ export default function Demo() {
       }
     }
     return null;
+  };
+
+  const createPythonRunResilient = async (prompt, workflowId, requestKey, inputs) => {
+    let transientFailures = 0;
+    for (;;) {
+      try {
+        return await createPythonRun(prompt, workflowId, requestKey, inputs);
+      } catch (error) {
+        const transient = !error.status || error.status === 429 || error.status >= 500;
+        if (!transient) throw error;
+        transientFailures += 1;
+        const delay = Math.min(15000, 1000 * (2 ** Math.min(transientFailures - 1, 4)));
+        await new Promise((resolve) => window.setTimeout(resolve, delay));
+      }
+    }
   };
 
   const reset = useCallback(() => {
@@ -581,7 +596,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             runRequestKeyRef.current ||= globalThis.crypto?.randomUUID?.()
               || `aura-${Date.now()}-${Math.random().toString(36).slice(2)}`;
             const resources = attachedResourcesRef.current || {};
-            const created = await createPythonRun(planningPrompt, currentWorkflowIdRef.current, runRequestKeyRef.current, {
+            const created = await createPythonRunResilient(planningPrompt, currentWorkflowIdRef.current, runRequestKeyRef.current, {
               requested_tools: userSelectedToolsRef.current,
               attached_documents: (resources.documents || []).map(({ name, file_url, size }) => ({
                 name,
@@ -591,7 +606,6 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             });
             pythonRunIdRef.current = created.id;
             const generation = ++pythonPollGenerationRef.current;
-            const planningDeadline = Date.now() + 90000;
             let run;
             for (;;) {
               run = await getPythonRunResilient(created.id, generation);
@@ -605,9 +619,6 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               if (disposition === "unavailable") throw new Error(
                 run.error || "The execution backend needs more setup before it can build this plan."
               );
-              if (Date.now() >= planningDeadline) {
-                throw new Error("Planning is taking longer than expected. The saved run remains safe to retry.");
-              }
               await new Promise((resolve) => setTimeout(resolve, 1000));
             }
             pythonPlanRef.current = run.plan;
@@ -765,7 +776,6 @@ Rules:
     try {
       await resumePythonRunAfterConnection(runId, connectionId);
       const generation = ++pythonPollGenerationRef.current;
-      const planningDeadline = Date.now() + 90000;
       for (;;) {
         const run = await getPythonRunResilient(runId, generation);
         if (!run) return;
@@ -781,9 +791,6 @@ Rules:
         }
         if (disposition === "unavailable") {
           throw new Error(run.error || "AURA could not resume planning after the connection was verified.");
-        }
-        if (Date.now() >= planningDeadline) {
-          throw new Error("Planning is taking longer than expected. Your saved task is safe to retry.");
         }
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
@@ -894,7 +901,7 @@ Rules:
   const recoverRunStatus = async () => {
     try {
       const latest = await getPythonRun(pythonRunIdRef.current);
-      if (needsRecovery(latest.status)) showRunRecovery(latest);
+      if (needsRecovery(latest.public_status || latest.status)) showRunRecovery(latest);
       else {
         // A failed request is not proof that execution failed. Offer a read-only check.
         setRecoveryRun(latest);
@@ -914,7 +921,7 @@ Rules:
     try {
       const latest = await getPythonRun(pythonRunIdRef.current);
       const options = recoveryForRun(latest);
-      if (needsRecovery(latest.status)) {
+      if (needsRecovery(latest.public_status || latest.status)) {
         if (action === "check") {
           showRunRecovery(latest);
           setRecoveryMessage("Status refreshed. Choose another safe approach or keep this workflow for later.");
@@ -949,7 +956,7 @@ Rules:
           resumed = await getPythonRunResilient(latest.id, generation);
           if (!resumed) return;
           if (resumed.plan?.steps?.length && resumed.status === "awaiting_approval") break;
-          if (needsRecovery(resumed.status)) {
+          if (needsRecovery(resumed.public_status || resumed.status)) {
             setPlanLoading(false);
             showRunRecovery(resumed);
             return;
@@ -1033,7 +1040,7 @@ Rules:
           setPhase("preview");
           return;
         }
-        if (needsRecovery(run.status)) {
+        if (needsRecovery(run.public_status || run.status)) {
           showRunRecovery(run);
           return;
         }
@@ -1125,7 +1132,7 @@ Rules:
           setPhase("preview");
           return;
         }
-        if (needsRecovery(run.status)) {
+        if (needsRecovery(run.public_status || run.status)) {
           showRunRecovery(run);
           return;
         }

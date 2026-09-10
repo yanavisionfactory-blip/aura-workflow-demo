@@ -66,6 +66,10 @@ from .providers import (
     verify_oauth_credentials,
 )
 from .replanning import maybe_replan_run
+from .run_supervisor import (
+    mark_supervisor_phase,
+    recover_planning_failure,
+)
 from .schemas import CriticDecision, OutcomeVerification
 from .security import CredentialVault
 from .semantic_memory import index_run_memory
@@ -447,7 +451,35 @@ def explicit_disconnected_capabilities(prompt: str, inventory: list[dict]) -> li
 async def plan_run(run_id: str, workspace_id: str) -> None:
     async with execution_lock(engine, workspace_id, run_id) as acquired:
         if acquired:
-            await _plan_run(run_id, workspace_id)
+            try:
+                await _plan_run(run_id, workspace_id)
+            except Exception as exc:
+                # Inventory refresh, credential control-plane and database-adjacent
+                # preparation happen before the model planner.  They still belong
+                # to the same durable supervisor and must not fall through to a
+                # browser Retry button after Celery exhausts an in-memory retry.
+                logger.exception(
+                    "Unhandled planning delivery failure run_id=%s error_type=%s",
+                    run_id,
+                    type(exc).__name__,
+                )
+                async with SessionLocal() as session:
+                    await set_tenant_context(session, workspace_id)
+                    run = await session.get(WorkflowRun, run_id)
+                    if (
+                        run
+                        and run.workspace_id == workspace_id
+                        and run.status in {RunStatus.queued, RunStatus.planning}
+                    ):
+                        await recover_planning_failure(
+                            session,
+                            run,
+                            exc,
+                            max_attempts=get_settings().max_planning_recovery_rounds,
+                            base_delay_seconds=get_settings().autonomous_recovery_base_delay_seconds,
+                            max_delay_seconds=get_settings().autonomous_recovery_max_delay_seconds,
+                        )
+                        await session.commit()
 
 
 async def _plan_run(run_id: str, workspace_id: str) -> None:
@@ -461,6 +493,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
         ):
             return
         run.status = RunStatus.planning
+        mark_supervisor_phase(run, "planning", "active")
         await ensure_aura_intelligence(session, run.workspace_id)
         tools = (
             await session.scalars(
@@ -603,6 +636,9 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                     )
                 )
             run.status = RunStatus.awaiting_approval
+            run.error = None
+            run.result = {}
+            mark_supervisor_phase(run, "approval", "waiting_for_plan_review")
             await audit(
                 session,
                 run.workspace_id,
@@ -633,6 +669,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 "status": "waiting_for_connection",
                 "missing_capabilities": exc.missing_capabilities,
             }
+            mark_supervisor_phase(run, "connection", "human_action_required")
             await audit(
                 session,
                 workspace_id,
@@ -674,6 +711,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                     "status": "waiting_for_connection",
                     "missing_capabilities": missing,
                 }
+                mark_supervisor_phase(run, "connection", "human_action_required")
                 await audit(
                     session,
                     workspace_id,
@@ -687,14 +725,13 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 )
                 await session.commit()
                 return
-            run.status = RunStatus.failed
-            run.error = planning_error_message(exc)
-            await audit(
+            await recover_planning_failure(
                 session,
-                run.workspace_id,
-                "run.plan_failed",
-                {"error": run.error},
-                run.id,
+                run,
+                exc,
+                max_attempts=get_settings().max_planning_recovery_rounds,
+                base_delay_seconds=get_settings().autonomous_recovery_base_delay_seconds,
+                max_delay_seconds=get_settings().autonomous_recovery_max_delay_seconds,
             )
             await session.commit()
 
