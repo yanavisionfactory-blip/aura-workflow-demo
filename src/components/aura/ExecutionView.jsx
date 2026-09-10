@@ -16,7 +16,7 @@ export default function ExecutionView({ steps, currentStepIndex, isReal }) {
     ? null
     : isReal
     ? remaining > 0
-      ? "Working… this can take up to a minute"
+      ? "Working independently in the background"
       : null
     : !etaSecs
     ? null
@@ -41,7 +41,9 @@ export default function ExecutionView({ steps, currentStepIndex, isReal }) {
               {failed ? "Workflow paused" : recovering ? "AURA is resolving a step" : "Running your workflow"}
             </h2>
             <p className="text-xs text-muted-foreground">
-              Step {stepCount ? Math.min(currentStepIndex + 1, stepCount) : 1} of {stepCount || 1}
+              {stepCount
+                ? `Step ${Math.min(currentStepIndex + 1, stepCount)} of ${stepCount}`
+                : "Restoring the saved run"}
               {eta ? ` · ${eta}` : ""}
             </p>
           </div>
@@ -49,7 +51,7 @@ export default function ExecutionView({ steps, currentStepIndex, isReal }) {
         <div className="flex items-center gap-2">
           <Zap className="w-3.5 h-3.5 text-accent" />
           <span className="text-sm font-mono text-accent">
-            {completedCount}/{stepCount || 1}
+            {completedCount}/{stepCount}
           </span>
         </div>
       </motion.div>

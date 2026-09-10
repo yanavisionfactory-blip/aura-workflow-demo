@@ -111,16 +111,18 @@ export default function ErrorView({ error, step, runSteps, onRetry, onEdit, onSk
       {message && <p role="status" className="mb-4 text-sm text-amber-200">{message}</p>}
       {/* Actions */}
       <div className="flex flex-wrap items-center gap-2 pt-4 border-t border-white/6">
-        <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
-          <Button
-            size="sm"
-            onClick={onRetry}
-            disabled={busy}
-            className="bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white border-0 gap-1.5"
-          >
-            {busy ? "Checking…" : buttonLabel}
-          </Button>
-        </motion.div>
+        {onRetry && error.canRetry !== false && (
+          <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+            <Button
+              size="sm"
+              onClick={onRetry}
+              disabled={busy}
+              className="bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white border-0 gap-1.5"
+            >
+              {busy ? "Checking…" : buttonLabel}
+            </Button>
+          </motion.div>
+        )}
         {onEdit && <Button disabled={busy} variant="outline" size="sm" onClick={onEdit} className="gap-1.5 border-white/10">
           <Pencil className="w-3.5 h-3.5" />
           Edit
