@@ -165,8 +165,10 @@ def build_agents() -> dict[str, Agent]:
             attachments: [{filename: 'roadmap.pdf', url: '{{steps.export.job.urls.0}}'}].
             A link in the body does not satisfy a file attachment request. Never invent a file hash.
             Prefer a listed finite batch operation over an implicit foreach or invented per-item
-            variable. A batch operation is the bounded iteration strategy: pass the complete
-            evidence-qualified, duplicate-free array and use its per-record receipts. When the user
+            variable. A full {{steps.key.array_field}} reference is valid for a structured array or
+            object input because AURA resolves and validates its real type before execution. A batch
+            operation is the bounded iteration strategy: pass the complete evidence-qualified,
+            duplicate-free array and use its per-record receipts. When the user
             designates an approval or policy form, that consequential call is allowed to establish
             the non-public policy decision; do not circularly require its approval result before
             invoking it. Any dependent write must select only explicit approved records, never

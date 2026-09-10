@@ -557,6 +557,15 @@ def public_catalog(slug: str) -> dict[str, Any]:
 
 
 def _validate_value(schema: dict[str, Any], value: Any, path: str) -> None:
+    # A full workflow reference is a typed value that will be resolved before
+    # provider dispatch. Permit it during plan compilation even when the target
+    # contract expects an array/object; runtime validation rejects unresolved or
+    # wrongly typed results again before any capability call.
+    if isinstance(value, str) and re.fullmatch(
+        r"\{\{\s*(?:inputs|vars|steps)\.[a-zA-Z0-9_.\-\[\]'\" ]+\s*\}\}",
+        value,
+    ):
+        return
     schema_type = schema.get("type")
     type_checks = {
         "object": dict,
