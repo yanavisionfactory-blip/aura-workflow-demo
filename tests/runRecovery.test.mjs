@@ -81,3 +81,51 @@ test("a dispatched write remains protected from duplicate retry", () => {
   assert.equal(result.canRetry, false);
   assert.match(result.fix, /already have happened/);
 });
+
+test("structured OAuth blockers offer the exact reconnect action", () => {
+  const result = recoveryForRun(run({
+    blocker: {
+      code: "oauth_required",
+      action: "reconnect_account",
+      message: "Google Workspace authorization is no longer usable.",
+      tool_slug: "google",
+      connection_id: "google-connection",
+      connected_account: "owner@example.com",
+    },
+  }));
+  assert.equal(result.blockerAction, "reconnect_account");
+  assert.equal(result.toolSlug, "google");
+  assert.equal(result.connectionId, "google-connection");
+  assert.equal(result.connectedAccount, "owner@example.com");
+  assert.equal(result.canRetry, true);
+  assert.equal(result.buttonLabel, "Reconnect account");
+});
+
+test("resource ambiguity stops for a human choice instead of inventing a retry", () => {
+  const result = recoveryForRun(run({
+    blocker: {
+      code: "resource_ambiguous",
+      action: "choose_resource",
+      message: "AURA found two spreadsheets named Creator Outreach.",
+      resource_name: "Creator Outreach",
+    },
+  }));
+  assert.equal(result.canRetry, false);
+  assert.equal(result.canSkip, false);
+  assert.equal(result.resourceName, "Creator Outreach");
+  assert.match(result.why, /two spreadsheets/);
+});
+
+test("uncertain external effects never expose a replay button", () => {
+  const result = recoveryForRun(run({
+    blocker: {
+      code: "external_effect_uncertain",
+      action: "inspect_run",
+      message: "The provider may have received this action.",
+      step_id: "failed",
+    },
+  }));
+  assert.equal(result.stepId, "failed");
+  assert.equal(result.canRetry, false);
+  assert.match(result.fix, /provider result/);
+});

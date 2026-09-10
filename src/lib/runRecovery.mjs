@@ -3,6 +3,51 @@ export const needsRecovery = (status) => ["waiting_for_action", "blocked", "fail
 
 export function recoveryForRun(run = {}) {
   const steps = run.steps || [];
+  const blocker = run.blocker;
+  if (blocker) {
+    let blockerIndex = steps.findIndex((step) => step.id === blocker.step_id);
+    if (blockerIndex < 0) {
+      blockerIndex = steps.findIndex((step) => !["completed", "skipped"].includes(step.status));
+    }
+    const connectionAction = ["connect_account", "reconnect_account"].includes(blocker.action);
+    const labels = {
+      plan_approval_required: "The workflow plan needs your approval.",
+      external_submission_approval_required: "An external submission needs your approval.",
+      oauth_required: "The selected app account needs to be reconnected.",
+      connection_required: "This workflow needs an app connection.",
+      connection_unverified: "AURA could not verify the selected app account.",
+      permission_required: "The selected account is missing required permission.",
+      resource_ambiguous: "AURA found more than one possible resource.",
+      resource_not_found: "AURA could not find the required resource.",
+      resource_access_denied: "The connected account cannot access the required resource.",
+      external_effect_uncertain: "AURA cannot safely repeat an external action.",
+    };
+    const fixes = {
+      connect_account: "Connect the requested account once; AURA will preserve this run and continue from the same point.",
+      reconnect_account: "Restore access to the selected account once; AURA will re-run preflight and continue from the same point.",
+      choose_resource: "Choose the exact account or resource AURA should use. The saved run will then continue without repeating completed work.",
+      review_plan: "Review the plan and start it when it is correct.",
+      review_submission: "Review the exact prepared payload. AURA will submit it only after you approve it.",
+      inspect_run: "Review the provider result before deciding what should happen next; completed work and receipts are preserved.",
+    };
+    return {
+      index: blockerIndex >= 0 ? blockerIndex : null,
+      stepId: blocker.step_id || null,
+      blockerCode: blocker.code,
+      blockerAction: blocker.action,
+      toolSlug: blocker.tool_slug || null,
+      connectionId: blocker.connection_id || null,
+      resourceName: blocker.resource_name || null,
+      connectedAccount: blocker.connected_account || null,
+      what: labels[blocker.code] || "AURA stopped at a required human decision.",
+      why: blocker.message || "AURA cannot safely continue this run without this decision.",
+      fix: fixes[blocker.action] || "Resolve the exact blocker shown above, then return to this saved run.",
+      canRetry: connectionAction,
+      canSkip: false,
+      buttonLabel: blocker.action === "reconnect_account" ? "Reconnect account" : "Connect account",
+      subtitle: "This is a required human action. Everything else remains saved and unattended.",
+    };
+  }
   let index = steps.findIndex((s) => s.status === "failed");
   if (index < 0) index = steps.findIndex((s) => !["completed", "skipped"].includes(s.status));
   const step = steps[index];

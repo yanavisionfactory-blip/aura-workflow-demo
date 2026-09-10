@@ -1,5 +1,6 @@
 const API_URL = (import.meta.env.VITE_AURA_API_URL || "").replace(/\/$/, "");
 const WORKSPACE_KEY = "aura_python_workspace_id";
+const ACTIVE_RUN_KEY = "aura_active_python_run_id";
 let tokenProvider = null;
 
 export const pythonRuntimeEnabled = Boolean(API_URL);
@@ -52,7 +53,12 @@ async function request(path, options = {}) {
   // Connections are persisted against that workspace, so clearing it here made
   // healthy apps look disconnected after a reload. Explicit sign-out remains
   // responsible for calling clearWorkspace().
-  if (!result.response.ok) throw new Error(messageFrom(result.data, result.response.status));
+  if (!result.response.ok) {
+    const error = new Error(messageFrom(result.data, result.response.status));
+    error.status = result.response.status;
+    error.details = result.data;
+    throw error;
+  }
   return result.data;
 }
 
@@ -332,9 +338,29 @@ export async function reconnectPythonConnection(connection, timeoutMs = 120000) 
   throw new Error("Reauthorization timed out. Please try again.");
 }
 
-export async function createPythonRun(prompt, workflowId = null) {
+export function rememberActivePythonRun(runId) {
+  if (runId) localStorage.setItem(ACTIVE_RUN_KEY, runId);
+}
+
+export function forgetActivePythonRun(runId = null) {
+  if (!runId || localStorage.getItem(ACTIVE_RUN_KEY) === runId) {
+    localStorage.removeItem(ACTIVE_RUN_KEY);
+  }
+}
+
+export function rememberedActivePythonRun() {
+  return localStorage.getItem(ACTIVE_RUN_KEY);
+}
+
+export async function createPythonRun(prompt, workflowId = null, requestKey = null) {
   await ensureWorkspace();
-  return request("/v1/runs", { method: "POST", body: JSON.stringify({ prompt, workflow_id: workflowId }) });
+  const run = await request("/v1/runs", {
+    method: "POST",
+    headers: requestKey ? { "Idempotency-Key": requestKey } : {},
+    body: JSON.stringify({ prompt, workflow_id: workflowId }),
+  });
+  rememberActivePythonRun(run.id);
+  return run;
 }
 
 export async function getPythonRun(runId) {
@@ -342,7 +368,29 @@ export async function getPythonRun(runId) {
   return request(`/v1/runs/${runId}`);
 }
 
-export async function approvePythonPlan(runId, editedSteps = null, approveConsequential = true) {
+export async function listPythonRuns({ active = false, limit = 20 } = {}) {
+  await ensureWorkspace();
+  return request(`/v1/runs?active=${active ? "true" : "false"}&limit=${limit}`);
+}
+
+export async function getResumablePythonRun() {
+  const remembered = rememberedActivePythonRun();
+  if (remembered) {
+    try {
+      const run = await getPythonRun(remembered);
+      if (!["completed", "cancelled"].includes(run.status)) return run;
+      forgetActivePythonRun(remembered);
+    } catch (error) {
+      if (![403, 404].includes(error.status)) throw error;
+      forgetActivePythonRun(remembered);
+    }
+  }
+  const [latest] = await listPythonRuns({ active: true, limit: 1 });
+  if (latest) rememberActivePythonRun(latest.id);
+  return latest || null;
+}
+
+export async function approvePythonPlan(runId, editedSteps = null, approveConsequential = false) {
   await ensureWorkspace();
   return request(`/v1/runs/${runId}/approve-plan`, { method: "POST", body: JSON.stringify({ approved: true, edited_steps: editedSteps, approve_consequential: approveConsequential }) });
 }
@@ -360,5 +408,13 @@ export async function resumePythonRun(runId, stepId = null, action = "retry") {
   return request(`/v1/runs/${runId}/resume`, {
     method: "POST",
     body: JSON.stringify({ action, step_id: stepId }),
+  });
+}
+
+export async function resumePythonRunAfterConnection(runId, connectionId) {
+  await ensureWorkspace();
+  return request(`/v1/runs/${runId}/resume-after-connection`, {
+    method: "POST",
+    body: JSON.stringify({ connection_id: connectionId }),
   });
 }
