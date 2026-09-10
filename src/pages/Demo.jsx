@@ -34,6 +34,7 @@ import {
   needsRecovery,
   recoveryForRun,
 } from "@/lib/runRecovery.mjs";
+import { planningDisposition } from "@/lib/planningFlow.mjs";
 
 const STEP_DURATION = 2.6;
 
@@ -538,12 +539,13 @@ Write ONE clear, conversational sentence restating what they want — but offer 
 
   // ---- Confirm interpretation ----
   const handleConfirm = useCallback(
-    (editedInterpretation) => {
+    (editedInterpretation, useEditablePlanner = false) => {
       setInterpretation(editedInterpretation);
-      {
+      if (!useEditablePlanner) {
         setPlanLoading(true);
         setPhase("plan");
         (async () => {
+          let handedOffToEditablePlanner = false;
           try {
             const planningPrompt = editedInterpretation.trim() || originalPromptRef.current;
             runRequestKeyRef.current ||= globalThis.crypto?.randomUUID?.()
@@ -555,28 +557,25 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             for (;;) {
               run = await getPythonRunResilient(created.id, generation);
               if (!run) return;
-              if (run.status === "awaiting_approval" && run.plan?.steps?.length) break;
-              if (needsRecovery(run.status)) {
-                showRunRecovery(run);
-                return;
-              }
-              if (run.status === "cancelled") {
-                forgetActivePythonRun(run.id);
-                throw new Error(run.error || "This workflow was cancelled.");
-              }
+              const disposition = planningDisposition(run);
+              if (disposition === "review") break;
+              if (disposition === "fallback") throw new Error(
+                run.error || "The execution backend needs more setup before it can build this plan."
+              );
               await new Promise((resolve) => setTimeout(resolve, 1000));
             }
             pythonPlanRef.current = run.plan;
             setPlan(uiPlanFromRun(run));
           } catch (error) {
-            setPlan({
-              interpretation: editedInterpretation,
-              workflowName: originalPromptRef.current.slice(0, 60),
-              steps: [],
-              error: error.message || "AURA could not build this plan. Please try again.",
-            });
-            setResults({ title: "Orchestrator unavailable", summary: error.message, metrics: [], outcomes: [], nextSteps: [] });
-          } finally { setPlanLoading(false); }
+            console.warn("Python planning unavailable; keeping the user in plan creation", error);
+            if (pythonRunIdRef.current) forgetActivePythonRun(pythonRunIdRef.current);
+            pythonRunIdRef.current = null;
+            pythonPlanRef.current = null;
+            handedOffToEditablePlanner = true;
+            handleConfirm(editedInterpretation, true);
+          } finally {
+            if (!handedOffToEditablePlanner) setPlanLoading(false);
+          }
         })();
         return;
       }
