@@ -276,6 +276,37 @@ def test_public_web_operations_delegate_to_the_isolated_worker(monkeypatch):
     )
 
 
+def test_creator_screen_delegates_typed_thresholds_to_browser_worker(monkeypatch):
+    executor = ProviderExecutor({})
+    request = AsyncMock(return_value={"qualified_candidates": []})
+    monkeypatch.setattr(executor, "_browser_worker_request", request)
+
+    result = asyncio.run(
+        executor._creator_tiktok_screen(
+            {
+                "query": "lifestyle creators",
+                "max_candidates": 5,
+                "videos_per_creator": 12,
+                "min_followers": 15_000,
+                "min_trimmed_mean_views": 15_000,
+                "ignored": "not forwarded",
+            }
+        )
+    )
+
+    assert result == {"qualified_candidates": []}
+    request.assert_awaited_once_with(
+        "/v1/tiktok/screen",
+        {
+            "query": "lifestyle creators",
+            "max_candidates": 5,
+            "videos_per_creator": 12,
+            "min_followers": 15_000,
+            "min_trimmed_mean_views": 15_000,
+        },
+    )
+
+
 def test_weather_forecast_returns_plain_language_summary(monkeypatch):
     executor = ProviderExecutor({})
     request = AsyncMock(side_effect=[

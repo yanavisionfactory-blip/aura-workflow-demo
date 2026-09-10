@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from datetime import datetime, timezone
 
 import pytest
 from fastapi import HTTPException
@@ -40,3 +41,51 @@ async def test_route_guard_blocks_non_public_requests(monkeypatch):
 
     route.abort.assert_awaited_once_with("blockedbyclient")
     route.continue_.assert_not_awaited()
+
+
+def test_profile_urls_normalize_video_results_and_deduplicate_handles():
+    assert worker._profile_urls(
+        [
+            "https://www.tiktok.com/@alice/video/123",
+            "https://www.tiktok.com/@alice",
+            "https://example.com/@ignored",
+            "https://m.tiktok.com/@bob?lang=en",
+        ],
+        5,
+    ) == ["https://www.tiktok.com/@alice", "https://www.tiktok.com/@bob"]
+
+
+def test_creator_metrics_apply_trim_and_original_audio_thresholds():
+    created = int(datetime.now(timezone.utc).timestamp())
+    views = [100, *([20_000] * 8), 1_000_000]
+    items = [
+        {
+            "id": str(index),
+            "createTime": created - index,
+            "stats": {"playCount": view_count},
+            "music": {
+                "original": index < 3,
+                "title": "original sound" if index < 3 else "licensed track",
+            },
+        }
+        for index, view_count in enumerate(views)
+    ]
+    policy = worker.TikTokScreenRequest(query="test creators")
+
+    result = worker._creator_metrics(
+        "https://www.tiktok.com/@alice",
+        {"uniqueId": "alice", "nickname": "Alice", "signature": "Daily videos"},
+        {"followerCount": 20_000, "videoCount": 12},
+        items,
+        policy,
+    )
+
+    assert result["trimmed_mean_views"] == 20_000
+    assert result["original_audio_ratio"] == 0.3
+    assert result["criteria"]["no_management_contact_in_bio"] is True
+    assert result["eligible_public_profile"] is True
+
+
+def test_management_bio_signal_is_conservatively_disqualifying():
+    assert worker._management_contact("Management: team@example.com") is True
+    assert worker._management_contact("Cooking and comedy") is False

@@ -67,8 +67,10 @@ def test_aura_weather_is_connection_free_and_read_only():
     capabilities = {item["name"]: item for item in manifest["capabilities"]}
     assert capabilities["web.search"]["permission_scope"] == "read"
     assert capabilities["web.page.read"]["permission_scope"] == "read"
+    assert capabilities["creator.tiktok.screen"]["permission_scope"] == "read"
     assert capabilities["web.search"]["requires_approval"] is False
     assert capabilities["web.page.read"]["requires_approval"] is False
+    assert capabilities["creator.tiktok.screen"]["requires_approval"] is False
 
 
 def test_google_catalog_can_resolve_and_update_named_spreadsheets():

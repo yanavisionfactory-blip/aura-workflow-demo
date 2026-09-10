@@ -82,6 +82,41 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                 properties={"url": {"type": "string", "format": "uri"}},
             ),
             _module(
+                "creator.tiktok.screen",
+                "search",
+                (
+                    "Discover public TikTok profiles and verify follower count, public access, "
+                    "published-video count, per-video views with a 10% high/low trimmed mean, "
+                    "original-audio ratio, posting recency, and management signals in the bio. "
+                    "Returns evidence-complete candidates separately from qualified candidates. "
+                    "Internal DNC, management, prior-approval, and outreach-window checks still "
+                    "require the current workspace sheets."
+                ),
+                required=("query",),
+                properties={
+                    "query": _TEXT,
+                    "max_candidates": {**_POSITIVE_INTEGER, "maximum": 10},
+                    "videos_per_creator": {
+                        "type": "integer",
+                        "minimum": 10,
+                        "maximum": 30,
+                    },
+                    "min_followers": _POSITIVE_INTEGER,
+                    "min_videos": {"type": "integer", "minimum": 10},
+                    "min_trimmed_mean_views": _POSITIVE_INTEGER,
+                    "min_original_audio_ratio": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1,
+                    },
+                    "recency_days": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 30,
+                    },
+                },
+            ),
+            _module(
                 "weather.forecast",
                 "search",
                 "Fetch a current public weather forecast for a named location.",
