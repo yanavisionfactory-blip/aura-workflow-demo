@@ -418,3 +418,8 @@ export async function resumePythonRunAfterConnection(runId, connectionId) {
     body: JSON.stringify({ connection_id: connectionId }),
   });
 }
+
+export async function cancelPythonRun(runId) {
+  await ensureWorkspace();
+  return request(`/v1/runs/${runId}/cancel`, { method: "POST" });
+}
