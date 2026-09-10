@@ -263,7 +263,7 @@ function EditableStepCard({ step, number, index, onUpdate }) {
   );
 }
 
-export default function PreviewView({ preview, steps, onApprove, onBack }) {
+export default function PreviewView({ preview, steps, onApprove, onBack, actionTime = false }) {
   const initial = steps && steps.length ? steps : preview?.steps || [];
   const [editSteps, setEditSteps] = useState(
     initial.map((s) => ({ ...s, preview: s.preview ? { ...s.preview } : s.preview }))
@@ -286,8 +286,14 @@ export default function PreviewView({ preview, steps, onApprove, onBack }) {
           <Eye className="w-5 h-5 text-accent" />
         </div>
         <div>
-          <h2 className="text-lg font-semibold">Review &amp; edit before running</h2>
-          <p className="text-xs text-muted-foreground">Edit any step's content — your changes drive the execution.</p>
+          <h2 className="text-lg font-semibold">
+            {actionTime ? "Review the exact external action" : "Review & edit before running"}
+          </h2>
+          <p className="text-xs text-muted-foreground">
+            {actionTime
+              ? "AURA has finished the safe preparation work. Nothing below is submitted until you approve."
+              : "Edit any step's content — your changes drive the execution."}
+          </p>
         </div>
       </div>
 
@@ -311,7 +317,7 @@ export default function PreviewView({ preview, steps, onApprove, onBack }) {
             className="bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white border-0 gap-1.5"
           >
             <Play className="w-3.5 h-3.5" />
-            Approve &amp; run
+            {actionTime ? "Approve & submit" : "Approve & run"}
           </Button>
         </motion.div>
       </div>

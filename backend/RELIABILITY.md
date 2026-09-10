@@ -7,6 +7,48 @@ JUnit results as `workflow-release-evaluation`.
 
 ## Operational controls
 
+### Unattended-run contract
+
+An approved run is owned by the control plane, not by the browser tab. The UI may
+disconnect at any time; PostgreSQL remains the source of truth and the transactional
+outbox, worker and elected recovery loop continue the run. On return, the client restores
+the newest active run and its exact approval or blocker state.
+
+Before the first workflow operation, the execution preflight proves that each selected
+connection is enabled, has a current verified capability manifest, allows every approved
+operation and can still yield usable credentials. Native OAuth and managed connections
+receive a real provider identity check. Literal named resources with a registered safe
+probe (currently Google spreadsheet resolution) are resolved with the selected account
+before workflow work begins. A passed result is bound to the immutable plan hash and
+stored in `execution_context.__aura_preflight__`.
+
+The state machine is deliberately small:
+
+| State | Control-plane behavior | User action |
+| --- | --- | --- |
+| `running` | Execute the immutable approved read plan and checkpoint receipts. | None. |
+| `retrying` | Commit a delayed outbox delivery with exponential backoff. | None. |
+| `recovering` | Resume a saved read/review cycle after a worker or provider failure. | None. |
+| `awaiting_approval` | Show the exact consequential payload immediately before dispatch. | Approve, edit or reject that payload. |
+| `waiting_for_action` | Preserve evidence and publish a structured blocker code/action. | Only the named OAuth, account/resource choice or safety decision. |
+| `completed` | Return provider-confirmed outputs and retain the audit trail. | None. |
+
+Neither the Senior Orchestrator nor an Execution Agent may pause a policy-valid approved
+read based only on model judgment. Deterministic guards own plan integrity, permissions,
+connection readiness, trust and schema validation; agent/model outages fall back to the
+same exact approved call. Temporary read failures are automatically retried and, after an
+execution delivery ends, the Autonomous Delivery Supervisor can select only a finite set
+of policy-generated recovery actions. Recovery state, attempt offsets and the next retry
+time are committed before redispatch, so a deploy cannot reset the run or duplicate a
+known/uncertain write.
+
+Human handoff is reserved for a new OAuth login or CAPTCHA, ambiguous account/resource,
+missing permission, approval of a consequential external action, plan-integrity change,
+or an external effect that cannot be reconciled safely. `GET /v1/runs/{id}` exposes the
+specific blocker `code`, `action`, tool, resource, selected account and step when known;
+`GET /v1/runs?active=true` supports browser-independent rehydration. Generic retry/skip
+buttons are not shown when the control plane has determined that repetition is unsafe.
+
 - API: `RECOVERY_SCHEDULER_ENABLED=true` starts a 15-second recovery/outbox loop.
   PostgreSQL elects one tick owner across API replicas. Celery Beat is not required
   for recovery. Scheduled business workflows still use the existing schedule dispatcher.

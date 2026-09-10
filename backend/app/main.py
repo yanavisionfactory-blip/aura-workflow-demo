@@ -2768,35 +2768,190 @@ async def create_run(
     return {"id": run.id, "status": run.status.value}
 
 
+def _step_recovery_state(run, step, attempted_steps: set[str]) -> dict:
+    # Attempts are durably recorded before dispatch. Absence plus no receipt
+    # proves that this step never reached its provider; frontend guesses do not.
+    before_action = step.id not in attempted_steps and not (
+        isinstance(step.output, dict) and "provider_result" in step.output
+    )
+    return {
+        "phase": "before_action" if before_action else "after_dispatch",
+        "can_retry": step.status == StepStatus.failed
+        and run.status in (RunStatus.waiting_for_action, RunStatus.failed)
+        and (not step.consequential or before_action),
+    }
+
+
+def _run_blocker(
+    run,
+    steps,
+    approvals_by_step,
+    requirements,
+    attempted_steps: set[str] | frozenset[str] = frozenset(),
+) -> dict | None:
+    stored = (run.execution_context or {}).get("__aura_blocker__") or (
+        run.result or {}
+    ).get("blocker")
+    if stored:
+        return stored
+    if run.status == RunStatus.awaiting_approval:
+        if not run.plan_approved:
+            return {
+                "code": "plan_approval_required",
+                "kind": "human_action",
+                "message": "Review and approve the workflow plan before AURA starts.",
+                "action": "review_plan",
+                "retryable": False,
+            }
+        pending_step = next(
+            (
+                step
+                for step in steps
+                if step.status == StepStatus.awaiting_approval
+                and step.id in approvals_by_step
+                and approvals_by_step[step.id].status == "pending"
+            ),
+            None,
+        )
+        if pending_step:
+            approval = approvals_by_step[pending_step.id]
+            return {
+                "code": "external_submission_approval_required",
+                "kind": "human_action",
+                "message": (
+                    f"Review the exact {pending_step.operation} payload before AURA "
+                    "submits it externally."
+                ),
+                "action": "review_submission",
+                "tool_slug": pending_step.tool_slug,
+                "step_id": pending_step.id,
+                "approval_id": approval.id,
+                "preview_status": (approval.preview or {}).get("status"),
+                "retryable": False,
+            }
+    pending_requirements = [item for item in requirements if item.status == "pending"]
+    if pending_requirements:
+        item = pending_requirements[0]
+        return {
+            "code": "connection_required",
+            "kind": "human_action",
+            "message": item.reason,
+            "action": "connect_account",
+            "tool_slug": item.provider_hint or item.capability,
+            "requirement_id": item.id,
+            "retryable": False,
+        }
+    autonomy = (run.execution_context or {}).get("__aura_autonomy__") or {}
+    handoff_code = autonomy.get("handoff_reason_code")
+    failed_step = next(
+        (step for step in steps if step.status == StepStatus.failed), None
+    )
+    if handoff_code:
+        messages = {
+            "connection_authorization_required": (
+                "The selected app account no longer grants the access this workflow needs."
+            ),
+            "recovery_budget_exhausted": (
+                "AURA exhausted every policy-safe automatic recovery without obtaining "
+                "a verified result. Completed work and provider receipts are preserved."
+            ),
+            "no_safe_recovery": (
+                "No policy-safe automatic recovery remains for this exact operation."
+            ),
+        }
+        return {
+            "code": handoff_code,
+            "kind": "human_action",
+            "message": messages.get(
+                handoff_code,
+                run.error or "AURA needs a human decision before it can continue safely.",
+            ),
+            "action": (
+                "reconnect_account"
+                if handoff_code == "connection_authorization_required"
+                else "inspect_run"
+            ),
+            "tool_slug": failed_step.tool_slug if failed_step else None,
+            "step_id": failed_step.id if failed_step else None,
+            "retryable": False,
+        }
+    if run.status in {RunStatus.failed, RunStatus.blocked, RunStatus.waiting_for_action}:
+        if failed_step:
+            recovery = _step_recovery_state(run, failed_step, attempted_steps)
+            if recovery["phase"] != "before_action":
+                return {
+                    "code": "external_effect_uncertain",
+                    "kind": "human_action",
+                    "message": (
+                        "The provider may have received this action, so AURA will not "
+                        "repeat it without reconciliation."
+                    ),
+                    "action": "inspect_run",
+                    "tool_slug": failed_step.tool_slug,
+                    "step_id": failed_step.id,
+                    "retryable": False,
+                }
+        return {
+            "code": "operator_attention_required",
+            "kind": "operator_action",
+            "message": run.error or "AURA preserved the run but cannot continue safely.",
+            "action": "inspect_run",
+            "tool_slug": failed_step.tool_slug if failed_step else None,
+            "step_id": failed_step.id if failed_step else None,
+            "retryable": False,
+        }
+    return None
+
+
+async def _run_view(session: AsyncSession, run: WorkflowRun) -> dict:
+    steps = (await session.scalars(select(RunStep).where(RunStep.run_id == run.id).order_by(RunStep.position))).all()
+    approvals = (
+        await session.scalars(select(Approval).where(Approval.run_id == run.id))
+    ).all()
+    approvals_by_step = {approval.step_id: approval for approval in approvals}
+    requirements = (
+        await session.scalars(
+            select(ConnectionRequirement).where(ConnectionRequirement.run_id == run.id)
+        )
+    ).all()
+    attempted_steps = set((await session.scalars(
+        select(StepAttempt.step_id).where(StepAttempt.run_id == run.id)
+    )).all())
+    return {"id": run.id, "status": run.status.value, "prompt": run.prompt, "inputs": run.inputs, "execution_context": run.execution_context, "plan": run.plan, "plan_approved": run.plan_approved, "result": run.result, "error": run.error, "blocker": _run_blocker(run, steps, approvals_by_step, requirements, attempted_steps), "automation_state": (run.execution_context or {}).get("__aura_preflight__"), "created_at": run.created_at, "updated_at": run.updated_at, "steps": [{"id": s.id, "key": s.step_key, "position": s.position, "agent": s.agent, "tool_slug": s.tool_slug, "operation": s.operation, "arguments": s.arguments, "depends_on": s.depends_on, "dependency_mode": s.dependency_mode, "condition": s.condition, "output_variables": s.output_variables, "status": s.status.value, "consequential": s.consequential, "recovery": _step_recovery_state(run, s, attempted_steps), "approval_id": s.approval_id, "approval_status": approvals_by_step[s.id].status if s.id in approvals_by_step else None, "approval_preview": approvals_by_step[s.id].preview if s.id in approvals_by_step else None, "output": s.output, "error": s.error} for s in steps]}
+
+
+@app.get("/v1/runs")
+async def list_runs(
+    active: bool = Query(default=False),
+    limit: int = Query(default=20, ge=1, le=100),
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> list[dict]:
+    query = select(WorkflowRun).where(
+        WorkflowRun.workspace_id == context.workspace_id
+    )
+    if active:
+        query = query.where(
+            WorkflowRun.status.notin_([RunStatus.completed, RunStatus.cancelled])
+        )
+    runs = (
+        await session.scalars(
+            query.order_by(WorkflowRun.updated_at.desc()).limit(limit)
+        )
+    ).all()
+    return [await _run_view(session, run) for run in runs]
+
+
 @app.get("/v1/runs/{run_id}")
 async def get_run(
     run_id: str,
     context: TenantContext = Depends(tenant_context),
     session: AsyncSession = Depends(tenant_session),
 ) -> dict:
-    wid = context.workspace_id
     run = await session.get(WorkflowRun, run_id)
-    if not run or run.workspace_id != wid:
+    if not run or run.workspace_id != context.workspace_id:
         raise HTTPException(404, "Run not found")
-    steps = (await session.scalars(select(RunStep).where(RunStep.run_id == run.id).order_by(RunStep.position))).all()
-    approvals = (
-        await session.scalars(select(Approval).where(Approval.run_id == run.id))
-    ).all()
-    approvals_by_step = {approval.step_id: approval for approval in approvals}
-    attempted_steps = set((await session.scalars(
-        select(StepAttempt.step_id).where(StepAttempt.run_id == run.id)
-    )).all())
-    def recovery_state(step):
-        # Attempts are durably recorded before dispatch. Absence plus no receipt
-        # proves that this step never reached its provider; frontend guesses do not.
-        before_action = step.id not in attempted_steps and not (
-            isinstance(step.output, dict) and "provider_result" in step.output
-        )
-        return {"phase": "before_action" if before_action else "after_dispatch",
-                "can_retry": step.status == StepStatus.failed and
-                run.status in (RunStatus.waiting_for_action, RunStatus.failed) and
-                (not step.consequential or before_action)}
-    return {"id": run.id, "status": run.status.value, "prompt": run.prompt, "inputs": run.inputs, "execution_context": run.execution_context, "plan": run.plan, "plan_approved": run.plan_approved, "result": run.result, "error": run.error, "steps": [{"id": s.id, "key": s.step_key, "position": s.position, "agent": s.agent, "tool_slug": s.tool_slug, "operation": s.operation, "arguments": s.arguments, "depends_on": s.depends_on, "dependency_mode": s.dependency_mode, "condition": s.condition, "output_variables": s.output_variables, "status": s.status.value, "consequential": s.consequential, "recovery": recovery_state(s), "approval_id": s.approval_id, "approval_status": approvals_by_step[s.id].status if s.id in approvals_by_step else None, "approval_preview": approvals_by_step[s.id].preview if s.id in approvals_by_step else None, "output": s.output, "error": s.error} for s in steps]}
+    return await _run_view(session, run)
 
 
 @app.get("/v1/runs/{run_id}/governance")
@@ -3447,6 +3602,31 @@ async def resume_run(
         None,
     )
     if not step:
+        preflight_blocker = (run.execution_context or {}).get("__aura_blocker__")
+        if payload.action == "retry" and payload.step_id is None and preflight_blocker:
+            if preflight_blocker.get("action") not in {
+                "connect_account",
+                "reconnect_account",
+                "choose_resource",
+            }:
+                raise HTTPException(409, "This blocker cannot be retried by the user")
+            execution_context = dict(run.execution_context or {})
+            execution_context.pop("__aura_blocker__", None)
+            preflight = dict(execution_context.get("__aura_preflight__") or {})
+            preflight["status"] = "pending"
+            preflight.pop("blocker", None)
+            execution_context["__aura_preflight__"] = preflight
+            run.execution_context = execution_context
+            run.result = {
+                key: value
+                for key, value in (run.result or {}).items()
+                if key != "blocker"
+            }
+            run.status = RunStatus.recovering
+            run.error = None
+            await session.commit()
+            await dispatch_pending(wid)
+            return {"id": run.id, "status": run.status.value, "preflight": True}
         if (payload.action == "retry" and payload.step_id is None and steps
                 and run.result.get("verification")
                 and all(item.status in {StepStatus.completed, StepStatus.skipped} for item in steps)):

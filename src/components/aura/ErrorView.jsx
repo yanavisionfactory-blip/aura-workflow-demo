@@ -110,23 +110,29 @@ export default function ErrorView({ error, step, runSteps, onRetry, onEdit, onSk
 
       {/* Actions */}
       <div className="flex flex-wrap items-center gap-2 pt-4 border-t border-white/6">
-        <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
-          <Button
-            size="sm"
-            onClick={onRetry}
-            className="bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white border-0 gap-1.5"
-          >
-            {buttonLabel}
+        {onRetry && error.canRetry !== false && (
+          <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+            <Button
+              size="sm"
+              onClick={onRetry}
+              className="bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white border-0 gap-1.5"
+            >
+              {buttonLabel}
+            </Button>
+          </motion.div>
+        )}
+        {onEdit && (
+          <Button variant="outline" size="sm" onClick={onEdit} className="gap-1.5 border-white/10">
+            <Pencil className="w-3.5 h-3.5" />
+            Edit
           </Button>
-        </motion.div>
-        <Button variant="outline" size="sm" onClick={onEdit} className="gap-1.5 border-white/10">
-          <Pencil className="w-3.5 h-3.5" />
-          Edit
-        </Button>
-        <Button variant="ghost" size="sm" onClick={onSkip} className="text-muted-foreground gap-1.5">
-          <SkipForward className="w-3.5 h-3.5" />
-          Skip
-        </Button>
+        )}
+        {onSkip && (
+          <Button variant="ghost" size="sm" onClick={onSkip} className="text-muted-foreground gap-1.5">
+            <SkipForward className="w-3.5 h-3.5" />
+            Skip
+          </Button>
+        )}
       </div>
     </motion.div>
   );

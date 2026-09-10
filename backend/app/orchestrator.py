@@ -469,6 +469,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 "connected": True,
             }
             for tool in tools
+            if tool.id in manifests_by_tool
         ]
         connected_slugs = {item["slug"] for item in connected_inventory}
         inventory_by_slug = {
@@ -882,6 +883,15 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 )
                 await session.commit()
                 return
+
+        # Prove current credentials and literal resource access before the first
+        # workflow step.  This phase is read-only, durably checkpointed, and may
+        # schedule its own delayed delivery for temporary provider failures.
+        from .execution_preflight import preflight_approved_run
+
+        preflight = await preflight_approved_run(session, run, steps)
+        if preflight.status != "passed":
+            return
 
         run.status = RunStatus.running
         run.error = None

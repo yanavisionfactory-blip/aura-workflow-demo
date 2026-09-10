@@ -16,9 +16,18 @@ import HistoryPanel from "@/components/aura/HistoryPanel";
 import EditRunReviewModal from "@/components/aura/EditRunReviewModal";
 import { detectNewConsequential } from "@/lib/editRunDetect";
 import { requestNotifyPermission, notifyWorkflowComplete, notifyWorkflowError } from "@/lib/auraNotify";
-import { hydrateConnections } from "@/lib/connectService";
+import { connectTool, hydrateConnections } from "@/lib/connectService";
 import { getAllConnections } from "@/lib/connectionsStore";
-import { approvePythonPlan, createPythonRun, getPythonRun } from "@/lib/auraApi";
+import {
+  approvePythonPlan,
+  createPythonRun,
+  decidePythonApproval,
+  forgetActivePythonRun,
+  getPythonRun,
+  getResumablePythonRun,
+  resumePythonRun,
+  resumePythonRunAfterConnection,
+} from "@/lib/auraApi";
 
 const STEP_DURATION = 2.6;
 
@@ -88,6 +97,181 @@ const friendlyStepTitle = (step) => {
   if (/update|change|sync/.test(reason)) return `Update ${tool}`;
   if (/create|add/.test(reason)) return `Create in ${tool}`;
   return `Use ${tool}`;
+};
+
+const pythonPlanForUi = (run) => ({
+  workflowName: run.plan?.name,
+  interpretation: run.plan?.interpretation,
+  estimatedTime: run.plan?.planning_artifacts?.timings_ms?.total
+    ? `Planned in ${(run.plan.planning_artifacts.timings_ms.total / 1000).toFixed(1)}s`
+    : "Runs independently in the AURA control plane",
+  steps: (run.plan?.steps || []).map((step) => ({
+    tool: planToolName(step),
+    title: friendlyStepTitle(step),
+    iWill: cleanSentence(step.reason),
+    action: cleanSentence(step.reason),
+    detail: JSON.stringify(step.arguments, null, 2),
+    reason: step.reason,
+    output: step.expected_output,
+    flow: [
+      { label: "Uses", value: planToolName(step) },
+      { label: "Creates", value: step.expected_output },
+    ],
+    riskLevel: step.consequential ? "modify" : "read",
+    riskNote: step.consequential
+      ? "AURA will pause immediately before this external submission and show the exact payload."
+      : "",
+  })),
+});
+
+const pythonExecutionSteps = (run) => {
+  const firstPending = (run.steps || []).findIndex((step) => step.status === "pending");
+  return (run.steps || []).map((step, index) => ({
+    id: step.id,
+    tool: planToolName(step),
+    action: friendlyStepTitle(step),
+    riskLevel: step.consequential ? "modify" : "read",
+    status: run.automation_state?.status === "retrying" && index === firstPending
+      ? "running"
+      : step.status === "awaiting_approval" && run.plan_approved
+      ? "pending"
+      : step.status,
+    liveOutput: step.output?.provider_result
+      ? `→ Provider confirmed ${step.operation}`
+      : step.error
+      ? `→ ${step.error}`
+      : run.automation_state?.status === "retrying" && step.status === "pending"
+      ? `→ Preflight retry ${run.automation_state.attempt}; no action has been sent yet`
+      : "",
+    output: step.output,
+  }));
+};
+
+const pythonResultForUi = (run) => {
+  const outputs = run.result?.outputs || [];
+  return {
+    title: "Workflow completed by AURA agents",
+    summary:
+      run.result?.deliverable?.summary ||
+      `${run.result?.completed_steps || outputs.length} provider actions completed with stored evidence.`,
+    metrics: [
+      {
+        value: String(run.result?.completed_steps || outputs.length),
+        label: "verified actions",
+      },
+    ],
+    outcomes: outputs.map((output) => ({
+      type: "document",
+      title: output.operation,
+      detail: `Confirmed by ${output.tool}`,
+      items: [
+        {
+          label: "Provider evidence",
+          detail: JSON.stringify(output.provider_result).slice(0, 500),
+        },
+      ],
+    })),
+    nextSteps: [],
+  };
+};
+
+const pendingPythonApproval = (run) =>
+  (run.steps || []).find(
+    (step) =>
+      step.status === "awaiting_approval" &&
+      step.approval_status === "pending" &&
+      step.approval_preview?.status === "ready"
+  );
+
+const approvalStepForUi = (step) => {
+  const args = step.approval_preview?.arguments || {};
+  let preview;
+  if (step.operation === "gmail.send") {
+    preview = {
+      type: "email",
+      to: args.to || "",
+      subject: args.subject || "",
+      body: args.body || "",
+      note: "This exact email will be sent only after you approve it.",
+    };
+  } else if (step.operation === "sheets.append") {
+    const rows = Array.isArray(args.values) ? args.values : [];
+    const width = Math.max(1, ...rows.map((row) => (Array.isArray(row) ? row.length : 1)));
+    preview = {
+      type: "table",
+      title: `${args.range || "Spreadsheet"} · ${rows.length} row${rows.length === 1 ? "" : "s"}`,
+      columns: Array.from({ length: width }, (_, index) => `Column ${index + 1}`),
+      rows: rows.map((row) => (Array.isArray(row) ? row : [row])),
+      previewNote: "Only these rows will be appended after approval.",
+    };
+  } else {
+    const records = Array.isArray(args.records) ? args.records : null;
+    preview = {
+      type: "list",
+      title: records
+        ? `${records.length} record${records.length === 1 ? "" : "s"} ready to submit`
+        : step.operation,
+      items: records
+        ? records.map((record, index) => ({
+            label: record.handle || record.creatorUsername || record.name || `Record ${index + 1}`,
+            detail: JSON.stringify(record).slice(0, 500),
+          }))
+        : Object.entries(args).map(([label, value]) => ({
+            label,
+            detail: JSON.stringify(value).slice(0, 500),
+          })),
+    };
+  }
+  return {
+    tool: planToolName(step),
+    action: friendlyStepTitle(step),
+    detail: JSON.stringify(args, null, 2),
+    output: "A provider-confirmed receipt",
+    flow: [{ label: "Uses", value: planToolName(step) }],
+    riskLevel: "modify",
+    riskNote: "Review this exact payload. Approval triggers the external action immediately.",
+    preview,
+    _approvalId: step.approval_id,
+    _approvalArguments: args,
+  };
+};
+
+const editedApprovalArguments = (step) => {
+  const original = step?._approvalArguments || {};
+  if (step?.preview?.type !== "email") return original;
+  return {
+    ...original,
+    to: step.preview.to,
+    subject: step.preview.subject,
+    body: step.preview.body,
+  };
+};
+
+const blockerForUi = (run) => {
+  const failedStep = (run.steps || []).find((step) => step.status === "failed");
+  const blocker = {
+    ...(run.blocker || {}),
+    step_id: run.blocker?.step_id || failedStep?.id || null,
+  };
+  const fixes = {
+    reconnect_account: blocker.connected_account
+      ? `Reconnect ${planToolName({ tool_slug: blocker.tool_slug, operation: "" })} with an account that can access ${blocker.resource_name || "the required resource"}. Currently selected: ${blocker.connected_account}.`
+      : `Reconnect ${planToolName({ tool_slug: blocker.tool_slug, operation: "" })} and grant the required access.`,
+    connect_account: `Connect ${planToolName({ tool_slug: blocker.tool_slug, operation: "" })}; AURA will then resume this saved run.`,
+    choose_resource: `Choose one exact resource for ${blocker.resource_name || "this step"}; AURA will never guess.`,
+    inspect_run: "Open the saved run details. Completed work and provider receipts are preserved.",
+  };
+  return {
+    what: blocker.message || run.error || "AURA preserved the run but could not continue safely.",
+    why: blocker.code ? `Exact blocker: ${blocker.code}` : "The backend reported a non-retryable blocker.",
+    fixShort: fixes[blocker.action] || "Retry the saved run after the blocker is resolved.",
+    buttonLabel:
+      blocker.action === "reconnect_account" || blocker.action === "connect_account"
+        ? "Connect & resume"
+        : "Retry saved run",
+    canRetry: blocker.action !== "choose_resource",
+    blocker,
+  };
 };
 
 const INTERPRETATION_SCHEMA = {
@@ -215,6 +399,7 @@ export default function Demo() {
   const [planLoading, setPlanLoading] = useState(false);
   const [plan, setPlan] = useState(null);
   const [results, setResults] = useState(null);
+  const [runError, setRunError] = useState(null);
   const [execSteps, setExecSteps] = useState([]);
   const [currentStepIdx, setCurrentStepIdx] = useState(0);
   const [approvedSteps, setApprovedSteps] = useState([]);
@@ -258,6 +443,9 @@ export default function Demo() {
   const currentWorkflowIdRef = useRef(null);
   const pythonRunIdRef = useRef(null);
   const pythonPlanRef = useRef(null);
+  const pendingPythonApprovalRef = useRef(null);
+  const pythonPollGenerationRef = useRef(0);
+  const runRequestKeyRef = useRef(null);
 
   const clearTimeouts = () => {
     timeoutRefs.current.forEach(clearTimeout);
@@ -276,11 +464,15 @@ export default function Demo() {
     currentWorkflowIdRef.current = null;
     pythonRunIdRef.current = null;
     pythonPlanRef.current = null;
+    pendingPythonApprovalRef.current = null;
+    pythonPollGenerationRef.current += 1;
+    runRequestKeyRef.current = null;
     setPhase("input");
     setOriginalPrompt("");
     setInterpretation("");
     setPlan(null);
     setResults(null);
+    setRunError(null);
     setExecSteps([]);
     setCurrentStepIdx(0);
     setStartTime(null);
@@ -364,40 +556,27 @@ Write ONE clear, conversational sentence restating what they want — but offer 
         (async () => {
           try {
             const planningPrompt = editedInterpretation.trim() || originalPromptRef.current;
-            const created = await createPythonRun(planningPrompt);
+            runRequestKeyRef.current ||=
+              globalThis.crypto?.randomUUID?.() ||
+              `run-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            const created = await createPythonRun(
+              planningPrompt,
+              null,
+              runRequestKeyRef.current
+            );
             pythonRunIdRef.current = created.id;
             let run;
             for (let attempt = 0; attempt < 120; attempt += 1) {
               run = await getPythonRun(created.id);
               if (run.status === "awaiting_approval" && run.plan?.steps?.length) break;
-              if (run.status === "failed") throw new Error(run.error || "Python orchestrator failed");
+              if (["failed", "blocked", "waiting_for_action", "cancelled"].includes(run.status)) {
+                throw new Error(run.blocker?.message || run.error || `Workflow ${run.status}`);
+              }
               await new Promise((resolve) => setTimeout(resolve, 1000));
             }
             if (!run?.plan?.steps?.length) throw new Error("Python orchestrator did not return a plan in time");
             pythonPlanRef.current = run.plan;
-            setPlan({
-              workflowName: run.plan.name,
-              interpretation: run.plan.interpretation,
-              estimatedTime: run.plan.planning_artifacts?.timings_ms?.total
-                ? `Planned in ${(run.plan.planning_artifacts.timings_ms.total / 1000).toFixed(1)}s`
-                : "Runs in the Python control plane",
-              steps: run.plan.steps.map((step) => ({
-                tool: planToolName(step),
-                title: friendlyStepTitle(step),
-                iWill: cleanSentence(step.reason),
-                action: cleanSentence(step.reason),
-                detail: JSON.stringify(step.arguments, null, 2), reason: step.reason, output: step.expected_output,
-                flow: [{ label: "Uses", value: planToolName(step) }, { label: "Creates", value: step.expected_output }],
-                riskLevel: step.consequential ? "modify" : "read",
-                riskNote: step.consequential ? "This provider action runs only after your approval." : "",
-                preview: step.consequential ? {
-                  type: step.operation === "gmail.send" ? "email" : "list",
-                  to: step.arguments?.to || "", subject: step.arguments?.subject || "", body: step.arguments?.body || "",
-                  title: step.operation,
-                  items: Object.entries(step.arguments || {}).map(([label, value]) => ({ label, detail: JSON.stringify(value) })),
-                } : undefined,
-              })),
-            });
+            setPlan(pythonPlanForUi(run));
           } catch (error) {
             setPlan({
               interpretation: editedInterpretation,
@@ -531,9 +710,106 @@ Rules:
       approvedStepsRef.current = editedSteps;
       setApprovedSteps(editedSteps);
     }
-    if (pythonRunIdRef.current) startPythonExecution(editedSteps);
+    if (pendingPythonApprovalRef.current && editedSteps?.[0]) {
+      const pending = pendingPythonApprovalRef.current;
+      pendingPythonApprovalRef.current = null;
+      setPhase("executing");
+      setStartTime((value) => value || Date.now());
+      decidePythonApproval(
+        pending.approval_id,
+        true,
+        editedApprovalArguments(editedSteps[0])
+      )
+        .then(() => monitorPythonRun(pythonRunIdRef.current))
+        .catch((error) => {
+          setRunError({
+            what: error.message,
+            why: "The reviewed external action was not accepted by the control plane.",
+            fixShort: "Review the exact payload and try again. Nothing was submitted.",
+            buttonLabel: "Review again",
+            canRetry: true,
+          });
+          pendingPythonApprovalRef.current = pending;
+          setPhase("error");
+        });
+    } else if (pythonRunIdRef.current) startPythonExecution(editedSteps);
     else startExecution();
   }, []);
+
+  const monitorPythonRun = async (runId) => {
+    if (!runId) return;
+    pythonRunIdRef.current = runId;
+    const generation = ++pythonPollGenerationRef.current;
+    setPhase("executing");
+    setStartTime((value) => value || Date.now());
+    let consecutivePollErrors = 0;
+    for (;;) {
+      if (pythonPollGenerationRef.current !== generation) return;
+      let run;
+      try {
+        run = await getPythonRun(runId);
+        consecutivePollErrors = 0;
+      } catch (error) {
+        // Browser/network interruptions do not change the backend run. Keep
+        // polling while the durable worker continues. Back off locally so an
+        // outage cannot create a request storm.
+        if (!error.status || error.status === 429 || error.status >= 500) {
+          consecutivePollErrors += 1;
+          const delay = Math.min(15000, 1000 * 2 ** Math.min(consecutivePollErrors, 4));
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          continue;
+        }
+        throw error;
+      }
+      if (["queued", "planning"].includes(run.status) && !run.plan?.steps?.length) {
+        setPhase("plan");
+        setPlanLoading(true);
+        await new Promise((resolve) => setTimeout(resolve, 900));
+        continue;
+      }
+      setExecSteps(pythonExecutionSteps(run));
+      const active = (run.steps || []).findIndex((step) => step.status === "running");
+      const firstIncomplete = (run.steps || []).findIndex(
+        (step) => !["completed", "skipped"].includes(step.status)
+      );
+      if (active >= 0) setCurrentStepIdx(active);
+      else if (firstIncomplete >= 0) setCurrentStepIdx(firstIncomplete);
+
+      if (run.status === "completed") {
+        forgetActivePythonRun(runId);
+        finishExecution(pythonResultForUi(run), null, "completed");
+        return;
+      }
+      if (run.status === "awaiting_approval" && run.plan_approved) {
+        const pending = pendingPythonApproval(run);
+        if (pending) {
+          pendingPythonApprovalRef.current = pending;
+          const uiStep = approvalStepForUi(pending);
+          approvedStepsRef.current = [uiStep];
+          setApprovedSteps([uiStep]);
+          setPhase("preview");
+          return;
+        }
+      }
+      if (run.status === "awaiting_approval" && !run.plan_approved) {
+        pythonPlanRef.current = run.plan;
+        setOriginalPrompt(run.prompt);
+        originalPromptRef.current = run.prompt;
+        setInterpretation(run.plan?.interpretation || run.prompt);
+        setPlan(pythonPlanForUi(run));
+        setPlanLoading(false);
+        setPhase("plan");
+        return;
+      }
+      if (["failed", "blocked", "waiting_for_action", "cancelled"].includes(run.status)) {
+        if (run.status === "cancelled") forgetActivePythonRun(runId);
+        setRunError(blockerForUi(run));
+        setPhase("error");
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 900));
+    }
+  };
 
   const startPythonExecution = async (editedUiSteps = null) => {
     const runId = pythonRunIdRef.current;
@@ -551,36 +827,16 @@ Rules:
     };
     try {
       await approvePythonPlan(runId, reviewedPlan.steps);
-      for (let attempt = 0; attempt < 600; attempt += 1) {
-        const run = await getPythonRun(runId);
-        setExecSteps((run.steps || []).map((step) => ({
-          tool: step.tool_slug, action: step.operation, riskLevel: step.consequential ? "modify" : "read",
-          status: step.status,
-          liveOutput: step.output?.provider_result ? `→ Provider confirmed ${step.operation}` : step.error ? `→ ${step.error}` : "",
-          output: step.output,
-        })));
-        const active = (run.steps || []).findIndex((step) => step.status === "running");
-        if (active >= 0) setCurrentStepIdx(active);
-        if (run.status === "completed") {
-          const outputs = run.result?.outputs || [];
-          finishExecution({
-            title: "Workflow completed by Python agents",
-            summary: `${run.result?.completed_steps || outputs.length} provider actions completed with stored evidence.`,
-            metrics: [{ value: String(run.result?.completed_steps || outputs.length), label: "verified actions" }],
-            outcomes: outputs.map((output) => ({
-              type: "document", title: output.operation, detail: `Confirmed by ${output.tool}`,
-              items: [{ label: "Provider evidence", detail: JSON.stringify(output.provider_result).slice(0, 500) }],
-            })),
-            nextSteps: [],
-          }, null, "completed");
-          return;
-        }
-        if (run.status === "failed" || run.status === "cancelled") throw new Error(run.error || `Workflow ${run.status}`);
-        await new Promise((resolve) => setTimeout(resolve, 900));
-      }
-      throw new Error("Python workflow timed out");
+      await monitorPythonRun(runId);
     } catch (error) {
-      finishExecution(null, error.message, "failed");
+      setRunError({
+        what: error.message,
+        why: "The control plane could not start the reviewed plan.",
+        fixShort: "AURA kept the plan unchanged. Retry when the connection is available.",
+        buttonLabel: "Retry saved run",
+        canRetry: true,
+      });
+      setPhase("error");
     }
   };
 
@@ -843,6 +1099,47 @@ Generate a results summary in plain, human-friendly language (not technical).
     setPhase("plan");
   }, []);
 
+  const handlePythonRecovery = useCallback(async () => {
+    if (pendingPythonApprovalRef.current) {
+      const uiStep = approvalStepForUi(pendingPythonApprovalRef.current);
+      approvedStepsRef.current = [uiStep];
+      setApprovedSteps([uiStep]);
+      setPhase("preview");
+      return;
+    }
+    const runId = pythonRunIdRef.current;
+    if (!runId) return;
+    const blocker = runError?.blocker || {};
+    setPhase("executing");
+    setRunError(null);
+    try {
+      if (["connect_account", "reconnect_account"].includes(blocker.action)) {
+        const toolName = blocker.tool_slug === "google"
+          ? "Google Sheets"
+          : planToolName({ tool_slug: blocker.tool_slug, operation: "" });
+        const connection = await connectTool(toolName);
+        if (blocker.code === "connection_required" && connection.connection?.id) {
+          await resumePythonRunAfterConnection(runId, connection.connection.id);
+        } else {
+          await resumePythonRun(runId, "retry", blocker.step_id || null);
+        }
+      } else {
+        await resumePythonRun(runId, "retry", blocker.step_id || null);
+      }
+      await monitorPythonRun(runId);
+    } catch (error) {
+      setRunError({
+        what: error.message,
+        why: "AURA could not clear the exact blocker yet; the saved run is unchanged.",
+        fixShort: "Complete the requested account or resource action, then retry this saved run.",
+        buttonLabel: "Try again",
+        canRetry: true,
+        blocker,
+      });
+      setPhase("error");
+    }
+  }, [runError]);
+
   // Run again / Edit & run from history: always run the CURRENT saved Workflow
   // definition — never the historical run's steps. Historical runs are immutable
   // records; re-running only ever creates a new run on the current workflow.
@@ -938,8 +1235,43 @@ Generate a results summary in plain, human-friendly language (not technical).
     })();
   }, []);
 
-  useEffect(() => { hydrateConnections(); }, []);
-  useEffect(() => () => clearTimeouts(), []);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        await hydrateConnections();
+        const run = await getResumablePythonRun();
+        if (!run || cancelled) return;
+        pythonRunIdRef.current = run.id;
+        pythonPlanRef.current = run.plan;
+        setOriginalPrompt(run.prompt);
+        originalPromptRef.current = run.prompt;
+        setInterpretation(run.plan?.interpretation || run.prompt);
+        if (run.status === "awaiting_approval" && !run.plan_approved) {
+          setPlan(pythonPlanForUi(run));
+          setPlanLoading(false);
+          setPhase("plan");
+          return;
+        }
+        await monitorPythonRun(run.id);
+      } catch (error) {
+        if (cancelled) return;
+        setRunError({
+          what: error.message,
+          why: "The browser could not restore the latest saved backend run.",
+          fixShort: "Reload to try restoration again. The backend run was not cancelled.",
+          buttonLabel: "Restore saved run",
+          canRetry: true,
+        });
+        setPhase("error");
+      }
+    })();
+    return () => {
+      cancelled = true;
+      pythonPollGenerationRef.current += 1;
+      clearTimeouts();
+    };
+  }, []);
 
   // Derive preview data + approval step (the modify step to call out)
   const mock = pendingMock.current;
@@ -1031,7 +1363,14 @@ Generate a results summary in plain, human-friendly language (not technical).
                 transition={{ duration: 0.4 }}
                 className="w-full flex justify-center"
               >
-                <PreviewView preview={previewData} steps={approvedSteps} approvalStep={approvalStep} onApprove={handlePreviewApprove} onBack={() => setPhase("plan")} />
+                <PreviewView
+                  preview={previewData}
+                  steps={approvedSteps}
+                  approvalStep={approvalStep}
+                  onApprove={handlePreviewApprove}
+                  onBack={() => setPhase(pendingPythonApprovalRef.current ? "executing" : "plan")}
+                  actionTime={!!pendingPythonApprovalRef.current}
+                />
               </motion.div>
             )}
 
@@ -1048,7 +1387,7 @@ Generate a results summary in plain, human-friendly language (not technical).
               </motion.div>
             )}
 
-            {phase === "error" && mock?.errorStep && (
+            {phase === "error" && (mock?.errorStep || runError) && (
               <motion.div
                 key="error"
                 initial={{ opacity: 0, y: 20 }}
@@ -1058,12 +1397,16 @@ Generate a results summary in plain, human-friendly language (not technical).
                 className="w-full flex justify-center"
               >
                 <ErrorView
-                  error={mock.errorStep}
-                  step={execSteps[mock.errorStep.index]}
+                  error={mock?.errorStep || runError}
+                  step={
+                    mock?.errorStep
+                      ? execSteps[mock.errorStep.index]
+                      : execSteps.find((step) => step.id === runError?.blocker?.step_id)
+                  }
                   runSteps={execSteps}
-                  onRetry={handleRetry}
-                  onEdit={handleEditFromError}
-                  onSkip={handleSkip}
+                  onRetry={mock?.errorStep ? handleRetry : handlePythonRecovery}
+                  onEdit={mock?.errorStep ? handleEditFromError : null}
+                  onSkip={mock?.errorStep ? handleSkip : null}
                 />
               </motion.div>
             )}
@@ -1098,7 +1441,7 @@ Generate a results summary in plain, human-friendly language (not technical).
         </main>
 
         <footer className="px-6 py-3 border-t border-white/5 flex items-center justify-between">
-          <span className="text-[11px] text-muted-foreground/40">AURA v2.5 · Interactive Demo</span>
+          <span className="text-[11px] text-muted-foreground/40">AURA v2.6 · Durable autonomous execution</span>
           <div className="flex items-center gap-1">
             <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
             <span className="text-[11px] text-muted-foreground/40">System ready</span>

@@ -7,14 +7,14 @@ const STEP_DURATION = 2.6; // seconds per step (for ETA)
 export default function ExecutionView({ steps, currentStepIndex, isReal }) {
   const completedCount = steps.filter((s) => s.status === "completed").length;
   const failed = steps.some((s) => s.status === "failed");
-  const progress = (completedCount / steps.length) * 100;
+  const progress = steps.length ? (completedCount / steps.length) * 100 : 0;
   const remaining = Math.max(0, steps.length - completedCount);
   const etaSecs = remaining > 0 && !failed ? remaining * STEP_DURATION : 0;
   const eta = failed
     ? null
     : isReal
     ? remaining > 0
-      ? "Working… this can take up to a minute"
+      ? "Working independently in the background"
       : null
     : !etaSecs
     ? null
@@ -38,7 +38,9 @@ export default function ExecutionView({ steps, currentStepIndex, isReal }) {
           <div>
             <h2 className="text-lg font-semibold">{failed ? "Workflow paused" : "Running your workflow"}</h2>
             <p className="text-xs text-muted-foreground">
-              Step {Math.min(currentStepIndex + 1, steps.length)} of {steps.length}
+              {steps.length
+                ? `Step ${Math.min(currentStepIndex + 1, steps.length)} of ${steps.length}`
+                : "Restoring the saved run"}
               {eta ? ` · ${eta}` : ""}
             </p>
           </div>

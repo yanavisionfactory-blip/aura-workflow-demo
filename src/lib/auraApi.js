@@ -1,5 +1,6 @@
 const API_URL = (import.meta.env.VITE_AURA_API_URL || "").replace(/\/$/, "");
 const WORKSPACE_KEY = "aura_python_workspace_id";
+const ACTIVE_RUN_KEY = "aura_active_python_run_id";
 let tokenProvider = null;
 
 export function setAuraTokenProvider(provider) {
@@ -38,7 +39,12 @@ async function request(path, options = {}) {
   if (response.status === 401 && tokenProvider) {
     clearWorkspace();
   }
-  if (!response.ok) throw new Error(messageFrom(data, response.status));
+  if (!response.ok) {
+    const error = new Error(messageFrom(data, response.status));
+    error.status = response.status;
+    error.details = data;
+    throw error;
+  }
   return data;
 }
 
@@ -89,6 +95,8 @@ export async function authorizeOAuth(provider, timeoutMs = 120000) {
   popup.document.title = "Connecting to AURA";
   popup.document.body.innerHTML = '<main style="font-family:system-ui;background:#0b1020;color:#eef2ff;min-height:100vh;display:grid;place-items:center;margin:0"><div style="text-align:center"><div style="font-size:32px;margin-bottom:12px">◌</div><strong>Preparing secure authorization…</strong><p style="color:#94a3b8;font-size:14px">AURA is checking this connection.</p></div></main>';
   let authorization_url;
+  let managedSession = null;
+  let managedPopupClosedAt = null;
   let previousUpdatedAt = null;
   const oauthSignal = { current: null };
   const receiveOAuthResult = (event) => {
@@ -101,13 +109,34 @@ export async function authorizeOAuth(provider, timeoutMs = 120000) {
     await ensureWorkspace();
     const before = await listPythonTools().catch(() => []);
     const existing = before.find((tool) => tool.slug === provider);
-    if (existing?.enabled) {
-      popup.close();
-      window.removeEventListener("message", receiveOAuthResult);
-      return { connected: true, reused: true, tool: existing };
-    }
     previousUpdatedAt = existing?.updated_at || null;
-    ({ authorization_url } = await request(`/v1/oauth/${provider}/start`));
+    const managedStatus = await request("/v1/managed-connectors/status").catch(() => null);
+    if (managedStatus?.configured && managedStatus.providers?.includes(provider)) {
+      const selected = existing?.id
+        ? `?connection_id=${encodeURIComponent(existing.id)}`
+        : "";
+      managedSession = await request(`/v1/managed-connectors/${provider}/session${selected}`, {
+        method: "POST",
+      });
+      if (managedSession.already_connected) {
+        const synced = await request(
+          `/v1/managed-connectors/${provider}/sync?external_connection_id=${encodeURIComponent(managedSession.external_connection_id)}`,
+          { method: "POST" }
+        );
+        if (synced.connected) {
+          popup.close();
+          return { connected: true, reused: true, tool: synced };
+        }
+      }
+      authorization_url = managedSession.connect_link || managedSession.authorization_url;
+    } else {
+      if (existing?.enabled) {
+        popup.close();
+        return { connected: true, reused: true, tool: existing };
+      }
+      ({ authorization_url } = await request(`/v1/oauth/${provider}/start`));
+    }
+    if (!authorization_url) throw new Error("AURA could not create a secure authorization link.");
   } catch (error) {
     popup.close();
     window.removeEventListener("message", receiveOAuthResult);
@@ -120,6 +149,40 @@ export async function authorizeOAuth(provider, timeoutMs = 120000) {
       await new Promise((resolve) => window.setTimeout(resolve, 1000));
       if (oauthSignal.current?.status === "error") {
         throw new Error(oauthSignal.current.message || "The app did not grant AURA access.");
+      }
+      if (managedSession) {
+        const selected = managedSession.connection_id
+          ? `connection_id=${encodeURIComponent(managedSession.connection_id)}`
+          : managedSession.external_connection_id
+          ? `external_connection_id=${encodeURIComponent(managedSession.external_connection_id)}`
+          : "";
+        const synced = await request(
+          `/v1/managed-connectors/${provider}/sync${selected ? `?${selected}` : ""}`,
+          { method: "POST" }
+        ).catch((error) => {
+          if (error.status && error.status < 500) throw error;
+          return null;
+        });
+        if (synced?.connected) {
+          const tools = await listPythonTools().catch(() => []);
+          const connected = tools.find((tool) => tool.id === synced.connection_id || tool.slug === provider);
+          if (!popup.closed) popup.close();
+          return { authorization_url, connected: true, tool: connected || synced };
+        }
+        if (synced && synced.retryable === false && synced.status === "degraded") {
+          throw new Error(
+            synced.reason === "authorization_required"
+              ? "The selected account did not grant usable access. Choose the account that owns the required resources."
+              : "The selected account could not be verified."
+          );
+        }
+        if (popup.closed && oauthSignal.current?.status !== "success") {
+          managedPopupClosedAt ||= Date.now();
+          if (Date.now() - managedPopupClosedAt > 10000) {
+            throw new Error("Authorization was closed before AURA verified the selected account.");
+          }
+        }
+        continue;
       }
       const tools = await listPythonTools().catch(() => []);
       const connected = tools.find((tool) =>
@@ -206,9 +269,29 @@ export async function disconnectPythonConnection(connectionId) {
   return request(`/v1/connections/${connectionId}`, { method: "DELETE" });
 }
 
-export async function createPythonRun(prompt, workflowId = null) {
+export function rememberActivePythonRun(runId) {
+  if (runId) localStorage.setItem(ACTIVE_RUN_KEY, runId);
+}
+
+export function forgetActivePythonRun(runId = null) {
+  if (!runId || localStorage.getItem(ACTIVE_RUN_KEY) === runId) {
+    localStorage.removeItem(ACTIVE_RUN_KEY);
+  }
+}
+
+export function rememberedActivePythonRun() {
+  return localStorage.getItem(ACTIVE_RUN_KEY);
+}
+
+export async function createPythonRun(prompt, workflowId = null, requestKey = null) {
   await ensureWorkspace();
-  return request("/v1/runs", { method: "POST", body: JSON.stringify({ prompt, workflow_id: workflowId }) });
+  const result = await request("/v1/runs", {
+    method: "POST",
+    headers: requestKey ? { "Idempotency-Key": requestKey } : {},
+    body: JSON.stringify({ prompt, workflow_id: workflowId }),
+  });
+  rememberActivePythonRun(result.id);
+  return result;
 }
 
 export async function getPythonRun(runId) {
@@ -216,7 +299,60 @@ export async function getPythonRun(runId) {
   return request(`/v1/runs/${runId}`);
 }
 
+export async function listPythonRuns({ active = false, limit = 20 } = {}) {
+  await ensureWorkspace();
+  return request(`/v1/runs?active=${active ? "true" : "false"}&limit=${limit}`);
+}
+
+export async function getResumablePythonRun() {
+  const remembered = rememberedActivePythonRun();
+  if (remembered) {
+    try {
+      const run = await getPythonRun(remembered);
+      if (!["completed", "cancelled"].includes(run.status)) return run;
+      forgetActivePythonRun(remembered);
+    } catch (error) {
+      if (![403, 404].includes(error.status)) throw error;
+      forgetActivePythonRun(remembered);
+    }
+  }
+  const [latest] = await listPythonRuns({ active: true, limit: 1 });
+  if (latest) rememberActivePythonRun(latest.id);
+  return latest || null;
+}
+
 export async function approvePythonPlan(runId, editedSteps = null) {
   await ensureWorkspace();
-  return request(`/v1/runs/${runId}/approve-plan`, { method: "POST", body: JSON.stringify({ approved: true, edited_steps: editedSteps }) });
+  return request(`/v1/runs/${runId}/approve-plan`, {
+    method: "POST",
+    body: JSON.stringify({
+      approved: true,
+      edited_steps: editedSteps,
+      approve_consequential: false,
+    }),
+  });
+}
+
+export async function decidePythonApproval(approvalId, approved, editedArguments = null) {
+  await ensureWorkspace();
+  return request(`/v1/approvals/${approvalId}`, {
+    method: "POST",
+    body: JSON.stringify({ approved, edited_arguments: editedArguments }),
+  });
+}
+
+export async function resumePythonRun(runId, action = "retry", stepId = null) {
+  await ensureWorkspace();
+  return request(`/v1/runs/${runId}/resume`, {
+    method: "POST",
+    body: JSON.stringify({ action, step_id: stepId }),
+  });
+}
+
+export async function resumePythonRunAfterConnection(runId, connectionId) {
+  await ensureWorkspace();
+  return request(`/v1/runs/${runId}/resume-after-connection`, {
+    method: "POST",
+    body: JSON.stringify({ connection_id: connectionId }),
+  });
 }
