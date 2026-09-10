@@ -22,6 +22,31 @@ const resolveTool = (raw) => {
   return TOOL_BY_NAME[key] || null;
 };
 
+const slugifyTool = (value) => String(value || "")
+  .trim()
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, "-")
+  .replace(/^-|-$/g, "");
+
+const REQUIREMENT_ALIASES = {
+  google: "Google Drive",
+  "google-workspace": "Google Drive",
+  atlassian: "Jira",
+  jira: "Jira",
+};
+
+const resolveRequirementTool = (raw) => {
+  const value = String(raw || "").trim();
+  const slug = slugifyTool(value);
+  if (REQUIREMENT_ALIASES[slug]) return REQUIREMENT_ALIASES[slug];
+  const exact = CATALOG.find(
+    (tool) => slugifyTool(tool.name) === slug || tool.name.toLowerCase() === value.toLowerCase()
+  );
+  if (exact) return exact.name;
+  const contained = CATALOG.find((tool) => value.toLowerCase().includes(tool.name.toLowerCase()));
+  return contained?.name || value;
+};
+
 const toolsForStep = (step) => {
   const names = [step.tool, ...(step.flow || []).filter((item) => item.label === "Uses").map((item) => item.value)]
     .map(resolveTool)
@@ -99,13 +124,14 @@ export default function PlanView({
       if (res.needsConfiguration) {
         setConnectionErrors((prev) => ({
           ...prev,
-          [name]: `AURA couldn't finish connecting ${name} automatically. Please try again.`,
+          [name]: `Finish setting up ${name} in Connections. Your task remains saved.`,
         }));
+        window.dispatchEvent(new CustomEvent("aura:open-connections", { detail: { toolName: name } }));
       }
       if (res.connected) {
         await hydrateConnections();
-        onConnectionRecovered?.(name);
       }
+      return res;
     } catch (e) {
       setConnectionErrors((prev) => ({
         ...prev,
@@ -119,8 +145,18 @@ export default function PlanView({
   };
 
   const handleConnectAll = async () => {
+    let recovered = null;
     for (const tool of needed) {
-      await handleConnect(tool.name);
+      const result = await handleConnect(tool.name);
+      if (result?.connected) {
+        recovered = {
+          name: tool.name,
+          connectionId: result.connection?.id || result.tool?.id || null,
+        };
+      }
+    }
+    if (recovered) {
+      await onConnectionRecovered?.(recovered.name, recovered.connectionId);
     }
   };
 
@@ -141,8 +177,17 @@ export default function PlanView({
         out.push({ name: t, reason: match ? match.iWill || match.action || "" : "" });
       });
     });
+    (plan.connectionRequirements || []).forEach((requirement) => {
+      const name = resolveRequirementTool(requirement);
+      if (!name || seen.has(name)) return;
+      seen.add(name);
+      out.push({
+        name,
+        reason: `AURA needs ${name} access to finish building this plan`,
+      });
+    });
     return out;
-  }, [steps]);
+  }, [steps, plan.connectionRequirements]);
 
   // AURA handles connector discovery and setup. The only thing a user may need
   // to do is grant the provider's required account permission.
@@ -157,6 +202,7 @@ export default function PlanView({
   const needed = connectionsReady
     ? planTools.filter((tool) => !effectiveConnections[tool.name])
     : [];
+  const connectionOnly = steps.length === 0 && (plan.connectionRequirements || []).length > 0;
 
   const onDragEnd = (res) => {
     if (!res.destination || res.source.index === res.destination.index) return;
@@ -269,14 +315,18 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
           <div className="p-1.5 rounded-lg bg-primary/10 border border-primary/20">
             <Brain className="w-4 h-4 text-primary" />
           </div>
-          <h2 className="text-lg font-semibold">Here's how Aura plans to complete your task</h2>
+          <h2 className="text-lg font-semibold">
+            {connectionOnly ? "Connect one tool so Aura can finish the plan" : "Here's how Aura plans to complete your task"}
+          </h2>
         </div>
         <p className="text-xs text-muted-foreground ml-9 leading-relaxed">
-          Review the steps and change anything that doesn't look right.
+          {connectionOnly
+            ? "Your task is saved. Planning resumes automatically after the connection is verified."
+            : "Review the steps and change anything that doesn't look right."}
         </p>
       </motion.div>
 
-      {plan.error && (
+      {plan.error && !connectionOnly && (
         <div className="mb-4 rounded-xl border border-red-400/25 bg-red-400/5 p-3 text-sm text-red-200">
           <p className="font-medium">AURA couldn't build this plan</p>
           <p className="mt-1 text-xs text-red-200/80">{plan.error}</p>
@@ -300,6 +350,23 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         errors={connectionErrors}
         onConnectAll={handleConnectAll}
       />
+
+      {connectionOnly && (
+        <div className="rounded-xl border border-white/8 bg-card/50 p-4 text-sm text-muted-foreground">
+          AURA has not executed anything. Connect the requested provider above, or retry planning after updating your connections.
+          {onRetryPlan && (
+            <button
+              type="button"
+              onClick={onRetryPlan}
+              className="mt-3 flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-xs font-medium text-foreground hover:bg-white/5"
+            >
+              <RotateCcw className="h-3.5 w-3.5" /> Retry planning
+            </button>
+          )}
+        </div>
+      )}
+
+      {!connectionOnly && <>
 
       {/* Steps */}
       <DragDropContext onDragEnd={onDragEnd}>
@@ -452,6 +519,7 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
           </motion.button>
         </div>
       </motion.div>
+      </>}
     </motion.div>
   );
 }

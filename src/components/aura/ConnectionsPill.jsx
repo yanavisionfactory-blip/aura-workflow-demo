@@ -29,6 +29,16 @@ export default function ConnectionsPill() {
     hydrateConnections().catch((e) => setError(e.message));
   }, []);
 
+  useEffect(() => {
+    const openRequestedTool = (event) => {
+      setWorkspaceOpen(true);
+      setConnectOpen(true);
+      setQuery(event.detail?.toolName || "");
+    };
+    window.addEventListener("aura:open-connections", openRequestedTool);
+    return () => window.removeEventListener("aura:open-connections", openRequestedTool);
+  }, []);
+
   const connectedTools = useMemo(() => {
     const catalogConnected = CATALOG.filter((t) => connected[t.name] && !isAura(t.name));
     const catalogNames = new Set(CATALOG.map((t) => t.name.toLowerCase()));

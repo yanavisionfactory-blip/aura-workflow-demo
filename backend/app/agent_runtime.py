@@ -457,6 +457,56 @@ async def _run_staged_planner(
     return PlanningBundle(objective=objective, toolset=toolset, plan=plan)
 
 
+def _has_only_missing_capabilities(bundle: PlanningBundle) -> bool:
+    return bool(bundle.toolset.missing_capabilities and not bundle.toolset.tools)
+
+
+async def _recover_catalog_tool_selection(
+    agents: dict[str, Agent],
+    request_payload: dict,
+    bundle: PlanningBundle,
+    *,
+    max_turns: int = 8,
+) -> PlanningBundle:
+    """Retry a false missing-capability decision against the full catalog once.
+
+    A disconnected catalog connector is still valid while building a reviewable
+    plan. The user should see that plan and its connection requirement instead of
+    an empty failure screen. A second router decision that still finds no catalog
+    connector is treated as a genuine missing capability and handed back to the
+    application as a connection/setup requirement.
+    """
+    if not _has_only_missing_capabilities(bundle):
+        return bundle
+
+    missing = list(bundle.toolset.missing_capabilities)
+    repair_payload = {
+        **request_payload,
+        "rejected_bundle": bundle.model_dump(mode="json"),
+        "required_fixes": [
+            "Re-check the complete connector catalog before declaring a capability missing.",
+            "Select a suitable catalog connector even when connected=false; connection is an execution preflight concern, not a planning blocker.",
+        ],
+        "response_recovery": (
+            "The previous router returned no tools. Re-route the objective against every "
+            "listed connector and operation. A connector marked connected=false is valid for "
+            "a reviewable plan and must be selected when it can perform the work. Report a "
+            "missing capability only when no listed connector can perform it."
+        ),
+    }
+    try:
+        recovered = await _run_staged_planner(
+            agents, repair_payload, max_turns=max_turns
+        )
+    except Exception as exc:  # noqa: BLE001 - preserve the actionable blocker
+        raise ConnectionRequiredError(missing) from exc
+    if _has_only_missing_capabilities(recovered):
+        raise ConnectionRequiredError(
+            list(recovered.toolset.missing_capabilities) or missing
+        )
+    return recovered
+
+
 def deterministic_plan_fixes(
     plan: WorkflowPlan,
     tool_inventory: list[dict],
@@ -969,6 +1019,11 @@ async def create_plan(
             raise RuntimeError(
                 "Planner recovery exhausted across combined and staged routes"
             ) from staged_error
+    if _has_only_missing_capabilities(bundle):
+        bundle = await _recover_catalog_tool_selection(
+            agents, request_payload, bundle, max_turns=8
+        )
+        recovery_mode = "staged_capability_repair"
     model_ms = round((perf_counter() - model_started_at) * 1000)
     objective = bundle.objective
     toolset = bundle.toolset
@@ -1079,8 +1134,13 @@ async def create_plan(
         repair_ms += round((perf_counter() - manager_repair_started) * 1000)
         objective = bundle.objective
         toolset = bundle.toolset
-        if toolset.missing_capabilities and not toolset.tools:
-            raise ConnectionRequiredError(toolset.missing_capabilities)
+        if _has_only_missing_capabilities(bundle):
+            bundle = await _recover_catalog_tool_selection(
+                agents, request_payload, bundle, max_turns=8
+            )
+            recovery_mode = "staged_manager_capability_repair"
+            objective = bundle.objective
+            toolset = bundle.toolset
         plan = normalize_plan_graph(bundle.plan)
         deterministic_fixes = deterministic_plan_fixes(
             plan, tool_inventory, available_input_names
@@ -1117,8 +1177,13 @@ async def create_plan(
             repair_ms += round((perf_counter() - manager_repair_started) * 1000)
             objective = bundle.objective
             toolset = bundle.toolset
-            if toolset.missing_capabilities and not toolset.tools:
-                raise ConnectionRequiredError(toolset.missing_capabilities)
+            if _has_only_missing_capabilities(bundle):
+                bundle = await _recover_catalog_tool_selection(
+                    agents, request_payload, bundle, max_turns=8
+                )
+                recovery_mode = "staged_manager_capability_repair"
+                objective = bundle.objective
+                toolset = bundle.toolset
             plan = normalize_plan_graph(bundle.plan)
             deterministic_fixes = deterministic_plan_fixes(
                 plan, tool_inventory, available_input_names
