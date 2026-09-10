@@ -918,6 +918,45 @@ async def create_plan(
             plan, tool_inventory, available_input_names
         )
         if deterministic_fixes:
+            # Senior feedback can cause the planner to restructure an otherwise
+            # valid graph and accidentally introduce synthetic loop variables.
+            # Give the smaller staged builder one final, bounded graph repair
+            # instead of surfacing a generic planning failure to the user.
+            repaired_payload = {
+                **request_payload,
+                "rejected_bundle": {
+                    "objective": objective.model_dump(mode="json"),
+                    "toolset": toolset.model_dump(mode="json"),
+                    "plan": plan.model_dump(mode="json"),
+                },
+                "required_fixes": deterministic_fixes,
+                "senior_orchestrator_review": supervision.model_dump(mode="json"),
+                "autonomous_resource_resolution": autonomous_resource_resolution_context(
+                    plan, tool_inventory, available_input_names
+                ),
+                "response_recovery": (
+                    "Repair only the listed graph authorization defects. Every vars.name "
+                    "reference must be produced by output_variables on a strictly earlier "
+                    "step. Otherwise replace it with a concrete steps.key.path reference. "
+                    "Do not invent implicit foreach or loop variables; expand a finite set "
+                    "of indexed step references when multiple items must be inspected."
+                ),
+            }
+            manager_repair_started = perf_counter()
+            bundle = await _run_staged_planner(
+                agents, repaired_payload, max_turns=8
+            )
+            repair_ms += round((perf_counter() - manager_repair_started) * 1000)
+            objective = bundle.objective
+            toolset = bundle.toolset
+            if toolset.missing_capabilities and not toolset.tools:
+                raise ConnectionRequiredError(toolset.missing_capabilities)
+            plan = normalize_plan_graph(bundle.plan)
+            deterministic_fixes = deterministic_plan_fixes(
+                plan, tool_inventory, available_input_names
+            )
+            recovery_mode = "staged_manager_authorization_repair"
+        if deterministic_fixes:
             raise ValueError(
                 "Senior-orchestrated plan repair failed authorization: "
                 + "; ".join(deterministic_fixes)
