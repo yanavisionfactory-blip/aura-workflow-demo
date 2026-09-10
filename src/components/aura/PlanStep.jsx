@@ -45,7 +45,7 @@ const LABEL_MAP = {
 };
 const normLabel = (l) => LABEL_MAP[l] || l;
 
-export default function PlanStep({ step, index, isLast, provided, onChange, onDelete, forceEdit, onEditConsumed }) {
+export default function PlanStep({ step, index, isLast, provided, onChange, onDelete, onRequestChange, forceEdit, onEditConsumed }) {
   const [changing, setChanging] = useState(false);
   const [changeText, setChangeText] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -69,6 +69,12 @@ export default function PlanStep({ step, index, isLast, provided, onChange, onDe
     setSubmitting(true);
     setError("");
     try {
+      if (onRequestChange) {
+        await onRequestChange(text);
+        setChanging(false);
+        setChangeText("");
+        return;
+      }
       const res = await base44.integrations.Core.InvokeLLM({
         prompt: `You are AURA, an AI workflow automation platform. Revise this single workflow step based on the user's requested change.
 

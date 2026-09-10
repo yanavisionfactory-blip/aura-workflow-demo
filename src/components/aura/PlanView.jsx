@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
-import { Brain, Plus, ArrowRight, Sparkles, Loader2, Check, X } from "lucide-react";
+import { Brain, Plus, ArrowRight, Sparkles, Loader2, Check, X, RotateCcw } from "lucide-react";
 import { aura } from "@/api/auraClient";
 import PlanStep from "./PlanStep";
 import PlanConnectionAlert from "./PlanConnectionAlert";
@@ -72,6 +72,8 @@ export default function PlanView({
   approveLabel = "Start",
   requiredReconnectTools = [],
   onConnectionRecovered,
+  onRevisePlan,
+  onRetryPlan,
 }) {
   const [steps, setSteps] = useState(plan.steps);
   const [forceEditIndex, setForceEditIndex] = useState(null);
@@ -158,6 +160,15 @@ export default function PlanView({
 
   const onDragEnd = (res) => {
     if (!res.destination || res.source.index === res.destination.index) return;
+    if (onRevisePlan) {
+      const moved = steps[res.source.index];
+      const destination = steps[res.destination.index];
+      const direction = res.destination.index < res.source.index ? "before" : "after";
+      onRevisePlan(
+        `Move “${moved?.title || moved?.action || `step ${res.source.index + 1}`}” ${direction} “${destination?.title || destination?.action || `step ${res.destination.index + 1}`}”.`
+      );
+      return;
+    }
     setSteps((prev) => {
       const next = [...prev];
       const [moved] = next.splice(res.source.index, 1);
@@ -167,8 +178,20 @@ export default function PlanView({
   };
 
   const updateStep = (i, updated) => setSteps((prev) => prev.map((s, idx) => (idx === i ? updated : s)));
-  const deleteStep = (i) => setSteps((prev) => prev.filter((_, idx) => idx !== i));
-  const addStep = () =>
+  const deleteStep = (i) => {
+    if (onRevisePlan) {
+      const target = steps[i];
+      onRevisePlan(`Remove “${target?.title || target?.action || `step ${i + 1}`}” from the plan.`);
+      return;
+    }
+    setSteps((prev) => prev.filter((_, idx) => idx !== i));
+  };
+  const addStep = () => {
+    if (onRevisePlan) {
+      setPlanInstruction("Add a step that ");
+      setPlanEditing(true);
+      return;
+    }
     setSteps((prev) => [
       ...prev,
       {
@@ -184,6 +207,7 @@ export default function PlanView({
         riskNote: "",
       },
     ]);
+  };
 
   // Tell AURA — natural-language plan-wide edits (reorder, swap tools, scope, restructure)
   const [planInstruction, setPlanInstruction] = useState("");
@@ -197,6 +221,12 @@ export default function PlanView({
     setPlanSubmitting(true);
     setPlanError("");
     try {
+      if (onRevisePlan) {
+        await onRevisePlan(text);
+        setPlanInstruction("");
+        setPlanEditing(false);
+        return;
+      }
       const res = await aura.integrations.Core.InvokeLLM({
         prompt: `You are AURA, an AI workflow automation platform. Revise the ENTIRE workflow plan based on the user's instruction.
 
@@ -250,6 +280,16 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         <div className="mb-4 rounded-xl border border-red-400/25 bg-red-400/5 p-3 text-sm text-red-200">
           <p className="font-medium">AURA couldn't build this plan</p>
           <p className="mt-1 text-xs text-red-200/80">{plan.error}</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">No external action was started, and your connections are unchanged.</p>
+          {onRetryPlan && (
+            <button
+              type="button"
+              onClick={onRetryPlan}
+              className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-red-300/20 bg-red-300/5 px-3 py-1.5 text-xs font-medium text-red-100 hover:bg-red-300/10"
+            >
+              <RotateCcw className="h-3.5 w-3.5" /> Retry planning
+            </button>
+          )}
         </div>
       )}
 
@@ -276,6 +316,11 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
                       provided={p}
                       onChange={(updated) => updateStep(i, updated)}
                       onDelete={() => deleteStep(i)}
+                      onRequestChange={onRevisePlan
+                        ? (instruction) => onRevisePlan(
+                          `For “${step.title || step.action || `step ${i + 1}`}”: ${instruction}`
+                        )
+                        : undefined}
                       forceEdit={forceEditIndex === i}
                       onEditConsumed={() => setForceEditIndex(null)}
                     />

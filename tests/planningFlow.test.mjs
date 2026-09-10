@@ -10,9 +10,9 @@ test("a completed backend plan proceeds to user review", () => {
   }), "review");
 });
 
-test("pre-execution blockers fall back to editable plan creation", () => {
+test("pre-execution blockers cannot manufacture an executable fallback", () => {
   for (const status of ["waiting_for_action", "blocked", "failed", "cancelled"]) {
-    assert.equal(planningDisposition({ status }), "fallback");
+    assert.equal(planningDisposition({ status }), "unavailable");
   }
 });
 

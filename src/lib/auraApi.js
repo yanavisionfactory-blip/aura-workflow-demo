@@ -352,12 +352,12 @@ export function rememberedActivePythonRun() {
   return localStorage.getItem(ACTIVE_RUN_KEY);
 }
 
-export async function createPythonRun(prompt, workflowId = null, requestKey = null) {
+export async function createPythonRun(prompt, workflowId = null, requestKey = null, inputs = {}) {
   await ensureWorkspace();
   const run = await request("/v1/runs", {
     method: "POST",
     headers: requestKey ? { "Idempotency-Key": requestKey } : {},
-    body: JSON.stringify({ prompt, workflow_id: workflowId }),
+    body: JSON.stringify({ prompt, workflow_id: workflowId, inputs }),
   });
   rememberActivePythonRun(run.id);
   return run;
