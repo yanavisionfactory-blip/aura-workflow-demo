@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   alternativeRecoveryPrompt,
   needsRecovery,
   recoveryForRun,
-  startupRunDisposition,
 } from '../src/lib/runRecovery.mjs';
 
 const run = (patch = {}) => ({ id: 'saved-run', status: 'waiting_for_action',
@@ -12,21 +12,17 @@ const run = (patch = {}) => ({ id: 'saved-run', status: 'waiting_for_action',
     { id: 'failed', position: 1, status: 'failed', consequential: false }],
   plan: { steps: [{}, {}] }, ...patch });
 
+test('AURA always launches into the original prompt flow', () => {
+  const demo = readFileSync(new URL('../src/pages/Demo.jsx', import.meta.url), 'utf8');
+  assert.match(demo, /useState\("input"\)/);
+  assert.match(demo, /setPhase\("confirm"\)/);
+  assert.doesNotMatch(demo, /getResumablePythonRun/);
+  assert.doesNotMatch(demo, /RunAttentionNotice/);
+});
+
 test('all real interrupted states route to recovery, not final results', () => {
   for (const status of ['waiting_for_action', 'blocked', 'failed']) assert.equal(needsRecovery(status), true);
   for (const status of ['completed', 'awaiting_approval', 'running', 'cancelled']) assert.equal(needsRecovery(status), false);
-});
-
-test('startup monitors active work without hijacking the home screen for human decisions', () => {
-  for (const status of ['queued', 'planning', 'running']) {
-    assert.equal(startupRunDisposition({ status }), 'monitor');
-  }
-  for (const status of ['awaiting_approval', 'waiting_for_action', 'blocked', 'failed']) {
-    assert.equal(startupRunDisposition({ status }), 'attention');
-  }
-  for (const status of ['completed', 'cancelled', 'unknown']) {
-    assert.equal(startupRunDisposition({ status }), 'ignore');
-  }
 });
 
 test('alternative recovery plans preserve safety boundaries and user direction', () => {

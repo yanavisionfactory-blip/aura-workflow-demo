@@ -1,18 +1,6 @@
 // Presentation only. The resume endpoint remains the authority for recovery.
 export const needsRecovery = (status) => ["waiting_for_action", "blocked", "failed"].includes(status);
 
-const AUTO_MONITOR_STATUSES = new Set(["queued", "planning", "running"]);
-const ATTENTION_STATUSES = new Set(["awaiting_approval", "waiting_for_action", "blocked", "failed"]);
-
-// Restoring a durable run must not turn the AURA home screen into a dead end.
-// Active work keeps running and is observed automatically; anything that needs
-// a person is presented as an optional attention card on the home screen.
-export function startupRunDisposition(run = {}) {
-  if (AUTO_MONITOR_STATUSES.has(run.status)) return "monitor";
-  if (ATTENTION_STATUSES.has(run.status)) return "attention";
-  return "ignore";
-}
-
 export function alternativeRecoveryPrompt(run = {}, userApproach = "") {
   const original = String(run.prompt || "Continue the saved workflow").trim();
   const approach = String(userApproach || "").trim();
