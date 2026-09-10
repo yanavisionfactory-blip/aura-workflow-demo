@@ -106,7 +106,14 @@ def build_agents() -> dict[str, Agent]:
             call using the returned page ID. A metadata-only step must not promise body content.
             Summarize only retrieved blocks and disclose unread nested or paginated content.
             Report missing capabilities only when no catalog
-            connector can perform the job. Never claim execution occurred.""",
+            connector can perform the job. Never claim execution occurred.
+            Prefer one listed batch operation over invented per-record loop variables. When the
+            user designates an approval or policy form, its creator-specific approved/rejected
+            receipt is the authoritative gate for the non-public policies that form evaluates;
+            invoking that approved write is the policy check itself, so do not require its result
+            before the call. Filter on prior public evidence and duplicate lists first, and allow
+            downstream writes only for records with an explicit approved receipt. Unknown is never
+            approval.""",
             AgentOutputSchema(PlanningBundle, strict_json_schema=False),
         ),
         "intent": _agent(
@@ -156,7 +163,14 @@ def build_agents() -> dict[str, Agent]:
             use job.result.designs[0].id; after export use job.urls[0]. The executor waits
             for verified job completion. For a PDF attachment, gmail.send must include
             attachments: [{filename: 'roadmap.pdf', url: '{{steps.export.job.urls.0}}'}].
-            A link in the body does not satisfy a file attachment request. Never invent a file hash.""",
+            A link in the body does not satisfy a file attachment request. Never invent a file hash.
+            Prefer a listed finite batch operation over an implicit foreach or invented per-item
+            variable. A batch operation is the bounded iteration strategy: pass the complete
+            evidence-qualified, duplicate-free array and use its per-record receipts. When the user
+            designates an approval or policy form, that consequential call is allowed to establish
+            the non-public policy decision; do not circularly require its approval result before
+            invoking it. Any dependent write must select only explicit approved records, never
+            rejected or unknown records.""",
             AgentOutputSchema(WorkflowPlan, strict_json_schema=False),
         ),
         "evaluator": _agent(
@@ -636,8 +650,16 @@ async def supervise_plan(
         """Review the planner team's proposed objective, tool selection, and workflow as its
         senior manager. Approve only when the plan satisfies the original request using the
         smallest sufficient toolset and preserves dependencies, permissions, and approval
-        boundaries. Otherwise return repair with concrete fixes. Do not execute tools, add new
-        user goals, or weaken deterministic safety checks.""",
+        boundaries. Otherwise return repair with concrete fixes. A listed array/batch operation is
+        a concrete bounded iteration strategy and does not need synthetic foreach steps. When the
+        user explicitly designates a policy or approval form, an explicit creator-specific approved
+        or rejected receipt from that form is authoritative evidence for the non-public policies the
+        form evaluates; the form call is the gate itself, so its result cannot be a prerequisite to
+        invoking it. Require public evidence and duplicate exclusion before that gate, and require
+        downstream writes to select only explicit approved receipts; unknown is not approval. A
+        provider write receipt with destination and updated range is verification of that write and
+        does not require a redundant readback unless the request explicitly asks to reread it. Do
+        not execute tools, add new user goals, or weaken deterministic safety checks.""",
         PlanSupervisionDecision,
     )
     try:

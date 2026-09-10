@@ -276,7 +276,10 @@ async def _create_compiled_plan(
     """Build a schema-valid plan, repairing internal connector mismatches silently."""
     manifests_by_slug = {item["slug"]: _current_capability_manifest(item["slug"], manifests_by_slug.get(item["slug"])) for item in inventory}
     inventory = [{**item, "operation_contracts": [
-        {key: module.get(key) for key in ("name", "input_schema", "output_schema", "permission_scope", "reliability")}
+        {key: module.get(key) for key in (
+            "name", "description", "module_type", "input_schema", "output_schema",
+            "permission_scope", "requires_approval", "capability_tags", "reliability",
+        )}
         for module in manifests_by_slug[item["slug"]].get("capabilities", [])
         if module.get("name") in item.get("allowed_operations", [])
     ]} for item in inventory]

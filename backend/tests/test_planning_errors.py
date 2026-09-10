@@ -112,3 +112,43 @@ def test_connector_contract_mismatch_is_replanned_before_reaching_user(monkeypat
     assert calls[0] == []
     assert "unknown inputs" in calls[1][0]
 
+
+def test_planner_inventory_preserves_operation_semantics(monkeypatch) -> None:
+    captured = {}
+    plan = SimpleNamespace(steps=[], planning_artifacts={})
+
+    async def fake_create_plan(_prompt, inventory, *_args, **_kwargs):
+        captured["contract"] = inventory[0]["operation_contracts"][0]
+        return plan
+
+    monkeypatch.setattr(orchestrator, "create_plan", fake_create_plan)
+    monkeypatch.setattr(orchestrator, "compile_contracts", None, raising=False)
+
+    result = asyncio.run(
+        orchestrator._create_compiled_plan(
+            "Read a page",
+            [{"slug": "browser", "allowed_operations": ["browser.page.read"]}],
+            set(),
+            {
+                "browser": {
+                    "capabilities": [
+                        {
+                            "name": "browser.page.read",
+                            "description": "Read the current rendered page.",
+                            "module_type": "search",
+                            "input_schema": {"type": "object"},
+                            "output_schema": {"type": "object"},
+                            "permission_scope": "read",
+                            "requires_approval": False,
+                            "capability_tags": ["public_page_content"],
+                        }
+                    ]
+                }
+            },
+        )
+    )
+
+    assert result is plan
+    assert captured["contract"]["description"] == "Read the current rendered page."
+    assert captured["contract"]["requires_approval"] is False
+    assert captured["contract"]["capability_tags"] == ["public_page_content"]
