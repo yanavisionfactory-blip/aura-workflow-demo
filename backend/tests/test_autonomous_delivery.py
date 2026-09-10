@@ -97,6 +97,52 @@ async def test_transient_read_is_recovered_on_a_fresh_durable_delivery(
         assert event.payload["action"] == "retry_step"
 
 
+async def test_capability_drift_refresh_is_attempted_once_per_failure(
+    runtime, monkeypatch
+):
+    monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
+    refreshes = 0
+
+    async def refreshed(*args):
+        nonlocal refreshes
+        refreshes += 1
+        return True, False
+
+    monkeypatch.setattr(autonomous_delivery, "_refresh_capabilities", refreshed)
+    await _failed_read(runtime, "[invalid_request] provider schema changed")
+
+    assert await autonomously_recover_run("run", "w") == "scheduled"
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        step = await session.get(RunStep, "step")
+        run.status = RunStatus.waiting_for_action
+        step.status = StepStatus.failed
+        session.add(
+            StepAttempt(
+                workspace_id="w",
+                run_id="run",
+                step_id="step",
+                attempt_number=2,
+                status="failed",
+                tool_slug="test",
+                operation="records.list",
+                error="[invalid_request] provider schema changed",
+            )
+        )
+        await session.commit()
+
+    # The identical incident now falls through to the repair planner instead of
+    # looping forever through the same contract refresh.
+    assert await autonomously_recover_run("run", "w") == "not_applicable"
+    assert refreshes == 1
+    async with runtime() as session:
+        state = (await session.get(WorkflowRun, "run")).execution_context[
+            "__aura_autonomy__"
+        ]
+        assert state["failure_history"][-1]["action"] == "refresh_capabilities"
+        assert len(state["actions_by_failure"]) == 1
+
+
 async def test_scheduler_sweeps_approved_runs_paused_before_supervision(
     runtime, monkeypatch
 ):
@@ -438,3 +484,47 @@ async def test_delivery_supervisor_cannot_invent_recovery_authority(monkeypatch)
     selected, source, _ = await agent_runtime.supervise_recovery({}, [option])
     assert selected == option
     assert source == "deterministic_fallback"
+
+
+async def test_diagnostician_and_incident_commander_collaborate(monkeypatch):
+    monkeypatch.setattr(
+        agent_runtime,
+        "get_settings",
+        lambda: SimpleNamespace(
+            agent_managed_execution_enabled=True,
+            openai_api_key="configured",
+            openai_model="test-model",
+        ),
+    )
+    responses = iter(
+        [
+            {
+                "category": "capability_drift",
+                "likely_cause": "The provider contract changed",
+                "evidence": ["The saved attempt returned invalid_request"],
+                "ranked_option_keys": ["refresh_capabilities"],
+                "confidence": 0.92,
+            },
+            {
+                "option_key": "refresh_capabilities",
+                "reason": "Refresh the contract before retrying the saved read",
+            },
+        ]
+    )
+
+    async def team_turn(*args, **kwargs):
+        return next(responses)
+
+    monkeypatch.setattr(agent_runtime, "_run", team_turn)
+    option = AutonomousRecoveryOption(
+        key="refresh_capabilities",
+        action="refresh_capabilities",
+        step_id="step",
+        reason_code="capability_contract_may_have_changed",
+    )
+    selected, source, reason = await agent_runtime.supervise_recovery(
+        {"failure": {"category": "invalid_request"}}, [option]
+    )
+    assert selected == option
+    assert source == "agent_team"
+    assert "provider contract changed" in reason
