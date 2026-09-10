@@ -47,6 +47,25 @@ test('generic failures do not invent a cause or an applied fix', () => {
   assert.equal(r.buttonLabel.includes('Apply fix'), false);
 });
 
+test('Google resource authorization blockers explain the exact recovery path', () => {
+  const result = recoveryForRun(run({
+    steps: [{
+      id: 'resolve-sheet',
+      position: 0,
+      status: 'failed',
+      consequential: false,
+      tool_slug: 'google',
+      operation: 'drive.spreadsheet.resolve',
+      error: 'This app connection needs your attention before AURA can continue.',
+    }],
+  }));
+  assert.match(result.what, /Google Drive resource/);
+  assert.match(result.why, /connected Google account/);
+  assert.match(result.fix, /reconnect.*both original sheets/i);
+  assert.equal(result.buttonLabel, 'Retry after reconnecting');
+  assert.equal(JSON.stringify(result).includes('12Chkm'), false);
+});
+
 test("backend proof of no dispatch allows a consequential preparation retry", () => {
   const run = {status: "waiting_for_action", steps: [{id: "s", status: "failed", consequential: true,
     recovery: {phase: "before_action", can_retry: true}}]};
