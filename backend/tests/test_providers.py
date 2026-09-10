@@ -300,7 +300,7 @@ def test_spreadsheet_resolver_verifies_configured_resource_alias(monkeypatch):
     request = AsyncMock(
         return_value={
             "id": "sheet-123",
-            "name": "Creator Outreach",
+            "name": "Creator Outreach ",
             "mimeType": "application/vnd.google-apps.spreadsheet",
             "modifiedTime": "2026-09-10T01:00:00Z",
         }

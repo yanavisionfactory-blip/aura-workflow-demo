@@ -1006,11 +1006,13 @@ class ProviderExecutor:
         name = str(a.get("name", "")).strip()
         if not name:
             raise ValueError("drive.spreadsheet.resolve requires name")
+        canonical_name = " ".join(name.split()).casefold()
         result = await self._drive_files_search({"query": name, "page_size": 10})
         matches = [
             item
             for item in result.get("files", [])
-            if item.get("name") == name
+            if " ".join(str(item.get("name", "")).split()).casefold()
+            == canonical_name
             and item.get("mimeType") == "application/vnd.google-apps.spreadsheet"
         ]
         resolution_source = "exact_name_search"
@@ -1037,7 +1039,8 @@ class ProviderExecutor:
                 raise
             if (
                 verified.get("id") == alias_id
-                and verified.get("name") == name
+                and " ".join(str(verified.get("name", "")).split()).casefold()
+                == canonical_name
                 and verified.get("mimeType")
                 == "application/vnd.google-apps.spreadsheet"
             ):
