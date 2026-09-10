@@ -35,6 +35,7 @@ import {
   recoveryForRun,
 } from "@/lib/runRecovery.mjs";
 import { planningDisposition } from "@/lib/planningFlow.mjs";
+import { hasDurablePlan, planningRequestPrompt } from "@/lib/runtimePlan.mjs";
 
 const STEP_DURATION = 2.6;
 
@@ -47,6 +48,7 @@ const planToolName = (step) => {
   }
   const names = {
     aura: "AURA Intelligence",
+    apify: "Apify",
     airtable: "Airtable",
     notion: "Notion",
     mailchimp: "Mailchimp",
@@ -66,6 +68,9 @@ const planToolName = (step) => {
     stripe: "Stripe",
     quickbooks: "QuickBooks",
     pinterest: "Pinterest",
+    modash: "Modash",
+    hypeauditor: "HypeAuditor",
+    "creator-approvals": "Creator Approvals",
   };
   return names[step.tool_slug] || step.tool_slug;
 };
@@ -420,7 +425,7 @@ export default function Demo() {
   };
   const pushT = (t) => timeoutRefs.current.push(t);
 
-  const getPythonRunResilient = async (runId, generation) => {
+  const getPythonRunResilient = async (runId, generation, maxTransientFailures = 6) => {
     let transientFailures = 0;
     while (pythonPollGenerationRef.current === generation) {
       try {
@@ -429,6 +434,7 @@ export default function Demo() {
         const transient = !error.status || error.status === 429 || error.status >= 500;
         if (!transient) throw error;
         transientFailures += 1;
+        if (transientFailures >= maxTransientFailures) throw error;
         const delay = Math.min(15000, 1000 * (2 ** Math.min(transientFailures - 1, 4)));
         await new Promise((resolve) => window.setTimeout(resolve, delay));
       }
@@ -539,45 +545,73 @@ Write ONE clear, conversational sentence restating what they want — but offer 
 
   // ---- Confirm interpretation ----
   const handleConfirm = useCallback(
-    (editedInterpretation, useEditablePlanner = false) => {
+    (editedInterpretation, revisionInstruction = "", allowLegacyPlanner = false) => {
       setInterpretation(editedInterpretation);
-      if (!useEditablePlanner) {
+      if (!allowLegacyPlanner) {
         setPlanLoading(true);
         setPhase("plan");
-        (async () => {
-          let handedOffToEditablePlanner = false;
+        return (async () => {
           try {
-            const planningPrompt = editedInterpretation.trim() || originalPromptRef.current;
+            if (revisionInstruction) {
+              const previousRunId = pythonRunIdRef.current;
+              pythonPollGenerationRef.current += 1;
+              runRequestKeyRef.current = null;
+              pythonRunIdRef.current = null;
+              pythonPlanRef.current = null;
+              if (previousRunId) {
+                await cancelPythonRun(previousRunId).catch(() => {});
+                forgetActivePythonRun(previousRunId);
+              }
+            }
+            const confirmedIntent = editedInterpretation.trim() || originalPromptRef.current;
+            const planningPrompt = planningRequestPrompt(confirmedIntent, revisionInstruction);
             runRequestKeyRef.current ||= globalThis.crypto?.randomUUID?.()
               || `aura-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-            const created = await createPythonRun(planningPrompt, null, runRequestKeyRef.current);
+            const resources = attachedResourcesRef.current || {};
+            const created = await createPythonRun(planningPrompt, currentWorkflowIdRef.current, runRequestKeyRef.current, {
+              requested_tools: userSelectedToolsRef.current,
+              attached_documents: (resources.documents || []).map(({ name, file_url, size }) => ({
+                name,
+                file_url,
+                size,
+              })),
+            });
             pythonRunIdRef.current = created.id;
             const generation = ++pythonPollGenerationRef.current;
+            const planningDeadline = Date.now() + 90000;
             let run;
             for (;;) {
               run = await getPythonRunResilient(created.id, generation);
               if (!run) return;
               const disposition = planningDisposition(run);
               if (disposition === "review") break;
-              if (disposition === "fallback") throw new Error(
+              if (disposition === "unavailable") throw new Error(
                 run.error || "The execution backend needs more setup before it can build this plan."
               );
+              if (Date.now() >= planningDeadline) {
+                throw new Error("Planning is taking longer than expected. The saved run remains safe to retry.");
+              }
               await new Promise((resolve) => setTimeout(resolve, 1000));
             }
             pythonPlanRef.current = run.plan;
             setPlan(uiPlanFromRun(run));
           } catch (error) {
-            console.warn("Python planning unavailable; keeping the user in plan creation", error);
+            console.warn("Python planning unavailable; no executable plan was created", error);
             if (pythonRunIdRef.current) forgetActivePythonRun(pythonRunIdRef.current);
             pythonRunIdRef.current = null;
             pythonPlanRef.current = null;
-            handedOffToEditablePlanner = true;
-            handleConfirm(editedInterpretation, true);
+            runRequestKeyRef.current = null;
+            setPlan({
+              interpretation: editedInterpretation,
+              workflowName: "",
+              estimatedTime: "",
+              steps: [],
+              error: error?.message || "AURA couldn't build the plan right now.",
+            });
           } finally {
-            if (!handedOffToEditablePlanner) setPlanLoading(false);
+            setPlanLoading(false);
           }
         })();
-        return;
       }
 
       const mock = pendingMock.current;
@@ -677,6 +711,28 @@ Rules:
     []
   );
 
+  const handlePlanRevision = useCallback(
+    (instruction) => handleConfirm(interpretation, instruction),
+    [handleConfirm, interpretation]
+  );
+
+  const handleRetryPlanning = useCallback(() => {
+    const failedRunId = pythonRunIdRef.current;
+    if (failedRunId) forgetActivePythonRun(failedRunId);
+    pythonRunIdRef.current = null;
+    pythonPlanRef.current = null;
+    runRequestKeyRef.current = null;
+    return handleConfirm(interpretation);
+  }, [handleConfirm, interpretation]);
+
+  const keepPlanInReview = useCallback((message) => {
+    setPlan((previous) => ({
+      ...(previous || { interpretation, steps: [] }),
+      error: message || "This plan is not attached to a durable AURA run. Rebuild it before starting.",
+    }));
+    setPhase("plan");
+  }, [interpretation]);
+
   // ---- Approve plan -> preview (both mock and custom) ----
   const handleApprove = useCallback((steps, name = "") => {
     approvedStepsRef.current = steps;
@@ -687,32 +743,33 @@ Rules:
       setEditReviewOpen(true);
       return;
     }
+    if (!hasDurablePlan(pythonRunIdRef.current, pythonPlanRef.current)) {
+      keepPlanInReview();
+      return;
+    }
     if (autoApprove) {
-      if (pythonRunIdRef.current) startPythonExecution();
-      else startExecution();
+      startPythonExecution();
       return;
     }
     const requiresReview = steps.some((step) => step.riskLevel === "modify");
     if (!requiresReview) {
-      if (pythonRunIdRef.current) startPythonExecution();
-      else startExecution();
+      startPythonExecution();
       return;
     }
-    if (pythonRunIdRef.current) {
-      startPythonPreparation(steps);
-      return;
-    }
-    setPhase("preview");
-  }, [editRunMode, autoApprove]);
+    startPythonPreparation(steps);
+  }, [editRunMode, autoApprove, keepPlanInReview]);
 
   const handlePreviewApprove = useCallback((editedSteps) => {
     if (editedSteps && editedSteps.length) {
       approvedStepsRef.current = editedSteps;
       setApprovedSteps(editedSteps);
     }
-    if (pythonRunIdRef.current) startPythonExecution(editedSteps, true);
-    else startExecution();
-  }, []);
+    if (!hasDurablePlan(pythonRunIdRef.current, pythonPlanRef.current)) {
+      keepPlanInReview();
+      return;
+    }
+    startPythonExecution(editedSteps, true);
+  }, [keepPlanInReview]);
 
   const mapRuntimeSteps = (run) => {
     const runtimeSteps = (run.steps || []).map((step, index) => {
@@ -883,6 +940,8 @@ Rules:
       liveOutput: "",
     })));
     try {
+      // The reviewed UI is a presentation of this exact immutable backend plan.
+      // Never send UI-only fields as executable steps.
       await approvePythonPlan(runId, pythonPlanRef.current.steps, false);
       for (;;) {
         const run = await getPythonRunResilient(runId, generation);
@@ -1005,106 +1064,6 @@ Rules:
     } catch (error) {
       console.error("Python workflow execution failed", error);
       await recoverRunStatus();
-    }
-  };
-
-  // ---- Execution ----
-  const startExecution = async () => {
-    clearTimeouts();
-    setPhase("executing");
-    setCurrentStepIdx(0);
-    setStartTime(Date.now());
-
-    // Examples may supply a pre-built plan, but execution is never mocked.
-    // Every approved plan goes through the same backend provider executor.
-    const template = approvedStepsRef.current.map((s) => ({
-      tool: s.tool,
-      action: s.action || s.iWill || "",
-      riskLevel: s.riskLevel,
-      status: "pending",
-      output: "",
-    }));
-    execTemplateRef.current = template;
-    setExecSteps(template);
-
-    try {
-      let wfId = currentWorkflowIdRef.current;
-      const baseName = workflowName || plan?.workflowName || originalPromptRef.current.slice(0, 60);
-      const now = new Date().toISOString();
-      const startUpdate = (id) =>
-        aura.entities.Workflow.updateMany(
-          { id },
-          { $set: { steps: approvedStepsRef.current, interpretation: plan?.interpretation || interpretation, last_run_status: "running", last_run_date: now }, $inc: { run_count: 1 } }
-        );
-      if (!wfId) {
-        // Reuse an existing saved workflow for the same prompt, else create one
-        const existing = await aura.entities.Workflow.filter({ prompt: originalPromptRef.current }, "-created_date", 1).catch(() => []);
-        if (existing.length) {
-          wfId = existing[0].id;
-          currentWorkflowIdRef.current = wfId;
-          await startUpdate(wfId);
-        } else {
-          const wf = await aura.entities.Workflow.create({
-            name: baseName,
-            prompt: originalPromptRef.current,
-            interpretation: plan?.interpretation || interpretation,
-            steps: approvedStepsRef.current,
-            last_run_status: "running",
-            last_run_date: now,
-            run_count: 1,
-          });
-          wfId = wf.id;
-          currentWorkflowIdRef.current = wfId;
-        }
-      } else {
-        await startUpdate(wfId);
-      }
-      const run = await aura.entities.WorkflowRun.create({ prompt: originalPromptRef.current, status: "running", workflow_id: wfId });
-      currentRunIdRef.current = run.id;
-    } catch (e) {
-      /* ignore */
-    }
-
-    if (!currentRunIdRef.current) {
-      finishExecution(null, "AURA could not create a persistent workflow run. No external actions were attempted.", "failed");
-      return;
-    }
-    runRealWorkflow(currentRunIdRef.current);
-  };
-
-  const runRealWorkflow = async (runId) => {
-    if (!runId) return;
-    let stopped = false;
-    const poll = async () => {
-      while (!stopped) {
-        try {
-          const run = await aura.entities.WorkflowRun.get(runId);
-          if (run.steps && run.steps.length) {
-            setExecSteps(run.steps.map((s) => ({ ...s, liveOutput: s.output || "" })));
-            const idx = run.steps.findIndex((s) => s.status === "running");
-            setCurrentStepIdx(idx >= 0 ? idx : Math.max(0, run.steps.filter((s) => s.status === "completed").length - 1));
-          }
-        } catch { /* ignore */ }
-        await new Promise((r) => setTimeout(r, 900));
-      }
-    };
-    poll();
-
-    try {
-      const res = await aura.functions.invoke("orchestrateWorkflow", {
-        runId,
-        steps: approvedStepsRef.current,
-        interpretation: plan?.interpretation || interpretation,
-        prompt: originalPromptRef.current,
-      });
-      stopped = true;
-      const data = res.data || {};
-      if (data.error) throw new Error(data.error);
-      if (data.steps) setExecSteps(data.steps.map((s) => ({ ...s, liveOutput: s.output || "" })));
-      finishExecution(data.results, null, data.status || "completed");
-    } catch (e) {
-      stopped = true;
-      finishExecution(null, e.message);
     }
   };
 
@@ -1288,18 +1247,18 @@ Generate a results summary in plain, human-friendly language (not technical).
     (workflow, approval) => {
       if (!workflow) return;
       const auto = approval === "auto";
+      const confirmedIntent = workflow.interpretation || workflow.prompt;
       reset();
       setAutoApprove(auto);
       currentWorkflowIdRef.current = workflow.id || null;
       setOriginalPrompt(workflow.prompt);
       originalPromptRef.current = workflow.prompt;
-      setInterpretation(workflow.interpretation || workflow.prompt);
+      setInterpretation(confirmedIntent);
       setWorkflowName(workflow.name || "");
-      setPlan({ steps: workflow.steps || [], interpretation: workflow.interpretation || workflow.prompt, workflowName: workflow.name || "", estimatedTime: "" });
-      setPlanLoading(false);
       setPhase("plan");
+      window.setTimeout(() => handleConfirm(confirmedIntent), 0);
     },
-    [reset]
+    [handleConfirm, reset]
   );
 
   // Start a fresh workflow from a natural-language prompt (Results "Run again" /
@@ -1459,6 +1418,8 @@ Generate a results summary in plain, human-friendly language (not technical).
                     plan={plan}
                     hasPreview={!!mock?.preview}
                     onApprove={handleApprove}
+                    onRevisePlan={handlePlanRevision}
+                    onRetryPlan={handleRetryPlanning}
                     onBack={() => setPhase("confirm")}
                     approveLabel={editRunMode ? "Review changes" : "Start"}
                   />
