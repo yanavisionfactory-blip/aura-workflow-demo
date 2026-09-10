@@ -57,6 +57,7 @@ def _blocker(
     *,
     action: str,
     tool_slug: str | None = None,
+    connection_id: str | None = None,
     resource_name: str | None = None,
     connected_account: str | None = None,
 ) -> dict[str, Any]:
@@ -66,6 +67,7 @@ def _blocker(
         "message": message,
         "action": action,
         "tool_slug": tool_slug,
+        "connection_id": connection_id,
         "resource_name": resource_name,
         "connected_account": connected_account,
         "retryable": False,
@@ -112,6 +114,7 @@ async def _connection_credentials(
                     f"{tool.display_name} is connected without a usable account reference.",
                     action="reconnect_account",
                     tool_slug=tool.slug,
+                    connection_id=tool.id,
                 ),
             )
         integration_id, verification = await managed_connector_client().verify_connection(
@@ -132,6 +135,7 @@ async def _connection_credentials(
                     f"{tool.display_name} authorization is no longer usable.",
                     action="reconnect_account",
                     tool_slug=tool.slug,
+                    connection_id=tool.id,
                     connected_account=_account_label(verification),
                 ),
             )
@@ -169,6 +173,7 @@ async def _connection_credentials(
                     f"{tool.display_name} authorization is no longer usable.",
                     action="reconnect_account",
                     tool_slug=tool.slug,
+                    connection_id=tool.id,
                     connected_account=_account_label(verification),
                 ),
             )
@@ -310,6 +315,7 @@ async def preflight_approved_run(session, run, steps: list[Any]) -> PreflightOut
                         f"Connect {slug} before AURA starts this workflow.",
                         action="connect_account",
                         tool_slug=slug,
+                        connection_id=tool.id if tool else None,
                     ),
                 )
             manifest = manifests_by_tool.get(tool.id)
@@ -323,6 +329,7 @@ async def preflight_approved_run(session, run, steps: list[Any]) -> PreflightOut
                         f"{tool.display_name} has not passed credential and capability verification.",
                         action="reconnect_account",
                         tool_slug=slug,
+                        connection_id=tool.id,
                     ),
                 )
             missing_operations = sorted(
@@ -342,6 +349,7 @@ async def preflight_approved_run(session, run, steps: list[Any]) -> PreflightOut
                         f"{tool.display_name} is missing the approved capability: {', '.join(missing_operations)}.",
                         action="reconnect_account",
                         tool_slug=slug,
+                        connection_id=tool.id,
                     ),
                 )
             credentials, verification, blocker = await _connection_credentials(
@@ -382,6 +390,7 @@ async def preflight_approved_run(session, run, steps: list[Any]) -> PreflightOut
                         f"More than one {resource_name!r} resource is accessible. Choose the exact one AURA should use.",
                         action="choose_resource",
                         tool_slug=step.tool_slug,
+                        connection_id=tool.id,
                         resource_name=resource_name,
                         connected_account=accounts_by_slug.get(step.tool_slug),
                     ),
@@ -396,6 +405,7 @@ async def preflight_approved_run(session, run, steps: list[Any]) -> PreflightOut
                         f"AURA could not find the exact {resource_name!r} resource in the connected account.",
                         action="choose_resource",
                         tool_slug=step.tool_slug,
+                        connection_id=tool.id,
                         resource_name=resource_name,
                         connected_account=accounts_by_slug.get(step.tool_slug),
                     ),
@@ -435,6 +445,7 @@ async def preflight_approved_run(session, run, steps: list[Any]) -> PreflightOut
                     f"The connected account cannot access the exact {resource_name!r} resource.{label}",
                     action="reconnect_account",
                     tool_slug=probe.tool_slug,
+                    connection_id=tools_by_slug[probe.tool_slug].id,
                     resource_name=resource_name,
                     connected_account=account,
                 ),
@@ -448,6 +459,7 @@ async def preflight_approved_run(session, run, steps: list[Any]) -> PreflightOut
                 "The selected app connection failed its readiness check.",
                 action="reconnect_account",
                 tool_slug=probe.tool_slug if probe else None,
+                connection_id=tools_by_slug[probe.tool_slug].id if probe else None,
                 resource_name=resource_name,
                 connected_account=account,
             ),

@@ -178,6 +178,7 @@ async def test_resource_access_denial_names_account_and_exact_action(database, m
         ),
         "action": "reconnect_account",
         "tool_slug": "google",
+        "connection_id": "google-tool",
         "resource_name": "Creator Outreach",
         "connected_account": "manager@example.com",
         "retryable": False,
