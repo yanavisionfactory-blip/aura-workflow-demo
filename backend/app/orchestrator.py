@@ -158,7 +158,19 @@ def _friendly_execution_error(error: str | None) -> str:
         return "The Execution Agent paused this step for review. Your completed work is preserved."
     if any(marker in detail for marker in ("input budget", "evidence budget", "evidence processing budget", "context_length_exceeded")):
         return "AURA could not prepare all the source content within this run’s processing limit."
-    if any(marker in detail for marker in ("unauthorized", "forbidden", "sign in", "token", "credential")):
+    if any(
+        marker in detail
+        for marker in (
+            "authorization_required",
+            "unauthorized",
+            "forbidden",
+            "sign in",
+            "token",
+            "credential",
+            "connection needs",
+            "cannot access the configured original",
+        )
+    ):
         return "This app connection needs your attention before AURA can continue."
     return "AURA couldn't complete this step safely after automatic recovery. Try again or adjust the workflow."
 

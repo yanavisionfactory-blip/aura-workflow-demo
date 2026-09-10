@@ -79,6 +79,13 @@ def test_internal_error_is_replaced_with_friendly_terminal_copy():
     )
 
 
+def test_authorization_error_is_replaced_with_connection_guidance():
+    assert _friendly_execution_error(
+        "authorization_required: the connected Google account cannot access "
+        "the configured original named 'Creator Outreach'"
+    ) == "This app connection needs your attention before AURA can continue."
+
+
 def test_plan_approval_supports_staged_consequential_review():
     assert PlanApproval(approved=True).approve_consequential is True
     assert (
