@@ -1948,6 +1948,19 @@ async def test_connection(
             result = await verify_oauth_credentials(tool.slug, credentials)
         except (httpx.HTTPError, ValueError):
             result = {"ok": False, "reason": "authorization_required"}
+    elif tool.kind == ToolKind.browser:
+        try:
+            refreshed_manifest = await discover_provider(
+                tool.kind.value,
+                str(tool.base_url),
+                credentials,
+                tool.config or {},
+            )
+            result = await verify_provider(refreshed_manifest, credentials)
+            manifest.manifest = refreshed_manifest
+            tool.allowed_operations = discovered_operations(refreshed_manifest)
+        except (ConnectorError, httpx.HTTPError, ValueError):
+            result = {"ok": False, "reason": "provider_temporarily_unavailable"}
     else:
         result = await verify_provider(manifest.manifest, credentials)
     manifest.verification = result
