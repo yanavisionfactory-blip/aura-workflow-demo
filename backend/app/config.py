@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     max_autonomous_recovery_rounds: int = Field(default=8, ge=1, le=20)
     max_autonomous_step_recoveries: int = Field(default=3, ge=1, le=8)
     max_autonomous_review_recoveries: int = Field(default=3, ge=1, le=8)
+    max_autonomous_read_repairs: int = Field(default=3, ge=0, le=8)
     autonomous_recovery_base_delay_seconds: int = Field(default=5, ge=1, le=60)
     autonomous_recovery_max_delay_seconds: int = Field(default=120, ge=5, le=600)
     parallel_read_limit: int = Field(default=3, ge=1, le=5)
