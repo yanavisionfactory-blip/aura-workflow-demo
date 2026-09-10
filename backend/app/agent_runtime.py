@@ -636,6 +636,7 @@ async def supervise_plan(
     objective: ObjectiveSpec,
     toolset: ToolsetProposal,
     plan: WorkflowPlan,
+    tool_inventory: list[dict] | None = None,
 ) -> tuple[PlanSupervisionDecision, str]:
     """Let the senior manager review planning without granting execution authority."""
     fallback = PlanSupervisionDecision(
@@ -671,6 +672,7 @@ async def supervise_plan(
                     "objective": objective.model_dump(mode="json"),
                     "toolset": toolset.model_dump(mode="json"),
                     "proposed_plan": plan.model_dump(mode="json"),
+                    "operation_contracts": tool_inventory or [],
                 },
                 max_turns=6,
             )
@@ -909,9 +911,11 @@ async def create_plan(
         raise ValueError("Plan failed preflight authorization: " + "; ".join(deterministic_fixes))
 
     supervision, supervision_source = await supervise_plan(
-        prompt, objective, toolset, plan
+        prompt, objective, toolset, plan, tool_inventory
     )
-    if supervision.action == "repair":
+    for manager_pass in range(2):
+        if supervision.action == "approve":
+            break
         repaired_payload = {
             **request_payload,
             "rejected_bundle": {
@@ -922,6 +926,19 @@ async def create_plan(
             "required_fixes": supervision.required_fixes,
             "senior_orchestrator_review": supervision.model_dump(mode="json"),
         }
+        if manager_pass:
+            repaired_payload["response_recovery"] = (
+                "Final bounded senior repair. Implement every required fix in one finite graph. "
+                "Resolve each named current sheet exactly once and read each resolved sheet once; "
+                "use those rows to exclude duplicates before the approval gate. Pass the entire "
+                "public-evidence-qualified, duplicate-free array to the listed batch form operation "
+                "instead of selecting index 0 or inventing foreach variables. The designated form "
+                "call itself establishes its private policy decision, so public evidence and sheet "
+                "exclusion are its preconditions; an explicit per-record approved receipt completes "
+                "the remaining private checks. Append only approved_records and rely on the append "
+                "write receipt. Runtime policy already retries recoverable read failures and stops "
+                "on a genuine blocker."
+            )
         manager_repair_started = perf_counter()
         try:
             bundle = await _run_planner(agents["planner"], repaired_payload, max_turns=8)
@@ -984,18 +1001,20 @@ async def create_plan(
                 + "; ".join(deterministic_fixes)
             )
         supervision, supervision_source = await supervise_plan(
-            prompt, objective, toolset, plan
+            prompt, objective, toolset, plan, tool_inventory
         )
-        if supervision.action != "approve":
+        if supervision.action == "approve":
+            recovery_mode = (
+                "manager_repair"
+                if recovery_mode == "combined"
+                else recovery_mode
+            )
+            break
+        if manager_pass == 1:
             raise ValueError(
                 "Senior orchestrator could not approve the repaired plan: "
                 + "; ".join(supervision.required_fixes)
             )
-        recovery_mode = (
-            "manager_repair"
-            if recovery_mode == "combined"
-            else recovery_mode
-        )
 
     operations = [step.operation.lower() for step in plan.steps]
     destructive = any(any(word in operation for word in ("delete", "purchase")) for operation in operations)
