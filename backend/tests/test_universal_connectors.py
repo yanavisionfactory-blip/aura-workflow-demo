@@ -1,8 +1,17 @@
+from types import SimpleNamespace
+
 import pytest
 from pydantic import ValidationError
 
+from app import universal_connectors
 from app.schemas import CustomOAuthStart
-from app.universal_connectors import ConnectorError, allowed_operations, capability_for, normalize_manifest
+from app.universal_connectors import (
+    ConnectorError,
+    allowed_operations,
+    capability_for,
+    discover_provider,
+    normalize_manifest,
+)
 
 
 def test_normalizes_agent_capabilities_and_governance() -> None:
@@ -53,6 +62,47 @@ def test_capability_lookup_never_allows_undeclared_operation() -> None:
     )
     with pytest.raises(ConnectorError, match="not in the verified manifest"):
         capability_for(manifest, "records.delete")
+
+
+async def test_browser_discovery_authenticates_to_the_isolated_worker(monkeypatch):
+    captured = {}
+
+    async def json_call(method, url, credentials, payload=None):
+        captured.update(
+            method=method,
+            url=url,
+            credentials=credentials,
+            payload=payload,
+        )
+        return {
+            "name": "Creator Approvals",
+            "capabilities": [
+                {"name": "browser.page.read", "permission_scope": "read"}
+            ],
+        }
+
+    monkeypatch.setattr(universal_connectors, "_public_endpoint", lambda _url: None)
+    monkeypatch.setattr(universal_connectors, "_json", json_call)
+    monkeypatch.setattr(
+        universal_connectors,
+        "get_settings",
+        lambda: SimpleNamespace(
+            browser_connector_url="https://browser.example.com",
+            browser_connector_token="worker-secret",
+        ),
+    )
+
+    manifest = await discover_provider(
+        "browser", "https://approvals.example.com", {}, {}
+    )
+
+    assert manifest["capabilities"][0]["name"] == "browser.page.read"
+    assert captured == {
+        "method": "POST",
+        "url": "https://browser.example.com/v1/discover",
+        "credentials": {"api_key": "worker-secret"},
+        "payload": {"target_url": "https://approvals.example.com"},
+    }
 
 
 def test_custom_oauth_requires_https_endpoints() -> None:

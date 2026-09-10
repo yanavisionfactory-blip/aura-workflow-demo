@@ -256,6 +256,26 @@ def test_drive_file_search_uses_an_escaped_exact_name(monkeypatch):
     )
 
 
+def test_public_web_operations_delegate_to_the_isolated_worker(monkeypatch):
+    executor = ProviderExecutor({})
+    request = AsyncMock(side_effect=[{"results": []}, {"text": "Creator profile"}])
+    monkeypatch.setattr(executor, "_browser_worker_request", request)
+
+    search = asyncio.run(executor._web_search({"query": "TikTok creators", "limit": 50}))
+    page = asyncio.run(executor._web_page_read({"url": "https://www.tiktok.com/@creator"}))
+
+    assert search == {"results": []}
+    assert page == {"text": "Creator profile"}
+    assert request.await_args_list[0].args == (
+        "/v1/search",
+        {"query": "TikTok creators", "limit": 20},
+    )
+    assert request.await_args_list[1].args == (
+        "/v1/read",
+        {"url": "https://www.tiktok.com/@creator"},
+    )
+
+
 def test_weather_forecast_returns_plain_language_summary(monkeypatch):
     executor = ProviderExecutor({})
     request = AsyncMock(side_effect=[

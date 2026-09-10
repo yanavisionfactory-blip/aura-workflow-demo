@@ -102,13 +102,19 @@ def normalize_manifest(raw: dict, provider_type: str, base_url: str) -> dict:
 async def discover_provider(kind: str, base_url: str, credentials: dict, config: dict) -> dict:
     _public_endpoint(base_url)
     if kind == "browser":
-        worker = get_settings().browser_connector_url
-        if not worker:
+        settings = get_settings()
+        worker = settings.browser_connector_url
+        if not worker or not settings.browser_connector_token:
             raise ConnectorError(
                 "Browser connector worker is not configured; arbitrary website access cannot be enabled safely"
             )
         return normalize_manifest(
-            await _json("POST", f"{worker.rstrip('/')}/v1/discover", {}, {"target_url": base_url}),
+            await _json(
+                "POST",
+                f"{worker.rstrip('/')}/v1/discover",
+                {"api_key": settings.browser_connector_token},
+                {"target_url": base_url},
+            ),
             kind,
             base_url,
         )
