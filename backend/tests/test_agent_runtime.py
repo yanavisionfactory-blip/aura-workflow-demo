@@ -900,6 +900,77 @@ def test_senior_repair_gets_bounded_graph_recovery_for_synthetic_variables(
     assert "implicit foreach" in staged_payloads[0]["response_recovery"]
 
 
+def test_senior_can_request_two_bounded_semantic_repairs(monkeypatch) -> None:
+    def bundle(key: str) -> agent_runtime.PlanningBundle:
+        return agent_runtime.PlanningBundle(
+            objective=ObjectiveSpec(goal="Read CRM records"),
+            toolset=ToolsetProposal(
+                tools=[
+                    ToolSelection(
+                        slug="crm", role="source", rationale="Reads CRM records"
+                    )
+                ]
+            ),
+            plan=plan(
+                PlanStep(
+                    key=key,
+                    agent="data",
+                    tool_slug="crm",
+                    operation="records.read",
+                    reason="Retrieve the records",
+                    expected_output="CRM records",
+                )
+            ),
+        )
+
+    planner_results = iter([bundle("initial"), bundle("first_repair"), bundle("final")])
+    repair_payloads = []
+    supervision_calls = 0
+
+    async def fake_planner(_agent, payload, **_kwargs):
+        if payload.get("required_fixes"):
+            repair_payloads.append(payload)
+        return next(planner_results)
+
+    async def fake_supervision(*_args, **_kwargs):
+        nonlocal supervision_calls
+        supervision_calls += 1
+        if supervision_calls < 3:
+            return (
+                PlanSupervisionDecision(
+                    action="repair",
+                    reason="Needs another bounded correction",
+                    required_fixes=[f"repair {supervision_calls}"],
+                ),
+                "agent",
+            )
+        return PlanSupervisionDecision(action="approve", reason="Executable"), "agent"
+
+    monkeypatch.setattr(agent_runtime, "build_agents", lambda: {"planner": object()})
+    monkeypatch.setattr(agent_runtime, "_run_planner", fake_planner)
+    monkeypatch.setattr(agent_runtime, "supervise_plan", fake_supervision)
+
+    result = asyncio.run(
+        create_plan(
+            "Read CRM records",
+            [
+                {
+                    "slug": "crm",
+                    "allowed_operations": ["records.read"],
+                    "connected": True,
+                }
+            ],
+            available_input_names=set(),
+        )
+    )
+
+    assert result.steps[0].key == "final"
+    assert supervision_calls == 3
+    assert repair_payloads[0]["required_fixes"] == ["repair 1"]
+    assert repair_payloads[1]["required_fixes"] == ["repair 2"]
+    assert "Final bounded senior repair" in repair_payloads[1]["response_recovery"]
+
+
 def test_combined_planner_allows_flexible_workflow_arguments() -> None:
     planner = agent_runtime.build_agents()["planner"]
 
