@@ -13,6 +13,12 @@ class BudgetExceeded(RuntimeError):
     pass
 
 
+class AuthorizationRequired(RuntimeError):
+    """A provider credential is valid but lacks access to the requested resource."""
+
+    status_code = 403
+
+
 @dataclass(frozen=True)
 class Failure:
     category: str

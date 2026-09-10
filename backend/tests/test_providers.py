@@ -6,6 +6,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
+import pytest
+
 from app import providers
 from app.config import Settings
 from app.providers import (
@@ -20,6 +23,7 @@ from app.providers import (
     oauth_registry_errors,
     oauth_route_callback_url,
 )
+from app.reliability import AuthorizationRequired
 
 
 def _settings() -> Settings:
@@ -328,6 +332,40 @@ def test_spreadsheet_resolver_verifies_configured_resource_alias(monkeypatch):
             )
         },
     )
+
+
+def test_spreadsheet_alias_reports_wrong_connected_account(monkeypatch):
+    executor = ProviderExecutor({"access_token": "token"})
+    monkeypatch.setattr(
+        executor, "_drive_files_search", AsyncMock(return_value={"files": []})
+    )
+    response = httpx.Response(
+        404,
+        request=httpx.Request(
+            "GET", "https://www.googleapis.com/drive/v3/files/sheet-123"
+        ),
+    )
+    monkeypatch.setattr(
+        executor,
+        "_request",
+        AsyncMock(
+            side_effect=httpx.HTTPStatusError(
+                "not found", request=response.request, response=response
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        providers,
+        "get_settings",
+        lambda: SimpleNamespace(
+            resource_aliases={"creator outreach": "sheet-123"}
+        ),
+    )
+
+    with pytest.raises(AuthorizationRequired, match="connected Google account"):
+        asyncio.run(
+            executor._drive_spreadsheet_resolve({"name": "Creator Outreach"})
+        )
 
 
 def test_google_identity_reads_current_connected_account(monkeypatch):
