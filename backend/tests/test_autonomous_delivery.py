@@ -184,6 +184,44 @@ async def test_scheduler_sweeps_approved_runs_paused_before_supervision(runtime,
         assert run.execution_context["__aura_autonomy__"]["rounds"] == 1
 
 
+async def test_scheduler_normalizes_null_legacy_autonomy_state(runtime, monkeypatch):
+    monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
+    monkeypatch.setattr(scheduler_runtime, "SessionLocal", runtime)
+
+    @asynccontextmanager
+    async def acquired(*args):
+        yield True
+
+    monkeypatch.setattr(scheduler_runtime, "execution_lock", acquired)
+    await _failed_read(runtime)
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        run.execution_context = {
+            "__aura_autonomy__": {
+                "version": None,
+                "rounds": None,
+                "review_recoveries": "invalid",
+                "step_recoveries": None,
+                "attempt_offsets": [],
+                "failure_history": "invalid",
+                "actions_by_failure": None,
+                "handoff_reason_code": "no_safe_recovery",
+            }
+        }
+        await session.commit()
+
+    assert await scheduler_runtime.recover_waiting_runs() == [("run", "w", "recovery")]
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        state = run.execution_context["__aura_autonomy__"]
+        assert run.status == RunStatus.recovering
+        assert state["version"] == autonomous_delivery.AUTONOMY_VERSION
+        assert state["rounds"] == 1
+        assert state["review_recoveries"] == 0
+        assert state["step_recoveries"] == {"step": 1}
+        assert state["failure_history"][-1]["outcome"] == "scheduled"
+
+
 async def test_completed_provider_work_retries_only_final_review(runtime, monkeypatch):
     monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
     async with runtime() as session:

@@ -36,7 +36,7 @@ from .native_connectors import (
 )
 from .policy import operation_scope
 from .providers import PROVIDERS
-from .run_supervisor import transition_run
+from .run_supervisor import recovery_counter, recovery_mapping, transition_run
 from .schemas import AutonomousRecoveryOption
 from .security import CredentialVault
 from .universal_connectors import ConnectorError, discover_provider
@@ -67,18 +67,39 @@ AUTONOMY_VERSION = 3
 
 
 def _autonomy(context: dict) -> dict:
-    state = deepcopy(context.get("__aura_autonomy__") or {})
-    if int(state.get("version", 0)) < AUTONOMY_VERSION:
+    state = recovery_mapping(context.get("__aura_autonomy__"))
+    if recovery_counter(state.get("version")) < AUTONOMY_VERSION:
         # A newer recovery engine may safely reconsider a prior platform-limited
         # handoff. Existing attempt counts and receipts remain authoritative.
         state.pop("handoff_reason_code", None)
     state["version"] = AUTONOMY_VERSION
-    state.setdefault("rounds", 0)
-    state.setdefault("step_recoveries", {})
-    state.setdefault("attempt_offsets", {})
-    state.setdefault("review_recoveries", 0)
-    state.setdefault("failure_history", [])
-    state.setdefault("actions_by_failure", {})
+    state["rounds"] = recovery_counter(state.get("rounds"))
+    state["review_recoveries"] = recovery_counter(state.get("review_recoveries"))
+    state["step_recoveries"] = {
+        str(key): recovery_counter(value)
+        for key, value in recovery_mapping(state.get("step_recoveries")).items()
+    }
+    state["attempt_offsets"] = {
+        str(key): recovery_counter(value)
+        for key, value in recovery_mapping(state.get("attempt_offsets")).items()
+    }
+    history = state.get("failure_history")
+    state["failure_history"] = (
+        [deepcopy(item) for item in history if isinstance(item, dict)][-20:]
+        if isinstance(history, list)
+        else []
+    )
+    actions = recovery_mapping(state.get("actions_by_failure"))
+    state["actions_by_failure"] = {
+        str(key): (
+            [str(item) for item in value if isinstance(item, str)]
+            if isinstance(value, list)
+            else [value]
+            if isinstance(value, str)
+            else []
+        )
+        for key, value in actions.items()
+    }
     return state
 
 
@@ -92,7 +113,7 @@ def attempts_for_current_cycle(
     """
     if consequential:
         return attempts
-    offset = int(_autonomy(context)["attempt_offsets"].get(step_id, 0))
+    offset = recovery_counter(_autonomy(context)["attempt_offsets"].get(step_id))
     return attempts[min(max(offset, 0), len(attempts)) :]
 
 
@@ -101,7 +122,7 @@ def reset_read_attempt_cycle(context: dict, step_id: str, attempt_count: int) ->
     state = _autonomy(context)
     state["attempt_offsets"] = {
         **state["attempt_offsets"],
-        step_id: max(0, int(attempt_count)),
+        step_id: recovery_counter(attempt_count),
     }
     context["__aura_autonomy__"] = state
     return context
@@ -241,9 +262,12 @@ async def _safe_options(
     session, run, steps, state, failure: dict | None = None
 ) -> list[AutonomousRecoveryOption]:
     settings = get_settings()
-    delay = _delay(int(state["rounds"]) + 1)
+    delay = _delay(recovery_counter(state.get("rounds")) + 1)
     if steps and all(step.status in {StepStatus.completed, StepStatus.skipped} for step in steps):
-        if int(state["review_recoveries"]) < settings.max_autonomous_review_recoveries:
+        if (
+            recovery_counter(state.get("review_recoveries"))
+            < settings.max_autonomous_review_recoveries
+        ):
             return [
                 AutonomousRecoveryOption(
                     key="retry_final_review",
@@ -262,7 +286,7 @@ async def _safe_options(
         )
     if not step:
         return []
-    per_step = int(state["step_recoveries"].get(step.id, 0))
+    per_step = recovery_counter(state["step_recoveries"].get(step.id))
     if per_step >= settings.max_autonomous_step_recoveries:
         return []
     recorded = isinstance(step.output, dict) and "provider_result" in step.output
@@ -496,7 +520,7 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
             return "not_applicable"
         context = deepcopy(run.execution_context or {})
         state = _autonomy(context)
-        if int(state["rounds"]) >= settings.max_autonomous_recovery_rounds:
+        if recovery_counter(state.get("rounds")) >= settings.max_autonomous_recovery_rounds:
             await _handoff(session, run, state, "recovery_budget_exhausted")
             await session.commit()
             return "handoff"
@@ -515,7 +539,7 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
                 "status": run.status.value,
                 "completed_steps": sum(step.status == StepStatus.completed for step in steps),
                 "failed_step_ids": [step.id for step in steps if step.status == StepStatus.failed],
-                "recovery_round": int(state["rounds"]) + 1,
+                "recovery_round": recovery_counter(state.get("rounds")) + 1,
                 "failed_step": (
                     {
                         "id": failed_step.id,
@@ -580,7 +604,7 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
                 await session.commit()
                 return "not_applicable"
 
-        state["rounds"] = int(state["rounds"]) + 1
+        state["rounds"] = recovery_counter(state.get("rounds")) + 1
         state["last_action"] = selected.action
         state["last_reason_code"] = selected.reason_code
         state["last_decision_source"] = source
@@ -607,11 +631,11 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
             datetime.now(UTC) + timedelta(seconds=selected.delay_seconds)
         ).isoformat()
         if selected.action == "retry_final_review":
-            state["review_recoveries"] = int(state["review_recoveries"]) + 1
+            state["review_recoveries"] = recovery_counter(state.get("review_recoveries")) + 1
         elif step:
             state["step_recoveries"] = {
                 **state["step_recoveries"],
-                step.id: int(state["step_recoveries"].get(step.id, 0)) + 1,
+                step.id: recovery_counter(state["step_recoveries"].get(step.id)) + 1,
             }
             attempt_count = await _attempt_count(session, step.id)
             consequential = step.consequential or operation_scope(step.operation) != "read"
