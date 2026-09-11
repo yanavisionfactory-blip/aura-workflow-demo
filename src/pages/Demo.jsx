@@ -17,6 +17,7 @@ import EditRunReviewModal from "@/components/aura/EditRunReviewModal";
 import { detectNewConsequential } from "@/lib/editRunDetect";
 import { requestNotifyPermission, notifyWorkflowComplete, notifyWorkflowError } from "@/lib/auraNotify";
 import { connectTool, hydrateConnections } from "@/lib/connectService";
+import { isManagedOAuthTool } from "@/lib/connectionPolicy.mjs";
 import { getAllConnections } from "@/lib/connectionsStore";
 import { CATALOG } from "@/lib/toolCatalog";
 import {
@@ -631,10 +632,12 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             runRequestKeyRef.current = null;
             const explicitRequirements = promptConnectionRequirements(
               editedInterpretation || originalPromptRef.current,
-              CATALOG.map((tool) => ({
-                ...tool,
-                slug: tool.name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
-              })),
+              CATALOG
+                .filter((tool) => isManagedOAuthTool(tool.name))
+                .map((tool) => ({
+                  ...tool,
+                  slug: tool.name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+                })),
               getAllConnections()
             );
             setPlan(explicitRequirements.length

@@ -1,12 +1,11 @@
 import { useState, useMemo, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Link2, Plus, Search, X, ArrowLeft, Check, ScanSearch, Trash2, Loader2, Settings2, RefreshCw } from "lucide-react";
+import { Link2, Plus, Search, X, ArrowLeft, Check, Trash2, Loader2, Settings2, RefreshCw } from "lucide-react";
 
 import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
-import { connectTool, disconnectTool, getToolConnection, hasStandardOAuth, hydrateConnections, reconnectTool, recordInterfaceConnection, testToolConnection } from "@/lib/connectService";
+import { connectTool, disconnectTool, getToolConnection, hydrateConnections, reconnectTool, testToolConnection } from "@/lib/connectService";
+import { isManagedOAuthTool } from "@/lib/connectionPolicy.mjs";
 import { CATALOG } from "@/lib/toolCatalog";
-import AuraInterfaceConnect from "./AuraInterfaceConnect";
-import ConnectToolModal from "./ConnectToolModal";
 
 // Tool catalog lives in @/lib/toolCatalog so the plan-stage tool picker and
 // this connections panel share one source of truth.
@@ -19,24 +18,12 @@ export default function ConnectionsPill() {
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [interfaceTool, setInterfaceTool] = useState(null);
-  const [pendingConnect, setPendingConnect] = useState(null);
   const [error, setError] = useState("");
   const [connectionAction, setConnectionAction] = useState("");
   const [managedConnection, setManagedConnection] = useState(null);
 
   useEffect(() => {
     hydrateConnections().catch((e) => setError(e.message));
-  }, []);
-
-  useEffect(() => {
-    const openRequestedTool = (event) => {
-      setWorkspaceOpen(true);
-      setConnectOpen(true);
-      setQuery(event.detail?.toolName || "");
-    };
-    window.addEventListener("aura:open-connections", openRequestedTool);
-    return () => window.removeEventListener("aura:open-connections", openRequestedTool);
   }, []);
 
   const connectedTools = useMemo(() => {
@@ -50,7 +37,9 @@ export default function ConnectionsPill() {
     return [...catalogConnected, ...customConnected];
   }, [connected]);
   const availableTools = useMemo(
-    () => CATALOG.filter((t) => !connected[t.name] && !isAura(t.name)),
+    () => CATALOG.filter(
+      (t) => !connected[t.name] && !isAura(t.name) && isManagedOAuthTool(t.name)
+    ),
     [connected]
   );
 
@@ -66,32 +55,12 @@ export default function ConnectionsPill() {
     setError("");
     try {
       const res = await connectTool(name, opts);
-      if (res.interfaceTool) setInterfaceTool(res.interfaceTool);
-      if (res.needsConfiguration) setPendingConnect({ name, custom: true, desc: "" });
       if (res.connected) await hydrateConnections();
     } catch (e) {
       setError(e.message || `Could not connect ${name}.`);
     } finally {
       setConnecting(null);
     }
-  };
-
-  const confirmConnect = async (toolObj) => {
-    if (!pendingConnect) return;
-    const name = toolObj?.name || pendingConnect.name;
-    await connect(name, {
-      apiKey: toolObj?.apiKey,
-      baseUrl: toolObj?.baseUrl,
-      connectionKind: toolObj?.connectionKind,
-      credentials: toolObj?.credentials,
-      authorizationUrl: toolObj?.authorizationUrl,
-      tokenUrl: toolObj?.tokenUrl,
-      clientId: toolObj?.clientId,
-      clientSecret: toolObj?.clientSecret,
-      scopes: toolObj?.scopes,
-      allowedOperations: toolObj?.connectionKind === "mcp" ? ["mcp.call"] : ["http.request"],
-    });
-    setPendingConnect(null);
   };
 
   const openConnectionManager = async (name) => {
@@ -129,9 +98,6 @@ export default function ConnectionsPill() {
       setConnectionAction("");
     }
   };
-
-  const q = query.trim();
-  const canAddCustom = q.length > 0 && !CATALOG.some((t) => t.name.toLowerCase() === q.toLowerCase());
 
   return (
     <>
@@ -217,15 +183,6 @@ export default function ConnectionsPill() {
                   </div>
                 ))}
 
-                <button
-                  onClick={() => setPendingConnect({ name: "", custom: true, interface: true, desc: "" })}
-                  className="w-full flex items-center gap-3 p-2.5 rounded-xl border border-dashed border-white/10 hover:border-primary/30 hover:bg-primary/5 transition-colors text-left"
-                >
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium">Add a custom tool</p>
-                    <p className="text-xs text-muted-foreground truncate">A tool you use at work that isn't listed</p>
-                  </div>
-                </button>
               </div>
 
               {/* Footer */}
@@ -279,7 +236,7 @@ export default function ConnectionsPill() {
                   <Search className="w-4 h-4 text-primary" />
                   <h3 className="text-base font-semibold">What do you want to connect?</h3>
                 </div>
-                <p className="text-xs text-muted-foreground">Search a tool, or paste a URL for one AURA doesn't know yet.</p>
+                <p className="text-xs text-muted-foreground">Choose an app. AURA opens its secure sign-in and verifies access.</p>
               </div>
 
               <div className="px-5 pb-3">
@@ -288,7 +245,7 @@ export default function ConnectionsPill() {
                   <input
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
-                    placeholder="Search or type a tool..."
+                    placeholder="Search apps..."
                     className="flex-1 bg-transparent outline-none text-sm placeholder:text-muted-foreground/40"
                   />
                 </div>
@@ -305,58 +262,26 @@ export default function ConnectionsPill() {
                       <p className="text-xs text-muted-foreground truncate">{t.desc}</p>
                     </div>
                     <button
-                      onClick={() => (t.apiKey || !hasStandardOAuth(t.name) ? setPendingConnect({ ...t, custom: true }) : connect(t.name))}
+                      onClick={() => connect(t.name)}
                       disabled={connecting === t.name}
                       className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-primary hover:bg-primary/10 transition-colors text-xs font-medium disabled:opacity-50"
                     >
-                      {t.interface ? <ScanSearch className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
-                      {connecting === t.name ? "Connecting…" : t.interface ? "Connect tool" : "Connect"}
+                      <Plus className="w-3.5 h-3.5" />
+                      {connecting === t.name ? "Connecting…" : "Connect"}
                     </button>
                   </div>
                 ))}
 
-                {canAddCustom && (
-                  <>
-                    {filtered.length > 0 && <div className="h-px bg-white/6 my-1" />}
-                    <button
-                      onClick={() => setPendingConnect({ name: q, custom: true, interface: true, desc: "" })}
-                      className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-primary/10 transition-colors text-left"
-                    >
-                      <div className="w-9 h-9 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
-                        <Plus className="w-4 h-4 text-primary" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate">Connect “{q}”</p>
-                        <p className="text-xs text-muted-foreground truncate">Custom tool you use at work — AURA learns its interface</p>
-                      </div>
-                    </button>
-                  </>
-                )}
-
-                {filtered.length === 0 && !canAddCustom && (
-                  <p className="text-center text-xs text-muted-foreground py-8">All tools connected</p>
+                {filtered.length === 0 && (
+                  <p className="text-center text-xs text-muted-foreground py-8">
+                    {query.trim() ? "No one-click app found" : "All available apps are connected"}
+                  </p>
                 )}
               </div>
             </motion.aside>
           </>
         )}
       </AnimatePresence>
-
-      <AuraInterfaceConnect
-        open={!!interfaceTool}
-        toolName={interfaceTool}
-        onClose={() => setInterfaceTool(null)}
-        onConnect={async (name, meta) => {
-          try {
-            setError("");
-            await recordInterfaceConnection(name, meta);
-            await hydrateConnections();
-            setInterfaceTool(null);
-          } catch (e) {
-            setError(e.message || "This web application could not be connected.");
-          }
-        }}
-      />
 
       <AnimatePresence>
         {managedConnection && (
@@ -390,12 +315,6 @@ export default function ConnectionsPill() {
         )}
       </AnimatePresence>
 
-      <ConnectToolModal
-        tool={pendingConnect}
-        connecting={connecting === pendingConnect?.name}
-        onConnect={confirmConnect}
-        onClose={() => setPendingConnect(null)}
-      />
     </>
   );
 }

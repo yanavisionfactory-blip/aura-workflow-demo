@@ -7,7 +7,8 @@ import PlanStep from "./PlanStep";
 import PlanConnectionAlert from "./PlanConnectionAlert";
 import { CATALOG } from "@/lib/toolCatalog";
 import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
-import { connectTool, getToolConnection, hydrateConnections, reconnectTool } from "@/lib/connectService";
+import { connectTool, hydrateConnections } from "@/lib/connectService";
+import { isManagedOAuthTool } from "@/lib/connectionPolicy.mjs";
 
 // Case-insensitive lookup so LLM tool-name variations ("meta ads", "Jira Software")
 // still resolve to the canonical name in the registry — keeps connection detection
@@ -118,16 +119,7 @@ export default function PlanView({
     setConnectingTool(name);
     setConnectionErrors((prev) => ({ ...prev, [name]: "" }));
     try {
-      const reconnectRequired = requiredReconnectTools.includes(name);
-      const existing = reconnectRequired ? await getToolConnection(name) : null;
-      const res = existing ? await reconnectTool(name) : await connectTool(name);
-      if (res.needsConfiguration) {
-        setConnectionErrors((prev) => ({
-          ...prev,
-          [name]: `Finish setting up ${name} in Connections. Your task remains saved.`,
-        }));
-        window.dispatchEvent(new CustomEvent("aura:open-connections", { detail: { toolName: name } }));
-      }
+      const res = await connectTool(name);
       if (res.connected) {
         await hydrateConnections();
       }
@@ -135,9 +127,7 @@ export default function PlanView({
     } catch (e) {
       setConnectionErrors((prev) => ({
         ...prev,
-        [name]: e?.message?.includes("AURA kept your plan unchanged")
-          ? e.message
-          : `AURA couldn't connect ${name}. Your plan is unchanged.`,
+        [name]: e?.message || `AURA couldn't connect ${name}. Your plan is unchanged.`,
       }));
     } finally {
       setConnectingTool(null);
@@ -199,9 +189,11 @@ export default function PlanView({
     return next;
   }, [connections, requiredReconnectTools]);
 
-  const needed = connectionsReady
+  const missingTools = connectionsReady
     ? planTools.filter((tool) => !effectiveConnections[tool.name])
     : [];
+  const needed = missingTools.filter((tool) => isManagedOAuthTool(tool.name));
+  const backstageOnly = missingTools.filter((tool) => !isManagedOAuthTool(tool.name));
   const connectionOnly = steps.length === 0 && (plan.connectionRequirements || []).length > 0;
   const planningFailure = steps.length === 0 && Boolean(plan.error) && !connectionOnly;
 
@@ -318,7 +310,9 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
           </div>
           <h2 className="text-lg font-semibold">
             {connectionOnly
-              ? "Connect one tool so Aura can finish the plan"
+              ? backstageOnly.length
+                ? "AURA is keeping connector setup backstage"
+                : "Connect one tool so Aura can finish the plan"
               : planningFailure
                 ? "Aura couldn't finish this plan yet"
                 : "Here's how Aura plans to complete your task"}
@@ -326,7 +320,9 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         </div>
         <p className="text-xs text-muted-foreground ml-9 leading-relaxed">
           {connectionOnly
-            ? "Your task is saved. Planning resumes automatically after the connection is verified."
+            ? backstageOnly.length
+              ? "Your task is saved. AURA will not ask you for API keys, MCP URLs, or technical configuration."
+              : "Your task is saved. Planning resumes automatically after the connection is verified."
             : planningFailure
               ? "Nothing was executed. Retry planning when you're ready."
             : "Review the steps and change anything that doesn't look right."}
@@ -358,9 +354,22 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         onConnectAll={handleConnectAll}
       />
 
+      {backstageOnly.length > 0 && (
+        <div className="mb-4 rounded-xl border border-amber-400/20 bg-amber-400/5 p-4 text-sm text-amber-100">
+          <p className="font-medium">AURA-managed connection required</p>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            {backstageOnly.map((tool) => tool.name).join(", ")} is not yet available through AURA's
+            verified one-click connection path. No technical setup is required from you, and nothing
+            has been executed.
+          </p>
+        </div>
+      )}
+
       {connectionOnly && (
         <div className="rounded-xl border border-white/8 bg-card/50 p-4 text-sm text-muted-foreground">
-          AURA has not executed anything. Connect the requested provider above, or retry planning after updating your connections.
+          {backstageOnly.length
+            ? "AURA has preserved this task without exposing connector internals. Retry planning after the managed connector is available."
+            : "AURA has not executed anything. Connect the requested provider above, or retry planning after updating your connections."}
           {onRetryPlan && (
             <button
               type="button"
@@ -519,7 +528,7 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
             onClick={() => onApprove(steps, name.trim())}
-            disabled={needed.length > 0 || steps.length === 0 || Boolean(plan.error)}
+            disabled={missingTools.length > 0 || steps.length === 0 || Boolean(plan.error)}
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white disabled:cursor-not-allowed disabled:opacity-40"
           >
             {approveLabel} <ArrowRight className="w-4 h-4" />
