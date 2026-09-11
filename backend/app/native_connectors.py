@@ -491,8 +491,9 @@ for _slug, _name, _required, _properties in [
     NATIVE_CONNECTORS[_slug]["modules"].append(_module(_name, "search", "Read the exact recorded resource for outcome verification.",
         required=_required, properties=_properties, permission_scope="read"))
 
-# Providers that use the universal connector lifecycle. Their detailed manifest
-# replaces this planning placeholder as soon as the user connects them.
+# Providers that use the operator-managed universal connector lifecycle. Their
+# detailed manifest is eligible for planning only after it has been provisioned
+# and verified backstage; normal users are never asked for transport details.
 UNIVERSAL_PLANNING_CONNECTORS: dict[str, str] = {
     "salesforce": "Salesforce",
     "clickup": "ClickUp",
@@ -553,6 +554,7 @@ def planning_catalog(connected_slugs: set[str] | None = None) -> list[dict[str, 
             "connected": slug in connected,
         }
         for slug, name in UNIVERSAL_PLANNING_CONNECTORS.items()
+        if slug in connected
     ]
     return native + universal
 
