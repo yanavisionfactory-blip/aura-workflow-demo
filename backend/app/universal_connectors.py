@@ -1,7 +1,6 @@
 import ipaddress
 import socket
-from datetime import datetime, timezone
-from typing import Any
+from datetime import UTC, datetime
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -10,7 +9,6 @@ from mcp.client.streamable_http import streamablehttp_client
 
 from .config import get_settings
 from .openapi_importer import OpenAPIImportError, compile_openapi
-from .policy import operation_scope
 
 
 class ConnectorError(ValueError):
@@ -119,24 +117,29 @@ async def discover_provider(kind: str, base_url: str, credentials: dict, config:
             base_url,
         )
     if kind == "mcp":
-        async with streamablehttp_client(base_url, headers=_headers(credentials)) as (read, write, _):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                result = await session.list_tools()
-                raw = {
-                    "name": config.get("name", urlparse(base_url).hostname),
-                    "capabilities": [
-                        {
-                            "name": tool.name,
-                            "description": tool.description or "",
-                            "input_schema": tool.inputSchema,
-                            "permission_scope": config.get("permission_scopes", {}).get(tool.name, "read"),
-                            "transport": {"tool_name": tool.name},
-                        }
-                        for tool in result.tools
-                    ],
-                }
-                return normalize_manifest(raw, kind, base_url)
+        async with streamablehttp_client(base_url, headers=_headers(credentials)) as (
+            read,
+            write,
+            _,
+        ), ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.list_tools()
+            raw = {
+                "name": config.get("name", urlparse(base_url).hostname),
+                "capabilities": [
+                    {
+                        "name": tool.name,
+                        "description": tool.description or "",
+                        "input_schema": tool.inputSchema,
+                        "permission_scope": config.get("permission_scopes", {}).get(
+                            tool.name, "read"
+                        ),
+                        "transport": {"tool_name": tool.name},
+                    }
+                    for tool in result.tools
+                ],
+            }
+            return normalize_manifest(raw, kind, base_url)
     if kind == "openapi":
         spec_url = config.get("spec_url") or urljoin(base_url.rstrip("/") + "/", "openapi.json")
         _public_endpoint(spec_url)
@@ -155,7 +158,9 @@ async def discover_provider(kind: str, base_url: str, credentials: dict, config:
             base_url,
         )
     if kind in {"agent", "plugin"}:
-        default = ".well-known/aura-agent.json" if kind == "agent" else ".well-known/aura-plugin.json"
+        default = (
+            ".well-known/aura-agent.json" if kind == "agent" else ".well-known/aura-plugin.json"
+        )
         manifest_url = config.get("manifest_url") or urljoin(base_url.rstrip("/") + "/", default)
         _public_endpoint(manifest_url)
         return normalize_manifest(await _json("GET", manifest_url, credentials), kind, base_url)
@@ -163,7 +168,9 @@ async def discover_provider(kind: str, base_url: str, credentials: dict, config:
         return normalize_manifest(
             {
                 "name": config.get("name", "Webhook"),
-                "capabilities": [{"name": "webhook.emit", "permission_scope": "write", "requires_approval": True}],
+                "capabilities": [
+                    {"name": "webhook.emit", "permission_scope": "write", "requires_approval": True}
+                ],
             },
             kind,
             base_url,
@@ -186,14 +193,17 @@ async def _json(method: str, url: str, credentials: dict, payload: dict | None =
 
 
 async def verify_provider(manifest: dict, credentials: dict) -> dict:
-    started = datetime.now(timezone.utc)
+    started = datetime.now(UTC)
     base_url = manifest["base_url"]
     _public_endpoint(base_url)
     async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
         response = await client.get(base_url, headers=_headers(credentials))
     return {
-        "ok": response.status_code < 500,
+        # 404/405 still prove endpoint reachability for webhook/API roots that
+        # do not expose a GET route. Authentication failures never pass.
+        "ok": response.status_code < 500 and response.status_code not in {401, 403},
         "status_code": response.status_code,
+        "retryable": response.status_code == 429 or response.status_code >= 500,
         "checked_at": started.isoformat(),
         "capability_count": len(manifest.get("capabilities", [])),
     }
@@ -204,7 +214,9 @@ def allowed_operations(manifest: dict) -> list[str]:
 
 
 def capability_for(manifest: dict, operation: str) -> dict:
-    capability = next((item for item in manifest.get("capabilities", []) if item["name"] == operation), None)
+    capability = next(
+        (item for item in manifest.get("capabilities", []) if item["name"] == operation), None
+    )
     if not capability:
         raise ConnectorError(f"Capability {operation!r} is not in the verified manifest")
     return capability

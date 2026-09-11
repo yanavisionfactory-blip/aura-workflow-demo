@@ -25,6 +25,10 @@ an internal isolated-repair incident instead of exposing a technical Retry butto
 The public run projection publishes `recovering` while this happens and strips raw
 provider errors and internal supervisor history.
 
+The standalone Recovery Engineer, isolated code-repair boundary, canary promotion,
+rollback contract, activation variables, and executable golden matrix are documented in
+[`docs/autonomous-recovery-engineer.md`](../docs/autonomous-recovery-engineer.md).
+
 Only an unavoidable decision may become a public blocker: OAuth/CAPTCHA, ambiguous
 account or resource selection, approval of a plan or exact consequential payload, or
 an unreconciled external effect. The deterministic gateway continues to own credential

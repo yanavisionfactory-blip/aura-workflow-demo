@@ -2,7 +2,7 @@
 
 import re
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 
@@ -30,6 +30,8 @@ from .models import (
 from .native_connectors import current_capability_manifest, normalize_module_arguments
 from .policy import canonical_plan_hash, operation_scope
 from .providers import idempotency_key
+from .recovery_engineer import equivalent_substitution_allowed
+from .run_supervisor import transition_run
 from .schemas import StepRepair, WorkflowPlan
 
 ELIGIBLE_FAILURES = {
@@ -87,6 +89,7 @@ def delegated_read_repair_allowed(
     snapshot: ApprovalSnapshot | None,
     approved_step: dict,
     replacement,
+    manifests: dict[str, dict] | None = None,
 ) -> bool:
     """Prove a repair stays inside authority explicitly captured at approval.
 
@@ -98,13 +101,11 @@ def delegated_read_repair_allowed(
         not snapshot
         or authority.get("version") != 1
         or not authority.get("allow_autonomous_read_repairs")
-        or int(authority.get("read_repair_count", 0))
-        >= get_settings().max_autonomous_read_repairs
+        or int(authority.get("read_repair_count", 0)) >= get_settings().max_autonomous_read_repairs
         or replacement.consequential
         or operation_scope(replacement.operation) != "read"
         or replacement.depends_on != approved_step.get("depends_on", [])
-        or replacement.operation
-        not in snapshot.permission_snapshot.get(replacement.tool_slug, [])
+        or replacement.operation not in snapshot.permission_snapshot.get(replacement.tool_slug, [])
     ):
         return False
     approved_targets = {(approved_step["tool_slug"], approved_step["operation"])}
@@ -112,7 +113,12 @@ def delegated_read_repair_allowed(
         approved_targets.add(
             (approved_step["fallback_tool_slug"], approved_step["fallback_operation"])
         )
-    if (replacement.tool_slug, replacement.operation) not in approved_targets:
+    if (
+        replacement.tool_slug,
+        replacement.operation,
+    ) not in approved_targets and not equivalent_substitution_allowed(
+        approved_step, replacement, snapshot, manifests or {}
+    ):
         return False
 
     before = _identity_values(approved_step.get("arguments", {}))
@@ -140,9 +146,7 @@ def derive_repaired_plan(
     manifests: dict,
 ) -> WorkflowPlan:
     original_step = original["steps"][position]
-    if operation_scope(original_step["operation"]) != "read" or original_step.get(
-        "consequential"
-    ):
+    if operation_scope(original_step["operation"]) != "read" or original_step.get("consequential"):
         raise ValueError("Automatic repairs are limited to non-consequential reads")
     if operation_scope(repair.operation) != "read":
         raise ValueError("A repair cannot introduce a write")
@@ -162,6 +166,7 @@ def derive_repaired_plan(
     if fixes:
         raise ValueError("; ".join(fixes))
     from .operation_contracts import compile_contracts
+
     compile_contracts(plan, manifests)
     original = WorkflowPlan.model_validate(original).model_dump(mode="json")
     serialized = plan.model_dump(mode="json")
@@ -194,9 +199,7 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
             return False
         steps = (
             await session.scalars(
-                select(RunStep)
-                .where(RunStep.run_id == run_id)
-                .order_by(RunStep.position)
+                select(RunStep).where(RunStep.run_id == run_id).order_by(RunStep.position)
             )
         ).all()
         step = next((item for item in steps if item.status == StepStatus.failed), None)
@@ -217,27 +220,26 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
             (
                 event
                 for event in events
-                if event.payload.get("step_id") == step.id
-                and event.event_type in ELIGIBLE_FAILURES
+                if event.payload.get("step_id") == step.id and event.event_type in ELIGIBLE_FAILURES
             ),
             None,
         )
         if not failure:
             return False
-        if str(failure.payload.get("internal_error", "")).startswith(("[authorization_required]", "[uncertain_write]", "[budget_exhausted]")):
+        if str(failure.payload.get("internal_error", "")).startswith(
+            ("[authorization_required]", "[uncertain_write]", "[budget_exhausted]")
+        ):
             return False
-        if failure.event_type == "step.criticized" and failure.payload.get(
-            "decision", {}
-        ).get("policy_violations"):
+        if failure.event_type == "step.criticized" and failure.payload.get("decision", {}).get(
+            "policy_violations"
+        ):
             return False
         context = deepcopy(run.execution_context or {})
         repairs = dict(context.get("__aura_replanning__", {}))
         count = int(repairs.get("attempts", 0))
         delegated_budget = (
             get_settings().max_autonomous_read_repairs
-            if context.get("__aura_authority__", {}).get(
-                "allow_autonomous_read_repairs"
-            )
+            if context.get("__aura_authority__", {}).get("allow_autonomous_read_repairs")
             else 0
         )
         if count >= max(2, delegated_budget):
@@ -255,8 +257,7 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
             )
         ).all()
         inventory = [
-            {"slug": tool.slug, "allowed_operations": tool.allowed_operations}
-            for tool in tools
+            {"slug": tool.slug, "allowed_operations": tool.allowed_operations} for tool in tools
         ]
         manifests = {}
         for tool in tools:
@@ -267,9 +268,7 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
                 )
             )
             if record:
-                manifests[tool.slug] = current_capability_manifest(
-                    tool.slug, record.manifest
-                )
+                manifests[tool.slug] = current_capability_manifest(tool.slug, record.manifest)
         try:
             proposal = StepRepair.model_validate(
                 await _run(
@@ -338,9 +337,7 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
         ):
             attempt_count = int(
                 await session.scalar(
-                    select(func.count(StepAttempt.id)).where(
-                        StepAttempt.step_id == step.id
-                    )
+                    select(func.count(StepAttempt.id)).where(StepAttempt.step_id == step.id)
                 )
                 or 0
             )
@@ -356,10 +353,17 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
             context.setdefault("steps", {}).pop(step.step_key, None)
             for name in step.output_variables:
                 context.setdefault("vars", {}).pop(name, None)
-            run.execution_context = reset_read_attempt_cycle(
-                context, step.id, attempt_count
+            run.execution_context = reset_read_attempt_cycle(context, step.id, attempt_count)
+            transition_run(
+                run,
+                RunStatus.recovering,
+                reason="replan_applied_scope_preserved",
+                actor="repair-planner",
+                phase="execution",
+                supervisor_status="recovering",
+                error=None,
+                metadata={"step_id": step.id},
             )
-            run.status, run.error = RunStatus.recovering, None
             session.add(
                 AuditEvent(
                     workspace_id=workspace_id,
@@ -376,7 +380,7 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
             await session.commit()
             return "retry"
         if delegated_read_repair_allowed(
-            run, latest_snapshot, approved_step, replacement
+            run, latest_snapshot, approved_step, replacement, manifests
         ):
             latest = await session.scalar(
                 select(PlanVersion)
@@ -395,7 +399,7 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
                 plan_hash=digest,
                 derived_from_id=latest.id if latest else None,
                 created_by="aura-delegated-read-repair",
-                approved_at=datetime.now(timezone.utc),
+                approved_at=datetime.now(UTC),
             )
             session.add(version)
             await session.flush()
@@ -415,9 +419,7 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
             )
             attempt_count = int(
                 await session.scalar(
-                    select(func.count(StepAttempt.id)).where(
-                        StepAttempt.step_id == step.id
-                    )
+                    select(func.count(StepAttempt.id)).where(StepAttempt.step_id == step.id)
                 )
                 or 0
             )
@@ -435,15 +437,26 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
                 context.setdefault("vars", {}).pop(name, None)
             context = reset_read_attempt_cycle(context, step.id, attempt_count)
             authority = dict(context.get("__aura_authority__", {}))
-            authority["read_repair_count"] = int(
-                authority.get("read_repair_count", 0)
-            ) + 1
+            authority["read_repair_count"] = int(authority.get("read_repair_count", 0)) + 1
             authority["last_plan_hash"] = digest
             context["__aura_authority__"] = authority
             run.execution_context = context
             run.plan = candidate
             run.plan_approved = True
-            run.status, run.error = RunStatus.recovering, None
+            transition_run(
+                run,
+                RunStatus.recovering,
+                reason="equivalent_read_provider_substituted",
+                actor="senior-orchestrator",
+                phase="execution",
+                supervisor_status="recovering",
+                error=None,
+                metadata={
+                    "step_id": step.id,
+                    "tool_slug": replacement.tool_slug,
+                    "operation": replacement.operation,
+                },
+            )
             session.add(
                 AuditEvent(
                     workspace_id=workspace_id,
@@ -500,13 +513,9 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
         context.setdefault("steps", {}).pop(step.step_key, None)
         for name in step.output_variables:
             context.setdefault("vars", {}).pop(name, None)
-        run.execution_context = reset_read_attempt_cycle(
-            context, step.id, attempt_count
-        )
+        run.execution_context = reset_read_attempt_cycle(context, step.id, attempt_count)
         run.plan, run.plan_approved = candidate, False
-        run.status = RunStatus.awaiting_approval
-        run.error = None
-        run.result = {
+        repair_result = {
             **(run.result or {}),
             "repair": {
                 "status": "awaiting_approval",
@@ -515,6 +524,18 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
                 "attempt": count + 1,
             },
         }
+        transition_run(
+            run,
+            RunStatus.awaiting_approval,
+            reason="replan_requires_expanded_authority",
+            actor="repair-planner",
+            phase="approval",
+            supervisor_status="human_action_required",
+            error=None,
+            result=repair_result,
+            dispatch=None,
+            metadata={"step_id": step.id},
+        )
         session.add(
             AuditEvent(
                 workspace_id=workspace_id,

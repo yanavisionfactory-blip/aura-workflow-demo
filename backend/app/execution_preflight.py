@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import httpx
 from sqlalchemy import select
 
 from .config import get_settings
@@ -26,7 +27,9 @@ from .models import (
     DispatchIntent,
     RunStatus,
     ToolConnection,
+    ToolKind,
 )
+from .native_connectors import native_manifest
 from .policy import canonical_plan_hash
 from .providers import (
     PROVIDERS,
@@ -35,9 +38,16 @@ from .providers import (
     verify_oauth_credentials,
 )
 from .reliability import classify_failure
+from .run_supervisor import transition_run
 from .security import CredentialVault
+from .universal_connectors import (
+    allowed_operations,
+    discover_provider,
+    validate_public_endpoint,
+    verify_provider,
+)
 
-PREFLIGHT_VERSION = 1
+PREFLIGHT_VERSION = 2
 RESOURCE_PROBE_OPERATIONS = {"drive.spreadsheet.resolve"}
 
 
@@ -97,12 +107,80 @@ def _literal_resource_probes(steps: list[Any]) -> list[Any]:
     return probes
 
 
+async def _refresh_custom_oauth_credentials(
+    tool: ToolConnection, credentials: dict[str, Any]
+) -> tuple[dict[str, Any], bool]:
+    """Refresh standards-based custom OAuth without exposing client secrets."""
+    if not tool.config.get("oauth_custom") or not credentials.get("refresh_token"):
+        return credentials, False
+    expires_at = int(credentials.get("expires_at") or 0)
+    if expires_at and expires_at > int(_now().timestamp()) + 60:
+        return credentials, False
+    token_url = str(tool.config.get("token_url") or "")
+    if not token_url:
+        return credentials, False
+    validate_public_endpoint(token_url)
+    payload = {
+        "grant_type": "refresh_token",
+        "refresh_token": credentials["refresh_token"],
+        **tool.config.get("token_params", {}),
+    }
+    auth = None
+    method = tool.config.get("token_auth_method", "client_secret_post")
+    if method == "client_secret_basic":
+        auth = (
+            credentials.get("client_id", ""),
+            credentials.get("client_secret", ""),
+        )
+    elif method == "client_secret_post":
+        payload.update(
+            {
+                "client_id": credentials.get("client_id", ""),
+                "client_secret": credentials.get("client_secret", ""),
+            }
+        )
+    else:
+        payload["client_id"] = credentials.get("client_id", "")
+    async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
+        response = await client.post(
+            token_url,
+            data=payload,
+            auth=auth,
+            headers={"Accept": "application/json"},
+        )
+        response.raise_for_status()
+        token_data = response.json()
+    if not token_data.get("access_token"):
+        raise ValueError("OAuth refresh did not return an access token")
+    refreshed = {**credentials, **token_data}
+    if token_data.get("expires_in"):
+        refreshed["expires_at"] = int(_now().timestamp()) + int(token_data["expires_in"])
+    return refreshed, True
+
+
 async def _connection_credentials(
     session,
     tool: ToolConnection,
     manifest: CapabilityManifest,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
     """Return credentials, verification and a human blocker when one is required."""
+    if tool.config.get("managed_by") == "aura":
+        # AURA Intelligence is an in-process, connection-free catalog. Its live
+        # probe is the currently imported runtime manifest rather than an HTTP
+        # request to a fabricated provider URL.
+        refreshed_manifest = native_manifest("aura")
+        manifest.manifest = refreshed_manifest
+        manifest.verification = {
+            "ok": True,
+            "source": "execution_preflight_internal_runtime",
+            "capability_count": len(refreshed_manifest.get("capabilities", [])),
+        }
+        manifest.verified_at = _now()
+        manifest.status = "verified"
+        tool.allowed_operations = allowed_operations(refreshed_manifest)
+        tool.enabled = True
+        return {}, manifest.verification, None
+
     if tool.config.get("managed_by") == "nango":
         reference = managed_connection_reference(tool)
         if not reference:
@@ -178,6 +256,48 @@ async def _connection_credentials(
                 ),
             )
         manifest.status = "verified"
+        tool.enabled = True
+        return credentials, verification, None
+
+    if tool.kind == ToolKind.oauth and tool.config.get("oauth_custom"):
+        credentials, changed = await _refresh_custom_oauth_credentials(tool, credentials)
+        if changed:
+            tool.encrypted_credentials = CredentialVault().encrypt(credentials)
+
+    refreshed_manifest = manifest.manifest
+    if tool.kind != ToolKind.oauth and tool.base_url:
+        refreshed_manifest = await discover_provider(
+            tool.kind.value,
+            str(tool.base_url),
+            credentials,
+            tool.config or {},
+        )
+        manifest.manifest = refreshed_manifest
+        tool.allowed_operations = allowed_operations(refreshed_manifest)
+    verification = await verify_provider(refreshed_manifest, credentials)
+    verification = {**verification, "source": "execution_preflight_live_probe"}
+    manifest.verification = verification
+    manifest.verified_at = _now()
+    if not verification.get("ok"):
+        status_code = int(verification.get("status_code") or 0)
+        if verification.get("retryable") or status_code == 429 or status_code >= 500:
+            raise RuntimeError("provider_temporarily_unavailable")
+        manifest.status = "degraded"
+        tool.enabled = False
+        return (
+            None,
+            verification,
+            _blocker(
+                "oauth_required" if tool.kind == ToolKind.oauth else "connection_unusable",
+                f"{tool.display_name} authorization is no longer usable.",
+                action="reconnect_account",
+                tool_slug=tool.slug,
+                connection_id=tool.id,
+                connected_account=_account_label(verification),
+            ),
+        )
+    manifest.status = "verified"
+    tool.enabled = True
     return credentials, verification, None
 
 
@@ -242,9 +362,19 @@ async def _stop_for_human(session, run, report: dict, blocker: dict) -> Prefligh
     context["__aura_preflight__"] = report
     context["__aura_blocker__"] = blocker
     run.execution_context = context
-    run.status = RunStatus.waiting_for_action
-    run.error = blocker["message"]
-    run.result = {**(run.result or {}), "blocker": blocker}
+    transition_run(
+        run,
+        RunStatus.waiting_for_action,
+        reason="preflight_human_action_required",
+        actor="preflight-controller",
+        phase="connection",
+        supervisor_status="human_action_required",
+        error=blocker["message"],
+        result={**(run.result or {}), "blocker": blocker},
+        blocker=blocker,
+        dispatch=None,
+        metadata={"blocker_code": blocker["code"]},
+    )
     session.add(
         AuditEvent(
             workspace_id=run.workspace_id,
@@ -266,6 +396,9 @@ async def preflight_approved_run(session, run, steps: list[Any]) -> PreflightOut
         previous.get("version") == PREFLIGHT_VERSION
         and previous.get("plan_hash") == plan_hash
         and previous.get("status") == "passed"
+        and previous.get("completed_at")
+        and (_now() - datetime.fromisoformat(previous["completed_at"])).total_seconds()
+        <= get_settings().connection_probe_ttl_seconds
     ):
         return PreflightOutcome("passed")
 
@@ -332,6 +465,11 @@ async def preflight_approved_run(session, run, steps: list[Any]) -> PreflightOut
                         connection_id=tool.id,
                     ),
                 )
+            credentials, verification, blocker = await _connection_credentials(
+                session, tool, manifest
+            )
+            if blocker:
+                return await _stop_for_human(session, run, report, blocker)
             missing_operations = sorted(
                 {
                     step.operation
@@ -346,17 +484,13 @@ async def preflight_approved_run(session, run, steps: list[Any]) -> PreflightOut
                     report,
                     _blocker(
                         "permission_required",
-                        f"{tool.display_name} is missing the approved capability: {', '.join(missing_operations)}.",
+                        f"{tool.display_name} is missing the approved capability: "
+                        f"{', '.join(missing_operations)}.",
                         action="reconnect_account",
                         tool_slug=slug,
                         connection_id=tool.id,
                     ),
                 )
-            credentials, verification, blocker = await _connection_credentials(
-                session, tool, manifest
-            )
-            if blocker:
-                return await _stop_for_human(session, run, report, blocker)
             credentials_by_slug[slug] = credentials or {}
             accounts_by_slug[slug] = _account_label(verification or manifest.verification)
             report["checks"].append(

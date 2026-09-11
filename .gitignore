@@ -15,6 +15,17 @@ node_modules
 dist
 dist-ssr
 *.local
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+pytest-of-root/
+pip-build-env-*/
+pip-ephem-wheel-cache-*/
+pip-metadata-*/
+pip-modern-metadata-*/
+pip-unpack-*/
 
 # Editor directories and files
 .vscode/*

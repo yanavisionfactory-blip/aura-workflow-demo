@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from time import perf_counter
 from types import SimpleNamespace
 
@@ -16,6 +17,7 @@ from app.db import Base
 from app.models import (
     ApprovalSnapshot,
     CapabilityManifest,
+    DispatchIntent,
     PlanVersion,
     RunStatus,
     RunStep,
@@ -27,6 +29,7 @@ from app.models import (
     Workspace,
 )
 from app.policy import DEFAULT_POLICY, canonical_plan_hash
+from app.run_supervisor import transition_run
 from app.schemas import (
     CriticDecision,
     ExecutionDirective,
@@ -73,9 +76,7 @@ def test_bracket_references_and_variable_dependencies_are_compiled():
     )
 
 
-@pytest.mark.parametrize(
-    "arguments", [{"id": "{{steps.source.id}}"}, {"id": "{{vars.missing}}"}]
-)
+@pytest.mark.parametrize("arguments", [{"id": "{{steps.source.id}}"}, {"id": "{{vars.missing}}"}])
 def test_unavailable_values_rejected_before_provider_execution(arguments):
     plan = WorkflowPlan(
         name="Flow",
@@ -90,13 +91,9 @@ def test_unavailable_values_rejected_before_provider_execution(arguments):
 @pytest.mark.parametrize(
     "ids,fixes", [(["invented"], []), ([], []), (["one"], ["Missing destination"])]
 )
-async def test_verifier_cannot_claim_success_with_invalid_evidence(
-    monkeypatch, ids, fixes
-):
+async def test_verifier_cannot_claim_success_with_invalid_evidence(monkeypatch, ids, fixes):
     async def output(*args, **kwargs):
-        return OutcomeVerification(
-            status="verified", evidence_step_ids=ids, required_fixes=fixes
-        )
+        return OutcomeVerification(status="verified", evidence_step_ids=ids, required_fixes=fixes)
 
     monkeypatch.setattr(agent_runtime, "_run", output)
     result = await verify_outcome(
@@ -114,9 +111,7 @@ async def test_verifier_outage_preserves_uncertainty(monkeypatch):
 
     monkeypatch.setattr(agent_runtime, "_run", fail)
     monkeypatch.setattr(agent_runtime.asyncio, "sleep", no_sleep)
-    result = await verify_outcome(
-        "Read", {}, [{"step_id": "one", "critic": {"action": "accept"}}]
-    )
+    result = await verify_outcome("Read", {}, [{"step_id": "one", "critic": {"action": "accept"}}])
     assert result.status == "unverified"
 
 
@@ -124,18 +119,14 @@ async def test_verifier_outage_preserves_uncertainty(monkeypatch):
     "workspace,subject,verified",
     [("other", "alice", True), ("w", "bob", True), ("w", "alice", False)],
 )
-def test_memory_rejects_cross_tenant_user_and_unverified_sources(
-    workspace, subject, verified
-):
+def test_memory_rejects_cross_tenant_user_and_unverified_sources(workspace, subject, verified):
     source = SimpleNamespace(
         workspace_id="w",
         status="completed",
         result={"verification": {"status": "verified" if verified else "unverified"}},
     )
     with pytest.raises(ValueError):
-        select_memory_inputs(
-            source, "alice", workspace, subject, {"record": "steps.read.id"}
-        )
+        select_memory_inputs(source, "alice", workspace, subject, {"record": "steps.read.id"})
 
 
 def test_memory_copies_only_explicit_selected_values():
@@ -143,13 +134,9 @@ def test_memory_copies_only_explicit_selected_values():
         workspace_id="w",
         status="completed",
         result={"verification": {"status": "verified"}},
-        execution_context={
-            "steps": {"read": {"record": {"id": "r"}, "private": "not selected"}}
-        },
+        execution_context={"steps": {"read": {"record": {"id": "r"}, "private": "not selected"}}},
     )
-    selected = select_memory_inputs(
-        source, "alice", "w", "alice", {"record": "steps.read.record"}
-    )
+    selected = select_memory_inputs(source, "alice", "w", "alice", {"record": "steps.read.record"})
     assert selected == {"record": {"id": "r"}}
     selected["record"]["id"] = "changed"
     assert source.execution_context["steps"]["read"]["record"]["id"] == "r"
@@ -164,9 +151,7 @@ def test_metrics_capture_usage_without_prompt_or_invented_cost():
             perf_counter(),
             SimpleNamespace(
                 context_wrapper=SimpleNamespace(
-                    usage=SimpleNamespace(
-                        input_tokens=10, output_tokens=5, total_tokens=15
-                    )
+                    usage=SimpleNamespace(input_tokens=10, output_tokens=5, total_tokens=15)
                 )
             ),
         )
@@ -213,6 +198,14 @@ async def runtime(monkeypatch):
                 plan=plan,
                 plan_approved=True,
                 status=RunStatus.running,
+                execution_context={
+                    "__aura_preflight__": {
+                        "version": 2,
+                        "plan_hash": digest,
+                        "status": "passed",
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                },
             )
         )
         session.add(
@@ -313,11 +306,15 @@ async def test_review_resume_after_write_does_not_replay_provider(runtime, monke
     monkeypatch.setattr(orchestrator, "critique_step", review)
     await orchestrator._execute_run("run", "w")
     async with runtime() as session:
-        assert (
-            await session.get(WorkflowRun, "run")
-        ).status == RunStatus.waiting_for_action
+        assert (await session.get(WorkflowRun, "run")).status == RunStatus.waiting_for_action
         run = await session.get(WorkflowRun, "run")
-        run.status = RunStatus.recovering  # Explicit user resume, not a duplicate delivery.
+        transition_run(
+            run,
+            RunStatus.recovering,
+            reason="test_explicit_user_resume",
+            actor="test",
+            dispatch=None,
+        )
         await session.commit()
     await orchestrator._execute_run("run", "w")
     async with runtime() as session:
@@ -352,9 +349,7 @@ async def test_unknown_write_after_restart_is_not_replayed(runtime, monkeypatch)
         assert len(attempts) == 1
 
 
-async def test_final_verification_retry_does_not_repeat_completed_action(
-    runtime, monkeypatch
-):
+async def test_final_verification_retry_does_not_repeat_completed_action(runtime, monkeypatch):
     count = 0
 
     async def execute(*args, **kwargs):
@@ -417,8 +412,12 @@ async def test_synthesis_outage_cannot_complete_or_index_run(runtime, monkeypatc
         return CriticDecision(action="accept")
 
     async def unavailable(*args):
-        return UnifiedDeliverable(summary="Receipt saved", deliverable="Partial extract",
-                                  validation_passed=False, required_fixes=["Retry synthesis"])
+        return UnifiedDeliverable(
+            summary="Receipt saved",
+            deliverable="Partial extract",
+            validation_passed=False,
+            required_fixes=["Retry synthesis"],
+        )
 
     async def forbidden(*args):
         pytest.fail("Unvalidated deliverable must not be verified or indexed")
@@ -427,12 +426,14 @@ async def test_synthesis_outage_cannot_complete_or_index_run(runtime, monkeypatc
     monkeypatch.setattr(orchestrator, "critique_step", accept)
     monkeypatch.setattr(orchestrator, "synthesize_result", unavailable)
     monkeypatch.setattr(orchestrator, "verify_outcome", forbidden)
-    monkeypatch.setattr(orchestrator, "index_run_memory", forbidden)
     await orchestrator._execute_run("run", "w")
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
         assert run.status == RunStatus.waiting_for_action
         assert run.result["verification"]["status"] == "unverified"
+        assert not (
+            await session.scalars(select(DispatchIntent).where(DispatchIntent.kind == "memory"))
+        ).all()
 
 
 async def test_recovery_api_does_not_allow_unknown_write_fallback(runtime):
@@ -443,7 +444,13 @@ async def test_recovery_api_does_not_allow_unknown_write_fallback(runtime):
 
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
-        run.status = RunStatus.waiting_for_action
+        transition_run(
+            run,
+            RunStatus.waiting_for_action,
+            reason="test_fixture_unknown_write",
+            actor="test",
+            dispatch=None,
+        )
         step = await session.get(RunStep, "step")
         step.status = StepStatus.failed
         session.add(
@@ -476,13 +483,9 @@ async def test_evaluation_endpoint_is_tenant_scoped(runtime):
 
     async with runtime() as session:
         with pytest.raises(HTTPException) as exc:
-            await get_run_evaluation(
-                "run", TenantContext("other", "alice", "owner"), session
-            )
+            await get_run_evaluation("run", TenantContext("other", "alice", "owner"), session)
         assert exc.value.status_code == 404
-        result = await get_run_evaluation(
-            "run", TenantContext("w", "alice", "owner"), session
-        )
+        result = await get_run_evaluation("run", TenantContext("w", "alice", "owner"), session)
         assert result["outcome_verified"] is False
         assert result["agent_cost_usd"] is None
 
@@ -521,11 +524,16 @@ async def test_run_creation_rejects_other_users_memory(runtime):
 
 async def test_active_connector_incident_pauses_before_provider_call(runtime, monkeypatch):
     from app.models import ToolTrustState
+
     async with runtime() as session:
-        session.add(ToolTrustState(workspace_id="w", tool_id="tool", score=1.0, incident_active=True))
+        session.add(
+            ToolTrustState(workspace_id="w", tool_id="tool", score=1.0, incident_active=True)
+        )
         await session.commit()
+
     async def forbidden(*args, **kwargs):
         pytest.fail("An active connector incident was bypassed")
+
     monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", forbidden)
     await orchestrator._execute_run("run", "w")
     async with runtime() as session:
@@ -533,9 +541,7 @@ async def test_active_connector_incident_pauses_before_provider_call(runtime, mo
         assert not (await session.scalars(select(StepAttempt))).all()
 
 
-async def test_execution_agent_escalation_prevents_provider_dispatch(
-    runtime, monkeypatch
-):
+async def test_execution_agent_escalation_prevents_provider_dispatch(runtime, monkeypatch):
     async def escalate(_prompt, approved_step, arguments, execution_agent):
         assert approved_step["key"] == "write"
         assert approved_step["tool_slug"] == "test"
@@ -574,14 +580,26 @@ async def test_execution_agent_escalation_prevents_provider_dispatch(
         )
 
 
-@pytest.mark.parametrize("state", [RunStatus.awaiting_approval, RunStatus.waiting_for_action, RunStatus.completed])
-async def test_stale_execution_delivery_leaves_paused_and_terminal_runs_untouched(runtime, monkeypatch, state):
+@pytest.mark.parametrize(
+    "state", [RunStatus.awaiting_approval, RunStatus.waiting_for_action, RunStatus.completed]
+)
+async def test_stale_execution_delivery_leaves_paused_and_terminal_runs_untouched(
+    runtime, monkeypatch, state
+):
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
-        run.status = state
+        transition_run(
+            run,
+            state,
+            reason="test_fixture_stale_delivery_boundary",
+            actor="test",
+            dispatch=None,
+        )
         await session.commit()
+
     async def forbidden(*args, **kwargs):
         pytest.fail("A stale delivery crossed a paused or terminal boundary")
+
     monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", forbidden)
     await orchestrator._execute_run("run", "w")
     async with runtime() as session:
@@ -591,45 +609,93 @@ async def test_stale_execution_delivery_leaves_paused_and_terminal_runs_untouche
 async def test_unattended_execution_requires_operation_certification(runtime, monkeypatch):
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
-        run.execution_context = {"execution_mode": "unattended"}
+        run.execution_context = {
+            **(run.execution_context or {}),
+            "execution_mode": "unattended",
+        }
         await session.commit()
+
     async def forbidden(*args, **kwargs):
         pytest.fail("Uncertified unattended operation executed")
+
     monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", forbidden)
     await orchestrator._execute_run("run", "w")
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
-        assert run.status == RunStatus.waiting_for_action
+        assert run.status == RunStatus.blocked
         assert "certification" in run.error
 
 
 async def test_uncertain_known_update_reconciles_without_repeating_write(runtime, monkeypatch):
     from app.native_connectors import native_manifest, native_operations
+
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
-        plan = WorkflowPlan(name="Update", interpretation="Set requested page fields", steps=[PlanStep(
-            key="write", agent="writer", tool_slug="notion", operation="notion.page.update",
-            arguments={"page_id": "page", "properties": {}}, reason="Update page", expected_output="Updated page", consequential=True)]).model_dump(mode="json")
+        plan = WorkflowPlan(
+            name="Update",
+            interpretation="Set requested page fields",
+            steps=[
+                PlanStep(
+                    key="write",
+                    agent="writer",
+                    tool_slug="notion",
+                    operation="notion.page.update",
+                    arguments={"page_id": "page", "properties": {}},
+                    reason="Update page",
+                    expected_output="Updated page",
+                    consequential=True,
+                )
+            ],
+        ).model_dump(mode="json")
         run.plan = plan
         digest = canonical_plan_hash(plan)
+        run.execution_context = {
+            **(run.execution_context or {}),
+            "__aura_preflight__": {
+                "version": 2,
+                "plan_hash": digest,
+                "status": "passed",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            },
+        }
         version = await session.get(PlanVersion, "version")
         version.plan, version.plan_hash = plan, digest
         snapshot = await session.get(ApprovalSnapshot, "snapshot")
         snapshot.plan_hash = digest
         snapshot.permission_snapshot = {"notion": native_operations("notion")}
         step = await session.get(RunStep, "step")
-        step.tool_slug, step.operation, step.arguments = "notion", "notion.page.update", plan["steps"][0]["arguments"]
+        step.tool_slug, step.operation, step.arguments = (
+            "notion",
+            "notion.page.update",
+            plan["steps"][0]["arguments"],
+        )
         tool = await session.get(ToolConnection, "tool")
         tool.slug, tool.allowed_operations = "notion", native_operations("notion")
         manifest = await session.get(CapabilityManifest, "manifest")
         manifest.manifest = native_manifest("notion")
-        session.add(StepAttempt(workspace_id="w", run_id="run", step_id="step", attempt_number=1,
-            status="running", tool_slug="notion", operation="notion.page.update"))
+        session.add(
+            StepAttempt(
+                workspace_id="w",
+                run_id="run",
+                step_id="step",
+                attempt_number=1,
+                status="running",
+                tool_slug="notion",
+                operation="notion.page.update",
+            )
+        )
         await session.commit()
+
     async def forbidden(*args, **kwargs):
         pytest.fail("Uncertain update was repeated")
+
     async def readback(*args):
-        return {"status": "verified", "observed": {"id": "page", "properties": {}}, "resource_id": "page"}
+        return {
+            "status": "verified",
+            "observed": {"id": "page", "properties": {}},
+            "resource_id": "page",
+        }
+
     monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", forbidden)
     monkeypatch.setattr(orchestrator, "check_provider_outcome", readback)
     await orchestrator._execute_run("run", "w")
@@ -638,19 +704,39 @@ async def test_uncertain_known_update_reconciles_without_repeating_write(runtime
         assert len((await session.scalars(select(StepAttempt))).all()) == 1
 
 
-@pytest.mark.parametrize("attempted,receipt,expected", [(False,False,True),(True,False,False),(False,True,False)])
-async def test_recovery_description_uses_durable_dispatch_evidence(runtime, attempted, receipt, expected):
+@pytest.mark.parametrize(
+    "attempted,receipt,expected", [(False, False, True), (True, False, False), (False, True, False)]
+)
+async def test_recovery_description_uses_durable_dispatch_evidence(
+    runtime, attempted, receipt, expected
+):
     from app.main import TenantContext, get_run
+
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
-        run.status = RunStatus.waiting_for_action
+        transition_run(
+            run,
+            RunStatus.waiting_for_action,
+            reason="test_fixture_recovery_projection",
+            actor="test",
+            dispatch=None,
+        )
         step = await session.get(RunStep, "step")
         step.status = StepStatus.failed
         if receipt:
             step.output = {"provider_result": {"id": "saved-record"}}
         if attempted:
-            session.add(StepAttempt(workspace_id="w", run_id="run", step_id="step", attempt_number=1,
-                status="running", tool_slug="test", operation="records.create"))
+            session.add(
+                StepAttempt(
+                    workspace_id="w",
+                    run_id="run",
+                    step_id="step",
+                    attempt_number=1,
+                    status="running",
+                    tool_slug="test",
+                    operation="records.create",
+                )
+            )
         await session.commit()
         result = await get_run("run", TenantContext("w", "alice", "owner"), session)
         recovery = result["steps"][0]["recovery"]
@@ -658,23 +744,41 @@ async def test_recovery_description_uses_durable_dispatch_evidence(runtime, atte
         assert recovery["phase"] == ("before_action" if expected else "after_dispatch")
 
 
-@pytest.mark.parametrize("approval_status,expected", [("pending", StepStatus.awaiting_approval), ("approved", StepStatus.pending)])
-async def test_retry_preserves_pending_approval_preparation(runtime, monkeypatch, approval_status, expected):
+@pytest.mark.parametrize(
+    "approval_status,expected",
+    [("pending", StepStatus.awaiting_approval), ("approved", StepStatus.pending)],
+)
+async def test_retry_preserves_pending_approval_preparation(
+    runtime, monkeypatch, approval_status, expected
+):
     from app import main
     from app.models import Approval
     from app.schemas import ResumeDecision
+
     async def no_dispatch(*args):
         pass
+
     monkeypatch.setattr(main, "dispatch_pending", no_dispatch)
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
-        run.status = RunStatus.waiting_for_action
+        transition_run(
+            run,
+            RunStatus.waiting_for_action,
+            reason="test_fixture_retry_approval",
+            actor="test",
+            dispatch=None,
+        )
         step = await session.get(RunStep, "step")
         step.status = StepStatus.failed
         session.add(Approval(id="approval", run_id="run", step_id="step", status=approval_status))
         step.approval_id = "approval"
         await session.commit()
-        await main.resume_run("run", ResumeDecision(action="retry"), main.TenantContext("w", "alice", "owner"), session)
+        await main.resume_run(
+            "run",
+            ResumeDecision(action="retry"),
+            main.TenantContext("w", "alice", "owner"),
+            session,
+        )
         assert step.status == expected
         assert (await session.get(Approval, "approval")).status == approval_status
         assert not (await session.scalars(select(StepAttempt))).all()

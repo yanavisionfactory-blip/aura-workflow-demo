@@ -5,7 +5,13 @@ from types import SimpleNamespace
 from sqlalchemy import select
 from test_agent_loop import runtime  # shared real-database fixture
 
-from app import agent_runtime, autonomous_delivery, orchestrator, scheduler_runtime
+from app import (
+    agent_runtime,
+    autonomous_delivery,
+    execution_preflight,
+    orchestrator,
+    scheduler_runtime,
+)
 from app.autonomous_delivery import (
     attempts_for_current_cycle,
     autonomously_recover_run,
@@ -25,13 +31,20 @@ from app.models import (
     WorkflowRun,
 )
 from app.policy import canonical_plan_hash
+from app.run_supervisor import transition_run
 from app.schemas import AutonomousRecoveryOption, CriticDecision
 
 
 async def _failed_read(runtime, error="[timeout] provider timed out"):
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
-        run.status = RunStatus.waiting_for_action
+        transition_run(
+            run,
+            RunStatus.waiting_for_action,
+            reason="test_fixture_failure",
+            actor="test",
+            dispatch=None,
+        )
         step = await session.get(RunStep, "step")
         step.consequential = False
         step.operation = "records.list"
@@ -62,9 +75,7 @@ async def _failed_read(runtime, error="[timeout] provider timed out"):
         await session.commit()
 
 
-async def test_transient_read_is_recovered_on_a_fresh_durable_delivery(
-    runtime, monkeypatch
-):
+async def test_transient_read_is_recovered_on_a_fresh_durable_delivery(runtime, monkeypatch):
     monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
     await _failed_read(runtime)
 
@@ -97,9 +108,7 @@ async def test_transient_read_is_recovered_on_a_fresh_durable_delivery(
         assert event.payload["action"] == "retry_step"
 
 
-async def test_capability_drift_refresh_is_attempted_once_per_failure(
-    runtime, monkeypatch
-):
+async def test_capability_drift_refresh_is_attempted_once_per_failure(runtime, monkeypatch):
     monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
     refreshes = 0
 
@@ -115,7 +124,13 @@ async def test_capability_drift_refresh_is_attempted_once_per_failure(
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
         step = await session.get(RunStep, "step")
-        run.status = RunStatus.waiting_for_action
+        transition_run(
+            run,
+            RunStatus.waiting_for_action,
+            reason="test_fixture_repeat_failure",
+            actor="test",
+            dispatch=None,
+        )
         step.status = StepStatus.failed
         session.add(
             StepAttempt(
@@ -136,16 +151,12 @@ async def test_capability_drift_refresh_is_attempted_once_per_failure(
     assert await autonomously_recover_run("run", "w") == "not_applicable"
     assert refreshes == 1
     async with runtime() as session:
-        state = (await session.get(WorkflowRun, "run")).execution_context[
-            "__aura_autonomy__"
-        ]
+        state = (await session.get(WorkflowRun, "run")).execution_context["__aura_autonomy__"]
         assert state["failure_history"][-1]["action"] == "refresh_capabilities"
         assert len(state["actions_by_failure"]) == 1
 
 
-async def test_scheduler_sweeps_approved_runs_paused_before_supervision(
-    runtime, monkeypatch
-):
+async def test_scheduler_sweeps_approved_runs_paused_before_supervision(runtime, monkeypatch):
     monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
     monkeypatch.setattr(scheduler_runtime, "SessionLocal", runtime)
 
@@ -166,9 +177,7 @@ async def test_scheduler_sweeps_approved_runs_paused_before_supervision(
         }
         await session.commit()
 
-    assert await scheduler_runtime.recover_waiting_runs() == [
-        ("run", "w", "recovery")
-    ]
+    assert await scheduler_runtime.recover_waiting_runs() == [("run", "w", "recovery")]
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
         assert run.status == RunStatus.recovering
@@ -179,7 +188,13 @@ async def test_completed_provider_work_retries_only_final_review(runtime, monkey
     monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
-        run.status = RunStatus.waiting_for_action
+        transition_run(
+            run,
+            RunStatus.waiting_for_action,
+            reason="test_fixture_unverified_result",
+            actor="test",
+            dispatch=None,
+        )
         run.result = {"verification": {"status": "unverified"}}
         step = await session.get(RunStep, "step")
         step.status = StepStatus.completed
@@ -201,7 +216,13 @@ async def test_repaired_platform_schema_retries_before_any_write(runtime, monkey
     monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
-        run.status = RunStatus.waiting_for_action
+        transition_run(
+            run,
+            RunStatus.waiting_for_action,
+            reason="test_fixture_platform_failure",
+            actor="test",
+            dispatch=None,
+        )
         step = await session.get(RunStep, "step")
         step.status = StepStatus.failed
         step.error = "AURA could not prepare the approved action."
@@ -235,7 +256,13 @@ async def test_uncertain_create_is_never_automatically_replayed(runtime, monkeyp
     monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
-        run.status = RunStatus.waiting_for_action
+        transition_run(
+            run,
+            RunStatus.waiting_for_action,
+            reason="test_fixture_uncertain_create",
+            actor="test",
+            dispatch=None,
+        )
         step = await session.get(RunStep, "step")
         step.status = StepStatus.failed
         session.add(
@@ -274,7 +301,13 @@ async def test_known_update_uses_readback_reconciliation_without_new_attempt_cyc
     monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
-        run.status = RunStatus.waiting_for_action
+        transition_run(
+            run,
+            RunStatus.waiting_for_action,
+            reason="test_fixture_uncertain_update",
+            actor="test",
+            dispatch=None,
+        )
         step = await session.get(RunStep, "step")
         step.operation = "notion.page.update"
         step.status = StepStatus.failed
@@ -311,7 +344,13 @@ async def test_managed_connection_is_revalidated_without_a_new_login(runtime, mo
     monkeypatch.setattr(autonomous_delivery, "managed_connector_client", Client)
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
-        run.status = RunStatus.waiting_for_action
+        transition_run(
+            run,
+            RunStatus.waiting_for_action,
+            reason="test_fixture_connection_failure",
+            actor="test",
+            dispatch=None,
+        )
         step = await session.get(RunStep, "step")
         step.consequential = False
         step.operation = "records.list"
@@ -356,7 +395,13 @@ async def test_explicitly_revoked_connection_is_never_reactivated(runtime, monke
     monkeypatch.setattr(autonomous_delivery, "managed_connector_client", Client)
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
-        run.status = RunStatus.waiting_for_action
+        transition_run(
+            run,
+            RunStatus.waiting_for_action,
+            reason="test_fixture_revoked_connection",
+            actor="test",
+            dispatch=None,
+        )
         step = await session.get(RunStep, "step")
         step.consequential = False
         step.operation = "records.list"
@@ -387,9 +432,7 @@ async def test_explicitly_revoked_connection_is_never_reactivated(runtime, monke
         assert (await session.get(CapabilityManifest, "manifest")).status == "revoked"
 
 
-async def test_recovered_read_gets_new_provider_attempts_after_old_budget(
-    runtime, monkeypatch
-):
+async def test_recovered_read_gets_new_provider_attempts_after_old_budget(runtime, monkeypatch):
     calls = 0
 
     async def execute(*args, **kwargs):
@@ -400,18 +443,26 @@ async def test_recovered_read_gets_new_provider_attempts_after_old_budget(
     async def accept(*args, **kwargs):
         return CriticDecision(action="accept")
 
+    async def passed_preflight(*args, **kwargs):
+        return execution_preflight.PreflightOutcome("passed")
+
     monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", execute)
     monkeypatch.setattr(orchestrator, "critique_step", accept)
+    monkeypatch.setattr(execution_preflight, "preflight_approved_run", passed_preflight)
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
-        run.status = RunStatus.recovering
+        transition_run(
+            run,
+            RunStatus.recovering,
+            reason="test_fixture_recovery_cycle",
+            actor="test",
+            dispatch=None,
+        )
         plan = deepcopy(run.plan)
         plan["steps"][0]["operation"] = "records.list"
         plan["steps"][0]["consequential"] = False
         run.plan = plan
-        run.execution_context = {
-            "__aura_autonomy__": {"attempt_offsets": {"step": 1}}
-        }
+        run.execution_context = {"__aura_autonomy__": {"attempt_offsets": {"step": 1}}}
         digest = canonical_plan_hash(run.plan)
         plan_version = await session.get(PlanVersion, "version")
         plan_version.plan = run.plan
