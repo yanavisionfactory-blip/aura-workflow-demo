@@ -1,9 +1,10 @@
 import hashlib
+import hmac
 import json
 import secrets
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode, urlsplit
 
 import httpx
@@ -20,7 +21,7 @@ from .agent_runtime import deterministic_plan_fixes
 from .autonomous_delivery import reset_read_attempt_cycle
 from .config import get_settings
 from .connector_sdk import ConnectorSDKError, validate_connector_definition
-from .db import engine, session_dependency, set_tenant_context
+from .db import SessionLocal, engine, session_dependency, set_tenant_context
 from .dispatch import dispatch_pending, recovery_loop
 from .identity import IdentityError, organization_claims, verify_clerk_session
 from .installation_runtime import (
@@ -49,6 +50,7 @@ from .models import (
     PlanVersion,
     PolicyConfig,
     PollingSubscription,
+    RecoveryIncident,
     RunStatus,
     RunStep,
     StepAttempt,
@@ -94,6 +96,7 @@ from .providers import (
     refresh_oauth_credentials,
     verify_oauth_credentials,
 )
+from .run_supervisor import SUPERVISOR_VERSION, transition_run
 from .schemas import (
     AiGenerateRequest,
     ApprovalDecision,
@@ -111,6 +114,7 @@ from .schemas import (
     PlanStep,
     PolicyUpdate,
     PollingSubscriptionCreate,
+    RecoveryPipelineResult,
     ResumeDecision,
     RunCreate,
     ToolCreate,
@@ -151,7 +155,7 @@ from .universal_connectors import (
 from .universal_connectors import (
     allowed_operations as discovered_operations,
 )
-from .worker import execute_run_task, plan_run_task, poll_subscription_task
+from .worker import poll_subscription_task
 from .workflow_memory import select_memory_inputs
 
 settings = get_settings()
@@ -159,16 +163,24 @@ app = FastAPI(title="AURA Control Plane", version="0.1.0")
 frontend_url = settings.frontend_url.rstrip("/") + "/"
 frontend_parts = urlsplit(frontend_url)
 frontend_origin = f"{frontend_parts.scheme}://{frontend_parts.netloc}"
-app.add_middleware(CORSMiddleware, allow_origins=[frontend_origin], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[frontend_origin],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.on_event("startup")
 async def startup() -> None:
     await migrate_database()
     from .internal_diagnostics import log_recent_stops_safely
+
     await log_recent_stops_safely()
     if settings.recovery_scheduler_enabled:
         import asyncio
+
         app.state.recovery_task = asyncio.create_task(recovery_loop())
 
 
@@ -176,6 +188,7 @@ async def startup() -> None:
 async def shutdown_recovery() -> None:
     import asyncio
     from contextlib import suppress
+
     task = getattr(app.state, "recovery_task", None)
     if task:
         task.cancel()
@@ -284,10 +297,84 @@ async def readiness() -> dict:
         checks["redis"] = False
     finally:
         await cache.aclose()
+    from .dispatch import scheduler_observation
+
+    if settings.recovery_scheduler_enabled:
+        now = datetime.now(UTC)
+        started_at = datetime.fromisoformat(scheduler_observation["started_at"])
+        last_tick = scheduler_observation.get("last_tick_at")
+        grace_seconds = max(30, settings.scheduler_interval_seconds * 2)
+        scheduler_fresh = (
+            (now - started_at).total_seconds() <= grace_seconds
+            if not last_tick
+            else (now - datetime.fromisoformat(last_tick)).total_seconds() <= grace_seconds
+        )
+        checks["recovery_scheduler"] = bool(
+            scheduler_fresh and int(scheduler_observation.get("consecutive_failures", 0)) < 3
+        )
+    else:
+        checks["recovery_scheduler"] = True
     if not all(checks.values()):
         raise HTTPException(503, {"status": "not_ready", "checks": checks})
-    from .dispatch import scheduler_observation
-    return {"status": "ready", "checks": checks, "recovery_scheduler": {"enabled": settings.recovery_scheduler_enabled, "last_tick_at": scheduler_observation["last_tick_at"], "leader": scheduler_observation["leader"]}}
+    return {
+        "status": "ready",
+        "checks": checks,
+        "recovery_scheduler": {
+            "enabled": settings.recovery_scheduler_enabled,
+            **scheduler_observation,
+        },
+    }
+
+
+@app.post("/v1/internal/recovery-incidents/{incident_id}/pipeline-result")
+async def recovery_pipeline_result(
+    incident_id: str,
+    request: Request,
+    x_aura_recovery_timestamp: str = Header(...),
+    x_aura_recovery_signature: str = Header(...),
+) -> dict:
+    """Accept an authenticated terminal result from the isolated CI runner."""
+    secret = settings.recovery_pipeline_callback_secret
+    if not secret:
+        raise HTTPException(503, "Recovery pipeline callbacks are not configured")
+    try:
+        timestamp = int(x_aura_recovery_timestamp)
+    except ValueError as exc:
+        raise HTTPException(401, "Invalid recovery callback timestamp") from exc
+    if abs(int(time.time()) - timestamp) > 300:
+        raise HTTPException(401, "Expired recovery callback")
+    body = await request.body()
+    signed = x_aura_recovery_timestamp.encode() + b"." + body
+    expected = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, x_aura_recovery_signature):
+        raise HTTPException(401, "Invalid recovery callback signature")
+    try:
+        payload = RecoveryPipelineResult.model_validate_json(body)
+    except ValueError as exc:
+        raise HTTPException(422, "Invalid recovery pipeline result") from exc
+
+    async with SessionLocal() as session:
+        await set_tenant_context(session, payload.workspace_id)
+        incident = await session.get(RecoveryIncident, incident_id)
+        if not incident or incident.workspace_id != payload.workspace_id:
+            raise HTTPException(404, "Recovery incident not found")
+        if incident.fingerprint != payload.fingerprint:
+            raise HTTPException(409, "Recovery incident fingerprint mismatch")
+        from .recovery_engineer import acknowledge_repair_result
+
+        try:
+            await acknowledge_repair_result(
+                session,
+                incident,
+                status=payload.status,
+                sandbox_result=payload.sandbox_result,
+                release_result=payload.release_result,
+            )
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        await session.commit()
+    await dispatch_pending(payload.workspace_id)
+    return {"incident_id": incident_id, "status": payload.status}
 
 
 @app.post("/v1/workspaces")
@@ -325,7 +412,12 @@ async def create_workspace(
     session.add(PolicyConfig(workspace_id=workspace.id, version=1, configuration=DEFAULT_POLICY))
     await session.commit()
     if settings.clerk_enabled:
-        return {"id": workspace.id, "workspace_id": workspace.id, "name": workspace.name, "role": role}
+        return {
+            "id": workspace.id,
+            "workspace_id": workspace.id,
+            "name": workspace.name,
+            "role": role,
+        }
     token = create_tenant_token(workspace.id, subject, role)
     return {"id": token, "workspace_id": workspace.id, "name": workspace.name, "role": role}
 
@@ -359,7 +451,9 @@ async def bootstrap_identity(
     organization_id, claimed_role = organization_claims(claims)
     external_id = organization_id or f"personal:{subject}"
     workspace = await session.scalar(
-        select(Workspace).where(Workspace.external_organization_id == external_id).order_by(Workspace.created_at)
+        select(Workspace)
+        .where(Workspace.external_organization_id == external_id)
+        .order_by(Workspace.created_at)
     )
     if workspace is None:
         role = "owner" if claimed_role == "admin" or organization_id is None else "member"
@@ -368,7 +462,9 @@ async def bootstrap_identity(
         await session.commit()
         await set_tenant_context(session, workspace.id)
         session.add(TenantMembership(workspace_id=workspace.id, subject=subject, role=role))
-        session.add(PolicyConfig(workspace_id=workspace.id, version=1, configuration=DEFAULT_POLICY))
+        session.add(
+            PolicyConfig(workspace_id=workspace.id, version=1, configuration=DEFAULT_POLICY)
+        )
         await session.commit()
     else:
         await set_tenant_context(session, workspace.id)
@@ -396,9 +492,7 @@ async def list_tools(
 ) -> list[dict]:
     wid = context.workspace_id
     tools = (
-        await session.scalars(
-            select(ToolConnection).where(ToolConnection.workspace_id == wid)
-        )
+        await session.scalars(select(ToolConnection).where(ToolConnection.workspace_id == wid))
     ).all()
     manifests = (
         await session.scalars(
@@ -406,9 +500,7 @@ async def list_tools(
         )
     ).all()
     trust_rows = (
-        await session.scalars(
-            select(ToolTrustState).where(ToolTrustState.workspace_id == wid)
-        )
+        await session.scalars(select(ToolTrustState).where(ToolTrustState.workspace_id == wid))
     ).all()
     manifest_by_tool = {item.tool_id: item for item in manifests}
     trust_by_tool = {item.tool_id: item for item in trust_rows}
@@ -427,16 +519,22 @@ async def list_tools(
                 "enabled": tool.enabled,
                 "external_connection_id": tool.external_connection_id,
                 "external_account_id": tool.external_account_id,
-                "status": manifest.status if manifest else ("connected" if tool.enabled else "disabled"),
+                "status": manifest.status
+                if manifest
+                else ("connected" if tool.enabled else "disabled"),
                 "allowed_operations": tool.allowed_operations,
-                "capabilities": (manifest.manifest or {}).get("capabilities", []) if manifest else [],
+                "capabilities": (manifest.manifest or {}).get("capabilities", [])
+                if manifest
+                else [],
                 "identity": verification.get("identity", {}),
                 "verification": {
                     key: value
                     for key, value in verification.items()
                     if key not in {"access_token", "refresh_token", "client_secret"}
                 },
-                "verified_at": manifest.verified_at.isoformat() if manifest and manifest.verified_at else None,
+                "verified_at": manifest.verified_at.isoformat()
+                if manifest and manifest.verified_at
+                else None,
                 "updated_at": tool.updated_at.isoformat() if tool.updated_at else None,
                 "trust_score": trust.score if trust else 1.0,
             }
@@ -457,9 +555,7 @@ async def managed_connector_status(
         # lazily. The frontend therefore routes only actually-needed apps into
         # the managed flow and never asks users to configure integration IDs.
         "providers": sorted(PROVIDERS) if client.configured else [],
-        "auto_provision": bool(
-            client.configured and settings.nango_auto_provision_integrations
-        ),
+        "auto_provision": bool(client.configured and settings.nango_auto_provision_integrations),
     }
 
 
@@ -522,9 +618,7 @@ async def create_managed_connector_session(
                 }
             )
         else:
-            matches = await client.find_connections(
-                provider, context.workspace_id, context.subject
-            )
+            matches = await client.find_connections(provider, context.workspace_id, context.subject)
             if len(matches) > 1:
                 raise HTTPException(
                     409,
@@ -542,9 +636,7 @@ async def create_managed_connector_session(
                 )
             if matches:
                 existing = matches[0]
-                integration_id, verification = await client.verify_connection(
-                    provider, existing
-                )
+                integration_id, verification = await client.verify_connection(provider, existing)
                 if verification.get("ok"):
                     result = {
                         "already_connected": True,
@@ -573,19 +665,21 @@ async def create_managed_connector_session(
                 result["mode"] = "connect"
     except ManagedConnectorError as exc:
         raise HTTPException(503, str(exc)) from exc
-    session.add(AuditEvent(
-        workspace_id=context.workspace_id,
-        actor=context.subject,
-        event_type={
-            "reconnect": "connector.managed_reauthorization_started",
-            "reuse": "connector.managed_authorization_reused",
-        }.get(result.get("mode"), "connector.managed_authorization_started"),
-        payload={
-            "provider": provider,
-            "connection_id": selected_tool.id if selected_tool else None,
-            "mode": result.get("mode"),
-        },
-    ))
+    session.add(
+        AuditEvent(
+            workspace_id=context.workspace_id,
+            actor=context.subject,
+            event_type={
+                "reconnect": "connector.managed_reauthorization_started",
+                "reuse": "connector.managed_authorization_reused",
+            }.get(result.get("mode"), "connector.managed_authorization_started"),
+            payload={
+                "provider": provider,
+                "connection_id": selected_tool.id if selected_tool else None,
+                "mode": result.get("mode"),
+            },
+        )
+    )
     await session.commit()
     return result
 
@@ -610,13 +704,14 @@ async def sync_managed_connector(
         if not tool or tool.workspace_id != context.workspace_id or tool.slug != provider:
             raise HTTPException(404, "Connection not found")
     else:
-        tool = await session.scalar(select(ToolConnection).where(
-            ToolConnection.workspace_id == context.workspace_id,
-            ToolConnection.slug == provider,
-        ))
-    selected_reference = (
-        external_connection_id
-        or (managed_connection_reference(tool) if tool else None)
+        tool = await session.scalar(
+            select(ToolConnection).where(
+                ToolConnection.workspace_id == context.workspace_id,
+                ToolConnection.slug == provider,
+            )
+        )
+    selected_reference = external_connection_id or (
+        managed_connection_reference(tool) if tool else None
     )
     try:
         connection = await client.find_connection(
@@ -644,7 +739,7 @@ async def sync_managed_connector(
             if record:
                 record.status = "degraded"
                 record.verification = verification
-                record.verified_at = datetime.now(timezone.utc)
+                record.verified_at = datetime.now(UTC)
             await session.commit()
         return {
             "connected": False,
@@ -654,9 +749,7 @@ async def sync_managed_connector(
             "connection_id": tool.id if tool else None,
         }
     try:
-        integration_id, verification = await client.verify_connection(
-            provider, connection
-        )
+        integration_id, verification = await client.verify_connection(provider, connection)
     except ManagedConnectorError as exc:
         raise HTTPException(503, str(exc)) from exc
     if not verification.get("ok"):
@@ -669,7 +762,7 @@ async def sync_managed_connector(
             if record:
                 record.status = status
                 record.verification = verification
-                record.verified_at = datetime.now(timezone.utc)
+                record.verified_at = datetime.now(UTC)
             await session.commit()
         return {
             "connected": False,
@@ -678,9 +771,7 @@ async def sync_managed_connector(
             "retryable": bool(verification.get("retryable")),
             "connection_id": tool.id if tool else None,
         }
-    external_account_id = external_account_reference(
-        provider, connection, verification
-    )
+    external_account_id = external_account_reference(provider, connection, verification)
     config = {
         "managed_by": "nango",
         "connection_id": connection["connection_id"],
@@ -724,18 +815,20 @@ async def sync_managed_connector(
     record.status = "verified"
     record.manifest = native_manifest(provider)
     record.verification = {**verification, "source": "managed_connector"}
-    record.verified_at = datetime.now(timezone.utc)
+    record.verified_at = datetime.now(UTC)
     client.clear_authorization_sessions(
         provider,
         context.workspace_id,
         context.subject,
     )
-    session.add(AuditEvent(
-        workspace_id=context.workspace_id,
-        actor=context.subject,
-        event_type="connector.managed_authorized",
-        payload={"tool_id": tool.id, "provider": provider},
-    ))
+    session.add(
+        AuditEvent(
+            workspace_id=context.workspace_id,
+            actor=context.subject,
+            event_type="connector.managed_authorized",
+            payload={"tool_id": tool.id, "provider": provider},
+        )
+    )
     await session.commit()
     return {
         "connected": True,
@@ -786,25 +879,40 @@ async def add_tool(
         except (ConnectorError, ValueError, httpx.HTTPError) as exc:
             raise HTTPException(422, f"Connection verification failed: {exc}") from exc
     tool = ToolConnection(
-        workspace_id=wid, slug=payload.slug, display_name=payload.display_name,
-        kind=ToolKind(payload.kind), base_url=str(payload.base_url) if payload.base_url else None,
-        encrypted_credentials=CredentialVault().encrypt(payload.credentials), config=payload.config,
-        allowed_operations=discovered_operations(manifest) if manifest else payload.allowed_operations,
+        workspace_id=wid,
+        slug=payload.slug,
+        display_name=payload.display_name,
+        kind=ToolKind(payload.kind),
+        base_url=str(payload.base_url) if payload.base_url else None,
+        encrypted_credentials=CredentialVault().encrypt(payload.credentials),
+        config=payload.config,
+        allowed_operations=discovered_operations(manifest)
+        if manifest
+        else payload.allowed_operations,
     )
     session.add(tool)
     await session.flush()
     if manifest:
-        session.add(CapabilityManifest(
-            workspace_id=wid,
-            tool_id=tool.id,
-            provider_type=payload.kind,
-            status="verified" if verification and verification["ok"] else "degraded",
-            manifest=manifest,
-            verification=verification or {},
-            verified_at=datetime.now(timezone.utc) if verification and verification["ok"] else None,
-        ))
+        session.add(
+            CapabilityManifest(
+                workspace_id=wid,
+                tool_id=tool.id,
+                provider_type=payload.kind,
+                status="verified" if verification and verification["ok"] else "degraded",
+                manifest=manifest,
+                verification=verification or {},
+                verified_at=datetime.now(UTC)
+                if verification and verification["ok"]
+                else None,
+            )
+        )
     await session.commit()
-    return {"id": tool.id, "slug": tool.slug, "connected": True, "capabilities": tool.allowed_operations}
+    return {
+        "id": tool.id,
+        "slug": tool.slug,
+        "connected": True,
+        "capabilities": tool.allowed_operations,
+    }
 
 
 @app.get("/v1/connectors/catalog")
@@ -812,7 +920,14 @@ async def connector_catalog() -> dict:
     return {
         "schema_version": "1.0",
         "adapter_types": [
-            "oauth", "openapi", "api_key", "mcp", "agent", "plugin", "webhook", "browser"
+            "oauth",
+            "openapi",
+            "api_key",
+            "mcp",
+            "agent",
+            "plugin",
+            "webhook",
+            "browser",
         ],
         "oauth_providers": {
             slug: {
@@ -838,11 +953,7 @@ async def install_connector_package(
     session: AsyncSession = Depends(tenant_session),
 ) -> dict:
     package = await session.get(ConnectorPackage, payload.package_id)
-    if (
-        not package
-        or package.workspace_id != context.workspace_id
-        or package.status != "published"
-    ):
+    if not package or package.workspace_id != context.workspace_id or package.status != "published":
         raise HTTPException(404, "Published connector package not found")
     existing = await session.scalar(
         select(ConnectorInstallation).where(
@@ -856,9 +967,7 @@ async def install_connector_package(
     if payload.authentication_type != authentication.get("type", "none"):
         raise HTTPException(422, "Selected authentication does not match the package")
     try:
-        credentials = normalized_credentials(
-            payload.authentication_type, payload.credentials
-        )
+        credentials = normalized_credentials(payload.authentication_type, payload.credentials)
     except ConnectorInstallationError as exc:
         raise HTTPException(422, str(exc)) from exc
     manifest = package.definition["manifest"]
@@ -874,11 +983,7 @@ async def install_connector_package(
         workspace_id=context.workspace_id,
         slug=package.slug,
         display_name=package.definition["name"],
-        kind=(
-            ToolKind.oauth
-            if payload.authentication_type == "oauth2"
-            else ToolKind.api_key
-        ),
+        kind=(ToolKind.oauth if payload.authentication_type == "oauth2" else ToolKind.api_key),
         base_url=manifest["base_url"],
         encrypted_credentials=CredentialVault().encrypt(credentials),
         config={
@@ -888,14 +993,10 @@ async def install_connector_package(
             "token_url": authentication.get("token_url"),
             "scopes": authentication.get("scopes", []),
             "token_params": authentication.get("token_params", {}),
-            "token_auth_method": authentication.get(
-                "token_auth_method", "client_secret_post"
-            ),
+            "token_auth_method": authentication.get("token_auth_method", "client_secret_post"),
             "manifest": manifest,
         },
-        allowed_operations=[
-            item["name"] for item in manifest.get("capabilities", [])
-        ],
+        allowed_operations=[item["name"] for item in manifest.get("capabilities", [])],
         enabled=payload.authentication_type != "oauth2",
     )
     session.add(tool)
@@ -905,11 +1006,7 @@ async def install_connector_package(
         slug=package.slug,
         package_id=package.id,
         tool_id=tool.id,
-        status=(
-            "authorizing"
-            if payload.authentication_type == "oauth2"
-            else "active"
-        ),
+        status=("authorizing" if payload.authentication_type == "oauth2" else "active"),
         authentication_type=payload.authentication_type,
         encrypted_auth_config=(
             CredentialVault().encrypt(credentials)
@@ -935,20 +1032,14 @@ async def install_connector_package(
         workspace_id=context.workspace_id,
         tool_id=tool.id,
         provider_type="connector_sdk",
-        status=(
-            "pending"
-            if payload.authentication_type == "oauth2"
-            else "verified"
-        ),
+        status=("pending" if payload.authentication_type == "oauth2" else "verified"),
         manifest=manifest,
         verification={
             **verification,
             "source": "connector_installation",
         },
         verified_at=(
-            None
-            if payload.authentication_type == "oauth2"
-            else datetime.now(timezone.utc)
+            None if payload.authentication_type == "oauth2" else datetime.now(UTC)
         ),
     )
     session.add(capability_record)
@@ -975,9 +1066,7 @@ async def install_connector_package(
     }
     if payload.authentication_type == "oauth2":
         callback_url = oauth_route_callback_url(settings, "installation")
-        state = create_oauth_state(
-            context.workspace_id, f"installation:{installation.id}"
-        )
+        state = create_oauth_state(context.workspace_id, f"installation:{installation.id}")
         try:
             response["authorization_url"] = installed_oauth_url(
                 authentication, credentials, state, callback_url
@@ -1002,9 +1091,7 @@ async def list_connector_installations(
     ).all()
     packages = (
         await session.scalars(
-            select(ConnectorPackage).where(
-                ConnectorPackage.workspace_id == context.workspace_id
-            )
+            select(ConnectorPackage).where(ConnectorPackage.workspace_id == context.workspace_id)
         )
     ).all()
     package_by_id = {item.id: item for item in packages}
@@ -1015,9 +1102,7 @@ async def list_connector_installations(
             "status": item.status,
             "authentication_type": item.authentication_type,
             "package_version": (
-                package_by_id[item.package_id].version
-                if item.package_id in package_by_id
-                else None
+                package_by_id[item.package_id].version if item.package_id in package_by_id else None
             ),
             "tool_id": item.tool_id,
             "updated_at": item.updated_at,
@@ -1047,17 +1132,16 @@ async def upgrade_connector_installation(
     current = await session.get(ConnectorPackage, installation.package_id)
     if current and package.version <= current.version:
         raise HTTPException(409, "Upgrade version must be newer")
-    if package.definition.get("authentication", {}).get(
-        "type", "none"
-    ) != installation.authentication_type:
+    if (
+        package.definition.get("authentication", {}).get("type", "none")
+        != installation.authentication_type
+    ):
         raise HTTPException(409, "Authentication changes require reinstall")
     tool = await session.get(ToolConnection, installation.tool_id)
     manifest = package.definition["manifest"]
     installation.previous_package_id = installation.package_id
     installation.package_id = package.id
-    tool.allowed_operations = [
-        item["name"] for item in manifest.get("capabilities", [])
-    ]
+    tool.allowed_operations = [item["name"] for item in manifest.get("capabilities", [])]
     tool.config = {**tool.config, "connector_package_id": package.id, "manifest": manifest}
     record = await session.scalar(
         select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id)
@@ -1115,9 +1199,7 @@ async def rollback_connector_installation(
     current_id = installation.package_id
     installation.package_id = target.id
     installation.previous_package_id = current_id
-    tool.allowed_operations = [
-        item["name"] for item in manifest.get("capabilities", [])
-    ]
+    tool.allowed_operations = [item["name"] for item in manifest.get("capabilities", [])]
     tool.config = {**tool.config, "connector_package_id": target.id, "manifest": manifest}
     record = await session.scalar(
         select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id)
@@ -1219,9 +1301,7 @@ async def submit_connector_package(
         validated = validate_connector_definition(payload.definition)
     except ConnectorSDKError as exc:
         raise HTTPException(422, str(exc)) from exc
-    canonical = json.dumps(
-        validated, sort_keys=True, separators=(",", ":")
-    )
+    canonical = json.dumps(validated, sort_keys=True, separators=(",", ":"))
     definition_hash = hashlib.sha256(canonical.encode()).hexdigest()
     versions = (
         await session.scalars(
@@ -1286,9 +1366,7 @@ async def list_connector_packages(
 ) -> list[dict]:
     rows = (
         await session.scalars(
-            select(ConnectorPackage).where(
-                ConnectorPackage.workspace_id == context.workspace_id
-            )
+            select(ConnectorPackage).where(ConnectorPackage.workspace_id == context.workspace_id)
         )
     ).all()
     return [
@@ -1326,7 +1404,7 @@ async def publish_connector_package(
     if package.status != "validated":
         raise HTTPException(409, "Only validated connectors may be published")
     package.status = "published"
-    package.published_at = datetime.now(timezone.utc)
+    package.published_at = datetime.now(UTC)
     session.add(
         AuditEvent(
             workspace_id=context.workspace_id,
@@ -1385,9 +1463,7 @@ async def create_polling_subscription(
     if capability.get("permission_scope") != "read":
         raise HTTPException(422, "Polling triggers may only call read modules")
     try:
-        validate_module_arguments(
-            manifest_record.manifest, payload.operation, payload.arguments
-        )
+        validate_module_arguments(manifest_record.manifest, payload.operation, payload.arguments)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     subscription = PollingSubscription(
@@ -1401,7 +1477,7 @@ async def create_polling_subscription(
         checkpoint_path=payload.checkpoint_path,
         cursor_argument=payload.cursor_argument,
         active=True,
-        next_poll_at=datetime.now(timezone.utc),
+        next_poll_at=datetime.now(UTC),
     )
     session.add(subscription)
     await session.flush()
@@ -1443,9 +1519,7 @@ async def list_polling_subscriptions(
     ).all()
     tools = (
         await session.scalars(
-            select(ToolConnection).where(
-                ToolConnection.workspace_id == context.workspace_id
-            )
+            select(ToolConnection).where(ToolConnection.workspace_id == context.workspace_id)
         )
     ).all()
     tool_slugs = {tool.id: tool.slug for tool in tools}
@@ -1629,9 +1703,7 @@ async def replay_webhook_delivery(
     if context.role not in {"owner", "admin"}:
         raise HTTPException(403, "Only workspace administrators can replay deliveries")
     delivery = await session.scalar(
-        select(WebhookDelivery)
-        .where(WebhookDelivery.id == delivery_id)
-        .with_for_update()
+        select(WebhookDelivery).where(WebhookDelivery.id == delivery_id).with_for_update()
     )
     if not delivery or delivery.workspace_id != context.workspace_id:
         raise HTTPException(404, "Webhook delivery not found")
@@ -1650,12 +1722,8 @@ async def replay_webhook_delivery(
         if original_run
         else 0
     )
-    if not original_run or not delivery_can_be_replayed(
-        original_run.status, completed_steps
-    ):
-        raise HTTPException(
-            409, "Only failed deliveries without completed actions can be replayed"
-        )
+    if not original_run or not delivery_can_be_replayed(original_run.status, completed_steps):
+        raise HTTPException(409, "Only failed deliveries without completed actions can be replayed")
     subscription = await session.get(WebhookSubscription, delivery.subscription_id)
     if not subscription or not subscription.active:
         raise HTTPException(409, "Webhook subscription is inactive")
@@ -1736,19 +1804,11 @@ async def receive_webhook(
 
     workspace_id = claims["workspace_id"]
     await set_tenant_context(session, workspace_id)
-    subscription = await session.get(
-        WebhookSubscription, claims["subscription_id"]
-    )
-    if (
-        not subscription
-        or subscription.workspace_id != workspace_id
-        or not subscription.active
-    ):
+    subscription = await session.get(WebhookSubscription, claims["subscription_id"])
+    if not subscription or subscription.workspace_id != workspace_id or not subscription.active:
         raise HTTPException(404, "Active webhook subscription not found")
     secret = CredentialVault().decrypt(subscription.encrypted_secret).get("secret", "")
-    if not verify_webhook_signature(
-        secret, x_aura_timestamp, body, x_aura_signature
-    ):
+    if not verify_webhook_signature(secret, x_aura_timestamp, body, x_aura_signature):
         raise HTTPException(401, "Invalid webhook signature")
 
     previous = await session.scalar(
@@ -1799,9 +1859,7 @@ async def receive_webhook(
         )
         classification = classify_delivery(previous.payload_hash, payload_hash)
         if classification == "collision":
-            raise HTTPException(
-                409, "Webhook event identifier was reused with new content"
-            )
+            raise HTTPException(409, "Webhook event identifier was reused with new content")
         return {
             "delivery_id": previous.id,
             "run_id": previous.run_id,
@@ -1811,7 +1869,12 @@ async def receive_webhook(
         workspace_id=workspace_id,
         prompt=prompt,
         inputs={"event": payload},
-        execution_context={"execution_mode": "unattended", "inputs": {"event": payload}, "vars": {}, "steps": {}},
+        execution_context={
+            "execution_mode": "unattended",
+            "inputs": {"event": payload},
+            "vars": {},
+            "steps": {},
+        },
         status=RunStatus.queued,
     )
     session.add(run)
@@ -1883,15 +1946,22 @@ async def discover_connector(
         status="verified",
         manifest=manifest,
         verification=verification,
-        verified_at=datetime.now(timezone.utc),
+        verified_at=datetime.now(UTC),
     )
     session.add(record)
-    session.add(AuditEvent(
-        workspace_id=context.workspace_id,
-        actor=context.subject,
-        event_type="connector.verified",
-        payload={"tool_id": tool.id, "slug": tool.slug, "kind": payload.kind, "capabilities": tool.allowed_operations},
-    ))
+    session.add(
+        AuditEvent(
+            workspace_id=context.workspace_id,
+            actor=context.subject,
+            event_type="connector.verified",
+            payload={
+                "tool_id": tool.id,
+                "slug": tool.slug,
+                "kind": payload.kind,
+                "capabilities": tool.allowed_operations,
+            },
+        )
+    )
     await session.commit()
     return {
         "id": tool.id,
@@ -1912,14 +1982,14 @@ async def test_connection(
     tool = await session.get(ToolConnection, connection_id)
     if not tool or tool.workspace_id != context.workspace_id:
         raise HTTPException(404, "Connection not found")
-    manifest = await session.scalar(select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id))
+    manifest = await session.scalar(
+        select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id)
+    )
     if not manifest:
         raise HTTPException(409, "Connection has no discovered capability manifest")
     if tool.config.get("managed_by") == "nango":
         try:
-            selected_reference = (
-                managed_connection_reference(tool) or tool.config["connection_id"]
-            )
+            selected_reference = managed_connection_reference(tool) or tool.config["connection_id"]
             _, result = await managed_connector_client().verify_connection(
                 tool.slug, {"connection_id": selected_reference}
             )
@@ -1931,10 +2001,8 @@ async def test_connection(
         if result.get("ok"):
             tool.external_connection_id = selected_reference
             if not tool.external_account_id:
-                tool.external_account_id = external_account_reference(
-                    tool.slug, {}, result
-                )
-        manifest.verified_at = datetime.now(timezone.utc)
+                tool.external_account_id = external_account_reference(tool.slug, {}, result)
+        manifest.verified_at = datetime.now(UTC)
         await session.commit()
         return {"id": tool.id, "status": manifest.status, "verification": result}
     credentials = CredentialVault().decrypt(tool.encrypted_credentials)
@@ -1965,7 +2033,7 @@ async def test_connection(
         result = await verify_provider(manifest.manifest, credentials)
     manifest.verification = result
     manifest.status = "verified" if result["ok"] else "degraded"
-    manifest.verified_at = datetime.now(timezone.utc)
+    manifest.verified_at = datetime.now(UTC)
     await session.commit()
     return {"id": tool.id, "status": manifest.status, "verification": result}
 
@@ -1995,7 +2063,14 @@ async def disconnect_connection(
         )
         if manifest:
             manifest.status = "revoked"
-        session.add(AuditEvent(workspace_id=context.workspace_id, actor=context.subject, event_type="connector.revoked", payload={"tool_id": tool.id, "slug": tool.slug, "provider_revocation": revocation}))
+        session.add(
+            AuditEvent(
+                workspace_id=context.workspace_id,
+                actor=context.subject,
+                event_type="connector.revoked",
+                payload={"tool_id": tool.id, "slug": tool.slug, "provider_revocation": revocation},
+            )
+        )
         await session.commit()
         return {"id": tool.id, "status": "revoked", "provider_revocation": revocation}
     credentials = CredentialVault().decrypt(tool.encrypted_credentials)
@@ -2011,13 +2086,19 @@ async def disconnect_connection(
             data = response.json()
             revocation.update(
                 {
-                    "ok": response.is_success and bool(data.get("ok")) and bool(data.get("revoked")),
+                    "ok": response.is_success
+                    and bool(data.get("ok"))
+                    and bool(data.get("revoked")),
                     "status_code": response.status_code,
                 }
             )
         except (httpx.HTTPError, ValueError) as exc:
             revocation.update({"ok": False, "error": str(exc)})
-    elif tool.config.get("oauth_custom") and tool.config.get("revocation_url") and credentials.get("access_token"):
+    elif (
+        tool.config.get("oauth_custom")
+        and tool.config.get("revocation_url")
+        and credentials.get("access_token")
+    ):
         revocation["attempted"] = True
         try:
             validate_public_endpoint(tool.config["revocation_url"])
@@ -2032,10 +2113,19 @@ async def disconnect_connection(
             revocation.update({"ok": False, "error": str(exc)})
     tool.enabled = False
     tool.encrypted_credentials = None
-    manifest = await session.scalar(select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id))
+    manifest = await session.scalar(
+        select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id)
+    )
     if manifest:
         manifest.status = "revoked"
-    session.add(AuditEvent(workspace_id=context.workspace_id, actor=context.subject, event_type="connector.revoked", payload={"tool_id": tool.id, "slug": tool.slug, "provider_revocation": revocation}))
+    session.add(
+        AuditEvent(
+            workspace_id=context.workspace_id,
+            actor=context.subject,
+            event_type="connector.revoked",
+            payload={"tool_id": tool.id, "slug": tool.slug, "provider_revocation": revocation},
+        )
+    )
     await session.commit()
     return {"id": tool.id, "status": "revoked", "provider_revocation": revocation}
 
@@ -2093,9 +2183,7 @@ async def reconnect_connection(
         scopes = tool.config.get("scopes", [])
         if scopes:
             params["scope"] = " ".join(scopes)
-        authorization_url = (
-            f"{tool.config['authorization_url']}?{urlencode(params)}"
-        )
+        authorization_url = f"{tool.config['authorization_url']}?{urlencode(params)}"
     else:
         definition = PROVIDERS.get(tool.slug)
         if not definition:
@@ -2327,7 +2415,7 @@ async def custom_oauth_start(
         params["scope"] = " ".join(payload.scopes)
     await session.commit()
     return {
-        "authorization_url": f"{str(payload.authorization_url)}?{urlencode(params)}",
+        "authorization_url": f"{payload.authorization_url!s}?{urlencode(params)}",
         "connection_id": tool.id,
         "slug": tool.slug,
     }
@@ -2348,8 +2436,7 @@ async def oauth_callback(
     if error or not code:
         safe_provider = state_provider if state_provider in PROVIDERS else provider
         message = (
-            "Jira did not grant access to an available workspace. "
-            "AURA kept your plan unchanged."
+            "Jira did not grant access to an available workspace. AURA kept your plan unchanged."
             if safe_provider == "jira"
             else "The app did not grant access. AURA kept your plan unchanged."
         )
@@ -2381,9 +2468,7 @@ async def oauth_callback(
         except (ConnectorInstallationError, httpx.HTTPError, ValueError) as exc:
             raise HTTPException(502, f"Connector OAuth exchange failed: {exc}") from exc
         try:
-            verification = await verify_provider(
-                package.definition["manifest"], credentials
-            )
+            verification = await verify_provider(package.definition["manifest"], credentials)
         except (ConnectorError, httpx.HTTPError, ValueError) as exc:
             raise HTTPException(502, f"Connector verification failed: {exc}") from exc
         if not verification.get("ok"):
@@ -2393,16 +2478,14 @@ async def oauth_callback(
         installation.status = "active"
         installation.encrypted_auth_config = None
         record = await session.scalar(
-            select(CapabilityManifest).where(
-                CapabilityManifest.tool_id == tool.id
-            )
+            select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id)
         )
         record.status = "verified"
         record.verification = {
             **verification,
             "source": "connector_installation_oauth",
         }
-        record.verified_at = datetime.now(timezone.utc)
+        record.verified_at = datetime.now(UTC)
         session.add(
             AuditEvent(
                 workspace_id=wid,
@@ -2416,9 +2499,7 @@ async def oauth_callback(
             )
         )
         await session.commit()
-        return RedirectResponse(
-            f"{frontend_url}?tool_connected={installation.slug}"
-        )
+        return RedirectResponse(f"{frontend_url}?tool_connected={installation.slug}")
     if provider == "custom" and state_provider.startswith("custom:"):
         tool_id = state_provider.split(":", 1)[1]
         wid = claims["workspace_id"]
@@ -2459,7 +2540,9 @@ async def oauth_callback(
         if not token_data.get("access_token"):
             raise HTTPException(502, "OAuth provider did not return an access token")
         if token_data.get("expires_in"):
-            token_data["expires_at"] = int(datetime.now(timezone.utc).timestamp()) + int(token_data["expires_in"])
+            token_data["expires_at"] = int(datetime.now(UTC).timestamp()) + int(
+                token_data["expires_in"]
+            )
         tool.encrypted_credentials = CredentialVault().encrypt({**stored, **token_data})
         tool.enabled = True
         capability_record = await session.scalar(
@@ -2467,13 +2550,17 @@ async def oauth_callback(
         )
         capability_record.status = "verified"
         capability_record.verification = {"ok": True, "source": "custom_oauth_callback"}
-        capability_record.verified_at = datetime.now(timezone.utc)
+        capability_record.verified_at = datetime.now(UTC)
         session.add(
             AuditEvent(
                 workspace_id=wid,
                 actor="oauth_callback",
                 event_type="connector.oauth_authorized",
-                payload={"tool_id": tool.id, "slug": tool.slug, "scopes": tool.config.get("scopes", [])},
+                payload={
+                    "tool_id": tool.id,
+                    "slug": tool.slug,
+                    "scopes": tool.config.get("scopes", []),
+                },
             )
         )
         await session.commit()
@@ -2485,17 +2572,14 @@ async def oauth_callback(
     definition = PROVIDERS.get(provider)
     if not definition:
         raise HTTPException(404, "Unknown OAuth provider")
-    callback_url = oauth_exchange_callback_url(
-        settings, definition, callback_route_provider
-    )
+    callback_url = oauth_exchange_callback_url(settings, definition, callback_route_provider)
     try:
         credentials = await exchange_oauth_code(
             settings, definition, code, state, callback_url=callback_url
         )
     except (httpx.HTTPError, RuntimeError, ValueError):
         message = (
-            "Jira did not return an accessible workspace. "
-            "AURA kept your plan unchanged."
+            "Jira did not return an accessible workspace. AURA kept your plan unchanged."
             if provider == "jira"
             else "The app could not finish connecting. AURA kept your plan unchanged."
         )
@@ -2504,14 +2588,25 @@ async def oauth_callback(
         )
     wid = claims["workspace_id"]
     await set_tenant_context(session, wid)
-    tool = await session.scalar(select(ToolConnection).where(ToolConnection.workspace_id == wid, ToolConnection.slug == provider))
+    tool = await session.scalar(
+        select(ToolConnection).where(
+            ToolConnection.workspace_id == wid, ToolConnection.slug == provider
+        )
+    )
     allowed = native_operations(provider)
     if tool:
         tool.encrypted_credentials = CredentialVault().encrypt(credentials)
         tool.enabled = True
         tool.allowed_operations = allowed
     else:
-        tool = ToolConnection(workspace_id=wid, slug=provider, display_name=definition.display_name, kind=ToolKind.oauth, encrypted_credentials=CredentialVault().encrypt(credentials), allowed_operations=allowed)
+        tool = ToolConnection(
+            workspace_id=wid,
+            slug=provider,
+            display_name=definition.display_name,
+            kind=ToolKind.oauth,
+            encrypted_credentials=CredentialVault().encrypt(credentials),
+            allowed_operations=allowed,
+        )
         session.add(tool)
         await session.flush()
     capability_record = await session.scalar(
@@ -2521,9 +2616,19 @@ async def oauth_callback(
     if capability_record:
         capability_record.status = "verified"
         capability_record.manifest = oauth_manifest
-        capability_record.verified_at = datetime.now(timezone.utc)
+        capability_record.verified_at = datetime.now(UTC)
     else:
-        session.add(CapabilityManifest(workspace_id=wid, tool_id=tool.id, provider_type="oauth", status="verified", manifest=oauth_manifest, verification={"ok": True, "source": "oauth_callback"}, verified_at=datetime.now(timezone.utc)))
+        session.add(
+            CapabilityManifest(
+                workspace_id=wid,
+                tool_id=tool.id,
+                provider_type="oauth",
+                status="verified",
+                manifest=oauth_manifest,
+                verification={"ok": True, "source": "oauth_callback"},
+                verified_at=datetime.now(UTC),
+            )
+        )
     await session.commit()
     return RedirectResponse(f"{frontend_url}?tool_connected={provider}")
 
@@ -2556,8 +2661,8 @@ def _schedule_view(schedule: WorkflowSchedule) -> dict:
 
 def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 @app.post("/v1/workflows", status_code=201)
@@ -2626,7 +2731,7 @@ async def create_workflow_schedule(
         workflow_id=workflow.id,
         name=payload.name,
         interval_seconds=payload.interval_seconds,
-        next_run_at=_as_utc(payload.start_at or datetime.now(timezone.utc)),
+        next_run_at=_as_utc(payload.start_at or datetime.now(UTC)),
         created_by=context.subject,
     )
     session.add(schedule)
@@ -2663,7 +2768,7 @@ async def update_workflow_schedule(
     if "next_run_at" in changes:
         changes["next_run_at"] = _as_utc(changes["next_run_at"])
     if "interval_seconds" in changes and "next_run_at" not in changes:
-        changes["next_run_at"] = datetime.now(timezone.utc) + timedelta(
+        changes["next_run_at"] = datetime.now(UTC) + timedelta(
             seconds=changes["interval_seconds"]
         )
     for field, value in changes.items():
@@ -2702,9 +2807,11 @@ async def create_run(
         )
         if existing:
             return {"id": existing.id, "status": existing.status.value, "replayed": True}
-    minute_ago = datetime.now(timezone.utc) - timedelta(minutes=1)
+    minute_ago = datetime.now(UTC) - timedelta(minutes=1)
     recent_runs = await session.scalar(
-        select(func.count()).select_from(WorkflowRun).where(
+        select(func.count())
+        .select_from(WorkflowRun)
+        .where(
             WorkflowRun.workspace_id == wid,
             WorkflowRun.created_at >= minute_ago,
         )
@@ -2721,15 +2828,22 @@ async def create_run(
     memory_inputs = {}
     if payload.memory_run_id:
         source = await session.get(WorkflowRun, payload.memory_run_id)
-        owner = await session.scalar(select(AuditEvent.actor).where(
-            AuditEvent.workspace_id == wid, AuditEvent.run_id == payload.memory_run_id,
-            AuditEvent.event_type == "run.created",
-        ).order_by(AuditEvent.created_at).limit(1))
+        owner = await session.scalar(
+            select(AuditEvent.actor)
+            .where(
+                AuditEvent.workspace_id == wid,
+                AuditEvent.run_id == payload.memory_run_id,
+                AuditEvent.event_type == "run.created",
+            )
+            .order_by(AuditEvent.created_at)
+            .limit(1)
+        )
         if not source or source.workspace_id != wid or owner != context.subject:
             raise HTTPException(404, "Memory source not found")
         try:
-            memory_inputs = select_memory_inputs(source, owner, wid, context.subject,
-                                                 payload.memory_bindings)
+            memory_inputs = select_memory_inputs(
+                source, owner, wid, context.subject, payload.memory_bindings
+            )
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
     inputs = {**workflow_inputs, **memory_inputs, **payload.inputs}
@@ -2743,7 +2857,7 @@ async def create_run(
             "vars": inputs,
             "steps": {},
             "__aura_supervisor__": {
-                "version": 1,
+                "version": SUPERVISOR_VERSION,
                 "owner": "run_supervisor",
                 "phase": "planning",
                 "status": "active",
@@ -2757,11 +2871,18 @@ async def create_run(
     session.add(run)
     try:
         await session.flush()
-        session.add(AuditEvent(workspace_id=wid, run_id=run.id, actor=context.subject,
-                               event_type="run.created", payload={
-                                   "memory_run_id": payload.memory_run_id,
-                                   "memory_bindings": payload.memory_bindings,
-                               }))
+        session.add(
+            AuditEvent(
+                workspace_id=wid,
+                run_id=run.id,
+                actor=context.subject,
+                event_type="run.created",
+                payload={
+                    "memory_run_id": payload.memory_run_id,
+                    "memory_bindings": payload.memory_bindings,
+                },
+            )
+        )
         await session.commit()
     except IntegrityError:
         await session.rollback()
@@ -2801,9 +2922,9 @@ def _run_blocker(
     requirements,
     attempted_steps: set[str] | frozenset[str] = frozenset(),
 ) -> dict | None:
-    stored = (run.execution_context or {}).get("__aura_blocker__") or (
-        run.result or {}
-    ).get("blocker")
+    stored = (run.execution_context or {}).get("__aura_blocker__") or (run.result or {}).get(
+        "blocker"
+    )
     if stored:
         return stored
     if run.status == RunStatus.awaiting_approval:
@@ -2855,9 +2976,7 @@ def _run_blocker(
         }
     autonomy = (run.execution_context or {}).get("__aura_autonomy__") or {}
     handoff_code = autonomy.get("handoff_reason_code")
-    failed_step = next(
-        (step for step in steps if step.status == StepStatus.failed), None
-    )
+    failed_step = next((step for step in steps if step.status == StepStatus.failed), None)
     if handoff_code:
         messages = {
             "connection_authorization_required": (
@@ -2916,25 +3035,76 @@ def _run_blocker(
 
 
 async def _run_view(session: AsyncSession, run: WorkflowRun) -> dict:
-    steps = (await session.scalars(select(RunStep).where(RunStep.run_id == run.id).order_by(RunStep.position))).all()
-    approvals = (
-        await session.scalars(select(Approval).where(Approval.run_id == run.id))
+    steps = (
+        await session.scalars(
+            select(RunStep).where(RunStep.run_id == run.id).order_by(RunStep.position)
+        )
     ).all()
+    approvals = (await session.scalars(select(Approval).where(Approval.run_id == run.id))).all()
     approvals_by_step = {approval.step_id: approval for approval in approvals}
     requirements = (
         await session.scalars(
             select(ConnectionRequirement).where(ConnectionRequirement.run_id == run.id)
         )
     ).all()
-    attempted_steps = set((await session.scalars(
-        select(StepAttempt.step_id).where(StepAttempt.run_id == run.id)
-    )).all())
+    attempted_steps = set(
+        (
+            await session.scalars(select(StepAttempt.step_id).where(StepAttempt.run_id == run.id))
+        ).all()
+    )
     blocker = _run_blocker(run, steps, approvals_by_step, requirements, attempted_steps)
     from .run_supervisor import public_run_projection
+
     public = public_run_projection(run, blocker)
     public_context = dict(run.execution_context or {})
     public_context.pop("__aura_supervisor__", None)
-    return {"id": run.id, "status": public["public_status"], "public_status": public["public_status"], "prompt": run.prompt, "inputs": run.inputs, "execution_context": public_context, "plan": run.plan, "plan_approved": run.plan_approved, "result": run.result, "error": public["public_error"], "blocker": public["public_blocker"], "supervisor_state": public["supervisor"], "automation_state": (run.execution_context or {}).get("__aura_preflight__"), "autonomy_state": (run.execution_context or {}).get("__aura_autonomy__"), "autonomy_authority": (run.execution_context or {}).get("__aura_authority__"), "created_at": run.created_at, "updated_at": run.updated_at, "steps": [{"id": s.id, "key": s.step_key, "position": s.position, "agent": s.agent, "tool_slug": s.tool_slug, "operation": s.operation, "arguments": s.arguments, "depends_on": s.depends_on, "dependency_mode": s.dependency_mode, "condition": s.condition, "output_variables": s.output_variables, "status": s.status.value, "consequential": s.consequential, "recovery": _step_recovery_state(run, s, attempted_steps), "approval_id": s.approval_id, "approval_status": approvals_by_step[s.id].status if s.id in approvals_by_step else None, "approval_preview": approvals_by_step[s.id].preview if s.id in approvals_by_step else None, "output": s.output, "error": s.error} for s in steps]}
+    return {
+        "id": run.id,
+        "status": public["public_status"],
+        "public_status": public["public_status"],
+        "prompt": run.prompt,
+        "inputs": run.inputs,
+        "execution_context": public_context,
+        "plan": run.plan,
+        "plan_approved": run.plan_approved,
+        "result": run.result,
+        "error": public["public_error"],
+        "blocker": public["public_blocker"],
+        "supervisor_state": public["supervisor"],
+        "automation_state": (run.execution_context or {}).get("__aura_preflight__"),
+        "autonomy_state": (run.execution_context or {}).get("__aura_autonomy__"),
+        "autonomy_authority": (run.execution_context or {}).get("__aura_authority__"),
+        "created_at": run.created_at,
+        "updated_at": run.updated_at,
+        "steps": [
+            {
+                "id": s.id,
+                "key": s.step_key,
+                "position": s.position,
+                "agent": s.agent,
+                "tool_slug": s.tool_slug,
+                "operation": s.operation,
+                "arguments": s.arguments,
+                "depends_on": s.depends_on,
+                "dependency_mode": s.dependency_mode,
+                "condition": s.condition,
+                "output_variables": s.output_variables,
+                "status": s.status.value,
+                "consequential": s.consequential,
+                "recovery": _step_recovery_state(run, s, attempted_steps),
+                "approval_id": s.approval_id,
+                "approval_status": approvals_by_step[s.id].status
+                if s.id in approvals_by_step
+                else None,
+                "approval_preview": approvals_by_step[s.id].preview
+                if s.id in approvals_by_step
+                else None,
+                "output": s.output,
+                "error": s.error,
+            }
+            for s in steps
+        ],
+    }
 
 
 @app.get("/v1/runs")
@@ -2944,18 +3114,10 @@ async def list_runs(
     context: TenantContext = Depends(tenant_context),
     session: AsyncSession = Depends(tenant_session),
 ) -> list[dict]:
-    query = select(WorkflowRun).where(
-        WorkflowRun.workspace_id == context.workspace_id
-    )
+    query = select(WorkflowRun).where(WorkflowRun.workspace_id == context.workspace_id)
     if active:
-        query = query.where(
-            WorkflowRun.status.notin_([RunStatus.completed, RunStatus.cancelled])
-        )
-    runs = (
-        await session.scalars(
-            query.order_by(WorkflowRun.updated_at.desc()).limit(limit)
-        )
-    ).all()
+        query = query.where(WorkflowRun.status.notin_([RunStatus.completed, RunStatus.cancelled]))
+    runs = (await session.scalars(query.order_by(WorkflowRun.updated_at.desc()).limit(limit))).all()
     return [await _run_view(session, run) for run in runs]
 
 
@@ -2982,9 +3144,7 @@ async def get_run_governance(
         raise HTTPException(404, "Run not found")
     versions = (
         await session.scalars(
-            select(PlanVersion)
-            .where(PlanVersion.run_id == run.id)
-            .order_by(PlanVersion.version)
+            select(PlanVersion).where(PlanVersion.run_id == run.id).order_by(PlanVersion.version)
         )
     ).all()
     snapshots = (
@@ -2996,9 +3156,7 @@ async def get_run_governance(
     ).all()
     events = (
         await session.scalars(
-            select(AuditEvent)
-            .where(AuditEvent.run_id == run.id)
-            .order_by(AuditEvent.created_at)
+            select(AuditEvent).where(AuditEvent.run_id == run.id).order_by(AuditEvent.created_at)
         )
     ).all()
     return {
@@ -3117,20 +3275,30 @@ async def resume_after_connection(
         for requirement in requirements:
             requirement.status = "satisfied"
             requirement.satisfied_by_tool_id = tool.id
-            requirement.satisfied_at = datetime.now(timezone.utc)
+            requirement.satisfied_at = datetime.now(UTC)
     remaining = [item for item in requirements if item.status == "pending"]
     if remaining:
         return {"id": run.id, "status": run.status.value, "remaining": len(remaining)}
-    run.status = RunStatus.queued
-    run.error = None
-    run.result = {}
-    session.add(AuditEvent(
-        workspace_id=context.workspace_id,
-        run_id=run.id,
+    transition_run(
+        run,
+        RunStatus.queued,
+        reason="connections_satisfied",
         actor=context.subject,
-        event_type="run.connections_satisfied",
-        payload={"connection_id": tool.id if tool else None},
-    ))
+        phase="planning",
+        supervisor_status="active",
+        error=None,
+        result={},
+        blocker=None,
+    )
+    session.add(
+        AuditEvent(
+            workspace_id=context.workspace_id,
+            run_id=run.id,
+            actor=context.subject,
+            event_type="run.connections_satisfied",
+            payload={"connection_id": tool.id if tool else None},
+        )
+    )
     await session.commit()
     await dispatch_pending(context.workspace_id)
     return {"id": run.id, "status": run.status.value}
@@ -3150,7 +3318,15 @@ async def approve_plan(
     if run.plan_approved:
         raise HTTPException(409, "Plan already approved")
     if not payload.approved:
-        run.status = RunStatus.cancelled
+        transition_run(
+            run,
+            RunStatus.cancelled,
+            reason="plan_rejected",
+            actor=context.subject,
+            phase="approval",
+            supervisor_status="cancelled",
+            dispatch=None,
+        )
         session.add(
             AuditEvent(
                 workspace_id=wid,
@@ -3183,6 +3359,7 @@ async def approve_plan(
         )
     ).all()
     from .connection_permissions import refresh_granted_readbacks, verification_permission_fixes
+
     for tool in tools:
         refresh_granted_readbacks(tool)
     inventory = [
@@ -3219,8 +3396,15 @@ async def approve_plan(
         except ValueError as exc:
             argument_fixes.append(f"Step {index} has invalid connector inputs: {exc}")
     from .operation_contracts import compile_contracts
+
     try:
-        compile_contracts(plan, {slug: current_capability_manifest(slug, manifests_by_tool_id.get(tool.id)) for slug, tool in tools_by_slug.items()})
+        compile_contracts(
+            plan,
+            {
+                slug: current_capability_manifest(slug, manifests_by_tool_id.get(tool.id))
+                for slug, tool in tools_by_slug.items()
+            },
+        )
     except ValueError as exc:
         argument_fixes.append(str(exc))
     if argument_fixes:
@@ -3229,8 +3413,12 @@ async def approve_plan(
         )
     for stored, planned in zip(steps, plan.steps, strict=True):
         if stored.output.get("provider_result") is not None:
-            if planned.model_dump(mode="json") != PlanStep.model_validate(run.plan["steps"][stored.position]).model_dump(mode="json"):
-                raise HTTPException(409, "A revised plan cannot change a step with a recorded provider result")
+            if planned.model_dump(mode="json") != PlanStep.model_validate(
+                run.plan["steps"][stored.position]
+            ).model_dump(mode="json"):
+                raise HTTPException(
+                    409, "A revised plan cannot change a step with a recorded provider result"
+                )
     normalized_arguments = plan.model_dump(mode="json") != original_plan_json
 
     latest_version = await session.scalar(
@@ -3269,9 +3457,7 @@ async def approve_plan(
     )
     policy = dict(policy_record.configuration if policy_record else DEFAULT_POLICY)
     trust_rows = (
-        await session.scalars(
-            select(ToolTrustState).where(ToolTrustState.workspace_id == wid)
-        )
+        await session.scalars(select(ToolTrustState).where(ToolTrustState.workspace_id == wid))
     ).all()
     trust_by_id = {row.tool_id: row.score for row in trust_rows}
     trust_scores = {tool.slug: trust_by_id.get(tool.id, 1.0) for tool in tools}
@@ -3311,7 +3497,7 @@ async def approve_plan(
     }
     run.execution_context = execution_context
     plan_version.status = "approved"
-    plan_version.approved_at = datetime.now(timezone.utc)
+    plan_version.approved_at = datetime.now(UTC)
     permission_snapshot = {tool.slug: list(tool.allowed_operations) for tool in tools}
     session.add(
         ApprovalSnapshot(
@@ -3333,9 +3519,7 @@ async def approve_plan(
             },
         )
     )
-    approvals = (
-        await session.scalars(select(Approval).where(Approval.run_id == run.id))
-    ).all()
+    approvals = (await session.scalars(select(Approval).where(Approval.run_id == run.id))).all()
     approvals_by_step = {approval.step_id: approval for approval in approvals}
     for step in steps:
         if step.status == StepStatus.completed:
@@ -3360,7 +3544,7 @@ async def approve_plan(
         if payload.approve_consequential:
             approval.status = "approved"
             approval.decided_by = context.subject
-            approval.decided_at = datetime.now(timezone.utc)
+            approval.decided_at = datetime.now(UTC)
             step.status = StepStatus.pending
         else:
             approval.status = "pending"
@@ -3368,9 +3552,15 @@ async def approve_plan(
             approval.decided_at = None
             step.status = StepStatus.awaiting_approval
     run.plan_approved = True
-    run.status = RunStatus.running
-    from .run_supervisor import mark_supervisor_phase
-    mark_supervisor_phase(run, "execution", "active")
+    transition_run(
+        run,
+        RunStatus.running,
+        reason="plan_approved",
+        actor=context.subject,
+        phase="execution",
+        supervisor_status="active",
+        error=None,
+    )
     session.add(
         AuditEvent(
             workspace_id=wid,
@@ -3382,9 +3572,7 @@ async def approve_plan(
                 "version": plan_version.version,
                 "plan_hash": plan_hash,
                 "policy_decision": policy_decision,
-                "approval_mode": (
-                    "combined" if payload.approve_consequential else "staged"
-                ),
+                "approval_mode": ("combined" if payload.approve_consequential else "staged"),
                 "allow_autonomous_read_repairs": payload.allow_autonomous_read_repairs,
             },
         )
@@ -3418,21 +3606,36 @@ async def decide_approval(
         raise HTTPException(409, "Approval already decided")
     if payload.approved:
         from .workflow_context import WorkflowContextError, canonical_action_arguments
-        proposed = payload.edited_arguments if payload.edited_arguments is not None else approval.preview.get("arguments", {})
+
+        proposed = (
+            payload.edited_arguments
+            if payload.edited_arguments is not None
+            else approval.preview.get("arguments", {})
+        )
         try:
-            canonical = canonical_action_arguments(step.operation, proposed, run.execution_context or {})
+            canonical = canonical_action_arguments(
+                step.operation, proposed, run.execution_context or {}
+            )
         except WorkflowContextError as exc:
             raise HTTPException(409, str(exc)) from exc
         if canonical != proposed:
             # Existing pending previews may predate a reference-resolution fix.
             # Refresh for review; do not approve a different argument silently.
-            approval.preview = {"status": "ready", "operation": step.operation, "arguments": canonical}
+            approval.preview = {
+                "status": "ready",
+                "operation": step.operation,
+                "arguments": canonical,
+            }
             await session.commit()
-            return {"approval_id": approval.id, "status": "pending", "run_id": run.id,
-                    "message": "The completed resource is ready. Review the updated action before continuing."}
+            return {
+                "approval_id": approval.id,
+                "status": "pending",
+                "run_id": run.id,
+                "message": "The completed resource is ready. Review the updated action before continuing.",
+            }
     approval.status = "approved" if payload.approved else "rejected"
     approval.decided_by = context.subject
-    approval.decided_at = datetime.now(timezone.utc)
+    approval.decided_at = datetime.now(UTC)
     if payload.approved:
         if payload.edited_arguments is not None:
             tool = await session.scalar(
@@ -3496,7 +3699,7 @@ async def decide_approval(
                 plan_hash=new_hash,
                 derived_from_id=current_version.id,
                 created_by=context.subject,
-                approved_at=datetime.now(timezone.utc),
+                approved_at=datetime.now(UTC),
             )
             session.add(new_version)
             await session.flush()
@@ -3529,7 +3732,18 @@ async def decide_approval(
     # Staged review is sequential: after each decision the worker executes the
     # approved action (or skips the rejected one), then prepares the next
     # consequential action from the newly accepted context.
-    run.status = RunStatus.running
+    transition_run(
+        run,
+        RunStatus.running,
+        reason="step_approval_decided",
+        actor=context.subject,
+        phase="execution",
+        supervisor_status="active",
+        error=None,
+        dispatch="execute",
+        metadata={"approval_id": approval.id, "decision": approval.status},
+        allow_same=True,
+    )
     await session.commit()
     await dispatch_pending(wid)
     return {"approval_id": approval.id, "status": approval.status, "run_id": run.id}
@@ -3611,7 +3825,15 @@ async def resume_run(
     if run.status not in {RunStatus.waiting_for_action, RunStatus.failed}:
         raise HTTPException(409, "Run is not waiting for a recovery decision")
     if payload.action == "cancel":
-        run.status = RunStatus.cancelled
+        transition_run(
+            run,
+            RunStatus.cancelled,
+            reason="recovery_cancelled_by_user",
+            actor=context.subject,
+            phase="execution",
+            supervisor_status="cancelled",
+            dispatch=None,
+        )
         await session.commit()
         return {"id": run.id, "status": run.status.value}
 
@@ -3646,46 +3868,62 @@ async def resume_run(
             execution_context["__aura_preflight__"] = preflight
             run.execution_context = execution_context
             run.result = {
-                key: value
-                for key, value in (run.result or {}).items()
-                if key != "blocker"
+                key: value for key, value in (run.result or {}).items() if key != "blocker"
             }
-            run.status = RunStatus.recovering
-            run.error = None
+            transition_run(
+                run,
+                RunStatus.recovering,
+                reason="preflight_retry_requested",
+                actor=context.subject,
+                phase="connection",
+                supervisor_status="recovering",
+                error=None,
+                blocker=None,
+            )
             await session.commit()
             await dispatch_pending(wid)
             return {"id": run.id, "status": run.status.value, "preflight": True}
-        if (payload.action == "retry" and payload.step_id is None and steps
-                and run.result.get("verification")
-                and all(item.status in {StepStatus.completed, StepStatus.skipped} for item in steps)):
-            run.status = RunStatus.recovering
-            run.error = None
+        if (
+            payload.action == "retry"
+            and payload.step_id is None
+            and steps
+            and run.result.get("verification")
+            and all(item.status in {StepStatus.completed, StepStatus.skipped} for item in steps)
+        ):
+            transition_run(
+                run,
+                RunStatus.recovering,
+                reason="verification_retry_requested",
+                actor=context.subject,
+                phase="verification",
+                supervisor_status="recovering",
+                error=None,
+            )
             await session.commit()
             await dispatch_pending(wid)
             return {"id": run.id, "status": run.status.value, "review_only": True}
         raise HTTPException(404, "Failed step not found")
     if step.consequential and payload.action in {"retry", "fallback"}:
-        attempted = await session.scalar(select(StepAttempt.id).where(
-            StepAttempt.step_id == step.id).limit(1))
+        attempted = await session.scalar(
+            select(StepAttempt.id).where(StepAttempt.step_id == step.id).limit(1)
+        )
         recorded = isinstance(step.output, dict) and "provider_result" in step.output
         if attempted and (not recorded or payload.action == "fallback"):
-            raise HTTPException(409, "Prior action may already have executed; reconcile its outcome before a new approved action")
+            raise HTTPException(
+                409,
+                "Prior action may already have executed; reconcile its outcome before a new approved action",
+            )
     approved_step = (run.plan.get("steps") or [])[step.position]
     if payload.action == "skip":
         if not approved_step.get("optional", False):
             raise HTTPException(409, "Only an optional approved step may be skipped")
         step.status = StepStatus.skipped
     elif payload.action == "fallback":
-        fallback_slug = payload.fallback_tool_slug or approved_step.get(
+        fallback_slug = payload.fallback_tool_slug or approved_step.get("fallback_tool_slug")
+        fallback_operation = payload.fallback_operation or approved_step.get("fallback_operation")
+        if fallback_slug != approved_step.get(
             "fallback_tool_slug"
-        )
-        fallback_operation = payload.fallback_operation or approved_step.get(
-            "fallback_operation"
-        )
-        if (
-            fallback_slug != approved_step.get("fallback_tool_slug")
-            or fallback_operation != approved_step.get("fallback_operation")
-        ):
+        ) or fallback_operation != approved_step.get("fallback_operation"):
             raise HTTPException(409, "An unapproved fallback requires a new plan version")
         if not fallback_slug or not fallback_operation:
             raise HTTPException(409, "No fallback was approved for this step")
@@ -3723,15 +3961,11 @@ async def resume_run(
     ):
         attempt_count = int(
             await session.scalar(
-                select(func.count(StepAttempt.id)).where(
-                    StepAttempt.step_id == step.id
-                )
+                select(func.count(StepAttempt.id)).where(StepAttempt.step_id == step.id)
             )
             or 0
         )
-        execution_context = reset_read_attempt_cycle(
-            execution_context, step.id, attempt_count
-        )
+        execution_context = reset_read_attempt_cycle(execution_context, step.id, attempt_count)
     recovery_counts = dict(execution_context.get("__aura_recovery__") or {})
     recovery_count = int(recovery_counts.get(step.id, 0)) + 1
     if recovery_count > 3:
@@ -3748,9 +3982,21 @@ async def resume_run(
     )
     if dead_letter:
         dead_letter.status = "resolved"
-        dead_letter.resolved_at = datetime.now(timezone.utc)
-    run.status = RunStatus.recovering
-    run.error = None
+        dead_letter.resolved_at = datetime.now(UTC)
+    transition_run(
+        run,
+        RunStatus.recovering,
+        reason="step_recovery_requested",
+        actor=context.subject,
+        phase="execution",
+        supervisor_status="recovering",
+        error=None,
+        metadata={
+            "action": payload.action,
+            "step_id": step.id,
+            "recovery_attempt": recovery_count,
+        },
+    )
     session.add(
         AuditEvent(
             workspace_id=wid,
@@ -3782,14 +4028,24 @@ async def cancel_run(
         return {"id": run.id, "status": run.status.value}
     run.cancellation_requested = True
     if run.status not in {RunStatus.running, RunStatus.planning}:
-        run.status = RunStatus.cancelled
-    session.add(AuditEvent(
-        workspace_id=context.workspace_id,
-        run_id=run.id,
-        actor=context.subject,
-        event_type="run.cancellation_requested",
-        payload={"status": run.status.value},
-    ))
+        transition_run(
+            run,
+            RunStatus.cancelled,
+            reason="cancellation_requested",
+            actor=context.subject,
+            phase="execution" if run.plan_approved else "planning",
+            supervisor_status="cancelled",
+            dispatch=None,
+        )
+    session.add(
+        AuditEvent(
+            workspace_id=context.workspace_id,
+            run_id=run.id,
+            actor=context.subject,
+            event_type="run.cancellation_requested",
+            payload={"status": run.status.value},
+        )
+    )
     await session.commit()
     return {"id": run.id, "status": run.status.value, "cancellation_requested": True}
 
@@ -3912,7 +4168,7 @@ async def update_workspace_record(
     ):
         raise HTTPException(404, "Workspace record not found")
     record.data = {**record.data, **payload.data}
-    record.updated_at = datetime.now(timezone.utc)
+    record.updated_at = datetime.now(UTC)
     await session.commit()
     return _record_view(record)
 
@@ -3926,9 +4182,8 @@ async def generate_workspace_json(
         raise HTTPException(503, "AURA intelligence is not configured")
     schema_instruction = ""
     if payload.response_json_schema:
-        schema_instruction = (
-            "\nReturn only valid JSON matching this JSON Schema:\n"
-            + json.dumps(payload.response_json_schema)
+        schema_instruction = "\nReturn only valid JSON matching this JSON Schema:\n" + json.dumps(
+            payload.response_json_schema
         )
     agent = Agent(
         name="AURA workspace assistant",
@@ -3968,7 +4223,9 @@ async def analyze_interface(
         title = body[lowered.index("<title") :].split(">", 1)[-1].split("</title>", 1)[0].strip()
     forms = lowered.count("<form")
     buttons = lowered.count("<button")
-    login_required = any(marker in lowered for marker in ("sign in", "log in", "password")) and forms > 0
+    login_required = (
+        any(marker in lowered for marker in ("sign in", "log in", "password")) and forms > 0
+    )
     return {
         "analysis": {
             "title": title or payload.url.host,
@@ -3977,7 +4234,11 @@ async def analyze_interface(
             "capabilities": [
                 {"kind": "view", "label": "Read visible page content"},
                 *([{"kind": "do", "label": f"Use {forms} visible form(s)"}] if forms else []),
-                *([{"kind": "change", "label": f"Use {buttons} visible action(s)"}] if buttons else []),
+                *(
+                    [{"kind": "change", "label": f"Use {buttons} visible action(s)"}]
+                    if buttons
+                    else []
+                ),
             ],
         }
     }
@@ -3992,35 +4253,77 @@ async def get_run_evaluation(
     run = await session.get(WorkflowRun, run_id)
     if not run or run.workspace_id != context.workspace_id:
         raise HTTPException(404, "Run not found")
-    events = (await session.scalars(select(AuditEvent).where(
-        AuditEvent.workspace_id == context.workspace_id, AuditEvent.run_id == run_id,
-        AuditEvent.event_type == "run.agent_metrics",
-    ).order_by(AuditEvent.created_at))).all()
+    events = (
+        await session.scalars(
+            select(AuditEvent)
+            .where(
+                AuditEvent.workspace_id == context.workspace_id,
+                AuditEvent.run_id == run_id,
+                AuditEvent.event_type == "run.agent_metrics",
+            )
+            .order_by(AuditEvent.created_at)
+        )
+    ).all()
     calls = [call for event in events for call in event.payload.get("calls", [])]
-    attempts = (await session.scalars(select(StepAttempt).where(
-        StepAttempt.workspace_id == context.workspace_id, StepAttempt.run_id == run_id,
-    ))).all()
-    completed_steps = (await session.scalars(select(RunStep).where(RunStep.run_id == run_id, RunStep.completed_at.is_not(None)))).all()
+    attempts = (
+        await session.scalars(
+            select(StepAttempt).where(
+                StepAttempt.workspace_id == context.workspace_id,
+                StepAttempt.run_id == run_id,
+            )
+        )
+    ).all()
+    completed_steps = (
+        await session.scalars(
+            select(RunStep).where(RunStep.run_id == run_id, RunStep.completed_at.is_not(None))
+        )
+    ).all()
+
     def elapsed_ms(end, start):
         return max(0, round((end - start).total_seconds() * 1000)) if end and start else None
+
     first_result = min((step.completed_at for step in completed_steps), default=None)
-    terminal = run.status in {RunStatus.completed, RunStatus.failed, RunStatus.cancelled, RunStatus.blocked}
+    terminal = run.status in {
+        RunStatus.completed,
+        RunStatus.failed,
+        RunStatus.cancelled,
+        RunStatus.blocked,
+    }
     return {
-        "planning_time_ms": sum(event.payload.get("duration_ms", 0) for event in events if event.payload.get("phase") == "plan_run"),
+        "planning_time_ms": sum(
+            event.payload.get("duration_ms", 0)
+            for event in events
+            if event.payload.get("phase") == "plan_run"
+        ),
         "time_to_first_useful_result_ms": elapsed_ms(first_result, run.created_at),
-        "total_completion_time_ms": elapsed_ms(run.updated_at, run.created_at) if terminal else None,
-        "execution_delivery_time_ms": sum(event.payload.get("duration_ms", 0) for event in events if event.payload.get("phase") == "execute_run"),
+        "total_completion_time_ms": elapsed_ms(run.updated_at, run.created_at)
+        if terminal
+        else None,
+        "execution_delivery_time_ms": sum(
+            event.payload.get("duration_ms", 0)
+            for event in events
+            if event.payload.get("phase") == "execute_run"
+        ),
         "restart_recoveries": (run.execution_context or {}).get("restart_recoveries", 0),
-        "replanning_attempts": (run.execution_context or {}).get("__aura_replanning__", {}).get("attempts", 0),
-        "autonomous_recovery_rounds": (run.execution_context or {}).get("__aura_autonomy__", {}).get("rounds", 0),
-        "autonomous_last_action": (run.execution_context or {}).get("__aura_autonomy__", {}).get("last_action"),
-        "run_id": run_id, "status": run.status.value,
+        "replanning_attempts": (run.execution_context or {})
+        .get("__aura_replanning__", {})
+        .get("attempts", 0),
+        "autonomous_recovery_rounds": (run.execution_context or {})
+        .get("__aura_autonomy__", {})
+        .get("rounds", 0),
+        "autonomous_last_action": (run.execution_context or {})
+        .get("__aura_autonomy__", {})
+        .get("last_action"),
+        "run_id": run_id,
+        "status": run.status.value,
         "outcome_verified": run.result.get("verification", {}).get("status") == "verified",
         "verification": run.result.get("verification"),
-        "agent_calls": calls, "agent_call_count": len(calls),
+        "agent_calls": calls,
+        "agent_call_count": len(calls),
         "agent_latency_ms": sum(call.get("latency_ms", 0) for call in calls),
         "known_total_tokens": sum(call.get("total_tokens") or 0 for call in calls),
-        "token_usage_complete": bool(calls) and all(call.get("total_tokens") is not None for call in calls),
+        "token_usage_complete": bool(calls)
+        and all(call.get("total_tokens") is not None for call in calls),
         "agent_cost_usd": None,
         "estimated_agent_cost_usd": (
             sum(call["estimated_cost_usd"] for call in calls)
@@ -4040,12 +4343,21 @@ async def search_workflow_memory(
     session: AsyncSession = Depends(tenant_session),
 ) -> dict:
     try:
-        results = await search_memory(session, context.workspace_id, context.subject,
-                                      payload.query, payload.limit, payload.minimum_score)
+        results = await search_memory(
+            session,
+            context.workspace_id,
+            context.subject,
+            payload.query,
+            payload.limit,
+            payload.minimum_score,
+        )
     except MemoryUnavailable as exc:
         raise HTTPException(503, str(exc)) from exc
-    return {"results": results, "candidate_limit": settings.memory_candidate_limit,
-            "embedding_model": settings.memory_embedding_model}
+    return {
+        "results": results,
+        "candidate_limit": settings.memory_candidate_limit,
+        "embedding_model": settings.memory_embedding_model,
+    }
 
 
 @app.post("/v1/memory/index/{run_id}")
@@ -4055,8 +4367,11 @@ async def index_workflow_memory(
     session: AsyncSession = Depends(tenant_session),
 ) -> dict:
     run = await session.get(WorkflowRun, run_id)
-    if (not run or run.workspace_id != context.workspace_id
-            or await source_owner(session, context.workspace_id, run_id) != context.subject):
+    if (
+        not run
+        or run.workspace_id != context.workspace_id
+        or await source_owner(session, context.workspace_id, run_id) != context.subject
+    ):
         raise HTTPException(404, "Memory source not found")
     try:
         memory = await index_run_memory(session, run, context.subject)
@@ -4075,10 +4390,15 @@ async def forget_workflow_memory(
     context: TenantContext = Depends(tenant_context),
     session: AsyncSession = Depends(tenant_session),
 ) -> dict:
-    memory = await session.scalar(select(WorkflowMemory).where(
-        WorkflowMemory.id == memory_id, WorkflowMemory.workspace_id == context.workspace_id,
-        WorkflowMemory.subject == context.subject,
-    ).with_for_update())
+    memory = await session.scalar(
+        select(WorkflowMemory)
+        .where(
+            WorkflowMemory.id == memory_id,
+            WorkflowMemory.workspace_id == context.workspace_id,
+            WorkflowMemory.subject == context.subject,
+        )
+        .with_for_update()
+    )
     if not memory:
         raise HTTPException(404, "Memory not found")
     memory.deleted, memory.text, memory.embedding = True, "", []

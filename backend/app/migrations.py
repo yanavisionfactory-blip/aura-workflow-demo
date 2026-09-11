@@ -28,6 +28,7 @@ DIRECT_TENANT_TABLES = (
     "approval_snapshots",
     "step_attempts",
     "dead_letter_entries",
+    "recovery_incidents",
     "artifacts",
     "audit_events",
 )
@@ -47,19 +48,27 @@ async def migrate_database() -> None:
     if engine.dialect.name == "postgresql":
         async with engine.begin() as connection:
             await connection.execute(
-                text("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS external_organization_id VARCHAR(240)")
+                text(
+                    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS external_organization_id VARCHAR(240)"
+                )
             )
             await connection.execute(
                 text("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS created_by VARCHAR(240)")
             )
             await connection.execute(
-                text("CREATE INDEX IF NOT EXISTS ix_workspaces_external_organization_id ON workspaces (external_organization_id)")
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_workspaces_external_organization_id ON workspaces (external_organization_id)"
+                )
             )
             await connection.execute(
-                text("ALTER TABLE tool_connections ADD COLUMN IF NOT EXISTS external_connection_id VARCHAR(500)")
+                text(
+                    "ALTER TABLE tool_connections ADD COLUMN IF NOT EXISTS external_connection_id VARCHAR(500)"
+                )
             )
             await connection.execute(
-                text("ALTER TABLE tool_connections ADD COLUMN IF NOT EXISTS external_account_id VARCHAR(500)")
+                text(
+                    "ALTER TABLE tool_connections ADD COLUMN IF NOT EXISTS external_account_id VARCHAR(500)"
+                )
             )
             await connection.execute(
                 text(
@@ -82,61 +91,93 @@ async def migrate_database() -> None:
                 )
             )
             await connection.execute(
-                text("ALTER TABLE workflows ADD COLUMN IF NOT EXISTS variables JSON DEFAULT '{}'::json")
+                text(
+                    "ALTER TABLE workflows ADD COLUMN IF NOT EXISTS variables JSON DEFAULT '{}'::json"
+                )
             )
             await connection.execute(
-                text("ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS inputs JSON DEFAULT '{}'::json")
+                text(
+                    "ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS inputs JSON DEFAULT '{}'::json"
+                )
             )
             await connection.execute(
-                text("ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS execution_context JSON DEFAULT '{}'::json")
+                text(
+                    "ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS execution_context JSON DEFAULT '{}'::json"
+                )
             )
             await connection.execute(
-                text("ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS cancellation_requested BOOLEAN DEFAULT FALSE")
+                text(
+                    "ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS cancellation_requested BOOLEAN DEFAULT FALSE"
+                )
             )
             await connection.execute(
                 text("ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS request_key VARCHAR(200)")
             )
             await connection.execute(
-                text("CREATE UNIQUE INDEX IF NOT EXISTS uq_workspace_run_request ON workflow_runs (workspace_id, request_key) WHERE request_key IS NOT NULL")
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_workspace_run_request ON workflow_runs (workspace_id, request_key) WHERE request_key IS NOT NULL"
+                )
             )
             await connection.execute(
                 text("ALTER TABLE run_steps ADD COLUMN IF NOT EXISTS step_key VARCHAR(120)")
             )
             await connection.execute(
-                text("ALTER TABLE run_steps ADD COLUMN IF NOT EXISTS depends_on JSON DEFAULT '[]'::json")
+                text(
+                    "ALTER TABLE run_steps ADD COLUMN IF NOT EXISTS depends_on JSON DEFAULT '[]'::json"
+                )
             )
             await connection.execute(
                 text("ALTER TABLE run_steps ADD COLUMN IF NOT EXISTS condition JSON")
             )
             await connection.execute(
-                text("ALTER TABLE run_steps ADD COLUMN IF NOT EXISTS dependency_mode VARCHAR(30) DEFAULT 'all_succeeded'")
+                text(
+                    "ALTER TABLE run_steps ADD COLUMN IF NOT EXISTS dependency_mode VARCHAR(30) DEFAULT 'all_succeeded'"
+                )
             )
             await connection.execute(
-                text("ALTER TABLE run_steps ADD COLUMN IF NOT EXISTS output_variables JSON DEFAULT '{}'::json")
+                text(
+                    "ALTER TABLE run_steps ADD COLUMN IF NOT EXISTS output_variables JSON DEFAULT '{}'::json"
+                )
             )
             await connection.execute(
-                text("UPDATE run_steps SET step_key = 'step_' || (position + 1) WHERE step_key IS NULL")
+                text(
+                    "UPDATE run_steps SET step_key = 'step_' || (position + 1) WHERE step_key IS NULL"
+                )
             )
             await connection.execute(
-                text("ALTER TABLE polling_subscriptions ADD COLUMN IF NOT EXISTS checkpoint JSON DEFAULT '{}'::json")
+                text(
+                    "ALTER TABLE polling_subscriptions ADD COLUMN IF NOT EXISTS checkpoint JSON DEFAULT '{}'::json"
+                )
             )
             await connection.execute(
-                text("ALTER TABLE polling_subscriptions ADD COLUMN IF NOT EXISTS checkpoint_path VARCHAR(500)")
+                text(
+                    "ALTER TABLE polling_subscriptions ADD COLUMN IF NOT EXISTS checkpoint_path VARCHAR(500)"
+                )
             )
             await connection.execute(
-                text("ALTER TABLE polling_subscriptions ADD COLUMN IF NOT EXISTS cursor_argument VARCHAR(200)")
+                text(
+                    "ALTER TABLE polling_subscriptions ADD COLUMN IF NOT EXISTS cursor_argument VARCHAR(200)"
+                )
             )
             await connection.execute(
-                text("ALTER TABLE polling_deliveries ADD COLUMN IF NOT EXISTS checkpoint JSON DEFAULT '{}'::json")
+                text(
+                    "ALTER TABLE polling_deliveries ADD COLUMN IF NOT EXISTS checkpoint JSON DEFAULT '{}'::json"
+                )
             )
             await connection.execute(
-                text("ALTER TABLE webhook_deliveries ADD COLUMN IF NOT EXISTS payload JSON DEFAULT '{}'::json")
+                text(
+                    "ALTER TABLE webhook_deliveries ADD COLUMN IF NOT EXISTS payload JSON DEFAULT '{}'::json"
+                )
             )
             await connection.execute(
-                text("ALTER TABLE webhook_deliveries ADD COLUMN IF NOT EXISTS replay_of_id VARCHAR(36)")
+                text(
+                    "ALTER TABLE webhook_deliveries ADD COLUMN IF NOT EXISTS replay_of_id VARCHAR(36)"
+                )
             )
             await connection.execute(
-                text("ALTER TABLE webhook_deliveries ADD COLUMN IF NOT EXISTS replay_count INTEGER DEFAULT 0")
+                text(
+                    "ALTER TABLE webhook_deliveries ADD COLUMN IF NOT EXISTS replay_count INTEGER DEFAULT 0"
+                )
             )
             for value in ("waiting_for_action", "recovering", "blocked"):
                 await connection.execute(
@@ -154,9 +195,7 @@ async def migrate_database() -> None:
         for table in DIRECT_TENANT_TABLES:
             await connection.execute(text(f'ALTER TABLE "{table}" ENABLE ROW LEVEL SECURITY'))
             await connection.execute(text(f'ALTER TABLE "{table}" FORCE ROW LEVEL SECURITY'))
-            await connection.execute(
-                text(f'DROP POLICY IF EXISTS tenant_isolation ON "{table}"')
-            )
+            await connection.execute(text(f'DROP POLICY IF EXISTS tenant_isolation ON "{table}"'))
             await connection.execute(
                 text(
                     f'CREATE POLICY tenant_isolation ON "{table}" '
@@ -168,9 +207,7 @@ async def migrate_database() -> None:
         for table, run_column in CHILD_TENANT_TABLES.items():
             await connection.execute(text(f'ALTER TABLE "{table}" ENABLE ROW LEVEL SECURITY'))
             await connection.execute(text(f'ALTER TABLE "{table}" FORCE ROW LEVEL SECURITY'))
-            await connection.execute(
-                text(f'DROP POLICY IF EXISTS tenant_isolation ON "{table}"')
-            )
+            await connection.execute(text(f'DROP POLICY IF EXISTS tenant_isolation ON "{table}"'))
             await connection.execute(
                 text(
                     f'CREATE POLICY tenant_isolation ON "{table}" USING ('
@@ -192,7 +229,9 @@ async def migrate_database() -> None:
             )
         )
         await connection.execute(
-            text("DROP TRIGGER IF EXISTS connector_installation_versions_immutable ON connector_installation_versions")
+            text(
+                "DROP TRIGGER IF EXISTS connector_installation_versions_immutable ON connector_installation_versions"
+            )
         )
         await connection.execute(
             text(
@@ -202,7 +241,9 @@ async def migrate_database() -> None:
             )
         )
         await connection.execute(
-            text("DROP TRIGGER IF EXISTS published_connector_packages_immutable ON connector_packages")
+            text(
+                "DROP TRIGGER IF EXISTS published_connector_packages_immutable ON connector_packages"
+            )
         )
         await connection.execute(
             text(

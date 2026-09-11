@@ -3,7 +3,7 @@ import logging
 import re
 import time
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 from sqlalchemy import select
@@ -67,16 +67,17 @@ from .providers import (
 )
 from .replanning import maybe_replan_run
 from .run_supervisor import (
-    mark_supervisor_phase,
     recover_planning_failure,
+    transition_run,
 )
 from .schemas import CriticDecision, OutcomeVerification
 from .security import CredentialVault
-from .semantic_memory import index_run_memory
 from .universal_connectors import (
     ConnectorError,
-    allowed_operations as discovered_operations,
     discover_provider,
+)
+from .universal_connectors import (
+    allowed_operations as discovered_operations,
 )
 from .workflow_context import (
     WorkflowContextError,
@@ -146,7 +147,7 @@ async def refresh_browser_connection_contract(
         "ok": True,
         "source": "planning_discovery_refresh",
     }
-    manifest.verified_at = datetime.now(timezone.utc)
+    manifest.verified_at = datetime.now(UTC)
     tool.allowed_operations = discovered_operations(refreshed)
     return list(tool.allowed_operations)
 
@@ -162,7 +163,15 @@ def _friendly_execution_error(error: str | None) -> str:
     detail = (error or "").lower()
     if "[execution_agent_escalated]" in detail:
         return "The Execution Agent paused this step for review. Your completed work is preserved."
-    if any(marker in detail for marker in ("input budget", "evidence budget", "evidence processing budget", "context_length_exceeded")):
+    if any(
+        marker in detail
+        for marker in (
+            "input budget",
+            "evidence budget",
+            "evidence processing budget",
+            "context_length_exceeded",
+        )
+    ):
         return "AURA could not prepare all the source content within this run’s processing limit."
     if any(
         marker in detail
@@ -205,7 +214,11 @@ def _required_read_arguments(manifest: dict, operation: str, arguments: dict) ->
     if not capability or operation_scope(operation) != "read":
         return None
     schema = capability.get("input_schema", {})
-    required = set(schema.get("required", [])) | {key for key, value in schema.get("properties", {}).items() if value.get("x-preserve-on-recovery")}
+    required = set(schema.get("required", [])) | {
+        key
+        for key, value in schema.get("properties", {}).items()
+        if value.get("x-preserve-on-recovery")
+    }
     reduced = {key: value for key, value in arguments.items() if key in required}
     return reduced if reduced != arguments else None
 
@@ -214,8 +227,7 @@ def _accept_successful_read_after_critic(operation: str, criticism: object) -> b
     """Keep a provider-confirmed read when the model asks for a semantic retry."""
     policy_notes = getattr(criticism, "policy_violations", []) or []
     semantic_only_policy_notes = all(
-        "expected_output" in str(note).lower()
-        and "incomplete" in str(note).lower()
+        "expected_output" in str(note).lower() and "incomplete" in str(note).lower()
         for note in policy_notes
     )
     return bool(
@@ -314,7 +326,7 @@ async def ensure_aura_intelligence(session, workspace_id: str) -> ToolConnection
     manifest.status = "verified"
     manifest.manifest = native_manifest("aura")
     manifest.verification = {"ok": True, "source": "aura_runtime"}
-    manifest.verified_at = datetime.now(timezone.utc)
+    manifest.verified_at = datetime.now(UTC)
     await session.flush()
     return tool
 
@@ -343,15 +355,36 @@ async def _create_compiled_plan(
     manifests_by_slug: dict[str, dict],
 ):
     """Build a schema-valid plan, repairing internal connector mismatches silently."""
-    manifests_by_slug = {item["slug"]: _current_capability_manifest(item["slug"], manifests_by_slug.get(item["slug"])) for item in inventory}
-    inventory = [{**item, "operation_contracts": [
-        {key: module.get(key) for key in (
-            "name", "description", "module_type", "input_schema", "output_schema",
-            "permission_scope", "requires_approval", "capability_tags", "reliability",
-        )}
-        for module in manifests_by_slug[item["slug"]].get("capabilities", [])
-        if module.get("name") in item.get("allowed_operations", [])
-    ]} for item in inventory]
+    manifests_by_slug = {
+        item["slug"]: _current_capability_manifest(
+            item["slug"], manifests_by_slug.get(item["slug"])
+        )
+        for item in inventory
+    }
+    inventory = [
+        {
+            **item,
+            "operation_contracts": [
+                {
+                    key: module.get(key)
+                    for key in (
+                        "name",
+                        "description",
+                        "module_type",
+                        "input_schema",
+                        "output_schema",
+                        "permission_scope",
+                        "requires_approval",
+                        "capability_tags",
+                        "reliability",
+                    )
+                }
+                for module in manifests_by_slug[item["slug"]].get("capabilities", [])
+                if module.get("name") in item.get("allowed_operations", [])
+            ],
+        }
+        for item in inventory
+    ]
     from .workflow_templates import creator_outreach_template
 
     audited_plan = creator_outreach_template(prompt, inventory)
@@ -373,14 +406,25 @@ async def _create_compiled_plan(
         )
         try:
             requested = prompt.casefold()
-            if ('roadmap' in requested or 'timeline' in requested) and any(
-                    s.operation == 'canva.design.create' for s in plan.steps):
-                raise NativeConnectorError('A populated roadmap requires canva.presentation.create; blank design creation cannot satisfy this request')
-            if 'attach' in requested and any(s.operation == 'gmail.send' and not s.arguments.get('attachments') for s in plan.steps):
-                raise NativeConnectorError('The requested file attachment must be present in gmail.send attachments, not substituted with a body link')
+            if ("roadmap" in requested or "timeline" in requested) and any(
+                s.operation == "canva.design.create" for s in plan.steps
+            ):
+                raise NativeConnectorError(
+                    "A populated roadmap requires canva.presentation.create; blank design creation cannot satisfy this request"
+                )
+            if "attach" in requested and any(
+                s.operation == "gmail.send" and not s.arguments.get("attachments")
+                for s in plan.steps
+            ):
+                raise NativeConnectorError(
+                    "The requested file attachment must be present in gmail.send attachments, not substituted with a body link"
+                )
             _normalize_planned_steps(plan, manifests_by_slug)
             from .operation_contracts import compile_contracts
-            plan.planning_artifacts["compiled_contracts"] = compile_contracts(plan, manifests_by_slug)
+
+            plan.planning_artifacts["compiled_contracts"] = compile_contracts(
+                plan, manifests_by_slug
+            )
             return plan
         except (NativeConnectorError, ValueError) as exc:
             if attempt == 2:
@@ -492,8 +536,16 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             or run.status not in {RunStatus.queued, RunStatus.planning}
         ):
             return
-        run.status = RunStatus.planning
-        mark_supervisor_phase(run, "planning", "active")
+        transition_run(
+            run,
+            RunStatus.planning,
+            reason="planning_delivery_started",
+            actor="plan-builder",
+            phase="planning",
+            supervisor_status="active",
+            dispatch=None,
+            allow_same=True,
+        )
         await ensure_aura_intelligence(session, run.workspace_id)
         tools = (
             await session.scalars(
@@ -513,12 +565,11 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
         ).all()
         manifests_by_tool = {manifest.tool_id: manifest for manifest in manifests}
         from .connection_permissions import refresh_granted_readbacks
+
         for tool in tools:
             refresh_native_connection_contract(tool)
             refresh_granted_readbacks(tool)
-            await refresh_browser_connection_contract(
-                tool, manifests_by_tool.get(tool.id)
-            )
+            await refresh_browser_connection_contract(tool, manifests_by_tool.get(tool.id))
         connected_inventory = [
             {
                 "slug": tool.slug,
@@ -531,9 +582,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             if tool.id in manifests_by_tool
         ]
         connected_slugs = {item["slug"] for item in connected_inventory}
-        inventory_by_slug = {
-            item["slug"]: item for item in planning_catalog(connected_slugs)
-        }
+        inventory_by_slug = {item["slug"]: item for item in planning_catalog(connected_slugs)}
         inventory_by_slug.update({item["slug"]: item for item in connected_inventory})
         inventory = list(inventory_by_slug.values())
         manifests_by_slug = {
@@ -546,20 +595,27 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
 
         try:
             from .plan_reuse import reuse_saved_plan
+
             plan = await reuse_saved_plan(session, run, connected_inventory, manifests_by_slug)
             if plan is None:
                 plan = await _create_compiled_plan(
-                    run.prompt, inventory, set((run.inputs or {}).keys()), manifests_by_slug,
+                    run.prompt,
+                    inventory,
+                    set((run.inputs or {}).keys()),
+                    manifests_by_slug,
                 )
-            missing = list(plan.planning_artifacts.get('connection_requirements', []))
+            missing = list(plan.planning_artifacts.get("connection_requirements", []))
             if missing:
                 from .connection_recovery import reuse_managed_connection
                 from .semantic_memory import source_owner
+
                 owner = await source_owner(session, workspace_id, run.id)
                 for slug in missing[:3]:
-                    if await reuse_managed_connection(session, managed_connector_client(), slug, workspace_id, owner):
+                    if await reuse_managed_connection(
+                        session, managed_connector_client(), slug, workspace_id, owner
+                    ):
                         missing.remove(slug)
-                plan.planning_artifacts['connection_requirements'] = missing
+                plan.planning_artifacts["connection_requirements"] = missing
             run.plan = plan.model_dump(mode="json")
             logger.info(
                 "Workflow plan ready run_id=%s graph=%s",
@@ -615,9 +671,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                     await session.flush()
                     step.approval_id = approval.id
                     step.status = StepStatus.awaiting_approval
-            for slug in sorted(
-                set(plan.planning_artifacts.get("connection_requirements", []))
-            ):
+            for slug in sorted(set(plan.planning_artifacts.get("connection_requirements", []))):
                 session.add(
                     ConnectionRequirement(
                         workspace_id=workspace_id,
@@ -635,10 +689,25 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                         ),
                     )
                 )
-            run.status = RunStatus.awaiting_approval
-            run.error = None
-            run.result = {}
-            mark_supervisor_phase(run, "approval", "waiting_for_plan_review")
+            transition_run(
+                run,
+                RunStatus.awaiting_approval,
+                reason="plan_compiled",
+                actor="plan-builder",
+                phase="approval",
+                supervisor_status="human_action_required",
+                error=None,
+                result={},
+                blocker={
+                    "kind": "human_action",
+                    "code": "plan_approval_required",
+                    "message": "Review and approve the compiled workflow plan.",
+                    "action": "review_plan",
+                    "retryable": False,
+                },
+                dispatch=None,
+                metadata={"plan_hash": plan_version.plan_hash},
+            )
             await audit(
                 session,
                 run.workspace_id,
@@ -663,13 +732,29 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                         required_permissions=[],
                     )
                 )
-            run.status = RunStatus.waiting_for_action
-            run.error = "One or more capability providers must be connected"
-            run.result = {
-                "status": "waiting_for_connection",
+            blocker = {
+                "kind": "human_action",
+                "code": "connection_required",
+                "message": "One or more capability providers must be connected",
+                "action": "connect_account",
                 "missing_capabilities": exc.missing_capabilities,
+                "retryable": False,
             }
-            mark_supervisor_phase(run, "connection", "human_action_required")
+            transition_run(
+                run,
+                RunStatus.waiting_for_action,
+                reason="planning_connection_required",
+                actor="tool-router",
+                phase="connection",
+                supervisor_status="human_action_required",
+                error=blocker["message"],
+                result={
+                    "status": "waiting_for_connection",
+                    "missing_capabilities": exc.missing_capabilities,
+                },
+                blocker=blocker,
+                dispatch=None,
+            )
             await audit(
                 session,
                 workspace_id,
@@ -705,13 +790,29 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                             ),
                         )
                     )
-                run.status = RunStatus.waiting_for_action
-                run.error = "One or more capability providers must be connected"
-                run.result = {
-                    "status": "waiting_for_connection",
+                blocker = {
+                    "kind": "human_action",
+                    "code": "connection_required",
+                    "message": "One or more capability providers must be connected",
+                    "action": "connect_account",
                     "missing_capabilities": missing,
+                    "retryable": False,
                 }
-                mark_supervisor_phase(run, "connection", "human_action_required")
+                transition_run(
+                    run,
+                    RunStatus.waiting_for_action,
+                    reason="planning_catalog_connection_required",
+                    actor="planner-recovery",
+                    phase="connection",
+                    supervisor_status="human_action_required",
+                    error=blocker["message"],
+                    result={
+                        "status": "waiting_for_connection",
+                        "missing_capabilities": missing,
+                    },
+                    blocker=blocker,
+                    dispatch=None,
+                )
                 await audit(
                     session,
                     workspace_id,
@@ -736,9 +837,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             await session.commit()
 
 
-async def _trust_state(
-    session, workspace_id: str, tool: ToolConnection
-) -> ToolTrustState:
+async def _trust_state(session, workspace_id: str, tool: ToolConnection) -> ToolTrustState:
     state = await session.scalar(
         select(ToolTrustState).where(
             ToolTrustState.workspace_id == workspace_id,
@@ -752,10 +851,16 @@ async def _trust_state(
             from sqlalchemy.dialects.postgresql import insert
         else:
             from sqlalchemy.dialects.sqlite import insert
-        await session.execute(insert(ToolTrustState).values(workspace_id=workspace_id, tool_id=tool.id, score=1.0)
-            .on_conflict_do_nothing(index_elements=["workspace_id", "tool_id"]))
-        state = await session.scalar(select(ToolTrustState).where(
-            ToolTrustState.workspace_id == workspace_id, ToolTrustState.tool_id == tool.id))
+        await session.execute(
+            insert(ToolTrustState)
+            .values(workspace_id=workspace_id, tool_id=tool.id, score=1.0)
+            .on_conflict_do_nothing(index_elements=["workspace_id", "tool_id"])
+        )
+        state = await session.scalar(
+            select(ToolTrustState).where(
+                ToolTrustState.workspace_id == workspace_id, ToolTrustState.tool_id == tool.id
+            )
+        )
     return state
 
 
@@ -798,14 +903,25 @@ def _partial_result(outputs: list[dict], step: RunStep, error: str) -> dict:
 async def review_recorded_result(session, run, step, snapshot, contract, result):
     from .completeness import incomplete_evidence
     from .operation_contracts import output_errors
-    errors = ([] if step.output.get("reconciliation", {}).get("status") == "verified" else output_errors(step.operation, result)) + incomplete_evidence(step.operation, result, contract.get("required_evidence", []))
+
+    errors = (
+        []
+        if step.output.get("reconciliation", {}).get("status") == "verified"
+        else output_errors(step.operation, result)
+    ) + incomplete_evidence(step.operation, result, contract.get("required_evidence", []))
     if errors:
         return CriticDecision(action="escalate", reasons=errors)
     if step.operation == "calendar.list":
         from .calendar_time import calendar_list_errors
+
         errors = calendar_list_errors(contract.get("arguments", {}), result)
-        return CriticDecision(action="escalate" if errors else "accept",
-            reasons=errors or ["Calendar event structure and query interval verified deterministically; semantic appointment selection remains downstream"])
+        return CriticDecision(
+            action="escalate" if errors else "accept",
+            reasons=errors
+            or [
+                "Calendar event structure and query interval verified deterministically; semantic appointment selection remains downstream"
+            ],
+        )
     check = step.output.get("outcome_check", {})
     if check.get("status") != "verified":
         check = await check_provider_outcome(session, run, step, snapshot)
@@ -813,17 +929,25 @@ async def review_recorded_result(session, run, step, snapshot, contract, result)
             step.output = {**step.output, "outcome_check": check}
             await session.commit()
     if check.get("status") not in {"verified", "unsupported"}:
-        return CriticDecision(action="escalate", reasons=check.get("reasons", ["Read-back is incomplete"]))
+        return CriticDecision(
+            action="escalate", reasons=check.get("reasons", ["Read-back is incomplete"])
+        )
     if check.get("status") == "verified":
         # Job polling observes the terminal provider response. Pass that response
         # downstream instead of the original in_progress receipt, including on resume.
-        if step.operation in {'canva.presentation.create', 'canva.export.create'}:
-            observed_job = check.get('observed', {}).get('job')
-            if observed_job and observed_job.get('id') == result.get('job', {}).get('id'):
+        if step.operation in {"canva.presentation.create", "canva.export.create"}:
+            observed_job = check.get("observed", {}).get("job")
+            if observed_job and observed_job.get("id") == result.get("job", {}).get("id"):
                 result.update(job=observed_job)
-                step.output = {**step.output, 'provider_result': dict(result)}
-        return CriticDecision(action="accept", reasons=["Provider read-back matches the approved action fields"])
-    evidence = {**result, "__aura_readback__": check["observed"]} if check.get("observed") and isinstance(result, dict) else result
+                step.output = {**step.output, "provider_result": dict(result)}
+        return CriticDecision(
+            action="accept", reasons=["Provider read-back matches the approved action fields"]
+        )
+    evidence = (
+        {**result, "__aura_readback__": check["observed"]}
+        if check.get("observed") and isinstance(result, dict)
+        else result
+    )
     review_contract = {key: value for key, value in contract.items() if key != "required_evidence"}
     review_contract["validated_capability_tags"] = contract.get("required_evidence", [])
     return await critique_step(review_contract, evidence)
@@ -835,7 +959,11 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
         if acquired:
             async with SessionLocal() as session:
                 await set_tenant_context(session, workspace_id)
-                state = await session.scalar(select(WorkflowRun.status).where(WorkflowRun.id == run_id, WorkflowRun.workspace_id == workspace_id))
+                state = await session.scalar(
+                    select(WorkflowRun.status).where(
+                        WorkflowRun.id == run_id, WorkflowRun.workspace_id == workspace_id
+                    )
+                )
                 if state not in {RunStatus.running, RunStatus.recovering}:
                     return
             for _ in range(3):
@@ -860,16 +988,41 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
         if not run or run.workspace_id != workspace_id:
             return
         if not (run.execution_context or {}).get("execution_mode"):
-            automated_origin = await session.scalar(select(AuditEvent.id).where(AuditEvent.workspace_id == workspace_id,
-                AuditEvent.run_id == run_id, AuditEvent.event_type.in_(["schedule.dispatched", "polling.change_detected", "webhook.delivery_accepted", "webhook.delivery_replayed"])).limit(1))
+            automated_origin = await session.scalar(
+                select(AuditEvent.id)
+                .where(
+                    AuditEvent.workspace_id == workspace_id,
+                    AuditEvent.run_id == run_id,
+                    AuditEvent.event_type.in_(
+                        [
+                            "schedule.dispatched",
+                            "polling.change_detected",
+                            "webhook.delivery_accepted",
+                            "webhook.delivery_replayed",
+                        ]
+                    ),
+                )
+                .limit(1)
+            )
             if automated_origin:
-                run.execution_context = {**(run.execution_context or {}), "execution_mode": "unattended"}
+                run.execution_context = {
+                    **(run.execution_context or {}),
+                    "execution_mode": "unattended",
+                }
         recovery_context = dict(run.execution_context or {})
         recovery_counts = dict(recovery_context.get("__aura_recovery__") or {})
         if run.status not in {RunStatus.running, RunStatus.recovering}:
             return
         if run.cancellation_requested:
-            run.status = RunStatus.cancelled
+            transition_run(
+                run,
+                RunStatus.cancelled,
+                reason="cancellation_observed_before_execution",
+                actor="senior-orchestrator",
+                phase="execution",
+                supervisor_status="cancelled",
+                dispatch=None,
+            )
             await audit(
                 session,
                 workspace_id,
@@ -880,13 +1033,28 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             await session.commit()
             return
         if not run.plan_approved:
-            run.status = RunStatus.awaiting_approval
+            transition_run(
+                run,
+                RunStatus.awaiting_approval,
+                reason="execution_requires_plan_approval",
+                actor="senior-orchestrator",
+                phase="approval",
+                supervisor_status="human_action_required",
+                blocker={
+                    "kind": "human_action",
+                    "code": "plan_approval_required",
+                    "message": "Review and approve the workflow plan.",
+                    "action": "review_plan",
+                    "retryable": False,
+                },
+                dispatch=None,
+            )
             await session.commit()
             return
         autonomy = deepcopy((run.execution_context or {}).get("__aura_autonomy__") or {})
         if run.status == RunStatus.recovering and autonomy.get("next_attempt_at"):
             autonomy["next_attempt_at"] = None
-            autonomy["last_started_at"] = datetime.now(timezone.utc).isoformat()
+            autonomy["last_started_at"] = datetime.now(UTC).isoformat()
             run.execution_context = {
                 **(run.execution_context or {}),
                 "__aura_autonomy__": autonomy,
@@ -923,8 +1091,25 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             or plan_version.plan_hash != current_hash
             or snapshot.plan_hash != current_hash
         ):
-            run.status = RunStatus.waiting_for_action
-            run.error = "Approved plan integrity check failed; re-approval is required"
+            message = "Approved plan integrity check failed; re-approval is required"
+            transition_run(
+                run,
+                RunStatus.waiting_for_action,
+                reason="approved_plan_integrity_failed",
+                actor="policy-governor",
+                phase="approval",
+                supervisor_status="human_action_required",
+                error=message,
+                blocker={
+                    "kind": "human_action",
+                    "code": "plan_approval_required",
+                    "message": message,
+                    "action": "review_plan",
+                    "retryable": False,
+                },
+                dispatch=None,
+                metadata={"current_hash": current_hash},
+            )
             await audit(
                 session,
                 workspace_id,
@@ -937,22 +1122,27 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
 
         steps = (
             await session.scalars(
-                select(RunStep)
-                .where(RunStep.run_id == run.id)
-                .order_by(RunStep.position)
+                select(RunStep).where(RunStep.run_id == run.id).order_by(RunStep.position)
             )
         ).all()
         plan_steps = run.plan.get("steps") or []
         if len(steps) != len(plan_steps):
-            run.status = RunStatus.waiting_for_action
-            run.error = "Executable step count differs from the approved plan"
+            transition_run(
+                run,
+                RunStatus.waiting_for_action,
+                reason="executable_step_count_mismatch",
+                actor="run-supervisor",
+                phase="execution",
+                supervisor_status="operator_attention",
+                error="Executable step count differs from the approved plan",
+                dispatch=None,
+            )
             await session.commit()
             return
         for stored, approved in zip(steps, plan_steps, strict=True):
-            primary_match = (
-                stored.tool_slug == approved.get("tool_slug")
-                and stored.operation == approved.get("operation")
-            )
+            primary_match = stored.tool_slug == approved.get(
+                "tool_slug"
+            ) and stored.operation == approved.get("operation")
             approved_fallback_match = (
                 bool(approved.get("fallback_tool_slug"))
                 and stored.tool_slug == approved.get("fallback_tool_slug")
@@ -962,8 +1152,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 not (primary_match or approved_fallback_match)
                 or stored.step_key != approved.get("key", f"step_{stored.position + 1}")
                 or stored.depends_on != approved.get("depends_on", [])
-                or stored.dependency_mode
-                != approved.get("dependency_mode", "all_succeeded")
+                or stored.dependency_mode != approved.get("dependency_mode", "all_succeeded")
                 or stored.condition != approved.get("condition")
                 or stored.output_variables != approved.get("output_variables", {})
                 or stored.arguments
@@ -974,8 +1163,17 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 or stored.consequential != approved.get("consequential", False)
             )
             if mismatch:
-                run.status = RunStatus.waiting_for_action
-                run.error = "Executable steps differ from the immutable approved plan"
+                transition_run(
+                    run,
+                    RunStatus.waiting_for_action,
+                    reason="executable_plan_mismatch",
+                    actor="run-supervisor",
+                    phase="execution",
+                    supervisor_status="operator_attention",
+                    error="Executable steps differ from the immutable approved plan",
+                    dispatch=None,
+                    metadata={"step_id": stored.id},
+                )
                 await audit(
                     session,
                     workspace_id,
@@ -995,8 +1193,18 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
         if preflight.status != "passed":
             return
 
-        run.status = RunStatus.running
-        run.error = None
+        transition_run(
+            run,
+            RunStatus.running,
+            reason="execution_preflight_passed",
+            actor="run-supervisor",
+            phase="execution",
+            supervisor_status="active",
+            error=None,
+            blocker=None,
+            dispatch=None,
+            allow_same=True,
+        )
         await session.commit()
 
         outputs: list[dict] = []
@@ -1026,10 +1234,9 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             "reason": supervision.reason,
             "source": supervision_source,
             "delegations": [
-                delegation.model_dump(mode="json")
-                for delegation in supervision.delegations
+                delegation.model_dump(mode="json") for delegation in supervision.delegations
             ],
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(UTC).isoformat(),
         }
         run.execution_context = deepcopy(context)
         await audit(
@@ -1046,51 +1253,85 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             actor="senior-orchestrator",
         )
         if supervision.action == "pause":
-            run.status = RunStatus.waiting_for_action
-            run.error = (
-                "The Senior Orchestrator paused execution for review: "
-                f"{supervision.reason}"
+            message = f"The Senior Orchestrator paused execution for review: {supervision.reason}"
+            transition_run(
+                run,
+                RunStatus.waiting_for_action,
+                reason="execution_supervisor_paused",
+                actor="senior-orchestrator",
+                phase="execution",
+                supervisor_status="operator_attention",
+                error=message,
+                dispatch=None,
             )
             await session.commit()
             return
-        delegations = {
-            delegation.step_key: delegation
-            for delegation in supervision.delegations
-        }
+        delegations = {delegation.step_key: delegation for delegation in supervision.delegations}
         await session.commit()
         step_by_key = {step.step_key: step for step in steps}
         for step in steps:
             from .parallel_reads import prefetch_ready_reads
-            await prefetch_ready_reads(session, run, steps, step.position, snapshot, context, outputs)
+
+            await prefetch_ready_reads(
+                session, run, steps, step.position, snapshot, context, outputs
+            )
             materialized_for_approval = False
             recorded_result = isinstance(step.output, dict) and "provider_result" in step.output
             if recorded_result and step.output.get("critic", {}).get("action") != "accept":
                 from .verification_recovery import verification_due
+
                 if not verification_due(step):
                     return
-                contract = {**plan_steps[step.position], "step_id": step.id,
-                            "arguments": step.output.get("resolved_arguments", step.arguments)}
-                criticism = await review_recorded_result(session, run, step, snapshot, contract, step.output["provider_result"])
+                contract = {
+                    **plan_steps[step.position],
+                    "step_id": step.id,
+                    "arguments": step.output.get("resolved_arguments", step.arguments),
+                }
+                criticism = await review_recorded_result(
+                    session, run, step, snapshot, contract, step.output["provider_result"]
+                )
                 step.output = {**step.output, "critic": criticism.model_dump(mode="json")}
-                await audit(session, workspace_id, "step.review_resumed",
-                            {"step_id": step.id, "decision": criticism.model_dump(mode="json")}, run.id)
+                await audit(
+                    session,
+                    workspace_id,
+                    "step.review_resumed",
+                    {"step_id": step.id, "decision": criticism.model_dump(mode="json")},
+                    run.id,
+                )
                 if criticism.action != "accept":
                     from .verification_recovery import defer_verification
+
                     if await defer_verification(session, run, step):
                         return
                     step.status = StepStatus.failed
-                    run.status = RunStatus.waiting_for_action
-                    step.error = run.error = "Recorded result needs review; no provider action was repeated."
-                    run.result = _partial_result(outputs, step, run.error)
+                    step.error = "Recorded result needs review; no provider action was repeated."
+                    transition_run(
+                        run,
+                        RunStatus.waiting_for_action,
+                        reason="recorded_result_review_incomplete",
+                        actor="outcome-checker",
+                        phase="verification",
+                        supervisor_status="recovering",
+                        error=step.error,
+                        result=_partial_result(outputs, step, step.error),
+                        dispatch=None,
+                        metadata={"step_id": step.id},
+                    )
                     await session.commit()
                     return
                 step.status = StepStatus.completed
                 step.error = None
-                step.completed_at = datetime.now(timezone.utc)
-                session.add(Artifact(workspace_id=workspace_id, run_id=run.id,
-                                     step_id=step.id, accepted=True,
-                                     provenance={"plan_hash": snapshot.plan_hash, "review_resumed": True},
-                                     content=step.output))
+                step.completed_at = datetime.now(UTC)
+                session.add(
+                    Artifact(
+                        workspace_id=workspace_id,
+                        run_id=run.id,
+                        step_id=step.id,
+                        accepted=True,
+                        provenance={"plan_hash": snapshot.plan_hash, "review_resumed": True},
+                        content=step.output,
+                    )
+                )
                 await session.commit()
             if recorded_result:
                 step.status = StepStatus.completed
@@ -1101,9 +1342,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 )
                 for name, value in step.output_variables.items():
                     try:
-                        context.setdefault("vars", {})[name] = resolve_value(
-                            value, context
-                        )
+                        context.setdefault("vars", {})[name] = resolve_value(value, context)
                     except WorkflowContextError:
                         logger.warning(
                             "Skipping unavailable output alias while preserving "
@@ -1178,7 +1417,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             context,
                         )
                         materialized_for_approval = True
-                    except Exception as recovery_exc:  # noqa: BLE001
+                    except Exception as recovery_exc:
                         internal_error = str(recovery_exc)
                         logger.exception(
                             "Approval argument recovery failed run_id=%s step_id=%s error_type=%s",
@@ -1188,8 +1427,17 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         )
                         step.status = StepStatus.failed
                         step.error = _friendly_execution_error(internal_error)
-                        run.status = RunStatus.waiting_for_action
-                        run.error = step.error
+                        transition_run(
+                            run,
+                            RunStatus.waiting_for_action,
+                            reason="approval_argument_resolution_exhausted",
+                            actor="recovery-engineer",
+                            phase="execution",
+                            supervisor_status="recovering",
+                            error=step.error,
+                            dispatch=None,
+                            metadata={"step_id": step.id},
+                        )
                         await audit(
                             session,
                             workspace_id,
@@ -1203,12 +1451,22 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     internal_error = str(exc)
                     logger.exception(
                         "Workflow input resolution failed run_id=%s step_id=%s",
-                        run.id, step.id,
+                        run.id,
+                        step.id,
                     )
                     step.status = StepStatus.failed
                     step.error = _friendly_execution_error(internal_error)
-                    run.status = RunStatus.waiting_for_action
-                    run.error = step.error
+                    transition_run(
+                        run,
+                        RunStatus.waiting_for_action,
+                        reason="workflow_variable_resolution_failed",
+                        actor="recovery-engineer",
+                        phase="execution",
+                        supervisor_status="recovering",
+                        error=step.error,
+                        dispatch=None,
+                        metadata={"step_id": step.id},
+                    )
                     await audit(
                         session,
                         workspace_id,
@@ -1224,8 +1482,17 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 if not approval or approval.status != "pending":
                     step.status = StepStatus.failed
                     step.error = "AURA is safely rebuilding this approval."
-                    run.status = RunStatus.waiting_for_action
-                    run.error = step.error
+                    transition_run(
+                        run,
+                        RunStatus.waiting_for_action,
+                        reason="approval_record_missing",
+                        actor="run-supervisor",
+                        phase="execution",
+                        supervisor_status="recovering",
+                        error=step.error,
+                        dispatch=None,
+                        metadata={"step_id": step.id},
+                    )
                     await session.commit()
                     return
                 tool = await session.scalar(
@@ -1236,8 +1503,27 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     )
                 )
                 if not tool:
-                    run.status = RunStatus.waiting_for_action
-                    run.error = "This app connection needs your attention before AURA can continue."
+                    message = "This app connection needs your attention before AURA can continue."
+                    blocker = {
+                        "kind": "human_action",
+                        "code": "connection_required",
+                        "message": message,
+                        "action": "connect_account",
+                        "tool_slug": step.tool_slug,
+                        "retryable": False,
+                    }
+                    transition_run(
+                        run,
+                        RunStatus.waiting_for_action,
+                        reason="approval_connection_unavailable",
+                        actor="connection-supervisor",
+                        phase="connection",
+                        supervisor_status="human_action_required",
+                        error=message,
+                        blocker=blocker,
+                        dispatch=None,
+                        metadata={"step_id": step.id},
+                    )
                     await session.commit()
                     return
                 manifest_record = await session.scalar(
@@ -1255,12 +1541,29 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         canonical_action_arguments,
                         requires_content_composition,
                     )
-                    resolved_arguments = canonical_action_arguments(step.operation, resolved_arguments, context)
-                    capability = next((m for m in manifest.get("capabilities", []) if m.get("name") == step.operation), {})
-                    if not materialized_for_approval and (step.operation == 'canva.presentation.create' or requires_content_composition(
-                        plan_steps[step.position].get("arguments", {}), capability.get("input_schema", {}), context
-                    )):
-                        raise NativeConnectorError("Structured source evidence requires readable content composition before approval")
+
+                    resolved_arguments = canonical_action_arguments(
+                        step.operation, resolved_arguments, context
+                    )
+                    capability = next(
+                        (
+                            m
+                            for m in manifest.get("capabilities", [])
+                            if m.get("name") == step.operation
+                        ),
+                        {},
+                    )
+                    if not materialized_for_approval and (
+                        step.operation == "canva.presentation.create"
+                        or requires_content_composition(
+                            plan_steps[step.position].get("arguments", {}),
+                            capability.get("input_schema", {}),
+                            context,
+                        )
+                    ):
+                        raise NativeConnectorError(
+                            "Structured source evidence requires readable content composition before approval"
+                        )
                     resolved_arguments = normalize_module_arguments(
                         manifest, step.operation, resolved_arguments
                     )
@@ -1278,10 +1581,8 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                                 manifest, step.operation, resolved_arguments
                             )
                             if referenced_paths(resolved_arguments):
-                                raise NativeConnectorError(
-                                    "Approval arguments are not concrete"
-                                )
-                        except Exception as recovery_exc:  # noqa: BLE001
+                                raise NativeConnectorError("Approval arguments are not concrete")
+                        except Exception as recovery_exc:
                             logger.exception(
                                 "Approval argument validation recovery failed "
                                 "run_id=%s step_id=%s error_type=%s",
@@ -1291,13 +1592,26 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             )
                             step.status = StepStatus.failed
                             step.error = _friendly_execution_error(str(recovery_exc))
-                            run.status = RunStatus.waiting_for_action
-                            run.error = step.error
+                            transition_run(
+                                run,
+                                RunStatus.waiting_for_action,
+                                reason="approval_argument_validation_recovery_exhausted",
+                                actor="recovery-engineer",
+                                phase="execution",
+                                supervisor_status="recovering",
+                                error=step.error,
+                                dispatch=None,
+                                metadata={"step_id": step.id},
+                            )
                             await audit(
                                 session,
                                 workspace_id,
                                 "step.approval_argument_validation_recovery_exhausted",
-                                {"step_id": step.id, "internal_error": str(recovery_exc), "phase": "preparing_arguments"},
+                                {
+                                    "step_id": step.id,
+                                    "internal_error": str(recovery_exc),
+                                    "phase": "preparing_arguments",
+                                },
                                 run.id,
                             )
                             await session.commit()
@@ -1310,8 +1624,17 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         )
                         step.status = StepStatus.failed
                         step.error = _friendly_execution_error(str(exc))
-                        run.status = RunStatus.waiting_for_action
-                        run.error = step.error
+                        transition_run(
+                            run,
+                            RunStatus.waiting_for_action,
+                            reason="approval_argument_validation_failed",
+                            actor="recovery-engineer",
+                            phase="execution",
+                            supervisor_status="recovering",
+                            error=step.error,
+                            dispatch=None,
+                            metadata={"step_id": step.id},
+                        )
                         await audit(
                             session,
                             workspace_id,
@@ -1321,17 +1644,43 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         )
                         await session.commit()
                         return
-                if step.operation == 'gmail.send' and resolved_arguments.get('attachments'):
+                if step.operation == "gmail.send" and resolved_arguments.get("attachments"):
                     from .file_delivery import prepare_attachments
+
                     # Exact URLs from verified completed exports in this tenant/run.
-                    exports = [s.output for s in steps if s.status == StepStatus.completed
-                        and s.operation == 'canva.export.create' and s.output.get('outcome_check', {}).get('status') == 'verified']
-                    urls = {url for output in exports for url in output.get('outcome_check', {}).get('observed', {}).get('job', {}).get('urls', [])}
+                    exports = [
+                        s.output
+                        for s in steps
+                        if s.status == StepStatus.completed
+                        and s.operation == "canva.export.create"
+                        and s.output.get("outcome_check", {}).get("status") == "verified"
+                    ]
+                    urls = {
+                        url
+                        for output in exports
+                        for url in output.get("outcome_check", {})
+                        .get("observed", {})
+                        .get("job", {})
+                        .get("urls", [])
+                    }
                     try:
                         resolved_arguments = await prepare_attachments(resolved_arguments, urls)
                     except Exception:
-                        run.status = RunStatus.waiting_for_action
-                        run.error = 'PDF preparation failed before sending. The completed Canva export is preserved; retry file preparation.'
+                        message = (
+                            "PDF preparation failed before sending. The completed Canva "
+                            "export is preserved; retry file preparation."
+                        )
+                        transition_run(
+                            run,
+                            RunStatus.waiting_for_action,
+                            reason="attachment_preparation_failed",
+                            actor="recovery-engineer",
+                            phase="execution",
+                            supervisor_status="recovering",
+                            error=message,
+                            dispatch=None,
+                            metadata={"step_id": step.id},
+                        )
                         await session.commit()
                         return
                 approval.preview = {
@@ -1340,7 +1689,24 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     "arguments": resolved_arguments,
                 }
                 run.execution_context = deepcopy(context)
-                run.status = RunStatus.awaiting_approval
+                transition_run(
+                    run,
+                    RunStatus.awaiting_approval,
+                    reason="consequential_step_ready_for_approval",
+                    actor="senior-orchestrator",
+                    phase="approval",
+                    supervisor_status="human_action_required",
+                    blocker={
+                        "kind": "human_action",
+                        "code": "external_submission_approval_required",
+                        "message": "Review this consequential action before it is submitted.",
+                        "action": "review_step",
+                        "step_id": step.id,
+                        "retryable": False,
+                    },
+                    dispatch=None,
+                    metadata={"step_id": step.id, "operation": step.operation},
+                )
                 await audit(
                     session,
                     workspace_id,
@@ -1360,25 +1726,63 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             )
             if not tool:
                 step.status = StepStatus.failed
-                run.status = RunStatus.waiting_for_action
-                run.error = f"Tool {step.tool_slug!r} is unavailable"
-                run.result = _partial_result(outputs, step, run.error)
+                message = f"Tool {step.tool_slug!r} is unavailable"
+                blocker = {
+                    "kind": "human_action",
+                    "code": "connection_required",
+                    "message": message,
+                    "action": "connect_account",
+                    "tool_slug": step.tool_slug,
+                    "retryable": False,
+                }
+                transition_run(
+                    run,
+                    RunStatus.waiting_for_action,
+                    reason="execution_connection_unavailable",
+                    actor="connection-supervisor",
+                    phase="connection",
+                    supervisor_status="human_action_required",
+                    error=message,
+                    result=_partial_result(outputs, step, message),
+                    blocker=blocker,
+                    dispatch=None,
+                    metadata={"step_id": step.id},
+                )
                 await session.commit()
                 return
 
             if (run.execution_context or {}).get("execution_mode") == "unattended":
                 from .assurance import operation_readiness
+
                 readiness = await operation_readiness(session, workspace_id, tool, step.operation)
                 if not readiness["execution_ready"]:
-                    run.status = RunStatus.waiting_for_action
-                    run.error = "Operation certification is required for unattended execution"
-                    run.result = {**(run.result or {}), "readiness": readiness}
+                    transition_run(
+                        run,
+                        RunStatus.blocked,
+                        reason="operation_certification_required",
+                        actor="assurance-controller",
+                        phase="execution",
+                        supervisor_status="operator_attention",
+                        error="Operation certification is required for unattended execution",
+                        result={**(run.result or {}), "readiness": readiness},
+                        dispatch=None,
+                        metadata={"step_id": step.id, "operation": step.operation},
+                    )
                     await session.commit()
                     return
             trust = await _trust_state(session, workspace_id, tool)
             if trust.incident_active:
-                run.status = RunStatus.waiting_for_action
-                run.error = "Connector incident is active; execution is paused"
+                transition_run(
+                    run,
+                    RunStatus.waiting_for_action,
+                    reason="connector_incident_active",
+                    actor="connection-supervisor",
+                    phase="connection",
+                    supervisor_status="recovering",
+                    error="Connector incident is active; execution is paused",
+                    dispatch=None,
+                    metadata={"step_id": step.id, "tool_slug": tool.slug},
+                )
                 await session.commit()
                 return
             approved_permissions = snapshot.permission_snapshot.get(tool.slug, [])
@@ -1412,9 +1816,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 )
                 await session.commit()
             runtime_decision = runtime_policy_check(
-                approved_cost=float(
-                    snapshot.cost_snapshot.get("estimated_cost_usd", 0.0)
-                ),
+                approved_cost=float(snapshot.cost_snapshot.get("estimated_cost_usd", 0.0)),
                 actual_cost=actual_cost,
                 approved_permissions=approved_permissions,
                 current_permissions=tool.allowed_operations,
@@ -1423,15 +1825,25 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 policy=snapshot.policy_snapshot,
             )
             if runtime_decision["action"] in {"pause", "block"}:
-                run.status = (
+                target_status = (
                     RunStatus.blocked
                     if runtime_decision["action"] == "block"
                     else RunStatus.waiting_for_action
                 )
                 step.status = StepStatus.failed
                 step.error = "; ".join(runtime_decision["reasons"])
-                run.error = step.error
-                run.result = _partial_result(outputs, step, step.error)
+                transition_run(
+                    run,
+                    target_status,
+                    reason=f"runtime_policy_{runtime_decision['action']}",
+                    actor="policy-governor",
+                    phase="execution",
+                    supervisor_status="operator_attention",
+                    error=step.error,
+                    result=_partial_result(outputs, step, step.error),
+                    dispatch=None,
+                    metadata={"step_id": step.id},
+                )
                 await audit(
                     session,
                     workspace_id,
@@ -1453,7 +1865,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 )
 
             step.status = StepStatus.running
-            step.started_at = datetime.now(timezone.utc)
+            step.started_at = datetime.now(UTC)
             run.updated_at = step.started_at
             await audit(
                 session,
@@ -1468,16 +1880,36 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 active_tool: ToolConnection, operation: str, arguments: dict
             ) -> tuple[dict | None, str | None]:
                 consequential = step.consequential or operation_scope(operation) != "read"
-                if operation == 'gmail.send' and arguments.get('attachments'):
-                    permitted_urls = {url for s in steps if s.operation == 'canva.export.create'
-                        and s.status == StepStatus.completed and s.output.get('outcome_check', {}).get('status') == 'verified'
-                        for url in s.output.get('outcome_check', {}).get('observed', {}).get('job', {}).get('urls', [])}
-                    if any(item.get('url') not in permitted_urls for item in arguments['attachments']):
-                        return None, '[invalid_request] Attachments must come from verified exports in this run'
+                if operation == "gmail.send" and arguments.get("attachments"):
+                    permitted_urls = {
+                        url
+                        for s in steps
+                        if s.operation == "canva.export.create"
+                        and s.status == StepStatus.completed
+                        and s.output.get("outcome_check", {}).get("status") == "verified"
+                        for url in s.output.get("outcome_check", {})
+                        .get("observed", {})
+                        .get("job", {})
+                        .get("urls", [])
+                    }
+                    if any(
+                        item.get("url") not in permitted_urls for item in arguments["attachments"]
+                    ):
+                        return (
+                            None,
+                            "[invalid_request] Attachments must come from verified exports in this run",
+                        )
                 from .extended_outcomes import required_reads
+
                 verification_reads = required_reads(operation, arguments)
-                if not verification_reads <= (set(active_tool.allowed_operations) & set(snapshot.permission_snapshot.get(active_tool.slug, []))):
-                    return None, "[authorization_required] Read-back permissions must be approved before the write"
+                if not verification_reads <= (
+                    set(active_tool.allowed_operations)
+                    & set(snapshot.permission_snapshot.get(active_tool.slug, []))
+                ):
+                    return (
+                        None,
+                        "[authorization_required] Read-back permissions must be approved before the write",
+                    )
                 active_trust = await _trust_state(session, workspace_id, active_tool)
                 all_existing = (
                     await session.scalars(
@@ -1494,7 +1926,15 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 )
                 if existing:
                     latest = max(existing, key=lambda item: item.attempt_number)
-                    if (latest.error or "").startswith(("[authorization_required]", "[invalid_request]", "[contract_or_runtime_error]", "[budget_exhausted]", "[rate_limited]")):
+                    if (latest.error or "").startswith(
+                        (
+                            "[authorization_required]",
+                            "[invalid_request]",
+                            "[contract_or_runtime_error]",
+                            "[budget_exhausted]",
+                            "[rate_limited]",
+                        )
+                    ):
                         return None, latest.error
                 if consequential and existing:
                     if operation in RECONCILIABLE_WRITES:
@@ -1503,22 +1943,41 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         check = await check_provider_outcome(session, run, step, snapshot)
                         if check.get("status") == "verified":
                             observed = check["observed"]
-                            step.output = {"step_id": step.id, "provider_result": observed, "tool": active_tool.slug,
-                                "operation": operation, "resolved_arguments": arguments,
-                                "outcome_check": check, "reconciliation": {"status": "verified", "meaning": "requested_state_confirmed"},
-                                "critic": {"action": "escalate", "reasons": ["Review pending"]}}
-                            await audit(session, workspace_id, "step.uncertain_write_reconciled", {"step_id": step.id}, run.id)
+                            step.output = {
+                                "step_id": step.id,
+                                "provider_result": observed,
+                                "tool": active_tool.slug,
+                                "operation": operation,
+                                "resolved_arguments": arguments,
+                                "outcome_check": check,
+                                "reconciliation": {
+                                    "status": "verified",
+                                    "meaning": "requested_state_confirmed",
+                                },
+                                "critic": {"action": "escalate", "reasons": ["Review pending"]},
+                            }
+                            await audit(
+                                session,
+                                workspace_id,
+                                "step.uncertain_write_reconciled",
+                                {"step_id": step.id},
+                                run.id,
+                            )
                             await session.commit()
                             return observed, None
                         await session.commit()
-                    return None, "Previous action outcome is uncertain; reconcile provider state before a new approved action"
+                    return (
+                        None,
+                        "Previous action outcome is uncertain; reconcile provider state before a new approved action",
+                    )
                 max_retries = (
-                    0
-                    if consequential
-                    else int(snapshot.policy_snapshot["max_retries_per_step"])
+                    0 if consequential else int(snapshot.policy_snapshot["max_retries_per_step"])
                 )
                 from .reliability import classify_failure
-                remaining = min(max_retries + 1, get_settings().max_provider_attempts) - len(existing)
+
+                remaining = min(max_retries + 1, get_settings().max_provider_attempts) - len(
+                    existing
+                )
                 if remaining <= 0:
                     return None, "Provider attempt budget exhausted; recorded work is preserved"
                 backoffs = list(snapshot.policy_snapshot["retry_backoff_seconds"]) or [1]
@@ -1553,6 +2012,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     timed_out = False
                     try:
                         from .reliability import BudgetExceeded, model_budget
+
                         budget = model_budget.get()
                         if budget and time.monotonic() >= budget.deadline:
                             raise BudgetExceeded("Delivery time budget exhausted")
@@ -1612,15 +2072,19 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         )
                         result = await asyncio.wait_for(
                             executor.execute(operation, arguments),
-                            timeout=min(float(snapshot.policy_snapshot["step_timeout_seconds"]),
-                                        max(0.01, budget.deadline - time.monotonic())) if budget else float(snapshot.policy_snapshot["step_timeout_seconds"]),
+                            timeout=min(
+                                float(snapshot.policy_snapshot["step_timeout_seconds"]),
+                                max(0.01, budget.deadline - time.monotonic()),
+                            )
+                            if budget
+                            else float(snapshot.policy_snapshot["step_timeout_seconds"]),
                         )
                         if _provider_result_is_malformed(result):
                             raise ValueError("Provider returned an empty or malformed response")
                         latency = (time.perf_counter() - started) * 1000
                         attempt.status = "succeeded"
                         attempt.latency_ms = latency
-                        attempt.completed_at = datetime.now(timezone.utc)
+                        attempt.completed_at = datetime.now(UTC)
                         _update_trust(
                             active_trust,
                             succeeded=True,
@@ -1628,8 +2092,10 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             latency_ms=latency,
                         )
                         step.output = {
-                            "step_id": step.id, "provider_result": result,
-                            "tool": active_tool.slug, "operation": operation,
+                            "step_id": step.id,
+                            "provider_result": result,
+                            "tool": active_tool.slug,
+                            "operation": operation,
                             "resolved_arguments": arguments,
                             "critic": {"action": "escalate", "reasons": ["Review pending"]},
                         }
@@ -1638,14 +2104,17 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         step.operation = operation
                         await session.commit()
                         return result, None
-                    except asyncio.TimeoutError as exc:
+                    except TimeoutError as exc:
                         failure = classify_failure(exc, read=not consequential)
                         timed_out = True
                         last_error = "Step timed out"
                         failure_impacts_trust = _failure_impacts_trust(exc)
                         logger.exception(
                             "Workflow step timed out run_id=%s step_id=%s tool=%s operation=%s",
-                            run.id, step.id, active_tool.slug, operation,
+                            run.id,
+                            step.id,
+                            active_tool.slug,
+                            operation,
                         )
                     except Exception as exc:
                         failure = classify_failure(exc, read=not consequential)
@@ -1653,14 +2122,18 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         failure_impacts_trust = _failure_impacts_trust(exc)
                         logger.exception(
                             "Workflow step failed run_id=%s step_id=%s tool=%s operation=%s error_type=%s",
-                            run.id, step.id, active_tool.slug, operation, type(exc).__name__,
+                            run.id,
+                            step.id,
+                            active_tool.slug,
+                            operation,
+                            type(exc).__name__,
                         )
                     latency = (time.perf_counter() - started) * 1000
                     attempt.status = "failed"
                     last_error = f"[{failure.category}] {last_error}"
                     attempt.error = last_error
                     attempt.latency_ms = latency
-                    attempt.completed_at = datetime.now(timezone.utc)
+                    attempt.completed_at = datetime.now(UTC)
                     if failure_impacts_trust:
                         _update_trust(
                             active_trust,
@@ -1720,9 +2193,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     directive.arguments,
                 )
 
-            result, error = await delegated_call(
-                tool, step.operation, resolved_arguments
-            )
+            result, error = await delegated_call(tool, step.operation, resolved_arguments)
             if (
                 not error
                 and result is not None
@@ -1740,9 +2211,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 "[contract_or_runtime_error]",
                 "[execution_agent_escalated]",
             )
-            recovery_blocked = bool(
-                error and error.startswith(recovery_blocked_prefixes)
-            )
+            recovery_blocked = bool(error and error.startswith(recovery_blocked_prefixes))
             if error and not recovery_blocked and fallback_slug and fallback_operation:
                 fallback = await session.scalar(
                     select(ToolConnection).where(
@@ -1752,19 +2221,15 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     )
                 )
                 fallback_trust = (
-                    await _trust_state(session, workspace_id, fallback)
-                    if fallback
-                    else None
+                    await _trust_state(session, workspace_id, fallback) if fallback else None
                 )
                 fallback_allowed = (
                     fallback
                     and fallback_operation in fallback.allowed_operations
-                    and fallback_operation
-                    in snapshot.permission_snapshot.get(fallback.slug, [])
+                    and fallback_operation in snapshot.permission_snapshot.get(fallback.slug, [])
                     and fallback_trust.score
                     >= float(snapshot.policy_snapshot["trust_execution_floor"])
-                    and operation_scope(fallback_operation)
-                    == operation_scope(step.operation)
+                    and operation_scope(fallback_operation) == operation_scope(step.operation)
                     and operation_scope(fallback_operation) == "read"
                 )
                 if fallback_allowed:
@@ -1792,9 +2257,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             resolved_arguments,
                         )
 
-            recovery_blocked = bool(
-                error and error.startswith(recovery_blocked_prefixes)
-            )
+            recovery_blocked = bool(error and error.startswith(recovery_blocked_prefixes))
 
             reduced_arguments = approved_step.get("reduced_scope_arguments")
             if (
@@ -1812,7 +2275,16 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     run.id,
                 )
                 resolved_reduced_arguments = resolve_value(reduced_arguments, context)
-                capability = next((m for m in _current_capability_manifest(tool.slug, None).get("capabilities", []) if m.get("name") == step.operation), {})
+                capability = next(
+                    (
+                        m
+                        for m in _current_capability_manifest(tool.slug, None).get(
+                            "capabilities", []
+                        )
+                        if m.get("name") == step.operation
+                    ),
+                    {},
+                )
                 for key, schema in capability.get("input_schema", {}).get("properties", {}).items():
                     if schema.get("x-preserve-on-recovery") and key in resolved_arguments:
                         resolved_reduced_arguments[key] = resolved_arguments[key]
@@ -1829,12 +2301,27 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 step.status = StepStatus.failed
                 internal_error = error or "Tool execution failed"
                 step.error = _friendly_execution_error(internal_error)
-                if run.cancellation_requested:
-                    run.status = RunStatus.cancelled
-                else:
-                    run.status = RunStatus.waiting_for_action
-                run.error = step.error
-                run.result = _partial_result(outputs, step, step.error)
+                target_status = (
+                    RunStatus.cancelled
+                    if run.cancellation_requested
+                    else RunStatus.waiting_for_action
+                )
+                transition_run(
+                    run,
+                    target_status,
+                    reason=(
+                        "cancellation_observed_after_attempt"
+                        if run.cancellation_requested
+                        else "step_recovery_exhausted"
+                    ),
+                    actor="senior-orchestrator",
+                    phase="execution",
+                    supervisor_status=("cancelled" if run.cancellation_requested else "recovering"),
+                    error=step.error,
+                    result=_partial_result(outputs, step, step.error),
+                    dispatch=None,
+                    metadata={"step_id": step.id},
+                )
                 attempts = (
                     await session.scalars(select(StepAttempt).where(StepAttempt.step_id == step.id))
                 ).all()
@@ -1846,18 +2333,20 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         )
                     )
                     if not existing_dead_letter:
-                        session.add(DeadLetterEntry(
-                            workspace_id=workspace_id,
-                            run_id=run.id,
-                            step_id=step.id,
-                            error=internal_error,
-                            attempt_count=len(attempts),
-                            payload={
-                                "tool_slug": step.tool_slug,
-                                "operation": step.operation,
-                                "arguments": resolved_arguments,
-                            },
-                        ))
+                        session.add(
+                            DeadLetterEntry(
+                                workspace_id=workspace_id,
+                                run_id=run.id,
+                                step_id=step.id,
+                                error=internal_error,
+                                attempt_count=len(attempts),
+                                payload={
+                                    "tool_slug": step.tool_slug,
+                                    "operation": step.operation,
+                                    "arguments": resolved_arguments,
+                                },
+                            )
+                        )
                 await audit(
                     session,
                     workspace_id,
@@ -1889,23 +2378,33 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             )
             if criticism.action != "accept":
                 from .verification_recovery import defer_verification
+
                 if await defer_verification(session, run, step):
                     return
                 internal_error = f"Runtime critic {criticism.action}: " + "; ".join(
-                    criticism.reasons
-                    + criticism.contract_failures
-                    + criticism.policy_violations
+                    criticism.reasons + criticism.contract_failures + criticism.policy_violations
                 )
                 logger.error(
                     "Workflow output rejected run_id=%s step_id=%s detail=%s",
-                    run.id, step.id, internal_error,
+                    run.id,
+                    step.id,
+                    internal_error,
                 )
                 step.output = {**step.output, "critic": criticism.model_dump(mode="json")}
                 step.status = StepStatus.failed
                 step.error = "Provider result was recorded but did not pass review."
-                run.status = RunStatus.waiting_for_action
-                run.error = step.error
-                run.result = _partial_result(outputs, step, step.error)
+                transition_run(
+                    run,
+                    RunStatus.waiting_for_action,
+                    reason="provider_result_review_rejected",
+                    actor="tool-output-critic",
+                    phase="verification",
+                    supervisor_status="recovering",
+                    error=step.error,
+                    result=_partial_result(outputs, step, step.error),
+                    dispatch=None,
+                    metadata={"step_id": step.id},
+                )
                 await session.commit()
                 return
 
@@ -1919,7 +2418,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 "critic": criticism.model_dump(mode="json"),
                 "outcome_check": step.output.get("outcome_check", {"status": "unsupported"}),
             }
-            step.completed_at = datetime.now(timezone.utc)
+            step.completed_at = datetime.now(UTC)
             run.updated_at = step.completed_at
             outputs.append(step.output)
             context.setdefault("steps", {})[step.step_key] = step_context_value(
@@ -1932,7 +2431,8 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 internal_error = str(exc)
                 logger.exception(
                     "Workflow output mapping failed run_id=%s step_id=%s",
-                    run.id, step.id,
+                    run.id,
+                    step.id,
                 )
                 await audit(
                     session,
@@ -1955,9 +2455,18 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     run.execution_context = deepcopy(context)
                     step.status = StepStatus.failed
                     step.error = _friendly_execution_error(internal_error)
-                    run.status = RunStatus.waiting_for_action
-                    run.error = step.error
-                    run.result = _partial_result(outputs, step, step.error)
+                    transition_run(
+                        run,
+                        RunStatus.waiting_for_action,
+                        reason="step_output_mapping_failed",
+                        actor="recovery-engineer",
+                        phase="execution",
+                        supervisor_status="recovering",
+                        error=step.error,
+                        result=_partial_result(outputs, step, step.error),
+                        dispatch=None,
+                        metadata={"step_id": step.id},
+                    )
                     await session.commit()
                     return
             run.execution_context = deepcopy(context)
@@ -1985,27 +2494,38 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             )
             await session.commit()
             from .recovery_probe import yield_after_checkpoint
+
             if await yield_after_checkpoint(session, run, step):
                 return
 
         required_incomplete = [
             step
             for step, approved in zip(steps, plan_steps, strict=True)
-            if not approved.get("optional", False)
-            and step.status != StepStatus.completed
+            if not approved.get("optional", False) and step.status != StepStatus.completed
         ]
         if required_incomplete:
-            run.status = RunStatus.failed
-            run.error = (
+            message = (
                 "AURA couldn't complete every required step after trying the safe "
                 "recovery options. No completed work was repeated."
             )
-            run.result = {
+            incomplete_result = {
                 "partial": bool(outputs),
                 "completed_steps": len(outputs),
                 "outputs": outputs,
                 "incomplete_steps": [step.step_key for step in required_incomplete],
             }
+            transition_run(
+                run,
+                RunStatus.failed,
+                reason="required_steps_incomplete",
+                actor="senior-orchestrator",
+                phase="execution",
+                supervisor_status="recovering",
+                error=message,
+                result=incomplete_result,
+                dispatch=None,
+                metadata={"incomplete_steps": [step.step_key for step in required_incomplete]},
+            )
             logger.error(
                 "Workflow incomplete run_id=%s required_steps=%s statuses=%s",
                 run.id,
@@ -2039,62 +2559,150 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
         outputs = [step.output for step in steps if step.status == StepStatus.completed]
         synthesis = None
         if outcome_failures:
-            verification = OutcomeVerification(status="unverified",
-                reasons=["Provider read-back could not confirm: " + ", ".join(outcome_failures)])
+            verification = OutcomeVerification(
+                status="unverified",
+                reasons=["Provider read-back could not confirm: " + ", ".join(outcome_failures)],
+            )
         else:
             review_started = time.perf_counter()
             try:
                 prepared_evidence, evidence_cache, cache_hit = await prepare_final_review(
-                    run.prompt, run.plan, outputs, (run.execution_context or {}).get("final_review_evidence"))
+                    run.prompt,
+                    run.plan,
+                    outputs,
+                    (run.execution_context or {}).get("final_review_evidence"),
+                )
             except Exception as exc:
-                logger.warning("Final evidence preparation unavailable run_id=%s error_type=%s", run.id, type(exc).__name__)
-                run.status = RunStatus.waiting_for_action
-                run.error = "Delivery results are saved. Final review is temporarily unavailable; completed actions will not repeat."
-                run.result = {"partial": True, "completed_steps": len(outputs), "outputs": outputs,
-                              "verification": {"status": "unverified", "reasons": ["Final evidence preparation unavailable"]}}
+                logger.warning(
+                    "Final evidence preparation unavailable run_id=%s error_type=%s",
+                    run.id,
+                    type(exc).__name__,
+                )
+                message = (
+                    "Delivery results are saved. Final review is temporarily unavailable; "
+                    "completed actions will not repeat."
+                )
+                transition_run(
+                    run,
+                    RunStatus.waiting_for_action,
+                    reason="final_evidence_preparation_unavailable",
+                    actor="outcome-verifier",
+                    phase="verification",
+                    supervisor_status="recovering",
+                    error=message,
+                    result={
+                        "partial": True,
+                        "completed_steps": len(outputs),
+                        "outputs": outputs,
+                        "verification": {
+                            "status": "unverified",
+                            "reasons": ["Final evidence preparation unavailable"],
+                        },
+                    },
+                    dispatch=None,
+                )
                 await session.commit()
                 return
             preparation_ms = round((time.perf_counter() - review_started) * 1000)
-            run.execution_context = {**(run.execution_context or {}), "final_review_evidence": evidence_cache}
+            run.execution_context = {
+                **(run.execution_context or {}),
+                "final_review_evidence": evidence_cache,
+            }
             await session.commit()
             synthesis = await synthesize_result(run.prompt, outputs, prepared_evidence)
             if not synthesis.validation_passed:
-                verification = OutcomeVerification(status="unverified",
+                verification = OutcomeVerification(
+                    status="unverified",
                     reasons=["Final response did not pass validation"],
-                    required_fixes=synthesis.required_fixes)
-                await audit(session, workspace_id, "run.synthesis_rejected",
-                            {"required_fixes": synthesis.required_fixes}, run.id,
-                            actor="tool-output-critic")
+                    required_fixes=synthesis.required_fixes,
+                )
+                await audit(
+                    session,
+                    workspace_id,
+                    "run.synthesis_rejected",
+                    {"required_fixes": synthesis.required_fixes},
+                    run.id,
+                    actor="tool-output-critic",
+                )
             else:
                 verification = await verify_outcome(
-                    run.prompt, run.plan, outputs, synthesis.model_dump(mode="json"), prepared_evidence
+                    run.prompt,
+                    run.plan,
+                    outputs,
+                    synthesis.model_dump(mode="json"),
+                    prepared_evidence,
                 )
-            await audit(session, workspace_id, "run.final_review_metrics", {
-                "preparation_ms": preparation_ms, "evidence_cache_hit": cache_hit,
-                "total_ms": round((time.perf_counter() - review_started) * 1000),
-                "status": verification.status}, run.id)
+            await audit(
+                session,
+                workspace_id,
+                "run.final_review_metrics",
+                {
+                    "preparation_ms": preparation_ms,
+                    "evidence_cache_hit": cache_hit,
+                    "total_ms": round((time.perf_counter() - review_started) * 1000),
+                    "status": verification.status,
+                },
+                run.id,
+            )
         verification_data = verification.model_dump(mode="json")
-        await audit(session, workspace_id, "run.outcome_verified", verification_data,
-                    run.id, actor="outcome-verifier")
-        run.result = {"partial": verification.status != "verified", "completed_steps": len(outputs),
-                      "outputs": outputs, "verification": verification_data}
+        await audit(
+            session,
+            workspace_id,
+            "run.outcome_verified",
+            verification_data,
+            run.id,
+            actor="outcome-verifier",
+        )
+        run.result = {
+            "partial": verification.status != "verified",
+            "completed_steps": len(outputs),
+            "outputs": outputs,
+            "verification": verification_data,
+        }
         if synthesis is not None:
             run.result["unified_deliverable"] = synthesis.model_dump(mode="json")
         if verification.status != "verified":
-            logger.warning("Workflow final verification unresolved run_id=%s status=%s reasons=%s fixes=%s",
-                           run.id, verification.status, verification.reasons, verification.required_fixes)
-            run.status = RunStatus.waiting_for_action
-            run.error = "The requested outcome is not yet verified. Recorded actions will not be replayed."
+            logger.warning(
+                "Workflow final verification unresolved run_id=%s status=%s reasons=%s fixes=%s",
+                run.id,
+                verification.status,
+                verification.reasons,
+                verification.required_fixes,
+            )
+            transition_run(
+                run,
+                RunStatus.waiting_for_action,
+                reason="final_outcome_not_verified",
+                actor="outcome-verifier",
+                phase="verification",
+                supervisor_status="recovering",
+                error=(
+                    "The requested outcome is not yet verified. Recorded actions "
+                    "will not be replayed."
+                ),
+                result=run.result,
+                dispatch=None,
+            )
             await session.commit()
             return
-        run.status = RunStatus.completed
-        run.result = {
+        completed_result = {
             "partial": False,
             "completed_steps": len(outputs),
             "outputs": outputs,
             "unified_deliverable": synthesis.model_dump(mode="json"),
             "verification": verification_data,
         }
+        transition_run(
+            run,
+            RunStatus.completed,
+            reason="verified_completion",
+            actor="outcome-verifier",
+            phase="delivery",
+            supervisor_status="completed",
+            error=None,
+            result=completed_result,
+            blocker=None,
+        )
         await audit(session, workspace_id, "run.completed", run.result, run.id)
         await session.commit()
         # Completion atomically enqueues memory indexing off the response path.

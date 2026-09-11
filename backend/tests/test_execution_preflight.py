@@ -21,7 +21,9 @@ from app.models import (
 )
 from app.native_connectors import native_manifest
 from app.reliability import AuthorizationRequired
+from app.run_supervisor import transition_run
 from app.schemas import PlanStep, ResumeDecision, WorkflowPlan
+from app.security import CredentialVault
 
 
 @pytest.fixture
@@ -120,6 +122,117 @@ def _managed_client():
         ),
         get_credentials=AsyncMock(return_value={"access_token": "fixture-token"}),
     )
+
+
+async def test_native_oauth_is_refreshed_and_identity_probed(monkeypatch):
+    vault = CredentialVault()
+    tool = ToolConnection(
+        id="native",
+        workspace_id="w",
+        slug="notion",
+        display_name="Notion",
+        kind=ToolKind.oauth,
+        config={},
+        encrypted_credentials=vault.encrypt({"access_token": "old"}),
+    )
+    manifest = CapabilityManifest(
+        id="native-manifest",
+        workspace_id="w",
+        tool_id="native",
+        status="verified",
+        manifest=native_manifest("notion"),
+    )
+    refresh = AsyncMock(return_value=({"access_token": "fresh"}, True))
+    verify = AsyncMock(return_value={"ok": True, "identity": {"id": "account"}, "status_code": 200})
+    monkeypatch.setattr(execution_preflight, "refresh_oauth_credentials", refresh)
+    monkeypatch.setattr(execution_preflight, "verify_oauth_credentials", verify)
+
+    credentials, verification, blocker = await execution_preflight._connection_credentials(
+        None, tool, manifest
+    )
+
+    assert credentials == {"access_token": "fresh"}
+    assert verification["identity"]["id"] == "account"
+    assert blocker is None
+    assert vault.decrypt(tool.encrypted_credentials) == {"access_token": "fresh"}
+    refresh.assert_awaited_once()
+    verify.assert_awaited_once_with("notion", {"access_token": "fresh"})
+
+
+async def test_custom_oauth_refreshes_then_runs_generic_probe(monkeypatch):
+    vault = CredentialVault()
+    tool = ToolConnection(
+        id="custom",
+        workspace_id="w",
+        slug="custom-crm",
+        display_name="Custom CRM",
+        kind=ToolKind.oauth,
+        config={"oauth_custom": True, "token_url": "https://auth.example/token"},
+        encrypted_credentials=vault.encrypt({"access_token": "old", "refresh_token": "r"}),
+    )
+    manifest = CapabilityManifest(
+        id="custom-manifest",
+        workspace_id="w",
+        tool_id="custom",
+        status="verified",
+        manifest={"base_url": "https://api.example", "capabilities": []},
+    )
+    refresh = AsyncMock(return_value=({"access_token": "fresh", "refresh_token": "r"}, True))
+    probe = AsyncMock(return_value={"ok": True, "identity": {"id": "custom-account"}})
+    monkeypatch.setattr(execution_preflight, "_refresh_custom_oauth_credentials", refresh)
+    monkeypatch.setattr(execution_preflight, "verify_provider", probe)
+
+    credentials, verification, blocker = await execution_preflight._connection_credentials(
+        None, tool, manifest
+    )
+
+    assert credentials["access_token"] == "fresh"
+    assert verification["source"] == "execution_preflight_live_probe"
+    assert blocker is None
+    refresh.assert_awaited_once()
+    probe.assert_awaited_once()
+
+
+async def test_universal_connector_is_rediscovered_before_live_probe(monkeypatch):
+    vault = CredentialVault()
+    tool = ToolConnection(
+        id="universal",
+        workspace_id="w",
+        slug="acme",
+        display_name="Acme",
+        kind=ToolKind.openapi,
+        base_url="https://old.example/openapi.json",
+        config={"header_name": "X-Key"},
+        allowed_operations=["old.operation"],
+        encrypted_credentials=vault.encrypt({"api_key": "secret"}),
+    )
+    manifest = CapabilityManifest(
+        id="universal-manifest",
+        workspace_id="w",
+        tool_id="universal",
+        status="verified",
+        manifest={"base_url": "https://old.example", "capabilities": []},
+    )
+    refreshed = {
+        "base_url": "https://new.example",
+        "capabilities": [{"name": "records.search"}],
+    }
+    discover = AsyncMock(return_value=refreshed)
+    probe = AsyncMock(return_value={"ok": True, "status_code": 200})
+    monkeypatch.setattr(execution_preflight, "discover_provider", discover)
+    monkeypatch.setattr(execution_preflight, "verify_provider", probe)
+
+    credentials, verification, blocker = await execution_preflight._connection_credentials(
+        None, tool, manifest
+    )
+
+    assert credentials == {"api_key": "secret"}
+    assert verification["source"] == "execution_preflight_live_probe"
+    assert blocker is None
+    assert manifest.manifest == refreshed
+    assert tool.allowed_operations == ["records.search"]
+    discover.assert_awaited_once()
+    probe.assert_awaited_once_with(refreshed, {"api_key": "secret"})
 
 
 async def test_preflight_proves_connection_and_literal_resource_access(database, monkeypatch):
@@ -239,7 +352,13 @@ async def test_preflight_blocker_can_resume_after_reconnection(database, monkeyp
     monkeypatch.setattr(main, "dispatch_pending", dispatch)
     async with database() as session:
         run = await session.get(WorkflowRun, "run")
-        run.status = RunStatus.waiting_for_action
+        transition_run(
+            run,
+            RunStatus.waiting_for_action,
+            reason="test_fixture_reconnection_required",
+            actor="test",
+            dispatch=None,
+        )
         run.error = "Reconnect Google Workspace"
         run.result = {
             "blocker": {

@@ -1,0 +1,295 @@
+name: AURA isolated recovery pipeline
+
+on:
+  repository_dispatch:
+    types: [aura_recovery_incident]
+  workflow_dispatch:
+    inputs:
+      incident_id:
+        description: Recovery incident UUID
+        required: true
+      workspace_id:
+        description: Opaque workspace UUID
+        required: true
+      run_id:
+        description: Opaque run UUID
+        required: true
+      phase:
+        description: Failure phase
+        required: true
+        type: choice
+        options: [planning, connection, execution, verification, delivery, code]
+      category:
+        description: Typed failure category
+        required: true
+      fingerprint:
+        description: Content-free diagnostic fingerprint
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: aura-recovery-${{ github.event.client_payload.incident_id || inputs.incident_id }}
+  cancel-in-progress: false
+
+env:
+  RECOVERY_BASE_REF: python-control-plane
+  INCIDENT_ID: ${{ github.event.client_payload.incident_id || inputs.incident_id }}
+  WORKSPACE_ID: ${{ github.event.client_payload.workspace_id || inputs.workspace_id }}
+  RUN_ID: ${{ github.event.client_payload.run_id || inputs.run_id }}
+  FAILURE_PHASE: ${{ github.event.client_payload.phase || inputs.phase }}
+  FAILURE_CATEGORY: ${{ github.event.client_payload.category || inputs.category }}
+  FAILURE_FINGERPRINT: ${{ github.event.client_payload.fingerprint || inputs.fingerprint }}
+
+jobs:
+  repair:
+    name: Diagnose, repair, and test in isolation
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      branch: ${{ steps.publish.outputs.branch }}
+      base_sha: ${{ steps.metadata.outputs.base_sha }}
+      pr_url: ${{ steps.publish.outputs.pr_url }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RECOVERY_BASE_REF }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate content-free incident metadata
+        id: metadata
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import re
+
+          uuid = re.compile(r"^[0-9a-f-]{32,36}$")
+          fingerprint = re.compile(r"^[0-9a-f]{16,64}$")
+          category = re.compile(r"^[a-z][a-z0-9_]{1,79}$")
+          for name in ("INCIDENT_ID", "WORKSPACE_ID", "RUN_ID"):
+              if not uuid.fullmatch(os.environ[name]):
+                  raise SystemExit(f"invalid {name}")
+          if not fingerprint.fullmatch(os.environ["FAILURE_FINGERPRINT"]):
+              raise SystemExit("invalid FAILURE_FINGERPRINT")
+          if not category.fullmatch(os.environ["FAILURE_CATEGORY"]):
+              raise SystemExit("invalid FAILURE_CATEGORY")
+          if os.environ["FAILURE_PHASE"] not in {
+              "planning", "connection", "execution", "verification", "delivery", "code"
+          }:
+              raise SystemExit("invalid FAILURE_PHASE")
+          import subprocess
+          base_sha = subprocess.check_output(
+              ["git", "rev-parse", "HEAD"], text=True
+          ).strip()
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"base_sha={base_sha}\n")
+          PY
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install trusted dependencies before sandboxing
+        run: |
+          python -m pip install -e "backend[dev]"
+          npm install
+
+      - name: Run Codex Recovery Engineer
+        id: codex
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ":workspace"
+          working-directory: ${{ github.workspace }}
+          prompt: |
+            You are AURA's isolated Recovery Engineer. This checkout contains no
+            production credentials or user payloads. Diagnose the repository using
+            only this typed incident and reproducible tests:
+
+            phase=${{ env.FAILURE_PHASE }}
+            category=${{ env.FAILURE_CATEGORY }}
+            fingerprint=${{ env.FAILURE_FINGERPRINT }}
+
+            Reproduce the defect, make the smallest deterministic repair under
+            backend/app, and run the relevant tests. Never edit tests, workflows,
+            deployment files, database/security/identity/configuration boundaries,
+            or dependency manifests. Never weaken assertions, authorization,
+            approval, idempotency, tenant isolation, or receipt verification. Do
+            not inspect environment variables or attempt a deployment. Preserve
+            all completed-step and no-repeat-write guarantees. If no safe repair is
+            possible, leave the checkout unchanged and explain why.
+
+      - name: Enforce repair allowlist and immutable tests
+        run: >-
+          python backend/app/code_repair_sandbox.py gate
+          --base "${{ steps.metadata.outputs.base_sha }}"
+      - name: Compile and run complete backend matrix
+        working-directory: backend
+        run: |
+          python -m compileall -q app
+          pytest -q
+      - name: Build frontend integration contract
+        run: npm run build
+        env:
+          VITE_BASE44_APP_ID: 6a8263b40ee6995c4e825a4d
+          VITE_AURA_API_URL: https://api.example.invalid
+
+      - name: Publish immutable recovery branch and pull request
+        id: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          BRANCH="recovery/${INCIDENT_ID}-${GITHUB_RUN_ATTEMPT}"
+          git config user.name "aura-recovery-engineer[bot]"
+          git config user.email "aura-recovery-engineer[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          git add backend/app
+          git commit -m "fix(recovery): resolve ${FAILURE_PHASE}/${FAILURE_CATEGORY}"
+          gh auth setup-git
+          git push --set-upstream origin "$BRANCH"
+          PR_URL="$(gh pr create --base "$RECOVERY_BASE_REF" --head "$BRANCH" \
+            --title "Recovery: ${FAILURE_PHASE}/${FAILURE_CATEGORY}" \
+            --body "Automated isolated repair for incident ${INCIDENT_ID}. Full tests and canary promotion are required before merge.")"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+  canary:
+    name: Deploy and verify Railway canary
+    needs: repair
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: recovery-canary
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.repair.outputs.branch }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Railway CLI
+        run: npm install --global @railway/cli
+      - name: Deploy isolated canary
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          CANARY_PROJECT: ${{ secrets.RAILWAY_PROJECT_ID }}
+          CANARY_SERVICE: ${{ secrets.RAILWAY_CANARY_SERVICE_ID }}
+          CANARY_ENVIRONMENT: ${{ secrets.RAILWAY_CANARY_ENVIRONMENT_ID }}
+        run: >-
+          railway up ./backend --ci
+          --project "$CANARY_PROJECT"
+          --service "$CANARY_SERVICE"
+          --environment "$CANARY_ENVIRONMENT"
+          --message "AURA recovery canary ${INCIDENT_ID}"
+      - name: Require canary liveness, scheduler, database, and Redis readiness
+        env:
+          CANARY_URL: ${{ secrets.RAILWAY_CANARY_URL }}
+        run: python backend/app/code_repair_sandbox.py health --url "$CANARY_URL" --timeout 300
+
+  promote:
+    name: Promote or redeploy baseline
+    needs: [repair, canary]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: recovery-production
+    outputs:
+      status: ${{ steps.release.outputs.status }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.repair.outputs.branch }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Railway CLI
+        run: npm install --global @railway/cli
+      - name: Deploy verified repair and roll back on failed health
+        id: release
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          PROD_PROJECT: ${{ secrets.RAILWAY_PROJECT_ID }}
+          PROD_SERVICE: ${{ secrets.RAILWAY_PRODUCTION_SERVICE_ID }}
+          PROD_ENVIRONMENT: ${{ secrets.RAILWAY_PRODUCTION_ENVIRONMENT_ID }}
+          PROD_URL: ${{ secrets.RAILWAY_PRODUCTION_URL }}
+          BASE_SHA: ${{ needs.repair.outputs.base_sha }}
+        shell: bash
+        run: |
+          set -o errexit -o nounset -o pipefail
+          if railway up ./backend --ci \
+              --project "$PROD_PROJECT" \
+              --service "$PROD_SERVICE" \
+              --environment "$PROD_ENVIRONMENT" \
+              --message "AURA verified recovery ${INCIDENT_ID}" \
+            && python backend/app/code_repair_sandbox.py health \
+              --url "$PROD_URL" --timeout 300; then
+            echo "status=promoted" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ROLLBACK_DIR="$(mktemp -d)"
+          git worktree add --detach "$ROLLBACK_DIR" "$BASE_SHA"
+          if railway up "$ROLLBACK_DIR/backend" --ci --path-as-root \
+              --project "$PROD_PROJECT" \
+              --service "$PROD_SERVICE" \
+              --environment "$PROD_ENVIRONMENT" \
+              --message "AURA automatic rollback ${INCIDENT_ID}" \
+            && python "$ROLLBACK_DIR/backend/app/code_repair_sandbox.py" health \
+              --url "$PROD_URL" --timeout 300; then
+            echo "status=rolled_back" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+      - name: Merge the canary-verified permanent repair
+        if: steps.release.outputs.status == 'promoted'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ needs.repair.outputs.pr_url }}
+        run: gh pr merge "$PR_URL" --squash --delete-branch
+
+  report:
+    name: Sign and record terminal pipeline result
+    if: always()
+    needs: [repair, canary, promote]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Send signed result to Run Supervisor
+        env:
+          RECOVERY_PIPELINE_CALLBACK_SECRET: ${{ secrets.RECOVERY_PIPELINE_CALLBACK_SECRET }}
+          CALLBACK_URL: ${{ secrets.RAILWAY_PRODUCTION_URL }}
+          REPAIR_RESULT: ${{ needs.repair.result }}
+          CANARY_RESULT: ${{ needs.canary.result }}
+          PROMOTE_RESULT: ${{ needs.promote.result }}
+          RELEASE_STATUS: ${{ needs.promote.outputs.status }}
+        shell: bash
+        run: |
+          if [ "$REPAIR_RESULT" != "success" ]; then
+            STATUS="failed"
+          elif [ "$RELEASE_STATUS" = "promoted" ]; then
+            STATUS="promoted"
+          elif [ "$RELEASE_STATUS" = "rolled_back" ]; then
+            STATUS="rolled_back"
+          elif [ "$CANARY_RESULT" != "success" ]; then
+            STATUS="canary_failed"
+          else
+            STATUS="failed"
+          fi
+          python backend/app/code_repair_sandbox.py callback \
+            --url "$CALLBACK_URL" \
+            --incident "$INCIDENT_ID" \
+            --workspace "$WORKSPACE_ID" \
+            --fingerprint "$FAILURE_FINGERPRINT" \
+            --status "$STATUS" \
+            --sandbox-result "{\"repair\":\"$REPAIR_RESULT\",\"canary\":\"$CANARY_RESULT\"}" \
+            --release-result "{\"promotion\":\"$PROMOTE_RESULT\"}"
