@@ -41,6 +41,14 @@ def test_planning_catalog_includes_unconnected_native_connectors() -> None:
     assert catalog["jira"]["connected"] is False
     assert "jira.issues.search" in catalog["jira"]["allowed_operations"]
     assert "jira.issue.create" in catalog["jira"]["allowed_operations"]
+    assert "meta-ads" not in catalog
+
+
+def test_planning_catalog_includes_universal_connector_only_after_provisioning() -> None:
+    catalog = {item["slug"]: item for item in planning_catalog({"aura", "meta-ads"})}
+
+    assert catalog["meta-ads"]["connected"] is True
+    assert catalog["meta-ads"]["allowed_operations"] == ["api.request"]
 
 
 def test_native_catalog_exposes_composable_module_types():

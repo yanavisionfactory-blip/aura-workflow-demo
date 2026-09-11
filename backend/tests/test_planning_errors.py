@@ -3,7 +3,11 @@ from types import SimpleNamespace
 
 import app.orchestrator as orchestrator
 from app.native_connectors import native_manifest
-from app.orchestrator import explicit_disconnected_capabilities, planning_error_message
+from app.orchestrator import (
+    actionable_connection_capabilities,
+    explicit_disconnected_capabilities,
+    planning_error_message,
+)
 
 
 def test_exhausted_api_credits_are_explained_without_raw_provider_payload() -> None:
@@ -76,6 +80,17 @@ def test_explicit_disconnected_capabilities_matches_named_provider_only() -> Non
     assert explicit_disconnected_capabilities(
         "Build an advertising report and email it", inventory
     ) == []
+
+
+def test_only_exact_backend_catalog_provider_becomes_user_connection_action() -> None:
+    inventory = [
+        {"slug": "hubspot", "name": "HubSpot", "connected": False},
+        {"slug": "google", "name": "Google Workspace", "connected": True},
+    ]
+
+    assert actionable_connection_capabilities(
+        ["HubSpot", "Meta Ads campaign reporting", "custom-mcp"], inventory
+    ) == ["hubspot"]
 
 
 def test_connector_contract_mismatch_is_replanned_before_reaching_user(monkeypatch) -> None:
