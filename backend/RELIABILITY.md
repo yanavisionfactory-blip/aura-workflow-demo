@@ -71,7 +71,9 @@ buttons are not shown when the control plane has determined that repetition is u
 
 - API: `RECOVERY_SCHEDULER_ENABLED=true` starts a 15-second recovery/outbox loop.
   PostgreSQL elects one tick owner across API replicas. Celery Beat is not required
-  for recovery. Scheduled business workflows still use the existing schedule dispatcher.
+  for recovery. Each cycle publishes a liveness heartbeat and has a hard timeout
+  (`SCHEDULER_TICK_TIMEOUT_SECONDS=300` by default). Scheduled business workflows still
+  use the existing schedule dispatcher.
 - `STALE_RUN_SECONDS=600`: inspect queued, planning, running and recovering runs.
   A live execution lock prevents recovery. Approval-paused and terminal runs are excluded.
 - `MAX_RESTART_RECOVERIES=3`: persist recovery count, then pause with saved evidence.

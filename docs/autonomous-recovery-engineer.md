@@ -57,6 +57,7 @@ the following values.
 | Variable | Value/purpose |
 | --- | --- |
 | `RECOVERY_ENGINEER_ENABLED` | `true` |
+| `SCHEDULER_TICK_TIMEOUT_SECONDS` | Hard ceiling for one recovery cycle; default `300` |
 | `MAX_RECOVERY_ENGINEER_ATTEMPTS` | Bounded workflow-repair attempts; default `3` |
 | `CONNECTION_PROBE_TTL_SECONDS` | Maximum age of a plan-bound successful probe; default `60` |
 | `RECOVERY_GITHUB_REPOSITORY` | `yanavisionfactory-blip/aura-workflow-demo` |

@@ -299,6 +299,10 @@ async def readiness() -> dict:
         await cache.aclose()
     from .dispatch import scheduler_observation
 
+    scheduler_details = {
+        "enabled": settings.recovery_scheduler_enabled,
+        **scheduler_observation,
+    }
     if settings.recovery_scheduler_enabled:
         now = datetime.now(UTC)
         started_at = datetime.fromisoformat(scheduler_observation["started_at"])
@@ -315,14 +319,21 @@ async def readiness() -> dict:
     else:
         checks["recovery_scheduler"] = True
     if not all(checks.values()):
-        raise HTTPException(503, {"status": "not_ready", "checks": checks})
+        # Scheduler diagnostics contain timestamps, stage names, exception types,
+        # and status codes only. Raw errors, payloads, and credentials never enter
+        # the public readiness projection.
+        raise HTTPException(
+            503,
+            {
+                "status": "not_ready",
+                "checks": checks,
+                "recovery_scheduler": scheduler_details,
+            },
+        )
     return {
         "status": "ready",
         "checks": checks,
-        "recovery_scheduler": {
-            "enabled": settings.recovery_scheduler_enabled,
-            **scheduler_observation,
-        },
+        "recovery_scheduler": scheduler_details,
     }
 
 

@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     # disabled explicitly for isolated maintenance, but production defaults to on.
     recovery_scheduler_enabled: bool = True
     scheduler_interval_seconds: int = Field(default=15, ge=5, le=300)
+    scheduler_tick_timeout_seconds: int = Field(default=300, ge=30, le=900)
     stale_run_seconds: int = Field(default=600, ge=120, le=3600)
     max_restart_recoveries: int = Field(default=3, ge=1, le=10)
     max_provider_attempts: int = Field(default=3, ge=1, le=5)
