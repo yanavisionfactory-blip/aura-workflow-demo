@@ -188,7 +188,7 @@ async def _failure_evidence(session, run, step) -> dict:
         (
             item
             for item in events
-            if item.payload.get("step_id") == step.id
+            if recovery_mapping(item.payload).get("step_id") == step.id
             and item.event_type
             in {
                 "step.recovery_exhausted",
@@ -201,12 +201,22 @@ async def _failure_evidence(session, run, step) -> dict:
         ),
         None,
     )
-    latest_error = (
-        attempts[0].error
-        if attempts
-        else str(
-            (event.payload if event else {}).get("internal_error") or step.error or run.error or ""
-        )
+    event_payload = recovery_mapping(event.payload) if event else {}
+    # Older and interrupted attempts may have committed before an error string was
+    # recorded.  Passing that nullable column directly to ``re.sub`` raises a
+    # TypeError and previously aborted every global recovery tick for the same run.
+    latest_error = next(
+        (
+            value
+            for value in (
+                attempts[0].error if attempts else None,
+                event_payload.get("internal_error"),
+                step.error,
+                run.error,
+            )
+            if isinstance(value, str) and value.strip()
+        ),
+        "",
     )
     category = _category(latest_error)
     if event:

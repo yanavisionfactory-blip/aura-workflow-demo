@@ -222,6 +222,32 @@ async def test_scheduler_normalizes_null_legacy_autonomy_state(runtime, monkeypa
         assert state["failure_history"][-1]["outcome"] == "scheduled"
 
 
+async def test_scheduler_recovers_attempt_committed_before_error_text(runtime, monkeypatch):
+    monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
+    monkeypatch.setattr(scheduler_runtime, "SessionLocal", runtime)
+
+    @asynccontextmanager
+    async def acquired(*args):
+        yield True
+
+    monkeypatch.setattr(scheduler_runtime, "execution_lock", acquired)
+    await _failed_read(runtime)
+    async with runtime() as session:
+        attempt = await session.scalar(select(StepAttempt).where(StepAttempt.step_id == "step"))
+        attempt.error = None
+        step = await session.get(RunStep, "step")
+        step.error = "[timeout] provider timed out after the attempt checkpoint"
+        await session.commit()
+
+    assert await scheduler_runtime.recover_waiting_runs() == [("run", "w", "recovery")]
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        state = run.execution_context["__aura_autonomy__"]
+        assert run.status == RunStatus.recovering
+        assert state["rounds"] == 1
+        assert state["failure_history"][-1]["category"] == "timeout"
+
+
 async def test_completed_provider_work_retries_only_final_review(runtime, monkeypatch):
     monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
     async with runtime() as session:
