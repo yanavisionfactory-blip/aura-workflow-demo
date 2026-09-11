@@ -39,6 +39,9 @@ from .run_supervisor import (
     HUMAN_ACTION_CODES,
     SUPERVISOR_VERSION,
     planning_failure_category,
+    recovery_counter,
+    recovery_list,
+    recovery_mapping,
     supervisor_state,
     transition_run,
 )
@@ -206,7 +209,7 @@ def diagnose_run(
         RecoveryCategory.authorization_required,
         RecoveryCategory.uncertain_external_effect,
     }
-    attempts = int((state.get("attempts") or {}).get(phase.value, 0))
+    attempts = recovery_counter(recovery_mapping(state.get("attempts")).get(phase.value))
     code_repair = not human_action and (
         normalized == RecoveryCategory.internal_defect
         or (
@@ -534,7 +537,7 @@ async def open_recovery_incident(
     session.add(incident)
     await session.flush()
     context = deepcopy(run.execution_context or {})
-    state = deepcopy(context.get("__aura_supervisor__") or {})
+    state = recovery_mapping(context.get("__aura_supervisor__"))
     state["repair_incident"] = {
         "id": incident.id,
         "fingerprint": incident.fingerprint,
@@ -566,7 +569,7 @@ async def open_recovery_incident(
 def _sync_incident_context(run: WorkflowRun, incident: RecoveryIncident) -> None:
     """Mirror the durable incident state into the supervisor checkpoint."""
     context = deepcopy(run.execution_context or {})
-    state = deepcopy(context.get("__aura_supervisor__") or {})
+    state = recovery_mapping(context.get("__aura_supervisor__"))
     state["repair_incident"] = {
         "id": incident.id,
         "fingerprint": incident.fingerprint,
@@ -586,11 +589,11 @@ def _record_engineer_attempt(
 ) -> int:
     """Persist one bounded, content-free recovery attempt."""
     context = deepcopy(run.execution_context or {})
-    state = deepcopy(context.get("__aura_supervisor__") or {})
-    attempts = dict(state.get("attempts") or {})
-    attempt = int(attempts.get(diagnostic.phase.value, 0)) + 1
+    state = recovery_mapping(context.get("__aura_supervisor__"))
+    attempts = recovery_mapping(state.get("attempts"))
+    attempt = recovery_counter(attempts.get(diagnostic.phase.value)) + 1
     attempts[diagnostic.phase.value] = attempt
-    history = list(state.get("failure_history") or [])[-19:]
+    history = recovery_list(state.get("failure_history"))[-19:]
     history.append(
         {
             "phase": diagnostic.phase.value,
@@ -623,11 +626,11 @@ def _record_code_attempt(
     incident: RecoveryIncident,
 ) -> int:
     context = deepcopy(run.execution_context or {})
-    state = deepcopy(context.get("__aura_supervisor__") or {})
-    attempts = dict(state.get("attempts") or {})
-    attempt = int(attempts.get(RecoveryPhase.code.value, 0)) + 1
+    state = recovery_mapping(context.get("__aura_supervisor__"))
+    attempts = recovery_mapping(state.get("attempts"))
+    attempt = recovery_counter(attempts.get(RecoveryPhase.code.value)) + 1
     attempts[RecoveryPhase.code.value] = attempt
-    history = list(state.get("failure_history") or [])[-19:]
+    history = recovery_list(state.get("failure_history"))[-19:]
     history.append(
         {
             "phase": RecoveryPhase.code.value,
@@ -731,8 +734,8 @@ async def recover_with_engineer(run_id: str, workspace_id: str) -> str:
         if incident.status in {"repairing", "testing", "canary", "awaiting_sandbox"}:
             return incident.status
 
-        phase_attempts = int(
-            (supervisor_state(run).get("attempts") or {}).get(diagnostic.phase.value, 0)
+        phase_attempts = recovery_counter(
+            recovery_mapping(supervisor_state(run).get("attempts")).get(diagnostic.phase.value)
         )
         max_attempts = get_settings().max_recovery_engineer_attempts
         if phase_attempts >= max_attempts and not diagnostic.code_repair_required:
@@ -742,7 +745,7 @@ async def recover_with_engineer(run_id: str, workspace_id: str) -> str:
                 "attempts": phase_attempts,
             }
             context = deepcopy(run.execution_context or {})
-            state = deepcopy(context.get("__aura_supervisor__") or {})
+            state = recovery_mapping(context.get("__aura_supervisor__"))
             state.update(status="operator_attention", next_attempt_at=None)
             context["__aura_supervisor__"] = state
             run.execution_context = context
@@ -801,8 +804,8 @@ async def recover_with_engineer(run_id: str, workspace_id: str) -> str:
             await session.commit()
             return "scheduled"
 
-        code_attempts = int(
-            (supervisor_state(run).get("attempts") or {}).get(RecoveryPhase.code.value, 0)
+        code_attempts = recovery_counter(
+            recovery_mapping(supervisor_state(run).get("attempts")).get(RecoveryPhase.code.value)
         )
         if code_attempts >= max_attempts:
             incident.status = "quarantined"

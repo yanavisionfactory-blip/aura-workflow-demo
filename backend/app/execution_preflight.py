@@ -38,7 +38,7 @@ from .providers import (
     verify_oauth_credentials,
 )
 from .reliability import classify_failure
-from .run_supervisor import transition_run
+from .run_supervisor import recovery_counter, recovery_mapping, transition_run
 from .security import CredentialVault
 from .universal_connectors import (
     allowed_operations,
@@ -302,8 +302,8 @@ async def _connection_credentials(
 
 
 async def _schedule_retry(session, run, report: dict, message: str) -> PreflightOutcome:
-    state = deepcopy((run.execution_context or {}).get("__aura_preflight__") or {})
-    attempt = int(state.get("attempt", 0)) + 1
+    state = recovery_mapping((run.execution_context or {}).get("__aura_preflight__"))
+    attempt = recovery_counter(state.get("attempt")) + 1
     delay = min(120, 5 * 2 ** min(attempt - 1, 5))
     available_at = _now() + timedelta(seconds=delay)
     report.update(
@@ -391,7 +391,7 @@ async def _stop_for_human(session, run, report: dict, blocker: dict) -> Prefligh
 async def preflight_approved_run(session, run, steps: list[Any]) -> PreflightOutcome:
     """Prove readiness once per immutable plan before any workflow step executes."""
     plan_hash = canonical_plan_hash(run.plan)
-    previous = deepcopy((run.execution_context or {}).get("__aura_preflight__") or {})
+    previous = recovery_mapping((run.execution_context or {}).get("__aura_preflight__"))
     if (
         previous.get("version") == PREFLIGHT_VERSION
         and previous.get("plan_hash") == plan_hash
@@ -408,7 +408,7 @@ async def preflight_approved_run(session, run, steps: list[Any]) -> PreflightOut
         "status": "running",
         "started_at": _now().isoformat(),
         "checks": [],
-        "attempt": int(previous.get("attempt", 0)),
+        "attempt": recovery_counter(previous.get("attempt")),
     }
     tool_slugs = sorted(
         {step.tool_slug for step in steps if step.status.value not in {"completed", "skipped"}}

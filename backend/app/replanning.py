@@ -31,7 +31,7 @@ from .native_connectors import current_capability_manifest, normalize_module_arg
 from .policy import canonical_plan_hash, operation_scope
 from .providers import idempotency_key
 from .recovery_engineer import equivalent_substitution_allowed
-from .run_supervisor import transition_run
+from .run_supervisor import recovery_counter, recovery_mapping, transition_run
 from .schemas import StepRepair, WorkflowPlan
 
 ELIGIBLE_FAILURES = {
@@ -96,12 +96,13 @@ def delegated_read_repair_allowed(
     The repair may improve filters, pagination or workflow-output paths, but cannot
     introduce a write, permission, dependency, or literal external resource target.
     """
-    authority = (run.execution_context or {}).get("__aura_authority__", {})
+    authority = recovery_mapping((run.execution_context or {}).get("__aura_authority__"))
     if (
         not snapshot
         or authority.get("version") != 1
         or not authority.get("allow_autonomous_read_repairs")
-        or int(authority.get("read_repair_count", 0)) >= get_settings().max_autonomous_read_repairs
+        or recovery_counter(authority.get("read_repair_count"))
+        >= get_settings().max_autonomous_read_repairs
         or replacement.consequential
         or operation_scope(replacement.operation) != "read"
         or replacement.depends_on != approved_step.get("depends_on", [])
@@ -235,11 +236,12 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
         ):
             return False
         context = deepcopy(run.execution_context or {})
-        repairs = dict(context.get("__aura_replanning__", {}))
-        count = int(repairs.get("attempts", 0))
+        repairs = recovery_mapping(context.get("__aura_replanning__"))
+        count = recovery_counter(repairs.get("attempts"))
+        authority = recovery_mapping(context.get("__aura_authority__"))
         delegated_budget = (
             get_settings().max_autonomous_read_repairs
-            if context.get("__aura_authority__", {}).get("allow_autonomous_read_repairs")
+            if authority.get("allow_autonomous_read_repairs")
             else 0
         )
         if count >= max(2, delegated_budget):
@@ -436,8 +438,10 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
             for name in step.output_variables:
                 context.setdefault("vars", {}).pop(name, None)
             context = reset_read_attempt_cycle(context, step.id, attempt_count)
-            authority = dict(context.get("__aura_authority__", {}))
-            authority["read_repair_count"] = int(authority.get("read_repair_count", 0)) + 1
+            authority = recovery_mapping(context.get("__aura_authority__"))
+            authority["read_repair_count"] = (
+                recovery_counter(authority.get("read_repair_count")) + 1
+            )
             authority["last_plan_hash"] = digest
             context["__aura_authority__"] = authority
             run.execution_context = context
