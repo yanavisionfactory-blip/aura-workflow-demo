@@ -38,7 +38,9 @@ class CustomOAuthStart(BaseModel):
     scopes: list[str] = Field(default_factory=list, max_length=100)
     authorization_params: dict[str, str] = Field(default_factory=dict)
     token_params: dict[str, str] = Field(default_factory=dict)
-    token_auth_method: Literal["client_secret_post", "client_secret_basic", "none"] = "client_secret_post"
+    token_auth_method: Literal["client_secret_post", "client_secret_basic", "none"] = (
+        "client_secret_post"
+    )
     capabilities: list[dict[str, Any]] = Field(default_factory=list, min_length=1, max_length=200)
     revocation_url: HttpUrl | None = None
 
@@ -430,3 +432,13 @@ class PolicyUpdate(BaseModel):
 class TrustSignalUpdate(BaseModel):
     incident_active: bool | None = None
     external_score: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class RecoveryPipelineResult(BaseModel):
+    """Signed, content-free result returned by the isolated repair pipeline."""
+
+    workspace_id: str = Field(min_length=1, max_length=64)
+    fingerprint: str = Field(min_length=16, max_length=64)
+    status: Literal["failed", "canary_failed", "rolled_back", "promoted"]
+    sandbox_result: dict[str, Any] = Field(default_factory=dict)
+    release_result: dict[str, Any] = Field(default_factory=dict)

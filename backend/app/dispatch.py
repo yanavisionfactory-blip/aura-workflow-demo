@@ -3,9 +3,10 @@
 A broker acknowledgement can be lost after publish. Duplicate deliveries are
 expected and serialized by the executor's per-run advisory lock and receipts.
 """
+
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
@@ -15,27 +16,47 @@ from .execution_lock import execution_lock
 from .models import DispatchIntent, RunStatus, WorkflowRun
 
 logger = logging.getLogger(__name__)
-scheduler_observation = {"last_tick_at": None, "leader": False}
+scheduler_observation = {
+    "started_at": datetime.now(UTC).isoformat(),
+    "last_tick_at": None,
+    "last_success_at": None,
+    "last_error_at": None,
+    "last_error_type": None,
+    "consecutive_failures": 0,
+    "leader": False,
+}
 
 
 async def dispatch_pending(workspace_id: str | None = None) -> int:
     from .scheduler_runtime import _workspace_ids
     from .worker import execute_run_task, index_memory_task, plan_run_task
+
     tasks = {"plan": plan_run_task, "execute": execute_run_task, "memory": index_memory_task}
     count = 0
     for tenant in [workspace_id] if workspace_id else await _workspace_ids():
         async with SessionLocal() as session:
             await set_tenant_context(session, tenant)
-            now = datetime.now(timezone.utc)
-            intents = (await session.scalars(select(DispatchIntent).where(
-                DispatchIntent.workspace_id == tenant,
-                DispatchIntent.status == "pending", DispatchIntent.available_at <= now,
-            ).order_by(DispatchIntent.created_at).limit(50).with_for_update(skip_locked=True))).all()
+            now = datetime.now(UTC)
+            intents = (
+                await session.scalars(
+                    select(DispatchIntent)
+                    .where(
+                        DispatchIntent.workspace_id == tenant,
+                        DispatchIntent.status == "pending",
+                        DispatchIntent.available_at <= now,
+                    )
+                    .order_by(DispatchIntent.created_at)
+                    .limit(50)
+                    .with_for_update(skip_locked=True)
+                )
+            ).all()
             for intent in intents:
                 run = await session.get(WorkflowRun, intent.run_id)
-                allowed = {"plan": {RunStatus.queued, RunStatus.planning},
-                           "execute": {RunStatus.running, RunStatus.recovering},
-                           "memory": {RunStatus.completed}}
+                allowed = {
+                    "plan": {RunStatus.queued, RunStatus.planning},
+                    "execute": {RunStatus.running, RunStatus.recovering},
+                    "memory": {RunStatus.completed},
+                }
                 if not run or run.status not in allowed.get(intent.kind, set()):
                     intent.status = "superseded"
                     continue
@@ -46,15 +67,24 @@ async def dispatch_pending(workspace_id: str | None = None) -> int:
                     intent.status = "published"
                     count += 1
                 except Exception:
-                    intent.available_at = now + timedelta(seconds=min(300, 2 ** min(intent.attempts, 8)))
-                    logger.warning("Dispatch deferred kind=%s run_id=%s", intent.kind, intent.run_id)
+                    intent.available_at = now + timedelta(
+                        seconds=min(300, 2 ** min(intent.attempts, 8))
+                    )
+                    logger.warning(
+                        "Dispatch deferred kind=%s run_id=%s", intent.kind, intent.run_id
+                    )
                     break  # A broker outage must not multiply API latency by the batch size.
             await session.commit()
     return count
 
 
 async def recovery_tick() -> dict:
-    from .scheduler_runtime import recover_stale_runs, recover_waiting_runs
+    from .scheduler_runtime import (
+        recover_engineer_runs,
+        recover_stale_runs,
+        recover_waiting_runs,
+    )
+
     settings = get_settings()
     async with execution_lock(engine, "system", "recovery-scheduler") as acquired:
         if not acquired:
@@ -64,10 +94,13 @@ async def recovery_tick() -> dict:
         published = await dispatch_pending()
         supervised = await recover_waiting_runs()
         published += await dispatch_pending()
+        engineered = await recover_engineer_runs()
+        published += await dispatch_pending()
         result = {
             "leader": True,
             "recovered": len(recovered),
             "supervised": len(supervised),
+            "engineered": len(engineered),
             "published": published,
         }
         logger.info("Recovery scheduler tick %s", result)
@@ -76,11 +109,26 @@ async def recovery_tick() -> dict:
 
 async def recovery_loop() -> None:
     while True:
+        attempted_at = datetime.now(UTC).isoformat()
         try:
             result = await recovery_tick()
-            scheduler_observation.update(last_tick_at=datetime.now(timezone.utc).isoformat(), **result)
+            scheduler_observation.update(
+                last_tick_at=attempted_at,
+                last_success_at=datetime.now(UTC).isoformat(),
+                last_error_at=None,
+                last_error_type=None,
+                consecutive_failures=0,
+                **result,
+            )
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
+            scheduler_observation.update(
+                last_tick_at=attempted_at,
+                last_error_at=datetime.now(UTC).isoformat(),
+                last_error_type=type(exc).__name__,
+                consecutive_failures=int(scheduler_observation.get("consecutive_failures", 0)) + 1,
+                leader=False,
+            )
             logger.exception("Recovery scheduler tick failed; next tick will retry")
         await asyncio.sleep(get_settings().scheduler_interval_seconds)

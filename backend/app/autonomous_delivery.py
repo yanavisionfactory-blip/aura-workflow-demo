@@ -8,7 +8,7 @@ import hashlib
 import json
 import re
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 
@@ -36,6 +36,7 @@ from .native_connectors import (
 )
 from .policy import operation_scope
 from .providers import PROVIDERS
+from .run_supervisor import transition_run
 from .schemas import AutonomousRecoveryOption
 from .security import CredentialVault
 from .universal_connectors import ConnectorError, discover_provider
@@ -182,11 +183,16 @@ async def _failure_evidence(session, run, step) -> dict:
     latest_error = (
         attempts[0].error
         if attempts
-        else str((event.payload if event else {}).get("internal_error") or step.error or run.error or "")
+        else str(
+            (event.payload if event else {}).get("internal_error") or step.error or run.error or ""
+        )
     )
     category = _category(latest_error)
     if event:
-        if "variable_resolution" in event.event_type or event.event_type == "step.output_mapping_failed":
+        if (
+            "variable_resolution" in event.event_type
+            or event.event_type == "step.output_mapping_failed"
+        ):
             category = "workflow_context_error"
         elif event.event_type == "step.criticized" and category == "unknown":
             category = "verification_failed"
@@ -236,9 +242,7 @@ async def _safe_options(
 ) -> list[AutonomousRecoveryOption]:
     settings = get_settings()
     delay = _delay(int(state["rounds"]) + 1)
-    if steps and all(
-        step.status in {StepStatus.completed, StepStatus.skipped} for step in steps
-    ):
+    if steps and all(step.status in {StepStatus.completed, StepStatus.skipped} for step in steps):
         if int(state["review_recoveries"]) < settings.max_autonomous_review_recoveries:
             return [
                 AutonomousRecoveryOption(
@@ -426,7 +430,7 @@ async def _refresh_capabilities(session, run, step) -> tuple[bool, bool]:
         "ok": True,
         "source": "adaptive_recovery_refresh",
     }
-    manifest.verified_at = datetime.now(timezone.utc)
+    manifest.verified_at = datetime.now(UTC)
     await session.flush()
     return step.operation in tool.allowed_operations, False
 
@@ -449,10 +453,8 @@ async def _revalidate_connection(session, run, step) -> tuple[bool, bool]:
     if manifest and manifest.status == "revoked":
         return False, False
     try:
-        integration_id, verification = (
-            await managed_connector_client().verify_connection(
-                tool.slug, {"connection_id": connection_id}
-            )
+        integration_id, verification = await managed_connector_client().verify_connection(
+            tool.slug, {"connection_id": connection_id}
         )
     except Exception as exc:  # noqa: BLE001 - the next durable delivery may retry the control plane
         return False, bool(getattr(exc, "retryable", True))
@@ -469,7 +471,7 @@ async def _revalidate_connection(session, run, step) -> tuple[bool, bool]:
     if manifest:
         manifest.status = "verified"
         manifest.verification = verification
-        manifest.verified_at = datetime.now(timezone.utc)
+        manifest.verified_at = datetime.now(UTC)
     return True, False
 
 
@@ -500,19 +502,11 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
             return "handoff"
         steps = (
             await session.scalars(
-                select(RunStep)
-                .where(RunStep.run_id == run.id)
-                .order_by(RunStep.position)
+                select(RunStep).where(RunStep.run_id == run.id).order_by(RunStep.position)
             )
         ).all()
-        failed_step = next(
-            (item for item in steps if item.status == StepStatus.failed), None
-        )
-        failure = (
-            await _failure_evidence(session, run, failed_step)
-            if failed_step
-            else None
-        )
+        failed_step = next((item for item in steps if item.status == StepStatus.failed), None)
+        failure = await _failure_evidence(session, run, failed_step) if failed_step else None
         options = await _safe_options(session, run, steps, state, failure)
         if not options:
             return "not_applicable"
@@ -556,8 +550,7 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
                 state["actions_by_failure"] = {
                     **state["actions_by_failure"],
                     fingerprint: sorted(
-                        set(state["actions_by_failure"].get(fingerprint, []))
-                        | {selected.action}
+                        set(state["actions_by_failure"].get(fingerprint, [])) | {selected.action}
                     ),
                 }
                 state["failure_history"] = [
@@ -597,8 +590,7 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
         state["actions_by_failure"] = {
             **state["actions_by_failure"],
             fingerprint: sorted(
-                set(state["actions_by_failure"].get(fingerprint, []))
-                | {selected.action}
+                set(state["actions_by_failure"].get(fingerprint, [])) | {selected.action}
             ),
         }
         state["failure_history"] = [
@@ -612,7 +604,7 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
             },
         ]
         state["next_attempt_at"] = (
-            datetime.now(timezone.utc) + timedelta(seconds=selected.delay_seconds)
+            datetime.now(UTC) + timedelta(seconds=selected.delay_seconds)
         ).isoformat()
         if selected.action == "retry_final_review":
             state["review_recoveries"] = int(state["review_recoveries"]) + 1
@@ -639,8 +631,18 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
             step.error = None
         context["__aura_autonomy__"] = state
         run.execution_context = context
-        run.status = RunStatus.recovering
-        run.error = None
+        transition_run(
+            run,
+            RunStatus.recovering,
+            reason="autonomous_recovery_scheduled",
+            actor="senior-orchestrator",
+            phase="verification" if selected.action == "retry_final_review" else "execution",
+            supervisor_status="recovering",
+            error=None,
+            dispatch=None,
+            metadata={"action": selected.action, "step_id": selected.step_id},
+            allow_same=True,
+        )
         dead_letters = (
             await session.scalars(
                 select(DeadLetterEntry).where(
@@ -652,11 +654,9 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
         for entry in dead_letters:
             if not step or entry.step_id == step.id:
                 entry.status = "resolved"
-                entry.resolved_at = datetime.now(timezone.utc)
+                entry.resolved_at = datetime.now(UTC)
         await session.flush()
-        available_at = datetime.now(timezone.utc) + timedelta(
-            seconds=selected.delay_seconds
-        )
+        available_at = datetime.now(UTC) + timedelta(seconds=selected.delay_seconds)
         intents = (
             await session.scalars(
                 select(DispatchIntent).where(
@@ -736,13 +736,13 @@ async def mark_recovery_checkpoint_succeeded(session, run, step) -> bool:
             and item.get("outcome") == "scheduled"
         ):
             item["outcome"] = "succeeded"
-            item["completed_at"] = datetime.now(timezone.utc).isoformat()
+            item["completed_at"] = datetime.now(UTC).isoformat()
             break
     else:
         return False
     state["failure_history"] = history[-20:]
     state["last_successful_action"] = state.get("last_action")
-    state["last_success_at"] = datetime.now(timezone.utc).isoformat()
+    state["last_success_at"] = datetime.now(UTC).isoformat()
     context["__aura_autonomy__"] = state
     run.execution_context = context
     session.add(

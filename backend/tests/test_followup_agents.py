@@ -28,6 +28,7 @@ from app.replanning import (
     derive_repaired_plan,
     maybe_replan_run,
 )
+from app.run_supervisor import transition_run
 from app.schemas import PlanStep, StepRepair, WorkflowPlan
 from app.semantic_memory import index_run_memory, search_memory, unit_vector
 
@@ -95,16 +96,21 @@ def test_repair_rejects_scope_expansion_and_missing_inputs(operation, arguments)
 
 
 @pytest.mark.parametrize("preapproved", [False, True])
-async def test_automatic_replanning_stages_a_reviewable_version(
-    runtime, monkeypatch, preapproved
-):
+async def test_automatic_replanning_stages_a_reviewable_version(runtime, monkeypatch, preapproved):
     monkeypatch.setattr(replanning, "SessionLocal", runtime)
     original = notion_plan()
     if preapproved:
         original["steps"][0]["reduced_scope_arguments"] = {"query": "quarterly report"}
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
-        run.plan, run.status = original, RunStatus.waiting_for_action
+        run.plan = original
+        transition_run(
+            run,
+            RunStatus.waiting_for_action,
+            reason="test_fixture_replanning_failure",
+            actor="test",
+            dispatch=None,
+        )
         step = await session.get(RunStep, "step")
         step.consequential, step.tool_slug, step.operation = (
             False,
@@ -172,18 +178,12 @@ async def test_automatic_replanning_stages_a_reviewable_version(
     assert await maybe_replan_run("run", "w") == ("retry" if preapproved else True)
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
-        assert run.status == (
-            RunStatus.recovering if preapproved else RunStatus.awaiting_approval
-        )
+        assert run.status == (RunStatus.recovering if preapproved else RunStatus.awaiting_approval)
         assert run.plan_approved is preapproved
         assert run.execution_context["__aura_replanning__"]["attempts"] == 1
         assert run.execution_context["__aura_autonomy__"]["attempt_offsets"]["step"] == 1
-        assert (await session.get(RunStep, "step")).arguments == {
-            "query": "quarterly report"
-        }
-        versions = (
-            await session.scalars(select(PlanVersion).order_by(PlanVersion.version))
-        ).all()
+        assert (await session.get(RunStep, "step")).arguments == {"query": "quarterly report"}
+        versions = (await session.scalars(select(PlanVersion).order_by(PlanVersion.version))).all()
         if preapproved:
             assert len(versions) == 1
             assert run.plan == original
@@ -193,15 +193,20 @@ async def test_automatic_replanning_stages_a_reviewable_version(
     assert await maybe_replan_run("run", "w") is False  # Must wait for approval.
 
 
-async def test_delegated_read_repair_auto_applies_inside_permission_envelope(
-    runtime, monkeypatch
-):
+async def test_delegated_read_repair_auto_applies_inside_permission_envelope(runtime, monkeypatch):
     monkeypatch.setattr(replanning, "SessionLocal", runtime)
     original = notion_plan()
     digest = canonical_plan_hash(original)
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
-        run.plan, run.status = original, RunStatus.waiting_for_action
+        run.plan = original
+        transition_run(
+            run,
+            RunStatus.waiting_for_action,
+            reason="test_fixture_delegated_repair",
+            actor="test",
+            dispatch=None,
+        )
         run.execution_context = {
             "__aura_authority__": {
                 "version": 1,
@@ -310,13 +315,17 @@ def test_delegated_read_repair_cannot_change_literal_resource_target(monkeypatch
     assert delegated_read_repair_allowed(run, snapshot, approved, replacement) is False
 
 
-async def test_automatic_replanning_never_rewrites_an_attempted_write(
-    runtime, monkeypatch
-):
+async def test_automatic_replanning_never_rewrites_an_attempted_write(runtime, monkeypatch):
     monkeypatch.setattr(replanning, "SessionLocal", runtime)
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
-        run.status = RunStatus.waiting_for_action
+        transition_run(
+            run,
+            RunStatus.waiting_for_action,
+            reason="test_fixture_write_failure",
+            actor="test",
+            dispatch=None,
+        )
         step = await session.get(RunStep, "step")
         step.status = StepStatus.failed
         await session.commit()
@@ -424,7 +433,13 @@ def test_notion_readback_does_not_claim_unobserved_children_were_verified():
 async def mark_verified(factory):
     async with factory() as session:
         run = await session.get(WorkflowRun, "run")
-        run.status = RunStatus.completed
+        transition_run(
+            run,
+            RunStatus.completed,
+            reason="test_fixture_verified_completion",
+            actor="test",
+            dispatch=None,
+        )
         run.result = {
             "verification": {"status": "verified"},
             "unified_deliverable": {
@@ -462,16 +477,11 @@ async def test_semantic_search_ranks_vectors_and_filters_owner_before_embedding(
         await session.commit()
         assert memory is not None
         assert await search_memory(session, "w", "bob", "financial performance") == []
-        assert (
-            len(embedded) == 1
-        )  # No query embedding for an unauthorized empty candidate set.
+        assert len(embedded) == 1  # No query embedding for an unauthorized empty candidate set.
         results = await search_memory(session, "w", "alice", "financial performance")
         assert results[0]["run_id"] == "run" and results[0]["score"] > 0.99
         assert results[0]["step_keys"] == ["write"]
-        assert (
-            await search_memory(session, "different", "alice", "financial performance")
-            == []
-        )
+        assert await search_memory(session, "different", "alice", "financial performance") == []
 
 
 async def test_deleted_memory_is_not_resurrected(runtime, monkeypatch):
@@ -487,9 +497,7 @@ async def test_deleted_memory_is_not_resurrected(runtime, monkeypatch):
         run = await session.get(WorkflowRun, "run")
         memory = await index_run_memory(session, run, "alice")
         await session.commit()
-        await forget_workflow_memory(
-            memory.id, TenantContext("w", "alice", "owner"), session
-        )
+        await forget_workflow_memory(memory.id, TenantContext("w", "alice", "owner"), session)
         assert await index_run_memory(session, run, "alice") is None
         assert await search_memory(session, "w", "alice", "earnings") == []
         assert memory.embedding == [] and memory.text == ""
@@ -573,6 +581,7 @@ async def test_repaired_plan_approval_preserves_completed_write(runtime, monkeyp
     from app.main import TenantContext, approve_plan
     from app.models import Approval
     from app.schemas import PlanApproval
+
     monkeypatch.setattr(dispatch, "SessionLocal", runtime)
     from fastapi import HTTPException
 
@@ -592,10 +601,13 @@ async def test_repaired_plan_approval_preserves_completed_write(runtime, monkeyp
             name="Repair", interpretation="Finish report", steps=[write, read]
         ).model_dump(mode="json")
         run = await session.get(WorkflowRun, "run")
-        run.plan, run.plan_approved, run.status = (
-            candidate,
-            False,
+        run.plan, run.plan_approved = candidate, False
+        transition_run(
+            run,
             RunStatus.awaiting_approval,
+            reason="test_fixture_candidate_plan",
+            actor="test",
+            dispatch=None,
         )
         stored = await session.get(RunStep, "step")
         stored.operation, stored.arguments, stored.status = (
@@ -680,9 +692,11 @@ async def test_repaired_plan_approval_preserves_completed_write(runtime, monkeyp
             )
         assert exc.value.status_code == 409
         queued = []
-        monkeypatch.setattr(
-            main.execute_run_task, "delay", lambda *args: queued.append(args)
-        )
+
+        async def dispatch(workspace_id):
+            queued.append(workspace_id)
+
+        monkeypatch.setattr(main, "dispatch_pending", dispatch)
         await approve_plan(
             "run",
             PlanApproval(approved=True, approve_consequential=False),
@@ -691,4 +705,4 @@ async def test_repaired_plan_approval_preserves_completed_write(runtime, monkeyp
         )
         assert stored.status == StepStatus.completed
         assert (await session.get(Approval, "approval")).status == "approved"
-        assert queued == [("run", "w")]
+        assert queued == ["w"]

@@ -20,6 +20,7 @@ def test_process_restart_preserves_receipts_and_never_replays_unknown_writes(tmp
 
 
 async def exercise(directory, crash_point, stage):
+    from datetime import UTC, datetime
     from sqlalchemy import select
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
     from app import orchestrator
@@ -45,7 +46,10 @@ async def exercise(directory, crash_point, stage):
         async with factory() as session:
             session.add(Workspace(id="w", name="Isolated restart validation"))
             session.add(WorkflowRun(id="run", workspace_id="w", prompt="Create one fixture record",
-                plan=plan, plan_approved=True, status=RunStatus.running))
+                plan=plan, plan_approved=True, status=RunStatus.running,
+                execution_context={"__aura_preflight__": {"version": 2,
+                    "plan_hash": digest, "status": "passed",
+                    "completed_at": datetime.now(UTC).isoformat()}}))
             session.add(PlanVersion(id="version", workspace_id="w", run_id="run", version=1,
                 status="approved", plan=plan, plan_hash=digest))
             session.add(ApprovalSnapshot(id="approval", workspace_id="w", run_id="run",

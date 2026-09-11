@@ -46,7 +46,7 @@ async def evaluate(url, *, samples=30, concurrencies=(1, 2, 4, 8), provider_dela
     os.environ.setdefault("CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
     os.environ.setdefault("SESSION_SIGNING_KEY", uuid.uuid4().hex + uuid.uuid4().hex)
     os.environ.setdefault("DATABASE_URL", url)
-    from . import db, orchestrator
+    from . import db, execution_preflight, orchestrator
     from .models import Workspace, WorkflowRun, RunStep, RunStatus, StepStatus, PlanVersion, ApprovalSnapshot, StepAttempt, AuditEvent, ToolConnection, ToolKind, CapabilityManifest
     if samples < 30 or samples > 100 or any(c not in (1, 2, 4, 8) for c in concurrencies):
         raise ValueError("Use 30–100 samples and supported bounded concurrency")
@@ -82,6 +82,16 @@ async def evaluate(url, *, samples=30, concurrencies=(1, 2, 4, 8), provider_dela
         return UnifiedDeliverable(summary="Fixture", deliverable="Requested fixture reads completed")
     async def credentials(*args):
         return {}, False
+    async def provider_probe(manifest, credentials):
+        """Prove the deterministic connector fixture is ready without network I/O."""
+        return {
+            "ok": True,
+            "status_code": 200,
+            "retryable": False,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "capability_count": len(manifest.get("capabilities", [])),
+            "fixture": True,
+        }
     try:
         with ExitStack() as stack:
             for module in (db, orchestrator):
@@ -93,6 +103,7 @@ async def evaluate(url, *, samples=30, concurrencies=(1, 2, 4, 8), provider_dela
                 stack.enter_context(patch.object(orchestrator, "critique_step", critic))
                 stack.enter_context(patch.object(orchestrator, "verify_outcome", verifier))
                 stack.enter_context(patch.object(orchestrator, "synthesize_result", synthesis))
+                stack.enter_context(patch.object(execution_preflight, "verify_provider", provider_probe))
             for concurrency in concurrencies:
                 for workload in (WORKLOADS[:3] if live else WORKLOADS):
                     workspace = str(uuid.uuid4())
