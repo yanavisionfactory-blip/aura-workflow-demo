@@ -1,0 +1,194 @@
+[
+  {
+    "id": "planning-malformed-repair",
+    "phase": "planning",
+    "category": "malformed_plan",
+    "attempts": 0,
+    "expected_category": "malformed_plan",
+    "expected_human": false,
+    "expected_code_repair": false,
+    "expected_actions": ["repair_plan", "retry_delivery"]
+  },
+  {
+    "id": "planning-malformed-code-escalation",
+    "phase": "planning",
+    "category": "malformed_plan",
+    "attempts": 3,
+    "expected_category": "malformed_plan",
+    "expected_human": false,
+    "expected_code_repair": true,
+    "expected_actions": ["isolate_code_repair"]
+  },
+  {
+    "id": "planning-runtime-defect",
+    "phase": "planning",
+    "category": "planner_runtime",
+    "attempts": 0,
+    "expected_category": "internal_defect",
+    "expected_human": false,
+    "expected_code_repair": true,
+    "expected_actions": ["isolate_code_repair"]
+  },
+  {
+    "id": "planning-rate-limit",
+    "phase": "planning",
+    "category": "rate_limited",
+    "attempts": 0,
+    "expected_category": "rate_limited",
+    "expected_human": false,
+    "expected_code_repair": false,
+    "expected_actions": ["retry_delivery", "replan_remaining"]
+  },
+  {
+    "id": "connection-live-refresh",
+    "phase": "connection",
+    "category": "timeout",
+    "attempts": 0,
+    "expected_category": "timeout",
+    "expected_human": false,
+    "expected_code_repair": false,
+    "expected_actions": ["refresh_connection"]
+  },
+  {
+    "id": "connection-authorization-human-gate",
+    "phase": "connection",
+    "category": "authorization_required",
+    "attempts": 0,
+    "expected_category": "authorization_required",
+    "expected_human": true,
+    "expected_code_repair": false,
+    "expected_actions": []
+  },
+  {
+    "id": "connection-resource-access-human-gate",
+    "phase": "connection",
+    "category": "provider_unavailable",
+    "attempts": 0,
+    "blocker_code": "resource_access_denied",
+    "expected_category": "provider_unavailable",
+    "expected_human": true,
+    "expected_code_repair": false,
+    "expected_actions": []
+  },
+  {
+    "id": "connection-capability-rediscovery",
+    "phase": "connection",
+    "category": "capability_drift",
+    "attempts": 0,
+    "expected_category": "capability_drift",
+    "expected_human": false,
+    "expected_code_repair": false,
+    "expected_actions": ["refresh_capabilities", "substitute_provider", "replan_remaining"]
+  },
+  {
+    "id": "execution-argument-repair",
+    "phase": "execution",
+    "category": "invalid_request",
+    "attempts": 0,
+    "expected_category": "invalid_arguments",
+    "expected_human": false,
+    "expected_code_repair": false,
+    "expected_actions": ["repair_arguments", "substitute_provider", "replan_remaining"]
+  },
+  {
+    "id": "execution-argument-code-escalation",
+    "phase": "execution",
+    "category": "invalid_request",
+    "attempts": 3,
+    "expected_category": "invalid_arguments",
+    "expected_human": false,
+    "expected_code_repair": true,
+    "expected_actions": ["isolate_code_repair"]
+  },
+  {
+    "id": "execution-capability-substitution",
+    "phase": "execution",
+    "category": "capability_drift",
+    "attempts": 0,
+    "expected_category": "capability_drift",
+    "expected_human": false,
+    "expected_code_repair": false,
+    "expected_actions": ["refresh_capabilities", "substitute_provider", "replan_remaining"]
+  },
+  {
+    "id": "execution-capability-code-escalation",
+    "phase": "execution",
+    "category": "capability_drift",
+    "attempts": 3,
+    "expected_category": "capability_drift",
+    "expected_human": false,
+    "expected_code_repair": true,
+    "expected_actions": ["isolate_code_repair"]
+  },
+  {
+    "id": "execution-transient-timeout",
+    "phase": "execution",
+    "category": "timeout",
+    "attempts": 0,
+    "expected_category": "timeout",
+    "expected_human": false,
+    "expected_code_repair": false,
+    "expected_actions": ["retry_delivery", "replan_remaining"]
+  },
+  {
+    "id": "execution-provider-outage",
+    "phase": "execution",
+    "category": "provider_unavailable",
+    "attempts": 0,
+    "expected_category": "provider_unavailable",
+    "expected_human": false,
+    "expected_code_repair": false,
+    "expected_actions": ["retry_delivery", "replan_remaining"]
+  },
+  {
+    "id": "execution-uncertain-write-human-gate",
+    "phase": "execution",
+    "category": "uncertain_write",
+    "attempts": 0,
+    "expected_category": "uncertain_external_effect",
+    "expected_human": true,
+    "expected_code_repair": false,
+    "expected_actions": []
+  },
+  {
+    "id": "verification-receipt-readback",
+    "phase": "verification",
+    "category": null,
+    "attempts": 0,
+    "expected_category": "verification_incomplete",
+    "expected_human": false,
+    "expected_code_repair": false,
+    "expected_actions": ["retry_verification"]
+  },
+  {
+    "id": "verification-code-escalation",
+    "phase": "verification",
+    "category": null,
+    "attempts": 3,
+    "expected_category": "verification_incomplete",
+    "expected_human": false,
+    "expected_code_repair": true,
+    "expected_actions": ["isolate_code_repair"]
+  },
+  {
+    "id": "delivery-retry",
+    "phase": "delivery",
+    "category": "provider_unavailable",
+    "attempts": 0,
+    "expected_category": "provider_unavailable",
+    "expected_human": false,
+    "expected_code_repair": false,
+    "expected_actions": ["retry_delivery", "replan_remaining"]
+  },
+  {
+    "id": "approval-remains-human",
+    "phase": "execution",
+    "category": "planner_runtime",
+    "attempts": 3,
+    "blocker_code": "plan_approval_required",
+    "expected_category": "internal_defect",
+    "expected_human": true,
+    "expected_code_repair": false,
+    "expected_actions": []
+  }
+]
