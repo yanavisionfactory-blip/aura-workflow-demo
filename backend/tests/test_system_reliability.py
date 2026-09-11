@@ -92,6 +92,131 @@ async def test_model_budget_prevents_additional_calls_and_isolated_contexts():
 
 
 @pytest.fixture
+def scheduler_state():
+    previous = dict(dispatch.scheduler_observation)
+    dispatch.scheduler_observation.update(
+        last_tick_at=None,
+        last_success_at=None,
+        last_error_at=None,
+        last_error_type=None,
+        last_error_code=None,
+        consecutive_failures=0,
+        leader=False,
+        tick_in_progress=False,
+        tick_started_at=None,
+        active_stage="idle",
+    )
+    yield dispatch.scheduler_observation
+    dispatch.scheduler_observation.clear()
+    dispatch.scheduler_observation.update(previous)
+
+
+async def test_scheduler_cycle_records_live_progress_and_completion(
+    scheduler_state, monkeypatch
+):
+    async def completed_tick():
+        assert scheduler_state["tick_in_progress"] is True
+        assert scheduler_state["last_tick_at"] is not None
+        dispatch._mark_scheduler_progress("fixture_stage")
+        return {"leader": True, "engineered": 1}
+
+    monkeypatch.setattr(dispatch, "recovery_tick", completed_tick)
+
+    result = await dispatch.run_recovery_cycle(timeout_seconds=1)
+
+    assert result == {"leader": True, "engineered": 1}
+    assert scheduler_state["last_success_at"] is not None
+    assert scheduler_state["last_error_type"] is None
+    assert scheduler_state["consecutive_failures"] == 0
+    assert scheduler_state["tick_in_progress"] is False
+    assert scheduler_state["active_stage"] == "idle"
+
+
+async def test_scheduler_cycle_exposes_safe_failure_metadata(scheduler_state, monkeypatch):
+    class ProviderFailure(RuntimeError):
+        status_code = 503
+
+    async def failed_tick():
+        dispatch._mark_scheduler_progress("recovery_engineer")
+        raise ProviderFailure("private provider detail")
+
+    monkeypatch.setattr(dispatch, "recovery_tick", failed_tick)
+
+    result = await dispatch.run_recovery_cycle(timeout_seconds=1)
+
+    assert result == {"leader": False, "error_type": "ProviderFailure"}
+    assert scheduler_state["last_error_type"] == "ProviderFailure"
+    assert scheduler_state["last_error_code"] == 503
+    assert scheduler_state["active_stage"] == "recovery_engineer"
+    assert scheduler_state["consecutive_failures"] == 1
+    assert "private provider detail" not in str(scheduler_state)
+
+
+async def test_scheduler_cycle_times_out_instead_of_hanging(scheduler_state, monkeypatch):
+    async def stalled_tick():
+        dispatch._mark_scheduler_progress("autonomous_recovery")
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(dispatch, "recovery_tick", stalled_tick)
+
+    result = await dispatch.run_recovery_cycle(timeout_seconds=0.01)
+
+    assert result == {"leader": False, "error_type": "TimeoutError"}
+    assert scheduler_state["last_error_type"] == "TimeoutError"
+    assert scheduler_state["active_stage"] == "autonomous_recovery"
+    assert scheduler_state["tick_in_progress"] is False
+
+
+async def test_readiness_exposes_only_safe_scheduler_diagnostics(
+    scheduler_state, monkeypatch
+):
+    from fastapi import HTTPException
+
+    from app import main
+
+    class StubConnection:
+        async def execute(self, *args, **kwargs):
+            return None
+
+    class StubEngine:
+        @asynccontextmanager
+        async def connect(self):
+            yield StubConnection()
+
+    class StubCache:
+        async def ping(self):
+            return True
+
+        async def aclose(self):
+            return None
+
+    now = datetime.now(timezone.utc).isoformat()
+    scheduler_state.update(
+        started_at=now,
+        last_tick_at=now,
+        last_error_at=now,
+        last_error_type="ProgrammingError",
+        last_error_code="42P01",
+        consecutive_failures=3,
+        active_stage="recovery_engineer",
+    )
+    monkeypatch.setattr(main, "engine", StubEngine())
+    monkeypatch.setattr(main.redis, "from_url", lambda *args, **kwargs: StubCache())
+    monkeypatch.setattr(main, "production_configuration_checks", lambda: {"config": True})
+    monkeypatch.setattr(main.settings, "recovery_scheduler_enabled", True)
+
+    with pytest.raises(HTTPException) as raised:
+        await main.readiness()
+
+    assert raised.value.status_code == 503
+    details = raised.value.detail["recovery_scheduler"]
+    assert details["last_error_type"] == "ProgrammingError"
+    assert details["last_error_code"] == "42P01"
+    assert details["active_stage"] == "recovery_engineer"
+    assert "private" not in str(raised.value.detail)
+
+
+@pytest.fixture
 async def database(monkeypatch):
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
