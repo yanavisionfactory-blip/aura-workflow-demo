@@ -491,6 +491,37 @@ def explicit_disconnected_capabilities(prompt: str, inventory: list[dict]) -> li
     return list(dict.fromkeys(missing))
 
 
+def actionable_connection_capabilities(
+    requested: list[str], inventory: list[dict]
+) -> list[str]:
+    """Return only exact, backend-owned connectors that a user can authorize.
+
+    Model-authored missing-capability prose is not a connection route. If it
+    cannot be matched to a disconnected catalog entry, recovery stays backstage
+    instead of asking the user for API, MCP, or custom OAuth configuration.
+    """
+    aliases: dict[str, str] = {}
+    for item in inventory:
+        if item.get("connected", False):
+            continue
+        slug = str(item.get("slug") or "").strip().casefold()
+        name = str(item.get("name") or "").strip().casefold()
+        if slug:
+            aliases[re.sub(r"[^a-z0-9]+", "-", slug).strip("-")] = slug
+        if name:
+            aliases[re.sub(r"[^a-z0-9]+", "-", name).strip("-")] = slug or name
+
+    actionable: list[str] = []
+    for value in requested:
+        normalized = re.sub(
+            r"[^a-z0-9]+", "-", str(value or "").strip().casefold()
+        ).strip("-")
+        slug = aliases.get(normalized)
+        if slug and slug not in actionable:
+            actionable.append(slug)
+    return actionable
+
+
 @trace_run
 async def plan_run(run_id: str, workspace_id: str) -> None:
     async with execution_lock(engine, workspace_id, run_id) as acquired:
@@ -721,7 +752,32 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             )
             await session.commit()
         except ConnectionRequiredError as exc:
-            for capability in exc.missing_capabilities:
+            missing = actionable_connection_capabilities(
+                exc.missing_capabilities, inventory
+            )
+            if not missing:
+                await audit(
+                    session,
+                    workspace_id,
+                    "run.planning_capability_recovery_started",
+                    {
+                        "reported_capabilities": exc.missing_capabilities,
+                        "user_configuration_requested": False,
+                    },
+                    run.id,
+                    actor="run-supervisor",
+                )
+                await recover_planning_failure(
+                    session,
+                    run,
+                    exc,
+                    max_attempts=get_settings().max_planning_recovery_rounds,
+                    base_delay_seconds=get_settings().autonomous_recovery_base_delay_seconds,
+                    max_delay_seconds=get_settings().autonomous_recovery_max_delay_seconds,
+                )
+                await session.commit()
+                return
+            for capability in missing:
                 session.add(
                     ConnectionRequirement(
                         workspace_id=workspace_id,
@@ -737,7 +793,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 "code": "connection_required",
                 "message": "One or more capability providers must be connected",
                 "action": "connect_account",
-                "missing_capabilities": exc.missing_capabilities,
+                "missing_capabilities": missing,
                 "retryable": False,
             }
             transition_run(
@@ -750,7 +806,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 error=blocker["message"],
                 result={
                     "status": "waiting_for_connection",
-                    "missing_capabilities": exc.missing_capabilities,
+                    "missing_capabilities": missing,
                 },
                 blocker=blocker,
                 dispatch=None,
@@ -759,7 +815,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 session,
                 workspace_id,
                 "run.connection_required",
-                {"missing_capabilities": exc.missing_capabilities},
+                {"missing_capabilities": missing},
                 run.id,
                 actor="tool-router",
             )

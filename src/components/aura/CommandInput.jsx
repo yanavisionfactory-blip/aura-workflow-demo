@@ -3,8 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { ArrowRight, Sparkles, X, Plus, FileBarChart, Mail, ListChecks, RefreshCw, Paperclip } from "lucide-react";
 import ValueProp from "./ValueProp";
 import ResourceComposer from "./ResourceComposer";
-import AuraInterfaceConnect from "./AuraInterfaceConnect";
-import { recordInterfaceConnection } from "@/lib/connectService";
+import { isManagedOAuthTool } from "@/lib/connectionPolicy.mjs";
 import { base44 } from "@/api/base44Client";
 
 const EXAMPLE_ICONS = [FileBarChart, Mail, ListChecks, RefreshCw];
@@ -24,7 +23,10 @@ const toolHints = [
 function getHints(text) {
   if (!text) return [];
   const lower = text.toLowerCase();
-  return toolHints.filter((h) => h.keywords.some((k) => lower.includes(k))).map((h) => h.label).slice(0, 3);
+  return toolHints
+    .filter((h) => isManagedOAuthTool(h.label) && h.keywords.some((k) => lower.includes(k)))
+    .map((h) => h.label)
+    .slice(0, 3);
 }
 
 export default function CommandInput({ onSubmit, disabled, examples, onPickExample }) {
@@ -34,8 +36,6 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
   const [removedTools, setRemovedTools] = useState([]);
   const [documents, setDocuments] = useState([]);
   const [showComposer, setShowComposer] = useState(false);
-  const [interfaceTool, setInterfaceTool] = useState(null);
-  const [interfaceError, setInterfaceError] = useState("");
   const [examplesCollapsed, setExamplesCollapsed] = useState(false);
   const inputRef = useRef(null);
 
@@ -150,28 +150,11 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
                     setDocuments((prev) => (prev.some((x) => x.file_url === doc.file_url) ? prev : [...prev, doc]));
                     setShowComposer(false);
                   }}
-                  onInterfaceTool={(name) => setInterfaceTool(name)}
                 />
               </div>
             </motion.div>
           )}
         </AnimatePresence>
-
-        <AuraInterfaceConnect
-          open={!!interfaceTool}
-          toolName={interfaceTool}
-          onClose={() => setInterfaceTool(null)}
-          onConnect={async (name, meta) => {
-            try {
-              setInterfaceError("");
-              await recordInterfaceConnection(name, meta);
-              setInterfaceTool(null);
-            } catch (e) {
-              setInterfaceError(e.message || "This web application could not be connected.");
-            }
-          }}
-        />
-        {interfaceError && <p className="mx-4 mb-2 text-xs text-red-400">{interfaceError}</p>}
 
         <div className="flex items-center justify-between px-4 pb-3">
           <span className="text-[11px] text-muted-foreground/60">Press Enter to run · Shift+Enter for a new line</span>

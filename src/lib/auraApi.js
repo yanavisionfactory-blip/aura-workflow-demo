@@ -120,13 +120,28 @@ export async function syncManagedConnector(provider, connection = {}) {
   return request(`/v1/managed-connectors/${provider}/sync${query}`, { method: "POST" });
 }
 
-export async function authorizeManagedConnector(provider, timeoutMs = 120000) {
-  const popup = window.open("about:blank", `aura-connect-${provider}`, "popup,width=620,height=760");
+const authorizationWindowContent = (reconnecting) => '<main style="font-family:system-ui;background:#0b1020;color:#eef2ff;min-height:100vh;display:grid;place-items:center;margin:0"><div style="text-align:center"><div style="font-size:32px;margin-bottom:12px">◌</div><strong>'
+  + (reconnecting ? "Preparing secure reauthorization…" : "Preparing your secure connection…")
+  + '</strong><p style="color:#94a3b8;font-size:14px">AURA handles setup and verifies access after you approve it.</p></div></main>';
+
+export function reserveAuthorizationWindow(provider, reconnecting = false) {
+  const action = reconnecting ? "reconnect" : "connect";
+  const popup = window.open("about:blank", `aura-${action}-${provider}`, "popup,width=620,height=760");
   if (!popup) {
     throw new Error("Your browser blocked the authorization window. Allow pop-ups for AURA and try again.");
   }
-  popup.document.title = "Connecting to AURA";
-  popup.document.body.innerHTML = '<main style="font-family:system-ui;background:#0b1020;color:#eef2ff;min-height:100vh;display:grid;place-items:center;margin:0"><div style="text-align:center"><div style="font-size:32px;margin-bottom:12px">◌</div><strong>Preparing your connection…</strong><p style="color:#94a3b8;font-size:14px">AURA will remember this app after you approve access.</p></div></main>';
+  popup.document.title = reconnecting ? "Reconnecting to AURA" : "Connecting to AURA";
+  popup.document.body.innerHTML = authorizationWindowContent(reconnecting);
+  return popup;
+}
+
+function authorizationWindow(provider, reconnecting, reservedWindow) {
+  if (reservedWindow && !reservedWindow.closed) return reservedWindow;
+  return reserveAuthorizationWindow(provider, reconnecting);
+}
+
+export async function authorizeManagedConnector(provider, timeoutMs = 120000, reservedWindow = null) {
+  const popup = authorizationWindow(provider, false, reservedWindow);
   let session;
   try {
     await ensureWorkspace();
@@ -161,13 +176,8 @@ export async function authorizeManagedConnector(provider, timeoutMs = 120000) {
   throw new Error("The app did not finish connecting. AURA kept your plan unchanged.");
 }
 
-export async function authorizeOAuth(provider, timeoutMs = 120000) {
-  const popup = window.open("about:blank", `aura-oauth-${provider}`, "popup,width=620,height=760");
-  if (!popup) {
-    throw new Error("Your browser blocked the authorization window. Allow pop-ups for AURA and try again.");
-  }
-  popup.document.title = "Connecting to AURA";
-  popup.document.body.innerHTML = '<main style="font-family:system-ui;background:#0b1020;color:#eef2ff;min-height:100vh;display:grid;place-items:center;margin:0"><div style="text-align:center"><div style="font-size:32px;margin-bottom:12px">◌</div><strong>Preparing secure authorization…</strong><p style="color:#94a3b8;font-size:14px">AURA is checking this connection.</p></div></main>';
+export async function authorizeOAuth(provider, timeoutMs = 120000, reservedWindow = null) {
+  const popup = authorizationWindow(provider, false, reservedWindow);
   let authorization_url;
   let previousUpdatedAt = null;
   const oauthSignal = { current: null };
@@ -286,11 +296,8 @@ export async function disconnectPythonConnection(connectionId) {
   return request(`/v1/connections/${connectionId}`, { method: "DELETE" });
 }
 
-export async function reconnectPythonConnection(connection, timeoutMs = 120000) {
-  const popup = window.open("about:blank", `aura-reconnect-${connection.id}`, "popup,width=620,height=760");
-  if (!popup) throw new Error("Your browser blocked the authorization window. Allow pop-ups for AURA and try again.");
-  popup.document.title = "Reconnecting to AURA";
-  popup.document.body.innerHTML = '<main style="font-family:system-ui;background:#0b1020;color:#eef2ff;min-height:100vh;display:grid;place-items:center;margin:0"><div style="text-align:center"><div style="font-size:32px;margin-bottom:12px">◌</div><strong>Preparing secure reauthorization…</strong><p style="color:#94a3b8;font-size:14px">AURA is checking this connection.</p></div></main>';
+export async function reconnectPythonConnection(connection, timeoutMs = 120000, reservedWindow = null) {
+  const popup = authorizationWindow(connection.slug || connection.id, true, reservedWindow);
   let started;
   try {
     await ensureWorkspace();

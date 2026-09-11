@@ -1,6 +1,7 @@
 import { base44 } from "@/api/base44Client";
 import { setConnection, replaceConnections } from "@/lib/connectionsStore";
 import { isVerifiedConnection, selectConnection } from "@/lib/connectionSelection.mjs";
+import { isManagedOAuthTool, managedOAuthProviderFor } from "@/lib/connectionPolicy.mjs";
 import {
   addPythonTool,
   authorizeManagedConnector,
@@ -12,10 +13,10 @@ import {
   listPythonTools,
   pythonRuntimeEnabled,
   reconnectPythonConnection,
+  reserveAuthorizationWindow,
   testPythonConnection,
 } from "@/lib/auraApi";
 
-const PYTHON_OAUTH = { Gmail: "google", "Google Drive": "google", "Google Calendar": "google", "Google Sheets": "google", Jira: "jira", Airtable: "airtable", Notion: "notion", Slack: "slack", TikTok: "tiktok", Mailchimp: "mailchimp", Canva: "canva" };
 const CONNECTION_NAMES = {
   atlassian: ["Jira"],
   jira: ["Jira"],
@@ -27,6 +28,7 @@ const CONNECTION_NAMES = {
   tiktok: ["TikTok"],
   mailchimp: ["Mailchimp"],
   canva: ["Canva"],
+  hubspot: ["HubSpot"],
 };
 const connectionAliases = (tool) => {
   const identity = `${tool.slug || ""} ${tool.display_name || ""}`.toLowerCase();
@@ -39,20 +41,30 @@ const slugify = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace
 const credentialsFor = (opts) => opts.credentials || (opts.apiKey ? { api_key: opts.apiKey } : {});
 
 export function hasStandardOAuth(toolName) {
-  return Boolean(PYTHON_OAUTH[toolName]);
+  return isManagedOAuthTool(toolName);
 }
 
 export async function connectTool(toolName, opts = {}) {
   if (pythonRuntimeEnabled) {
-    const provider = PYTHON_OAUTH[toolName];
+    const provider = managedOAuthProviderFor(toolName);
     if (provider) {
-      const existing = await getToolConnection(toolName, opts.connectionId);
-      const managed = await getManagedConnectorStatus().catch(() => ({ configured: false, providers: [] }));
-      const result = existing
-        ? await reconnectPythonConnection(existing)
-        : managed.configured && managed.providers.includes(provider)
-          ? await authorizeManagedConnector(provider)
-          : await authorizeOAuth(provider);
+      // Reserve the provider window while the click still has browser user
+      // activation. Backend discovery happens afterwards and cannot turn this
+      // into a blocked or unrelated frontend configuration dialog.
+      const authorizationWindow = reserveAuthorizationWindow(provider);
+      let result;
+      try {
+        const existing = await getToolConnection(toolName, opts.connectionId);
+        const managed = await getManagedConnectorStatus().catch(() => ({ configured: false, providers: [] }));
+        result = existing?.kind === "oauth"
+          ? await reconnectPythonConnection(existing, 120000, authorizationWindow)
+          : managed.configured && managed.providers.includes(provider)
+            ? await authorizeManagedConnector(provider, 120000, authorizationWindow)
+            : await authorizeOAuth(provider, 120000, authorizationWindow);
+      } catch (error) {
+        if (!authorizationWindow.closed) authorizationWindow.close();
+        throw error;
+      }
       if (result.redirecting) return { method: "oauth", connected: false, authorizationStarted: true, provider };
       if (!result.tool?.id) throw new Error(`${toolName} access could not be verified.`);
       const verification = await testPythonConnection(result.tool.id);
@@ -66,6 +78,13 @@ export async function connectTool(toolName, opts = {}) {
         provider,
         connection: result.tool,
       };
+    }
+
+    if (opts.administrativeSetup !== true) {
+      throw new Error(
+        `${toolName} is not available as a one-click AURA connection yet. ` +
+        "No API key or MCP setup is required from you, and your work remains saved."
+      );
     }
 
     if (opts.connectionKind === "oauth2") {
@@ -93,7 +112,9 @@ export async function connectTool(toolName, opts = {}) {
       return { method: "oauth2", connected: true, connection: result.tool };
     }
 
-    if (!opts.baseUrl) return { method: "custom", connected: false, needsConfiguration: true };
+    if (!opts.baseUrl) {
+      throw new Error("Administrative connector provisioning requires a backend-managed endpoint.");
+    }
     const kind = opts.connectionKind || "openapi";
     const credentials = credentialsFor(opts);
     let connection;
@@ -164,7 +185,7 @@ export async function hydrateConnections() {
 
 export async function getToolConnection(toolName, connectionId = null) {
   const tools = await listPythonTools();
-  const provider = PYTHON_OAUTH[toolName];
+  const provider = managedOAuthProviderFor(toolName);
   return selectConnection(tools, { toolName, provider, connectionId });
 }
 
@@ -186,17 +207,25 @@ export async function disconnectTool(toolName, connectionId = null) {
 
 export async function reconnectTool(toolName, connectionId = null) {
   if (!pythonRuntimeEnabled) throw new Error("Reauthorization requires the Python control plane.");
-  const tool = await getToolConnection(toolName, connectionId);
-  if (!tool) throw new Error(`${toolName} is not connected.`);
-  const result = await reconnectPythonConnection(tool);
-  await hydrateConnections();
-  return result;
+  const provider = managedOAuthProviderFor(toolName);
+  const authorizationWindow = reserveAuthorizationWindow(provider || slugify(toolName), true);
+  try {
+    const tool = await getToolConnection(toolName, connectionId);
+    if (!tool) throw new Error(`${toolName} is not connected.`);
+    const result = await reconnectPythonConnection(tool, 120000, authorizationWindow);
+    await hydrateConnections();
+    return result;
+  } catch (error) {
+    if (!authorizationWindow.closed) authorizationWindow.close();
+    throw error;
+  }
 }
 
 export async function recordInterfaceConnection(toolName, meta = {}) {
   if (pythonRuntimeEnabled) {
     if (!meta.baseUrl) throw new Error("Paste the tool URL before connecting it.");
     return connectTool(toolName, {
+      administrativeSetup: true,
       baseUrl: meta.baseUrl,
       connectionKind: "browser",
       credentials: meta.credentials || {},

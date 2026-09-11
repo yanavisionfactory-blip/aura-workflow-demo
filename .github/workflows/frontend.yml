@@ -16,9 +16,8 @@ jobs:
         with:
           node-version: "20"
       - run: npm install
-      - run: node --test tests/runRecovery.test.mjs
+      - run: npm test
       - run: npm run build
         env:
           VITE_AURA_API_URL: https://api.example.invalid
           VITE_CLERK_PUBLISHABLE_KEY: pk_test_ci_placeholder
-
