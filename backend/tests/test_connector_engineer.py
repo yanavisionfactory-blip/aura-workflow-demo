@@ -10,6 +10,7 @@ from app.connector_engineer import (
     discovered_marketplace,
     engineer_nango_catalog,
     isolate_definition,
+    requested_marketplace_entry,
     release_signature_valid,
     released_connectors,
 )
@@ -43,6 +44,33 @@ def provider() -> dict:
         "display_name": "Linear",
         "auth_mode": "OAUTH2",
         "categories": ["Project Management"],
+    }
+
+
+def test_marketplace_keeps_trusted_logos_and_creates_safe_request_rows():
+    from app.connector_engineer import _provider_marketplace_entry
+
+    listed = _provider_marketplace_entry(
+        {
+            **provider(),
+            "logo_url": "https://app.nango.dev/images/template-logos/linear.svg",
+        }
+    )
+    assert listed["logo_url"].endswith("/linear.svg")
+    assert "logo_url" not in _provider_marketplace_entry(
+        {**provider(), "logo_url": "https://tracking.example/linear.svg"}
+    )
+
+    requested = requested_marketplace_entry("  Obscure   Work App  ")
+    assert requested == {
+        "provider": "obscure-work-app",
+        "display_name": "Obscure Work App",
+        "categories": ["Requested apps"],
+        "auth_mode": "UNKNOWN",
+        "eligible_for_one_click": False,
+        "availability": "requested",
+        "connectable": False,
+        "source": "user_request",
     }
 
 

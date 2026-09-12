@@ -27,6 +27,20 @@ class ConnectionResume(BaseModel):
     connection_id: str | None = None
 
 
+class ConnectorMarketplaceRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=160)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def normalize_name(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise TypeError("App name must be text")
+        normalized = " ".join(value.split())
+        if any(ord(character) < 32 for character in normalized):
+            raise ValueError("App name contains unsupported characters")
+        return normalized
+
+
 class CustomOAuthStart(BaseModel):
     slug: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,119}$")
     display_name: str = Field(min_length=2, max_length=200)

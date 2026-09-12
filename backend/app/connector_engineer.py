@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
+from urllib.parse import urlsplit
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
@@ -843,12 +844,43 @@ def _provider_marketplace_entry(provider: dict[str, Any]) -> dict[str, Any] | No
     if not isinstance(categories, list):
         categories = []
     auth_mode = str(provider.get("auth_mode") or "UNKNOWN").upper()
-    return {
+    entry = {
         "provider": slug,
         "display_name": str(provider.get("display_name") or provider.get("name") or slug),
         "categories": [str(item) for item in categories if item][:12],
         "auth_mode": auth_mode,
         "eligible_for_one_click": auth_mode == "OAUTH2",
+    }
+    logo_url = str(provider.get("logo_url") or "").strip()
+    if logo_url:
+        parsed = urlsplit(logo_url)
+        hostname = (parsed.hostname or "").lower()
+        if (
+            parsed.scheme == "https"
+            and hostname
+            and (hostname == "nango.dev" or hostname.endswith(".nango.dev"))
+            and parsed.username is None
+            and parsed.password is None
+        ):
+            entry["logo_url"] = logo_url
+    return entry
+
+
+def requested_marketplace_entry(name: str) -> dict[str, Any]:
+    """Create a non-connectable catalog row for an app requested by a user."""
+    display_name = " ".join(name.split())[:160]
+    provider = _slug(display_name, "")
+    if not provider:
+        provider = f"requested-{hashlib.sha256(display_name.encode()).hexdigest()[:12]}"
+    return {
+        "provider": provider,
+        "display_name": display_name,
+        "categories": ["Requested apps"],
+        "auth_mode": "UNKNOWN",
+        "eligible_for_one_click": False,
+        "availability": "requested",
+        "connectable": False,
+        "source": "user_request",
     }
 
 

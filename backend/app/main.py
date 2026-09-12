@@ -27,6 +27,7 @@ from .connector_engineer import (
     connector_engineer_tick,
     discovered_marketplace,
     release_descriptor,
+    requested_marketplace_entry,
     released_connector,
     released_connectors,
     verify_released_connection,
@@ -114,6 +115,7 @@ from .schemas import (
     ApprovalDecision,
     ConnectionDiscover,
     ConnectionResume,
+    ConnectorMarketplaceRequest,
     ConnectorDefinitionValidate,
     ConnectorInstallationCreate,
     ConnectorInstallationRollback,
@@ -629,6 +631,20 @@ async def managed_connector_status(
         }
         for item in discovered["providers"]
     }
+    requested_events = list(
+        (
+            await session.scalars(
+                select(AuditEvent)
+                .where(AuditEvent.event_type == "connector.marketplace_requested")
+                .order_by(AuditEvent.created_at.desc())
+                .limit(100)
+            )
+        ).all()
+    )
+    for event in reversed(requested_events):
+        item = requested_marketplace_entry(str((event.payload or {}).get("display_name") or ""))
+        if item["display_name"] and item["provider"] not in marketplace_by_provider:
+            marketplace_by_provider[item["provider"]] = item
     for provider, item in available_by_provider.items():
         marketplace_by_provider[provider] = {
             **marketplace_by_provider.get(provider, {}),
@@ -666,6 +682,71 @@ async def managed_connector_status(
             ),
         },
     }
+
+
+@app.post("/v1/managed-connectors/requests")
+async def request_marketplace_connector(
+    payload: ConnectorMarketplaceRequest,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    """Persist demand for an app without pretending an unsafe connector exists."""
+    entry = requested_marketplace_entry(payload.name)
+    discovered = await discovered_marketplace(session)
+    exact = next(
+        (
+            item
+            for item in discovered["providers"]
+            if str(item.get("provider") or "").casefold() == entry["provider"].casefold()
+            or str(item.get("display_name") or "").casefold()
+            == entry["display_name"].casefold()
+        ),
+        None,
+    )
+    if exact:
+        return {"status": "listed", "entry": exact}
+
+    recent = list(
+        (
+            await session.scalars(
+                select(AuditEvent)
+                .where(
+                    AuditEvent.event_type == "connector.marketplace_requested",
+                    AuditEvent.actor == context.subject,
+                    AuditEvent.created_at >= datetime.now(UTC) - timedelta(hours=1),
+                )
+                .order_by(AuditEvent.created_at.desc())
+                .limit(21)
+            )
+        ).all()
+    )
+    duplicate = next(
+        (
+            event
+            for event in recent
+            if str((event.payload or {}).get("display_name") or "").casefold()
+            == entry["display_name"].casefold()
+        ),
+        None,
+    )
+    if duplicate:
+        return {"status": "requested", "request_id": duplicate.id, "entry": entry}
+    if len(recent) >= 20:
+        raise HTTPException(429, "Too many connector requests; try again later")
+
+    event = AuditEvent(
+        workspace_id=context.workspace_id,
+        actor=context.subject,
+        event_type="connector.marketplace_requested",
+        payload={
+            "provider": entry["provider"],
+            "display_name": entry["display_name"],
+            "source": "marketplace_search",
+        },
+    )
+    session.add(event)
+    await session.commit()
+    return {"status": "requested", "request_id": event.id, "entry": entry}
 
 
 @app.get("/v1/admin/connector-engineer")
