@@ -125,7 +125,7 @@ class RunCreate(BaseModel):
     def validate_memory_selection(self):
         if bool(self.memory_run_id) != bool(self.memory_bindings):
             raise ValueError("Memory requires a source run and explicit input bindings")
-        documents = self.inputs.get("documents")
+        documents = self.inputs.get("attached_documents", self.inputs.get("documents"))
         if documents is not None:
             if not isinstance(documents, list) or len(documents) > 8:
                 raise ValueError("A run may contain no more than eight attached documents")
