@@ -25,6 +25,7 @@ from .models import (
     AuditEvent,
     CapabilityManifest,
     DispatchIntent,
+    ManagedConnectorRelease,
     RunStatus,
     ToolConnection,
     ToolKind,
@@ -195,9 +196,46 @@ async def _connection_credentials(
                     connection_id=tool.id,
                 ),
             )
-        integration_id, verification = await managed_connector_client().verify_connection(
-            tool.slug, {"connection_id": reference}
-        )
+        release_id = (tool.config or {}).get("connector_release_id")
+        release = await session.get(ManagedConnectorRelease, release_id) if release_id else None
+        if release_id:
+            from .connector_engineer import (
+                certify_verified_reads,
+                release_signature_valid,
+                released_connector,
+                verify_released_connection,
+            )
+
+            if (
+                not release
+                or release.status not in {"released", "superseded"}
+                or not release_signature_valid(release)
+            ):
+                release = await released_connector(session, tool.slug)
+            if not release:
+                return (
+                    None,
+                    None,
+                    _blocker(
+                        "connection_unavailable",
+                        f"{tool.display_name} no longer has a verified connector release.",
+                        action="wait_for_connector_repair",
+                        tool_slug=tool.slug,
+                        connection_id=tool.id,
+                    ),
+                )
+            integration_id = release.integration_id
+            verification = await verify_released_connection(
+                managed_connector_client(),
+                release,
+                {"connection_id": reference},
+            )
+        else:
+            integration_id, verification = (
+                await managed_connector_client().verify_connection(
+                    tool.slug, {"connection_id": reference}
+                )
+            )
         manifest.verification = verification
         manifest.verified_at = _now()
         if not verification.get("ok"):
@@ -220,6 +258,25 @@ async def _connection_credentials(
         manifest.status = "verified"
         tool.enabled = True
         tool.config = {**(tool.config or {}), "integration_id": integration_id}
+        if release_id and release:
+            tool.config = {
+                **tool.config,
+                "connector_release_id": release.id,
+                "connector_release_version": release.version,
+                "connector_release_hash": release.definition_hash,
+            }
+            tool.allowed_operations = list(
+                verification.get("allowed_operations") or []
+            )
+            manifest.manifest = release.definition.get("manifest") or {}
+            await certify_verified_reads(
+                session,
+                tool.workspace_id,
+                tool,
+                release,
+                list(verification.get("certified_read_operations") or []),
+            )
+            return {}, verification, None
         credentials = await managed_connector_client().get_credentials(reference, integration_id)
         return credentials, verification, None
 

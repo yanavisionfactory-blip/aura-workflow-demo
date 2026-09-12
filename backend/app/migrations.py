@@ -254,6 +254,44 @@ async def migrate_database() -> None:
             )
         )
         await connection.execute(
+            text(
+                """
+                CREATE OR REPLACE FUNCTION reject_signed_connector_release_change()
+                RETURNS trigger AS $$
+                BEGIN
+                    IF TG_OP = 'DELETE' THEN
+                        RAISE EXCEPTION 'signed connector release cannot be deleted';
+                    END IF;
+                    IF OLD.provider_slug IS DISTINCT FROM NEW.provider_slug
+                       OR OLD.integration_id IS DISTINCT FROM NEW.integration_id
+                       OR OLD.version IS DISTINCT FROM NEW.version
+                       OR OLD.display_name IS DISTINCT FROM NEW.display_name
+                       OR OLD.definition IS DISTINCT FROM NEW.definition
+                       OR OLD.definition_hash IS DISTINCT FROM NEW.definition_hash
+                       OR OLD.signature IS DISTINCT FROM NEW.signature THEN
+                        RAISE EXCEPTION 'signed connector release content cannot be changed';
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """
+            )
+        )
+        await connection.execute(
+            text(
+                "DROP TRIGGER IF EXISTS managed_connector_releases_immutable "
+                "ON managed_connector_releases"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE TRIGGER managed_connector_releases_immutable "
+                "BEFORE UPDATE OR DELETE ON managed_connector_releases FOR EACH ROW "
+                "WHEN (OLD.signature <> '') "
+                "EXECUTE FUNCTION reject_signed_connector_release_change()"
+            )
+        )
+        await connection.execute(
             text("DROP TRIGGER IF EXISTS approval_snapshots_immutable ON approval_snapshots")
         )
         await connection.execute(

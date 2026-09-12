@@ -191,6 +191,57 @@ class ConnectorPackage(Base):
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class ManagedConnectorRelease(Base):
+    """Global, immutable-by-version capability pack produced by Connector Engineer.
+
+    This table intentionally has no workspace_id: releases describe operator-owned
+    Nango integrations and are shared read-only across tenants. Customer connection
+    references remain isolated in ToolConnection.
+    """
+
+    __tablename__ = "managed_connector_releases"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider_slug",
+            "integration_id",
+            "version",
+            name="uq_managed_connector_release_version",
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    provider_slug: Mapped[str] = mapped_column(String(120), index=True)
+    integration_id: Mapped[str] = mapped_column(String(240), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    display_name: Mapped[str] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(30), default="discovered", index=True)
+    definition: Mapped[dict] = mapped_column(JSON, default=dict)
+    definition_hash: Mapped[str] = mapped_column(String(64), index=True)
+    signature: Mapped[str] = mapped_column(String(64), default="")
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict)
+    previous_release_id: Mapped[str | None] = mapped_column(
+        ForeignKey("managed_connector_releases.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ManagedConnectorCatalog(Base):
+    """Last provider catalog discovered by the operator-owned Connector Engineer."""
+
+    __tablename__ = "managed_connector_catalogs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    source: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    providers: Mapped[list] = mapped_column(JSON, default=list)
+    provider_count: Mapped[int] = mapped_column(Integer, default=0)
+    scan_cursor: Mapped[int] = mapped_column(Integer, default=0)
+    refreshed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
 class ConnectorInstallation(Base):
     __tablename__ = "connector_installations"
     __table_args__ = (

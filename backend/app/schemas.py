@@ -125,6 +125,23 @@ class RunCreate(BaseModel):
     def validate_memory_selection(self):
         if bool(self.memory_run_id) != bool(self.memory_bindings):
             raise ValueError("Memory requires a source run and explicit input bindings")
+        documents = self.inputs.get("documents")
+        if documents is not None:
+            if not isinstance(documents, list) or len(documents) > 8:
+                raise ValueError("A run may contain no more than eight attached documents")
+            encoded_size = 0
+            for document in documents:
+                if not isinstance(document, dict):
+                    raise ValueError("Attached document metadata must be an object")
+                name = document.get("name")
+                file_url = document.get("file_url")
+                if not isinstance(name, str) or not name.strip() or len(name) > 500:
+                    raise ValueError("Attached documents require a valid filename")
+                if not isinstance(file_url, str) or not file_url.startswith("data:"):
+                    raise ValueError("Attached document content must use an AURA upload reference")
+                encoded_size += len(file_url)
+            if encoded_size > 16_000_000:
+                raise ValueError("Attached document content exceeds the per-run limit")
         return self
 
 

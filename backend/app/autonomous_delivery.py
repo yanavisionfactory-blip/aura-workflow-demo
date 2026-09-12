@@ -22,6 +22,7 @@ from .models import (
     CapabilityManifest,
     DeadLetterEntry,
     DispatchIntent,
+    ManagedConnectorRelease,
     RunStatus,
     RunStep,
     StepAttempt,
@@ -487,9 +488,36 @@ async def _revalidate_connection(session, run, step) -> tuple[bool, bool]:
     if manifest and manifest.status == "revoked":
         return False, False
     try:
-        integration_id, verification = await managed_connector_client().verify_connection(
-            tool.slug, {"connection_id": connection_id}
-        )
+        release_id = (tool.config or {}).get("connector_release_id")
+        release = await session.get(ManagedConnectorRelease, release_id) if release_id else None
+        if release_id:
+            from .connector_engineer import (
+                certify_verified_reads,
+                release_signature_valid,
+                released_connector,
+                verify_released_connection,
+            )
+
+            if (
+                not release
+                or release.status not in {"released", "superseded"}
+                or not release_signature_valid(release)
+            ):
+                release = await released_connector(session, tool.slug)
+            if not release:
+                return False, False
+            integration_id = release.integration_id
+            verification = await verify_released_connection(
+                managed_connector_client(),
+                release,
+                {"connection_id": connection_id},
+            )
+        else:
+            integration_id, verification = (
+                await managed_connector_client().verify_connection(
+                    tool.slug, {"connection_id": connection_id}
+                )
+            )
     except Exception as exc:  # noqa: BLE001 - the next durable delivery may retry the control plane
         return False, bool(getattr(exc, "retryable", True))
     if not verification.get("ok"):
@@ -501,11 +529,31 @@ async def _revalidate_connection(session, run, step) -> tuple[bool, bool]:
         "connection_id": connection_id,
         "integration_id": integration_id,
         "verification_status": "verified",
+        **(
+            {
+                "connector_release_id": release.id,
+                "connector_release_version": release.version,
+                "connector_release_hash": release.definition_hash,
+            }
+            if release_id and release
+            else {}
+        ),
     }
     if manifest:
         manifest.status = "verified"
         manifest.verification = verification
         manifest.verified_at = datetime.now(UTC)
+        if release_id and release:
+            manifest.manifest = release.definition.get("manifest") or {}
+    if release_id and release:
+        tool.allowed_operations = list(verification.get("allowed_operations") or [])
+        await certify_verified_reads(
+            session,
+            run.workspace_id,
+            tool,
+            release,
+            list(verification.get("certified_read_operations") or []),
+        )
     return True, False
 
 

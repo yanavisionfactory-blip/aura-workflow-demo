@@ -20,6 +20,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .agent_runtime import deterministic_plan_fixes
 from .autonomous_delivery import reset_read_attempt_cycle
 from .config import get_settings
+from .connector_engineer import (
+    certify_verified_reads,
+    connector_engineer_loop,
+    connector_engineer_observation,
+    connector_engineer_tick,
+    discovered_marketplace,
+    release_descriptor,
+    released_connector,
+    released_connectors,
+    verify_released_connection,
+)
 from .connector_sdk import ConnectorSDKError, validate_connector_definition
 from .db import SessionLocal, engine, session_dependency, set_tenant_context
 from .dispatch import dispatch_pending, recovery_loop
@@ -47,6 +58,7 @@ from .models import (
     ConnectorInstallationVersion,
     ConnectorPackage,
     DeadLetterEntry,
+    ManagedConnectorRelease,
     PlanVersion,
     PolicyConfig,
     PollingSubscription,
@@ -182,6 +194,12 @@ async def startup() -> None:
         import asyncio
 
         app.state.recovery_task = asyncio.create_task(recovery_loop())
+    if settings.connector_engineer_enabled:
+        import asyncio
+
+        app.state.connector_engineer_task = asyncio.create_task(
+            connector_engineer_loop(SessionLocal)
+        )
 
 
 @app.on_event("shutdown")
@@ -189,9 +207,13 @@ async def shutdown_recovery() -> None:
     import asyncio
     from contextlib import suppress
 
-    task = getattr(app.state, "recovery_task", None)
-    if task:
+    tasks = [
+        getattr(app.state, "recovery_task", None),
+        getattr(app.state, "connector_engineer_task", None),
+    ]
+    for task in (item for item in tasks if item):
         task.cancel()
+    for task in (item for item in tasks if item):
         with suppress(asyncio.CancelledError):
             await task
 
@@ -303,6 +325,14 @@ async def readiness() -> dict:
         "enabled": settings.recovery_scheduler_enabled,
         **scheduler_observation,
     }
+    connector_engineer_details = {
+        **connector_engineer_observation,
+        "enabled": settings.connector_engineer_enabled,
+        "configured": bool(
+            managed_connector_client().configured
+            and len(settings.connector_release_signing_key) >= 32
+        ),
+    }
     if settings.recovery_scheduler_enabled:
         now = datetime.now(UTC)
         started_at = datetime.fromisoformat(scheduler_observation["started_at"])
@@ -328,12 +358,14 @@ async def readiness() -> dict:
                 "status": "not_ready",
                 "checks": checks,
                 "recovery_scheduler": scheduler_details,
+                "connector_engineer": connector_engineer_details,
             },
         )
     return {
         "status": "ready",
         "checks": checks,
         "recovery_scheduler": scheduler_details,
+        "connector_engineer": connector_engineer_details,
     }
 
 
@@ -560,14 +592,141 @@ async def managed_connector_status(
 ) -> dict:
     """Expose capabilities, never managed-connector credentials, to the UI."""
     client = managed_connector_client()
+    dynamic = await released_connectors(session) if client.configured else []
+    discovered = await discovered_marketplace(session) if client.configured else {
+        "providers": [],
+        "provider_count": 0,
+        "refreshed_at": None,
+    }
+    native_catalog = [
+        {
+            "provider": slug,
+            "display_name": definition.display_name,
+            "auth_mode": "OAUTH2",
+            "capability_count": len(native_operations(slug)),
+            "capabilities": native_operations(slug),
+            "managed": True,
+            "source": "native",
+        }
+        for slug, definition in sorted(PROVIDERS.items())
+    ]
+    dynamic_catalog = [
+        {**release_descriptor(release), "source": "connector_engineer"}
+        for release in dynamic
+    ]
+    available_by_provider = {
+        item["provider"]: item for item in native_catalog + dynamic_catalog
+    }
+    marketplace_by_provider = {
+        item["provider"]: {
+            **item,
+            "availability": "available"
+            if item["provider"] in available_by_provider
+            else "verifying"
+            if item.get("eligible_for_one_click")
+            else "unsupported_auth",
+            "connectable": item["provider"] in available_by_provider,
+        }
+        for item in discovered["providers"]
+    }
+    for provider, item in available_by_provider.items():
+        marketplace_by_provider[provider] = {
+            **marketplace_by_provider.get(provider, {}),
+            **item,
+            "availability": "available",
+            "connectable": True,
+            "eligible_for_one_click": True,
+        }
     return {
         "configured": client.configured,
-        # With a Nango environment key, every AURA provider can be resolved
-        # lazily. The frontend therefore routes only actually-needed apps into
-        # the managed flow and never asks users to configure integration IDs.
-        "providers": sorted(PROVIDERS) if client.configured else [],
+        # Only built-ins or signed/canaried releases are selectable. Discovery
+        # alone may appear in search, but never creates a Connect action.
+        "providers": (
+            sorted({*PROVIDERS, *(release.provider_slug for release in dynamic)})
+            if client.configured
+            else []
+        ),
+        "catalog": native_catalog + dynamic_catalog if client.configured else [],
+        "marketplace": sorted(
+            marketplace_by_provider.values(),
+            key=lambda item: (not item["connectable"], item["display_name"].casefold()),
+        )
+        if client.configured
+        else [],
+        "marketplace_refreshed_at": discovered["refreshed_at"],
         "auto_provision": bool(client.configured and settings.nango_auto_provision_integrations),
+        "connector_engineer": {
+            "enabled": settings.connector_engineer_enabled,
+            "configured": bool(
+                client.configured and len(settings.connector_release_signing_key) >= 32
+            ),
+            "released": len(dynamic_catalog),
+            "last_scan_completed_at": connector_engineer_observation.get(
+                "last_scan_completed_at"
+            ),
+        },
     }
+
+
+@app.get("/v1/admin/connector-engineer")
+async def connector_engineer_status(
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    if context.role not in {"owner", "admin"}:
+        raise HTTPException(403, "Only tenant administrators may inspect connector releases")
+    releases = list(
+        (
+            await session.scalars(
+                select(ManagedConnectorRelease)
+                .order_by(
+                    ManagedConnectorRelease.provider_slug,
+                    ManagedConnectorRelease.version.desc(),
+                )
+                .limit(250)
+            )
+        ).all()
+    )
+    return {
+        "observation": dict(connector_engineer_observation),
+        "configured": bool(
+            managed_connector_client().configured
+            and len(settings.connector_release_signing_key) >= 32
+        ),
+        "releases": [
+            {
+                "id": release.id,
+                "provider": release.provider_slug,
+                "integration_id": release.integration_id,
+                "version": release.version,
+                "status": release.status,
+                "definition_hash": release.definition_hash,
+                "released_at": release.released_at.isoformat()
+                if release.released_at
+                else None,
+                "canary": {
+                    "passed": (release.evidence or {}).get("canary", {}).get("passed"),
+                    "checked_at": (release.evidence or {}).get("canary", {}).get(
+                        "checked_at"
+                    ),
+                    "operation_count": len(
+                        (release.evidence or {}).get("canary", {}).get("operations", [])
+                    ),
+                },
+            }
+            for release in releases
+        ],
+    }
+
+
+@app.post("/v1/admin/connector-engineer/scan")
+async def scan_connector_engineer_catalog(
+    context: TenantContext = Depends(tenant_context),
+) -> dict:
+    if context.role not in {"owner", "admin"}:
+        raise HTTPException(403, "Only tenant administrators may scan connector releases")
+    summary = await connector_engineer_tick(SessionLocal, force=True)
+    return summary.model_dump(mode="json")
 
 
 @app.post("/v1/managed-connectors/{provider}/session", status_code=201)
@@ -579,8 +738,10 @@ async def create_managed_connector_session(
     session: AsyncSession = Depends(tenant_session),
 ) -> dict:
     provider = provider.lower()
-    if provider not in PROVIDERS:
+    release = None if provider in PROVIDERS else await released_connector(session, provider)
+    if provider not in PROVIDERS and not release:
         raise HTTPException(404, "Unknown app")
+    release_integration_id = release.integration_id if release else None
     client = managed_connector_client()
     selected_tool = None
     if connection_id:
@@ -611,14 +772,25 @@ async def create_managed_connector_session(
                     context.subject,
                     selected_reference,
                     include_errors=True,
+                    **(
+                        {"integration_id": release_integration_id}
+                        if release_integration_id
+                        else {}
+                    ),
                 )
                 if not scoped:
                     raise HTTPException(404, "Connection not found")
+            reconnect_arguments = (
+                {"integration_id": release_integration_id}
+                if release_integration_id
+                else {}
+            )
             result = await client.create_reconnect_session(
                 provider,
                 selected_reference,
                 context.workspace_id,
                 context.subject,
+                **reconnect_arguments,
             )
             result.update(
                 {
@@ -629,7 +801,16 @@ async def create_managed_connector_session(
                 }
             )
         else:
-            matches = await client.find_connections(provider, context.workspace_id, context.subject)
+            matches = await client.find_connections(
+                provider,
+                context.workspace_id,
+                context.subject,
+                **(
+                    {"integration_id": release_integration_id}
+                    if release_integration_id
+                    else {}
+                ),
+            )
             if len(matches) > 1:
                 raise HTTPException(
                     409,
@@ -647,7 +828,15 @@ async def create_managed_connector_session(
                 )
             if matches:
                 existing = matches[0]
-                integration_id, verification = await client.verify_connection(provider, existing)
+                if release:
+                    integration_id = release.integration_id
+                    verification = await verify_released_connection(
+                        client, release, existing
+                    )
+                else:
+                    integration_id, verification = await client.verify_connection(
+                        provider, existing
+                    )
                 if verification.get("ok"):
                     result = {
                         "already_connected": True,
@@ -662,6 +851,11 @@ async def create_managed_connector_session(
                         existing["connection_id"],
                         context.workspace_id,
                         context.subject,
+                        **(
+                            {"integration_id": release_integration_id}
+                            if release_integration_id
+                            else {}
+                        ),
                     )
                     result.update(
                         {
@@ -671,7 +865,14 @@ async def create_managed_connector_session(
                     )
             else:
                 result = await client.create_session(
-                    provider, context.workspace_id, context.subject
+                    provider,
+                    context.workspace_id,
+                    context.subject,
+                    **(
+                        {"integration_id": release_integration_id}
+                        if release_integration_id
+                        else {}
+                    ),
                 )
                 result["mode"] = "connect"
     except ManagedConnectorError as exc:
@@ -688,6 +889,7 @@ async def create_managed_connector_session(
                 "provider": provider,
                 "connection_id": selected_tool.id if selected_tool else None,
                 "mode": result.get("mode"),
+                "release_id": release.id if release else None,
             },
         )
     )
@@ -706,8 +908,10 @@ async def sync_managed_connector(
     """Import a managed reference only after credentials and provider access verify."""
     provider = provider.lower()
     definition = PROVIDERS.get(provider)
-    if not definition:
+    release = None if definition else await released_connector(session, provider)
+    if not definition and not release:
         raise HTTPException(404, "Unknown app")
+    release_integration_id = release.integration_id if release else None
     client = managed_connector_client()
     tool = None
     if connection_id:
@@ -731,6 +935,11 @@ async def sync_managed_connector(
             context.subject,
             selected_reference,
             include_errors=True,
+            **(
+                {"integration_id": release_integration_id}
+                if release_integration_id
+                else {}
+            ),
         )
     except ManagedConnectorError as exc:
         raise HTTPException(503, str(exc)) from exc
@@ -760,7 +969,11 @@ async def sync_managed_connector(
             "connection_id": tool.id if tool else None,
         }
     try:
-        integration_id, verification = await client.verify_connection(provider, connection)
+        if release:
+            integration_id = release.integration_id
+            verification = await verify_released_connection(client, release, connection)
+        else:
+            integration_id, verification = await client.verify_connection(provider, connection)
     except ManagedConnectorError as exc:
         raise HTTPException(503, str(exc)) from exc
     if not verification.get("ok"):
@@ -783,32 +996,51 @@ async def sync_managed_connector(
             "connection_id": tool.id if tool else None,
         }
     external_account_id = external_account_reference(provider, connection, verification)
+    capability_manifest = (
+        release.definition.get("manifest") if release else native_manifest(provider)
+    )
+    allowed = (
+        list(verification.get("allowed_operations") or [])
+        if release
+        else native_operations(provider)
+    )
     config = {
         "managed_by": "nango",
         "connection_id": connection["connection_id"],
         "integration_id": integration_id,
         "external_account_id": external_account_id,
+        **(
+            {
+                "connector_release_id": release.id,
+                "connector_release_version": release.version,
+                "connector_release_hash": release.definition_hash,
+            }
+            if release
+            else {}
+        ),
     }
     if tool:
-        tool.display_name = definition.display_name
+        tool.display_name = definition.display_name if definition else release.display_name
         tool.kind = ToolKind.oauth
+        tool.base_url = settings.nango_base_url if release else tool.base_url
         tool.config = config
         tool.encrypted_credentials = CredentialVault().encrypt({})
         tool.external_connection_id = connection["connection_id"]
         tool.external_account_id = external_account_id
-        tool.allowed_operations = native_operations(provider)
+        tool.allowed_operations = allowed
         tool.enabled = True
     else:
         tool = ToolConnection(
             workspace_id=context.workspace_id,
             slug=provider,
-            display_name=definition.display_name,
+            display_name=definition.display_name if definition else release.display_name,
             kind=ToolKind.oauth,
+            base_url=settings.nango_base_url if release else None,
             encrypted_credentials=CredentialVault().encrypt({}),
             external_connection_id=connection["connection_id"],
             external_account_id=external_account_id,
             config=config,
-            allowed_operations=native_operations(provider),
+            allowed_operations=allowed,
             enabled=True,
         )
         session.add(tool)
@@ -824,9 +1056,20 @@ async def sync_managed_connector(
         )
         session.add(record)
     record.status = "verified"
-    record.manifest = native_manifest(provider)
-    record.verification = {**verification, "source": "managed_connector"}
+    record.manifest = capability_manifest
+    record.verification = {
+        **verification,
+        "source": "connector_engineer" if release else "managed_connector",
+    }
     record.verified_at = datetime.now(UTC)
+    if release:
+        await certify_verified_reads(
+            session,
+            context.workspace_id,
+            tool,
+            release,
+            list(verification.get("certified_read_operations") or []),
+        )
     client.clear_authorization_sessions(
         provider,
         context.workspace_id,
@@ -837,7 +1080,11 @@ async def sync_managed_connector(
             workspace_id=context.workspace_id,
             actor=context.subject,
             event_type="connector.managed_authorized",
-            payload={"tool_id": tool.id, "provider": provider},
+            payload={
+                "tool_id": tool.id,
+                "provider": provider,
+                "release_id": release.id if release else None,
+            },
         )
     )
     await session.commit()
@@ -2001,9 +2248,34 @@ async def test_connection(
     if tool.config.get("managed_by") == "nango":
         try:
             selected_reference = managed_connection_reference(tool) or tool.config["connection_id"]
-            _, result = await managed_connector_client().verify_connection(
-                tool.slug, {"connection_id": selected_reference}
+            release_id = (tool.config or {}).get("connector_release_id")
+            release = (
+                await session.get(ManagedConnectorRelease, release_id)
+                if release_id
+                else None
             )
+            if release_id:
+                from .connector_engineer import release_signature_valid
+
+                if (
+                    not release
+                    or release.status not in {"released", "superseded"}
+                    or not release_signature_valid(release)
+                ):
+                    release = await released_connector(session, tool.slug)
+                if not release:
+                    raise ManagedConnectorError(
+                        "The connector release is temporarily unavailable"
+                    )
+                result = await verify_released_connection(
+                    managed_connector_client(),
+                    release,
+                    {"connection_id": selected_reference},
+                )
+            else:
+                _, result = await managed_connector_client().verify_connection(
+                    tool.slug, {"connection_id": selected_reference}
+                )
         except (ManagedConnectorError, KeyError):
             result = {"ok": False, "reason": "authorization_required"}
         manifest.verification = result
@@ -2013,6 +2285,23 @@ async def test_connection(
             tool.external_connection_id = selected_reference
             if not tool.external_account_id:
                 tool.external_account_id = external_account_reference(tool.slug, {}, result)
+            if release_id and release:
+                tool.config = {
+                    **(tool.config or {}),
+                    "integration_id": release.integration_id,
+                    "connector_release_id": release.id,
+                    "connector_release_version": release.version,
+                    "connector_release_hash": release.definition_hash,
+                }
+                tool.allowed_operations = list(result.get("allowed_operations") or [])
+                manifest.manifest = release.definition.get("manifest") or {}
+                await certify_verified_reads(
+                    session,
+                    context.workspace_id,
+                    tool,
+                    release,
+                    list(result.get("certified_read_operations") or []),
+                )
         manifest.verified_at = datetime.now(UTC)
         await session.commit()
         return {"id": tool.id, "status": manifest.status, "verification": result}

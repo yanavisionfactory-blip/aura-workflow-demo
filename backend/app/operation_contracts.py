@@ -3,9 +3,10 @@
 Unknown output shapes remain explicitly provisional. Authentication is never
 treated as conformance certification. Raw provider fields are retained.
 """
-from copy import deepcopy
 import hashlib
+import hmac
 import json
+from copy import deepcopy
 
 from jsonschema import Draft202012Validator
 
@@ -296,21 +297,105 @@ KNOWN.update({
 from .outcome_checks import READBACK_OPERATIONS as READBACK
 
 
+def _engineered_attestation(module: dict) -> bool:
+    """Verify the release stamp before trusting a dynamically compiled schema."""
+    metadata = (module.get("metadata") or {}).get("connector_engineer")
+    if not isinstance(metadata, dict):
+        return False
+    try:
+        from .config import get_settings
+
+        signature = str(metadata["release_signature"])
+        module_signature = str(metadata["module_signature"])
+        payload = {
+            "provider_slug": str(metadata["provider"]),
+            "integration_id": str(metadata["integration_id"]),
+            "version": int(metadata["release_version"]),
+            "definition_hash": str(metadata["release_definition_hash"]),
+            "engineer_version": int(metadata["version"]),
+        }
+        key = get_settings().connector_release_signing_key
+        if len(key) < 32 or len(signature) != 64 or len(module_signature) != 64:
+            return False
+        expected_release = hmac.new(
+            key.encode(),
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        content = deepcopy(module)
+        content_metadata = (content.get("metadata") or {}).get("connector_engineer")
+        for field in (
+            "release_id",
+            "release_version",
+            "release_definition_hash",
+            "release_signature",
+            "module_hash",
+            "module_signature",
+        ):
+            content_metadata.pop(field, None)
+        module_hash = hashlib.sha256(
+            json.dumps(
+                content,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode()
+        ).hexdigest()
+        expected_module = hmac.new(
+            key.encode(),
+            json.dumps(
+                {**payload, "module_hash": module_hash},
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        return (
+            hmac.compare_digest(expected_release, signature)
+            and hmac.compare_digest(str(metadata["module_hash"]), module_hash)
+            and hmac.compare_digest(expected_module, module_signature)
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def enrich_operation(module: dict) -> dict:
     value = deepcopy(module)
     operation = value["name"]
-    schema, evidence = KNOWN.get(operation, (value.get("output_schema", OBJECT), []))
+    engineered = _engineered_attestation(value)
+    connector_metadata = value.get("metadata") or {}
+    schema, evidence = KNOWN.get(
+        operation,
+        (
+            value.get("output_schema", OBJECT),
+            connector_metadata.get("provides", []) if engineered else [],
+        ),
+    )
     value["output_schema"] = deepcopy(schema)
     read = value.get("permission_scope") == "read"
-    contract = {"version": 2, "verification_version": 2, "output_validation": "typed" if operation in KNOWN else "provisional",
-        "provides": evidence, "readback_operation": READBACK.get(operation),
-        "readback_operations": [READBACK[operation]] + (["notion.blocks.children.list"] if operation == "notion.page.create" else []) if operation in READBACK else [],
+    declared_readback = connector_metadata.get("readback") if engineered else None
+    readback_operation = (
+        declared_readback.get("operation")
+        if isinstance(declared_readback, dict)
+        else READBACK.get(operation)
+    )
+    typed = operation in KNOWN or engineered
+    contract = {"version": 2, "verification_version": 2, "output_validation": "typed" if typed else "provisional",
+        "output_schema": deepcopy(schema),
+        "provides": evidence, "readback_operation": readback_operation,
+        "readback_operations": [readback_operation] + (["notion.blocks.children.list"] if operation == "notion.page.create" else []) if readback_operation else [],
         "retry": {"max_attempts": 3 if read else 1,
             "retry_categories": ["timeout", "rate_limited", "provider_unavailable"] if read else [],
             "uncertain_write": "reconcile_before_retry"},
-        "pagination": "bounded_recursive" if operation == "notion.blocks.children.list" else "provider_cursor" if any(word in operation for word in ("list", "search")) else "not_applicable",
-        "reconciliation": "read_known_resource" if operation in {"notion.page.update", "jira.issue.update"} else "receipt_readback_or_pause" if operation in READBACK else "pause_if_uncertain",
-        "concurrent_read": read and operation in KNOWN,
+        "pagination": "bounded_recursive" if operation == "notion.blocks.children.list" else "provider_cursor" if any(word in operation for word in ("list", "search")) or (value.get("transport") or {}).get("type") == "nango_records" else "not_applicable",
+        "reconciliation": "read_known_resource" if operation in {"notion.page.update", "jira.issue.update"} else "receipt_readback_or_pause" if readback_operation else "pause_if_uncertain",
+        "concurrent_read": read and typed,
         "execution_ready": False, "certification": "live_conformance_required"}
     contract["hash"] = hashlib.sha256(json.dumps({"input": value.get("input_schema"),
         "output": schema, "contract": contract}, sort_keys=True).encode()).hexdigest()
@@ -318,12 +403,17 @@ def enrich_operation(module: dict) -> dict:
     return value
 
 
-def output_errors(operation: str, result: object) -> list[str]:
-    if operation not in KNOWN:
+def output_errors(
+    operation: str,
+    result: object,
+    output_schema: dict | None = None,
+) -> list[str]:
+    schema = KNOWN.get(operation, (output_schema, []))[0]
+    if not schema:
         return []
     # Error paths only: never include provider content or credentials in diagnostics.
     return ["Invalid provider output at " + ".".join(map(str, error.path))
-            for error in Draft202012Validator(KNOWN[operation][0]).iter_errors(result)]
+            for error in Draft202012Validator(schema).iter_errors(result)]
 
 
 def compile_contracts(plan, manifests: dict) -> dict:

@@ -130,6 +130,20 @@ scheduled; recovery rounds and the last action are also exposed by the run evalu
 
 ## Connector certification
 
+The dynamic Connector Engineer continuously reconciles configured Nango OAuth2
+integrations into signed, versioned capability packs. Discovery is not release:
+only isolated definitions that pass every operation on a dedicated canary account
+enter the planning catalog. Customer OAuth sessions are then restricted to that
+exact released integration, and the connection is scope/probe verified before a
+saved workflow resumes. A failed candidate never replaces the last good release;
+repeated failures quarantine an active release and restore its valid predecessor.
+The searchable marketplace is the persisted provider discovery snapshot: `verifying`
+entries are visible for discovery but disabled, while only signed/canaried `available`
+entries can open consent. Bounded scans keep a durable cursor and rotate through the
+eligible catalog instead of repeatedly inspecting the same first batch.
+See [`docs/connector-authorization.md`](docs/connector-authorization.md) for the
+operator variables, release states, and customer-visible boundary.
+
 A verified OAuth connection does not certify its operations. Native contracts expose
 input/output schemas, permission scope, evidence tags, retry semantics and a contract
 hash. Typed output schemas cover supported Notion, Gmail, Calendar and Jira reads and
