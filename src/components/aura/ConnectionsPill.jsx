@@ -31,7 +31,8 @@ import {
   removeDocument,
   subscribeDocuments,
 } from "@/lib/documentStore";
-import { CATALOG, MARKETPLACE } from "@/lib/toolCatalog";
+import { requestManagedConnector } from "@/lib/auraApi";
+import { CATALOG, MARKETPLACE, searchMarketplace } from "@/lib/toolCatalog";
 
 const isAura = (name) => name === "AURA Intelligence";
 
@@ -44,6 +45,7 @@ export default function ConnectionsPill() {
   const [query, setQuery] = useState("");
   const [catalogRevision, setCatalogRevision] = useState(0);
   const [connecting, setConnecting] = useState(null);
+  const [requesting, setRequesting] = useState(null);
   const [connectionAction, setConnectionAction] = useState("");
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
@@ -72,13 +74,7 @@ export default function ConnectionsPill() {
   }, [connected, catalogRevision]);
 
   const marketplace = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    return MARKETPLACE.filter((tool) => {
-      if (!needle) return true;
-      return tool.name.toLowerCase().includes(needle) ||
-        tool.provider.includes(needle) ||
-        tool.categories?.some((category) => category.toLowerCase().includes(needle));
-    });
+    return searchMarketplace(query);
   }, [query, catalogRevision]);
 
   const count = connectedTools.length;
@@ -95,6 +91,20 @@ export default function ConnectionsPill() {
       setError(cause.message || `Could not connect ${tool.name}.`);
     } finally {
       setConnecting(null);
+    }
+  };
+
+  const requestApp = async (tool) => {
+    setRequesting(tool.name);
+    setError("");
+    try {
+      await requestManagedConnector(tool.name);
+      await hydrateConnections();
+      setCatalogRevision((value) => value + 1);
+    } catch (cause) {
+      setError(cause.message || `AURA could not request ${tool.name}.`);
+    } finally {
+      setRequesting(null);
     }
   };
 
@@ -283,7 +293,7 @@ export default function ConnectionsPill() {
                 <>
                   <div className="px-5 py-4">
                     <h3 className="text-base font-semibold">App marketplace</h3>
-                    <p className="mt-1 text-xs text-muted-foreground">Search every provider AURA has discovered. Connect is enabled only after isolated tests and canary verification.</p>
+                    <p className="mt-1 text-xs text-muted-foreground">Search {MARKETPLACE.length.toLocaleString()} apps and APIs. If an app is missing, request it here without configuring credentials.</p>
                   </div>
                   <div className="px-5 pb-3">
                     <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-card/70 px-3 py-2">
@@ -296,24 +306,30 @@ export default function ConnectionsPill() {
                       const isConnected = Boolean(connected[tool.name]);
                       return (
                         <div key={`${tool.provider}:${tool.name}`} className="flex items-center gap-3 rounded-xl p-2.5 transition-colors hover:bg-white/5">
-                          <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/8 bg-secondary text-base">{tool.icon}</div>
+                          <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-lg border border-white/8 bg-secondary text-base">
+                            {tool.logoUrl ? <img src={tool.logoUrl} alt="" className="h-6 w-6 object-contain" /> : tool.icon}
+                          </div>
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-sm font-medium">{tool.name}</p>
                             <p className="truncate text-xs text-muted-foreground">{tool.desc}</p>
                           </div>
                           {isConnected ? (
                             <span className="flex items-center gap-1 text-xs text-emerald-400"><Check className="h-3.5 w-3.5" />Connected</span>
+                          ) : tool.requestable ? (
+                            <button type="button" onClick={() => requestApp(tool)} disabled={requesting === tool.name} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-50">
+                              {requesting === tool.name ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}{requesting === tool.name ? "Requesting…" : "Request app"}
+                            </button>
                           ) : tool.connectable ? (
                             <button type="button" onClick={() => connect(tool)} disabled={connecting === tool.name} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-50">
                               {connecting === tool.name ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}{connecting === tool.name ? "Opening…" : "Connect"}
                             </button>
                           ) : (
-                            <span className="rounded-full border border-amber-400/20 bg-amber-400/5 px-2 py-1 text-[10px] text-amber-300">{tool.availability === "unsupported_auth" ? "Not one-click" : "Verifying"}</span>
+                            <span className="rounded-full border border-amber-400/20 bg-amber-400/5 px-2 py-1 text-[10px] text-amber-300">{tool.availability === "unsupported_auth" ? "Not one-click" : tool.availability === "requested" ? "Requested" : "Verifying"}</span>
                           )}
                         </div>
                       );
                     })}
-                    {!marketplace.length && <p className="py-8 text-center text-xs text-muted-foreground">No matching provider found. AURA refreshes this catalog automatically.</p>}
+                    {!marketplace.length && <p className="py-8 text-center text-xs text-muted-foreground">Type at least two characters to find or request an app.</p>}
                   </div>
                 </>
               ) : (

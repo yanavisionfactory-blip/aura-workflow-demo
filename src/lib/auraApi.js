@@ -111,6 +111,14 @@ export async function getManagedConnectorStatus(refresh = false) {
   return managedConnectorStatus;
 }
 
+export async function requestManagedConnector(name) {
+  await ensureWorkspace();
+  return request("/v1/managed-connectors/requests", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}
+
 export async function syncManagedConnector(provider, connection = {}) {
   await ensureWorkspace();
   const params = new URLSearchParams();

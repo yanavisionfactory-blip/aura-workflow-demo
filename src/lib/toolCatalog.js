@@ -52,12 +52,39 @@ function normalize(item) {
     name: String(item.display_name || provider),
     provider,
     icon: ICONS[provider] || "🔗",
+    logoUrl: String(item.logo_url || "").startsWith("https://") ? item.logo_url : null,
     desc: description(item),
     categories: Array.isArray(item.categories) ? item.categories : [],
     connectable: Boolean(item.connectable ?? item.availability === "available"),
     availability: item.availability || (item.connectable ? "available" : "verifying"),
     source: item.source || "connector_engineer",
   };
+}
+
+export function searchMarketplace(query, limit = 120) {
+  const displayName = String(query || "").trim().replace(/\s+/g, " ");
+  const needle = displayName.toLowerCase();
+  const matches = MARKETPLACE.filter((tool) => {
+    if (!needle) return true;
+    return tool.name.toLowerCase().includes(needle) ||
+      tool.provider.includes(needle) ||
+      tool.categories?.some((category) => category.toLowerCase().includes(needle));
+  });
+  if (matches.length || displayName.length < 2) return matches.slice(0, limit);
+
+  const requestedSlug = needle.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "app";
+  return [{
+    name: displayName,
+    provider: `requested:${requestedSlug}`,
+    icon: "＋",
+    logoUrl: null,
+    desc: "Not in the current directory — ask AURA to add it",
+    categories: ["Requested apps"],
+    connectable: false,
+    requestable: true,
+    availability: "requestable",
+    source: "search_request",
+  }];
 }
 
 function expandGoogle(item) {
