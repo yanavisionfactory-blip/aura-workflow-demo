@@ -1,13 +1,11 @@
 import { replaceConnections } from "@/lib/connectionsStore";
 import { isVerifiedConnection, selectConnection } from "@/lib/connectionSelection.mjs";
 import {
-  authorizeManagedConnector,
-  authorizeOAuth,
+  authorizeConnectorBroker,
   disconnectPythonConnection,
   getManagedConnectorStatus,
   listPythonTools,
   pythonRuntimeEnabled,
-  reconnectPythonConnection,
   reserveAuthorizationWindow,
   testPythonConnection,
 } from "@/lib/auraApi";
@@ -31,18 +29,16 @@ export async function connectTool(toolName, opts = {}) {
   }
 
   const provider = entry.provider;
-  const authorizationWindow = reserveAuthorizationWindow(provider);
+  let authorizationWindow = null;
   try {
     const existing = await getToolConnection(toolName, opts.connectionId);
-    const managed = await getManagedConnectorStatus(true).catch(() => ({
-      configured: false,
-      providers: [],
-    }));
-    const result = existing?.kind === "oauth"
-      ? await reconnectPythonConnection(existing, 120000, authorizationWindow)
-      : managed.configured && managed.providers.includes(provider)
-        ? await authorizeManagedConnector(provider, 120000, authorizationWindow)
-        : await authorizeOAuth(provider, 120000, authorizationWindow);
+    const backend = existing?.connection_backend || entry.connectionBackend;
+    if (backend !== "pipedream") authorizationWindow = reserveAuthorizationWindow(provider);
+    const result = await authorizeConnectorBroker(provider, {
+      connection: existing,
+      timeoutMs: 120000,
+      reservedWindow: authorizationWindow,
+    });
 
     if (result.redirecting) {
       return { method: "oauth", connected: false, authorizationStarted: true, provider };
@@ -60,7 +56,7 @@ export async function connectTool(toolName, opts = {}) {
       connection: result.tool,
     };
   } catch (error) {
-    if (!authorizationWindow.closed) authorizationWindow.close();
+    if (authorizationWindow && !authorizationWindow.closed) authorizationWindow.close();
     throw error;
   }
 }
@@ -123,15 +119,22 @@ export async function reconnectTool(toolName, connectionId = null) {
   if (!pythonRuntimeEnabled) throw new Error("Reauthorization requires the secure control plane.");
   const provider = providerForTool(toolName);
   if (!provider) throw new Error(`${toolName} is not a released one-click connector.`);
-  const authorizationWindow = reserveAuthorizationWindow(provider, true);
+  let authorizationWindow = null;
   try {
     const tool = await getToolConnection(toolName, connectionId);
     if (!tool) throw new Error(`${toolName} is not connected.`);
-    const result = await reconnectPythonConnection(tool, 120000, authorizationWindow);
+    if (tool.connection_backend !== "pipedream") {
+      authorizationWindow = reserveAuthorizationWindow(provider, true);
+    }
+    const result = await authorizeConnectorBroker(provider, {
+      connection: tool,
+      timeoutMs: 120000,
+      reservedWindow: authorizationWindow,
+    });
     await hydrateConnections();
     return result;
   } catch (error) {
-    if (!authorizationWindow.closed) authorizationWindow.close();
+    if (authorizationWindow && !authorizationWindow.closed) authorizationWindow.close();
     throw error;
   }
 }
