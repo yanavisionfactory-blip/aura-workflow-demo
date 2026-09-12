@@ -5,13 +5,16 @@ import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 
+from jsonschema import Draft202012Validator
 from sqlalchemy import select
 
 from .config import get_settings
 from .db import SessionLocal, set_tenant_context
+from .managed_connectors import managed_connection_reference, managed_connector_client
 from .models import (
     AuditEvent,
     CapabilityManifest,
+    ManagedConnectorRelease,
     PollingDelivery,
     PollingSubscription,
     RunStatus,
@@ -118,33 +121,62 @@ async def poll_subscription(subscription_id: str, workspace_id: str) -> dict:
         )
         if capability.get("permission_scope") != "read":
             raise RuntimeError("Polling triggers may only execute read modules")
-        credentials = vault.decrypt(tool.encrypted_credentials)
-        if tool.kind.value == "oauth":
-            credentials, changed = await refresh_oauth_credentials(
-                get_settings(), tool.slug, credentials, tool.config
-            )
-            if changed:
-                tool.encrypted_credentials = vault.encrypt(credentials)
-                session.add(
-                    AuditEvent(
-                        workspace_id=workspace_id,
-                        actor="polling-trigger",
-                        event_type="connector.token_refreshed",
-                        payload={"tool_id": tool.id, "slug": tool.slug},
-                    )
-                )
-        executor = ProviderExecutor(
-            credentials,
-            tool.base_url,
-            provider_kind=tool.kind.value,
-            capability_manifest=manifest_record.manifest,
-        )
         arguments = arguments_with_checkpoint(
             subscription.arguments,
             subscription.cursor_argument,
             subscription.checkpoint or {},
         )
-        result = await executor.execute(subscription.operation, arguments)
+        release_id = (tool.config or {}).get("connector_release_id")
+        if tool.config.get("managed_by") == "nango" and release_id:
+            from .connector_engineer import release_signature_valid
+
+            release = await session.get(ManagedConnectorRelease, release_id)
+            if (
+                not release
+                or release.status not in {"released", "superseded"}
+                or release.definition_hash != tool.config.get("connector_release_hash")
+                or not release_signature_valid(release)
+            ):
+                raise RuntimeError("Polling connector release is no longer trusted")
+            capability = capability_for(
+                release.definition.get("manifest") or {}, subscription.operation
+            )
+            connection_id = managed_connection_reference(tool)
+            if not connection_id:
+                raise RuntimeError("Polling managed connection reference is missing")
+            result = await managed_connector_client().execute_capability(
+                release.integration_id,
+                connection_id,
+                capability,
+                arguments,
+            )
+        else:
+            credentials = vault.decrypt(tool.encrypted_credentials)
+            if tool.kind.value == "oauth":
+                credentials, changed = await refresh_oauth_credentials(
+                    get_settings(), tool.slug, credentials, tool.config
+                )
+                if changed:
+                    tool.encrypted_credentials = vault.encrypt(credentials)
+                    session.add(
+                        AuditEvent(
+                            workspace_id=workspace_id,
+                            actor="polling-trigger",
+                            event_type="connector.token_refreshed",
+                            payload={"tool_id": tool.id, "slug": tool.slug},
+                        )
+                    )
+            executor = ProviderExecutor(
+                credentials,
+                tool.base_url,
+                provider_kind=tool.kind.value,
+                capability_manifest=manifest_record.manifest,
+            )
+            result = await executor.execute(subscription.operation, arguments)
+        if list(
+            Draft202012Validator(capability.get("output_schema") or {}).iter_errors(result)
+        ):
+            raise RuntimeError("Polling connector output failed its declared schema")
         canonical, payload_hash = result_fingerprint(result)
         next_checkpoint = (
             {"value": value_at_path(result, subscription.checkpoint_path)}
@@ -236,4 +268,3 @@ async def poll_subscription(subscription_id: str, workspace_id: str) -> dict:
             "interval_seconds": subscription.interval_seconds,
             "run_id": run.id,
         }
-

@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import logging
 import re
 import time
@@ -6,6 +7,7 @@ from copy import deepcopy
 from datetime import UTC, datetime
 
 import httpx
+from jsonschema import Draft202012Validator
 from sqlalchemy import select
 
 from .agent_runtime import (
@@ -39,6 +41,7 @@ from .models import (
     CapabilityManifest,
     ConnectionRequirement,
     DeadLetterEntry,
+    ManagedConnectorRelease,
     PlanVersion,
     RunStatus,
     RunStep,
@@ -74,6 +77,7 @@ from .schemas import CriticDecision, OutcomeVerification
 from .security import CredentialVault
 from .universal_connectors import (
     ConnectorError,
+    capability_for,
     discover_provider,
 )
 from .universal_connectors import (
@@ -88,6 +92,49 @@ from .workflow_context import (
 )
 
 logger = logging.getLogger(__name__)
+
+_TEXT_DOCUMENT_TYPES = {
+    "application/csv",
+    "application/json",
+    "application/ld+json",
+    "application/xml",
+}
+
+
+def _planning_prompt_with_documents(prompt: str, inputs: dict | None) -> str:
+    """Add bounded uploaded text to the model call without exposing data URLs."""
+    documents = (inputs or {}).get("attached_documents", (inputs or {}).get("documents"))
+    if not isinstance(documents, list) or not documents:
+        return prompt
+    sections: list[str] = []
+    remaining = 40_000
+    for document in documents[:8]:
+        if not isinstance(document, dict):
+            continue
+        name = str(document.get("name") or "document")[:500]
+        data_url = document.get("file_url")
+        section = f"Attached document: {name}"
+        if isinstance(data_url, str) and data_url.startswith("data:") and "," in data_url:
+            metadata, encoded = data_url.split(",", 1)
+            media_type = metadata[5:].split(";", 1)[0].lower()
+            textual = media_type.startswith("text/") or media_type in _TEXT_DOCUMENT_TYPES
+            if textual and remaining > 0:
+                try:
+                    raw = (
+                        base64.b64decode(encoded, validate=True)
+                        if ";base64" in metadata.lower()
+                        else encoded.encode()
+                    )
+                    content = raw.decode("utf-8", errors="replace").replace("\x00", "")
+                    content = content[:remaining]
+                    remaining -= len(content)
+                    section += f"\n{content}"
+                except (ValueError, TypeError):
+                    pass
+        sections.append(section)
+    if not sections:
+        return prompt
+    return f"{prompt}\n\nUser-attached workflow documents:\n" + "\n\n".join(sections)
 
 
 def refresh_native_connection_contract(tool: ToolConnection) -> list[str]:
@@ -613,15 +660,22 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             if tool.id in manifests_by_tool
         ]
         connected_slugs = {item["slug"] for item in connected_inventory}
+        from .connector_engineer import dynamic_planning_catalog
+
+        dynamic_inventory, dynamic_manifests = await dynamic_planning_catalog(
+            session, connected_slugs
+        )
         inventory_by_slug = {item["slug"]: item for item in planning_catalog(connected_slugs)}
+        inventory_by_slug.update({item["slug"]: item for item in dynamic_inventory})
         inventory_by_slug.update({item["slug"]: item for item in connected_inventory})
         inventory = list(inventory_by_slug.values())
-        manifests_by_slug = {
+        manifests_by_slug = dict(dynamic_manifests)
+        manifests_by_slug.update({
             tool.slug: manifest.manifest
             for tool in tools
             for manifest in manifests
             if manifest.tool_id == tool.id
-        }
+        })
         await session.commit()
 
         try:
@@ -630,7 +684,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             plan = await reuse_saved_plan(session, run, connected_inventory, manifests_by_slug)
             if plan is None:
                 plan = await _create_compiled_plan(
-                    run.prompt,
+                    _planning_prompt_with_documents(run.prompt, run.inputs),
                     inventory,
                     set((run.inputs or {}).keys()),
                     manifests_by_slug,
@@ -2072,35 +2126,6 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         budget = model_budget.get()
                         if budget and time.monotonic() >= budget.deadline:
                             raise BudgetExceeded("Delivery time budget exhausted")
-                        if active_tool.config.get("managed_by") == "nango":
-                            credentials = await managed_connector_client().get_credentials(
-                                managed_connection_reference(active_tool)
-                                or active_tool.config["connection_id"],
-                                active_tool.config["integration_id"],
-                            )
-                            if active_tool.slug == "jira" and not credentials.get("cloud_id"):
-                                verification = await verify_oauth_credentials("jira", credentials)
-                                identity = verification.get("identity", {})
-                                if identity.get("id"):
-                                    credentials["cloud_id"] = identity["id"]
-                        else:
-                            credentials = vault.decrypt(active_tool.encrypted_credentials)
-                        if (
-                            active_tool.kind.value == "oauth"
-                            and active_tool.config.get("managed_by") != "nango"
-                        ):
-                            credentials, changed = await refresh_oauth_credentials(
-                                get_settings(), active_tool.slug, credentials, active_tool.config
-                            )
-                            if changed:
-                                active_tool.encrypted_credentials = vault.encrypt(credentials)
-                                await audit(
-                                    session,
-                                    workspace_id,
-                                    "connector.token_refreshed",
-                                    {"tool_id": active_tool.id, "slug": active_tool.slug},
-                                    run.id,
-                                )
                         manifest_record = await session.scalar(
                             select(CapabilityManifest).where(
                                 CapabilityManifest.tool_id == active_tool.id,
@@ -2109,32 +2134,115 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         )
                         if not manifest_record:
                             raise RuntimeError("Capability provider is not verified")
-                        current_manifest = _current_capability_manifest(
-                            active_tool.slug,
-                            manifest_record.manifest if manifest_record else None,
-                        )
-                        executor = ProviderExecutor(
-                            credentials,
-                            active_tool.base_url,
-                            timeout_seconds=float(
-                                snapshot.policy_snapshot[
-                                    "gateway_timeout_seconds"
-                                    if active_tool.kind.value == "mcp"
-                                    else "step_timeout_seconds"
-                                ]
-                            ),
-                            provider_kind=active_tool.kind.value,
-                            capability_manifest=current_manifest,
-                        )
-                        result = await asyncio.wait_for(
-                            executor.execute(operation, arguments),
-                            timeout=min(
+                        execution_timeout = (
+                            min(
                                 float(snapshot.policy_snapshot["step_timeout_seconds"]),
                                 max(0.01, budget.deadline - time.monotonic()),
                             )
                             if budget
-                            else float(snapshot.policy_snapshot["step_timeout_seconds"]),
+                            else float(snapshot.policy_snapshot["step_timeout_seconds"])
                         )
+                        release_id = (active_tool.config or {}).get(
+                            "connector_release_id"
+                        )
+                        if active_tool.config.get("managed_by") == "nango" and release_id:
+                            from .connector_engineer import release_signature_valid
+
+                            release = await session.get(ManagedConnectorRelease, release_id)
+                            if (
+                                not release
+                                or release.provider_slug != active_tool.slug
+                                or release.integration_id
+                                != active_tool.config.get("integration_id")
+                                or release.definition_hash
+                                != active_tool.config.get("connector_release_hash")
+                                or release.status not in {"released", "superseded"}
+                                or not release_signature_valid(release)
+                            ):
+                                raise RuntimeError(
+                                    "Connector release is no longer trusted"
+                                )
+                            current_manifest = release.definition.get("manifest") or {}
+                            capability = capability_for(current_manifest, operation)
+                            connection_reference = managed_connection_reference(active_tool)
+                            if not connection_reference:
+                                raise RuntimeError("Managed connection reference is missing")
+                            result = await asyncio.wait_for(
+                                managed_connector_client().execute_capability(
+                                    release.integration_id,
+                                    connection_reference,
+                                    capability,
+                                    arguments,
+                                ),
+                                timeout=execution_timeout,
+                            )
+                            output_failures = list(
+                                Draft202012Validator(
+                                    capability.get("output_schema") or {}
+                                ).iter_errors(result)
+                            )
+                            if output_failures:
+                                raise ValueError(
+                                    "Connector output failed its released schema"
+                                )
+                        else:
+                            if active_tool.config.get("managed_by") == "nango":
+                                credentials = await managed_connector_client().get_credentials(
+                                    managed_connection_reference(active_tool)
+                                    or active_tool.config["connection_id"],
+                                    active_tool.config["integration_id"],
+                                )
+                                if active_tool.slug == "jira" and not credentials.get(
+                                    "cloud_id"
+                                ):
+                                    verification = await verify_oauth_credentials(
+                                        "jira", credentials
+                                    )
+                                    identity = verification.get("identity", {})
+                                    if identity.get("id"):
+                                        credentials["cloud_id"] = identity["id"]
+                            else:
+                                credentials = vault.decrypt(active_tool.encrypted_credentials)
+                            if (
+                                active_tool.kind.value == "oauth"
+                                and active_tool.config.get("managed_by") != "nango"
+                            ):
+                                credentials, changed = await refresh_oauth_credentials(
+                                    get_settings(),
+                                    active_tool.slug,
+                                    credentials,
+                                    active_tool.config,
+                                )
+                                if changed:
+                                    active_tool.encrypted_credentials = vault.encrypt(credentials)
+                                    await audit(
+                                        session,
+                                        workspace_id,
+                                        "connector.token_refreshed",
+                                        {"tool_id": active_tool.id, "slug": active_tool.slug},
+                                        run.id,
+                                    )
+                            current_manifest = _current_capability_manifest(
+                                active_tool.slug,
+                                manifest_record.manifest if manifest_record else None,
+                            )
+                            executor = ProviderExecutor(
+                                credentials,
+                                active_tool.base_url,
+                                timeout_seconds=float(
+                                    snapshot.policy_snapshot[
+                                        "gateway_timeout_seconds"
+                                        if active_tool.kind.value == "mcp"
+                                        else "step_timeout_seconds"
+                                    ]
+                                ),
+                                provider_kind=active_tool.kind.value,
+                                capability_manifest=current_manifest,
+                            )
+                            result = await asyncio.wait_for(
+                                executor.execute(operation, arguments),
+                                timeout=execution_timeout,
+                            )
                         if _provider_result_is_malformed(result):
                             raise ValueError("Provider returned an empty or malformed response")
                         latency = (time.perf_counter() - started) * 1000

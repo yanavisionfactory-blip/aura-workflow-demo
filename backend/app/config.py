@@ -97,6 +97,19 @@ class Settings(BaseSettings):
     nango_base_url: str = "https://api.nango.dev"
     nango_integration_map: str = "{}"
     nango_auto_provision_integrations: bool = True
+    # Connector Engineer discovers data-only capability packs from the Nango
+    # environment. A pack is never user-visible until its signature, isolated
+    # validation, and dedicated-account canary all pass.
+    connector_engineer_enabled: bool = True
+    connector_engineer_scan_interval_seconds: int = Field(default=300, ge=60, le=86_400)
+    connector_engineer_canary_ttl_seconds: int = Field(default=86_400, ge=300, le=604_800)
+    connector_engineer_max_integrations_per_scan: int = Field(default=25, ge=1, le=100)
+    connector_engineer_max_capabilities_per_pack: int = Field(default=50, ge=1, le=200)
+    connector_engineer_canary_failure_threshold: int = Field(default=2, ge=1, le=5)
+    connector_engineer_signing_key: str = ""
+    connector_engineer_canary_connections_json: str = "{}"
+    connector_engineer_allowed_providers_json: str = "[]"
+    connector_engineer_allow_writes: bool = False
 
     @property
     def clerk_enabled(self) -> bool:
@@ -134,6 +147,37 @@ class Settings(BaseSettings):
             for provider, integration in value.items()
             if str(provider).strip() and str(integration).strip()
         }
+
+    @property
+    def connector_engineer_canary_connections(self) -> dict[str, str]:
+        """Dedicated Nango connection IDs keyed by provider or integration ID."""
+        try:
+            value = json.loads(self.connector_engineer_canary_connections_json or "{}")
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(value, dict):
+            return {}
+        return {
+            str(provider).strip().lower(): str(connection).strip()
+            for provider, connection in value.items()
+            if str(provider).strip() and str(connection).strip()
+        }
+
+    @property
+    def connector_engineer_allowed_providers(self) -> set[str]:
+        """Optional operator allow-list. Empty means every configured OAuth integration."""
+        try:
+            value = json.loads(self.connector_engineer_allowed_providers_json or "[]")
+        except json.JSONDecodeError:
+            return set()
+        if not isinstance(value, list):
+            return set()
+        return {str(provider).strip().lower() for provider in value if str(provider).strip()}
+
+    @property
+    def connector_release_signing_key(self) -> str:
+        """Permit an explicit key while retaining the existing release trust root."""
+        return self.connector_engineer_signing_key or self.certification_signing_key
 
     @property
     def resource_aliases(self) -> dict[str, str]:

@@ -96,6 +96,29 @@ class NangoClient:
     async def list_providers(self) -> list[dict]:
         return self._data_list(await self._request("GET", "/providers"), "providers")
 
+    async def list_functions(self, integration_id: str) -> list[dict]:
+        """Return every deployed sync/action for one exact Nango integration."""
+        functions: list[dict] = []
+        page = 1
+        while page <= 20:
+            result = await self._request(
+                "GET",
+                f"/integrations/{quote(integration_id, safe='')}/functions",
+                params={"page": page, "limit": 100},
+            )
+            batch = self._data_list(result, "functions")
+            functions.extend(batch)
+            pagination = result.get("pagination") or result.get("meta") or {}
+            has_more = bool(
+                result.get("has_more")
+                or pagination.get("has_more")
+                or pagination.get("hasMore")
+            )
+            if not has_more or not batch:
+                break
+            page += 1
+        return functions
+
     def integration_credentials(self, provider: str) -> dict[str, str]:
         """Use AURA's server-side OAuth app credentials for Nango provisioning."""
         definition = PROVIDERS.get(provider)
@@ -223,6 +246,8 @@ class NangoClient:
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict:
         if not self.api_key:
             raise ManagedConnectorError("Managed connections are not configured")
+        extra_headers = kwargs.pop("headers", {}) or {}
+        headers = {**self._headers(), **extra_headers}
         last_error: Exception | None = None
         for attempt in range(3):
             try:
@@ -230,7 +255,7 @@ class NangoClient:
                     response = await client.request(
                         method,
                         f"{self.base_url}{path}",
-                        headers=self._headers(),
+                        headers=headers,
                         **kwargs,
                     )
                 if response.status_code in {429, 500, 502, 503, 504} and attempt < 2:
@@ -268,32 +293,33 @@ class NangoClient:
             retryable=retryable,
         ) from last_error
 
-    async def preflight(self, provider: str) -> str:
+    async def preflight(self, provider: str, integration_id: str | None = None) -> str:
         """Fresh, bounded validation before issuing any user authorization link.
 
         No positive cache: admin repairs and credential edits take effect on the
         next attempt. Runs with healthy existing connections do not pay this cost.
         """
         provider = provider.strip().lower()
-        self._integration_cache.pop(provider, None)
+        if not integration_id:
+            self._integration_cache.pop(provider, None)
         try:
             async with asyncio.timeout(10):
-                integration_id = await self.integration_id(provider)
+                resolved_id = integration_id or await self.integration_id(provider)
                 result = await self._request(
-                    "GET", f"/integrations/{quote(integration_id, safe='')}",
+                    "GET", f"/integrations/{quote(resolved_id, safe='')}",
                     params={"include": "credentials"},
                 )
                 data = result.get("data", {})
-                if not isinstance(data, dict) or data.get("unique_key") != integration_id:
+                if not isinstance(data, dict) or data.get("unique_key") != resolved_id:
                     raise ConnectorConfigurationError("integration_identity_mismatch")
-                if data.get("provider") != provider:
+                if str(data.get("provider") or "").lower() != provider:
                     raise ConnectorConfigurationError("integration_provider_mismatch")
                 credentials = data.get("credentials")
                 if not isinstance(credentials, dict):
                     raise ConnectorConfigurationError("oauth_credentials_unavailable")
                 validate_oauth_configuration(provider, credentials)
                 logger.info("managed_connector_preflight_passed provider=%s", provider)
-                return integration_id
+                return resolved_id
         except ConnectorConfigurationError as exc:
             logger.warning("managed_connector_preflight_failed provider=%s code=%s", provider, exc.code)
             raise
@@ -331,11 +357,18 @@ class NangoClient:
                 self._authorization_sessions.pop(key, None)
                 self._authorization_locks.pop(key, None)
 
-    async def create_session(self, provider: str, workspace_id: str, subject: str) -> dict:
+    async def create_session(
+        self,
+        provider: str,
+        workspace_id: str,
+        subject: str,
+        *,
+        integration_id: str | None = None,
+    ) -> dict:
         async def create() -> dict:
-            integration_id = await self.preflight(provider)
+            resolved_id = await self.preflight(provider, integration_id)
             payload = {
-                "allowed_integrations": [integration_id],
+                "allowed_integrations": [resolved_id],
                 "tags": {
                     "organization_id": workspace_id,
                     "end_user_id": subject,
@@ -346,7 +379,7 @@ class NangoClient:
             return result.get("data", result)
 
         return await self._cached_authorization_session(
-            (provider, workspace_id, subject, "new"), create
+            (provider, workspace_id, subject, "new", integration_id or ""), create
         )
 
     async def create_reconnect_session(
@@ -355,15 +388,17 @@ class NangoClient:
         connection_id: str,
         workspace_id: str,
         subject: str,
+        *,
+        integration_id: str | None = None,
     ) -> dict:
         async def create() -> dict:
-            integration_id = await self.preflight(provider)
+            resolved_id = await self.preflight(provider, integration_id)
             result = await self._request(
                 "POST",
                 "/connect/sessions/reconnect",
                 json={
                     "connection_id": connection_id,
-                    "integration_id": integration_id,
+                    "integration_id": resolved_id,
                     "tags": {
                         "organization_id": workspace_id,
                         "end_user_id": subject,
@@ -374,7 +409,7 @@ class NangoClient:
             return result.get("data", result)
 
         return await self._cached_authorization_session(
-            (provider, workspace_id, subject, connection_id), create
+            (provider, workspace_id, subject, connection_id, integration_id or ""), create
         )
 
     async def find_connections(
@@ -382,8 +417,10 @@ class NangoClient:
         provider: str,
         workspace_id: str,
         subject: str,
+        *,
+        integration_id: str | None = None,
     ) -> list[dict]:
-        integration_id = await self.integration_id(provider)
+        resolved_id = integration_id or await self.integration_id(provider)
         result = await self._request(
             "GET",
             "/connections",
@@ -396,7 +433,7 @@ class NangoClient:
         for connection in result.get("connections", []):
             tags = connection.get("tags") or {}
             if (
-                connection.get("provider_config_key") == integration_id
+                connection.get("provider_config_key") == resolved_id
                 and tags.get("organization_id") == workspace_id
                 and tags.get("end_user_id") == subject
                 and tags.get("aura_provider", provider) == provider
@@ -412,8 +449,14 @@ class NangoClient:
         connection_id: str | None = None,
         *,
         include_errors: bool = False,
+        integration_id: str | None = None,
     ) -> dict | None:
-        matches = await self.find_connections(provider, workspace_id, subject)
+        matches = await self.find_connections(
+            provider,
+            workspace_id,
+            subject,
+            integration_id=integration_id,
+        )
         if connection_id:
             selected = next(
                 (
@@ -496,6 +539,51 @@ class NangoClient:
             return integration_id, verification
         verification.setdefault("retryable", False)
         return integration_id, verification
+
+    async def execute_capability(
+        self,
+        integration_id: str,
+        connection_id: str,
+        capability: dict[str, Any],
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Execute only Connector Engineer-approved Nango transports."""
+        transport = capability.get("transport") or {}
+        headers = {
+            "Connection-Id": connection_id,
+            "Provider-Config-Key": integration_id,
+        }
+        if transport.get("type") == "nango_action":
+            action_name = str(transport.get("action_name") or "").strip()
+            if not action_name:
+                raise ManagedConnectorError("The connector capability is invalid", retryable=False)
+            result = await self._request(
+                "POST",
+                "/action/trigger",
+                headers=headers,
+                json={"action_name": action_name, "input": arguments},
+            )
+        elif transport.get("type") == "nango_records":
+            model = str(transport.get("model") or "").strip()
+            if not model:
+                raise ManagedConnectorError("The connector capability is invalid", retryable=False)
+            allowed = {
+                key: value
+                for key, value in arguments.items()
+                if key in {"cursor", "limit", "filter", "modified_after", "ids", "variant"}
+                and value is not None
+            }
+            result = await self._request(
+                "GET",
+                "/records",
+                headers=headers,
+                params={"model": model, **allowed},
+            )
+        else:
+            raise ManagedConnectorError("The connector transport is not released", retryable=False)
+        if not isinstance(result, dict):
+            raise ManagedConnectorError("The connector returned an invalid response", retryable=False)
+        return result
 
     async def delete_connection(self, connection_id: str, integration_id: str) -> None:
         await self._request(
