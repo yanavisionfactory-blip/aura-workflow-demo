@@ -5,22 +5,14 @@ import { Brain, Plus, ArrowRight, Sparkles, Loader2, Check, X, RotateCcw } from 
 import { aura } from "@/api/auraClient";
 import PlanStep from "./PlanStep";
 import PlanConnectionAlert from "./PlanConnectionAlert";
-import { CATALOG } from "@/lib/toolCatalog";
+import { CATALOG, catalogEntryFor } from "@/lib/toolCatalog";
 import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
 import { connectTool, hydrateConnections } from "@/lib/connectService";
-import { isManagedOAuthTool } from "@/lib/connectionPolicy.mjs";
-
-// Case-insensitive lookup so LLM tool-name variations ("meta ads", "Jira Software")
-// still resolve to the canonical name in the registry — keeps connection detection
-// reliable as real tools get integrated.
-const TOOL_BY_NAME = Object.fromEntries(
-  CATALOG.map((tool) => [tool.name.toLowerCase(), tool.name])
-);
 const resolveTool = (raw) => {
   if (!raw || typeof raw !== "string") return null;
   const key = raw.trim().toLowerCase();
   if (key === "aura intelligence") return null;
-  return TOOL_BY_NAME[key] || null;
+  return catalogEntryFor(key)?.name || null;
 };
 
 const slugifyTool = (value) => String(value || "")
@@ -192,8 +184,8 @@ export default function PlanView({
   const missingTools = connectionsReady
     ? planTools.filter((tool) => !effectiveConnections[tool.name])
     : [];
-  const needed = missingTools.filter((tool) => isManagedOAuthTool(tool.name));
-  const backstageOnly = missingTools.filter((tool) => !isManagedOAuthTool(tool.name));
+  const needed = missingTools.filter((tool) => catalogEntryFor(tool.name));
+  const backstageOnly = missingTools.filter((tool) => !catalogEntryFor(tool.name));
   const connectionOnly = steps.length === 0 && (plan.connectionRequirements || []).length > 0;
   const planningFailure = steps.length === 0 && Boolean(plan.error) && !connectionOnly;
 

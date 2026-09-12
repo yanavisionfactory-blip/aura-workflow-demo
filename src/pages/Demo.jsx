@@ -17,9 +17,8 @@ import EditRunReviewModal from "@/components/aura/EditRunReviewModal";
 import { detectNewConsequential } from "@/lib/editRunDetect";
 import { requestNotifyPermission, notifyWorkflowComplete, notifyWorkflowError } from "@/lib/auraNotify";
 import { connectTool, hydrateConnections } from "@/lib/connectService";
-import { isManagedOAuthTool } from "@/lib/connectionPolicy.mjs";
 import { getAllConnections } from "@/lib/connectionsStore";
-import { CATALOG } from "@/lib/toolCatalog";
+import { CATALOG, catalogEntryFor } from "@/lib/toolCatalog";
 import {
   approvePythonPlan,
   cancelPythonRun,
@@ -78,7 +77,7 @@ const planToolName = (step) => {
     hypeauditor: "HypeAuditor",
     "creator-approvals": "Creator Approvals",
   };
-  return names[step.tool_slug] || step.tool_slug;
+  return catalogEntryFor(step.tool_slug)?.name || names[step.tool_slug] || step.tool_slug;
 };
 
 const cleanSentence = (value, fallback = "Complete this step") => {
@@ -503,7 +502,8 @@ export default function Demo() {
   }, []);
 
   const handlePageBack = useCallback(() => {
-    if (phase === "confirm") reset();
+    if (phase === "input") window.history.back();
+    else if (phase === "confirm") reset();
     else if (phase === "plan") setPhase("confirm");
     else if (phase === "preview") setPhase("plan");
     else if (phase === "executing" || phase === "error") setPhase("plan");
@@ -632,11 +632,9 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             runRequestKeyRef.current = null;
             const explicitRequirements = promptConnectionRequirements(
               editedInterpretation || originalPromptRef.current,
-              CATALOG
-                .filter((tool) => isManagedOAuthTool(tool.name))
-                .map((tool) => ({
+              CATALOG.map((tool) => ({
                   ...tool,
-                  slug: tool.name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+                  slug: tool.provider,
                 })),
               getAllConnections()
             );
@@ -698,13 +696,10 @@ ${
   })()
 }
 Tool selection — YOU decide which tools to use:
-- MANDATORY SPECIALIZED TOOLS: some jobs require a specialized data API — never substitute a weaker generic tool (no "TikTok API", no "AURA Intelligence", no web search) for these:
-  - ANY step that finds/discovers/searches TikTok or Instagram creators, influencers, or creator stats (followers, engagement, contact emails) → the "tool" MUST be "Modash" (or "HypeAuditor"). This is non-negotiable: verified creator stats only come from a creator-data API. If it's not connected, still name "Modash" as the tool and set "riskNote" to: "Without a connected creator-data API (Modash), discovery results are unverified LLM estimates."
-  - ANY step that scrapes or verifies a public profile → the "tool" MUST be "Apify".
-- For each step, pick the BEST tool for that specific job. When more than one tool could work, choose the one that fits most naturally (right capability, least friction) — and prefer a tool the user has already connected when it's a good fit.
-- If the ideal tool isn't connected, still propose it — the user will be prompted to connect it, and can swap it for another tool afterwards.
-- The user can change any tool choice later in the plan, so don't hedge — commit to the best pick and name it in "tool", "action", and the "Uses"/"Creates" flow.
-- Be honest about quality: if the best tool for a step isn't connected, say so in "riskNote" rather than silently substituting a weaker tool. Never present LLM-generated guesses as verified data.
+- The exact verified connector names available now are: ${CATALOG.map((tool) => tool.name).join(", ")}.
+- Use only those exact names for external-tool steps. AURA Intelligence may be used only for reasoning over attached documents or data already produced by a verified connector.
+- Prefer an already-connected tool when it has the required capability.
+- If no released connector can perform a required step, do not invent a provider or ask for API keys, MCP endpoints, OAuth client details, or custom configuration. State the unavailable capability clearly in "riskNote" so AURA can preserve the plan until Connector Engineer releases a safe provider.
 
 Rules:
 - "interpretation": ONE clear action sentence stating exactly what this workflow does when run — naming the key tools and the outcome (e.g. "Sync customer and project information across HubSpot, Notion and Jira, then notify the team"). Imperative, action-oriented. NOT a description of the user's problem or marketing copy.
@@ -722,11 +717,7 @@ Rules:
   - If the step creates tasks/records/tickets (Jira, Notion tasks, etc.): type "list" with title/items.
   - Never use type "email" for a step that does not send an email. If unsure which type fits, use "list".
   - Fill with realistic content reflecting the confirmed intent and THIS step's specific action — the preview must read as a direct illustration of what the step does, not a generic template.
-- Use realistic business tools (Slack, HubSpot, Gmail, Salesforce, Meta Ads, Google Sheets, Notion, Jira, Google Calendar, Stripe).
-- SPECIALIZED DATA TOOLS — propose the right specialized API when a step needs verified data that only it can provide. Do NOT silently substitute a weaker generic tool:
-  - Discovering/finding creators or influencers with verified follower counts, engagement, or contact emails → propose "Modash" (or "HypeAuditor"). These are the ONLY way to get verified creator stats. If neither is connected, STILL propose one by name (the user will be prompted to connect it with an API key), and set the step's "riskNote" to: "Without a connected creator-data API (Modash), discovery results are unverified LLM estimates."
-  - Scraping or verifying a public profile → propose "Apify".
-- Be honest about quality: if the best tool for a step isn't connected, say so in "riskNote" rather than silently substituting a weaker tool. Never present LLM-generated guesses as verified data.
+- Be honest about quality and capability gaps. Never present LLM-generated guesses as verified provider data.
 - "workflowName": a SHORT reusable job title (2-6 words, imperative) naming the recurring workflow itself — e.g. "Sync customer project across apps", "Route new leads to sales". NOT an outcome of one run (never past-tense like "Project synchronized"). This names the saved workflow, not an individual run.
 - Generate 3-5 steps. estimatedTime e.g. "~10 seconds".`,
           response_json_schema: PLAN_SCHEMA,
@@ -1460,7 +1451,8 @@ Generate a results summary in plain, human-friendly language (not technical).
       <div className="relative z-10 flex flex-col min-h-screen">
         <TopBar
           onHistoryOpen={() => setHistoryOpen(true)}
-          onBack={phase === "input" ? null : handlePageBack}
+          onBack={handlePageBack}
+          backLabel={phase === "input" ? "Return" : "Back"}
         />
 
         <main className="flex-1 flex items-center justify-center px-4 py-8 md:py-12">

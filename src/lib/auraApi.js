@@ -103,9 +103,9 @@ export async function listPythonTools() {
 
 let managedConnectorStatus = null;
 
-export async function getManagedConnectorStatus() {
+export async function getManagedConnectorStatus(refresh = false) {
   await ensureWorkspace();
-  if (!managedConnectorStatus) {
+  if (refresh || !managedConnectorStatus) {
     managedConnectorStatus = await request("/v1/managed-connectors/status");
   }
   return managedConnectorStatus;

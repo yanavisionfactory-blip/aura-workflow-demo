@@ -1,63 +1,98 @@
-import { useState, useMemo, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { Link2, Plus, Search, X, ArrowLeft, Check, Trash2, Loader2, Settings2, RefreshCw } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import {
+  ArrowLeft,
+  Check,
+  FileUp,
+  Link2,
+  Loader2,
+  Paperclip,
+  Plus,
+  RefreshCw,
+  Search,
+  Settings2,
+  Trash2,
+  X,
+} from "lucide-react";
 
+import { aura } from "@/api/auraClient";
 import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
-import { connectTool, disconnectTool, getToolConnection, hydrateConnections, reconnectTool, testToolConnection } from "@/lib/connectService";
-import { isManagedOAuthTool } from "@/lib/connectionPolicy.mjs";
-import { CATALOG } from "@/lib/toolCatalog";
+import {
+  connectTool,
+  disconnectTool,
+  getToolConnection,
+  hydrateConnections,
+  reconnectTool,
+  testToolConnection,
+} from "@/lib/connectService";
+import {
+  attachDocument,
+  getAttachedDocuments,
+  removeDocument,
+  subscribeDocuments,
+} from "@/lib/documentStore";
+import { CATALOG, MARKETPLACE } from "@/lib/toolCatalog";
 
-// Tool catalog lives in @/lib/toolCatalog so the plan-stage tool picker and
-// this connections panel share one source of truth.
-
-const isAura = (n) => n === "AURA Intelligence";
+const isAura = (name) => name === "AURA Intelligence";
 
 export default function ConnectionsPill() {
   const [connected, setConnected] = useState(getAllConnections);
-  useEffect(() => subscribeConnections(setConnected), []);
+  const [documents, setDocuments] = useState(getAttachedDocuments);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
+  const [tab, setTab] = useState("apps");
   const [query, setQuery] = useState("");
-  const [error, setError] = useState("");
+  const [catalogRevision, setCatalogRevision] = useState(0);
+  const [connecting, setConnecting] = useState(null);
   const [connectionAction, setConnectionAction] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState("");
   const [managedConnection, setManagedConnection] = useState(null);
+  const fileRef = useRef(null);
 
   useEffect(() => {
-    hydrateConnections().catch((e) => setError(e.message));
+    const unsubscribeConnections = subscribeConnections(setConnected);
+    const unsubscribeDocuments = subscribeDocuments(setDocuments);
+    hydrateConnections()
+      .then(() => setCatalogRevision((value) => value + 1))
+      .catch((cause) => setError(cause.message));
+    return () => {
+      unsubscribeConnections();
+      unsubscribeDocuments();
+    };
   }, []);
 
   const connectedTools = useMemo(() => {
-    const catalogConnected = CATALOG.filter((t) => connected[t.name] && !isAura(t.name));
-    const catalogNames = new Set(CATALOG.map((t) => t.name.toLowerCase()));
-    // Custom tools learned through the AURA Interface flow are in the store
-    // but not in the static catalog — show them in the workspace list too.
-    const customConnected = Object.keys(connected)
-      .filter((n) => !isAura(n) && !catalogNames.has(n.toLowerCase()))
-      .map((n) => ({ name: n, icon: "🔗", interface: true, desc: "Connected through AURA Interface" }));
-    return [...catalogConnected, ...customConnected];
-  }, [connected]);
-  const availableTools = useMemo(
-    () => CATALOG.filter(
-      (t) => !connected[t.name] && !isAura(t.name) && isManagedOAuthTool(t.name)
-    ),
-    [connected]
-  );
+    const catalogConnected = CATALOG.filter((tool) => connected[tool.name] && !isAura(tool.name));
+    const catalogNames = new Set(CATALOG.map((tool) => tool.name.toLowerCase()));
+    const existingConnections = Object.keys(connected)
+      .filter((name) => !isAura(name) && !catalogNames.has(name.toLowerCase()))
+      .map((name) => ({ name, icon: "🔗", desc: "Existing workspace connection" }));
+    return [...catalogConnected, ...existingConnections];
+  }, [connected, catalogRevision]);
+
+  const marketplace = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return MARKETPLACE.filter((tool) => {
+      if (!needle) return true;
+      return tool.name.toLowerCase().includes(needle) ||
+        tool.provider.includes(needle) ||
+        tool.categories?.some((category) => category.toLowerCase().includes(needle));
+    });
+  }, [query, catalogRevision]);
 
   const count = connectedTools.length;
   const stacked = connectedTools.slice(0, 4);
-  const filtered = availableTools.filter((t) =>
-    t.name.toLowerCase().includes(query.trim().toLowerCase())
-  );
 
-  const [connecting, setConnecting] = useState(null);
-  const connect = async (name, opts = {}) => {
-    setConnecting(name);
+  const connect = async (tool) => {
+    if (!tool.connectable || connected[tool.name]) return;
+    setConnecting(tool.name);
     setError("");
     try {
-      const res = await connectTool(name, opts);
-      if (res.connected) await hydrateConnections();
-    } catch (e) {
-      setError(e.message || `Could not connect ${name}.`);
+      await connectTool(tool.name);
+      await hydrateConnections();
+    } catch (cause) {
+      setError(cause.message || `Could not connect ${tool.name}.`);
     } finally {
       setConnecting(null);
     }
@@ -70,8 +105,8 @@ export default function ConnectionsPill() {
       const connection = await getToolConnection(name);
       if (!connection) throw new Error(`${name} is not connected.`);
       setManagedConnection({ ...connection, uiName: name });
-    } catch (e) {
-      setError(e.message || `Could not load ${name}.`);
+    } catch (cause) {
+      setError(cause.message || `Could not load ${name}.`);
     } finally {
       setConnectionAction("");
     }
@@ -82,43 +117,80 @@ export default function ConnectionsPill() {
     setError("");
     try {
       if (action === "disconnect") {
-        await disconnectTool(name, managedConnection.id);
+        await disconnectTool(name, managedConnection?.id);
         setManagedConnection(null);
       } else if (action === "reconnect") {
-        const result = await reconnectTool(name, managedConnection.id);
+        const result = await reconnectTool(name, managedConnection?.id);
         setManagedConnection({ ...result.tool, uiName: name });
       } else {
-        await testToolConnection(name, managedConnection.id);
-        const refreshed = await getToolConnection(name, managedConnection.id);
-        if (refreshed) setManagedConnection({ ...refreshed, uiName: name });
+        await testToolConnection(name, managedConnection?.id);
       }
-    } catch (e) {
-      setError(e.message || `Could not ${action} ${name}.`);
+    } catch (cause) {
+      setError(cause.message || `Could not ${action} ${name}.`);
     } finally {
       setConnectionAction("");
     }
   };
 
+  const handleFiles = async (event) => {
+    const files = [...(event.target.files || [])];
+    if (!files.length) return;
+    if (files.length + documents.length > 8) {
+      setError("Attach no more than eight documents to one workflow.");
+      if (fileRef.current) fileRef.current.value = "";
+      return;
+    }
+    if (files.some((file) => file.size > 10 * 1024 * 1024)) {
+      setError("Each document must be smaller than 10 MB.");
+      if (fileRef.current) fileRef.current.value = "";
+      return;
+    }
+    setUploading(true);
+    setError("");
+    try {
+      for (const file of files) {
+        const result = await aura.integrations.Core.UploadFile({ file });
+        attachDocument({ name: file.name, file_url: result.file_url, size: file.size });
+      }
+    } catch (cause) {
+      setError(cause.message || "AURA could not attach that document.");
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
+
+  const openConnect = (nextTab = "apps") => {
+    setTab(nextTab);
+    setQuery("");
+    setConnectOpen(true);
+  };
+
+  const closeWorkspace = () => {
+    setConnectOpen(false);
+    setWorkspaceOpen(false);
+  };
+
   return (
     <>
-      {/* Pill trigger */}
       <button
+        type="button"
         onClick={() => setWorkspaceOpen(true)}
-        className="flex items-center gap-2 pl-1.5 pr-3 py-1 rounded-full border border-white/8 hover:border-white/15 hover:bg-white/5 transition-all"
+        className="flex items-center gap-2 rounded-full border border-white/8 py-1 pl-1.5 pr-3 transition-all hover:border-white/15 hover:bg-white/5"
       >
         <div className="flex items-center">
-          {stacked.map((t, i) => (
+          {stacked.map((tool, index) => (
             <div
-              key={t.name}
-              style={{ marginLeft: i === 0 ? 0 : -8, zIndex: stacked.length - i }}
-              className="w-6 h-6 rounded-full bg-secondary border border-white/10 flex items-center justify-center text-[11px]"
+              key={tool.name}
+              style={{ marginLeft: index === 0 ? 0 : -8, zIndex: stacked.length - index }}
+              className="flex h-6 w-6 items-center justify-center rounded-full border border-white/10 bg-secondary text-[11px]"
             >
-              {t.icon}
+              {tool.icon}
             </div>
           ))}
         </div>
-        <Link2 className="w-3.5 h-3.5 text-muted-foreground/70" />
-        <span className="text-xs font-medium text-foreground/90">Connections</span>
+        <Link2 className="h-3.5 w-3.5 text-muted-foreground/70" />
+        <span className="text-xs font-medium text-foreground/90">Connect</span>
         <span className="text-xs text-muted-foreground/60">{count}</span>
       </button>
 
@@ -126,74 +198,59 @@ export default function ConnectionsPill() {
         {workspaceOpen && (
           <>
             <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setWorkspaceOpen(false)}
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={closeWorkspace}
               className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm"
             />
             <motion.aside
-              initial={{ x: "100%" }}
-              animate={{ x: 0 }}
-              exit={{ x: "100%" }}
+              initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }}
               transition={{ type: "spring", stiffness: 300, damping: 30 }}
-              className="fixed right-0 top-0 h-full w-full max-w-md z-50 bg-card border-l border-white/6 flex flex-col shadow-2xl"
+              className="fixed right-0 top-0 z-50 flex h-full w-full max-w-md flex-col border-l border-white/6 bg-card shadow-2xl"
             >
-              {/* Header */}
-              <div className="flex items-center justify-between px-5 py-4 border-b border-white/6">
+              <div className="flex items-center justify-between border-b border-white/6 px-5 py-4">
                 <div className="flex items-center gap-2">
-                  <div className="p-1.5 rounded-lg bg-primary/10 border border-primary/20">
-                    <Plus className="w-4 h-4 text-primary" />
-                  </div>
-                  <span className="font-semibold text-sm">Your workspace</span>
+                  <div className="rounded-lg border border-primary/20 bg-primary/10 p-1.5"><Link2 className="h-4 w-4 text-primary" /></div>
+                  <span className="text-sm font-semibold">Your workspace</span>
                 </div>
-                <button onClick={() => setWorkspaceOpen(false)} className="p-1.5 rounded-lg hover:bg-white/5 text-muted-foreground hover:text-foreground transition-colors">
-                  <X className="w-4 h-4" />
-                </button>
+                <button type="button" aria-label="Close workspace" onClick={closeWorkspace} className="rounded-lg p-1.5 text-muted-foreground hover:bg-white/5 hover:text-foreground"><X className="h-4 w-4" /></button>
               </div>
 
               <div className="px-5 py-3">
-                <p className="text-xs text-muted-foreground">Give AURA access to the tools you want it to work with.</p>
-                {error && <p className="mt-2 text-xs text-red-400 rounded-lg border border-red-400/20 bg-red-400/5 p-2">{error}</p>}
+                <p className="text-xs text-muted-foreground">AURA owns setup and verification. You only approve the provider’s official consent window.</p>
+                {error && <p className="mt-2 rounded-lg border border-red-400/20 bg-red-400/5 p-2 text-xs text-red-400">{error}</p>}
               </div>
 
-              {/* Connected list */}
-              <div className="px-3 flex-1 space-y-1 overflow-y-auto">
-                {connectedTools.map((t) => (
-                  <div key={t.name} className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-white/5 transition-colors">
-                    <div className="w-9 h-9 rounded-lg bg-secondary border border-white/8 flex items-center justify-center text-base">
-                      {t.icon}
+              <div className="flex-1 space-y-4 overflow-y-auto px-3 pb-4">
+                <section>
+                  <p className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Connected apps</p>
+                  {connectedTools.length ? connectedTools.map((tool) => (
+                    <div key={tool.name} className="flex items-center gap-3 rounded-xl p-2.5 transition-colors hover:bg-white/5">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/8 bg-secondary text-base">{tool.icon}</div>
+                      <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{tool.name}</p><p className="truncate text-xs text-muted-foreground">{tool.desc}</p></div>
+                      <button type="button" onClick={() => openConnectionManager(tool.name)} disabled={connectionAction === tool.name} className="flex items-center gap-1 px-1.5 py-1 text-[10px] text-muted-foreground hover:text-foreground">
+                        {connectionAction === tool.name ? <Loader2 className="h-3 w-3 animate-spin" /> : <Settings2 className="h-3 w-3" />}
+                        Manage
+                      </button>
+                      <Check className="h-3.5 w-3.5 text-emerald-400" />
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{t.name}</p>
-                      <p className="text-xs text-muted-foreground truncate">
-                        {t.interface ? "Connected through AURA Interface" : t.desc}
-                      </p>
-                    </div>
-                    <button onClick={() => openConnectionManager(t.name)} disabled={connectionAction === t.name} className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground px-1.5 py-1">
-                      {connectionAction === t.name ? <Loader2 className="w-3 h-3 animate-spin" /> : <Settings2 className="w-3 h-3" />}
-                      Manage
-                    </button>
-                    <button onClick={() => runConnectionAction(t.name, "disconnect")} disabled={connectionAction === t.name} title="Revoke access" className="p-1.5 text-muted-foreground hover:text-red-400">
-                      {connectionAction === t.name ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                    </button>
-                    <div className="flex items-center gap-1 text-emerald-400">
-                      <Check className="w-3.5 h-3.5" />
-                    </div>
-                  </div>
-                ))}
+                  )) : <p className="px-2 py-3 text-xs text-muted-foreground">No apps connected yet.</p>}
+                </section>
 
+                <section>
+                  <p className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Attached documents</p>
+                  {documents.length ? documents.map((document) => (
+                    <div key={document.file_url} className="flex items-center gap-3 rounded-xl p-2.5 transition-colors hover:bg-white/5">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/8 bg-secondary"><Paperclip className="h-4 w-4 text-primary" /></div>
+                      <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{document.name}</p><p className="text-xs text-muted-foreground">Available to the next workflow</p></div>
+                      <button type="button" aria-label={`Remove ${document.name}`} onClick={() => removeDocument(document.file_url)} className="p-1.5 text-muted-foreground hover:text-red-400"><Trash2 className="h-3.5 w-3.5" /></button>
+                    </div>
+                  )) : <p className="px-2 py-3 text-xs text-muted-foreground">No documents attached yet.</p>}
+                </section>
               </div>
 
-              {/* Footer */}
-              <div className="px-5 py-4 border-t border-white/6">
-                <button
-                  onClick={() => { setConnectOpen(true); setQuery(""); }}
-                  className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl border border-primary/30 text-primary hover:bg-primary/10 transition-colors text-sm font-medium"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  + Connect more
-                </button>
+              <div className="grid grid-cols-2 gap-2 border-t border-white/6 px-5 py-4">
+                <button type="button" onClick={() => openConnect("apps")} className="flex items-center justify-center gap-1.5 rounded-xl border border-primary/30 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"><Plus className="h-3.5 w-3.5" />Find apps</button>
+                <button type="button" onClick={() => openConnect("documents")} className="flex items-center justify-center gap-1.5 rounded-xl border border-white/10 py-2.5 text-sm font-medium transition-colors hover:bg-white/5"><Paperclip className="h-3.5 w-3.5" />Attach docs</button>
               </div>
             </motion.aside>
           </>
@@ -201,83 +258,86 @@ export default function ConnectionsPill() {
 
         {connectOpen && (
           <>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setConnectOpen(false)}
-              className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm"
-            />
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setConnectOpen(false)} className="fixed inset-0 z-[55] bg-black/30 backdrop-blur-sm" />
             <motion.aside
-              initial={{ x: "100%" }}
-              animate={{ x: 0 }}
-              exit={{ x: "100%" }}
+              initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }}
               transition={{ type: "spring", stiffness: 300, damping: 30 }}
-              className="fixed right-0 top-0 h-full w-full max-w-md z-50 bg-card border-l border-white/6 flex flex-col shadow-2xl"
+              className="fixed right-0 top-0 z-[60] flex h-full w-full max-w-md flex-col border-l border-white/6 bg-card shadow-2xl"
             >
-              {/* Header with back */}
-              <div className="flex items-center justify-between px-5 py-4 border-b border-white/6">
+              <div className="flex items-center justify-between border-b border-white/6 px-5 py-4">
                 <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setConnectOpen(false)}
-                    className="p-1.5 -ml-1.5 rounded-lg hover:bg-white/5 text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    <ArrowLeft className="w-4 h-4" />
-                  </button>
-                  <span className="font-semibold text-sm">Your workspace</span>
+                  <button type="button" aria-label="Return to workspace" onClick={() => setConnectOpen(false)} className="-ml-1.5 rounded-lg p-1.5 text-muted-foreground hover:bg-white/5 hover:text-foreground"><ArrowLeft className="h-4 w-4" /></button>
+                  <span className="text-sm font-semibold">Connect resources</span>
                 </div>
-                <button onClick={() => setConnectOpen(false)} className="p-1.5 rounded-lg hover:bg-white/5 text-muted-foreground hover:text-foreground transition-colors">
-                  <X className="w-4 h-4" />
-                </button>
+                <button type="button" aria-label="Close connections" onClick={closeWorkspace} className="rounded-lg p-1.5 text-muted-foreground hover:bg-white/5 hover:text-foreground"><X className="h-4 w-4" /></button>
               </div>
 
-              <div className="px-5 py-4">
-                <div className="flex items-center gap-2 mb-1">
-                  <Search className="w-4 h-4 text-primary" />
-                  <h3 className="text-base font-semibold">What do you want to connect?</h3>
-                </div>
-                <p className="text-xs text-muted-foreground">Choose an app. AURA opens its secure sign-in and verifies access.</p>
+              <div className="flex gap-1 border-b border-white/6 px-5 pt-3">
+                <button type="button" onClick={() => setTab("apps")} className={`flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium ${tab === "apps" ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`}><Link2 className="h-3.5 w-3.5" />Apps</button>
+                <button type="button" onClick={() => setTab("documents")} className={`flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium ${tab === "documents" ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`}><Paperclip className="h-3.5 w-3.5" />Documents</button>
               </div>
 
-              <div className="px-5 pb-3">
-                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-card/70 border border-white/10">
-                  <Search className="w-3.5 h-3.5 text-muted-foreground/60" />
-                  <input
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    placeholder="Search apps..."
-                    className="flex-1 bg-transparent outline-none text-sm placeholder:text-muted-foreground/40"
-                  />
-                </div>
-              </div>
+              {error && <p className="mx-5 mt-3 rounded-lg border border-red-400/20 bg-red-400/5 p-2 text-xs text-red-400">{error}</p>}
 
-              <div className="px-3 pb-4 flex-1 space-y-1 overflow-y-auto">
-                {filtered.map((t) => (
-                  <div key={t.name} className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-white/5 transition-colors">
-                    <div className="w-9 h-9 rounded-lg bg-secondary border border-white/8 flex items-center justify-center text-base">
-                      {t.icon}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{t.name}</p>
-                      <p className="text-xs text-muted-foreground truncate">{t.desc}</p>
-                    </div>
-                    <button
-                      onClick={() => connect(t.name)}
-                      disabled={connecting === t.name}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-primary hover:bg-primary/10 transition-colors text-xs font-medium disabled:opacity-50"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      {connecting === t.name ? "Connecting…" : "Connect"}
-                    </button>
+              {tab === "apps" ? (
+                <>
+                  <div className="px-5 py-4">
+                    <h3 className="text-base font-semibold">App marketplace</h3>
+                    <p className="mt-1 text-xs text-muted-foreground">Search every provider AURA has discovered. Connect is enabled only after isolated tests and canary verification.</p>
                   </div>
-                ))}
-
-                {filtered.length === 0 && (
-                  <p className="text-center text-xs text-muted-foreground py-8">
-                    {query.trim() ? "No one-click app found" : "All available apps are connected"}
-                  </p>
-                )}
-              </div>
+                  <div className="px-5 pb-3">
+                    <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-card/70 px-3 py-2">
+                      <Search className="h-3.5 w-3.5 text-muted-foreground/60" />
+                      <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search apps and categories…" className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/40" />
+                    </div>
+                  </div>
+                  <div className="flex-1 space-y-1 overflow-y-auto px-3 pb-4">
+                    {marketplace.map((tool) => {
+                      const isConnected = Boolean(connected[tool.name]);
+                      return (
+                        <div key={`${tool.provider}:${tool.name}`} className="flex items-center gap-3 rounded-xl p-2.5 transition-colors hover:bg-white/5">
+                          <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/8 bg-secondary text-base">{tool.icon}</div>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-medium">{tool.name}</p>
+                            <p className="truncate text-xs text-muted-foreground">{tool.desc}</p>
+                          </div>
+                          {isConnected ? (
+                            <span className="flex items-center gap-1 text-xs text-emerald-400"><Check className="h-3.5 w-3.5" />Connected</span>
+                          ) : tool.connectable ? (
+                            <button type="button" onClick={() => connect(tool)} disabled={connecting === tool.name} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-50">
+                              {connecting === tool.name ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}{connecting === tool.name ? "Opening…" : "Connect"}
+                            </button>
+                          ) : (
+                            <span className="rounded-full border border-amber-400/20 bg-amber-400/5 px-2 py-1 text-[10px] text-amber-300">{tool.availability === "unsupported_auth" ? "Not one-click" : "Verifying"}</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                    {!marketplace.length && <p className="py-8 text-center text-xs text-muted-foreground">No matching provider found. AURA refreshes this catalog automatically.</p>}
+                  </div>
+                </>
+              ) : (
+                <div className="flex-1 overflow-y-auto p-5">
+                  <h3 className="text-base font-semibold">Attach documents</h3>
+                  <p className="mt-1 text-xs text-muted-foreground">Files uploaded here are available to the next workflow without leaving Connect.</p>
+                  <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading} className="mt-4 flex w-full flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-white/12 py-8 transition-all hover:border-primary/30 hover:bg-primary/5 disabled:opacity-50">
+                    {uploading ? <Loader2 className="h-6 w-6 animate-spin text-primary" /> : <FileUp className="h-6 w-6 text-primary" />}
+                    <span className="text-sm font-medium">{uploading ? "Uploading…" : "Choose documents"}</span>
+                    <span className="text-[11px] text-muted-foreground">PDF, DOC, sheet, CSV, image, or other workflow input</span>
+                  </button>
+                  <input ref={fileRef} type="file" multiple className="hidden" onChange={handleFiles} />
+                  <div className="mt-4 space-y-1">
+                    {documents.map((document) => (
+                      <div key={document.file_url} className="flex items-center gap-3 rounded-xl bg-white/5 p-2.5">
+                        <Paperclip className="h-4 w-4 shrink-0 text-primary" />
+                        <p className="min-w-0 flex-1 truncate text-sm">{document.name}</p>
+                        <Check className="h-3.5 w-3.5 text-emerald-400" />
+                        <button type="button" aria-label={`Remove ${document.name}`} onClick={() => removeDocument(document.file_url)} className="p-1 text-muted-foreground hover:text-red-400"><X className="h-3.5 w-3.5" /></button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </motion.aside>
           </>
         )}
@@ -285,36 +345,36 @@ export default function ConnectionsPill() {
 
       <AnimatePresence>
         {managedConnection && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[80] bg-black/65 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setManagedConnection(null)}>
-            <motion.div initial={{ scale: 0.97, y: 8 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.97, y: 8 }} onClick={(e) => e.stopPropagation()} className="w-full max-w-sm rounded-2xl border border-white/10 bg-card shadow-2xl overflow-hidden">
-              <div className="flex items-center justify-between px-5 py-4 border-b border-white/8">
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[80] flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm"
+            onClick={() => setManagedConnection(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.97, y: 8 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.97, y: 8 }}
+              onClick={(event) => event.stopPropagation()}
+              className="w-full max-w-sm overflow-hidden rounded-2xl border border-white/10 bg-card shadow-2xl"
+            >
+              <div className="flex items-center justify-between border-b border-white/8 px-5 py-4">
                 <p className="text-sm font-semibold">{managedConnection.uiName || managedConnection.display_name}</p>
-                <button onClick={() => setManagedConnection(null)} className="p-1.5 text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
+                <button type="button" aria-label="Close connection manager" onClick={() => setManagedConnection(null)} className="p-1.5 text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
               </div>
               <div className="px-6 py-6">
                 <div className="flex items-center gap-3 rounded-xl border border-emerald-400/15 bg-emerald-400/5 px-4 py-3">
-                  <div className="w-7 h-7 rounded-full bg-emerald-400/15 flex items-center justify-center shrink-0">
-                    <Check className="w-4 h-4 text-emerald-400" />
-                  </div>
-                  <div>
-                    <p className="text-xs font-medium text-emerald-400">Connected</p>
-                    <p className="mt-0.5 text-[11px] text-muted-foreground">Ready to use in plans you approve.</p>
-                  </div>
+                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-400/15"><Check className="h-4 w-4 text-emerald-400" /></div>
+                  <div><p className="text-xs font-medium text-emerald-400">Connected and verified</p><p className="mt-0.5 text-[11px] text-muted-foreground">Ready to use in plans you approve.</p></div>
                 </div>
-                {error && <p className="mt-4 text-xs text-red-400 rounded-lg border border-red-400/20 bg-red-400/5 p-2">{error}</p>}
+                {error && <p className="mt-4 rounded-lg border border-red-400/20 bg-red-400/5 p-2 text-xs text-red-400">{error}</p>}
               </div>
-              <div className="p-4 border-t border-white/8">
-                <p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Connection actions</p>
-                <div className="grid grid-cols-2 gap-2">
-                  <button onClick={() => runConnectionAction(managedConnection.uiName, "reconnect")} disabled={managedConnection.kind !== "oauth" || connectionAction === managedConnection.uiName} className="flex items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-40"><RefreshCw className="w-3.5 h-3.5" /> Reconnect</button>
-                  <button onClick={() => runConnectionAction(managedConnection.uiName, "disconnect")} disabled={connectionAction === managedConnection.uiName} className="flex items-center justify-center gap-1.5 rounded-lg border border-red-400/30 px-3 py-2.5 text-xs font-medium text-red-400 hover:bg-red-400/10"><Trash2 className="w-3.5 h-3.5" /> Disconnect</button>
-                </div>
+              <div className="grid grid-cols-3 gap-2 border-t border-white/8 p-4">
+                <button type="button" onClick={() => runConnectionAction(managedConnection.uiName, "test")} disabled={connectionAction === managedConnection.uiName} className="flex items-center justify-center gap-1.5 rounded-lg border border-white/10 px-2 py-2.5 text-xs font-medium hover:bg-white/5"><Check className="h-3.5 w-3.5" />Test</button>
+                <button type="button" onClick={() => runConnectionAction(managedConnection.uiName, "reconnect")} disabled={connectionAction === managedConnection.uiName} className="flex items-center justify-center gap-1.5 rounded-lg bg-primary px-2 py-2.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-40"><RefreshCw className="h-3.5 w-3.5" />Reconnect</button>
+                <button type="button" onClick={() => runConnectionAction(managedConnection.uiName, "disconnect")} disabled={connectionAction === managedConnection.uiName} className="flex items-center justify-center gap-1.5 rounded-lg border border-red-400/30 px-2 py-2.5 text-xs font-medium text-red-400 hover:bg-red-400/10"><Trash2 className="h-3.5 w-3.5" />Remove</button>
               </div>
             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
-
     </>
   );
 }
