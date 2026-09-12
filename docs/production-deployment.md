@@ -21,6 +21,11 @@ CLERK_ISSUER=<Clerk issuer URL>
 CLERK_AUTHORIZED_PARTIES=https://yanavisionfactory-blip.github.io
 ALLOW_LEGACY_WORKSPACE_TOKENS=false
 NANGO_API_KEY=<Nango environment API key>
+PIPEDREAM_CLIENT_ID=<Pipedream OAuth client ID>
+PIPEDREAM_CLIENT_SECRET=<Pipedream OAuth client secret>
+PIPEDREAM_PROJECT_ID=<Pipedream Connect project ID>
+PIPEDREAM_ENVIRONMENT=production
+CONNECTOR_ENGINEER_SIGNING_KEY=<at least 32 random characters>
 ```
 
 With `NANGO_API_KEY` present, AURA discovers existing Nango integrations and provisions a
@@ -33,6 +38,19 @@ is the simplest initial configuration.
 Set `NANGO_AUTO_PROVISION_INTEGRATIONS=false` only when an operator intentionally wants discovery
 without provisioning. When Nango is not configured, AURA's existing native OAuth adapters remain
 available.
+
+Pipedream Connect is AURA's embedded long-tail connector plane. The Connector Broker selects a
+native or signed Nango release first and falls back to Pipedream for OAuth apps with public actions.
+The browser receives only an origin-bound, short-lived Connect token and an opaque AURA user
+reference. Pipedream client credentials, provider credentials, raw endpoints, and action transport
+metadata remain server-side. Do not put any `PIPEDREAM_*` secret in GitHub Pages, build arguments,
+or a variable prefixed with `VITE_`.
+
+At first use, AURA imports Pipedream's data-only action contracts, validates their JSON schemas and
+permission annotations in isolation, signs the resulting versioned capability pack, and caches it.
+Subsequent connections reuse the signed pack. Account connection performs only an ownership,
+health, identity, and scope probe; it does not execute a customer action canary. Apps without
+managed OAuth remain visible as **Coming soon** and never receive an API-key or custom-OAuth form.
 
 Managed OAuth providers declare their callback route in the provider registry. Managed,
 installed, and custom authorization and token exchange flows always use the same resolver.

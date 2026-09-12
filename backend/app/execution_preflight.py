@@ -23,6 +23,7 @@ from .config import get_settings
 from .managed_connectors import managed_connection_reference, managed_connector_client
 from .models import (
     AuditEvent,
+    BrokerCapabilityPack,
     CapabilityManifest,
     DispatchIntent,
     ManagedConnectorRelease,
@@ -31,6 +32,13 @@ from .models import (
     ToolKind,
 )
 from .native_connectors import native_manifest
+from .pipedream_connect import (
+    PipedreamConnectError,
+    pipedream_client,
+)
+from .pipedream_connect import (
+    pack_signature_valid as pipedream_pack_signature_valid,
+)
 from .policy import canonical_plan_hash
 from .providers import (
     PROVIDERS,
@@ -181,6 +189,79 @@ async def _connection_credentials(
         tool.allowed_operations = allowed_operations(refreshed_manifest)
         tool.enabled = True
         return {}, manifest.verification, None
+
+    if tool.config.get("managed_by") == "pipedream":
+        pack_id = (tool.config or {}).get("capability_pack_id")
+        pack = await session.get(BrokerCapabilityPack, pack_id) if pack_id else None
+        trusted = bool(
+            pack
+            and pack.backend == "pipedream"
+            and pack.provider_slug == tool.slug
+            and pack.status in {"released", "superseded"}
+            and pack.definition_hash == (tool.config or {}).get("capability_pack_hash")
+            and pipedream_pack_signature_valid(pack)
+        )
+        if not trusted:
+            return (
+                None,
+                None,
+                _blocker(
+                    "connection_unavailable",
+                    f"{tool.display_name} no longer has a trusted action pack.",
+                    action="wait_for_connector_repair",
+                    tool_slug=tool.slug,
+                    connection_id=tool.id,
+                ),
+            )
+        external_user_id = str((tool.config or {}).get("external_user_id") or "")
+        account_id = str(tool.external_connection_id or "")
+        if not external_user_id or not account_id:
+            verification = {
+                "ok": False,
+                "reason": "authorization_required",
+                "retryable": False,
+            }
+        else:
+            try:
+                verification = await pipedream_client().verify_account(
+                    external_user_id, tool.slug, account_id
+                )
+            except PipedreamConnectError as exc:
+                if exc.retryable:
+                    raise RuntimeError("provider_temporarily_unavailable") from exc
+                verification = {
+                    "ok": False,
+                    "reason": "authorization_required",
+                    "retryable": False,
+                }
+        manifest.verification = {
+            **verification,
+            "source": "execution_preflight_connector_broker",
+            "backend": "pipedream",
+        }
+        manifest.verified_at = _now()
+        if not verification.get("ok"):
+            manifest.status = "degraded"
+            tool.enabled = False
+            return (
+                None,
+                verification,
+                _blocker(
+                    "oauth_required",
+                    f"{tool.display_name} authorization is no longer usable.",
+                    action="reconnect_account",
+                    tool_slug=tool.slug,
+                    connection_id=tool.id,
+                    connected_account=_account_label(verification),
+                ),
+            )
+        manifest.status = "verified"
+        manifest.manifest = pack.definition
+        tool.allowed_operations = [
+            item["name"] for item in pack.definition.get("capabilities", []) if item.get("name")
+        ]
+        tool.enabled = True
+        return {}, verification, None
 
     if tool.config.get("managed_by") == "nango":
         reference = managed_connection_reference(tool)

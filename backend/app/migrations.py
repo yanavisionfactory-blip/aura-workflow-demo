@@ -292,6 +292,44 @@ async def migrate_database() -> None:
             )
         )
         await connection.execute(
+            text(
+                """
+                CREATE OR REPLACE FUNCTION reject_signed_broker_pack_change()
+                RETURNS trigger AS $$
+                BEGIN
+                    IF TG_OP = 'DELETE' THEN
+                        RAISE EXCEPTION 'signed broker capability pack cannot be deleted';
+                    END IF;
+                    IF OLD.backend IS DISTINCT FROM NEW.backend
+                       OR OLD.provider_slug IS DISTINCT FROM NEW.provider_slug
+                       OR OLD.version IS DISTINCT FROM NEW.version
+                       OR OLD.display_name IS DISTINCT FROM NEW.display_name
+                       OR OLD.definition IS DISTINCT FROM NEW.definition
+                       OR OLD.definition_hash IS DISTINCT FROM NEW.definition_hash
+                       OR OLD.signature IS DISTINCT FROM NEW.signature THEN
+                        RAISE EXCEPTION 'signed broker capability pack content cannot be changed';
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """
+            )
+        )
+        await connection.execute(
+            text(
+                "DROP TRIGGER IF EXISTS broker_capability_packs_immutable "
+                "ON broker_capability_packs"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE TRIGGER broker_capability_packs_immutable "
+                "BEFORE UPDATE OR DELETE ON broker_capability_packs FOR EACH ROW "
+                "WHEN (OLD.signature <> '') "
+                "EXECUTE FUNCTION reject_signed_broker_pack_change()"
+            )
+        )
+        await connection.execute(
             text("DROP TRIGGER IF EXISTS approval_snapshots_immutable ON approval_snapshots")
         )
         await connection.execute(

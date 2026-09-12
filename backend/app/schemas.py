@@ -41,6 +41,21 @@ class ConnectorMarketplaceRequest(BaseModel):
         return normalized
 
 
+class ConnectorBrokerComplete(BaseModel):
+    account_id: str = Field(pattern=r"^apn_[A-Za-z0-9]+$", max_length=500)
+    connection_id: str | None = Field(default=None, max_length=36)
+
+    @field_validator("account_id", mode="before")
+    @classmethod
+    def normalize_account_id(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise TypeError("Account reference must be text")
+        normalized = value.strip()
+        if any(ord(character) < 32 for character in normalized):
+            raise ValueError("Account reference contains unsupported characters")
+        return normalized
+
+
 class CustomOAuthStart(BaseModel):
     slug: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,119}$")
     display_name: str = Field(min_length=2, max_length=200)

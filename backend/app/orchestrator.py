@@ -38,6 +38,7 @@ from .models import (
     ApprovalSnapshot,
     Artifact,
     AuditEvent,
+    BrokerCapabilityPack,
     CapabilityManifest,
     ConnectionRequirement,
     DeadLetterEntry,
@@ -665,11 +666,18 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
         dynamic_inventory, dynamic_manifests = await dynamic_planning_catalog(
             session, connected_slugs
         )
+        from .pipedream_connect import planning_catalog as pipedream_planning_catalog
+
+        broker_inventory, broker_manifests = await pipedream_planning_catalog(
+            session, connected_slugs
+        )
         inventory_by_slug = {item["slug"]: item for item in planning_catalog(connected_slugs)}
         inventory_by_slug.update({item["slug"]: item for item in dynamic_inventory})
+        inventory_by_slug.update({item["slug"]: item for item in broker_inventory})
         inventory_by_slug.update({item["slug"]: item for item in connected_inventory})
         inventory = list(inventory_by_slug.values())
         manifests_by_slug = dict(dynamic_manifests)
+        manifests_by_slug.update(broker_manifests)
         manifests_by_slug.update({
             tool.slug: manifest.manifest
             for tool in tools
@@ -2142,10 +2150,62 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             if budget
                             else float(snapshot.policy_snapshot["step_timeout_seconds"])
                         )
+                        broker_pack_id = (active_tool.config or {}).get(
+                            "capability_pack_id"
+                        )
                         release_id = (active_tool.config or {}).get(
                             "connector_release_id"
                         )
-                        if active_tool.config.get("managed_by") == "nango" and release_id:
+                        if (
+                            active_tool.config.get("managed_by") == "pipedream"
+                            and broker_pack_id
+                        ):
+                            from .pipedream_connect import (
+                                pack_signature_valid as pipedream_pack_signature_valid,
+                            )
+                            from .pipedream_connect import (
+                                pipedream_client,
+                            )
+
+                            pack = await session.get(BrokerCapabilityPack, broker_pack_id)
+                            if (
+                                not pack
+                                or pack.backend != "pipedream"
+                                or pack.provider_slug != active_tool.slug
+                                or pack.definition_hash
+                                != active_tool.config.get("capability_pack_hash")
+                                or pack.status not in {"released", "superseded"}
+                                or not pipedream_pack_signature_valid(pack)
+                            ):
+                                raise RuntimeError(
+                                    "Connector capability pack is no longer trusted"
+                                )
+                            capability = capability_for(pack.definition, operation)
+                            account_id = str(active_tool.external_connection_id or "")
+                            external_user_id = str(
+                                active_tool.config.get("external_user_id") or ""
+                            )
+                            if not account_id or not external_user_id:
+                                raise RuntimeError("Managed account reference is missing")
+                            result = await asyncio.wait_for(
+                                pipedream_client().run_action(
+                                    external_user_id,
+                                    account_id,
+                                    capability,
+                                    arguments,
+                                ),
+                                timeout=execution_timeout,
+                            )
+                            output_failures = list(
+                                Draft202012Validator(
+                                    capability.get("output_schema") or {}
+                                ).iter_errors(result)
+                            )
+                            if output_failures:
+                                raise ValueError(
+                                    "Connector output failed its released schema"
+                                )
+                        elif active_tool.config.get("managed_by") == "nango" and release_id:
                             from .connector_engineer import release_signature_valid
 
                             release = await session.get(ManagedConnectorRelease, release_id)
@@ -2205,7 +2265,8 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                                 credentials = vault.decrypt(active_tool.encrypted_credentials)
                             if (
                                 active_tool.kind.value == "oauth"
-                                and active_tool.config.get("managed_by") != "nango"
+                                and active_tool.config.get("managed_by")
+                                not in {"nango", "pipedream"}
                             ):
                                 credentials, changed = await refresh_oauth_credentials(
                                     get_settings(),
