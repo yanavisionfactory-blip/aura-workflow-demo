@@ -5,6 +5,7 @@ import {
   CATALOG,
   MARKETPLACE,
   catalogEntryFor,
+  mergeMarketplaceApps,
   replaceToolCatalog,
   searchMarketplace,
 } from "../src/lib/toolCatalog.js";
@@ -43,4 +44,25 @@ test("discovered providers are searchable but only released providers are select
     })),
     [{ name: "Obscure Work App", requestable: true, availability: "requestable" }]
   );
+
+  mergeMarketplaceApps([
+    {
+      provider: "salesforce",
+      display_name: "Salesforce",
+      categories: ["CRM"],
+      availability: "available",
+      connectable: true,
+      connection_backend: "pipedream",
+    },
+    {
+      provider: "legacy-key-app",
+      display_name: "Legacy Key App",
+      availability: "coming_soon",
+      connectable: false,
+    },
+  ]);
+
+  assert.equal(catalogEntryFor("salesforce")?.connectionBackend, "pipedream");
+  assert.equal(catalogEntryFor("legacy-key-app"), null);
+  assert.equal(searchMarketplace("Legacy Key App")[0].availability, "coming_soon");
 });

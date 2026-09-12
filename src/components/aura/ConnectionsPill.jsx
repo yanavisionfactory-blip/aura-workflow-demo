@@ -31,8 +31,12 @@ import {
   removeDocument,
   subscribeDocuments,
 } from "@/lib/documentStore";
-import { requestManagedConnector } from "@/lib/auraApi";
-import { CATALOG, MARKETPLACE, searchMarketplace } from "@/lib/toolCatalog";
+import { requestManagedConnector, searchConnectorBrokerApps } from "@/lib/auraApi";
+import {
+  CATALOG,
+  mergeMarketplaceApps,
+  searchMarketplace,
+} from "@/lib/toolCatalog";
 
 const isAura = (name) => name === "AURA Intelligence";
 
@@ -46,6 +50,8 @@ export default function ConnectionsPill() {
   const [catalogRevision, setCatalogRevision] = useState(0);
   const [connecting, setConnecting] = useState(null);
   const [requesting, setRequesting] = useState(null);
+  const [searchingCatalog, setSearchingCatalog] = useState(false);
+  const [catalogSearchQuery, setCatalogSearchQuery] = useState("");
   const [connectionAction, setConnectionAction] = useState("");
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
@@ -63,6 +69,37 @@ export default function ConnectionsPill() {
       unsubscribeDocuments();
     };
   }, []);
+
+  useEffect(() => {
+    const normalized = query.trim().replace(/\s+/g, " ");
+    if (normalized.length < 2) {
+      setSearchingCatalog(false);
+      setCatalogSearchQuery("");
+      return undefined;
+    }
+    let cancelled = false;
+    setSearchingCatalog(true);
+    const timer = window.setTimeout(() => {
+      searchConnectorBrokerApps(normalized)
+        .then((result) => {
+          if (cancelled) return;
+          mergeMarketplaceApps(result.apps);
+          setCatalogRevision((value) => value + 1);
+          setCatalogSearchQuery(normalized);
+          setError("");
+        })
+        .catch(() => {
+          if (!cancelled) setError("AURA could not search the app network. Try again in a moment.");
+        })
+        .finally(() => {
+          if (!cancelled) setSearchingCatalog(false);
+        });
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [query]);
 
   const connectedTools = useMemo(() => {
     const catalogConnected = CATALOG.filter((tool) => connected[tool.name] && !isAura(tool.name));
@@ -293,12 +330,13 @@ export default function ConnectionsPill() {
                 <>
                   <div className="px-5 py-4">
                     <h3 className="text-base font-semibold">App marketplace</h3>
-                    <p className="mt-1 text-xs text-muted-foreground">Search {MARKETPLACE.length.toLocaleString()} apps and APIs. If an app is missing, request it here without configuring credentials.</p>
+                    <p className="mt-1 text-xs text-muted-foreground">Search apps and APIs across AURA’s embedded connector network. You only approve the provider’s consent screen.</p>
                   </div>
                   <div className="px-5 pb-3">
                     <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-card/70 px-3 py-2">
                       <Search className="h-3.5 w-3.5 text-muted-foreground/60" />
                       <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search apps and categories…" className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/40" />
+                      {searchingCatalog && <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />}
                     </div>
                   </div>
                   <div className="flex-1 space-y-1 overflow-y-auto px-3 pb-4">
@@ -315,16 +353,20 @@ export default function ConnectionsPill() {
                           </div>
                           {isConnected ? (
                             <span className="flex items-center gap-1 text-xs text-emerald-400"><Check className="h-3.5 w-3.5" />Connected</span>
+                          ) : tool.requestable && catalogSearchQuery !== query.trim().replace(/\s+/g, " ") ? (
+                            searchingCatalog
+                              ? <span className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />Searching…</span>
+                              : <span className="rounded-full border border-amber-400/20 bg-amber-400/5 px-2 py-1 text-[10px] text-amber-300">Coming soon</span>
                           ) : tool.requestable ? (
                             <button type="button" onClick={() => requestApp(tool)} disabled={requesting === tool.name} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-50">
                               {requesting === tool.name ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}{requesting === tool.name ? "Requesting…" : "Request app"}
                             </button>
                           ) : tool.connectable ? (
-                            <button type="button" onClick={() => connect(tool)} disabled={connecting === tool.name} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-50">
+                            <button type="button" onClick={() => connect(tool)} disabled={Boolean(connecting)} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-50">
                               {connecting === tool.name ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}{connecting === tool.name ? "Opening…" : "Connect"}
                             </button>
                           ) : (
-                            <span className="rounded-full border border-amber-400/20 bg-amber-400/5 px-2 py-1 text-[10px] text-amber-300">{tool.availability === "unsupported_auth" ? "Not one-click" : tool.availability === "requested" ? "Requested" : "Verifying"}</span>
+                            <span className="rounded-full border border-amber-400/20 bg-amber-400/5 px-2 py-1 text-[10px] text-amber-300">{tool.availability === "requested" ? "Requested" : "Coming soon"}</span>
                           )}
                         </div>
                       );

@@ -31,7 +31,12 @@ const NATIVE_FALLBACK = [
   { name: "Canva", provider: "canva", icon: ICONS.canva, desc: "Create and export designs" },
   { name: "HubSpot", provider: "hubspot", icon: ICONS.hubspot, desc: "Manage contacts and deals" },
   { name: "Jira", provider: "jira", icon: ICONS.jira, desc: "Create and track issues" },
-].map((tool) => ({ ...tool, connectable: true, availability: "available" }));
+].map((tool) => ({
+  ...tool,
+  connectable: true,
+  availability: "available",
+  connectionBackend: "native",
+}));
 
 export const CATALOG = [...NATIVE_FALLBACK];
 export const MARKETPLACE = [...NATIVE_FALLBACK];
@@ -42,7 +47,7 @@ function description(item) {
     return `${item.capability_count} verified ${item.capability_count === 1 ? "capability" : "capabilities"}`;
   }
   if (categories.length) return categories.slice(0, 2).join(" · ");
-  return item.connectable ? "Verified one-click connection" : "AURA is verifying this connector";
+  return item.connectable ? "Verified one-click connection" : "Coming soon";
 }
 
 function normalize(item) {
@@ -58,6 +63,7 @@ function normalize(item) {
     connectable: Boolean(item.connectable ?? item.availability === "available"),
     availability: item.availability || (item.connectable ? "available" : "verifying"),
     source: item.source || "connector_engineer",
+    connectionBackend: item.connection_backend || item.connectionBackend || null,
   };
 }
 
@@ -94,6 +100,21 @@ function expandGoogle(item) {
 
 function replace(target, items) {
   target.splice(0, target.length, ...items);
+}
+
+export function mergeMarketplaceApps(items = []) {
+  const byProvider = new Map(MARKETPLACE.map((item) => [item.provider, item]));
+  items.forEach((raw) => {
+    const item = normalize(raw);
+    if (!item) return;
+    const current = byProvider.get(item.provider);
+    if (!current || item.connectable || !current.connectable) byProvider.set(item.provider, item);
+  });
+  const marketplace = [...byProvider.values()].sort(
+    (a, b) => Number(b.connectable) - Number(a.connectable) || a.name.localeCompare(b.name),
+  );
+  replace(MARKETPLACE, marketplace);
+  replace(CATALOG, marketplace.filter((item) => item.connectable));
 }
 
 export function replaceToolCatalog(status = {}) {

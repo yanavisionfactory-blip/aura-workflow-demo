@@ -1,3 +1,5 @@
+import { createFrontendClient } from "@pipedream/sdk/browser";
+
 const API_URL = (import.meta.env.VITE_AURA_API_URL || "").replace(/\/$/, "");
 const WORKSPACE_KEY = "aura_python_workspace_id";
 const ACTIVE_RUN_KEY = "aura_active_python_run_id";
@@ -119,6 +121,32 @@ export async function requestManagedConnector(name) {
   });
 }
 
+export async function searchConnectorBrokerApps(query, limit = 30) {
+  const normalized = String(query || "").trim().replace(/\s+/g, " ");
+  if (normalized.length < 2) return { apps: [], count: 0, backends: {} };
+  await ensureWorkspace();
+  const params = new URLSearchParams({ q: normalized, limit: String(limit) });
+  return request(`/v1/connector-broker/apps?${params.toString()}`);
+}
+
+export async function createConnectorBrokerSession(provider, connectionId = null) {
+  await ensureWorkspace();
+  const params = new URLSearchParams();
+  if (connectionId) params.set("connection_id", connectionId);
+  const query = params.size ? `?${params.toString()}` : "";
+  return request(`/v1/connector-broker/${encodeURIComponent(provider)}/session${query}`, {
+    method: "POST",
+  });
+}
+
+export async function completeConnectorBrokerConnection(provider, accountId, connectionId = null) {
+  await ensureWorkspace();
+  return request(`/v1/connector-broker/${encodeURIComponent(provider)}/complete`, {
+    method: "POST",
+    body: JSON.stringify({ account_id: accountId, connection_id: connectionId }),
+  });
+}
+
 export async function syncManagedConnector(provider, connection = {}) {
   await ensureWorkspace();
   const params = new URLSearchParams();
@@ -148,12 +176,12 @@ function authorizationWindow(provider, reconnecting, reservedWindow) {
   return reserveAuthorizationWindow(provider, reconnecting);
 }
 
-export async function authorizeManagedConnector(provider, timeoutMs = 120000, reservedWindow = null) {
+export async function authorizeManagedConnector(provider, timeoutMs = 120000, reservedWindow = null, preparedSession = null) {
   const popup = authorizationWindow(provider, false, reservedWindow);
   let session;
   try {
     await ensureWorkspace();
-    session = await request(`/v1/managed-connectors/${provider}/session`, { method: "POST" });
+    session = preparedSession || await request(`/v1/managed-connectors/${provider}/session`, { method: "POST" });
     if (session.connect_link) popup.location.assign(session.connect_link);
     else if (!session.already_connected) throw new Error("AURA could not prepare this connection.");
   } catch (error) {
@@ -184,7 +212,7 @@ export async function authorizeManagedConnector(provider, timeoutMs = 120000, re
   throw new Error("The app did not finish connecting. AURA kept your plan unchanged.");
 }
 
-export async function authorizeOAuth(provider, timeoutMs = 120000, reservedWindow = null) {
+export async function authorizeOAuth(provider, timeoutMs = 120000, reservedWindow = null, preparedSession = null) {
   const popup = authorizationWindow(provider, false, reservedWindow);
   let authorization_url;
   let previousUpdatedAt = null;
@@ -199,13 +227,13 @@ export async function authorizeOAuth(provider, timeoutMs = 120000, reservedWindo
     await ensureWorkspace();
     const before = await listPythonTools().catch(() => []);
     const existing = before.find((tool) => tool.slug === provider);
-    if (existing?.enabled) {
+    if (existing?.enabled && !preparedSession) {
       popup.close();
       window.removeEventListener("message", receiveOAuthResult);
       return { connected: true, reused: true, tool: existing };
     }
-    previousUpdatedAt = existing?.updated_at || null;
-    ({ authorization_url } = await request(`/v1/oauth/${provider}/start`));
+    previousUpdatedAt = preparedSession?.previous_updated_at || existing?.updated_at || null;
+    ({ authorization_url } = preparedSession || await request(`/v1/oauth/${provider}/start`));
   } catch (error) {
     popup.close();
     window.removeEventListener("message", receiveOAuthResult);
@@ -246,6 +274,99 @@ export async function authorizeOAuth(provider, timeoutMs = 120000, reservedWindo
   } finally {
     window.removeEventListener("message", receiveOAuthResult);
   }
+}
+
+async function authorizePipedreamConnector(provider, session, timeoutMs) {
+  const tokenCallback = async () => {
+    const refreshed = await createConnectorBrokerSession(provider, session.connection_id);
+    return {
+      token: refreshed.token,
+      expiresAt: refreshed.expires_at ? new Date(refreshed.expires_at) : new Date(Date.now() + 60000),
+      connectLinkUrl: "",
+    };
+  };
+  const client = createFrontendClient({
+    externalUserId: session.external_user_id,
+    projectEnvironment: session.project_environment,
+    token: session.token,
+    tokenCallback,
+  });
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let completion = null;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      document.querySelectorAll('iframe[id^="pipedream-connect-iframe-"]').forEach((frame) => frame.remove());
+      callback(value);
+    };
+    const timer = window.setTimeout(() => {
+      document.querySelectorAll('iframe[id^="pipedream-connect-iframe-"]').forEach((frame) => frame.remove());
+      finish(reject, new Error("The app did not finish connecting. AURA kept your plan unchanged."));
+    }, timeoutMs);
+
+    client.connectAccount({
+      app: session.app || provider,
+      token: session.token,
+      accountId: session.account_id || undefined,
+      customOauthClient: false,
+      onSuccess: ({ id }) => {
+        completion = completeConnectorBrokerConnection(
+          provider,
+          id,
+          session.connection_id,
+        ).then(async (result) => {
+          const tools = await listPythonTools();
+          const tool = tools.find((item) => item.id === result.connection_id);
+          if (!tool) throw new Error(`${provider} access could not be verified.`);
+          return { connected: true, managed: true, backend: "pipedream", tool };
+        });
+        completion.then(
+          (result) => finish(resolve, result),
+          (error) => finish(reject, error),
+        );
+      },
+      onError: (error) => finish(
+        reject,
+        new Error(error?.message || "The provider did not grant AURA access."),
+      ),
+      onClose: ({ successful }) => {
+        if (successful && completion) return;
+        finish(reject, new Error("Connection was cancelled. AURA kept your plan unchanged."));
+      },
+    }).then(() => {
+      document.querySelectorAll('iframe[id^="pipedream-connect-iframe-"]').forEach((frame) => {
+        frame.title = `Connect ${provider}`;
+      });
+    }).catch((error) => finish(reject, error));
+  });
+}
+
+export async function authorizeConnectorBroker(
+  provider,
+  { connection = null, timeoutMs = 120000, reservedWindow = null } = {},
+) {
+  let session;
+  try {
+    session = await createConnectorBrokerSession(provider, connection?.id || null);
+  } catch (error) {
+    if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
+    throw error;
+  }
+  if (session.backend === "pipedream") {
+    if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
+    return authorizePipedreamConnector(provider, session, timeoutMs);
+  }
+  if (session.backend === "nango") {
+    return authorizeManagedConnector(provider, timeoutMs, reservedWindow, session);
+  }
+  if (session.backend === "native") {
+    return authorizeOAuth(provider, timeoutMs, reservedWindow, session);
+  }
+  if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
+  throw new Error("AURA could not select a secure connection route for this app.");
 }
 
 export async function authorizeCustomOAuth(payload, timeoutMs = 120000) {
