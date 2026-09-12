@@ -1,4 +1,4 @@
-"""Discover, validate, canary, release, and roll back Nango capability packs.
+"""Discover, validate, canary, release, and roll back connector capability packs.
 
 Connector Engineer only compiles data returned by Nango. It never downloads or
 executes provider code in the AURA process, and it never uses customer accounts
@@ -39,6 +39,18 @@ from .models import (
     OperationCertification,
 )
 from .operation_contracts import enrich_operation
+from .pipedream_connect import (
+    PipedreamClient,
+)
+from .pipedream_connect import (
+    app_uses_managed_oauth as pipedream_uses_managed_oauth,
+)
+from .pipedream_connect import (
+    certify_app as certify_pipedream_app,
+)
+from .pipedream_connect import (
+    marketplace_entry as pipedream_marketplace_entry,
+)
 from .providers import PROVIDERS
 
 logger = logging.getLogger(__name__)
@@ -983,6 +995,71 @@ async def discovered_marketplace(session: AsyncSession) -> dict[str, Any]:
     }
 
 
+async def engineer_pipedream_catalog(
+    session: AsyncSession,
+    client: PipedreamClient | None = None,
+    settings: Settings | None = None,
+) -> EngineeringSummary:
+    """Pre-warm popular, data-only Pipedream action packs without customer accounts."""
+    settings = settings or get_settings()
+    client = client or PipedreamClient(settings)
+    if not client.configured or len(settings.connector_release_signing_key) < 32:
+        return EngineeringSummary(status="disabled")
+    apps = await client.list_apps(
+        "",
+        limit=100,
+        sort_key="featured_weight",
+        sort_direction="desc",
+    )
+    entries = [pipedream_marketplace_entry(item, connectable=True) for item in apps]
+    snapshot = await session.scalar(
+        select(ManagedConnectorCatalog).where(ManagedConnectorCatalog.source == "pipedream")
+    )
+    if snapshot is None:
+        snapshot = ManagedConnectorCatalog(source="pipedream")
+        session.add(snapshot)
+    snapshot.providers = entries
+    snapshot.provider_count = len(entries)
+    snapshot.refreshed_at = datetime.now(UTC)
+    summary = EngineeringSummary(status="completed", discovered=len(entries))
+    eligible = [
+        item
+        for item in apps
+        if pipedream_uses_managed_oauth(item)
+        and _slug(item.get("name_slug") or item.get("name")) not in PROVIDERS
+    ]
+    summary.skipped = len(apps) - len(eligible)
+    for app_definition in eligible[: settings.connector_engineer_max_integrations_per_scan]:
+        provider_slug = _slug(app_definition.get("name_slug") or app_definition.get("name"))
+        try:
+            async with session.begin_nested():
+                await certify_pipedream_app(session, client, app_definition, settings)
+            summary.compiled += 1
+            summary.released += 1
+        except Exception as exc:  # noqa: BLE001 - isolate one vendor action pack
+            logger.warning(
+                "connector_engineer_pipedream_failed provider=%s error_type=%s",
+                provider_slug,
+                type(exc).__name__,
+            )
+            summary.rejected += 1
+    await session.commit()
+    return summary
+
+
+async def discovered_pipedream_marketplace(session: AsyncSession) -> dict[str, Any]:
+    snapshot = await session.scalar(
+        select(ManagedConnectorCatalog).where(ManagedConnectorCatalog.source == "pipedream")
+    )
+    if snapshot is None:
+        return {"providers": [], "provider_count": 0, "refreshed_at": None}
+    return {
+        "providers": list(snapshot.providers or []),
+        "provider_count": snapshot.provider_count,
+        "refreshed_at": snapshot.refreshed_at.isoformat() if snapshot.refreshed_at else None,
+    }
+
+
 async def connector_engineer_tick(
     session_factory: Any,
     *,
@@ -1005,22 +1082,58 @@ async def connector_engineer_tick(
             try:
                 async with session_factory() as session:
                     if not force:
-                        snapshot = await session.scalar(
-                            select(ManagedConnectorCatalog).where(
-                                ManagedConnectorCatalog.source == "nango"
-                            )
-                        )
-                        if snapshot and snapshot.refreshed_at:
+                        required_sources = []
+                        if NangoClient(settings).configured:
+                            required_sources.append("nango")
+                        if PipedreamClient(settings).configured:
+                            required_sources.append("pipedream")
+                        snapshots = {
+                            item.source: item
+                            for item in (
+                                await session.scalars(
+                                    select(ManagedConnectorCatalog).where(
+                                        ManagedConnectorCatalog.source.in_(required_sources)
+                                    )
+                                )
+                            ).all()
+                        }
+                        refreshed = []
+                        for source in required_sources:
+                            snapshot = snapshots.get(source)
+                            if snapshot is None or snapshot.refreshed_at is None:
+                                break
                             refreshed_at = snapshot.refreshed_at
                             if refreshed_at.tzinfo is None:
                                 refreshed_at = refreshed_at.replace(tzinfo=UTC)
-                            elapsed = datetime.now(UTC) - refreshed_at
-                            if (
-                                elapsed.total_seconds()
-                                < settings.connector_engineer_scan_interval_seconds
-                            ):
-                                return EngineeringSummary(status="not_due")
-                    summary = await engineer_nango_catalog(session, settings=settings)
+                            refreshed.append(refreshed_at)
+                        else:
+                            if refreshed:
+                                elapsed = datetime.now(UTC) - min(refreshed)
+                                if (
+                                    elapsed.total_seconds()
+                                    < settings.connector_engineer_scan_interval_seconds
+                                ):
+                                    return EngineeringSummary(status="not_due")
+                    summaries: list[EngineeringSummary] = []
+                    failures: list[Exception] = []
+                    for engineer in (engineer_nango_catalog, engineer_pipedream_catalog):
+                        try:
+                            summaries.append(await engineer(session, settings=settings))
+                        except Exception as exc:  # noqa: BLE001 - connector planes fail independently
+                            failures.append(exc)
+                    active = [item for item in summaries if item.status != "disabled"]
+                    if failures and not active:
+                        raise failures[0]
+                    summary = EngineeringSummary(
+                        status="partial" if failures else "completed" if active else "disabled",
+                        discovered=sum(item.discovered for item in summaries),
+                        compiled=sum(item.compiled for item in summaries),
+                        released=sum(item.released for item in summaries),
+                        awaiting_canary=sum(item.awaiting_canary for item in summaries),
+                        rejected=sum(item.rejected for item in summaries) + len(failures),
+                        rolled_back=sum(item.rolled_back for item in summaries),
+                        skipped=sum(item.skipped for item in summaries),
+                    )
                 finished = _timestamp()
                 connector_engineer_observation.update(
                     last_scan_completed_at=finished,

@@ -242,6 +242,37 @@ class ManagedConnectorCatalog(Base):
     )
 
 
+class BrokerCapabilityPack(Base):
+    """Immutable, versioned action contract imported from a connector network.
+
+    These records are global because they contain no customer credentials or
+    account identifiers. Tenant-owned connection references remain isolated in
+    ``ToolConnection``.
+    """
+
+    __tablename__ = "broker_capability_packs"
+    __table_args__ = (
+        UniqueConstraint(
+            "backend",
+            "provider_slug",
+            "version",
+            name="uq_broker_capability_pack_version",
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    backend: Mapped[str] = mapped_column(String(40), index=True)
+    provider_slug: Mapped[str] = mapped_column(String(120), index=True)
+    display_name: Mapped[str] = mapped_column(String(200))
+    version: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(30), default="released", index=True)
+    definition: Mapped[dict] = mapped_column(JSON, default=dict)
+    definition_hash: Mapped[str] = mapped_column(String(64), index=True)
+    signature: Mapped[str] = mapped_column(String(64), default="")
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    certified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class ConnectorInstallation(Base):
     __tablename__ = "connector_installations"
     __table_args__ = (

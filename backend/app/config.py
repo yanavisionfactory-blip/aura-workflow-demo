@@ -97,6 +97,16 @@ class Settings(BaseSettings):
     nango_base_url: str = "https://api.nango.dev"
     nango_integration_map: str = "{}"
     nango_auto_provision_integrations: bool = True
+    # Pipedream Connect supplies the managed-auth/action long tail. Credentials
+    # authorize AURA's server only; browsers receive short-lived, user-scoped
+    # Connect tokens and never receive these values.
+    pipedream_client_id: str = ""
+    pipedream_client_secret: str = ""
+    pipedream_project_id: str = ""
+    pipedream_environment: str = "production"
+    pipedream_base_url: str = "https://api.pipedream.com"
+    pipedream_max_actions_per_app: int = Field(default=200, ge=1, le=500)
+    pipedream_connect_token_ttl_seconds: int = Field(default=900, ge=60, le=14_400)
     # Connector Engineer discovers data-only capability packs from the Nango
     # environment. A pack is never user-visible until its signature, isolated
     # validation, and dedicated-account canary all pass.
