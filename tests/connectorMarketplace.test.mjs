@@ -6,6 +6,7 @@ import {
   MARKETPLACE,
   catalogEntryFor,
   replaceToolCatalog,
+  searchMarketplace,
 } from "../src/lib/toolCatalog.js";
 
 test("discovered providers are searchable but only released providers are selectable", () => {
@@ -33,4 +34,13 @@ test("discovered providers are searchable but only released providers are select
   assert.deepEqual(CATALOG.map((tool) => tool.name), ["Linear"]);
   assert.equal(catalogEntryFor("linear")?.name, "Linear");
   assert.equal(catalogEntryFor("make"), null);
+  assert.equal(searchMarketplace("Linear")[0].name, "Linear");
+  assert.deepEqual(
+    searchMarketplace("Obscure Work App").map(({ name, requestable, availability }) => ({
+      name,
+      requestable,
+      availability,
+    })),
+    [{ name: "Obscure Work App", requestable: true, availability: "requestable" }]
+  );
 });
