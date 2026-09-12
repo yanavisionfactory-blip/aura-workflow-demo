@@ -4,8 +4,7 @@ import { Search, Plus, FileUp, Loader2, Check, Link2, Paperclip, X } from "lucid
 import { CATALOG } from "@/lib/toolCatalog";
 import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
 import { connectTool } from "@/lib/connectService";
-import { isManagedOAuthTool } from "@/lib/connectionPolicy.mjs";
-import { base44 } from "@/api/base44Client";
+import { aura } from "@/api/auraClient";
 
 // Normal users only see tools with a backend-owned OAuth route. Custom API,
 // MCP, key, and browser provisioning remains an operator-side concern.
@@ -15,6 +14,7 @@ export default function ResourceComposer({ open, onClose, onAddTool, onAddDocume
   const [query, setQuery] = useState("");
   const [connecting, setConnecting] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
   const [connections, setConnections] = useState(getAllConnections);
   const [connectionError, setConnectionError] = useState("");
   const fileRef = useRef(null);
@@ -22,9 +22,7 @@ export default function ResourceComposer({ open, onClose, onAddTool, onAddDocume
   useEffect(() => subscribeConnections(setConnections), []);
 
   const q = query.trim().toLowerCase();
-  const filtered = CATALOG.filter(
-    (t) => (isManagedOAuthTool(t.name) || connections[t.name]) && t.name.toLowerCase().includes(q)
-  );
+  const filtered = CATALOG.filter((t) => t.name.toLowerCase().includes(q));
 
   // One selection is one connection action: AURA opens the provider consent
   // page immediately and performs discovery/verification itself.
@@ -49,12 +47,22 @@ export default function ResourceComposer({ open, onClose, onAddTool, onAddDocume
   const handleFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (pinnedDocs.length >= 8) {
+      setUploadError("Attach no more than eight documents to one workflow.");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setUploadError("Choose a file smaller than 10 MB.");
+      if (fileRef.current) fileRef.current.value = "";
+      return;
+    }
     setUploading(true);
+    setUploadError("");
     try {
-      const out = await base44.integrations.Core.UploadFile({ file });
+      const out = await aura.integrations.Core.UploadFile({ file });
       onAddDocument({ name: file.name, file_url: out.file_url, size: file.size });
-    } catch {
-      // non-fatal
+    } catch (cause) {
+      setUploadError(cause.message || "AURA could not attach that file.");
     }
     setUploading(false);
     if (fileRef.current) fileRef.current.value = "";
@@ -97,7 +105,7 @@ export default function ResourceComposer({ open, onClose, onAddTool, onAddDocume
                   autoFocus
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search apps..."
+                  placeholder="Search verified connectors..."
                   className="flex-1 bg-transparent outline-none text-[11px] placeholder:text-muted-foreground/40"
                 />
               </div>
@@ -149,7 +157,7 @@ export default function ResourceComposer({ open, onClose, onAddTool, onAddDocume
                 })}
 
                 {!filtered.length && (
-                  <p className="text-center text-[10px] text-muted-foreground/60 py-6">No one-click app found</p>
+                  <p className="text-center text-[10px] text-muted-foreground/60 py-6">No verified one-click connector found</p>
                 )}
                 {connectionError && <p className="px-2 py-2 text-[10px] leading-relaxed text-red-300">{connectionError}</p>}
               </div>
@@ -171,6 +179,7 @@ export default function ResourceComposer({ open, onClose, onAddTool, onAddDocume
                 <span className="text-[10px] text-muted-foreground/60">PDF, CSV, sheet, doc, image — AURA can read it in the workflow</span>
               </button>
               <input ref={fileRef} type="file" className="hidden" onChange={handleFile} />
+              {uploadError && <p className="mt-2 text-[10px] text-red-400">{uploadError}</p>}
 
               {pinnedDocs.length > 0 && (
                 <div className="mt-2 space-y-0.5">

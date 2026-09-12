@@ -1,8 +1,8 @@
 import { motion } from "framer-motion";
 import ConnectionsPill from "./ConnectionsPill";
-import { Sparkles, History } from "lucide-react";
+import { ArrowLeft, Sparkles, History } from "lucide-react";
 
-export default function TopBar({ onHistoryOpen }) {
+export default function TopBar({ onHistoryOpen, onBack, backLabel = "Back" }) {
   return (
     <motion.header
       initial={{ opacity: 0, y: -10 }}
@@ -11,6 +11,12 @@ export default function TopBar({ onHistoryOpen }) {
       className="flex items-center justify-between px-6 py-4 border-b border-white/5"
     >
       <div className="flex items-center gap-3">
+        {onBack && (
+          <button type="button" onClick={onBack} aria-label="Go back" className="flex items-center gap-1.5 rounded-lg border border-white/8 px-2.5 py-1.5 text-xs text-muted-foreground transition-all hover:border-white/15 hover:bg-white/5 hover:text-foreground">
+            <ArrowLeft className="h-3.5 w-3.5" />
+            {backLabel}
+          </button>
+        )}
         <div className="relative">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-accent flex items-center justify-center">
             <Sparkles className="w-4 h-4 text-white" />

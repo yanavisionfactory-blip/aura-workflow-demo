@@ -1,35 +1,101 @@
-// Single source of truth for the tools AURA can connect to. Shared by the
-// Connections panel (proactive) and the in-plan "Uses" line picker (reactive)
-// so both surfaces show the same tools, icons, and connection methods.
+// The selectable catalog is owned by the backend. Only built-in providers or
+// signed Connector Engineer releases receive a Connect button. Discovered
+// providers remain searchable in MARKETPLACE while AURA verifies them.
 
-export const CATALOG = [
-  { name: "Gmail", icon: "📧", desc: "Read and send email" },
-  { name: "Airtable", icon: "🗃️", desc: "Read and write records" },
-  { name: "Google Drive", icon: "🗂️", desc: "Access files and folders" },
-  { name: "Slack", icon: "💬", desc: "Send messages to channels" },
-  { name: "Salesforce", icon: "☁️", desc: "Read and update CRM records" },
-  { name: "Google Calendar", icon: "📅", desc: "Read and create events" },
-  { name: "HubSpot", icon: "🔶", desc: "Manage contacts and deals" },
-  { name: "Mailchimp", icon: "🐵", desc: "Manage audiences, contacts, and campaigns" },
-  { name: "Canva", icon: "🎨", desc: "Create, organize, and export designs" },
-  { name: "Notion", icon: "📝", desc: "Read and edit notes and docs" },
-  { name: "Google Sheets", icon: "📊", desc: "Read and write spreadsheets" },
-  { name: "Shopify", icon: "🛍️", desc: "Manage orders and products" },
-  { name: "Instagram", icon: "📸", desc: "Publish and analyze posts" },
-  { name: "TikTok", icon: "🎵", desc: "Read videos and publish approved content" },
-  { name: "QuickBooks", icon: "🧾", desc: "Read invoices and financials" },
-  { name: "Stripe", icon: "💳", desc: "Charge customers and subscriptions" },
-  { name: "Meta Ads", icon: "📈", desc: "Pull ad campaign performance" },
-  { name: "Jira", icon: "✅", desc: "Create and track Atlassian issues" },
-  { name: "Confluence", icon: "📚", desc: "Read and update Atlassian knowledge bases" },
-  { name: "ClickUp", icon: "✔️", desc: "Manage tasks, lists, and workspaces" },
-  // Internal tool with no standard connection — connects via the AURA Interface
-  // learn flow. Same persistent store once connected.
-  { name: "Creator Approvals", icon: "🔌", desc: "Submit creators for approval", interface: true },
-  // Specialized creator-data APIs — return VERIFIED TikTok stats + contact
-  // emails. AURA proposes these for creator-discovery goals; without one,
-  // discovery falls back to LLM web search and results are marked unverified.
-  { name: "Modash", icon: "🔍", desc: "Verified creator stats & contact emails", apiKey: true, specialty: "creator-data" },
-  { name: "HypeAuditor", icon: "📊", desc: "Influencer analytics & contact emails", apiKey: true, specialty: "creator-data" },
-  { name: "Apify", icon: "🕷️", desc: "Scrape & verify TikTok profiles", apiKey: true, specialty: "scraping" },
-];
+const ICONS = {
+  google: "✨",
+  gmail: "📧",
+  "google-drive": "🗂️",
+  "google-calendar": "📅",
+  "google-sheets": "📊",
+  airtable: "🗃️",
+  notion: "📝",
+  slack: "💬",
+  tiktok: "🎵",
+  mailchimp: "✉️",
+  canva: "🎨",
+  hubspot: "🔶",
+  jira: "✅",
+};
+
+const NATIVE_FALLBACK = [
+  { name: "Gmail", provider: "google", icon: ICONS.gmail, desc: "Read and send email" },
+  { name: "Google Drive", provider: "google", icon: ICONS["google-drive"], desc: "Access files and folders" },
+  { name: "Google Calendar", provider: "google", icon: ICONS["google-calendar"], desc: "Read and create events" },
+  { name: "Google Sheets", provider: "google", icon: ICONS["google-sheets"], desc: "Read and write spreadsheets" },
+  { name: "Airtable", provider: "airtable", icon: ICONS.airtable, desc: "Read and write records" },
+  { name: "Notion", provider: "notion", icon: ICONS.notion, desc: "Read and edit notes and docs" },
+  { name: "Slack", provider: "slack", icon: ICONS.slack, desc: "Send messages to channels" },
+  { name: "TikTok", provider: "tiktok", icon: ICONS.tiktok, desc: "Read profiles and publish content" },
+  { name: "Mailchimp", provider: "mailchimp", icon: ICONS.mailchimp, desc: "Manage audiences and campaigns" },
+  { name: "Canva", provider: "canva", icon: ICONS.canva, desc: "Create and export designs" },
+  { name: "HubSpot", provider: "hubspot", icon: ICONS.hubspot, desc: "Manage contacts and deals" },
+  { name: "Jira", provider: "jira", icon: ICONS.jira, desc: "Create and track issues" },
+].map((tool) => ({ ...tool, connectable: true, availability: "available" }));
+
+export const CATALOG = [...NATIVE_FALLBACK];
+export const MARKETPLACE = [...NATIVE_FALLBACK];
+
+function description(item) {
+  const categories = Array.isArray(item.categories) ? item.categories.filter(Boolean) : [];
+  if (item.connectable && item.capability_count) {
+    return `${item.capability_count} verified ${item.capability_count === 1 ? "capability" : "capabilities"}`;
+  }
+  if (categories.length) return categories.slice(0, 2).join(" · ");
+  return item.connectable ? "Verified one-click connection" : "AURA is verifying this connector";
+}
+
+function normalize(item) {
+  const provider = String(item.provider || "").trim().toLowerCase();
+  if (!provider) return null;
+  return {
+    name: String(item.display_name || provider),
+    provider,
+    icon: ICONS[provider] || "🔗",
+    desc: description(item),
+    categories: Array.isArray(item.categories) ? item.categories : [],
+    connectable: Boolean(item.connectable ?? item.availability === "available"),
+    availability: item.availability || (item.connectable ? "available" : "verifying"),
+    source: item.source || "connector_engineer",
+  };
+}
+
+function expandGoogle(item) {
+  if (item.provider !== "google" || !item.connectable) return [item];
+  return NATIVE_FALLBACK.filter((tool) => tool.provider === "google");
+}
+
+function replace(target, items) {
+  target.splice(0, target.length, ...items);
+}
+
+export function replaceToolCatalog(status = {}) {
+  const hasMarketplace = Array.isArray(status.marketplace) && status.marketplace.length;
+  const rawMarketplace = hasMarketplace ? status.marketplace : status.catalog;
+  if (!Array.isArray(rawMarketplace) || !rawMarketplace.length) return;
+
+  const marketplace = [];
+  const seen = new Set();
+  rawMarketplace.forEach((raw) => {
+    const normalized = normalize(hasMarketplace ? raw : { ...raw, connectable: true });
+    if (!normalized) return;
+    expandGoogle(normalized).forEach((item) => {
+      const key = `${item.provider}:${item.name.toLowerCase()}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      marketplace.push(item);
+    });
+  });
+  marketplace.sort((a, b) => Number(b.connectable) - Number(a.connectable) || a.name.localeCompare(b.name));
+  replace(MARKETPLACE, marketplace);
+  replace(CATALOG, marketplace.filter((item) => item.connectable));
+}
+
+export function catalogEntryFor(toolName) {
+  const key = String(toolName || "").trim().toLowerCase();
+  return CATALOG.find((item) => item.name.toLowerCase() === key || item.provider === key) || null;
+}
+
+export function providerForTool(toolName) {
+  return catalogEntryFor(toolName)?.provider || null;
+}

@@ -3,8 +3,9 @@ import { motion, AnimatePresence } from "framer-motion";
 import { ArrowRight, Sparkles, X, Plus, FileBarChart, Mail, ListChecks, RefreshCw, Paperclip } from "lucide-react";
 import ValueProp from "./ValueProp";
 import ResourceComposer from "./ResourceComposer";
-import { isManagedOAuthTool } from "@/lib/connectionPolicy.mjs";
 import { base44 } from "@/api/base44Client";
+import { attachDocument, getAttachedDocuments, removeDocument, subscribeDocuments } from "@/lib/documentStore";
+import { catalogEntryFor } from "@/lib/toolCatalog";
 
 const EXAMPLE_ICONS = [FileBarChart, Mail, ListChecks, RefreshCw];
 
@@ -24,7 +25,7 @@ function getHints(text) {
   if (!text) return [];
   const lower = text.toLowerCase();
   return toolHints
-    .filter((h) => isManagedOAuthTool(h.label) && h.keywords.some((k) => lower.includes(k)))
+    .filter((h) => catalogEntryFor(h.label) && h.keywords.some((k) => lower.includes(k)))
     .map((h) => h.label)
     .slice(0, 3);
 }
@@ -34,7 +35,7 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
   const [isFocused, setIsFocused] = useState(false);
   const [manualTools, setManualTools] = useState([]);
   const [removedTools, setRemovedTools] = useState([]);
-  const [documents, setDocuments] = useState([]);
+  const [documents, setDocuments] = useState(getAttachedDocuments);
   const [showComposer, setShowComposer] = useState(false);
   const [examplesCollapsed, setExamplesCollapsed] = useState(false);
   const inputRef = useRef(null);
@@ -47,6 +48,8 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => subscribeDocuments(setDocuments), []);
 
   const autoHints = getHints(value).filter((h) => !removedTools.includes(h));
   const hints = [...new Set([...autoHints, ...manualTools])];
@@ -92,7 +95,7 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
 
         {/* Tool hints */}
         <AnimatePresence>
-          {value.length > 0 && (
+          {(value.length > 0 || documents.length > 0) && (
             <motion.div
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: "auto" }}
@@ -122,7 +125,7 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
                   initial={{ opacity: 0, scale: 0.85 }}
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.85 }}
-                  onClick={() => setDocuments((prev) => prev.filter((x) => x.file_url !== d.file_url))}
+                  onClick={() => removeDocument(d.file_url)}
                   className="group flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-accent/8 text-accent/70 border border-accent/15 hover:bg-red-500/10 hover:border-red-400/20 hover:text-red-400/70 transition-all max-w-[180px]"
                 >
                   <Paperclip className="w-2.5 h-2.5 shrink-0" />
@@ -135,7 +138,7 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
                   onClick={() => setShowComposer((p) => !p)}
                   className="flex items-center gap-1 text-[10px] px-2.5 py-0.5 rounded-full bg-primary/10 border border-primary/20 text-primary/60 hover:bg-primary/20 hover:border-primary/40 hover:text-primary/90 transition-all font-medium"
                 >
-                  <Plus className="w-2.5 h-2.5" /> add
+                  <Plus className="w-2.5 h-2.5" /> tools & docs
                 </button>
                 <ResourceComposer
                   open={showComposer}
@@ -147,7 +150,7 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
                     setRemovedTools((prev) => prev.filter((r) => r !== name));
                   }}
                   onAddDocument={(doc) => {
-                    setDocuments((prev) => (prev.some((x) => x.file_url === doc.file_url) ? prev : [...prev, doc]));
+                    attachDocument(doc);
                     setShowComposer(false);
                   }}
                 />

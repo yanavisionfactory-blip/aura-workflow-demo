@@ -1,12 +1,9 @@
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Pencil, Search, Plus } from "lucide-react";
+import { Pencil, Search } from "lucide-react";
 import { CATALOG } from "@/lib/toolCatalog";
 
-// Inline editor for the "Uses" line on a plan step. The user can pick a known
-// tool from the catalog or type their own — an internal base, a document, or
-// any tool AURA doesn't know yet. Connection state is deliberately not shown
-// here: the plan has one dedicated notification listing only missing apps.
+// The plan editor exposes only verified one-click connectors from the backend.
 export default function ToolPicker({ value, onChange }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -25,8 +22,6 @@ export default function ToolPicker({ value, onChange }) {
 
   const q = query.trim().toLowerCase();
   const filtered = CATALOG.filter((t) => t.name.toLowerCase().includes(q));
-  const exactMatch = CATALOG.some((t) => t.name.toLowerCase() === q);
-  const canAddCustom = q.length > 0 && !exactMatch;
 
   const select = (name) => {
     onChange(name);
@@ -64,12 +59,9 @@ export default function ToolPicker({ value, onChange }) {
                   autoFocus
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search or type a tool…"
+                  placeholder="Search verified connectors…"
                   className="flex-1 min-w-0 bg-transparent outline-none text-sm placeholder:text-muted-foreground/40"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && canAddCustom) select(query.trim());
-                    if (e.key === "Escape") setOpen(false);
-                  }}
+                  onKeyDown={(e) => { if (e.key === "Escape") setOpen(false); }}
                 />
               </div>
             </div>
@@ -88,23 +80,8 @@ export default function ToolPicker({ value, onChange }) {
                   </div>
                 </button>
               ))}
-              {filtered.length === 0 && !canAddCustom && (
-                <p className="text-center text-xs text-muted-foreground py-4">No tools found</p>
-              )}
-              {canAddCustom && (
-                <button
-                  type="button"
-                  onClick={() => select(query.trim())}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-primary/10 border-t border-white/6 transition-colors"
-                >
-                  <span className="p-1 rounded-lg bg-primary/10 border border-primary/20 flex-shrink-0">
-                    <Plus className="w-3 h-3 text-primary" />
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">Add “{query.trim()}”</p>
-                    <p className="text-[10px] text-muted-foreground">Custom tool, base, or document</p>
-                  </div>
-                </button>
+              {filtered.length === 0 && (
+                <p className="text-center text-xs text-muted-foreground py-4">No verified connector found</p>
               )}
             </div>
           </motion.div>
