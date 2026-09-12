@@ -152,8 +152,8 @@ class PipedreamClient:
                     "client_id": self.settings.pipedream_client_id,
                     "client_secret": self.settings.pipedream_client_secret,
                     "scope": (
-                        "connect:apps:read connect:accounts:read connect:accounts:write "
-                        "connect:components:read connect:actions:read connect:actions:write"
+                        "connect:apps:* connect:accounts:read connect:accounts:write "
+                        "connect:actions:* connect:tokens:create"
                     ),
                 },
             )

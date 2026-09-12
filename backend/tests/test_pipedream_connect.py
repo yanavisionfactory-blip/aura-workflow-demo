@@ -89,6 +89,26 @@ def actions() -> list[dict]:
     ]
 
 
+async def test_oauth_token_requests_only_documented_connect_scopes():
+    client = FakePipedream()
+    client._request = AsyncMock(
+        return_value={"access_token": "access-token", "expires_in": 3600}
+    )
+
+    assert await client._oauth_token() == "access-token"
+
+    request = client._request.await_args
+    assert request.args == ("POST", "/v1/oauth/token")
+    assert request.kwargs["authenticated"] is False
+    assert request.kwargs["json"]["scope"].split() == [
+        "connect:apps:*",
+        "connect:accounts:read",
+        "connect:accounts:write",
+        "connect:actions:*",
+        "connect:tokens:create",
+    ]
+
+
 def test_marketplace_only_marks_managed_oauth_apps_connectable():
     oauth = marketplace_entry(app_definition(), connectable=True)
     api_key = marketplace_entry(app_definition("keys"), connectable=True)
