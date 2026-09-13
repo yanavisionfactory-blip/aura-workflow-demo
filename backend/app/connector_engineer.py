@@ -1137,9 +1137,13 @@ async def connector_engineer_tick(
                     summaries: list[EngineeringSummary] = []
                     failures: list[Exception] = []
                     plane_failures: dict[str, dict[str, Any]] = {}
+                    # Pipedream's broad registry is the immediate long-tail
+                    # plane. Persist it before the slower per-integration Nango
+                    # sweep; runtime selection still prefers certified Nango
+                    # and native connectors.
                     for source, engineer in (
-                        ("nango", engineer_nango_catalog),
                         ("pipedream", engineer_pipedream_catalog),
+                        ("nango", engineer_nango_catalog),
                     ):
                         try:
                             summaries.append(await engineer(session, settings=settings))
