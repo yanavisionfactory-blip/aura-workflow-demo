@@ -114,6 +114,7 @@ connector_engineer_observation: dict[str, Any] = {
     "last_success_at": None,
     "last_error_at": None,
     "last_error_type": None,
+    "last_plane_failures": {},
     "last_summary": {},
 }
 _connector_engineer_lock = asyncio.Lock()
@@ -1127,11 +1128,25 @@ async def connector_engineer_tick(
                                     return EngineeringSummary(status="not_due")
                     summaries: list[EngineeringSummary] = []
                     failures: list[Exception] = []
-                    for engineer in (engineer_nango_catalog, engineer_pipedream_catalog):
+                    plane_failures: dict[str, dict[str, Any]] = {}
+                    for source, engineer in (
+                        ("nango", engineer_nango_catalog),
+                        ("pipedream", engineer_pipedream_catalog),
+                    ):
                         try:
                             summaries.append(await engineer(session, settings=settings))
                         except Exception as exc:  # noqa: BLE001 - connector planes fail independently
                             failures.append(exc)
+                            plane_failures[source] = {
+                                "error_type": type(exc).__name__,
+                                "status_code": getattr(exc, "status_code", None),
+                            }
+                            logger.warning(
+                                "connector_engineer_plane_failed source=%s error_type=%s status_code=%s",
+                                source,
+                                type(exc).__name__,
+                                getattr(exc, "status_code", None),
+                            )
                     active = [item for item in summaries if item.status != "disabled"]
                     if failures and not active:
                         raise failures[0]
@@ -1151,6 +1166,7 @@ async def connector_engineer_tick(
                     last_success_at=finished,
                     last_error_at=None,
                     last_error_type=None,
+                    last_plane_failures=plane_failures,
                     last_summary=summary.model_dump(mode="json"),
                 )
                 return summary
