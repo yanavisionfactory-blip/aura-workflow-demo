@@ -1033,6 +1033,9 @@ async def engineer_pipedream_catalog(
         and pipedream_has_executable_strategy(item)
         and _slug(item.get("name_slug") or item.get("name")) not in PROVIDERS
     ]
+    # Pre-warm deterministic action contracts before slower MCP discovery so
+    # one remote MCP server cannot delay ordinary marketplace connections.
+    eligible.sort(key=lambda item: not bool(item.get("has_actions")))
     summary.skipped = len(apps) - len(eligible)
     for app_definition in eligible[: settings.connector_engineer_max_integrations_per_scan]:
         provider_slug = _slug(app_definition.get("name_slug") or app_definition.get("name"))
