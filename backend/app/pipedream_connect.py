@@ -92,6 +92,19 @@ def _vendor_app(app: dict[str, Any]) -> str:
     return _slug(app.get("name"))
 
 
+def canonical_provider_slug(value: Any) -> str:
+    """Collapse execution-only MCP aliases into one customer-facing app slug."""
+    candidate = str(value or "").strip()
+    candidate = re.sub(r"(?:[-_\s]+mcp|\s*\(mcp\))$", "", candidate, flags=re.IGNORECASE)
+    return _slug(candidate)
+
+
+def canonical_display_name(value: Any) -> str:
+    """Hide connector-plane suffixes that are irrelevant to AURA users."""
+    candidate = str(value or "").strip()
+    return re.sub(r"\s*\(mcp\)\s*$", "", candidate, flags=re.IGNORECASE).strip()
+
+
 def _canonical(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
 
@@ -192,6 +205,8 @@ def app_has_executable_strategy(app: dict[str, Any]) -> bool:
 
 def marketplace_entry(app: dict[str, Any], *, connectable: bool) -> dict[str, Any]:
     provider = _slug(app.get("name_slug") or app.get("name"))
+    vendor_app = _vendor_app(app)
+    canonical_provider = canonical_provider_slug(vendor_app or provider)
     categories = app.get("categories") if isinstance(app.get("categories"), list) else []
     oauth = app_uses_managed_oauth(app)
     strategy = connection_strategy(app)
@@ -207,9 +222,20 @@ def marketplace_entry(app: dict[str, Any], *, connectable: bool) -> dict[str, An
         if _has_certified_proxy(app)
         else None
     )
+    display_name = canonical_display_name(app.get("name") or provider.replace("-", " ").title())
+    route = {
+        "provider": provider,
+        "connection_backend": "pipedream",
+        "connection_strategy": strategy,
+        "execution_backend": execution_backend,
+        "connectable": available,
+    }
     entry = {
         "provider": provider,
-        "display_name": str(app.get("name") or provider.replace("-", " ").title())[:200],
+        "canonical_provider": canonical_provider,
+        "display_name": display_name[:200],
+        "aliases": sorted({provider, canonical_provider, str(app.get("name") or "").strip()}),
+        "routes": [route],
         "categories": [str(item) for item in categories if item][:12],
         "auth_mode": "OAUTH2" if oauth else str(app.get("auth_type") or "UNKNOWN").upper(),
         "eligible_for_one_click": oauth,

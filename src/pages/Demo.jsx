@@ -255,6 +255,9 @@ const uiConnectionPlanFromRun = (run, interpretation) => ({
   estimatedTime: "Planning resumes after the connection is verified",
   steps: [],
   connectionRequirements: planningConnectionRequirements(run),
+  connectionChecklist: Array.isArray(run.connection_requirements)
+    ? run.connection_requirements
+    : [],
 });
 
 const INTERPRETATION_SCHEMA = {
@@ -763,12 +766,18 @@ Rules:
     return handleConfirm(interpretation);
   }, [handleConfirm, interpretation]);
 
-  const handlePlanningConnectionRecovered = async (_toolName, connectionId) => {
+  const handlePlanningConnectionRecovered = async (recoveries) => {
     const runId = pythonRunIdRef.current;
-    if (!runId || !connectionId) return handleRetryPlanning();
+    const connections = Array.isArray(recoveries) ? recoveries : [];
+    const connectionIds = [...new Set(connections.map((item) => item?.connectionId).filter(Boolean))];
+    if (!runId || connectionIds.length === 0) return handleRetryPlanning();
     setPlanLoading(true);
     try {
-      await resumePythonRunAfterConnection(runId, connectionId);
+      for (const connectionId of connectionIds) {
+        const latest = await getPythonRun(runId);
+        if (!["waiting_for_action"].includes(latest.status)) break;
+        await resumePythonRunAfterConnection(runId, connectionId);
+      }
       const generation = ++pythonPollGenerationRef.current;
       for (;;) {
         const run = await getPythonRunResilient(runId, generation);

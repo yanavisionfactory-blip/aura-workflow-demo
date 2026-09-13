@@ -9,6 +9,11 @@ export function planningConnectionRequirements(run = {}) {
   const result = run.result || {};
   const blocker = run.blocker || {};
   const values = [
+    ...(Array.isArray(run.connection_requirements)
+      ? run.connection_requirements
+        .filter((item) => item?.status !== "satisfied")
+        .map((item) => item.canonical_provider || item.provider_hint || item.capability)
+      : []),
     ...(Array.isArray(result.missing_capabilities) ? result.missing_capabilities : []),
     blocker.code === "connection_required" ? blocker.tool_slug : null,
   ]

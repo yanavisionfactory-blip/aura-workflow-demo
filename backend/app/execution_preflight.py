@@ -214,7 +214,12 @@ async def _connection_credentials(
                 ),
             )
         external_user_id = str((tool.config or {}).get("external_user_id") or "")
-        account_id = str(tool.external_connection_id or "")
+        account_id = str((tool.config or {}).get("account_id") or tool.external_connection_id or "")
+        vendor_app = str(
+            (tool.config or {}).get("vendor_app")
+            or (tool.config or {}).get("canonical_provider")
+            or tool.slug
+        )
         if not external_user_id or not account_id:
             verification = {
                 "ok": False,
@@ -224,7 +229,7 @@ async def _connection_credentials(
         else:
             try:
                 verification = await pipedream_client().verify_account(
-                    external_user_id, tool.slug, account_id
+                    external_user_id, vendor_app, account_id
                 )
             except PipedreamConnectError as exc:
                 if exc.retryable:

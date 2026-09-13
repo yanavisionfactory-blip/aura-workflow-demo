@@ -82,3 +82,36 @@ test("discovered providers are searchable but only released providers are select
   assert.equal(searchMarketplace("Legacy Key App")[0].availability, "coming_soon");
   assert.equal(searchMarketplace("Unsupported App")[0].requestable, true);
 });
+
+test("action and MCP routes appear as one app with both execution paths", () => {
+  replaceToolCatalog({
+    marketplace: [
+      {
+        provider: "notion",
+        canonical_provider: "notion",
+        display_name: "Notion",
+        availability: "available",
+        connectable: true,
+        connection_backend: "pipedream",
+        execution_backend: "pipedream_action",
+      },
+      {
+        provider: "notion-mcp",
+        canonical_provider: "notion",
+        display_name: "Notion (MCP)",
+        availability: "available",
+        connectable: true,
+        connection_backend: "pipedream",
+        execution_backend: "pipedream_mcp",
+      },
+    ],
+  });
+
+  assert.deepEqual(MARKETPLACE.map((tool) => tool.name), ["Notion"]);
+  assert.equal(CATALOG.length, 1);
+  assert.equal(catalogEntryFor("notion-mcp")?.name, "Notion");
+  assert.deepEqual(
+    catalogEntryFor("Notion")?.routes.map((route) => route.provider).sort(),
+    ["notion", "notion-mcp"],
+  );
+});

@@ -88,6 +88,8 @@ from .native_connectors import (
 )
 from .pipedream_connect import (
     PipedreamConnectError,
+    canonical_display_name,
+    canonical_provider_slug,
     connection_setup_label,
     connection_strategy,
     opaque_external_user_id,
@@ -579,6 +581,9 @@ async def list_tools(
                 "external_connection_id": tool.external_connection_id,
                 "external_account_id": tool.external_account_id,
                 "connection_backend": (tool.config or {}).get("managed_by"),
+                "canonical_provider": (tool.config or {}).get("canonical_provider")
+                or canonical_provider_slug(tool.slug),
+                "execution_strategy": (tool.config or {}).get("execution_strategy"),
                 "status": manifest.status
                 if manifest
                 else ("connected" if tool.enabled else "disabled"),
@@ -600,6 +605,99 @@ async def list_tools(
             }
         )
     return result
+
+
+def _marketplace_route(item: dict) -> dict:
+    return {
+        "provider": str(item.get("provider") or ""),
+        "connection_backend": item.get("connection_backend"),
+        "connection_strategy": item.get("connection_strategy"),
+        "execution_backend": item.get("execution_backend"),
+        "connectable": bool(item.get("connectable")),
+    }
+
+
+def _canonical_marketplace_entries(items: list[dict]) -> list[dict]:
+    """Present one app card while retaining every certified execution route."""
+    grouped: dict[str, list[dict]] = {}
+    for raw in items:
+        provider = str(raw.get("provider") or "").strip()
+        if not provider:
+            continue
+        canonical = str(raw.get("canonical_provider") or "").strip()
+        if not canonical:
+            canonical = canonical_provider_slug(provider)
+        item = {
+            **raw,
+            "canonical_provider": canonical,
+            "display_name": canonical_display_name(raw.get("display_name") or provider),
+        }
+        grouped.setdefault(canonical, []).append(item)
+
+    backend_priority = {"nango": 0, "native": 1, "pipedream": 2, None: 9}
+    execution_priority = {
+        "pipedream_action": 0,
+        "pipedream_proxy": 1,
+        "pipedream_mcp": 2,
+        None: 3,
+    }
+    merged: list[dict] = []
+    for canonical, candidates in grouped.items():
+        primary = min(
+            candidates,
+            key=lambda item: (
+                not bool(item.get("connectable")),
+                backend_priority.get(item.get("connection_backend"), 8),
+                execution_priority.get(item.get("execution_backend"), 3),
+                str(item.get("provider") or ""),
+            ),
+        )
+        aliases: set[str] = {canonical}
+        categories: set[str] = set()
+        capabilities: set[str] = set()
+        routes: dict[str, dict] = {}
+        for item in candidates:
+            aliases.update(
+                str(value).strip()
+                for value in [
+                    item.get("provider"),
+                    item.get("display_name"),
+                    *(item.get("aliases") or []),
+                ]
+                if value
+            )
+            categories.update(str(value) for value in item.get("categories") or [] if value)
+            capabilities.update(str(value) for value in item.get("capabilities") or [] if value)
+            for route in item.get("routes") or [_marketplace_route(item)]:
+                route_provider = str(route.get("provider") or item.get("provider") or "")
+                if route_provider:
+                    current = routes.get(route_provider)
+                    if current is None or route.get("connectable"):
+                        routes[route_provider] = {**route, "provider": route_provider}
+        connectable = any(item.get("connectable") for item in candidates)
+        requestable = not connectable and all(item.get("requestable") for item in candidates)
+        merged.append(
+            {
+                **primary,
+                "canonical_provider": canonical,
+                "display_name": canonical_display_name(primary.get("display_name") or canonical),
+                "aliases": sorted(aliases, key=str.casefold),
+                "categories": sorted(categories, key=str.casefold),
+                "capabilities": sorted(capabilities),
+                "capability_count": len(capabilities)
+                if capabilities
+                else max(int(item.get("capability_count") or 0) for item in candidates),
+                "routes": list(routes.values()),
+                "connectable": connectable,
+                "requestable": requestable,
+                "availability": "available"
+                if connectable
+                else "requestable"
+                if requestable
+                else "coming_soon",
+            }
+        )
+    return merged
 
 
 @app.get("/v1/managed-connectors/status")
@@ -676,7 +774,11 @@ async def managed_connector_status(
     long_tail_catalog = [
         {
             "provider": pack.provider_slug,
-            "display_name": pack.display_name,
+            "canonical_provider": canonical_provider_slug(
+                (pack.definition.get("identity") or {}).get("app") or pack.provider_slug
+            ),
+            "display_name": canonical_display_name(pack.display_name),
+            "aliases": [pack.provider_slug, pack.display_name],
             "auth_mode": "OAUTH2",
             "capability_count": len(pack.definition.get("capabilities") or []),
             "capabilities": [
@@ -687,6 +789,9 @@ async def managed_connector_status(
             "managed": True,
             "source": "connector_broker",
             "connection_backend": "pipedream",
+            "connection_strategy": pack.definition.get("connection_strategy"),
+            "execution_backend": f"pipedream_{pack.definition.get('execution_strategy')}",
+            "setup_hint": pack.definition.get("connection_setup"),
             "availability": "available" if long_tail_ready else "coming_soon",
             "connectable": long_tail_ready,
         }
@@ -745,17 +850,28 @@ async def managed_connector_status(
         for item in native_catalog + dynamic_catalog + long_tail_catalog
         if item.get("connectable")
     ]
+    canonical_catalog = _canonical_marketplace_entries(catalog)
+    canonical_marketplace = _canonical_marketplace_entries(
+        list(marketplace_by_provider.values())
+    )
     return {
         "configured": bool(client.configured or native_ready or long_tail_ready),
         # Only built-ins or signed/canaried releases are selectable. Discovery
         # alone may appear in search, but never creates a Connect action.
-        "providers": sorted(item["provider"] for item in catalog),
-        "catalog": catalog,
+        "providers": sorted(
+            {
+                str(route.get("provider"))
+                for item in canonical_catalog
+                for route in item.get("routes") or []
+                if route.get("provider")
+            }
+        ),
+        "catalog": canonical_catalog,
         "marketplace": sorted(
-            marketplace_by_provider.values(),
+            canonical_marketplace,
             key=lambda item: (not item["connectable"], item["display_name"].casefold()),
         )
-        if marketplace_by_provider
+        if canonical_marketplace
         else [],
         "marketplace_refreshed_at": (
             discovered_long_tail["refreshed_at"] or discovered["refreshed_at"]
@@ -967,7 +1083,7 @@ async def search_connector_broker_apps(
                     entries[item["provider"]] = item
 
     ordered = sorted(
-        entries.values(),
+        _canonical_marketplace_entries(list(entries.values())),
         key=lambda item: (
             not bool(item.get("connectable")),
             query not in str(item.get("display_name") or "").casefold(),
@@ -1510,6 +1626,175 @@ async def sync_managed_connector(
     }
 
 
+def _pipedream_pack_vendor_app(pack: BrokerCapabilityPack) -> str:
+    return str((pack.definition.get("identity") or {}).get("app") or pack.provider_slug)
+
+
+def _pipedream_account_id(tool: ToolConnection) -> str:
+    return str((tool.config or {}).get("account_id") or tool.external_connection_id or "")
+
+
+def _pipedream_tool_vendor_app(tool: ToolConnection) -> str:
+    config = tool.config or {}
+    return str(config.get("vendor_app") or config.get("canonical_provider") or tool.slug)
+
+
+async def _released_pipedream_family_packs(
+    session: AsyncSession,
+    vendor_app: str,
+) -> list[BrokerCapabilityPack]:
+    rows = list(
+        (
+            await session.scalars(
+                select(BrokerCapabilityPack)
+                .where(
+                    BrokerCapabilityPack.backend == "pipedream",
+                    BrokerCapabilityPack.status == "released",
+                )
+                .order_by(
+                    BrokerCapabilityPack.provider_slug,
+                    BrokerCapabilityPack.version.desc(),
+                )
+            )
+        ).all()
+    )
+    latest: dict[str, BrokerCapabilityPack] = {}
+    canonical_vendor = canonical_provider_slug(vendor_app)
+    for row in rows:
+        if row.provider_slug in latest or not pipedream_pack_signature_valid(row):
+            continue
+        if canonical_provider_slug(_pipedream_pack_vendor_app(row)) != canonical_vendor:
+            continue
+        latest[row.provider_slug] = row
+    return list(latest.values())
+
+
+async def _pipedream_family_tools(
+    session: AsyncSession,
+    workspace_id: str,
+    vendor_app: str,
+) -> list[ToolConnection]:
+    tools = list(
+        (
+            await session.scalars(
+                select(ToolConnection).where(ToolConnection.workspace_id == workspace_id)
+            )
+        ).all()
+    )
+    canonical_vendor = canonical_provider_slug(vendor_app)
+    return [
+        tool
+        for tool in tools
+        if (tool.config or {}).get("managed_by") == "pipedream"
+        and canonical_provider_slug(_pipedream_tool_vendor_app(tool)) == canonical_vendor
+    ]
+
+
+async def _activate_pipedream_account_family(
+    session: AsyncSession,
+    context: TenantContext,
+    *,
+    requested_pack: BrokerCapabilityPack,
+    account_id: str,
+    external_user_id: str,
+    verification: dict,
+) -> tuple[ToolConnection, list[ToolConnection], list[str]]:
+    """Attach every certified action/MCP route to one opaque managed account."""
+    vendor_app = _pipedream_pack_vendor_app(requested_pack)
+    packs = await _released_pipedream_family_packs(session, vendor_app)
+    if requested_pack.provider_slug not in {item.provider_slug for item in packs}:
+        packs.append(requested_pack)
+    existing_family = await _pipedream_family_tools(
+        session, context.workspace_id, vendor_app
+    )
+    existing_by_slug = {item.slug: item for item in existing_family}
+    holder = next(
+        (
+            item
+            for item in existing_family
+            if item.external_connection_id == account_id
+        ),
+        None,
+    )
+    activated: list[ToolConnection] = []
+    resumed: set[str] = set()
+    for pack in packs:
+        tool = existing_by_slug.get(pack.provider_slug)
+        if tool is None:
+            tool = await session.scalar(
+                select(ToolConnection).where(
+                    ToolConnection.workspace_id == context.workspace_id,
+                    ToolConnection.slug == pack.provider_slug,
+                )
+            )
+        if tool is None:
+            tool = ToolConnection(
+                workspace_id=context.workspace_id,
+                slug=pack.provider_slug,
+                display_name=canonical_display_name(pack.display_name),
+                kind=ToolKind.oauth,
+                encrypted_credentials=CredentialVault().encrypt({}),
+            )
+            session.add(tool)
+            await session.flush()
+        if holder is None and pack.provider_slug == requested_pack.provider_slug:
+            holder = tool
+        capabilities = list(pack.definition.get("capabilities") or [])
+        allowed = [str(item["name"]) for item in capabilities if item.get("name")]
+        tool.display_name = canonical_display_name(pack.display_name)
+        tool.kind = ToolKind.oauth
+        tool.base_url = None
+        tool.encrypted_credentials = CredentialVault().encrypt({})
+        tool.external_connection_id = account_id if tool is holder else None
+        tool.external_account_id = account_id
+        tool.config = {
+            "managed_by": "pipedream",
+            "external_user_id": external_user_id,
+            "account_id": account_id,
+            "vendor_app": vendor_app,
+            "canonical_provider": canonical_provider_slug(vendor_app),
+            "connection_strategy": str(
+                pack.definition.get("connection_strategy") or "secure_credentials"
+            ),
+            "execution_strategy": str(
+                pack.definition.get("execution_strategy") or "action"
+            ),
+            "capability_pack_id": pack.id,
+            "capability_pack_version": pack.version,
+            "capability_pack_hash": pack.definition_hash,
+        }
+        tool.allowed_operations = allowed
+        tool.enabled = True
+        manifest = await session.scalar(
+            select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id)
+        )
+        if not manifest:
+            manifest = CapabilityManifest(
+                workspace_id=context.workspace_id,
+                tool_id=tool.id,
+                provider_type="pipedream",
+            )
+            session.add(manifest)
+        manifest.status = "verified"
+        manifest.manifest = pack.definition
+        manifest.verification = {
+            **verification,
+            "source": "connector_broker",
+            "backend": "pipedream",
+            "capability_pack_id": pack.id,
+            "canonical_provider": canonical_provider_slug(vendor_app),
+        }
+        manifest.verified_at = datetime.now(UTC)
+        resumed.update(
+            await _satisfy_matching_connection_requirements(session, context, tool)
+        )
+        activated.append(tool)
+    requested_tool = next(
+        item for item in activated if item.slug == requested_pack.provider_slug
+    )
+    return requested_tool, activated, sorted(resumed)
+
+
 @app.post("/v1/connector-broker/{provider}/session", status_code=201)
 async def create_connector_broker_session(
     provider: str,
@@ -1600,6 +1885,62 @@ async def create_connector_broker_session(
             ((selected_tool.config or {}).get("external_user_id") if selected_tool else None)
             or opaque_external_user_id(context.workspace_id, context.subject, settings)
         )
+        family_tools = await _pipedream_family_tools(
+            session, context.workspace_id, vendor_app
+        )
+        reusable = next(
+            (
+                item
+                for item in family_tools
+                if item.enabled
+                and _pipedream_account_id(item)
+                and (item.config or {}).get("external_user_id") == external_user_id
+            ),
+            None,
+        )
+        if reusable:
+            verification = await client.verify_account(
+                external_user_id,
+                vendor_app,
+                _pipedream_account_id(reusable),
+            )
+            if verification.get("ok"):
+                tool, activated, resumed_run_ids = await _activate_pipedream_account_family(
+                    session,
+                    context,
+                    requested_pack=pack,
+                    account_id=_pipedream_account_id(reusable),
+                    external_user_id=external_user_id,
+                    verification=verification,
+                )
+                session.add(
+                    AuditEvent(
+                        workspace_id=context.workspace_id,
+                        actor=context.subject,
+                        event_type="connector.broker_account_reused",
+                        payload={
+                            "provider": provider,
+                            "canonical_provider": canonical_provider_slug(vendor_app),
+                            "tool_id": tool.id,
+                            "activated_routes": [item.slug for item in activated],
+                            "resumed_run_ids": resumed_run_ids,
+                        },
+                    )
+                )
+                await session.commit()
+                if resumed_run_ids:
+                    await dispatch_pending(context.workspace_id)
+                return {
+                    "backend": "pipedream",
+                    "provider": provider,
+                    "app": vendor_app,
+                    "already_connected": True,
+                    "connected": True,
+                    "connection_id": tool.id,
+                    "tool_connection_id": tool.id,
+                    "activated_routes": [item.slug for item in activated],
+                    "resumed_run_ids": resumed_run_ids,
+                }
         grant = await client.create_connect_token(external_user_id)
     except PipedreamConnectError as exc:
         raise HTTPException(503 if exc.retryable else 409, str(exc)) from exc
@@ -1638,15 +1979,22 @@ async def create_connector_broker_session(
 
 
 def _requirement_accepts_tool(requirement: ConnectionRequirement, tool: ToolConnection) -> bool:
-    provider = tool.slug.casefold()
+    providers = {
+        tool.slug.casefold(),
+        canonical_provider_slug(tool.slug).casefold(),
+        canonical_provider_slug(_pipedream_tool_vendor_app(tool)).casefold(),
+    }
     capability = str(requirement.capability or "").casefold()
     provider_hint = str(requirement.provider_hint or "").casefold()
+    canonical_hint = canonical_provider_slug(provider_hint).casefold()
     allowed = {str(item).casefold() for item in tool.allowed_operations or []}
     return bool(
-        provider_hint == provider
-        or capability == provider
+        provider_hint in providers
+        or canonical_hint in providers
+        or capability in providers
         or capability in allowed
-        or (capability.startswith(f"{provider}.") and capability in allowed)
+        or any(capability.startswith(f"{provider}.") for provider in providers)
+        and capability in allowed
     )
 
 
@@ -1757,77 +2105,13 @@ async def complete_connector_broker_connection(
             },
         )
 
-    tool = selected_tool
-    if tool is None:
-        tool = await session.scalar(
-            select(ToolConnection).where(
-                ToolConnection.workspace_id == context.workspace_id,
-                ToolConnection.slug == provider,
-            )
-        )
-
-    capabilities = list(pack.definition.get("capabilities") or [])
-    allowed = [str(item["name"]) for item in capabilities if item.get("name")]
-    connection_config = {
-        "managed_by": "pipedream",
-        "external_user_id": external_user_id,
-        "connection_strategy": str(
-            pack.definition.get("connection_strategy") or "secure_credentials"
-        ),
-        "execution_strategy": str(
-            pack.definition.get("execution_strategy") or "action"
-        ),
-        "capability_pack_id": pack.id,
-        "capability_pack_version": pack.version,
-        "capability_pack_hash": pack.definition_hash,
-    }
-    if tool:
-        tool.display_name = pack.display_name
-        tool.kind = ToolKind.oauth
-        tool.base_url = None
-        tool.encrypted_credentials = CredentialVault().encrypt({})
-        tool.external_connection_id = payload.account_id
-        tool.external_account_id = payload.account_id
-        tool.config = connection_config
-        tool.allowed_operations = allowed
-        tool.enabled = True
-    else:
-        tool = ToolConnection(
-            workspace_id=context.workspace_id,
-            slug=provider,
-            display_name=pack.display_name,
-            kind=ToolKind.oauth,
-            base_url=None,
-            encrypted_credentials=CredentialVault().encrypt({}),
-            external_connection_id=payload.account_id,
-            external_account_id=payload.account_id,
-            config=connection_config,
-            allowed_operations=allowed,
-            enabled=True,
-        )
-        session.add(tool)
-        await session.flush()
-    manifest = await session.scalar(
-        select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id)
-    )
-    if not manifest:
-        manifest = CapabilityManifest(
-            workspace_id=context.workspace_id,
-            tool_id=tool.id,
-            provider_type="pipedream",
-        )
-        session.add(manifest)
-    manifest.status = "verified"
-    manifest.manifest = pack.definition
-    manifest.verification = {
-        **verification,
-        "source": "connector_broker",
-        "backend": "pipedream",
-        "capability_pack_id": pack.id,
-    }
-    manifest.verified_at = datetime.now(UTC)
-    resumed_run_ids = await _satisfy_matching_connection_requirements(
-        session, context, tool
+    tool, activated, resumed_run_ids = await _activate_pipedream_account_family(
+        session,
+        context,
+        requested_pack=pack,
+        account_id=payload.account_id,
+        external_user_id=external_user_id,
+        verification=verification,
     )
     session.add(
         AuditEvent(
@@ -1837,8 +2121,10 @@ async def complete_connector_broker_connection(
             payload={
                 "tool_id": tool.id,
                 "provider": provider,
+                "canonical_provider": canonical_provider_slug(vendor_app),
                 "backend": "pipedream",
                 "capability_pack_id": pack.id,
+                "activated_routes": [item.slug for item in activated],
                 "resumed_run_ids": resumed_run_ids,
             },
         )
@@ -1853,6 +2139,7 @@ async def complete_connector_broker_connection(
         "connection_id": tool.id,
         "identity": verification.get("identity") or {},
         "authorized_scopes": verification.get("authorized_scopes") or [],
+        "activated_routes": [item.slug for item in activated],
         "resumed_run_ids": resumed_run_ids,
     }
 
@@ -2729,7 +3016,8 @@ async def test_connection(
         pack_id = (tool.config or {}).get("capability_pack_id")
         pack = await session.get(BrokerCapabilityPack, pack_id) if pack_id else None
         external_user_id = str((tool.config or {}).get("external_user_id") or "")
-        account_id = str(tool.external_connection_id or "")
+        account_id = _pipedream_account_id(tool)
+        vendor_app = _pipedream_tool_vendor_app(tool)
         trusted = bool(
             pack
             and pack.backend == "pipedream"
@@ -2747,7 +3035,7 @@ async def test_connection(
         else:
             try:
                 result = await pipedream_client().verify_account(
-                    external_user_id, tool.slug, account_id
+                    external_user_id, vendor_app, account_id
                 )
             except PipedreamConnectError as exc:
                 result = {
@@ -2871,20 +3159,27 @@ async def disconnect_connection(
         raise HTTPException(404, "Connection not found")
     if tool.config.get("managed_by") == "pipedream":
         revocation = {"attempted": True, "ok": True, "managed": True}
+        account_id = _pipedream_account_id(tool)
+        family = await _pipedream_family_tools(
+            session,
+            context.workspace_id,
+            _pipedream_tool_vendor_app(tool),
+        )
+        shared = [item for item in family if _pipedream_account_id(item) == account_id]
         try:
-            account_id = str(tool.external_connection_id or "")
             if not account_id:
                 raise PipedreamConnectError("Account reference is missing", retryable=False)
             await pipedream_client().delete_account(account_id)
         except PipedreamConnectError:
             revocation["ok"] = False
-        tool.enabled = False
-        tool.encrypted_credentials = None
-        manifest = await session.scalar(
-            select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id)
-        )
-        if manifest:
-            manifest.status = "revoked"
+        for related in shared or [tool]:
+            related.enabled = False
+            related.encrypted_credentials = None
+            manifest = await session.scalar(
+                select(CapabilityManifest).where(CapabilityManifest.tool_id == related.id)
+            )
+            if manifest:
+                manifest.status = "revoked"
         session.add(
             AuditEvent(
                 workspace_id=context.workspace_id,
@@ -2894,6 +3189,7 @@ async def disconnect_connection(
                     "tool_id": tool.id,
                     "slug": tool.slug,
                     "backend": "pipedream",
+                    "revoked_routes": [item.slug for item in shared or [tool]],
                     "provider_revocation": revocation,
                 },
             )
@@ -3733,6 +4029,21 @@ async def _run_view(session: AsyncSession, run: WorkflowRun) -> dict:
         "automation_state": (run.execution_context or {}).get("__aura_preflight__"),
         "autonomy_state": (run.execution_context or {}).get("__aura_autonomy__"),
         "autonomy_authority": (run.execution_context or {}).get("__aura_authority__"),
+        "connection_requirements": [
+            {
+                "id": item.id,
+                "capability": item.capability,
+                "provider_hint": item.provider_hint,
+                "canonical_provider": canonical_provider_slug(
+                    item.provider_hint or str(item.capability).split(".", 1)[0]
+                ),
+                "reason": item.reason,
+                "required_permissions": item.required_permissions,
+                "status": item.status,
+                "satisfied_by_tool_id": item.satisfied_by_tool_id,
+            }
+            for item in requirements
+        ],
         "created_at": run.created_at,
         "updated_at": run.updated_at,
         "steps": [
@@ -3882,6 +4193,9 @@ async def get_connection_requirements(
                 "id": item.id,
                 "capability": item.capability,
                 "provider_hint": item.provider_hint,
+                "canonical_provider": canonical_provider_slug(
+                    item.provider_hint or str(item.capability).split(".", 1)[0]
+                ),
                 "reason": item.reason,
                 "required_permissions": item.required_permissions,
                 "status": item.status,
@@ -3943,17 +4257,66 @@ async def resume_after_connection(
     ).all()
     if not requirements:
         raise HTTPException(409, "Run has no pending connection requirement")
-    if tool:
-        # Re-planning is the authoritative capability check. Mark the user's selected
-        # provider as the candidate; the router may issue a new requirement if its
-        # verified manifest still cannot satisfy the objective.
-        for requirement in requirements:
-            requirement.status = "satisfied"
-            requirement.satisfied_by_tool_id = tool.id
-            requirement.satisfied_at = datetime.now(UTC)
+    if not tool:
+        raise HTTPException(422, "A verified connection is required")
+    matched = [
+        requirement
+        for requirement in requirements
+        if _requirement_accepts_tool(requirement, tool)
+    ]
+    if not matched:
+        already_recorded = int(
+            await session.scalar(
+                select(func.count(ConnectionRequirement.id)).where(
+                    ConnectionRequirement.run_id == run.id,
+                    ConnectionRequirement.satisfied_by_tool_id == tool.id,
+                )
+            )
+            or 0
+        )
+        if already_recorded:
+            return {
+                "id": run.id,
+                "status": run.status.value,
+                "remaining": len(requirements),
+                "remaining_requirements": [
+                    {
+                        "id": item.id,
+                        "capability": item.capability,
+                        "provider_hint": item.provider_hint,
+                        "reason": item.reason,
+                    }
+                    for item in requirements
+                ],
+            }
+        raise HTTPException(
+            409,
+            {
+                "code": "connection_does_not_satisfy_requirement",
+                "message": "This account does not provide the capability this workflow needs",
+            },
+        )
+    for requirement in matched:
+        requirement.status = "satisfied"
+        requirement.satisfied_by_tool_id = tool.id
+        requirement.satisfied_at = datetime.now(UTC)
     remaining = [item for item in requirements if item.status == "pending"]
     if remaining:
-        return {"id": run.id, "status": run.status.value, "remaining": len(remaining)}
+        await session.commit()
+        return {
+            "id": run.id,
+            "status": run.status.value,
+            "remaining": len(remaining),
+            "remaining_requirements": [
+                {
+                    "id": item.id,
+                    "capability": item.capability,
+                    "provider_hint": item.provider_hint,
+                    "reason": item.reason,
+                }
+                for item in remaining
+            ],
+        }
     transition_run(
         run,
         RunStatus.queued,
@@ -3976,7 +4339,12 @@ async def resume_after_connection(
     )
     await session.commit()
     await dispatch_pending(context.workspace_id)
-    return {"id": run.id, "status": run.status.value}
+    return {
+        "id": run.id,
+        "status": run.status.value,
+        "remaining": 0,
+        "remaining_requirements": [],
+    }
 
 
 @app.post("/v1/runs/{run_id}/approve-plan")

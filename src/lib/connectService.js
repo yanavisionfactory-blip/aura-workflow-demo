@@ -28,11 +28,15 @@ export async function connectTool(toolName, opts = {}) {
     );
   }
 
-  const provider = entry.provider;
+  const requestedProvider = String(opts.provider || "").trim().toLowerCase();
+  const requestedRoute = entry.routes?.find(
+    (route) => route.provider === requestedProvider && route.connectable
+  );
+  const provider = requestedRoute?.provider || entry.provider;
   let authorizationWindow = null;
   try {
-    const existing = await getToolConnection(toolName, opts.connectionId);
-    const backend = existing?.connection_backend || entry.connectionBackend;
+    const existing = await getToolConnection(toolName, opts.connectionId, provider);
+    const backend = existing?.connection_backend || requestedRoute?.connectionBackend || entry.connectionBackend;
     if (backend !== "pipedream") authorizationWindow = reserveAuthorizationWindow(provider);
     const result = await authorizeConnectorBroker(provider, {
       connection: existing,
@@ -82,7 +86,11 @@ export async function hydrateConnections() {
   for (const { tool, connected } of health) {
     if (!connected) continue;
     if (tool.display_name) map[tool.display_name] = true;
-    CATALOG.filter((entry) => entry.provider === tool.slug).forEach((entry) => {
+    CATALOG.filter((entry) =>
+      entry.provider === tool.slug ||
+      entry.canonicalProvider === tool.canonical_provider ||
+      entry.routes?.some((route) => route.provider === tool.slug)
+    ).forEach((entry) => {
       map[entry.name] = true;
     });
   }
@@ -90,11 +98,11 @@ export async function hydrateConnections() {
   return tools;
 }
 
-export async function getToolConnection(toolName, connectionId = null) {
+export async function getToolConnection(toolName, connectionId = null, providerOverride = null) {
   const tools = await listPythonTools();
   return selectConnection(tools, {
     toolName,
-    provider: providerForTool(toolName),
+    provider: providerOverride || providerForTool(toolName),
     connectionId,
   });
 }

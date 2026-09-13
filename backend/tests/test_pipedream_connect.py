@@ -846,3 +846,175 @@ async def test_completion_persists_reference_verifies_manifest_and_dispatches(mo
         assert manifest.status == "verified"
         assert manifest.verification["backend"] == "pipedream"
         dispatch.assert_not_awaited()
+
+
+async def test_completion_reuses_one_account_for_action_and_mcp_routes(monkeypatch, database):
+    config = settings()
+    async with database() as session:
+        session.add(Workspace(id="workspace-1", name="Shared connector account"))
+        action_pack = BrokerCapabilityPack(
+            id="pack-action",
+            backend="pipedream",
+            provider_slug="notion",
+            display_name="Notion",
+            version=1,
+            status="released",
+            definition={
+                **compile_action_manifest(app_definition(), actions(), config),
+                "identity": {"app": "notion"},
+            },
+            definition_hash="action-hash",
+            signature="action-signature",
+        )
+        mcp_pack = BrokerCapabilityPack(
+            id="pack-mcp",
+            backend="pipedream",
+            provider_slug="notion-mcp",
+            display_name="Notion (MCP)",
+            version=1,
+            status="released",
+            definition={
+                "schema_version": "1.0",
+                "provider": "notion-mcp",
+                "identity": {"app": "notion"},
+                "connection_strategy": "mcp",
+                "connection_setup": "Provider consent",
+                "execution_strategy": "mcp",
+                "capabilities": [
+                    {
+                        "name": "notion-mcp.search",
+                        "transport": {
+                            "type": "pipedream_mcp",
+                            "app": "notion",
+                            "tool_name": "search",
+                        },
+                    }
+                ],
+            },
+            definition_hash="mcp-hash",
+            signature="mcp-signature",
+        )
+        session.add_all([action_pack, mcp_pack])
+        await session.commit()
+
+        client = SimpleNamespace(
+            configured=True,
+            verify_account=AsyncMock(return_value={"ok": True, "identity": {"id": "user-1"}}),
+        )
+        monkeypatch.setattr(main, "settings", config)
+        monkeypatch.setattr(main, "pipedream_client", lambda: client)
+        monkeypatch.setattr(main, "released_pipedream_pack", AsyncMock(return_value=action_pack))
+        monkeypatch.setattr(main, "pipedream_pack_signature_valid", lambda _item: True)
+        monkeypatch.setattr(main, "dispatch_pending", AsyncMock())
+
+        result = await main.complete_connector_broker_connection(
+            "notion",
+            main.ConnectorBrokerComplete(account_id="apn_shared123"),
+            context=main.TenantContext("workspace-1", "user-1", "owner"),
+            session=session,
+        )
+
+        tools = list(
+            (
+                await session.scalars(
+                    select(ToolConnection).order_by(ToolConnection.slug)
+                )
+            ).all()
+        )
+        assert result["activated_routes"] == ["notion", "notion-mcp"]
+        assert [tool.slug for tool in tools] == ["notion", "notion-mcp"]
+        assert {tool.external_account_id for tool in tools} == {"apn_shared123"}
+        assert sum(tool.external_connection_id == "apn_shared123" for tool in tools) == 1
+        assert {tool.config["account_id"] for tool in tools} == {"apn_shared123"}
+        assert {tool.config["canonical_provider"] for tool in tools} == {"notion"}
+        client.verify_account.assert_awaited_once_with(
+            main.opaque_external_user_id("workspace-1", "user-1", config),
+            "notion",
+            "apn_shared123",
+        )
+
+
+async def test_resume_after_connection_waits_for_every_compatible_account(monkeypatch, database):
+    async with database() as session:
+        session.add(Workspace(id="workspace-1", name="Connection checklist"))
+        run = WorkflowRun(
+            id="run-1",
+            workspace_id="workspace-1",
+            prompt="Read Linear and send Slack",
+            status=RunStatus.waiting_for_action,
+        )
+        linear = ToolConnection(
+            id="tool-linear",
+            workspace_id="workspace-1",
+            slug="linear",
+            display_name="Linear",
+            kind=ToolKind.oauth,
+            allowed_operations=["linear.list"],
+            enabled=True,
+        )
+        slack = ToolConnection(
+            id="tool-slack",
+            workspace_id="workspace-1",
+            slug="slack",
+            display_name="Slack",
+            kind=ToolKind.oauth,
+            allowed_operations=["slack.send"],
+            enabled=True,
+        )
+        session.add_all(
+            [
+                run,
+                linear,
+                slack,
+                CapabilityManifest(
+                    workspace_id="workspace-1",
+                    tool_id=linear.id,
+                    provider_type="oauth",
+                    status="verified",
+                ),
+                CapabilityManifest(
+                    workspace_id="workspace-1",
+                    tool_id=slack.id,
+                    provider_type="oauth",
+                    status="verified",
+                ),
+                ConnectionRequirement(
+                    workspace_id="workspace-1",
+                    run_id=run.id,
+                    capability="linear.list",
+                    provider_hint="linear",
+                    reason="Linear is required",
+                ),
+                ConnectionRequirement(
+                    workspace_id="workspace-1",
+                    run_id=run.id,
+                    capability="slack.send",
+                    provider_hint="slack",
+                    reason="Slack is required",
+                ),
+            ]
+        )
+        await session.commit()
+        dispatch = AsyncMock()
+        monkeypatch.setattr(main, "dispatch_pending", dispatch)
+        context = main.TenantContext("workspace-1", "user-1", "owner")
+
+        first = await main.resume_after_connection(
+            run.id,
+            main.ConnectionResume(connection_id=linear.id),
+            context=context,
+            session=session,
+        )
+        assert first["remaining"] == 1
+        assert (await session.get(WorkflowRun, run.id)).status == RunStatus.waiting_for_action
+        dispatch.assert_not_awaited()
+
+        second = await main.resume_after_connection(
+            run.id,
+            main.ConnectionResume(connection_id=slack.id),
+            context=context,
+            session=session,
+        )
+        assert second["remaining"] == 0
+        assert (await session.get(WorkflowRun, run.id)).status == RunStatus.queued
+        dispatch.assert_awaited_once_with("workspace-1")
