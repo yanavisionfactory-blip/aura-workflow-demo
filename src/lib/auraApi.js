@@ -355,6 +355,13 @@ export async function authorizeConnectorBroker(
     if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
     throw error;
   }
+  if (session.already_connected && session.connection_id) {
+    if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
+    const tools = await listPythonTools();
+    const tool = tools.find((item) => item.id === session.connection_id);
+    if (!tool) throw new Error(`${provider} access could not be verified.`);
+    return { connected: true, reused: true, managed: true, backend: session.backend, tool };
+  }
   if (session.backend === "pipedream") {
     if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
     return authorizePipedreamConnector(provider, session, timeoutMs);

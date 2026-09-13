@@ -14,6 +14,7 @@ import {
   Box,
   Plus,
   Loader2,
+  CheckCircle2,
 } from "lucide-react";
 
 const TOOL_ICONS = {
@@ -47,15 +48,10 @@ export default function PlanConnectionAlert({
   // not pin them in the command input) and that aren't connected. Tools the
   // user explicitly selected are their responsibility — they connect those in
   // the command input, so we don't nag about them here.
-  const needed = tools.filter((t) => !connections[t.name] && !userSelectedTools.includes(t.name));
+  const checklist = tools.filter((t) => !userSelectedTools.includes(t.name));
+  const needed = checklist.filter((t) => !connections[t.name]);
   if (needed.length === 0) return null;
-  const count = needed.length;
-  const headerLabel =
-    count === 1
-      ? `Connect ${needed[0].name} to continue`
-      : count === 2
-      ? `Connect ${needed[0].name} and ${needed[1].name} to continue`
-      : `Connect ${count} tools to continue`;
+  const connectedCount = checklist.length - needed.length;
 
   const isConnecting = Boolean(connectingTool);
 
@@ -67,7 +63,12 @@ export default function PlanConnectionAlert({
     >
       <div className="flex items-center gap-2 px-4 py-3 border-b border-white/6">
         <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0" />
-        <span className="text-sm font-semibold">{headerLabel}</span>
+        <div className="min-w-0">
+          <p className="text-sm font-semibold">AURA connection checklist</p>
+          <p className="text-[11px] text-muted-foreground">
+            {connectedCount} of {checklist.length} required {checklist.length === 1 ? "account" : "accounts"} connected
+          </p>
+        </div>
       </div>
 
       {/* Primary action — at the top so it's immediately reachable */}
@@ -78,14 +79,15 @@ export default function PlanConnectionAlert({
           className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:cursor-wait disabled:opacity-70"
         >
           {isConnecting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
-          {isConnecting ? `Connecting ${connectingTool}…` : "Connect & continue"}
+          {isConnecting ? `Connecting ${connectingTool}…` : "Connect remaining accounts"}
         </button>
       </div>
 
       <div className="divide-y divide-white/5">
-        {needed.map((t) => {
+        {checklist.map((t) => {
           const Icon = iconFor(t.name);
           const error = errors[t.name];
+          const connected = Boolean(connections[t.name]);
           return (
             <div key={t.name} className="flex items-start gap-3 px-4 py-3">
               <div className="mt-0.5 p-1.5 rounded-lg bg-secondary/60 border border-white/8 flex-shrink-0">
@@ -94,7 +96,10 @@ export default function PlanConnectionAlert({
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-sm font-medium">{t.name}</span>
-                  <span className="text-[11px] text-amber-400">Connection needed</span>
+                  <span className={`inline-flex items-center gap-1 text-[11px] ${connected ? "text-emerald-400" : "text-amber-400"}`}>
+                    {connected && <CheckCircle2 className="h-3 w-3" />}
+                    {connected ? "Connected" : "Connection needed"}
+                  </span>
                 </div>
                 {t.reason && (
                   <p className="text-[11px] text-muted-foreground/70 mt-0.5 leading-relaxed">{cap(t.reason)}.</p>

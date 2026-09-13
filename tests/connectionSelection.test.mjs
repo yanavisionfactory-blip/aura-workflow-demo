@@ -30,3 +30,31 @@ test("requires explicit provider verification before reporting readiness", () =>
   assert.equal(isVerifiedConnection({ status: "verified", verification: { ok: false } }), false);
   assert.equal(isVerifiedConnection({ status: "verification_pending" }), false);
 });
+
+test("reuses one verified account across action and MCP routes", () => {
+  const tools = [
+    {
+      id: "action",
+      slug: "notion",
+      canonical_provider: "notion",
+      display_name: "Notion",
+      external_account_id: "apn_shared",
+      enabled: true,
+      status: "verified",
+    },
+    {
+      id: "mcp",
+      slug: "notion-mcp",
+      canonical_provider: "notion",
+      display_name: "Notion",
+      external_account_id: "apn_shared",
+      enabled: true,
+      status: "verified",
+    },
+  ];
+
+  assert.equal(
+    selectConnection(tools, { toolName: "Notion", provider: "notion-mcp" }).id,
+    "mcp",
+  );
+});

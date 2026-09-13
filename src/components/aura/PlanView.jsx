@@ -30,6 +30,8 @@ const REQUIREMENT_ALIASES = {
 
 const resolveRequirementTool = (raw) => {
   const value = String(raw || "").trim();
+  const catalogMatch = catalogEntryFor(value);
+  if (catalogMatch) return catalogMatch.name;
   const slug = slugifyTool(value);
   if (REQUIREMENT_ALIASES[slug]) return REQUIREMENT_ALIASES[slug];
   const exact = CATALOG.find(
@@ -107,11 +109,11 @@ export default function PlanView({
   }, []);
   const [connectingTool, setConnectingTool] = useState(null);
   const [connectionErrors, setConnectionErrors] = useState({});
-  const handleConnect = async (name) => {
+  const handleConnect = async (name, provider = null) => {
     setConnectingTool(name);
     setConnectionErrors((prev) => ({ ...prev, [name]: "" }));
     try {
-      const res = await connectTool(name);
+      const res = await connectTool(name, { provider });
       if (res.connected) {
         await hydrateConnections();
       }
@@ -127,18 +129,17 @@ export default function PlanView({
   };
 
   const handleConnectAll = async () => {
-    let recovered = null;
+    const recovered = [];
     for (const tool of needed) {
-      const result = await handleConnect(tool.name);
-      if (result?.connected) {
-        recovered = {
-          name: tool.name,
-          connectionId: result.connection?.id || result.tool?.id || null,
-        };
-      }
+      const result = await handleConnect(tool.name, tool.provider);
+      if (!result?.connected) return;
+      recovered.push({
+        name: tool.name,
+        connectionId: result.connection?.id || result.tool?.id || null,
+      });
     }
-    if (recovered) {
-      await onConnectionRecovered?.(recovered.name, recovered.connectionId);
+    if (recovered.length === needed.length && recovered.every((item) => item.connectionId)) {
+      await onConnectionRecovered?.(recovered);
     }
   };
 
@@ -159,17 +160,33 @@ export default function PlanView({
         out.push({ name: t, reason: match ? match.iWill || match.action || "" : "" });
       });
     });
-    (plan.connectionRequirements || []).forEach((requirement) => {
-      const name = resolveRequirementTool(requirement);
-      if (!name || seen.has(name)) return;
+    const requirements = plan.connectionChecklist?.length
+      ? plan.connectionChecklist.filter((requirement) => requirement.status !== "satisfied")
+      : (plan.connectionRequirements || []);
+    requirements.forEach((requirement) => {
+      const raw = typeof requirement === "string"
+        ? requirement
+        : requirement.canonical_provider || requirement.provider_hint || requirement.capability;
+      const name = resolveRequirementTool(raw);
+      if (!name) return;
+      if (seen.has(name)) {
+        if (String(raw).toLowerCase().endsWith("-mcp")) {
+          const existing = out.find((item) => item.name === name);
+          if (existing) existing.provider = raw;
+        }
+        return;
+      }
       seen.add(name);
       out.push({
         name,
-        reason: `AURA needs ${name} access to finish building this plan`,
+        provider: raw,
+        reason: typeof requirement === "object" && requirement.reason
+          ? requirement.reason
+          : `AURA needs ${name} access to finish building this plan`,
       });
     });
     return out;
-  }, [steps, plan.connectionRequirements]);
+  }, [steps, plan.connectionChecklist, plan.connectionRequirements]);
 
   // AURA handles connector discovery and setup. The only thing a user may need
   // to do is grant the provider's required account permission.
@@ -339,7 +356,7 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
       )}
 
       <PlanConnectionAlert
-        tools={needed}
+        tools={planTools.filter((tool) => catalogEntryFor(tool.name))}
         connections={effectiveConnections}
         connectingTool={connectingTool}
         errors={connectionErrors}

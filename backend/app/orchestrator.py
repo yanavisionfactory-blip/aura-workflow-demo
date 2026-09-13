@@ -2181,7 +2181,11 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                                     "Connector capability pack is no longer trusted"
                                 )
                             capability = capability_for(pack.definition, operation)
-                            account_id = str(active_tool.external_connection_id or "")
+                            account_id = str(
+                                active_tool.config.get("account_id")
+                                or active_tool.external_connection_id
+                                or ""
+                            )
                             external_user_id = str(
                                 active_tool.config.get("external_user_id") or ""
                             )
