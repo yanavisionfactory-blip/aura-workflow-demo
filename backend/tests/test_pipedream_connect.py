@@ -105,14 +105,7 @@ async def test_oauth_token_requests_only_documented_connect_scopes():
     request = client._request.await_args
     assert request.args == ("POST", "/v1/oauth/token")
     assert request.kwargs["authenticated"] is False
-    assert request.kwargs["json"]["scope"].split() == [
-        "connect:apps:*",
-        "connect:accounts:read",
-        "connect:accounts:write",
-        "connect:actions:*",
-        "connect:proxy",
-        "connect:tokens:create",
-    ]
+    assert request.kwargs["json"]["scope"] == "connect:*"
 
 
 async def test_app_discovery_uses_the_connect_registry_for_catalog_and_actions():
