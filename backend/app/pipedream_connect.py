@@ -59,8 +59,15 @@ _RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
 class PipedreamConnectError(RuntimeError):
     """Safe connector-network failure without upstream secrets or response bodies."""
 
-    def __init__(self, message: str, *, retryable: bool = True):
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool = True,
+        status_code: int | None = None,
+    ):
         self.retryable = retryable
+        self.status_code = status_code
         super().__init__(message)
 
 
@@ -315,6 +322,7 @@ class PipedreamClient:
                 raise PipedreamConnectError(
                     "The connector network rejected this request",
                     retryable=response.status_code in _RETRYABLE_STATUS,
+                    status_code=response.status_code,
                 )
             try:
                 result = response.json()
