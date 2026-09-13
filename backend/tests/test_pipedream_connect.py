@@ -378,6 +378,7 @@ async def test_mcp_bridge_preserves_marketplace_slug_and_vendor_app(database):
     async with database() as session:
         pack = await certify_app(session, client, app, settings())
 
+    client.list_actions.assert_not_awaited()
     client.list_mcp_tools.assert_awaited_once_with("lovable")
     assert pack.provider_slug == "lovable-mcp"
     assert pack.definition["identity"] == {"app": "lovable"}
@@ -594,10 +595,20 @@ async def test_exact_nango_mcp_search_certifies_pipedream_bridge(monkeypatch, da
     client = SimpleNamespace(
         configured=True,
         list_apps=AsyncMock(return_value=[]),
+        get_app=AsyncMock(
+            return_value={
+                "name_slug": "lovable",
+                "name": "Lovable",
+                "auth_type": "oauth2",
+                "categories": ["developer-tools"],
+            }
+        ),
     )
     pack = SimpleNamespace(
         definition={
             "connection_setup": "Provider consent",
+            "connection_strategy": "oauth",
+            "execution_strategy": "mcp",
             "capabilities": [{"name": "lovable-mcp.list-projects"}],
         }
     )
@@ -638,11 +649,13 @@ async def test_exact_nango_mcp_search_certifies_pipedream_bridge(monkeypatch, da
     entry = result["apps"][0]
     assert entry["provider"] == "lovable-mcp"
     assert entry["connectable"] is True
-    assert entry["connection_strategy"] == "mcp"
+    assert entry["connection_strategy"] == "oauth"
     assert entry["execution_backend"] == "pipedream_mcp"
     synthetic = certify.await_args.args[2]
     assert synthetic["name_slug"] == "lovable-mcp"
     assert synthetic["vendor_app"] == "lovable"
+    assert synthetic["auth_type"] == "oauth2"
+    client.get_app.assert_awaited_once_with("lovable")
 
 
 async def test_broker_session_uses_released_mcp_bridge_without_registry_lookup(
