@@ -43,6 +43,7 @@ export default function PlanConnectionAlert({
   errors = {},
   onConnectAll,
   userSelectedTools = [],
+  connectionEnabled = true,
 }) {
   // Only surface connect prompts for tools AURA chose on its own (the user did
   // not pin them in the command input) and that aren't connected. Tools the
@@ -75,11 +76,17 @@ export default function PlanConnectionAlert({
       <div className="p-3 border-b border-white/6">
         <button
           onClick={onConnectAll}
-          disabled={isConnecting}
+          disabled={isConnecting || !connectionEnabled}
           className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:cursor-wait disabled:opacity-70"
         >
-          {isConnecting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
-          {isConnecting ? `Connecting ${connectingTool}…` : "Connect remaining accounts"}
+          {isConnecting || !connectionEnabled
+            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            : <Plus className="w-3.5 h-3.5" />}
+          {isConnecting
+            ? `Connecting ${connectingTool}…`
+            : connectionEnabled
+              ? "Connect remaining accounts"
+              : "Preparing secure connections…"}
         </button>
       </div>
 
