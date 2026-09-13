@@ -160,6 +160,28 @@ def test_complete_requirements_collapse_routes_and_reuse_connected_family() -> N
     ) == []
 
 
+def test_google_workspace_connection_satisfies_named_gmail_family() -> None:
+    inventory = [
+        {
+            "slug": "google",
+            "name": "Google Workspace",
+            "canonical_provider": "google",
+            "connected": True,
+            "allowed_operations": ["gmail.list", "gmail.send", "calendar.list"],
+        },
+        {
+            "slug": "gmail",
+            "name": "Gmail",
+            "canonical_provider": "gmail",
+            "connected": False,
+            "allowed_operations": ["gmail.list", "gmail.send"],
+        },
+    ]
+
+    assert explicit_disconnected_capabilities("Send the result with Gmail", inventory) == []
+    assert actionable_connection_capabilities(["Gmail"], inventory) == []
+
+
 def test_provider_candidates_ignore_instruction_words() -> None:
     assert _capitalized_provider_candidates(
         "Read my open Linear issues and prepare the summary for Slack."

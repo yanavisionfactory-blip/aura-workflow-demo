@@ -8,6 +8,7 @@ import PlanConnectionAlert from "./PlanConnectionAlert";
 import { CATALOG, catalogEntryFor } from "@/lib/toolCatalog";
 import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
 import { connectTool, hydrateConnections } from "@/lib/connectService";
+import { planningConnectionsEnabled } from "@/lib/planningFlow.mjs";
 const resolveTool = (raw) => {
   if (!raw || typeof raw !== "string") return null;
   const key = raw.trim().toLowerCase();
@@ -221,7 +222,7 @@ export default function PlanView({
   const connectionCount = needed.length || planTools.length;
   const planningFailure = steps.length === 0 && Boolean(plan.error) && !connectionOnly;
   const validatingExecution = Boolean(plan.provisional);
-  const connectionsCanOpen = !validatingExecution || plan.compileState === "waiting_for_connection";
+  const connectionsCanOpen = planningConnectionsEnabled(plan.compileState);
 
   const onDragEnd = (res) => {
     if (!res.destination || res.source.index === res.destination.index) return;

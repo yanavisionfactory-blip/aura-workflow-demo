@@ -1050,3 +1050,24 @@ async def test_resume_after_connection_waits_for_every_compatible_account(monkey
         assert second["remaining"] == 0
         assert (await session.get(WorkflowRun, run.id)).status == RunStatus.queued
         dispatch.assert_awaited_once_with("workspace-1")
+
+
+def test_google_workspace_connection_satisfies_bare_gmail_requirement():
+    tool = ToolConnection(
+        id="tool-google",
+        workspace_id="workspace-1",
+        slug="google",
+        display_name="Google Workspace",
+        kind=ToolKind.oauth,
+        allowed_operations=["gmail.list", "gmail.send", "calendar.list"],
+        enabled=True,
+    )
+    requirement = ConnectionRequirement(
+        workspace_id="workspace-1",
+        run_id="run-1",
+        capability="gmail",
+        provider_hint="gmail",
+        reason="Gmail is required",
+    )
+
+    assert main._requirement_accepts_tool(requirement, tool) is True

@@ -59,6 +59,10 @@ export function promptConnectionRequirements(prompt = "", catalog = [], connecti
     .map((tool) => tool.slug || tool.name);
 }
 
+export function planningConnectionsEnabled(compileState = "") {
+  return compileState !== "validating";
+}
+
 // Planning is only a proposal stage. A runtime blocker must remain an inline,
 // retryable planning error; it must never manufacture an executable fallback.
 export function planningDisposition(run = {}) {

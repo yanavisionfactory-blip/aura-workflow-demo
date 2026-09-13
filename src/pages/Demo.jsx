@@ -886,10 +886,16 @@ Rules:
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     } catch (error) {
+      const latest = await getPythonRun(runId).catch(() => null);
+      const authoritative = latest && planningDisposition(latest) === "connection"
+        ? uiConnectionPlanFromRun(latest, interpretation)
+        : null;
       setPlan((current) => ({
         ...(current || { interpretation, workflowName: "", steps: [] }),
+        ...(authoritative || {}),
+        steps: authoritative?.steps?.length ? authoritative.steps : (current?.steps || []),
         provisional: true,
-        compileState: "blocked",
+        compileState: authoritative ? "waiting_for_connection" : "blocked",
         compileError: error?.message || "AURA couldn't resume executable validation right now.",
       }));
     } finally {

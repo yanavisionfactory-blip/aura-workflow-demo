@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 
 import {
   planningConnectionRequirements,
+  planningConnectionsEnabled,
   planningDisposition,
   promptConnectionRequirements,
   shouldStartFreshPlanningRun,
@@ -127,6 +128,12 @@ test("generic intent does not guess a provider", () => {
     ),
     []
   );
+});
+
+test("a stopped validation never leaves the connection action spinning", () => {
+  assert.equal(planningConnectionsEnabled("validating"), false);
+  assert.equal(planningConnectionsEnabled("waiting_for_connection"), true);
+  assert.equal(planningConnectionsEnabled("blocked"), true);
 });
 
 test("connection mode preserves the compiled plan instead of replacing it with an empty screen", () => {
