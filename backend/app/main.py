@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 import time
 from dataclasses import dataclass
@@ -155,6 +156,7 @@ from .schemas import (
     WorkspaceRecordCreate,
     WorkspaceRecordUpdate,
 )
+
 from .security import (
     CredentialVault,
     create_oauth_state,
@@ -183,6 +185,7 @@ from .universal_connectors import (
 from .worker import poll_subscription_task
 from .workflow_memory import select_memory_inputs
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 app = FastAPI(title="AURA Control Plane", version="0.1.0")
 frontend_url = settings.frontend_url.rstrip("/") + "/"
@@ -852,12 +855,75 @@ async def search_connector_broker_apps(
         for item in discovered["providers"]:
             if not matches(item) or item["provider"] in entries:
                 continue
-            entries[item["provider"]] = {
+            discovered_entry = {
                 **item,
                 "availability": "coming_soon",
                 "connectable": False,
                 "connection_backend": None,
             }
+            categories = {
+                str(value).strip().casefold()
+                for value in item.get("categories") or []
+                if value
+            }
+            display_name = str(item.get("display_name") or "").strip()
+            display_alias = (
+                display_name[:-5].strip()
+                if display_name.casefold().endswith("(mcp)")
+                else display_name
+            )
+            provider_slug = str(item.get("provider") or "").strip()
+            vendor_app = (
+                provider_slug[:-4]
+                if provider_slug.casefold().endswith("-mcp")
+                else provider_slug
+            )
+            exact_aliases = {
+                provider_slug.casefold(),
+                vendor_app.casefold(),
+                display_name.casefold(),
+                display_alias.casefold(),
+            }
+            if long_tail_ready and "mcp" in categories and query in exact_aliases:
+                try:
+                    pack = await released_pipedream_pack(session, provider_slug)
+                    if pack is None:
+                        pack = await certify_pipedream_app(
+                            session,
+                            long_tail,
+                            {
+                                "name_slug": provider_slug,
+                                "vendor_app": vendor_app,
+                                "name": display_name,
+                                "display_name": display_name,
+                                "categories": list(categories),
+                                "auth_type": item.get("auth_mode") or "unknown",
+                                "has_actions": False,
+                            },
+                        )
+                        await session.commit()
+                    discovered_entry.update(
+                        availability="available",
+                        connectable=True,
+                        source="connector_broker",
+                        connection_backend="pipedream",
+                        connection_strategy="mcp",
+                        setup_hint=str(
+                            pack.definition.get("connection_setup") or "Provider consent"
+                        ),
+                        execution_backend="pipedream_mcp",
+                        capability_count=len(pack.definition.get("capabilities") or []),
+                    )
+                except PipedreamConnectError as exc:
+                    logger.warning(
+                        "connector_broker_mcp_certification_failed provider=%s "
+                        "error_type=%s status_code=%s upstream_code=%s",
+                        provider_slug,
+                        type(exc).__name__,
+                        exc.status_code,
+                        exc.upstream_code,
+                    )
+            entries[item["provider"]] = discovered_entry
 
     if long_tail_ready:
         try:
@@ -1484,21 +1550,24 @@ async def create_connector_broker_session(
             )
         )
     try:
-        app_definition = await client.get_app(provider)
-        strategy = connection_strategy(app_definition)
-        if strategy == "unsupported":
-            raise HTTPException(
-                409,
-                {
-                    "code": "secure_connection_unavailable",
-                    "message": "This app has no supported secure connection route",
-                },
-            )
         pack = await released_pipedream_pack(session, provider)
         if pack is None:
+            app_definition = await client.get_app(provider)
+            strategy = connection_strategy(app_definition)
+            if strategy == "unsupported":
+                raise HTTPException(
+                    409,
+                    {
+                        "code": "secure_connection_unavailable",
+                        "message": "This app has no supported secure connection route",
+                    },
+                )
             # This is a data-only contract hydration and schema validation. It
             # never executes a customer action or asks for provider credentials.
             pack = await certify_pipedream_app(session, client, app_definition)
+        else:
+            app_definition = {}
+            strategy = str(pack.definition.get("connection_strategy") or "mcp")
         vendor_app = str(
             (pack.definition.get("identity") or {}).get("app")
             or app_definition.get("name_slug")
@@ -1538,7 +1607,10 @@ async def create_connector_broker_session(
         "account_id": selected_tool.external_connection_id if selected_tool else None,
         "connection_id": selected_tool.id if selected_tool else None,
         "connection_strategy": strategy,
-        "setup_hint": connection_setup_label(app_definition),
+        "setup_hint": str(
+            pack.definition.get("connection_setup")
+            or (connection_setup_label(app_definition) if app_definition else "Provider consent")
+        ),
     }
 
 

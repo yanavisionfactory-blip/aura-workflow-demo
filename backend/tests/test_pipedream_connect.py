@@ -335,21 +335,53 @@ async def test_certification_preserves_vendor_app_id_for_action_discovery(databa
     assert pack.definition["identity"] == {"app": "google_sheets"}
 
 
-async def test_non_mcp_app_without_actions_does_not_probe_mcp(database):
+async def test_app_without_actions_falls_back_to_mcp_discovery(database):
     client = FakePipedream()
     client.list_actions = AsyncMock(return_value=[])
-    client.list_mcp_tools = AsyncMock(return_value=[])
+    client.list_mcp_tools = AsyncMock(
+        return_value=[
+            {
+                "name": "list_items",
+                "annotations": {"readOnlyHint": True},
+                "inputSchema": {"type": "object"},
+            }
+        ]
+    )
 
     async with database() as session:
-        with pytest.raises(PipedreamConnectError, match="no certified executable"):
-            await certify_app(
-                session,
-                client,
-                {**app_definition("keys"), "has_actions": False},
-                settings(),
-            )
+        pack = await certify_app(
+            session,
+            client,
+            {**app_definition("keys"), "has_actions": False},
+            settings(),
+        )
 
-    client.list_mcp_tools.assert_not_awaited()
+    client.list_mcp_tools.assert_awaited_once_with("linear")
+    assert pack.definition["execution_strategy"] == "mcp"
+    assert pack.definition["capabilities"][0]["transport"]["app"] == "linear"
+
+
+async def test_mcp_bridge_preserves_marketplace_slug_and_vendor_app(database):
+    client = FakePipedream()
+    client.list_actions = AsyncMock(return_value=[])
+    client.list_mcp_tools = AsyncMock(
+        return_value=[{"name": "list_projects", "inputSchema": {"type": "object"}}]
+    )
+    app = {
+        "name_slug": "lovable-mcp",
+        "vendor_app": "lovable",
+        "name": "Lovable (MCP)",
+        "categories": ["mcp"],
+        "auth_type": "oauth2",
+    }
+
+    async with database() as session:
+        pack = await certify_app(session, client, app, settings())
+
+    client.list_mcp_tools.assert_awaited_once_with("lovable")
+    assert pack.provider_slug == "lovable-mcp"
+    assert pack.definition["identity"] == {"app": "lovable"}
+    assert pack.definition["capabilities"][0]["transport"]["app"] == "lovable"
 
 
 async def test_connector_engineer_prewarms_catalog_without_customer_account(database):
@@ -555,6 +587,104 @@ async def test_broker_session_prefers_nango_for_certified_provider(monkeypatch):
 
     assert result["backend"] == "nango"
     managed_session.assert_awaited_once()
+
+
+async def test_exact_nango_mcp_search_certifies_pipedream_bridge(monkeypatch, database):
+    config = settings()
+    client = SimpleNamespace(
+        configured=True,
+        list_apps=AsyncMock(return_value=[]),
+    )
+    pack = SimpleNamespace(
+        definition={
+            "connection_setup": "Provider consent",
+            "capabilities": [{"name": "lovable-mcp.list-projects"}],
+        }
+    )
+    certify = AsyncMock(return_value=pack)
+    monkeypatch.setattr(main, "settings", config)
+    monkeypatch.setattr(
+        main, "managed_connector_client", lambda: SimpleNamespace(configured=True)
+    )
+    monkeypatch.setattr(main, "pipedream_client", lambda: client)
+    monkeypatch.setattr(main, "released_connectors", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        main,
+        "discovered_marketplace",
+        AsyncMock(
+            return_value={
+                "providers": [
+                    {
+                        "provider": "lovable-mcp",
+                        "display_name": "Lovable (MCP)",
+                        "categories": ["dev-tools", "mcp"],
+                        "auth_mode": "OAUTH2",
+                    }
+                ]
+            }
+        ),
+    )
+    monkeypatch.setattr(main, "released_pipedream_pack", AsyncMock(return_value=None))
+    monkeypatch.setattr(main, "certify_pipedream_app", certify)
+
+    async with database() as session:
+        result = await main.search_connector_broker_apps(
+            q="Lovable",
+            limit=30,
+            context=main.TenantContext("workspace-1", "user-1", "owner"),
+            session=session,
+        )
+
+    entry = result["apps"][0]
+    assert entry["provider"] == "lovable-mcp"
+    assert entry["connectable"] is True
+    assert entry["connection_strategy"] == "mcp"
+    assert entry["execution_backend"] == "pipedream_mcp"
+    synthetic = certify.await_args.args[2]
+    assert synthetic["name_slug"] == "lovable-mcp"
+    assert synthetic["vendor_app"] == "lovable"
+
+
+async def test_broker_session_uses_released_mcp_bridge_without_registry_lookup(
+    monkeypatch, database
+):
+    config = settings()
+    client = SimpleNamespace(
+        configured=True,
+        get_app=AsyncMock(),
+        create_connect_token=AsyncMock(
+            return_value={"token": "short-token", "expires_at": "soon"}
+        ),
+    )
+    pack = SimpleNamespace(
+        id="pack-mcp",
+        definition={
+            "identity": {"app": "lovable"},
+            "connection_strategy": "mcp",
+            "connection_setup": "Provider consent",
+            "capabilities": [{"name": "lovable-mcp.list-projects"}],
+        },
+    )
+    monkeypatch.setattr(main, "settings", config)
+    monkeypatch.setattr(
+        main, "managed_connector_client", lambda: SimpleNamespace(configured=False)
+    )
+    monkeypatch.setattr(main, "pipedream_client", lambda: client)
+    monkeypatch.setattr(main, "released_pipedream_pack", AsyncMock(return_value=pack))
+
+    async with database() as session:
+        session.add(Workspace(id="workspace-1", name="MCP bridge"))
+        await session.commit()
+        result = await main.create_connector_broker_session(
+            "lovable-mcp",
+            context=main.TenantContext("workspace-1", "user-1", "owner"),
+            session=session,
+        )
+
+    assert result["backend"] == "pipedream"
+    assert result["app"] == "lovable"
+    assert result["connection_strategy"] == "mcp"
+    client.get_app.assert_not_awaited()
 
 
 async def test_verified_connection_resumes_only_a_fully_satisfied_run(database):
