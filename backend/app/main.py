@@ -627,12 +627,21 @@ def _canonical_marketplace_entries(items: list[dict]) -> list[dict]:
         canonical = str(raw.get("canonical_provider") or "").strip()
         if not canonical:
             canonical = canonical_provider_slug(provider)
+        display_name = canonical_display_name(raw.get("display_name") or provider)
         item = {
             **raw,
             "canonical_provider": canonical,
-            "display_name": canonical_display_name(raw.get("display_name") or provider),
+            "display_name": display_name,
+            "aliases": sorted(
+                {
+                    provider,
+                    canonical,
+                    str(raw.get("display_name") or "").strip(),
+                    *(str(value).strip() for value in raw.get("aliases") or [] if value),
+                }
+            ),
         }
-        grouped.setdefault(canonical, []).append(item)
+        grouped.setdefault(canonical_provider_slug(display_name), []).append(item)
 
     backend_priority = {"nango": 0, "native": 1, "pipedream": 2, None: 9}
     execution_priority = {
@@ -642,7 +651,7 @@ def _canonical_marketplace_entries(items: list[dict]) -> list[dict]:
         None: 3,
     }
     merged: list[dict] = []
-    for canonical, candidates in grouped.items():
+    for _display_key, candidates in grouped.items():
         primary = min(
             candidates,
             key=lambda item: (
@@ -652,6 +661,9 @@ def _canonical_marketplace_entries(items: list[dict]) -> list[dict]:
                 str(item.get("provider") or ""),
             ),
         )
+        canonical = str(primary.get("canonical_provider") or "").strip()
+        if not canonical:
+            canonical = canonical_provider_slug(primary.get("provider"))
         aliases: set[str] = {canonical}
         categories: set[str] = set()
         capabilities: set[str] = set()
