@@ -31,6 +31,17 @@ const normalizedWords = (value) => String(value || "")
   .replace(/[^a-z0-9]+/g, " ")
   .trim();
 
+export function shouldStartFreshPlanningRun({
+  nextIntent = "",
+  activeIntent = "",
+  hasActiveRequest = false,
+  revisionInstruction = "",
+} = {}) {
+  if (!hasActiveRequest) return false;
+  if (String(revisionInstruction || "").trim()) return true;
+  return normalizedWords(nextIntent) !== normalizedWords(activeIntent);
+}
+
 export function promptConnectionRequirements(prompt = "", catalog = [], connections = {}) {
   const text = ` ${normalizedWords(prompt)} `;
   if (!text.trim()) return [];

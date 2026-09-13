@@ -12,6 +12,7 @@ EXTRA_READBACK = {
     "canva.design.create": "canva.design.get", "canva.export.create": "canva.export.get",
     "canva.presentation.create": "canva.import.get",
     "tiktok.video.upload.init": "tiktok.post.status.get", "tiktok.video.publish.init": "tiktok.post.status.get",
+    "jira.issues.create_from_blocks": "jira.issue.get",
 }
 
 
@@ -41,6 +42,40 @@ def build_extended(operation, a, receipt):
         if len(ids) != len(a["children"]) or len(ids) != len(set(ids)):
             raise ValueError("Block receipts do not cover the approved children")
         return OutcomeCheck(read, {"block_id": a["block_id"]}, a["block_id"], {"ids": ids, "children": a["children"]}, "notion_blocks")
+    if operation == "jira.issues.create_from_blocks":
+        issues = receipt.get("issues", [])
+        summaries = receipt.get("requested_summaries", [])
+        project_key = receipt.get("project_key")
+        issue_type = receipt.get("issue_type")
+        if (
+            not issues
+            or len(issues) != len(summaries)
+            or len(issues) > 20
+            or len({str(issue.get("key") or "") for issue in issues}) != len(issues)
+            or any(not issue.get("key") for issue in issues)
+            or not project_key
+            or not issue_type
+        ):
+            raise ValueError("Jira receipts do not cover the approved task batch")
+        checks = tuple(
+            OutcomeCheck(
+                read,
+                {
+                    "issue_id_or_key": issue["key"],
+                    "fields": ["summary", "project", "issuetype"],
+                },
+                issue["key"],
+                {
+                    "fields": {
+                        "summary": summary,
+                        "project": {"key": project_key},
+                        "issuetype": {"name": issue_type},
+                    }
+                },
+            )
+            for issue, summary in zip(issues, summaries, strict=True)
+        )
+        return replace(checks[0], kind="compound", checks=checks)
     if operation == "slack.post":
         if receipt.get("channel") != a["channel"]:
             raise ValueError("Message receipt changed destination")

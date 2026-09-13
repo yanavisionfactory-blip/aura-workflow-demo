@@ -575,6 +575,7 @@ class ProviderExecutor:
             "jira.issues.search": self._jira_issues_search,
             "jira.issue.get": self._jira_issue_get,
             "jira.issue.create": self._jira_issue_create,
+            "jira.issues.create_from_blocks": self._jira_issues_create_from_blocks,
             "jira.issue.update": self._jira_issue_update,
             "weather.forecast": self._weather_forecast,
             "web.search": self._web_search,
@@ -630,6 +631,15 @@ class ProviderExecutor:
             url = f"https://mail.google.com/mail/u/0/#all/{message_id}"
         elif not url and operation.startswith("jira."):
             issue_key = result.get("key") or result.get("issue_id_or_key")
+            if not issue_key and isinstance(result.get("issues"), list):
+                issue_key = next(
+                    (
+                        issue.get("key")
+                        for issue in result["issues"]
+                        if isinstance(issue, dict) and issue.get("key")
+                    ),
+                    None,
+                )
             site_url = self.credentials.get("site_url")
             if issue_key and isinstance(site_url, str):
                 url = f"{site_url.rstrip('/')}/browse/{quote(str(issue_key), safe='')}"
@@ -1424,6 +1434,86 @@ class ProviderExecutor:
         if a.get("assignee_id"):
             fields["assignee"] = {"accountId": a["assignee_id"]}
         return await self._jira_request("POST", "issue", json={"fields": fields})
+
+    @staticmethod
+    def _notion_block_text(block: dict[str, Any]) -> str:
+        block_type = str(block.get("type") or "")
+        body = block.get(block_type)
+        if not isinstance(body, dict):
+            return ""
+        rich_text = body.get("rich_text")
+        if not isinstance(rich_text, list):
+            return ""
+        parts: list[str] = []
+        for item in rich_text:
+            if not isinstance(item, dict):
+                continue
+            value = item.get("plain_text")
+            if not isinstance(value, str):
+                text = item.get("text")
+                value = text.get("content") if isinstance(text, dict) else None
+            if isinstance(value, str):
+                parts.append(value)
+        return "".join(parts).strip()
+
+    async def _jira_issues_create_from_blocks(self, a: dict) -> dict:
+        blocks = a.get("source_blocks")
+        if not isinstance(blocks, list):
+            raise TypeError("Jira task batch requires retrieved Notion blocks")
+
+        max_issues = min(max(int(a.get("max_issues", 20)), 1), 20)
+        task_types = {"to_do", "bulleted_list_item", "numbered_list_item"}
+        candidates = [
+            self._notion_block_text(block)
+            for block in blocks[:100]
+            if isinstance(block, dict) and str(block.get("type") or "") in task_types
+        ]
+        summaries = []
+        for value in candidates:
+            summary = " ".join(value.split())[:255]
+            if summary and summary not in summaries:
+                summaries.append(summary)
+            if len(summaries) >= max_issues:
+                break
+        if not summaries:
+            raise ValueError("No actionable list or to-do blocks were found in the Notion page")
+
+        project_key = str(a.get("project_key") or "").strip()
+        if not project_key:
+            project_response = await self._jira_projects_list(
+                {"query": a.get("project_query"), "limit": 2}
+            )
+            projects = project_response.get("values")
+            if not isinstance(projects, list) or len(projects) != 1:
+                raise ValueError(
+                    "AURA needs one unambiguous Jira project before creating the approved task batch"
+                )
+            project_key = str(projects[0].get("key") or "").strip()
+        if not project_key:
+            raise ValueError("The resolved Jira project has no project key")
+
+        issue_type = str(a.get("issue_type") or "Task")
+        issue_updates = [
+            {
+                "fields": {
+                    "project": {"key": project_key},
+                    "summary": summary,
+                    "issuetype": {"name": issue_type},
+                }
+            }
+            for summary in summaries
+        ]
+        result = await self._jira_request(
+            "POST",
+            "issue/bulk",
+            json={"issueUpdates": issue_updates},
+        )
+        return {
+            **result,
+            "project_key": project_key,
+            "requested_summaries": summaries,
+            "issue_type": issue_type,
+        }
 
     async def _jira_issue_update(self, a: dict) -> dict:
         fields = dict(a["fields"])

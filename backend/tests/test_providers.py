@@ -525,6 +525,88 @@ def test_provider_results_include_user_facing_deep_links():
     )
 
 
+def test_jira_bulk_adapter_extracts_bounded_notion_tasks(monkeypatch):
+    executor = ProviderExecutor({"cloud_id": "cloud-1"})
+    requests = []
+
+    async def jira_request(method, path, **kwargs):
+        requests.append((method, path, kwargs))
+        if path == "project/search":
+            return {"values": [{"id": "10000", "key": "AURA"}]}
+        return {
+            "issues": [
+                {"id": "1", "key": "AURA-1"},
+                {"id": "2", "key": "AURA-2"},
+            ],
+            "errors": [],
+        }
+
+    monkeypatch.setattr(executor, "_jira_request", jira_request)
+    result = asyncio.run(
+        executor._jira_issues_create_from_blocks(
+            {
+                "source_blocks": [
+                    {
+                        "type": "heading_2",
+                        "heading_2": {"rich_text": [{"plain_text": "Action items"}]},
+                    },
+                    {
+                        "type": "to_do",
+                        "to_do": {"rich_text": [{"plain_text": "Prepare launch brief"}]},
+                    },
+                    {
+                        "type": "bulleted_list_item",
+                        "bulleted_list_item": {
+                            "rich_text": [{"plain_text": "Confirm pilot owners"}]
+                        },
+                    },
+                ],
+                "max_issues": 20,
+            }
+        )
+    )
+
+    assert result["errors"] == []
+    assert result["project_key"] == "AURA"
+    assert result["requested_summaries"] == [
+        "Prepare launch brief",
+        "Confirm pilot owners",
+    ]
+    assert requests[0][1] == "project/search"
+    assert requests[1][0:2] == ("POST", "issue/bulk")
+    assert [
+        issue["fields"]["summary"]
+        for issue in requests[1][2]["json"]["issueUpdates"]
+    ] == ["Prepare launch brief", "Confirm pilot owners"]
+
+
+def test_jira_bulk_adapter_never_guesses_between_projects(monkeypatch):
+    executor = ProviderExecutor({"cloud_id": "cloud-1"})
+
+    async def jira_request(method, path, **kwargs):
+        return {
+            "values": [
+                {"id": "10000", "key": "ONE"},
+                {"id": "10001", "key": "TWO"},
+            ]
+        }
+
+    monkeypatch.setattr(executor, "_jira_request", jira_request)
+    with pytest.raises(ValueError, match="unambiguous Jira project"):
+        asyncio.run(
+            executor._jira_issues_create_from_blocks(
+                {
+                    "source_blocks": [
+                        {
+                            "type": "to_do",
+                            "to_do": {"rich_text": [{"plain_text": "Prepare launch brief"}]},
+                        }
+                    ]
+                }
+            )
+        )
+
+
 def test_provider_result_link_rejects_non_https_urls():
     result = ProviderExecutor({})._attach_result_url(
         "calendar.create", {}, {"htmlLink": "javascript:alert(1)"}

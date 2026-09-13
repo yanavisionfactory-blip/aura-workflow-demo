@@ -39,6 +39,7 @@ import {
   planningConnectionRequirements,
   planningDisposition,
   promptConnectionRequirements,
+  shouldStartFreshPlanningRun,
 } from "@/lib/planningFlow.mjs";
 import { hasDurablePlan, planningRequestPrompt } from "@/lib/runtimePlan.mjs";
 import { weatherStepTitle } from "@/lib/planPresentation.mjs";
@@ -437,6 +438,7 @@ export default function Demo() {
   const pythonPlanRef = useRef(null);
   const pythonPollGenerationRef = useRef(0);
   const runRequestKeyRef = useRef(null);
+  const lastPlanningIntentRef = useRef("");
 
   const clearTimeouts = () => {
     timeoutRefs.current.forEach(clearTimeout);
@@ -480,6 +482,7 @@ export default function Demo() {
     clearTimeouts();
     pythonPollGenerationRef.current += 1;
     runRequestKeyRef.current = null;
+    lastPlanningIntentRef.current = "";
     pendingMock.current = null;
     resolvedErrorRef.current = false;
     approvedStepsRef.current = [];
@@ -587,8 +590,15 @@ Write ONE clear, conversational sentence restating what they want — but offer 
         setPhase("plan");
         return (async () => {
           try {
-            if (revisionInstruction) {
-              const previousRunId = pythonRunIdRef.current;
+            const confirmedIntent = editedInterpretation.trim() || originalPromptRef.current;
+            const previousRunId = pythonRunIdRef.current;
+            const startFresh = shouldStartFreshPlanningRun({
+              nextIntent: confirmedIntent,
+              activeIntent: lastPlanningIntentRef.current,
+              hasActiveRequest: Boolean(previousRunId || runRequestKeyRef.current),
+              revisionInstruction,
+            });
+            if (startFresh) {
               pythonPollGenerationRef.current += 1;
               runRequestKeyRef.current = null;
               pythonRunIdRef.current = null;
@@ -598,7 +608,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
                 forgetActivePythonRun(previousRunId);
               }
             }
-            const confirmedIntent = editedInterpretation.trim() || originalPromptRef.current;
+            lastPlanningIntentRef.current = confirmedIntent;
             const planningPrompt = planningRequestPrompt(confirmedIntent, revisionInstruction);
             runRequestKeyRef.current ||= globalThis.crypto?.randomUUID?.()
               || `aura-${Date.now()}-${Math.random().toString(36).slice(2)}`;

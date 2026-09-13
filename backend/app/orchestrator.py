@@ -473,10 +473,16 @@ async def _create_compiled_plan(
         }
         for item in inventory
     ]
-    from .workflow_templates import creator_outreach_template, weather_presentation_template
+    from .workflow_templates import (
+        creator_outreach_template,
+        notion_to_jira_template,
+        weather_presentation_template,
+    )
 
-    audited_plan = creator_outreach_template(prompt, inventory) or weather_presentation_template(
-        prompt, inventory
+    audited_plan = (
+        creator_outreach_template(prompt, inventory)
+        or weather_presentation_template(prompt, inventory)
+        or notion_to_jira_template(prompt, inventory)
     )
     if audited_plan is not None:
         _normalize_planned_steps(audited_plan, manifests_by_slug)

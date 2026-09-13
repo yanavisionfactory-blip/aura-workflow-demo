@@ -37,6 +37,26 @@ KNOWN = {
         "properties": {"id": TEXT, "key": TEXT, "fields": OBJECT}}, ["issue_state"]),
     "jira.issue.create": ({"type": "object", "required": ["id", "key"],
         "properties": {"id": TEXT, "key": TEXT}}, ["write_receipt"]),
+    "jira.issues.create_from_blocks": ({
+        "type": "object",
+        "required": [
+            "issues",
+            "errors",
+            "project_key",
+            "requested_summaries",
+            "issue_type",
+        ],
+        "properties": {
+            "issues": {"type": "array", "minItems": 1, "items": {
+                "type": "object", "required": ["id", "key"],
+                "properties": {"id": TEXT, "key": TEXT},
+            }},
+            "errors": {"type": "array", "maxItems": 0},
+            "project_key": TEXT,
+            "requested_summaries": {"type": "array", "minItems": 1, "items": TEXT},
+            "issue_type": TEXT,
+        },
+    }, ["write_receipt"]),
 }
 # Exact envelope guarantees; provider-specific nested fields remain open unless declared.
 def envelope(field, item=OBJECT):

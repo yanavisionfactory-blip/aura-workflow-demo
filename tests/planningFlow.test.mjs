@@ -6,6 +6,7 @@ import {
   planningConnectionRequirements,
   planningDisposition,
   promptConnectionRequirements,
+  shouldStartFreshPlanningRun,
 } from "../src/lib/planningFlow.mjs";
 
 test("a completed backend plan proceeds to user review", () => {
@@ -102,4 +103,23 @@ test("connection mode preserves the compiled plan instead of replacing it with a
 
   assert.equal(source.includes("...uiPlanFromRun(run)"), true);
   assert.equal(source.includes("pythonPlanRef.current = run.plan || null"), true);
+});
+
+test("an edited confirmed intent cannot reuse the previous durable planning request", () => {
+  assert.equal(shouldStartFreshPlanningRun({
+    nextIntent: "Read Notion notes and create Jira tasks",
+    activeIntent: "Make a Canva deck about Munich weather",
+    hasActiveRequest: true,
+  }), true);
+  assert.equal(shouldStartFreshPlanningRun({
+    nextIntent: "  Read Notion notes and create Jira tasks. ",
+    activeIntent: "read notion notes and create jira tasks",
+    hasActiveRequest: true,
+  }), false);
+  assert.equal(shouldStartFreshPlanningRun({
+    nextIntent: "Read Notion notes",
+    activeIntent: "Read Notion notes",
+    hasActiveRequest: true,
+    revisionInstruction: "Use Jira for the output",
+  }), true);
 });
