@@ -263,7 +263,7 @@ export default function ConnectionsPill() {
               </div>
 
               <div className="px-5 py-3">
-                <p className="text-xs text-muted-foreground">AURA owns setup and verification. You only approve the provider’s official consent window.</p>
+                <p className="text-xs text-muted-foreground">AURA owns setup and verification. Approve provider consent or enter required credentials in the secure embedded form.</p>
                 {error && <p className="mt-2 rounded-lg border border-red-400/20 bg-red-400/5 p-2 text-xs text-red-400">{error}</p>}
               </div>
 
@@ -330,7 +330,7 @@ export default function ConnectionsPill() {
                 <>
                   <div className="px-5 py-4">
                     <h3 className="text-base font-semibold">App marketplace</h3>
-                    <p className="mt-1 text-xs text-muted-foreground">Search apps and APIs across AURA’s embedded connector network. You only approve the provider’s consent screen.</p>
+                    <p className="mt-1 text-xs text-muted-foreground">Search apps and APIs across AURA’s embedded connector network. Provider credentials stay inside the secure connection flow.</p>
                   </div>
                   <div className="px-5 pb-3">
                     <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-card/70 px-3 py-2">
