@@ -5,8 +5,20 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
 from app import main, migrations
-from app.models import Approval, ApprovalSnapshot, PlanVersion, RunStatus, RunStep, StepStatus, ToolConnection, ToolKind, WorkflowRun, Workspace
+from app.models import (
+    Approval,
+    ApprovalSnapshot,
+    PlanVersion,
+    RunStatus,
+    RunStep,
+    StepStatus,
+    ToolConnection,
+    ToolKind,
+    WorkflowRun,
+    Workspace,
+)
 from app.schemas import ApprovalDecision
 
 

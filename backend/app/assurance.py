@@ -2,16 +2,14 @@
 import hashlib
 import hmac
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
-from .config import get_settings
 from .managed_connectors import managed_connection_reference
 from .models import OperationCertification
 from .native_connectors import current_capability_manifest
 from .operation_contracts import enrich_operation
-from .policy import operation_scope
 
 SCENARIOS = {"read": {"execute", "receipt_resume"}, "write": {"execute", "read_back", "receipt_resume", "lost_response"}}
 
@@ -33,9 +31,9 @@ def validate_attestation(report, signature, key, *, workspace_id, tool, contract
         raise ValueError("Trusted certification signing is not configured")
     if not hmac.compare_digest(hmac.new(key.encode(), canonical(report), hashlib.sha256).hexdigest(), signature):
         raise ValueError("Certification signature is invalid")
-    now = now or datetime.now(timezone.utc)
-    expires = datetime.fromisoformat(report["expires_at"].replace("Z", "+00:00"))
-    issued = datetime.fromisoformat(report["issued_at"].replace("Z", "+00:00"))
+    now = now or datetime.now(UTC)
+    expires = datetime.fromisoformat(report["expires_at"])
+    issued = datetime.fromisoformat(report["issued_at"])
     if expires.tzinfo is None or issued.tzinfo is None or not issued <= now < expires or expires-issued > timedelta(days=30):
         raise ValueError("Certification validity window is invalid")
     if (report.get("workspace_id") != workspace_id or report.get("tool_id") != tool.id
@@ -73,7 +71,7 @@ async def operation_readiness(session, workspace_id, tool, operation, stored=Non
         OperationCertification.workspace_id == workspace_id, OperationCertification.tool_id == tool.id,
         OperationCertification.operation == operation, OperationCertification.contract_hash == contract["hash"],
         OperationCertification.connection_fingerprint == connection_fingerprint(tool),
-        OperationCertification.revoked.is_(False), OperationCertification.expires_at > datetime.now(timezone.utc),
+        OperationCertification.revoked.is_(False), OperationCertification.expires_at > datetime.now(UTC),
     ).order_by(OperationCertification.created_at.desc()).limit(1))
     if not certification:
         reasons.append("Current live certification is missing or expired")

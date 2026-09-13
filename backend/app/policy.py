@@ -4,7 +4,6 @@ from typing import Any
 
 from .schemas import WorkflowPlan
 
-
 DEFAULT_POLICY: dict[str, Any] = {
     "cost_soft_ratio": 1.10,
     "cost_pause_ratio": 1.25,

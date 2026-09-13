@@ -1,6 +1,6 @@
 """Provider-specific outcome evidence, including compound and asynchronous writes."""
-from dataclasses import replace
 import hashlib
+from dataclasses import replace
 
 EXTRA_READBACK = {
     "airtable.create": "airtable.record.get", "sheets.append": "sheets.read",

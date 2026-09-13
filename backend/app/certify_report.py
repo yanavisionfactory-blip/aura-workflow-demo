@@ -8,9 +8,10 @@ import hashlib
 import hmac
 import json
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from .assurance import canonical, SCENARIOS
+
+from .assurance import SCENARIOS, canonical
 from .native_connectors import native_manifest
 
 
@@ -35,7 +36,7 @@ def build_attestation(reports, scope, key):
         raise ValueError("Live scenario, provider account or release evidence is incomplete")
     if len(key) < 32:
         raise ValueError("Trusted signing key is not configured")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     report = {**scope, "contract_hash": module["reliability"]["hash"], "scenarios": {name: "passed" for name in passed},
         "provider_account_id": next(iter(account_ids)), "release_sha": next(iter(releases)),
         "dedicated_test_account": True, "issued_at": now.isoformat(), "expires_at": (now + timedelta(days=7)).isoformat(),

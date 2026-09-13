@@ -1,5 +1,5 @@
 """Deterministic calendar time presentation; preserve the provider's raw values."""
-from datetime import datetime, timezone, date, time
+from datetime import UTC, date, datetime, time
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
@@ -10,10 +10,10 @@ def event_time_summary(event: dict) -> dict:
         if value.get('date') and not value.get('dateTime'):
             return f"{value['date']} (all day)"
         try:
-            instant = datetime.fromisoformat(str(value.get('dateTime', '')).replace('Z', '+00:00'))
+            instant = datetime.fromisoformat(str(value.get('dateTime', '')))
             if instant.tzinfo is None:
                 return None  # A provider timestamp with no offset is not a known instant.
-            utc = instant.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+            utc = instant.astimezone(UTC).strftime('%Y-%m-%d %H:%M UTC')
             name = value.get('timeZone')
             if not name:
                 return utc
@@ -44,7 +44,7 @@ def calendar_list_errors(arguments: dict, result: dict) -> list[str]:
     Google timeMin filters event ends; timeMax filters event starts, exclusively.
     """
     def instant(value):
-        parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        parsed = datetime.fromisoformat(value)
         if parsed.tzinfo is None:
             raise ValueError('Missing offset')
         return parsed

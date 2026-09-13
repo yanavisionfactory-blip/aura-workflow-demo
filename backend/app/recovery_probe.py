@@ -1,11 +1,24 @@
 """Admin-created read-only canary. Yield one run, never interrupt a process."""
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 from sqlalchemy import select
+
 from .config import get_settings
-from .models import (RecoveryProbe, WorkflowRun, RunStatus, RunStep, StepStatus, PlanVersion,
-                     ApprovalSnapshot, DispatchIntent, ToolConnection, AuditEvent, StepAttempt)
-from .schemas import PlanStep, WorkflowPlan
+from .models import (
+    ApprovalSnapshot,
+    AuditEvent,
+    DispatchIntent,
+    PlanVersion,
+    RecoveryProbe,
+    RunStatus,
+    RunStep,
+    StepAttempt,
+    StepStatus,
+    ToolConnection,
+    WorkflowRun,
+)
 from .policy import DEFAULT_POLICY, canonical_plan_hash
+from .schemas import PlanStep, WorkflowPlan
 
 
 async def create_probe(session, workspace_id, subject):
@@ -30,7 +43,7 @@ async def create_probe(session, workspace_id, subject):
     session.add(run)
     await session.flush()
     version = PlanVersion(workspace_id=workspace_id, run_id=run.id, version=1, status="approved", plan=data,
-        plan_hash=digest, created_by=subject, approved_at=datetime.now(timezone.utc))
+        plan_hash=digest, created_by=subject, approved_at=datetime.now(UTC))
     session.add(version)
     await session.flush()
     tool = await session.scalar(select(ToolConnection).where(ToolConnection.workspace_id == workspace_id, ToolConnection.slug == "aura"))
@@ -65,7 +78,7 @@ async def yield_after_checkpoint(session, run, step):
     # Only server-created probes with this fixed read-only plan can yield.
     if any(item.get("operation") != "weather.forecast" or item.get("consequential") for item in run.plan.get("steps", [])):
         return False
-    probe.yielded_at = datetime.now(timezone.utc)
+    probe.yielded_at = datetime.now(UTC)
     session.add(AuditEvent(workspace_id=run.workspace_id, run_id=run.id, actor="recovery-canary",
         event_type="run.canary_checkpoint_yielded", payload={"step_id": step.id}))
     await session.commit()

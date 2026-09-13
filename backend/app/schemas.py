@@ -110,7 +110,7 @@ class RunCreate(BaseModel):
             encoded_size = 0
             for document in documents:
                 if not isinstance(document, dict):
-                    raise ValueError("Attached document metadata must be an object")
+                    raise TypeError("Attached document metadata must be an object")
                 name = document.get("name")
                 file_url = document.get("file_url")
                 if not isinstance(name, str) or not name.strip() or len(name) > 500:

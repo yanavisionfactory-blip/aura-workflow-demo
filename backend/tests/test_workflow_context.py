@@ -200,14 +200,16 @@ def test_step_result_normalizes_provider_collection_aliases() -> None:
 
 def test_missing_resource_id_never_falls_back_to_an_unrelated_id():
     import pytest
+
     from app.workflow_context import WorkflowContextError
     with pytest.raises(WorkflowContextError):
         resolve_value("{{steps.create.job.design_id}}", {"steps": {"create": {"job": {"id": "job-1"}}}})
 
 
 def test_completed_job_resource_binding_preserves_other_designs():
-    from app.workflow_context import canonical_action_arguments, WorkflowContextError
     import pytest
+
+    from app.workflow_context import WorkflowContextError, canonical_action_arguments
     receipt = {"job": {"id": "job-1", "status": "success",
                        "result": {"designs": [{"id": "design-1"}]}}}
     context = {"steps": {"create": step_context_value(receipt, "canva.presentation.create")}}

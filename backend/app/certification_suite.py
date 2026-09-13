@@ -9,8 +9,9 @@ import copy
 import json
 import os
 from pathlib import Path
-from .release_evaluation import evaluate, save
+
 from .native_connectors import native_manifest
+from .release_evaluation import evaluate, save
 
 
 async def run_suite(fixtures, directory, *, allow_writes=False):

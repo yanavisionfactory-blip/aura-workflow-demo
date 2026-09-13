@@ -88,7 +88,7 @@ async def dispatch_pending(workspace_id: str | None = None) -> int:
                     await asyncio.to_thread(tasks[intent.kind].delay, intent.run_id, tenant)
                     intent.status = "published"
                     count += 1
-                except Exception:
+                except Exception:  # noqa: BLE001 - broker failures are retried from the durable outbox
                     intent.available_at = now + timedelta(
                         seconds=min(300, 2 ** min(intent.attempts, 8))
                     )

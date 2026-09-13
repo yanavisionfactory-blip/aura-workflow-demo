@@ -6,12 +6,12 @@ not encode provider-specific workflows.
 
 import json
 import re
-from datetime import datetime, timezone
 from copy import deepcopy
+from datetime import UTC, datetime
 from typing import Any
 
-from .policy import operation_scope
 from .file_delivery import ATTACHMENTS_SCHEMA
+from .policy import operation_scope
 from .presentation_content import PRESENTATION_SCHEMA
 
 
@@ -521,7 +521,20 @@ def native_manifest(slug: str) -> dict[str, Any]:
 
 
 def current_capability_manifest(slug: str, stored: dict[str, Any] | None) -> dict[str, Any]:
-    """Use the deployed native contract, falling back to a discovered connector schema."""
+    """Use the contract for the backend that owns this verified connection."""
+    if stored:
+        capabilities = stored.get("capabilities") or []
+        is_signed_network_contract = stored.get("provider_type") in {
+            "connector_sdk",
+            "pipedream",
+        } or any(
+            (item.get("metadata") or {}).get("connector_broker")
+            or (item.get("metadata") or {}).get("connector_engineer")
+            for item in capabilities
+            if isinstance(item, dict)
+        )
+        if is_signed_network_contract:
+            return stored
     try:
         return native_manifest(slug)
     except NativeConnectorError:
@@ -603,7 +616,7 @@ def _validate_value(schema: dict[str, Any], value: Any, path: str) -> None:
         raise NativeConnectorError(f"{path} must be {schema_type}")
     if schema.get("format") == "date-time" and isinstance(value, str) and "{{" not in value:
         try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(value)
             if parsed.tzinfo is None or not re.fullmatch(r"\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})", value):
                 raise ValueError("offset required")
         except ValueError as exc:
@@ -743,11 +756,11 @@ def normalize_module_arguments(
             raise NativeConnectorError(f"Duplicate values supplied for {target!r}")
         if properties.get(target, {}).get("format") == "date-time" and isinstance(value, str) and "{{" not in value:
             try:
-                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                parsed = datetime.fromisoformat(value)
                 if parsed.tzinfo is None:
                     # A labeled UTC query window is preferable to a blocked plan.
                     # Explicit offsets are preserved; this is not the user's timezone.
-                    value = parsed.replace(tzinfo=timezone.utc).isoformat()
+                    value = parsed.replace(tzinfo=UTC).isoformat()
             except ValueError:
                 pass  # Normal validation explains genuinely invalid dates.
         normalized[target] = value

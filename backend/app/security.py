@@ -2,7 +2,7 @@ import hashlib
 import hmac
 import json
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import jwt
 from cryptography.fernet import Fernet, InvalidToken, MultiFernet
@@ -48,7 +48,7 @@ class CredentialVault:
 
 def create_oauth_state(workspace_id: str, provider: str) -> str:
     settings = get_settings()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return jwt.encode(
         {
             "workspace_id": workspace_id,
@@ -67,7 +67,7 @@ def decode_oauth_state(token: str) -> dict:
 
 
 def create_tenant_token(workspace_id: str, subject: str, role: str = "owner") -> str:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return jwt.encode(
         {
             "typ": "tenant_context",
@@ -89,7 +89,7 @@ def decode_tenant_token(token: str) -> dict:
 
 
 def create_webhook_token(workspace_id: str, subscription_id: str) -> str:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return jwt.encode(
         {
             "typ": "webhook_endpoint",

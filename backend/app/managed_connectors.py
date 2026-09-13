@@ -10,9 +10,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from functools import lru_cache
 from time import monotonic
-from typing import Any, Awaitable, Callable
+from typing import Any
 from urllib.parse import quote
 
 import httpx

@@ -1,7 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 
-import app.orchestrator as orchestrator
+from app import orchestrator
 from app.native_connectors import native_manifest
 from app.orchestrator import (
     _capitalized_provider_candidates,

@@ -1,7 +1,7 @@
 """Explicit, provenance-preserving reuse of verified results."""
 
-from copy import deepcopy
 import re
+from copy import deepcopy
 
 from .workflow_context import normalize_reference_path, resolve_value
 

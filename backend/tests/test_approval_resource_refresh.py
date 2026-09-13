@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 from app import main
-from app.models import Approval, WorkflowRun, RunStep
+from app.models import Approval, RunStep, WorkflowRun
 from app.schemas import ApprovalDecision
 
 

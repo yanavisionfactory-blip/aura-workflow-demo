@@ -5,7 +5,6 @@ import json
 import re
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 from typing import Any
 from urllib.parse import quote, urlencode, urlsplit
@@ -741,8 +740,9 @@ class ProviderExecutor:
         message["To"] = recipient
         message["Subject"] = str(a.get("subject") or "AURA workflow")
         message.set_content(str(a.get("body") or ""), charset="utf-8")
-        from .file_delivery import download_pdf, fingerprint, MAX_FILE_BYTES, ATTACHMENTS_SCHEMA
         from jsonschema import validate
+
+        from .file_delivery import ATTACHMENTS_SCHEMA, MAX_FILE_BYTES, download_pdf, fingerprint
         attachments = a.get('attachments', [])
         validate(attachments, ATTACHMENTS_SCHEMA)
         total = 0
@@ -1155,8 +1155,9 @@ class ProviderExecutor:
         return await self._canva_request("POST", "designs", json=payload)
 
     async def _canva_presentation_create(self, a: dict) -> dict:
-        from .presentation_content import render_timeline
         import hashlib
+
+        from .presentation_content import render_timeline
         data = render_timeline(a)
         headers = {**self._headers(), 'Content-Type': 'application/octet-stream',
             'Import-Metadata': json.dumps({'title_base64': base64.b64encode(a['title'].encode()).decode(),
@@ -1445,8 +1446,11 @@ class ProviderExecutor:
             raise ValueError("MCP tool has no Streamable HTTP URL")
         if not a.get("tool_name"):
             raise ValueError("mcp.call requires an allow-listed tool_name")
-        async with streamablehttp_client(self.base_url, headers=self._headers()) as (read, write, _):
-            async with ClientSession(read, write) as session:
+        async with streamablehttp_client(self.base_url, headers=self._headers()) as (
+            read,
+            write,
+            _,
+        ), ClientSession(read, write) as session:
                 await session.initialize()
                 available = await session.list_tools()
                 names = {tool.name for tool in available.tools}

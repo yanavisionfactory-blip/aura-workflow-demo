@@ -1,9 +1,9 @@
 """Real subprocess crashes with durable storage; provider/model calls are fixtures."""
 
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -12,24 +12,46 @@ import pytest
 def test_process_restart_preserves_receipts_and_never_replays_unknown_writes(tmp_path, crash_point):
     env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
     args = [sys.executable, str(Path(__file__).resolve()), str(tmp_path), crash_point]
-    first = subprocess.run(args + ["crash"], env=env, capture_output=True, text=True, timeout=30)
+    first = subprocess.run(
+        args + ["crash"], env=env, capture_output=True, text=True, timeout=30, check=False
+    )
     assert first.returncode == 73, first.stdout + first.stderr
-    resumed = subprocess.run(args + ["resume"], env=env, capture_output=True, text=True, timeout=30)
+    resumed = subprocess.run(
+        args + ["resume"], env=env, capture_output=True, text=True, timeout=30, check=False
+    )
     assert resumed.returncode == 0, resumed.stdout + resumed.stderr
     assert (tmp_path / "provider_calls").read_text().splitlines() == ["create"]
 
 
 async def exercise(directory, crash_point, stage):
     from datetime import UTC, datetime
+
     from sqlalchemy import select
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
     from app import orchestrator
     from app.db import Base
-    from app.models import (ApprovalSnapshot, CapabilityManifest, PlanVersion, RunStatus,
-                            RunStep, StepAttempt, StepStatus, ToolConnection, ToolKind,
-                            WorkflowRun, Workspace)
+    from app.models import (
+        ApprovalSnapshot,
+        CapabilityManifest,
+        PlanVersion,
+        RunStatus,
+        RunStep,
+        StepAttempt,
+        StepStatus,
+        ToolConnection,
+        ToolKind,
+        WorkflowRun,
+        Workspace,
+    )
     from app.policy import DEFAULT_POLICY, canonical_plan_hash
-    from app.schemas import CriticDecision, OutcomeVerification, PlanStep, UnifiedDeliverable, WorkflowPlan
+    from app.schemas import (
+        CriticDecision,
+        OutcomeVerification,
+        PlanStep,
+        UnifiedDeliverable,
+        WorkflowPlan,
+    )
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{directory / 'checkpoint.sqlite'}")
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -109,7 +131,7 @@ async def exercise(directory, crash_point, stage):
                 assert run.result["verification"]["status"] == "verified"
             else:
                 assert run.status == RunStatus.waiting_for_action
-                assert not run.result.get("verification", {}).get("status") == "verified"
+                assert run.result.get("verification", {}).get("status") != "verified"
     finally:
         await engine.dispose()
 

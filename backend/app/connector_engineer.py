@@ -45,10 +45,10 @@ from .pipedream_connect import (
     app_has_executable_strategy as pipedream_has_executable_strategy,
 )
 from .pipedream_connect import (
-    connection_strategy as pipedream_connection_strategy,
+    certify_app as certify_pipedream_app,
 )
 from .pipedream_connect import (
-    certify_app as certify_pipedream_app,
+    connection_strategy as pipedream_connection_strategy,
 )
 from .pipedream_connect import (
     marketplace_entry as pipedream_marketplace_entry,
@@ -121,6 +121,8 @@ connector_engineer_observation: dict[str, Any] = {
     "last_summary": {},
 }
 _connector_engineer_lock = asyncio.Lock()
+_pipedream_certification_wakeup = asyncio.Event()
+_pending_pipedream_certifications: dict[str, dict[str, Any]] = {}
 
 
 @asynccontextmanager
@@ -139,6 +141,50 @@ def _timestamp() -> str:
 
 def _canonical(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+
+
+def _safe_failure_code(exc: Exception) -> str | None:
+    """Return only an internal, log-safe failure identifier."""
+    if not isinstance(exc, ValueError):
+        return None
+    message = str(exc).split(":", 1)[0]
+    code = _slug(message, "value-error")
+    return (
+        code
+        if code
+        in {
+            "canary-output-schema-mismatch",
+            "canary-readback-binding-missing",
+            "canary-readback-operation-missing",
+            "canary-readback-schema-mismatch",
+            "connector-isolation-failed",
+            "connector-release-signing-unavailable",
+            "duplicate-normalized-capability",
+            "nango-integration-id-missing",
+            "no-safe-nango-capabilities",
+            "untrusted-connector-transport",
+            "untrusted-transport-origin",
+            "write-without-approval",
+        }
+        else "value-error"
+    )
+
+
+def queue_pipedream_certification(app: dict[str, Any]) -> bool:
+    """Wake the backstage certifier without doing schema discovery in a user request."""
+    provider = _slug(app.get("name_slug") or app.get("name"))
+    if not provider or not pipedream_has_executable_strategy(app):
+        return False
+    already_pending = provider in _pending_pipedream_certifications
+    _pending_pipedream_certifications[provider] = json.loads(json.dumps(app))
+    _pipedream_certification_wakeup.set()
+    return not already_pending
+
+
+def _drain_pipedream_certifications() -> dict[str, dict[str, Any]]:
+    pending = dict(_pending_pipedream_certifications)
+    _pending_pipedream_certifications.clear()
+    return pending
 
 
 def _definition_hash(definition: dict[str, Any]) -> str:
@@ -366,13 +412,24 @@ def compile_nango_definition(
                 modules.append(capability)
         if len(modules) >= settings.connector_engineer_max_capabilities_per_pack:
             break
+    # Broad integrations such as GitHub can publish the same metadata more than
+    # once. Preserve an exact duplicate once, but remove an entire name group
+    # when one normalized operation would route to different contracts. One
+    # ambiguous function must not poison every other safe provider capability.
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for module in modules:
+        grouped.setdefault(module["name"], []).append(module)
+    unambiguous: list[dict[str, Any]] = []
+    ambiguous: list[str] = []
+    for name, candidates in grouped.items():
+        distinct = {_canonical(candidate) for candidate in candidates}
+        if len(distinct) == 1 or len(candidates) == 1:
+            unambiguous.append(candidates[0])
+        else:
+            ambiguous.append(name)
+    modules = unambiguous
     if not modules:
         raise ValueError("no_safe_nango_capabilities")
-    # Operation names can converge after normalization. Fail closed instead of
-    # silently routing one name to the wrong Nango function or model.
-    names = [module["name"] for module in modules]
-    if len(names) != len(set(names)):
-        raise ValueError("duplicate_normalized_capability")
     display_name = str(
         integration.get("display_name")
         or provider.get("display_name")
@@ -390,6 +447,7 @@ def compile_nango_definition(
             "version": ENGINEER_VERSION,
             "provider_slug": provider_slug,
             "integration_id": integration_id,
+            "ambiguous_operations_dropped": sorted(ambiguous),
             "logo_url": provider.get("logo_url") or integration.get("logo"),
             "categories": provider.get("categories") or [],
             "auth_mode": provider.get("auth_mode"),
@@ -413,9 +471,7 @@ def isolate_definition(
             transport = module.get("transport") or {}
             if transport.get("type") not in _ALLOWED_TRANSPORTS:
                 raise ValueError("untrusted_connector_transport")
-            if module.get("permission_scope") != "read" and not module.get(
-                "requires_approval"
-            ):
+            if module.get("permission_scope") != "read" and not module.get("requires_approval"):
                 raise ValueError("write_without_approval")
             Draft202012Validator.check_schema(module.get("input_schema") or {})
             Draft202012Validator.check_schema(module.get("output_schema") or {})
@@ -458,7 +514,9 @@ def sign_release(release: ManagedConnectorRelease, settings: Settings | None = N
     key = (settings or get_settings()).connector_release_signing_key
     if len(key) < 32:
         raise ValueError("connector_release_signing_unavailable")
-    return hmac.new(key.encode(), _canonical(_release_signature_payload(release)), hashlib.sha256).hexdigest()
+    return hmac.new(
+        key.encode(), _canonical(_release_signature_payload(release)), hashlib.sha256
+    ).hexdigest()
 
 
 def release_signature_valid(
@@ -473,9 +531,7 @@ def release_signature_valid(
     return bool(release.signature) and hmac.compare_digest(expected, release.signature)
 
 
-def _stamp_manifest(
-    release: ManagedConnectorRelease, settings: Settings | None = None
-) -> None:
+def _stamp_manifest(release: ManagedConnectorRelease, settings: Settings | None = None) -> None:
     key = (settings or get_settings()).connector_release_signing_key
     if len(key) < 32:
         raise ValueError("connector_release_signing_unavailable")
@@ -654,9 +710,7 @@ async def canary_release(
     )
 
 
-def _canary_connection(
-    provider_slug: str, integration_id: str, settings: Settings
-) -> str | None:
+def _canary_connection(provider_slug: str, integration_id: str, settings: Settings) -> str | None:
     fixtures = settings.connector_engineer_canary_connections
     return fixtures.get(integration_id.lower()) or fixtures.get(provider_slug.lower())
 
@@ -733,7 +787,7 @@ def _canary_due(release: ManagedConnectorRelease, settings: Settings) -> bool:
     if not checked:
         return True
     try:
-        checked_at = datetime.fromisoformat(str(checked).replace("Z", "+00:00"))
+        checked_at = datetime.fromisoformat(str(checked))
     except ValueError:
         return True
     return datetime.now(UTC) - checked_at >= timedelta(
@@ -836,9 +890,7 @@ def _select_integrations(
     for provider, candidates in groups.items():
         override = settings.managed_integrations.get(provider)
         if override:
-            match = next(
-                (item for item in candidates if item.get("unique_key") == override), None
-            )
+            match = next((item for item in candidates if item.get("unique_key") == override), None)
         else:
             exact = [item for item in candidates if item.get("unique_key") == provider]
             match = exact[0] if len(exact) == 1 else candidates[0] if len(candidates) == 1 else None
@@ -976,9 +1028,10 @@ async def engineer_nango_catalog(
                 summary.rejected += 1
         except Exception as exc:  # noqa: BLE001 - one connector cannot block the catalog sweep
             logger.warning(
-                "connector_engineer_integration_failed provider=%s error_type=%s",
+                "connector_engineer_integration_failed provider=%s error_type=%s reason_code=%s",
                 provider_slug,
                 type(exc).__name__,
+                _safe_failure_code(exc),
             )
             summary.rejected += 1
     await session.commit()
@@ -1008,24 +1061,39 @@ async def engineer_pipedream_catalog(
     client = client or PipedreamClient(settings)
     if not client.configured or len(settings.connector_release_signing_key) < 32:
         return EngineeringSummary(status="disabled")
+    pending = _drain_pipedream_certifications()
     apps = await client.list_apps(
         "",
         limit=100,
         sort_key="featured_weight",
         sort_direction="desc",
     )
-    entries = [pipedream_marketplace_entry(item, connectable=True) for item in apps]
-    entries_by_provider = {item["provider"]: item for item in entries}
+    apps_by_provider = {_slug(item.get("name_slug") or item.get("name")): item for item in apps}
+    apps_by_provider.update(pending)
+    apps = list(apps_by_provider.values())
     snapshot = await session.scalar(
         select(ManagedConnectorCatalog).where(ManagedConnectorCatalog.source == "pipedream")
     )
     if snapshot is None:
         snapshot = ManagedConnectorCatalog(source="pipedream")
         session.add(snapshot)
-    snapshot.providers = entries
-    snapshot.provider_count = len(entries)
+    entries_by_provider = {
+        str(item.get("provider")): dict(item) for item in snapshot.providers or []
+    }
+    for app_definition in apps:
+        entry = pipedream_marketplace_entry(app_definition, connectable=False)
+        entries_by_provider[entry["provider"]] = entry
+    snapshot.providers = json.loads(
+        json.dumps(
+            sorted(
+                entries_by_provider.values(),
+                key=lambda item: str(item.get("display_name") or "").casefold(),
+            )
+        )
+    )
+    snapshot.provider_count = len(snapshot.providers)
     snapshot.refreshed_at = datetime.now(UTC)
-    summary = EngineeringSummary(status="completed", discovered=len(entries))
+    summary = EngineeringSummary(status="completed", discovered=len(apps))
     eligible = [
         item
         for item in apps
@@ -1035,15 +1103,18 @@ async def engineer_pipedream_catalog(
     ]
     # Pre-warm deterministic action contracts before slower MCP discovery so
     # one remote MCP server cannot delay ordinary marketplace connections.
-    eligible.sort(key=lambda item: not bool(item.get("has_actions")))
+    eligible.sort(
+        key=lambda item: (
+            _slug(item.get("name_slug") or item.get("name")) not in pending,
+            not bool(item.get("has_actions")),
+        )
+    )
     summary.skipped = len(apps) - len(eligible)
     for app_definition in eligible[: settings.connector_engineer_max_integrations_per_scan]:
         provider_slug = _slug(app_definition.get("name_slug") or app_definition.get("name"))
         try:
             async with session.begin_nested():
-                pack = await certify_pipedream_app(
-                    session, client, app_definition, settings
-                )
+                pack = await certify_pipedream_app(session, client, app_definition, settings)
             entry = entries_by_provider.get(provider_slug)
             if entry is not None:
                 entry.update(
@@ -1065,6 +1136,19 @@ async def engineer_pipedream_catalog(
                 getattr(exc, "upstream_code", None),
             )
             summary.rejected += 1
+            if getattr(exc, "retryable", False):
+                queue_pipedream_certification(app_definition)
+    # JSON columns do not detect in-place edits inside a nested list. Reassign
+    # after certification so the immediately-connectable status is persisted.
+    snapshot.providers = json.loads(
+        json.dumps(
+            sorted(
+                entries_by_provider.values(),
+                key=lambda item: str(item.get("display_name") or "").casefold(),
+            )
+        )
+    )
+    snapshot.provider_count = len(snapshot.providers)
     await session.commit()
     return summary
 
@@ -1095,112 +1179,116 @@ async def connector_engineer_tick(
         return EngineeringSummary(status="disabled")
     if _connector_engineer_lock.locked():
         return EngineeringSummary(status="in_progress")
-    async with _connector_engineer_lock:
-        async with _catalog_leadership() as leader:
-            connector_engineer_observation["leader"] = leader
-            if not leader:
-                return EngineeringSummary(status="not_leader")
-            connector_engineer_observation["last_scan_started_at"] = _timestamp()
-            try:
-                async with session_factory() as session:
-                    if not force:
-                        required_sources = []
-                        if NangoClient(settings).configured:
-                            required_sources.append("nango")
-                        if PipedreamClient(settings).configured:
-                            required_sources.append("pipedream")
-                        snapshots = {
-                            item.source: item
-                            for item in (
-                                await session.scalars(
-                                    select(ManagedConnectorCatalog).where(
-                                        ManagedConnectorCatalog.source.in_(required_sources)
-                                    )
+    async with _connector_engineer_lock, _catalog_leadership() as leader:
+        connector_engineer_observation["leader"] = leader
+        if not leader:
+            return EngineeringSummary(status="not_leader")
+        connector_engineer_observation["last_scan_started_at"] = _timestamp()
+        try:
+            async with session_factory() as session:
+                if not force and not _pending_pipedream_certifications:
+                    required_sources = []
+                    if NangoClient(settings).configured:
+                        required_sources.append("nango")
+                    if PipedreamClient(settings).configured:
+                        required_sources.append("pipedream")
+                    snapshots = {
+                        item.source: item
+                        for item in (
+                            await session.scalars(
+                                select(ManagedConnectorCatalog).where(
+                                    ManagedConnectorCatalog.source.in_(required_sources)
                                 )
-                            ).all()
-                        }
-                        refreshed = []
-                        for source in required_sources:
-                            snapshot = snapshots.get(source)
-                            if snapshot is None or snapshot.refreshed_at is None:
-                                break
-                            refreshed_at = snapshot.refreshed_at
-                            if refreshed_at.tzinfo is None:
-                                refreshed_at = refreshed_at.replace(tzinfo=UTC)
-                            refreshed.append(refreshed_at)
-                        else:
-                            if refreshed:
-                                elapsed = datetime.now(UTC) - min(refreshed)
-                                if (
-                                    elapsed.total_seconds()
-                                    < settings.connector_engineer_scan_interval_seconds
-                                ):
-                                    return EngineeringSummary(status="not_due")
-                    summaries: list[EngineeringSummary] = []
-                    failures: list[Exception] = []
-                    plane_failures: dict[str, dict[str, Any]] = {}
-                    # Pipedream's broad registry is the immediate long-tail
-                    # plane. Persist it before the slower per-integration Nango
-                    # sweep; runtime selection still prefers certified Nango
-                    # and native connectors.
-                    for source, engineer in (
-                        ("pipedream", engineer_pipedream_catalog),
-                        ("nango", engineer_nango_catalog),
-                    ):
-                        try:
-                            summaries.append(await engineer(session, settings=settings))
-                        except Exception as exc:  # noqa: BLE001 - connector planes fail independently
-                            failures.append(exc)
-                            plane_failures[source] = {
-                                "error_type": type(exc).__name__,
-                                "status_code": getattr(exc, "status_code", None),
-                            }
-                            logger.warning(
-                                "connector_engineer_plane_failed source=%s error_type=%s status_code=%s",
-                                source,
-                                type(exc).__name__,
-                                getattr(exc, "status_code", None),
                             )
-                    active = [item for item in summaries if item.status != "disabled"]
-                    if failures and not active:
-                        raise failures[0]
-                    summary = EngineeringSummary(
-                        status="partial" if failures else "completed" if active else "disabled",
-                        discovered=sum(item.discovered for item in summaries),
-                        compiled=sum(item.compiled for item in summaries),
-                        released=sum(item.released for item in summaries),
-                        awaiting_canary=sum(item.awaiting_canary for item in summaries),
-                        rejected=sum(item.rejected for item in summaries) + len(failures),
-                        rolled_back=sum(item.rolled_back for item in summaries),
-                        skipped=sum(item.skipped for item in summaries),
-                    )
-                finished = _timestamp()
-                connector_engineer_observation.update(
-                    last_scan_completed_at=finished,
-                    last_success_at=finished,
-                    last_error_at=None,
-                    last_error_type=None,
-                    last_plane_failures=plane_failures,
-                    last_summary=summary.model_dump(mode="json"),
+                        ).all()
+                    }
+                    refreshed = []
+                    for source in required_sources:
+                        snapshot = snapshots.get(source)
+                        if snapshot is None or snapshot.refreshed_at is None:
+                            break
+                        refreshed_at = snapshot.refreshed_at
+                        if refreshed_at.tzinfo is None:
+                            refreshed_at = refreshed_at.replace(tzinfo=UTC)
+                        refreshed.append(refreshed_at)
+                    else:
+                        if refreshed:
+                            elapsed = datetime.now(UTC) - min(refreshed)
+                            if (
+                                elapsed.total_seconds()
+                                < settings.connector_engineer_scan_interval_seconds
+                            ):
+                                return EngineeringSummary(status="not_due")
+                summaries: list[EngineeringSummary] = []
+                failures: list[Exception] = []
+                plane_failures: dict[str, dict[str, Any]] = {}
+                # Pipedream's broad registry is the immediate long-tail
+                # plane. Persist it before the slower per-integration Nango
+                # sweep; runtime selection still prefers certified Nango
+                # and native connectors.
+                for source, engineer in (
+                    ("pipedream", engineer_pipedream_catalog),
+                    ("nango", engineer_nango_catalog),
+                ):
+                    try:
+                        summaries.append(await engineer(session, settings=settings))
+                    except Exception as exc:  # noqa: BLE001 - connector planes fail independently
+                        failures.append(exc)
+                        plane_failures[source] = {
+                            "error_type": type(exc).__name__,
+                            "status_code": getattr(exc, "status_code", None),
+                        }
+                        logger.warning(
+                            "connector_engineer_plane_failed source=%s error_type=%s status_code=%s",
+                            source,
+                            type(exc).__name__,
+                            getattr(exc, "status_code", None),
+                        )
+                active = [item for item in summaries if item.status != "disabled"]
+                if failures and not active:
+                    raise failures[0]
+                summary = EngineeringSummary(
+                    status="partial" if failures else "completed" if active else "disabled",
+                    discovered=sum(item.discovered for item in summaries),
+                    compiled=sum(item.compiled for item in summaries),
+                    released=sum(item.released for item in summaries),
+                    awaiting_canary=sum(item.awaiting_canary for item in summaries),
+                    rejected=sum(item.rejected for item in summaries) + len(failures),
+                    rolled_back=sum(item.rolled_back for item in summaries),
+                    skipped=sum(item.skipped for item in summaries),
                 )
-                return summary
-            except Exception as exc:  # noqa: BLE001 - scheduler remains available and retries later
-                connector_engineer_observation.update(
-                    last_scan_completed_at=_timestamp(),
-                    last_error_at=_timestamp(),
-                    last_error_type=type(exc).__name__,
-                )
-                logger.warning(
-                    "connector_engineer_scan_failed error_type=%s", type(exc).__name__
-                )
-                return EngineeringSummary(status="failed")
+            finished = _timestamp()
+            connector_engineer_observation.update(
+                last_scan_completed_at=finished,
+                last_success_at=finished,
+                last_error_at=None,
+                last_error_type=None,
+                last_plane_failures=plane_failures,
+                last_summary=summary.model_dump(mode="json"),
+            )
+            return summary
+        except Exception as exc:  # noqa: BLE001 - scheduler remains available and retries later
+            connector_engineer_observation.update(
+                last_scan_completed_at=_timestamp(),
+                last_error_at=_timestamp(),
+                last_error_type=type(exc).__name__,
+            )
+            logger.warning("connector_engineer_scan_failed error_type=%s", type(exc).__name__)
+            return EngineeringSummary(status="failed")
 
 
 async def connector_engineer_loop(session_factory: Any) -> None:
     """Continuously reconcile the verified catalog outside workflow delivery ticks."""
     while True:
+        _pipedream_certification_wakeup.clear()
         await connector_engineer_tick(session_factory)
-        await asyncio.sleep(max(60, get_settings().connector_engineer_scan_interval_seconds))
+        try:
+            await asyncio.wait_for(
+                _pipedream_certification_wakeup.wait(),
+                timeout=max(60, get_settings().connector_engineer_scan_interval_seconds),
+            )
+        except TimeoutError:
+            pass
 
 
 async def released_connectors(
@@ -1310,7 +1398,9 @@ async def verify_released_connection(
     except ManagedConnectorError as exc:
         return {
             "ok": False,
-            "reason": "provider_temporarily_unavailable" if exc.retryable else "authorization_required",
+            "reason": "provider_temporarily_unavailable"
+            if exc.retryable
+            else "authorization_required",
             "retryable": exc.retryable,
         }
     if not credentials.get("access_token"):

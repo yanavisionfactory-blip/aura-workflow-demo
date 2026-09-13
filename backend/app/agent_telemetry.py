@@ -1,11 +1,11 @@
 """Per-run model metrics without retaining prompts or model reasoning."""
 
+import logging
 from contextvars import ContextVar
 from functools import wraps
 from time import perf_counter
 
 from .config import get_settings
-import logging
 
 calls: ContextVar[list[dict] | None] = ContextVar("agent_calls", default=None)
 
@@ -51,8 +51,9 @@ def trace_run(function):
         from .models import AuditEvent
 
         records: list[dict] = []
-        from .reliability import CallBudget, model_budget
         from time import monotonic
+
+        from .reliability import CallBudget, model_budget
         settings = get_settings()
         started = perf_counter()
         budget_token = model_budget.set(CallBudget(monotonic() + settings.delivery_budget_seconds, settings.max_model_calls_per_delivery))

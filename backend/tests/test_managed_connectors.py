@@ -1,11 +1,12 @@
-import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
+import pytest
+
 from app.config import Settings
 from app.managed_connectors import (
-    NangoClient,
     ConnectorConfigurationError,
+    NangoClient,
     external_account_reference,
 )
 from app.providers import PROVIDERS
@@ -419,6 +420,7 @@ async def test_invalid_canva_environment_cannot_provision_bad_integration():
 
 async def test_upstream_error_does_not_log_echoed_credentials(monkeypatch, caplog):
     import httpx
+
     from app.managed_connectors import ManagedConnectorError
     original = httpx.AsyncClient
     transport = httpx.MockTransport(lambda request: httpx.Response(

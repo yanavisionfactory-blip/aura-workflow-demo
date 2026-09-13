@@ -1,6 +1,6 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, MagicMock
-import pytest
+from unittest.mock import AsyncMock, MagicMock, Mock
+
 from app.connection_recovery import reuse_managed_connection
 from app.managed_connectors import NangoClient
 

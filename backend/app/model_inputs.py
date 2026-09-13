@@ -3,9 +3,9 @@
 Stored connector receipts are never modified. Repeated subtrees are represented by
 JSON pointers into this input, rather than copied into the model window repeatedly.
 """
+import base64
 import hashlib
 import json
-import base64
 
 MAX_INPUT_BYTES = 96_000
 CHUNK_BYTES = 24_000

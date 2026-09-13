@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from time import perf_counter
 from types import SimpleNamespace
 
@@ -203,7 +203,7 @@ async def runtime(monkeypatch):
                         "version": 2,
                         "plan_hash": digest,
                         "status": "passed",
-                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                        "completed_at": datetime.now(UTC).isoformat(),
                     }
                 },
             )
@@ -655,7 +655,7 @@ async def test_uncertain_known_update_reconciles_without_repeating_write(runtime
                 "version": 2,
                 "plan_hash": digest,
                 "status": "passed",
-                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": datetime.now(UTC).isoformat(),
             },
         }
         version = await session.get(PlanVersion, "version")

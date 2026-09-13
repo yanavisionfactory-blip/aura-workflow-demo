@@ -1,12 +1,13 @@
-import copy
 import hashlib
+from datetime import UTC
 from types import SimpleNamespace
+
 import pytest
-from app.outcome_checks import build_outcome_check, evaluate_outcome_check, READBACK_OPERATIONS
+
 from app.extended_outcomes import leaves, observe_check, required_reads
 from app.native_connectors import NATIVE_CONNECTORS, native_manifest
+from app.outcome_checks import READBACK_OPERATIONS, build_outcome_check, evaluate_outcome_check
 from app.policy import operation_scope
-from test_system_reliability import database
 
 
 def cases():
@@ -162,17 +163,19 @@ async def test_new_resource_checks_use_exact_get_routes(monkeypatch, operation, 
 
 
 async def test_pending_jobs_create_one_delayed_dispatch_and_exhaust_the_budget(database):
-    from app.models import WorkflowRun, RunStep, RunStatus, StepStatus, DispatchIntent
-    from app.verification_recovery import defer_verification, verification_due
+    from datetime import datetime, timedelta
+
     from sqlalchemy import select
-    from datetime import datetime, timezone, timedelta
+
+    from app.models import DispatchIntent, RunStatus, RunStep, StepStatus, WorkflowRun
+    from app.verification_recovery import defer_verification, verification_due
     async with database() as session:
         run = WorkflowRun(id="pending-job", workspace_id="w", prompt="Export", status=RunStatus.running)
         step = RunStep(id="pending-step", run_id=run.id, position=0, step_key="export", agent="exporter", tool_slug="canva",
             operation="canva.export.create", arguments={}, status=StepStatus.running, idempotency_key="fixture",
             output={"provider_result": {"job": {"id": "j"}}, "outcome_check": {"status": "pending"}})
         session.add_all([run, step]); await session.commit()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         assert await defer_verification(session, run, step, now)
         assert not verification_due(step, now)
         assert verification_due(step, now+timedelta(seconds=16))
@@ -185,11 +188,15 @@ async def test_pending_jobs_create_one_delayed_dispatch_and_exhaust_the_budget(d
 
 @pytest.mark.skipif(not __import__('os').getenv('AURA_TEST_POSTGRES_URL'), reason="Requires real PostgreSQL concurrency")
 async def test_simultaneous_first_runs_share_one_trust_record():
-    import asyncio, os, uuid
-    from sqlalchemy import select, func
-    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    import asyncio
+    import os
+    import uuid
+
+    from sqlalchemy import func, select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
     from app import orchestrator
-    from app.models import Workspace, ToolConnection, ToolKind, ToolTrustState
+    from app.models import ToolConnection, ToolKind, ToolTrustState, Workspace
     engine = create_async_engine(os.environ['AURA_TEST_POSTGRES_URL'])
     factory = async_sessionmaker(engine, expire_on_commit=False)
     workspace, tool_id = str(uuid.uuid4()), str(uuid.uuid4())

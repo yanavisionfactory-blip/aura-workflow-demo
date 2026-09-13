@@ -79,7 +79,8 @@ export default function ConnectionsPill() {
     }
     let cancelled = false;
     setSearchingCatalog(true);
-    const timer = window.setTimeout(() => {
+    let timer;
+    const search = (attempt = 0) => {
       searchConnectorBrokerApps(normalized)
         .then((result) => {
           if (cancelled) return;
@@ -87,14 +88,23 @@ export default function ConnectionsPill() {
           setCatalogRevision((value) => value + 1);
           setCatalogSearchQuery(normalized);
           setError("");
+          const preparing = result.apps.some((item) =>
+            ["queued", "in_progress"].includes(item.certification_status)
+          );
+          if (preparing && attempt < 10) {
+            timer = window.setTimeout(() => search(attempt + 1), 2000);
+          } else {
+            setSearchingCatalog(false);
+          }
         })
         .catch(() => {
-          if (!cancelled) setError("AURA could not search the app network. Try again in a moment.");
+          if (!cancelled) {
+            setError("AURA could not search the app network. Try again in a moment.");
+            setSearchingCatalog(false);
+          }
         })
-        .finally(() => {
-          if (!cancelled) setSearchingCatalog(false);
-        });
-    }, 250);
+    };
+    timer = window.setTimeout(search, 250);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);

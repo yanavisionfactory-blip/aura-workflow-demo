@@ -1,6 +1,6 @@
 """Reuse an already-authorized, unambiguous connection before prompting login."""
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -77,7 +77,7 @@ async def reuse_managed_connection(session, client, provider, workspace_id, subj
                 provider_type='oauth', status='verified', manifest=manifest,
                 verification={**verification, 'source': 'connector_engineer_existing_authorization'
                     if release else 'existing_managed_authorization'},
-                verified_at=datetime.now(timezone.utc)))
+                verified_at=datetime.now(UTC)))
             if release:
                 await certify_verified_reads(
                     session, workspace_id, tool, release,

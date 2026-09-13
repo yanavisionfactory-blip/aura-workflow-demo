@@ -2,9 +2,17 @@ import asyncio
 import base64
 import hashlib
 import json
+
 import pytest
+
 from app import agent_runtime
-from app.model_inputs import bounded_input, pack, evidence_chunks, ModelInputTooLarge, MAX_INPUT_BYTES
+from app.model_inputs import (
+    MAX_INPUT_BYTES,
+    ModelInputTooLarge,
+    bounded_input,
+    evidence_chunks,
+    pack,
+)
 
 
 def test_exact_repeated_provider_content_is_shared_without_losing_late_fields():
@@ -82,8 +90,8 @@ def test_incomplete_chunk_cannot_produce_action(monkeypatch):
 
 
 def test_executor_aliases_do_not_multiply_model_source_size():
-    from app.workflow_context import step_context_value
     from app.model_inputs import canonical_execution_evidence, encoded
+    from app.workflow_context import step_context_value
     receipt = {"results": [{"id": "record-1", "content": "milestone " * 3000}], "complete": True}
     inflated = step_context_value(receipt, "notion.blocks.children.list")
     assert len(encoded(inflated)) > 288000
@@ -112,7 +120,7 @@ def test_source_caveats_and_long_but_bounded_summaries_do_not_block_drafting(mon
     summaries = seen[-1]["accepted_execution_context"]["evidence_summaries"]
     assert all(summary["source_limitations"] == ["No deadline supplied"] for summary in summaries)
 def test_binary_readback_projection_preserves_hash_and_original_receipt():
-    from app.model_inputs import semantic_evidence, bounded_input
+    from app.model_inputs import semantic_evidence
     raw = b"%PDF-" + b"binary-file-content" * 20000
     data = base64.urlsafe_b64encode(raw).decode()
     receipt = {"id": "message", "payload": {"parts": [

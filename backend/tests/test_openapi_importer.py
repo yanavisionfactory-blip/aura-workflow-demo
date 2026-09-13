@@ -3,7 +3,6 @@ import pytest
 from app.native_connectors import NativeConnectorError, validate_module_arguments
 from app.openapi_importer import OpenAPIImportError, compile_openapi
 
-
 SPEC = {
     "openapi": "3.1.0",
     "info": {"title": "Example"},

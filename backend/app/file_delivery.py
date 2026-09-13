@@ -2,7 +2,8 @@
 import asyncio
 import base64
 import hashlib
-from urllib.parse import urlsplit, urljoin
+from urllib.parse import urljoin, urlsplit
+
 import httpx
 
 MAX_FILE_BYTES = 8 * 1024 * 1024
@@ -18,7 +19,7 @@ def allowed_download_url(url):
     p = urlsplit(url)
     host = (p.hostname or '').lower()
     if (p.scheme != 'https' or p.username or p.password or p.port not in (None, 443)
-            or not (host.endswith('.canva.com') or host.endswith('.canvausercontent.com'))):
+            or not (host.endswith(('.canva.com', '.canvausercontent.com')))):
         raise ValueError('PDF download must use a Canva export URL')
     return url
 
