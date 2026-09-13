@@ -9,6 +9,9 @@ const catalog = [
   { name: "Linear", provider: "linear", aliases: ["Linear"] },
   { name: "Slack", provider: "slack", aliases: ["Slack"] },
   { name: "Jira", provider: "jira", aliases: ["Jira"] },
+  { name: "Google Drive", provider: "google", canonicalProvider: "google", aliases: ["google", "Google Drive"] },
+  { name: "Google Calendar", provider: "google", canonicalProvider: "google", aliases: ["google", "Google Calendar"] },
+  { name: "Google Sheets", provider: "google", canonicalProvider: "google", aliases: ["google", "Google Sheets"] },
 ];
 
 test("weather presentation intent immediately suggests Canva and AURA Weather", () => {
@@ -27,4 +30,11 @@ test("explicit providers are all preserved and generic issue does not invent Jir
 
 test("generic send wording does not invent Gmail", () => {
   assert.deepEqual(promptToolHints("Send this design to Canva", catalog), ["Canva"]);
+});
+
+test("a shared provider family does not select every sibling app", () => {
+  assert.deepEqual(
+    promptToolHints("Read Google Drive files and calendar, then draft emails in Gmail", catalog),
+    ["Google Drive", "Google Calendar", "Gmail"],
+  );
 });
