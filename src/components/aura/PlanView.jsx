@@ -204,6 +204,7 @@ export default function PlanView({
   const needed = missingTools.filter((tool) => catalogEntryFor(tool.name));
   const backstageOnly = missingTools.filter((tool) => !catalogEntryFor(tool.name));
   const connectionOnly = steps.length === 0 && (plan.connectionRequirements || []).length > 0;
+  const connectionCount = needed.length || planTools.length;
   const planningFailure = steps.length === 0 && Boolean(plan.error) && !connectionOnly;
 
   const onDragEnd = (res) => {
@@ -321,7 +322,9 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
             {connectionOnly
               ? backstageOnly.length
                 ? "AURA is keeping connector setup backstage"
-                : "Connect one tool so Aura can finish the plan"
+                : connectionCount === 1
+                  ? "Connect one account so AURA can finish the plan"
+                  : `Connect ${connectionCount} accounts so AURA can finish the plan`
               : planningFailure
                 ? "Aura couldn't finish this plan yet"
                 : "Here's how Aura plans to complete your task"}
@@ -331,7 +334,9 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
           {connectionOnly
             ? backstageOnly.length
               ? "Your task is saved. AURA will not ask you for API keys, MCP URLs, or technical configuration."
-              : "Your task is saved. Planning resumes automatically after the connection is verified."
+              : connectionCount === 1
+                ? "Your task is saved. Planning resumes automatically after the connection is verified."
+                : "Your task is saved. Planning resumes automatically after every required connection is verified."
             : planningFailure
               ? "Nothing was executed. Retry planning when you're ready."
             : "Review the steps and change anything that doesn't look right."}
