@@ -369,52 +369,6 @@ export async function authorizeConnectorBroker(
   throw new Error("AURA could not select a secure connection route for this app.");
 }
 
-export async function authorizeCustomOAuth(payload, timeoutMs = 120000) {
-  const popup = window.open("about:blank", `aura-oauth-${payload.slug}`, "popup,width=620,height=760");
-  if (!popup) throw new Error("Your browser blocked the authorization window. Allow pop-ups for AURA and try again.");
-  await ensureWorkspace();
-  let started;
-  try {
-    started = await request("/v1/oauth/custom/start", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-    popup.location.assign(started.authorization_url);
-  } catch (error) {
-    popup.close();
-    throw error;
-  }
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    await new Promise((resolve) => window.setTimeout(resolve, 1000));
-    const tools = await listPythonTools().catch(() => []);
-    const connected = tools.find((tool) => tool.slug === payload.slug && tool.enabled);
-    if (connected) {
-      if (!popup.closed) popup.close();
-      return { connected: true, tool: connected };
-    }
-    if (popup.closed) throw new Error("Authorization was cancelled before the connection completed.");
-  }
-  if (!popup.closed) popup.close();
-  throw new Error("Authorization timed out. Please try again.");
-}
-
-export async function addPythonTool({ slug, displayName, kind = "api_key", baseUrl, credentials, allowedOperations = ["http.request"], config = {} }) {
-  await ensureWorkspace();
-  return request("/v1/tools", {
-    method: "POST",
-    body: JSON.stringify({ slug, display_name: displayName, kind, base_url: baseUrl || null, credentials: credentials || {}, config, allowed_operations: allowedOperations }),
-  });
-}
-
-export async function discoverPythonConnector({ slug, displayName, kind, baseUrl, credentials = {}, config = {} }) {
-  await ensureWorkspace();
-  return request("/v1/connectors/discover", {
-    method: "POST",
-    body: JSON.stringify({ slug, display_name: displayName, kind, base_url: baseUrl, credentials, config }),
-  });
-}
-
 export async function testPythonConnection(connectionId) {
   await ensureWorkspace();
   return request(`/v1/connections/${connectionId}/test`, { method: "POST" });

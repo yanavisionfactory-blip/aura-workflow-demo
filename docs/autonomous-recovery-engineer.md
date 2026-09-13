@@ -18,7 +18,7 @@ cannot be reconciled.
 | Capability | Permanent backend behavior |
 | --- | --- |
 | Central run-state ownership | `run_supervisor.transition_run` is the only authorized persisted mutation path. The model flush hook rejects bypasses and emits audit/outbox rows atomically. |
-| Connection refresh and capability probes | Execution preflight refreshes managed and native OAuth connections, standards-based custom OAuth tokens, rediscovered OpenAPI/MCP-style manifests, and a live non-auth-failure endpoint probe. A pass is immutable-plan-bound and expires after `CONNECTION_PROBE_TTL_SECONDS`. |
+| Connection refresh and capability probes | Execution preflight verifies managed-vault and native OAuth references, released capability packs, and live non-auth-failure endpoint probes. A pass is immutable-plan-bound and expires after `CONNECTION_PROBE_TTL_SECONDS`. |
 | Repair malformed plans and arguments | The Recovery Engineer decodes fenced JSON, converts keyed step objects to arrays, restores mechanical required fields, normalizes graphs and aliases, then recompiles connector contracts. Invalid inputs never reach a provider. |
 | Replan while preserving completed steps | A candidate replan is merged with the exact serialized completed checkpoints. Any changed or missing completed checkpoint is restored, and known or uncertain writes are never replayed. |
 | Substitute equivalent tools/providers | Substitution is limited to non-consequential reads already present in the approval permission snapshot. Permission scope, typed output validation, evidence contract, dependencies, and literal resource identity must remain equivalent. |
@@ -57,6 +57,7 @@ the following values.
 | Variable | Value/purpose |
 | --- | --- |
 | `RECOVERY_ENGINEER_ENABLED` | `true` |
+| `SCHEDULER_TICK_TIMEOUT_SECONDS` | Hard ceiling for one recovery cycle; default `300` |
 | `MAX_RECOVERY_ENGINEER_ATTEMPTS` | Bounded workflow-repair attempts; default `3` |
 | `CONNECTION_PROBE_TTL_SECONDS` | Maximum age of a plan-bound successful probe; default `60` |
 | `RECOVERY_GITHUB_REPOSITORY` | `yanavisionfactory-blip/aura-workflow-demo` |
@@ -77,8 +78,8 @@ the following values.
 Create GitHub environments named `recovery-canary` and `recovery-production`. The canary
 must use separate non-customer data stores and no production provider credentials. Keep
 the workflow file on the default branch because GitHub accepts `repository_dispatch`
-only there; the repair checkout and generated PR deliberately target
-`python-control-plane`, the Railway deployment branch.
+only there; the repair checkout and generated PR deliberately target `main`, the
+single Railway and GitHub Pages release branch.
 
 ## Release acceptance
 

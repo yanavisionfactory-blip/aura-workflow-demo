@@ -20,16 +20,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .agent_runtime import deterministic_plan_fixes
 from .autonomous_delivery import reset_read_attempt_cycle
 from .config import get_settings
+from .connector_engineer import (
+    certify_verified_reads,
+    connector_engineer_loop,
+    connector_engineer_observation,
+    connector_engineer_tick,
+    discovered_marketplace,
+    discovered_pipedream_marketplace,
+    release_descriptor,
+    released_connector,
+    released_connectors,
+    requested_marketplace_entry,
+    verify_released_connection,
+)
 from .connector_sdk import ConnectorSDKError, validate_connector_definition
 from .db import SessionLocal, engine, session_dependency, set_tenant_context
 from .dispatch import dispatch_pending, recovery_loop
 from .identity import IdentityError, organization_claims, verify_clerk_session
-from .installation_runtime import (
-    ConnectorInstallationError,
-    exchange_installed_oauth_code,
-    installed_oauth_url,
-    normalized_credentials,
-)
 from .managed_connectors import (
     ManagedConnectorError,
     external_account_reference,
@@ -41,12 +48,14 @@ from .models import (
     Approval,
     ApprovalSnapshot,
     AuditEvent,
+    BrokerCapabilityPack,
     CapabilityManifest,
     ConnectionRequirement,
     ConnectorInstallation,
     ConnectorInstallationVersion,
     ConnectorPackage,
     DeadLetterEntry,
+    ManagedConnectorRelease,
     PlanVersion,
     PolicyConfig,
     PollingSubscription,
@@ -76,6 +85,25 @@ from .native_connectors import (
     public_catalog,
     validate_module_arguments,
 )
+from .pipedream_connect import (
+    PipedreamConnectError,
+    connection_setup_label,
+    connection_strategy,
+    opaque_external_user_id,
+    pipedream_client,
+)
+from .pipedream_connect import (
+    certify_app as certify_pipedream_app,
+)
+from .pipedream_connect import (
+    marketplace_entry as pipedream_marketplace_entry,
+)
+from .pipedream_connect import (
+    pack_signature_valid as pipedream_pack_signature_valid,
+)
+from .pipedream_connect import (
+    released_pack as released_pipedream_pack,
+)
 from .policy import (
     DEFAULT_POLICY,
     TENANT_OVERRIDABLE_POLICY_KEYS,
@@ -100,14 +128,13 @@ from .run_supervisor import SUPERVISOR_VERSION, transition_run
 from .schemas import (
     AiGenerateRequest,
     ApprovalDecision,
-    ConnectionDiscover,
     ConnectionResume,
+    ConnectorBrokerComplete,
     ConnectorDefinitionValidate,
-    ConnectorInstallationCreate,
     ConnectorInstallationRollback,
     ConnectorInstallationUpgrade,
+    ConnectorMarketplaceRequest,
     ConnectorPackageSubmit,
-    CustomOAuthStart,
     InterfaceAnalyzeRequest,
     MemorySearch,
     PlanApproval,
@@ -117,7 +144,6 @@ from .schemas import (
     RecoveryPipelineResult,
     ResumeDecision,
     RunCreate,
-    ToolCreate,
     TrustSignalUpdate,
     WebhookReplayRequest,
     WebhookSubscriptionCreate,
@@ -148,7 +174,6 @@ from .trigger_runtime import (
 from .universal_connectors import (
     ConnectorError,
     discover_provider,
-    normalize_manifest,
     validate_public_endpoint,
     verify_provider,
 )
@@ -182,6 +207,12 @@ async def startup() -> None:
         import asyncio
 
         app.state.recovery_task = asyncio.create_task(recovery_loop())
+    if settings.connector_engineer_enabled:
+        import asyncio
+
+        app.state.connector_engineer_task = asyncio.create_task(
+            connector_engineer_loop(SessionLocal)
+        )
 
 
 @app.on_event("shutdown")
@@ -189,9 +220,13 @@ async def shutdown_recovery() -> None:
     import asyncio
     from contextlib import suppress
 
-    task = getattr(app.state, "recovery_task", None)
-    if task:
+    tasks = [
+        getattr(app.state, "recovery_task", None),
+        getattr(app.state, "connector_engineer_task", None),
+    ]
+    for task in (item for item in tasks if item):
         task.cancel()
+    for task in (item for item in tasks if item):
         with suppress(asyncio.CancelledError):
             await task
 
@@ -299,6 +334,18 @@ async def readiness() -> dict:
         await cache.aclose()
     from .dispatch import scheduler_observation
 
+    scheduler_details = {
+        "enabled": settings.recovery_scheduler_enabled,
+        **scheduler_observation,
+    }
+    connector_engineer_details = {
+        **connector_engineer_observation,
+        "enabled": settings.connector_engineer_enabled,
+        "configured": bool(
+            managed_connector_client().configured
+            and len(settings.connector_release_signing_key) >= 32
+        ),
+    }
     if settings.recovery_scheduler_enabled:
         now = datetime.now(UTC)
         started_at = datetime.fromisoformat(scheduler_observation["started_at"])
@@ -315,14 +362,23 @@ async def readiness() -> dict:
     else:
         checks["recovery_scheduler"] = True
     if not all(checks.values()):
-        raise HTTPException(503, {"status": "not_ready", "checks": checks})
+        # Scheduler diagnostics contain timestamps, stage names, exception types,
+        # and status codes only. Raw errors, payloads, and credentials never enter
+        # the public readiness projection.
+        raise HTTPException(
+            503,
+            {
+                "status": "not_ready",
+                "checks": checks,
+                "recovery_scheduler": scheduler_details,
+                "connector_engineer": connector_engineer_details,
+            },
+        )
     return {
         "status": "ready",
         "checks": checks,
-        "recovery_scheduler": {
-            "enabled": settings.recovery_scheduler_enabled,
-            **scheduler_observation,
-        },
+        "recovery_scheduler": scheduler_details,
+        "connector_engineer": connector_engineer_details,
     }
 
 
@@ -519,6 +575,7 @@ async def list_tools(
                 "enabled": tool.enabled,
                 "external_connection_id": tool.external_connection_id,
                 "external_account_id": tool.external_account_id,
+                "connection_backend": (tool.config or {}).get("managed_by"),
                 "status": manifest.status
                 if manifest
                 else ("connected" if tool.enabled else "disabled"),
@@ -549,14 +606,449 @@ async def managed_connector_status(
 ) -> dict:
     """Expose capabilities, never managed-connector credentials, to the UI."""
     client = managed_connector_client()
-    return {
-        "configured": client.configured,
-        # With a Nango environment key, every AURA provider can be resolved
-        # lazily. The frontend therefore routes only actually-needed apps into
-        # the managed flow and never asks users to configure integration IDs.
-        "providers": sorted(PROVIDERS) if client.configured else [],
-        "auto_provision": bool(client.configured and settings.nango_auto_provision_integrations),
+    long_tail_client = pipedream_client()
+    long_tail_ready = bool(
+        long_tail_client.configured and len(settings.connector_release_signing_key) >= 32
+    )
+    dynamic = await released_connectors(session) if client.configured else []
+    discovered = await discovered_marketplace(session) if client.configured else {
+        "providers": [],
+        "provider_count": 0,
+        "refreshed_at": None,
     }
+    discovered_long_tail = (
+        await discovered_pipedream_marketplace(session)
+        if long_tail_ready
+        else {"providers": [], "provider_count": 0, "refreshed_at": None}
+    )
+    native_catalog = []
+    for slug, definition in sorted(PROVIDERS.items()):
+        backend = "nango" if client.configured else None
+        if backend is None:
+            try:
+                oauth_authorization_url(settings, definition, "catalog-probe")
+            except ValueError:
+                pass
+            else:
+                backend = "native"
+        native_catalog.append(
+            {
+                "provider": slug,
+                "display_name": definition.display_name,
+                "auth_mode": "OAUTH2",
+                "capability_count": len(native_operations(slug)),
+                "capabilities": native_operations(slug),
+                "managed": True,
+                "source": "native",
+                "connection_backend": backend,
+                "availability": "available" if backend else "coming_soon",
+                "connectable": backend is not None,
+            }
+        )
+    dynamic_catalog = [
+        {
+            **release_descriptor(release),
+            "source": "connector_engineer",
+            "connection_backend": "nango",
+            "availability": "available",
+            "connectable": True,
+        }
+        for release in dynamic
+    ]
+    long_tail_packs = list(
+        (
+            await session.scalars(
+                select(BrokerCapabilityPack)
+                .where(
+                    BrokerCapabilityPack.backend == "pipedream",
+                    BrokerCapabilityPack.status == "released",
+                )
+                .order_by(
+                    BrokerCapabilityPack.provider_slug,
+                    BrokerCapabilityPack.version.desc(),
+                )
+            )
+        ).all()
+    )
+    long_tail_catalog = [
+        {
+            "provider": pack.provider_slug,
+            "display_name": pack.display_name,
+            "auth_mode": "OAUTH2",
+            "capability_count": len(pack.definition.get("capabilities") or []),
+            "capabilities": [
+                item.get("name")
+                for item in pack.definition.get("capabilities") or []
+                if item.get("name")
+            ],
+            "managed": True,
+            "source": "connector_broker",
+            "connection_backend": "pipedream",
+            "availability": "available" if long_tail_ready else "coming_soon",
+            "connectable": long_tail_ready,
+        }
+        for pack in long_tail_packs
+        if pipedream_pack_signature_valid(pack)
+    ]
+    available_by_provider = {
+        item["provider"]: item
+        for item in native_catalog + dynamic_catalog + long_tail_catalog
+        if item.get("connectable")
+    }
+    marketplace_by_provider = {
+        item["provider"]: {
+            **item,
+            "availability": "available"
+            if item["provider"] in available_by_provider
+            else "coming_soon"
+            if item.get("eligible_for_one_click")
+            else "coming_soon",
+            "connectable": item["provider"] in available_by_provider,
+        }
+        for item in discovered["providers"]
+    }
+    for item in discovered_long_tail["providers"]:
+        current = marketplace_by_provider.get(item["provider"])
+        if current is None or not current.get("connectable"):
+            marketplace_by_provider[item["provider"]] = item
+    requested_events = list(
+        (
+            await session.scalars(
+                select(AuditEvent)
+                .where(AuditEvent.event_type == "connector.marketplace_requested")
+                .order_by(AuditEvent.created_at.desc())
+                .limit(100)
+            )
+        ).all()
+    )
+    for event in reversed(requested_events):
+        item = requested_marketplace_entry(str((event.payload or {}).get("display_name") or ""))
+        if item["display_name"] and item["provider"] not in marketplace_by_provider:
+            marketplace_by_provider[item["provider"]] = item
+    for provider, item in available_by_provider.items():
+        marketplace_by_provider[provider] = {
+            **marketplace_by_provider.get(provider, {}),
+            **item,
+            "availability": "available",
+            "connectable": True,
+            "eligible_for_one_click": True,
+        }
+    for item in native_catalog + long_tail_catalog:
+        marketplace_by_provider.setdefault(item["provider"], item)
+    native_ready = any(item.get("connectable") for item in native_catalog)
+    released_long_tail_count = len(long_tail_catalog)
+    catalog = [
+        item
+        for item in native_catalog + dynamic_catalog + long_tail_catalog
+        if item.get("connectable")
+    ]
+    return {
+        "configured": bool(client.configured or native_ready or long_tail_ready),
+        # Only built-ins or signed/canaried releases are selectable. Discovery
+        # alone may appear in search, but never creates a Connect action.
+        "providers": sorted(item["provider"] for item in catalog),
+        "catalog": catalog,
+        "marketplace": sorted(
+            marketplace_by_provider.values(),
+            key=lambda item: (not item["connectable"], item["display_name"].casefold()),
+        )
+        if marketplace_by_provider
+        else [],
+        "marketplace_refreshed_at": (
+            discovered_long_tail["refreshed_at"] or discovered["refreshed_at"]
+        ),
+        "auto_provision": bool(client.configured and settings.nango_auto_provision_integrations),
+        "connector_engineer": {
+            "enabled": settings.connector_engineer_enabled,
+            "configured": bool(
+                (client.configured or long_tail_client.configured)
+                and len(settings.connector_release_signing_key) >= 32
+            ),
+            "released": len(dynamic_catalog),
+            "last_scan_completed_at": connector_engineer_observation.get(
+                "last_scan_completed_at"
+            ),
+        },
+        "connector_broker": {
+            "configured": bool(client.configured or native_ready or long_tail_ready),
+            "selection_order": ["nango_certified", "native", "pipedream"],
+            "nango_configured": client.configured,
+            "pipedream_configured": long_tail_ready,
+            "pipedream_released_packs": released_long_tail_count,
+            "oauth_only": False,
+            "connection_strategies": [
+                "oauth",
+                "secure_credentials",
+                "service_account",
+                "mcp",
+                "proxy",
+            ],
+        },
+    }
+
+
+@app.get("/v1/connector-broker/apps")
+async def search_connector_broker_apps(
+    q: str = Query(min_length=2, max_length=160),
+    limit: int = Query(default=30, ge=1, le=50),
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    """Search connector planes while preserving AURA's backend preference order."""
+    query = " ".join(q.split()).casefold()
+    nango = managed_connector_client()
+    long_tail = pipedream_client()
+    long_tail_ready = bool(
+        long_tail.configured and len(settings.connector_release_signing_key) >= 32
+    )
+    entries: dict[str, dict] = {}
+
+    def matches(item: dict) -> bool:
+        haystack = " ".join(
+            [
+                str(item.get("provider") or ""),
+                str(item.get("display_name") or ""),
+                *[str(value) for value in item.get("categories") or []],
+            ]
+        ).casefold()
+        return query in haystack
+
+    for slug, definition in PROVIDERS.items():
+        native_backend = "nango" if nango.configured else None
+        if native_backend is None:
+            try:
+                oauth_authorization_url(settings, definition, "catalog-probe")
+            except ValueError:
+                pass
+            else:
+                native_backend = "native"
+        item = {
+            "provider": slug,
+            "display_name": definition.display_name,
+            "categories": [],
+            "auth_mode": "OAUTH2",
+            "eligible_for_one_click": native_backend is not None,
+            "availability": "available" if native_backend else "coming_soon",
+            "connectable": native_backend is not None,
+            "source": "native",
+            "connection_backend": native_backend,
+            "capability_count": len(native_operations(slug)),
+        }
+        if matches(item):
+            entries[slug] = item
+    if nango.configured:
+        for release in await released_connectors(session):
+            item = {
+                **release_descriptor(release),
+                "availability": "available",
+                "connectable": True,
+                "eligible_for_one_click": True,
+                "source": "connector_engineer",
+                "connection_backend": "nango",
+            }
+            if matches(item):
+                entries[release.provider_slug] = item
+        discovered = await discovered_marketplace(session)
+        for item in discovered["providers"]:
+            if not matches(item) or item["provider"] in entries:
+                continue
+            entries[item["provider"]] = {
+                **item,
+                "availability": "coming_soon",
+                "connectable": False,
+                "connection_backend": None,
+            }
+
+    if long_tail_ready:
+        try:
+            apps = await long_tail.list_apps(q, limit=limit)
+        except PipedreamConnectError:
+            cached = await discovered_pipedream_marketplace(session)
+            for item in cached["providers"]:
+                if not matches(item):
+                    continue
+                current = entries.get(item["provider"])
+                if current is None or not current.get("connectable"):
+                    entries[item["provider"]] = item
+        else:
+            for app_definition in apps:
+                item = pipedream_marketplace_entry(app_definition, connectable=True)
+                current = entries.get(item["provider"])
+                if current is None or not current.get("connectable"):
+                    entries[item["provider"]] = item
+
+    ordered = sorted(
+        entries.values(),
+        key=lambda item: (
+            not bool(item.get("connectable")),
+            query not in str(item.get("display_name") or "").casefold(),
+            str(item.get("display_name") or "").casefold(),
+        ),
+    )[:limit]
+    return {
+        "apps": ordered,
+        "count": len(ordered),
+        "backends": {
+            "nango": nango.configured,
+            "pipedream": long_tail_ready,
+        },
+    }
+
+
+@app.post("/v1/managed-connectors/requests")
+async def request_marketplace_connector(
+    payload: ConnectorMarketplaceRequest,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    """Persist demand for an app without pretending an unsafe connector exists."""
+    entry = requested_marketplace_entry(payload.name)
+    discovered = await discovered_marketplace(session)
+    exact = next(
+        (
+            item
+            for item in discovered["providers"]
+            if str(item.get("provider") or "").casefold() == entry["provider"].casefold()
+            or str(item.get("display_name") or "").casefold()
+            == entry["display_name"].casefold()
+        ),
+        None,
+    )
+    if exact:
+        return {"status": "listed", "entry": exact}
+
+    recent = list(
+        (
+            await session.scalars(
+                select(AuditEvent)
+                .where(
+                    AuditEvent.event_type == "connector.marketplace_requested",
+                    AuditEvent.actor == context.subject,
+                    AuditEvent.created_at >= datetime.now(UTC) - timedelta(hours=1),
+                )
+                .order_by(AuditEvent.created_at.desc())
+                .limit(21)
+            )
+        ).all()
+    )
+    duplicate = next(
+        (
+            event
+            for event in recent
+            if str((event.payload or {}).get("display_name") or "").casefold()
+            == entry["display_name"].casefold()
+        ),
+        None,
+    )
+    if duplicate:
+        return {"status": "requested", "request_id": duplicate.id, "entry": entry}
+    if len(recent) >= 20:
+        raise HTTPException(429, "Too many connector requests; try again later")
+
+    event = AuditEvent(
+        workspace_id=context.workspace_id,
+        actor=context.subject,
+        event_type="connector.marketplace_requested",
+        payload={
+            "provider": entry["provider"],
+            "display_name": entry["display_name"],
+            "source": "marketplace_search",
+        },
+    )
+    session.add(event)
+    await session.commit()
+    return {"status": "requested", "request_id": event.id, "entry": entry}
+
+
+@app.get("/v1/admin/connector-engineer")
+async def connector_engineer_status(
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    if context.role not in {"owner", "admin"}:
+        raise HTTPException(403, "Only tenant administrators may inspect connector releases")
+    releases = list(
+        (
+            await session.scalars(
+                select(ManagedConnectorRelease)
+                .order_by(
+                    ManagedConnectorRelease.provider_slug,
+                    ManagedConnectorRelease.version.desc(),
+                )
+                .limit(250)
+            )
+        ).all()
+    )
+    broker_releases = list(
+        (
+            await session.scalars(
+                select(BrokerCapabilityPack)
+                .order_by(
+                    BrokerCapabilityPack.backend,
+                    BrokerCapabilityPack.provider_slug,
+                    BrokerCapabilityPack.version.desc(),
+                )
+                .limit(250)
+            )
+        ).all()
+    )
+    return {
+        "observation": dict(connector_engineer_observation),
+        "configured": bool(
+            (managed_connector_client().configured or pipedream_client().configured)
+            and len(settings.connector_release_signing_key) >= 32
+        ),
+        "releases": [
+            {
+                "id": release.id,
+                "provider": release.provider_slug,
+                "integration_id": release.integration_id,
+                "version": release.version,
+                "status": release.status,
+                "definition_hash": release.definition_hash,
+                "released_at": release.released_at.isoformat()
+                if release.released_at
+                else None,
+                "canary": {
+                    "passed": (release.evidence or {}).get("canary", {}).get("passed"),
+                    "checked_at": (release.evidence or {}).get("canary", {}).get(
+                        "checked_at"
+                    ),
+                    "operation_count": len(
+                        (release.evidence or {}).get("canary", {}).get("operations", [])
+                    ),
+                },
+            }
+            for release in releases
+        ],
+        "broker_releases": [
+            {
+                "id": release.id,
+                "backend": release.backend,
+                "provider": release.provider_slug,
+                "version": release.version,
+                "status": release.status,
+                "definition_hash": release.definition_hash,
+                "certified_at": release.certified_at.isoformat()
+                if release.certified_at
+                else None,
+                "isolation": (release.evidence or {}).get("isolation") or {},
+                "registry_canary": (release.evidence or {}).get("registry_canary") or {},
+            }
+            for release in broker_releases
+            if pipedream_pack_signature_valid(release)
+        ],
+    }
+
+
+@app.post("/v1/admin/connector-engineer/scan")
+async def scan_connector_engineer_catalog(
+    context: TenantContext = Depends(tenant_context),
+) -> dict:
+    if context.role not in {"owner", "admin"}:
+        raise HTTPException(403, "Only tenant administrators may scan connector releases")
+    summary = await connector_engineer_tick(SessionLocal, force=True)
+    return summary.model_dump(mode="json")
 
 
 @app.post("/v1/managed-connectors/{provider}/session", status_code=201)
@@ -568,8 +1060,10 @@ async def create_managed_connector_session(
     session: AsyncSession = Depends(tenant_session),
 ) -> dict:
     provider = provider.lower()
-    if provider not in PROVIDERS:
+    release = None if provider in PROVIDERS else await released_connector(session, provider)
+    if provider not in PROVIDERS and not release:
         raise HTTPException(404, "Unknown app")
+    release_integration_id = release.integration_id if release else None
     client = managed_connector_client()
     selected_tool = None
     if connection_id:
@@ -600,14 +1094,25 @@ async def create_managed_connector_session(
                     context.subject,
                     selected_reference,
                     include_errors=True,
+                    **(
+                        {"integration_id": release_integration_id}
+                        if release_integration_id
+                        else {}
+                    ),
                 )
                 if not scoped:
                     raise HTTPException(404, "Connection not found")
+            reconnect_arguments = (
+                {"integration_id": release_integration_id}
+                if release_integration_id
+                else {}
+            )
             result = await client.create_reconnect_session(
                 provider,
                 selected_reference,
                 context.workspace_id,
                 context.subject,
+                **reconnect_arguments,
             )
             result.update(
                 {
@@ -618,7 +1123,16 @@ async def create_managed_connector_session(
                 }
             )
         else:
-            matches = await client.find_connections(provider, context.workspace_id, context.subject)
+            matches = await client.find_connections(
+                provider,
+                context.workspace_id,
+                context.subject,
+                **(
+                    {"integration_id": release_integration_id}
+                    if release_integration_id
+                    else {}
+                ),
+            )
             if len(matches) > 1:
                 raise HTTPException(
                     409,
@@ -636,7 +1150,15 @@ async def create_managed_connector_session(
                 )
             if matches:
                 existing = matches[0]
-                integration_id, verification = await client.verify_connection(provider, existing)
+                if release:
+                    integration_id = release.integration_id
+                    verification = await verify_released_connection(
+                        client, release, existing
+                    )
+                else:
+                    integration_id, verification = await client.verify_connection(
+                        provider, existing
+                    )
                 if verification.get("ok"):
                     result = {
                         "already_connected": True,
@@ -651,6 +1173,11 @@ async def create_managed_connector_session(
                         existing["connection_id"],
                         context.workspace_id,
                         context.subject,
+                        **(
+                            {"integration_id": release_integration_id}
+                            if release_integration_id
+                            else {}
+                        ),
                     )
                     result.update(
                         {
@@ -660,7 +1187,14 @@ async def create_managed_connector_session(
                     )
             else:
                 result = await client.create_session(
-                    provider, context.workspace_id, context.subject
+                    provider,
+                    context.workspace_id,
+                    context.subject,
+                    **(
+                        {"integration_id": release_integration_id}
+                        if release_integration_id
+                        else {}
+                    ),
                 )
                 result["mode"] = "connect"
     except ManagedConnectorError as exc:
@@ -677,6 +1211,7 @@ async def create_managed_connector_session(
                 "provider": provider,
                 "connection_id": selected_tool.id if selected_tool else None,
                 "mode": result.get("mode"),
+                "release_id": release.id if release else None,
             },
         )
     )
@@ -695,8 +1230,10 @@ async def sync_managed_connector(
     """Import a managed reference only after credentials and provider access verify."""
     provider = provider.lower()
     definition = PROVIDERS.get(provider)
-    if not definition:
+    release = None if definition else await released_connector(session, provider)
+    if not definition and not release:
         raise HTTPException(404, "Unknown app")
+    release_integration_id = release.integration_id if release else None
     client = managed_connector_client()
     tool = None
     if connection_id:
@@ -720,6 +1257,11 @@ async def sync_managed_connector(
             context.subject,
             selected_reference,
             include_errors=True,
+            **(
+                {"integration_id": release_integration_id}
+                if release_integration_id
+                else {}
+            ),
         )
     except ManagedConnectorError as exc:
         raise HTTPException(503, str(exc)) from exc
@@ -749,7 +1291,11 @@ async def sync_managed_connector(
             "connection_id": tool.id if tool else None,
         }
     try:
-        integration_id, verification = await client.verify_connection(provider, connection)
+        if release:
+            integration_id = release.integration_id
+            verification = await verify_released_connection(client, release, connection)
+        else:
+            integration_id, verification = await client.verify_connection(provider, connection)
     except ManagedConnectorError as exc:
         raise HTTPException(503, str(exc)) from exc
     if not verification.get("ok"):
@@ -772,32 +1318,51 @@ async def sync_managed_connector(
             "connection_id": tool.id if tool else None,
         }
     external_account_id = external_account_reference(provider, connection, verification)
+    capability_manifest = (
+        release.definition.get("manifest") if release else native_manifest(provider)
+    )
+    allowed = (
+        list(verification.get("allowed_operations") or [])
+        if release
+        else native_operations(provider)
+    )
     config = {
         "managed_by": "nango",
         "connection_id": connection["connection_id"],
         "integration_id": integration_id,
         "external_account_id": external_account_id,
+        **(
+            {
+                "connector_release_id": release.id,
+                "connector_release_version": release.version,
+                "connector_release_hash": release.definition_hash,
+            }
+            if release
+            else {}
+        ),
     }
     if tool:
-        tool.display_name = definition.display_name
+        tool.display_name = definition.display_name if definition else release.display_name
         tool.kind = ToolKind.oauth
+        tool.base_url = settings.nango_base_url if release else tool.base_url
         tool.config = config
         tool.encrypted_credentials = CredentialVault().encrypt({})
         tool.external_connection_id = connection["connection_id"]
         tool.external_account_id = external_account_id
-        tool.allowed_operations = native_operations(provider)
+        tool.allowed_operations = allowed
         tool.enabled = True
     else:
         tool = ToolConnection(
             workspace_id=context.workspace_id,
             slug=provider,
-            display_name=definition.display_name,
+            display_name=definition.display_name if definition else release.display_name,
             kind=ToolKind.oauth,
+            base_url=settings.nango_base_url if release else None,
             encrypted_credentials=CredentialVault().encrypt({}),
             external_connection_id=connection["connection_id"],
             external_account_id=external_account_id,
             config=config,
-            allowed_operations=native_operations(provider),
+            allowed_operations=allowed,
             enabled=True,
         )
         session.add(tool)
@@ -813,9 +1378,20 @@ async def sync_managed_connector(
         )
         session.add(record)
     record.status = "verified"
-    record.manifest = native_manifest(provider)
-    record.verification = {**verification, "source": "managed_connector"}
+    record.manifest = capability_manifest
+    record.verification = {
+        **verification,
+        "source": "connector_engineer" if release else "managed_connector",
+    }
     record.verified_at = datetime.now(UTC)
+    if release:
+        await certify_verified_reads(
+            session,
+            context.workspace_id,
+            tool,
+            release,
+            list(verification.get("certified_read_operations") or []),
+        )
     client.clear_authorization_sessions(
         provider,
         context.workspace_id,
@@ -826,7 +1402,11 @@ async def sync_managed_connector(
             workspace_id=context.workspace_id,
             actor=context.subject,
             event_type="connector.managed_authorized",
-            payload={"tool_id": tool.id, "provider": provider},
+            payload={
+                "tool_id": tool.id,
+                "provider": provider,
+                "release_id": release.id if release else None,
+            },
         )
     )
     await session.commit()
@@ -841,77 +1421,344 @@ async def sync_managed_connector(
     }
 
 
-@app.post("/v1/tools", status_code=201)
-async def add_tool(
-    payload: ToolCreate,
+@app.post("/v1/connector-broker/{provider}/session", status_code=201)
+async def create_connector_broker_session(
+    provider: str,
+    connection_id: str | None = None,
     context: TenantContext = Depends(tenant_context),
     session: AsyncSession = Depends(tenant_session),
 ) -> dict:
-    wid = context.workspace_id
-    if payload.kind == "mcp" and not payload.base_url:
-        raise HTTPException(422, "MCP tools require a Streamable HTTP server URL")
-    if payload.kind in {"api_key", "openapi"} and not payload.credentials:
-        raise HTTPException(422, "Credentials are required")
-    manifest = None
-    verification = None
-    if payload.base_url:
-        discovery_config = dict(payload.config)
-        if payload.kind == "api_key" and not discovery_config.get("manifest"):
-            discovery_config["manifest"] = {
-                "name": payload.display_name,
-                "capabilities": [
-                    {
-                        "name": operation,
-                        "permission_scope": operation_scope(operation),
-                        "requires_approval": operation_scope(operation) != "read",
-                    }
-                    for operation in (payload.allowed_operations or ["http.request"])
-                ],
-            }
+    """Select the best connector plane and return only a short-lived browser grant."""
+    provider = requested_marketplace_entry(provider)["provider"]
+    nango = managed_connector_client()
+    selected_tool = None
+    if connection_id:
+        selected_tool = await session.get(ToolConnection, connection_id)
+        if (
+            not selected_tool
+            or selected_tool.workspace_id != context.workspace_id
+            or selected_tool.slug != provider
+        ):
+            raise HTTPException(404, "Connection not found")
+    selected_backend = (selected_tool.config or {}).get("managed_by") if selected_tool else None
+    nango_release = None if provider in PROVIDERS else await released_connector(session, provider)
+    if selected_tool and selected_backend not in {"nango", "pipedream"}:
+        result = await reconnect_connection(
+            connection_id=selected_tool.id,
+            context=context,
+            session=session,
+        )
+        return {**result, "backend": "native", "provider": provider}
+    if (
+        nango.configured
+        and selected_backend != "pipedream"
+        and (provider in PROVIDERS or nango_release)
+    ):
+        result = await create_managed_connector_session(
+            provider=provider,
+            connection_id=connection_id,
+            external_connection_id=None,
+            context=context,
+            session=session,
+        )
+        return {**result, "backend": "nango", "provider": provider}
+    if not selected_tool and provider in PROVIDERS:
         try:
-            manifest = await discover_provider(
-                payload.kind,
-                str(payload.base_url),
-                payload.credentials,
-                discovery_config,
-            )
-            verification = await verify_provider(manifest, payload.credentials)
-        except (ConnectorError, ValueError, httpx.HTTPError) as exc:
-            raise HTTPException(422, f"Connection verification failed: {exc}") from exc
-    tool = ToolConnection(
-        workspace_id=wid,
-        slug=payload.slug,
-        display_name=payload.display_name,
-        kind=ToolKind(payload.kind),
-        base_url=str(payload.base_url) if payload.base_url else None,
-        encrypted_credentials=CredentialVault().encrypt(payload.credentials),
-        config=payload.config,
-        allowed_operations=discovered_operations(manifest)
-        if manifest
-        else payload.allowed_operations,
-    )
-    session.add(tool)
-    await session.flush()
-    if manifest:
-        session.add(
-            CapabilityManifest(
-                workspace_id=wid,
-                tool_id=tool.id,
-                provider_type=payload.kind,
-                status="verified" if verification and verification["ok"] else "degraded",
-                manifest=manifest,
-                verification=verification or {},
-                verified_at=datetime.now(UTC)
-                if verification and verification["ok"]
-                else None,
+            result = await oauth_start(provider=provider, context=context)
+        except HTTPException as exc:
+            if exc.status_code != 503:
+                raise
+        else:
+            return {**result, "backend": "native", "provider": provider}
+
+    client = pipedream_client()
+    if not client.configured or len(settings.connector_release_signing_key) < 32:
+        raise HTTPException(409, "This app is coming soon")
+    if connection_id and selected_backend != "pipedream":
+        raise HTTPException(404, "Connection not found")
+    if not connection_id:
+        selected_tool = await session.scalar(
+            select(ToolConnection).where(
+                ToolConnection.workspace_id == context.workspace_id,
+                ToolConnection.slug == provider,
             )
         )
+    try:
+        app_definition = await client.get_app(provider)
+        strategy = connection_strategy(app_definition)
+        if strategy == "unsupported":
+            raise HTTPException(
+                409,
+                {
+                    "code": "secure_connection_unavailable",
+                    "message": "This app has no supported secure connection route",
+                },
+            )
+        pack = await released_pipedream_pack(session, provider)
+        if pack is None:
+            # This is a data-only contract hydration and schema validation. It
+            # never executes a customer action or asks for provider credentials.
+            pack = await certify_pipedream_app(session, client, app_definition)
+        vendor_app = str(
+            (pack.definition.get("identity") or {}).get("app")
+            or app_definition.get("name_slug")
+            or provider
+        )
+        external_user_id = str(
+            ((selected_tool.config or {}).get("external_user_id") if selected_tool else None)
+            or opaque_external_user_id(context.workspace_id, context.subject, settings)
+        )
+        grant = await client.create_connect_token(external_user_id)
+    except PipedreamConnectError as exc:
+        raise HTTPException(503 if exc.retryable else 409, str(exc)) from exc
+
+    session.add(
+        AuditEvent(
+            workspace_id=context.workspace_id,
+            actor=context.subject,
+            event_type="connector.broker_authorization_started",
+            payload={
+                "provider": provider,
+                "backend": "pipedream",
+                "connection_id": selected_tool.id if selected_tool else None,
+                "capability_pack_id": pack.id,
+                "connection_strategy": strategy,
+            },
+        )
+    )
     await session.commit()
     return {
-        "id": tool.id,
-        "slug": tool.slug,
+        "backend": "pipedream",
+        "provider": provider,
+        "app": vendor_app,
+        "token": grant["token"],
+        "expires_at": grant.get("expires_at"),
+        "external_user_id": external_user_id,
+        "project_environment": settings.pipedream_environment,
+        "account_id": selected_tool.external_connection_id if selected_tool else None,
+        "connection_id": selected_tool.id if selected_tool else None,
+        "connection_strategy": strategy,
+        "setup_hint": connection_setup_label(app_definition),
+    }
+
+
+def _requirement_accepts_tool(requirement: ConnectionRequirement, tool: ToolConnection) -> bool:
+    provider = tool.slug.casefold()
+    capability = str(requirement.capability or "").casefold()
+    provider_hint = str(requirement.provider_hint or "").casefold()
+    allowed = {str(item).casefold() for item in tool.allowed_operations or []}
+    return bool(
+        provider_hint == provider
+        or capability == provider
+        or capability in allowed
+        or (capability.startswith(f"{provider}.") and capability in allowed)
+    )
+
+
+async def _satisfy_matching_connection_requirements(
+    session: AsyncSession,
+    context: TenantContext,
+    tool: ToolConnection,
+) -> list[str]:
+    """Resume only paused runs whose pending requirements this manifest satisfies."""
+    runs = list(
+        (
+            await session.scalars(
+                select(WorkflowRun).where(
+                    WorkflowRun.workspace_id == context.workspace_id,
+                    WorkflowRun.status == RunStatus.waiting_for_action,
+                )
+            )
+        ).all()
+    )
+    resumed: list[str] = []
+    now = datetime.now(UTC)
+    for run in runs:
+        pending = list(
+            (
+                await session.scalars(
+                    select(ConnectionRequirement).where(
+                        ConnectionRequirement.run_id == run.id,
+                        ConnectionRequirement.status == "pending",
+                    )
+                )
+            ).all()
+        )
+        matched = [item for item in pending if _requirement_accepts_tool(item, tool)]
+        if not matched:
+            continue
+        for requirement in matched:
+            requirement.status = "satisfied"
+            requirement.satisfied_by_tool_id = tool.id
+            requirement.satisfied_at = now
+        if len(matched) != len(pending):
+            continue
+        transition_run(
+            run,
+            RunStatus.queued,
+            reason="broker_connection_verified",
+            actor="run-supervisor",
+            phase="planning",
+            supervisor_status="active",
+            error=None,
+            result={},
+            blocker=None,
+        )
+        session.add(
+            AuditEvent(
+                workspace_id=context.workspace_id,
+                run_id=run.id,
+                actor="run-supervisor",
+                event_type="run.connections_satisfied",
+                payload={"connection_id": tool.id, "backend": "pipedream"},
+            )
+        )
+        resumed.append(run.id)
+    return resumed
+
+
+@app.post("/v1/connector-broker/{provider}/complete")
+async def complete_connector_broker_connection(
+    provider: str,
+    payload: ConnectorBrokerComplete,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    """Verify the opaque account server-side, persist its reference, and resume runs."""
+    provider = requested_marketplace_entry(provider)["provider"]
+    client = pipedream_client()
+    if not client.configured or len(settings.connector_release_signing_key) < 32:
+        raise HTTPException(503, "Instant app connections are not configured")
+    pack = await released_pipedream_pack(session, provider)
+    if not pack or not pipedream_pack_signature_valid(pack):
+        raise HTTPException(409, "This app is coming soon")
+    selected_tool = None
+    if payload.connection_id:
+        selected_tool = await session.get(ToolConnection, payload.connection_id)
+        if (
+            not selected_tool
+            or selected_tool.workspace_id != context.workspace_id
+            or selected_tool.slug != provider
+            or (selected_tool.config or {}).get("managed_by") != "pipedream"
+        ):
+            raise HTTPException(404, "Connection not found")
+    external_user_id = str(
+        ((selected_tool.config or {}).get("external_user_id") if selected_tool else None)
+        or opaque_external_user_id(context.workspace_id, context.subject, settings)
+    )
+    vendor_app = str((pack.definition.get("identity") or {}).get("app") or provider)
+    try:
+        verification = await client.verify_account(
+            external_user_id, vendor_app, payload.account_id
+        )
+    except PipedreamConnectError as exc:
+        raise HTTPException(503 if exc.retryable else 409, str(exc)) from exc
+    if not verification.get("ok"):
+        raise HTTPException(
+            409,
+            {
+                "code": str(verification.get("reason") or "authorization_required"),
+                "message": "The provider did not confirm this account",
+            },
+        )
+
+    tool = selected_tool
+    if tool is None:
+        tool = await session.scalar(
+            select(ToolConnection).where(
+                ToolConnection.workspace_id == context.workspace_id,
+                ToolConnection.slug == provider,
+            )
+        )
+
+    capabilities = list(pack.definition.get("capabilities") or [])
+    allowed = [str(item["name"]) for item in capabilities if item.get("name")]
+    connection_config = {
+        "managed_by": "pipedream",
+        "external_user_id": external_user_id,
+        "connection_strategy": str(
+            pack.definition.get("connection_strategy") or "secure_credentials"
+        ),
+        "execution_strategy": str(
+            pack.definition.get("execution_strategy") or "action"
+        ),
+        "capability_pack_id": pack.id,
+        "capability_pack_version": pack.version,
+        "capability_pack_hash": pack.definition_hash,
+    }
+    if tool:
+        tool.display_name = pack.display_name
+        tool.kind = ToolKind.oauth
+        tool.base_url = None
+        tool.encrypted_credentials = CredentialVault().encrypt({})
+        tool.external_connection_id = payload.account_id
+        tool.external_account_id = payload.account_id
+        tool.config = connection_config
+        tool.allowed_operations = allowed
+        tool.enabled = True
+    else:
+        tool = ToolConnection(
+            workspace_id=context.workspace_id,
+            slug=provider,
+            display_name=pack.display_name,
+            kind=ToolKind.oauth,
+            base_url=None,
+            encrypted_credentials=CredentialVault().encrypt({}),
+            external_connection_id=payload.account_id,
+            external_account_id=payload.account_id,
+            config=connection_config,
+            allowed_operations=allowed,
+            enabled=True,
+        )
+        session.add(tool)
+        await session.flush()
+    manifest = await session.scalar(
+        select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id)
+    )
+    if not manifest:
+        manifest = CapabilityManifest(
+            workspace_id=context.workspace_id,
+            tool_id=tool.id,
+            provider_type="pipedream",
+        )
+        session.add(manifest)
+    manifest.status = "verified"
+    manifest.manifest = pack.definition
+    manifest.verification = {
+        **verification,
+        "source": "connector_broker",
+        "backend": "pipedream",
+        "capability_pack_id": pack.id,
+    }
+    manifest.verified_at = datetime.now(UTC)
+    resumed_run_ids = await _satisfy_matching_connection_requirements(
+        session, context, tool
+    )
+    session.add(
+        AuditEvent(
+            workspace_id=context.workspace_id,
+            actor=context.subject,
+            event_type="connector.broker_authorized",
+            payload={
+                "tool_id": tool.id,
+                "provider": provider,
+                "backend": "pipedream",
+                "capability_pack_id": pack.id,
+                "resumed_run_ids": resumed_run_ids,
+            },
+        )
+    )
+    await session.commit()
+    if resumed_run_ids:
+        await dispatch_pending(context.workspace_id)
+    return {
         "connected": True,
-        "capabilities": tool.allowed_operations,
+        "status": "verified",
+        "tool_id": tool.id,
+        "connection_id": tool.id,
+        "identity": verification.get("identity") or {},
+        "authorized_scopes": verification.get("authorized_scopes") or [],
+        "resumed_run_ids": resumed_run_ids,
     }
 
 
@@ -944,137 +1791,6 @@ async def connector_catalog() -> dict:
             settings.browser_connector_url and settings.browser_connector_token
         ),
     }
-
-
-@app.post("/v1/connector-installations", status_code=201)
-async def install_connector_package(
-    payload: ConnectorInstallationCreate,
-    context: TenantContext = Depends(tenant_context),
-    session: AsyncSession = Depends(tenant_session),
-) -> dict:
-    package = await session.get(ConnectorPackage, payload.package_id)
-    if not package or package.workspace_id != context.workspace_id or package.status != "published":
-        raise HTTPException(404, "Published connector package not found")
-    existing = await session.scalar(
-        select(ConnectorInstallation).where(
-            ConnectorInstallation.workspace_id == context.workspace_id,
-            ConnectorInstallation.slug == package.slug,
-        )
-    )
-    if existing:
-        raise HTTPException(409, "This connector is already installed")
-    authentication = package.definition.get("authentication", {"type": "none"})
-    if payload.authentication_type != authentication.get("type", "none"):
-        raise HTTPException(422, "Selected authentication does not match the package")
-    try:
-        credentials = normalized_credentials(payload.authentication_type, payload.credentials)
-    except ConnectorInstallationError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    manifest = package.definition["manifest"]
-    verification = {"ok": False, "reason": "awaiting_oauth_callback"}
-    if payload.authentication_type != "oauth2":
-        try:
-            verification = await verify_provider(manifest, credentials)
-        except (ConnectorError, httpx.HTTPError, ValueError) as exc:
-            raise HTTPException(422, f"Connector verification failed: {exc}") from exc
-        if not verification.get("ok"):
-            raise HTTPException(422, "Connector credentials could not be verified")
-    tool = ToolConnection(
-        workspace_id=context.workspace_id,
-        slug=package.slug,
-        display_name=package.definition["name"],
-        kind=(ToolKind.oauth if payload.authentication_type == "oauth2" else ToolKind.api_key),
-        base_url=manifest["base_url"],
-        encrypted_credentials=CredentialVault().encrypt(credentials),
-        config={
-            **payload.configuration,
-            "connector_package_id": package.id,
-            "oauth_custom": payload.authentication_type == "oauth2",
-            "token_url": authentication.get("token_url"),
-            "scopes": authentication.get("scopes", []),
-            "token_params": authentication.get("token_params", {}),
-            "token_auth_method": authentication.get("token_auth_method", "client_secret_post"),
-            "manifest": manifest,
-        },
-        allowed_operations=[item["name"] for item in manifest.get("capabilities", [])],
-        enabled=payload.authentication_type != "oauth2",
-    )
-    session.add(tool)
-    await session.flush()
-    installation = ConnectorInstallation(
-        workspace_id=context.workspace_id,
-        slug=package.slug,
-        package_id=package.id,
-        tool_id=tool.id,
-        status=("authorizing" if payload.authentication_type == "oauth2" else "active"),
-        authentication_type=payload.authentication_type,
-        encrypted_auth_config=(
-            CredentialVault().encrypt(credentials)
-            if payload.authentication_type == "oauth2"
-            else None
-        ),
-        configuration=payload.configuration,
-        created_by=context.subject,
-    )
-    session.add(installation)
-    await session.flush()
-    session.add(
-        ConnectorInstallationVersion(
-            workspace_id=context.workspace_id,
-            installation_id=installation.id,
-            sequence=1,
-            package_id=package.id,
-            action="install",
-            created_by=context.subject,
-        )
-    )
-    capability_record = CapabilityManifest(
-        workspace_id=context.workspace_id,
-        tool_id=tool.id,
-        provider_type="connector_sdk",
-        status=("pending" if payload.authentication_type == "oauth2" else "verified"),
-        manifest=manifest,
-        verification={
-            **verification,
-            "source": "connector_installation",
-        },
-        verified_at=(
-            None if payload.authentication_type == "oauth2" else datetime.now(UTC)
-        ),
-    )
-    session.add(capability_record)
-    session.add(
-        AuditEvent(
-            workspace_id=context.workspace_id,
-            actor=context.subject,
-            event_type="connector.installed",
-            payload={
-                "installation_id": installation.id,
-                "package_id": package.id,
-                "slug": package.slug,
-                "authentication_type": payload.authentication_type,
-            },
-        )
-    )
-    response = {
-        "id": installation.id,
-        "slug": installation.slug,
-        "package_version": package.version,
-        "status": installation.status,
-        "tool_id": tool.id,
-        "modules": tool.allowed_operations,
-    }
-    if payload.authentication_type == "oauth2":
-        callback_url = oauth_route_callback_url(settings, "installation")
-        state = create_oauth_state(context.workspace_id, f"installation:{installation.id}")
-        try:
-            response["authorization_url"] = installed_oauth_url(
-                authentication, credentials, state, callback_url
-            )
-        except ConnectorInstallationError as exc:
-            raise HTTPException(422, str(exc)) from exc
-    await session.commit()
-    return response
 
 
 @app.get("/v1/connector-installations")
@@ -1900,79 +2616,6 @@ async def receive_webhook(
     return {"delivery_id": delivery.id, "run_id": run.id, "status": "queued"}
 
 
-@app.post("/v1/connectors/discover", status_code=201)
-async def discover_connector(
-    payload: ConnectionDiscover,
-    context: TenantContext = Depends(tenant_context),
-    session: AsyncSession = Depends(tenant_session),
-) -> dict:
-    try:
-        manifest = await discover_provider(
-            payload.kind,
-            str(payload.base_url),
-            payload.credentials,
-            payload.config,
-        )
-        verification = await verify_provider(manifest, payload.credentials)
-    except (ConnectorError, ValueError, httpx.HTTPError) as exc:
-        raise HTTPException(422, f"Connector discovery failed: {exc}") from exc
-    if not verification["ok"]:
-        raise HTTPException(422, {"message": "Connector verification failed", **verification})
-    existing = await session.scalar(
-        select(ToolConnection).where(
-            ToolConnection.workspace_id == context.workspace_id,
-            ToolConnection.slug == payload.slug,
-        )
-    )
-    if existing:
-        raise HTTPException(409, "A connection with this slug already exists")
-    tool = ToolConnection(
-        workspace_id=context.workspace_id,
-        slug=payload.slug,
-        display_name=payload.display_name,
-        kind=ToolKind(payload.kind),
-        base_url=str(payload.base_url),
-        encrypted_credentials=CredentialVault().encrypt(payload.credentials),
-        config=payload.config,
-        allowed_operations=discovered_operations(manifest),
-        enabled=True,
-    )
-    session.add(tool)
-    await session.flush()
-    record = CapabilityManifest(
-        workspace_id=context.workspace_id,
-        tool_id=tool.id,
-        provider_type=payload.kind,
-        status="verified",
-        manifest=manifest,
-        verification=verification,
-        verified_at=datetime.now(UTC),
-    )
-    session.add(record)
-    session.add(
-        AuditEvent(
-            workspace_id=context.workspace_id,
-            actor=context.subject,
-            event_type="connector.verified",
-            payload={
-                "tool_id": tool.id,
-                "slug": tool.slug,
-                "kind": payload.kind,
-                "capabilities": tool.allowed_operations,
-            },
-        )
-    )
-    await session.commit()
-    return {
-        "id": tool.id,
-        "slug": tool.slug,
-        "connected": True,
-        "status": record.status,
-        "capabilities": manifest["capabilities"],
-        "verification": verification,
-    }
-
-
 @app.post("/v1/connections/{connection_id}/test")
 async def test_connection(
     connection_id: str,
@@ -1987,12 +2630,79 @@ async def test_connection(
     )
     if not manifest:
         raise HTTPException(409, "Connection has no discovered capability manifest")
+    if tool.config.get("managed_by") == "pipedream":
+        pack_id = (tool.config or {}).get("capability_pack_id")
+        pack = await session.get(BrokerCapabilityPack, pack_id) if pack_id else None
+        external_user_id = str((tool.config or {}).get("external_user_id") or "")
+        account_id = str(tool.external_connection_id or "")
+        trusted = bool(
+            pack
+            and pack.backend == "pipedream"
+            and pack.provider_slug == tool.slug
+            and pack.status in {"released", "superseded"}
+            and pack.definition_hash == (tool.config or {}).get("capability_pack_hash")
+            and pipedream_pack_signature_valid(pack)
+        )
+        if not trusted or not external_user_id or not account_id:
+            result = {
+                "ok": False,
+                "reason": "connector_release_unavailable",
+                "retryable": False,
+            }
+        else:
+            try:
+                result = await pipedream_client().verify_account(
+                    external_user_id, tool.slug, account_id
+                )
+            except PipedreamConnectError as exc:
+                result = {
+                    "ok": False,
+                    "reason": "provider_temporarily_unavailable"
+                    if exc.retryable
+                    else "authorization_required",
+                    "retryable": exc.retryable,
+                }
+        manifest.verification = {
+            **result,
+            "source": "connector_broker",
+            "backend": "pipedream",
+        }
+        manifest.status = "verified" if result.get("ok") else "degraded"
+        manifest.verified_at = datetime.now(UTC)
+        tool.enabled = bool(result.get("ok"))
+        await session.commit()
+        return {"id": tool.id, "status": manifest.status, "verification": result}
     if tool.config.get("managed_by") == "nango":
         try:
             selected_reference = managed_connection_reference(tool) or tool.config["connection_id"]
-            _, result = await managed_connector_client().verify_connection(
-                tool.slug, {"connection_id": selected_reference}
+            release_id = (tool.config or {}).get("connector_release_id")
+            release = (
+                await session.get(ManagedConnectorRelease, release_id)
+                if release_id
+                else None
             )
+            if release_id:
+                from .connector_engineer import release_signature_valid
+
+                if (
+                    not release
+                    or release.status not in {"released", "superseded"}
+                    or not release_signature_valid(release)
+                ):
+                    release = await released_connector(session, tool.slug)
+                if not release:
+                    raise ManagedConnectorError(
+                        "The connector release is temporarily unavailable"
+                    )
+                result = await verify_released_connection(
+                    managed_connector_client(),
+                    release,
+                    {"connection_id": selected_reference},
+                )
+            else:
+                _, result = await managed_connector_client().verify_connection(
+                    tool.slug, {"connection_id": selected_reference}
+                )
         except (ManagedConnectorError, KeyError):
             result = {"ok": False, "reason": "authorization_required"}
         manifest.verification = result
@@ -2002,6 +2712,23 @@ async def test_connection(
             tool.external_connection_id = selected_reference
             if not tool.external_account_id:
                 tool.external_account_id = external_account_reference(tool.slug, {}, result)
+            if release_id and release:
+                tool.config = {
+                    **(tool.config or {}),
+                    "integration_id": release.integration_id,
+                    "connector_release_id": release.id,
+                    "connector_release_version": release.version,
+                    "connector_release_hash": release.definition_hash,
+                }
+                tool.allowed_operations = list(result.get("allowed_operations") or [])
+                manifest.manifest = release.definition.get("manifest") or {}
+                await certify_verified_reads(
+                    session,
+                    context.workspace_id,
+                    tool,
+                    release,
+                    list(result.get("certified_read_operations") or []),
+                )
         manifest.verified_at = datetime.now(UTC)
         await session.commit()
         return {"id": tool.id, "status": manifest.status, "verification": result}
@@ -2047,6 +2774,37 @@ async def disconnect_connection(
     tool = await session.get(ToolConnection, connection_id)
     if not tool or tool.workspace_id != context.workspace_id:
         raise HTTPException(404, "Connection not found")
+    if tool.config.get("managed_by") == "pipedream":
+        revocation = {"attempted": True, "ok": True, "managed": True}
+        try:
+            account_id = str(tool.external_connection_id or "")
+            if not account_id:
+                raise PipedreamConnectError("Account reference is missing", retryable=False)
+            await pipedream_client().delete_account(account_id)
+        except PipedreamConnectError:
+            revocation["ok"] = False
+        tool.enabled = False
+        tool.encrypted_credentials = None
+        manifest = await session.scalar(
+            select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id)
+        )
+        if manifest:
+            manifest.status = "revoked"
+        session.add(
+            AuditEvent(
+                workspace_id=context.workspace_id,
+                actor=context.subject,
+                event_type="connector.revoked",
+                payload={
+                    "tool_id": tool.id,
+                    "slug": tool.slug,
+                    "backend": "pipedream",
+                    "provider_revocation": revocation,
+                },
+            )
+        )
+        await session.commit()
+        return {"id": tool.id, "status": "revoked", "provider_revocation": revocation}
     if tool.config.get("managed_by") == "nango":
         revocation = {"attempted": True, "ok": True, "managed": True}
         try:
@@ -2145,6 +2903,14 @@ async def reconnect_connection(
             "This connector is re-verified with Test; replace its credentials to reauthorize it",
         )
     previous_updated_at = tool.updated_at.isoformat() if tool.updated_at else None
+    if tool.config.get("managed_by") == "pipedream":
+        result = await create_connector_broker_session(
+            provider=tool.slug,
+            connection_id=tool.id,
+            context=context,
+            session=session,
+        )
+        return {**result, "previous_updated_at": previous_updated_at}
     if tool.config.get("managed_by") == "nango":
         try:
             selected_reference = managed_connection_reference(tool)
@@ -2341,86 +3107,6 @@ async def oauth_start(
     return {"authorization_url": authorization_url}
 
 
-@app.post("/v1/oauth/custom/start", status_code=201)
-async def custom_oauth_start(
-    payload: CustomOAuthStart,
-    context: TenantContext = Depends(tenant_context),
-    session: AsyncSession = Depends(tenant_session),
-) -> dict:
-    for endpoint in (payload.authorization_url, payload.token_url, payload.api_base_url):
-        validate_public_endpoint(str(endpoint))
-    if payload.revocation_url:
-        validate_public_endpoint(str(payload.revocation_url))
-    existing = await session.scalar(
-        select(ToolConnection).where(
-            ToolConnection.workspace_id == context.workspace_id,
-            ToolConnection.slug == payload.slug,
-        )
-    )
-    if existing:
-        raise HTTPException(409, "A connection with this slug already exists")
-    manifest = normalize_manifest(
-        {
-            "name": payload.display_name,
-            "capabilities": payload.capabilities,
-            "identity": {"oauth": "custom"},
-        },
-        "oauth",
-        str(payload.api_base_url),
-    )
-    tool = ToolConnection(
-        workspace_id=context.workspace_id,
-        slug=payload.slug,
-        display_name=payload.display_name,
-        kind=ToolKind.oauth,
-        base_url=str(payload.api_base_url),
-        encrypted_credentials=CredentialVault().encrypt(
-            {"client_id": payload.client_id, "client_secret": payload.client_secret}
-        ),
-        config={
-            "oauth_custom": True,
-            "authorization_url": str(payload.authorization_url),
-            "token_url": str(payload.token_url),
-            "revocation_url": str(payload.revocation_url) if payload.revocation_url else None,
-            "scopes": payload.scopes,
-            "authorization_params": payload.authorization_params,
-            "token_params": payload.token_params,
-            "token_auth_method": payload.token_auth_method,
-            "manifest": manifest,
-        },
-        allowed_operations=[item["name"] for item in manifest["capabilities"]],
-        enabled=False,
-    )
-    session.add(tool)
-    await session.flush()
-    session.add(
-        CapabilityManifest(
-            workspace_id=context.workspace_id,
-            tool_id=tool.id,
-            provider_type="oauth",
-            status="pending",
-            manifest=manifest,
-            verification={"ok": False, "reason": "awaiting_oauth_callback"},
-        )
-    )
-    state = create_oauth_state(context.workspace_id, f"custom:{tool.id}")
-    params = {
-        "client_id": payload.client_id,
-        "redirect_uri": oauth_route_callback_url(settings, "custom"),
-        "response_type": "code",
-        "state": state,
-        **payload.authorization_params,
-    }
-    if payload.scopes:
-        params["scope"] = " ".join(payload.scopes)
-    await session.commit()
-    return {
-        "authorization_url": f"{payload.authorization_url!s}?{urlencode(params)}",
-        "connection_id": tool.id,
-        "slug": tool.slug,
-    }
-
-
 @app.get("/v1/oauth/{provider}/callback")
 async def oauth_callback(
     provider: str,
@@ -2443,128 +3129,6 @@ async def oauth_callback(
         return RedirectResponse(
             f"{frontend_url}?{urlencode({'oauth_provider': safe_provider, 'oauth_status': 'error', 'oauth_message': message})}"
         )
-    if provider == "installation" and state_provider.startswith("installation:"):
-        installation_id = state_provider.split(":", 1)[1]
-        wid = claims["workspace_id"]
-        await set_tenant_context(session, wid)
-        installation = await session.get(ConnectorInstallation, installation_id)
-        if (
-            not installation
-            or installation.workspace_id != wid
-            or installation.status != "authorizing"
-        ):
-            raise HTTPException(404, "Pending connector authorization not found")
-        package = await session.get(ConnectorPackage, installation.package_id)
-        tool = await session.get(ToolConnection, installation.tool_id)
-        if not package or not tool:
-            raise HTTPException(404, "Connector installation is incomplete")
-        authentication = package.definition.get("authentication", {})
-        stored = CredentialVault().decrypt(installation.encrypted_auth_config)
-        callback_url = oauth_route_callback_url(settings, "installation")
-        try:
-            credentials = await exchange_installed_oauth_code(
-                authentication, stored, code, callback_url
-            )
-        except (ConnectorInstallationError, httpx.HTTPError, ValueError) as exc:
-            raise HTTPException(502, f"Connector OAuth exchange failed: {exc}") from exc
-        try:
-            verification = await verify_provider(package.definition["manifest"], credentials)
-        except (ConnectorError, httpx.HTTPError, ValueError) as exc:
-            raise HTTPException(502, f"Connector verification failed: {exc}") from exc
-        if not verification.get("ok"):
-            raise HTTPException(502, "Authorized connector could not be verified")
-        tool.encrypted_credentials = CredentialVault().encrypt(credentials)
-        tool.enabled = True
-        installation.status = "active"
-        installation.encrypted_auth_config = None
-        record = await session.scalar(
-            select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id)
-        )
-        record.status = "verified"
-        record.verification = {
-            **verification,
-            "source": "connector_installation_oauth",
-        }
-        record.verified_at = datetime.now(UTC)
-        session.add(
-            AuditEvent(
-                workspace_id=wid,
-                actor="oauth_callback",
-                event_type="connector.installation_authorized",
-                payload={
-                    "installation_id": installation.id,
-                    "package_id": package.id,
-                    "slug": installation.slug,
-                },
-            )
-        )
-        await session.commit()
-        return RedirectResponse(f"{frontend_url}?tool_connected={installation.slug}")
-    if provider == "custom" and state_provider.startswith("custom:"):
-        tool_id = state_provider.split(":", 1)[1]
-        wid = claims["workspace_id"]
-        await set_tenant_context(session, wid)
-        tool = await session.get(ToolConnection, tool_id)
-        if not tool or tool.workspace_id != wid or not tool.config.get("oauth_custom"):
-            raise HTTPException(404, "Pending OAuth connection not found")
-        stored = CredentialVault().decrypt(tool.encrypted_credentials)
-        token_payload = {
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": oauth_route_callback_url(settings, "custom"),
-            **tool.config.get("token_params", {}),
-        }
-        auth = None
-        method = tool.config.get("token_auth_method", "client_secret_post")
-        if method == "client_secret_basic":
-            auth = (stored["client_id"], stored.get("client_secret", ""))
-        elif method == "client_secret_post":
-            token_payload.update(
-                {"client_id": stored["client_id"], "client_secret": stored.get("client_secret", "")}
-            )
-        else:
-            token_payload["client_id"] = stored["client_id"]
-        try:
-            validate_public_endpoint(tool.config["token_url"])
-            async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
-                response = await client.post(
-                    tool.config["token_url"],
-                    data=token_payload,
-                    auth=auth,
-                    headers={"Accept": "application/json"},
-                )
-                response.raise_for_status()
-                token_data = response.json()
-        except (ConnectorError, httpx.HTTPError, ValueError) as exc:
-            raise HTTPException(502, f"OAuth token exchange failed: {exc}") from exc
-        if not token_data.get("access_token"):
-            raise HTTPException(502, "OAuth provider did not return an access token")
-        if token_data.get("expires_in"):
-            token_data["expires_at"] = int(datetime.now(UTC).timestamp()) + int(
-                token_data["expires_in"]
-            )
-        tool.encrypted_credentials = CredentialVault().encrypt({**stored, **token_data})
-        tool.enabled = True
-        capability_record = await session.scalar(
-            select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id)
-        )
-        capability_record.status = "verified"
-        capability_record.verification = {"ok": True, "source": "custom_oauth_callback"}
-        capability_record.verified_at = datetime.now(UTC)
-        session.add(
-            AuditEvent(
-                workspace_id=wid,
-                actor="oauth_callback",
-                event_type="connector.oauth_authorized",
-                payload={
-                    "tool_id": tool.id,
-                    "slug": tool.slug,
-                    "scopes": tool.config.get("scopes", []),
-                },
-            )
-        )
-        await session.commit()
-        return RedirectResponse(f"{frontend_url}?tool_connected={tool.slug}")
     if oauth_callback_matches(settings, state_provider, provider):
         provider = state_provider
     if state_provider != provider:
@@ -3243,8 +3807,6 @@ async def resume_after_connection(
     run = await session.get(WorkflowRun, run_id)
     if not run or run.workspace_id != context.workspace_id:
         raise HTTPException(404, "Run not found")
-    if run.status != RunStatus.waiting_for_action:
-        raise HTTPException(409, "Run is not waiting for a connection")
     tool = None
     if payload.connection_id:
         tool = await session.get(ToolConnection, payload.connection_id)
@@ -3258,6 +3820,24 @@ async def resume_after_connection(
         )
         if not manifest:
             raise HTTPException(409, "Connection has not passed capability verification")
+    if run.status != RunStatus.waiting_for_action:
+        if run.status in {RunStatus.queued, RunStatus.planning} and tool:
+            pending_count = int(
+                await session.scalar(
+                    select(func.count(ConnectionRequirement.id)).where(
+                        ConnectionRequirement.run_id == run.id,
+                        ConnectionRequirement.status == "pending",
+                    )
+                )
+                or 0
+            )
+            if pending_count == 0:
+                return {
+                    "id": run.id,
+                    "status": run.status.value,
+                    "already_resumed": True,
+                }
+        raise HTTPException(409, "Run is not waiting for a connection")
     requirements = (
         await session.scalars(
             select(ConnectionRequirement).where(

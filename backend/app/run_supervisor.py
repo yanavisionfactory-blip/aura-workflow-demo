@@ -33,6 +33,32 @@ class _Unset:
 
 UNSET = _Unset()
 AUTO_DISPATCH = "auto"
+MAX_RECOVERY_COUNTER = 1_000_000
+
+
+def recovery_counter(value: object, default: int = 0) -> int:
+    """Normalize untrusted persisted counters from older runtime versions.
+
+    Recovery metadata is intentionally schema-flexible JSON so deployments can
+    resume runs written by older releases. A legacy ``null`` or malformed value
+    must consume the safe default instead of crashing the global scheduler.
+    """
+    try:
+        parsed = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        parsed = default
+    return min(MAX_RECOVERY_COUNTER, max(0, parsed))
+
+
+def recovery_mapping(value: object) -> dict[str, Any]:
+    """Return a detached mapping for schema-flexible persisted recovery state."""
+    return deepcopy(value) if isinstance(value, dict) else {}
+
+
+def recovery_list(value: object) -> list[Any]:
+    """Return a detached list without interpreting malformed legacy values."""
+    return deepcopy(value) if isinstance(value, list) else []
+
 
 # This is the complete persistence state machine.  Components can request a
 # transition, but they cannot invent another edge or mutate ``WorkflowRun.status``
@@ -165,8 +191,8 @@ def transition_run(
 
     now = datetime.now(UTC)
     context = deepcopy(run.execution_context or {})
-    state = deepcopy(context.get(SUPERVISOR_KEY) or {})
-    sequence = int(state.get("transition_sequence", 0)) + 1
+    state = recovery_mapping(context.get(SUPERVISOR_KEY))
+    sequence = recovery_counter(state.get("transition_sequence")) + 1
     resolved_phase = (
         phase or state.get("phase") or ("execution" if run.plan_approved else "planning")
     )
@@ -308,7 +334,7 @@ def _planning_action(category: str, attempt: int) -> str:
 
 
 def supervisor_state(run: WorkflowRun) -> dict:
-    return deepcopy((run.execution_context or {}).get(SUPERVISOR_KEY) or {})
+    return recovery_mapping((run.execution_context or {}).get(SUPERVISOR_KEY))
 
 
 def _failure_fingerprint(category: str, exc: BaseException) -> str:
@@ -333,12 +359,13 @@ async def recover_planning_failure(
     defect must not burn money forever, and is handed to the internal repair queue.
     """
     context = deepcopy(run.execution_context or {})
-    state = deepcopy(context.get(SUPERVISOR_KEY) or {})
-    attempt = int(state.get("attempts", {}).get("planning", 0)) + 1
+    state = recovery_mapping(context.get(SUPERVISOR_KEY))
+    attempts = state.get("attempts") if isinstance(state.get("attempts"), dict) else {}
+    attempt = recovery_counter(attempts.get("planning")) + 1
     category = planning_failure_category(exc)
     fingerprint = _failure_fingerprint(category, exc)
     action = _planning_action(category, attempt)
-    history = list(state.get("failure_history") or [])[-19:]
+    history = recovery_list(state.get("failure_history"))[-19:]
     history.append(
         {
             "phase": "planning",
@@ -348,7 +375,7 @@ async def recover_planning_failure(
             "at": datetime.now(UTC).isoformat(),
         }
     )
-    attempts = {**(state.get("attempts") or {}), "planning": attempt}
+    attempts = {**attempts, "planning": attempt}
     state = {
         **state,
         "version": SUPERVISOR_VERSION,
@@ -473,7 +500,7 @@ def mark_supervisor_phase(run: WorkflowRun, phase: str, status: str) -> None:
 
 def is_unavoidable_human_blocker(blocker: dict | None) -> bool:
     return bool(
-        blocker
+        isinstance(blocker, dict)
         and blocker.get("kind") == "human_action"
         and blocker.get("code") in HUMAN_ACTION_CODES
     )
@@ -501,7 +528,11 @@ def public_run_projection(run: WorkflowRun, blocker: dict | None) -> dict:
                     if state.get("status") == "operator_attention"
                     else "recovering"
                 ),
-                "attempt": int((state.get("attempts") or {}).get(state.get("phase"), 0)),
+                "attempt": recovery_counter(
+                    (state.get("attempts") or {}).get(state.get("phase"))
+                    if isinstance(state.get("attempts"), dict)
+                    else None
+                ),
                 "completed_work_preserved": True,
                 "browser_independent": True,
             },

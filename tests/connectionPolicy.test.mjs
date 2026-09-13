@@ -39,3 +39,22 @@ test("normal workflow surfaces do not mount technical connector dialogs", () => 
     assert.equal(source.includes("aura:open-connections"), false, file);
   }
 });
+
+test("browser code cannot submit provider secrets directly to AURA", () => {
+  const source = readFileSync(
+    new URL("../src/lib/auraApi.js", import.meta.url),
+    "utf8",
+  );
+  for (const forbidden of [
+    "request(\"/v1/tools\", {",
+    "/v1/connectors/discover",
+    "/v1/oauth/custom/start",
+    "authorizeCustomOAuth",
+    "addPythonTool",
+    "discoverPythonConnector",
+  ]) {
+    assert.equal(source.includes(forbidden), false, forbidden);
+  }
+  assert.equal(source.includes("/v1/connector-broker/"), true);
+  assert.equal(source.includes("completeConnectorBrokerConnection"), true);
+});

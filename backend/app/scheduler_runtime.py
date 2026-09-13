@@ -17,6 +17,8 @@ from .models import (
 from .run_supervisor import (
     SUPERVISOR_VERSION,
     is_unavoidable_human_blocker,
+    recovery_counter,
+    recovery_mapping,
     transition_run,
 )
 
@@ -33,13 +35,43 @@ def next_occurrence(current: datetime, interval_seconds: int) -> datetime:
 def recovery_action(status: RunStatus, execution_context: dict | None = None) -> str | None:
     if status in (RunStatus.queued, RunStatus.planning):
         return "plan"
-    if status == RunStatus.recovering and (
-        (execution_context or {}).get("__aura_supervisor__", {}).get("phase") == "planning"
-    ):
+    context = execution_context if isinstance(execution_context, dict) else {}
+    supervisor = recovery_mapping(context.get("__aura_supervisor__"))
+    if status == RunStatus.recovering and supervisor.get("phase") == "planning":
         return "plan"
     if status in (RunStatus.running, RunStatus.recovering):
         return "execute"
     return None
+
+
+def _autonomous_handoff_is_current(execution_context: dict | None, autonomy_version: int) -> bool:
+    context = execution_context if isinstance(execution_context, dict) else {}
+    state = recovery_mapping(context.get("__aura_autonomy__"))
+    return bool(
+        state.get("handoff_reason_code")
+        and recovery_counter(state.get("version")) >= autonomy_version
+    )
+
+
+def _recovery_engineer_candidate(run: WorkflowRun) -> bool:
+    context = run.execution_context if isinstance(run.execution_context, dict) else {}
+    supervisor = recovery_mapping(context.get("__aura_supervisor__"))
+    incident = recovery_mapping(supervisor.get("repair_incident"))
+    autonomy = recovery_mapping(context.get("__aura_autonomy__"))
+    return bool(
+        not is_unavoidable_human_blocker(context.get("__aura_blocker__"))
+        and incident.get("status")
+        not in {
+            "queued",
+            "diagnosing",
+            "repairing",
+            "testing",
+            "canary",
+            "awaiting_sandbox",
+            "quarantined",
+        }
+        and (run.status == RunStatus.blocked or autonomy.get("handoff_reason_code"))
+    )
 
 
 async def dispatch_due_schedules(now: datetime | None = None) -> list[tuple[str, str]]:
@@ -180,7 +212,7 @@ async def recover_stale_runs(
                     if pending:
                         continue  # Broker backoff is not a worker crash and consumes no recovery budget.
                     context = dict(run.execution_context or {})
-                    attempts = int(context.get("restart_recoveries", 0))
+                    attempts = recovery_counter(context.get("restart_recoveries"))
                     if attempts >= get_settings().max_restart_recoveries:
                         transition_run(
                             run,
@@ -258,36 +290,7 @@ async def recover_engineer_runs() -> list[tuple[str, str, str]]:
                     .limit(5)
                 )
             ).all()
-            candidate_ids = [
-                run.id
-                for run in candidates
-                if not is_unavoidable_human_blocker(
-                    (run.execution_context or {}).get("__aura_blocker__")
-                )
-                and (
-                    (run.execution_context or {})
-                    .get("__aura_supervisor__", {})
-                    .get("repair_incident", {})
-                    .get("status")
-                    not in {
-                        "queued",
-                        "diagnosing",
-                        "repairing",
-                        "testing",
-                        "canary",
-                        "awaiting_sandbox",
-                        "quarantined",
-                    }
-                )
-                and (
-                    run.status == RunStatus.blocked
-                    or bool(
-                        (run.execution_context or {})
-                        .get("__aura_autonomy__", {})
-                        .get("handoff_reason_code")
-                    )
-                )
-            ]
+            candidate_ids = [run.id for run in candidates if _recovery_engineer_candidate(run)]
         for run_id in candidate_ids:
             async with execution_lock(engine, workspace_id, run_id) as acquired:
                 if not acquired:
@@ -331,15 +334,7 @@ async def recover_waiting_runs() -> list[tuple[str, str, str]]:
             candidate_ids = [
                 run.id
                 for run in candidates
-                if not (
-                    (run.execution_context or {})
-                    .get("__aura_autonomy__", {})
-                    .get("handoff_reason_code")
-                    and int(
-                        (run.execution_context or {}).get("__aura_autonomy__", {}).get("version", 0)
-                    )
-                    >= AUTONOMY_VERSION
-                )
+                if not _autonomous_handoff_is_current(run.execution_context, AUTONOMY_VERSION)
             ]
         for run_id in candidate_ids:
             async with execution_lock(engine, workspace_id, run_id) as acquired:
