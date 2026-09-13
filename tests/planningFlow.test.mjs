@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
   planningConnectionRequirements,
@@ -91,4 +92,14 @@ test("generic intent does not guess a provider", () => {
     ),
     []
   );
+});
+
+test("connection mode preserves the compiled plan instead of replacing it with an empty screen", () => {
+  const source = readFileSync(
+    new URL("../src/pages/Demo.jsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.equal(source.includes("...uiPlanFromRun(run)"), true);
+  assert.equal(source.includes("pythonPlanRef.current = run.plan || null"), true);
 });

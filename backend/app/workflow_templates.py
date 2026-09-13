@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from .schemas import WorkflowPlan
 
 
@@ -12,6 +14,115 @@ def _owner(inventory: list[dict], operations: set[str]) -> dict | None:
         if operations.issubset(set(item.get("allowed_operations") or []))
     ]
     return matches[0] if len(matches) == 1 else None
+
+
+def weather_presentation_template(
+    prompt: str,
+    inventory: list[dict],
+) -> WorkflowPlan | None:
+    """Return an immediate audited plan for a bounded weather presentation."""
+    requested = prompt.casefold()
+    if not any(word in requested for word in ("presentation", "deck", "slide")):
+        return None
+    if not any(word in requested for word in ("weather", "forecast")):
+        return None
+    location_match = re.search(
+        r"\b(?:weather|forecast)\s+(?:in|for)\s+(.+?)"
+        r"(?=\s+(?:today|tomorrow)\b|[,.!?]|$)",
+        prompt,
+        re.IGNORECASE,
+    )
+    relative_date = next(
+        (value for value in ("tomorrow", "today") if re.search(rf"\b{value}\b", requested)),
+        None,
+    )
+    if not location_match or not relative_date:
+        return None
+    location = location_match.group(1).strip(" \t\n\r,.")
+    if not location or len(location) > 80:
+        return None
+
+    weather = _owner(inventory, {"weather.forecast"})
+    canva = _owner(inventory, {"canva.presentation.create"})
+    if not weather or not canva:
+        return None
+
+    weather_slug = str(weather["slug"])
+    canva_slug = str(canva["slug"])
+    plan = WorkflowPlan.model_validate(
+        {
+            "name": f"{location} weather presentation",
+            "interpretation": (
+                f"Retrieve the public weather forecast for {location} {relative_date} and "
+                "create one populated Canva presentation grounded only in that forecast."
+            ),
+            "steps": [
+                {
+                    "key": "weather",
+                    "agent": "Weather Research Agent",
+                    "tool_slug": weather_slug,
+                    "operation": "weather.forecast",
+                    "arguments": {"location": location, "date": relative_date},
+                    "reason": "Retrieve the requested public forecast before composing the presentation.",
+                    "expected_output": "Location, forecast date, and grounded weather summary.",
+                    "required_evidence": ["forecast"],
+                },
+                {
+                    "key": "create_presentation",
+                    "agent": "Canva Presentation Agent",
+                    "tool_slug": canva_slug,
+                    "operation": "canva.presentation.create",
+                    "arguments": {
+                        "title": f"{location} weather",
+                        "subtitle": "Forecast for {{steps.weather.date}}",
+                        "phases": [{
+                            "period": "{{steps.weather.date}}",
+                            "title": "Weather forecast",
+                            "items": ["{{steps.weather.summary}}"],
+                        }],
+                    },
+                    "reason": "Create the requested populated presentation from the retrieved forecast.",
+                    "expected_output": "Verified Canva presentation creation job and design identity.",
+                    "consequential": True,
+                    "depends_on": ["weather"],
+                    "required_evidence": ["dispatch_receipt", "populated_presentation"],
+                },
+            ],
+        }
+    )
+    plan.planning_artifacts = {
+        "objective_spec": {
+            "goal": f"Create a Canva presentation for {location}'s {relative_date} weather.",
+            "deliverables": ["One populated Canva presentation"],
+            "constraints": ["Use the current public forecast", "Do not introduce email delivery"],
+            "success_metrics": ["The Canva creation job returns a verified design identity"],
+            "required_inputs": [],
+        },
+        "toolset_proposal": {
+            "tools": [
+                {"slug": weather_slug, "role": "public weather forecast"},
+                {"slug": canva_slug, "role": "populated presentation creation"},
+            ],
+            "missing_capabilities": [],
+        },
+        "preflight_evaluation": {
+            "passed": True,
+            "estimated_risk": "medium",
+            "risk_score": 0.3,
+            "permission_scope": "write",
+        },
+        "architecture": ["forecast", "compose", "approve", "create", "verify"],
+        "senior_orchestrator": {
+            "action": "approve",
+            "reason": "Audited weather-presentation template passed deterministic preflight.",
+            "source": "audited_template",
+        },
+        "planner_recovery_mode": "audited_weather_presentation_template",
+        "connection_requirements": (
+            [canva_slug] if not canva.get("connected", True) else []
+        ),
+    }
+    return plan
 
 
 def creator_outreach_template(

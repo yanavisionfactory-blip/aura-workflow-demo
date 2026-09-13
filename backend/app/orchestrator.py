@@ -14,6 +14,7 @@ from .agent_runtime import (
     ConnectionRequiredError,
     create_plan,
     critique_step,
+    intent_bounded_tool_inventory,
     materialize_action_arguments,
     prepare_execution_directive,
     prepare_final_review,
@@ -439,6 +440,7 @@ async def _create_compiled_plan(
     inventory: list[dict],
     available_input_names: set[str],
     manifests_by_slug: dict[str, dict],
+    requested_tool_names: list[str] | tuple[str, ...] | set[str] = (),
 ):
     """Build a schema-valid plan, repairing internal connector mismatches silently."""
     manifests_by_slug = {
@@ -471,9 +473,11 @@ async def _create_compiled_plan(
         }
         for item in inventory
     ]
-    from .workflow_templates import creator_outreach_template
+    from .workflow_templates import creator_outreach_template, weather_presentation_template
 
-    audited_plan = creator_outreach_template(prompt, inventory)
+    audited_plan = creator_outreach_template(prompt, inventory) or weather_presentation_template(
+        prompt, inventory
+    )
     if audited_plan is not None:
         _normalize_planned_steps(audited_plan, manifests_by_slug)
         from .operation_contracts import compile_contracts
@@ -482,6 +486,7 @@ async def _create_compiled_plan(
             audited_plan, manifests_by_slug
         )
         return audited_plan
+    inventory = intent_bounded_tool_inventory(prompt, inventory, requested_tool_names)
     repair_requirements: list[str] = []
     for attempt in range(3):
         plan = await create_plan(
@@ -737,6 +742,7 @@ async def connection_requirement_inventory(
     session,
     prompt: str,
     execution_inventory: list[dict],
+    requested_tool_names: list[str] | tuple[str, ...] | set[str] = (),
 ) -> list[dict]:
     """Extend certified actions with connectable apps from the canonical marketplace."""
     combined = list(execution_inventory)
@@ -760,9 +766,14 @@ async def connection_requirement_inventory(
                 combined.append(catalog_item)
                 known_families.add(family)
 
+    candidates = (
+        [str(value) for value in requested_tool_names if value]
+        if requested_tool_names
+        else _capitalized_provider_candidates(prompt)
+    )
     unresolved = [
         candidate
-        for candidate in _capitalized_provider_candidates(prompt)
+        for candidate in candidates
         if _connection_family({"canonical_provider": candidate}) not in known_families
     ]
     if unresolved:
@@ -806,6 +817,76 @@ async def connection_requirement_inventory(
                         known_families.add(family)
                     break
     return combined
+
+
+async def _persist_plan_draft(session, run: WorkflowRun, plan) -> tuple[str, str]:
+    """Persist a reviewable plan before connection or approval gates."""
+    run.plan = plan.model_dump(mode="json")
+    plan_hash = canonical_plan_hash(run.plan)
+    existing = await session.scalar(
+        select(PlanVersion.id).where(
+            PlanVersion.run_id == run.id,
+            PlanVersion.version == 1,
+        )
+    )
+    if existing:
+        return plan_hash, existing
+    logger.info(
+        "Workflow plan ready run_id=%s graph=%s",
+        run.id,
+        [
+            {
+                "key": item.key,
+                "depends_on": item.depends_on,
+                "condition": item.condition is not None,
+                "optional": item.optional,
+                "operation": item.operation,
+            }
+            for item in plan.steps
+        ],
+    )
+    plan_version = PlanVersion(
+        workspace_id=run.workspace_id,
+        run_id=run.id,
+        version=1,
+        status="draft",
+        plan=run.plan,
+        plan_hash=plan_hash,
+        created_by="aura-plan-builder",
+    )
+    session.add(plan_version)
+    await session.flush()
+    for position, item in enumerate(plan.steps):
+        step = RunStep(
+            run_id=run.id,
+            position=position,
+            step_key=item.key,
+            agent=item.agent,
+            tool_slug=item.tool_slug,
+            operation=item.operation,
+            arguments=item.arguments,
+            depends_on=item.depends_on,
+            dependency_mode=item.dependency_mode,
+            condition=item.condition.model_dump(mode="json") if item.condition else None,
+            output_variables=item.output_variables,
+            consequential=item.consequential,
+            idempotency_key=idempotency_key(
+                run.id, position, item.operation, item.arguments
+            ),
+        )
+        session.add(step)
+        await session.flush()
+        if item.consequential:
+            approval = Approval(
+                run_id=run.id,
+                step_id=step.id,
+                preview={"status": "preparing"},
+            )
+            session.add(approval)
+            await session.flush()
+            step.approval_id = approval.id
+            step.status = StepStatus.awaiting_approval
+    return plan_hash, plan_version.id
 
 
 @trace_run
@@ -925,8 +1006,13 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             for manifest in manifests
             if manifest.tool_id == tool.id
         })
+        requested_tools = [
+            str(value)
+            for value in (run.inputs or {}).get("requested_tools", [])
+            if value
+        ]
         requirement_inventory = await connection_requirement_inventory(
-            session, run.prompt, inventory
+            session, run.prompt, inventory, requested_tools
         )
         await session.commit()
 
@@ -940,6 +1026,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                     inventory,
                     set((run.inputs or {}).keys()),
                     manifests_by_slug,
+                    requested_tools,
                 )
             missing = complete_connection_requirements(
                 run.prompt,
@@ -956,7 +1043,8 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                         session, managed_connector_client(), slug, workspace_id, owner
                     ):
                         missing.remove(slug)
-                plan.planning_artifacts["connection_requirements"] = missing
+            plan.planning_artifacts["connection_requirements"] = missing
+            plan_hash, plan_version_id = await _persist_plan_draft(session, run, plan)
             if missing:
                 for capability in missing:
                     session.add(
@@ -1007,61 +1095,6 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 )
                 await session.commit()
                 return
-            run.plan = plan.model_dump(mode="json")
-            logger.info(
-                "Workflow plan ready run_id=%s graph=%s",
-                run.id,
-                [
-                    {
-                        "key": item.key,
-                        "depends_on": item.depends_on,
-                        "condition": item.condition is not None,
-                        "optional": item.optional,
-                        "operation": item.operation,
-                    }
-                    for item in plan.steps
-                ],
-            )
-            plan_version = PlanVersion(
-                workspace_id=run.workspace_id,
-                run_id=run.id,
-                version=1,
-                status="draft",
-                plan=run.plan,
-                plan_hash=canonical_plan_hash(run.plan),
-                created_by="aura-plan-builder",
-            )
-            session.add(plan_version)
-            for position, item in enumerate(plan.steps):
-                step = RunStep(
-                    run_id=run.id,
-                    position=position,
-                    step_key=item.key,
-                    agent=item.agent,
-                    tool_slug=item.tool_slug,
-                    operation=item.operation,
-                    arguments=item.arguments,
-                    depends_on=item.depends_on,
-                    dependency_mode=item.dependency_mode,
-                    condition=item.condition.model_dump(mode="json") if item.condition else None,
-                    output_variables=item.output_variables,
-                    consequential=item.consequential,
-                    idempotency_key=idempotency_key(
-                        run.id, position, item.operation, item.arguments
-                    ),
-                )
-                session.add(step)
-                await session.flush()
-                if item.consequential:
-                    approval = Approval(
-                        run_id=run.id,
-                        step_id=step.id,
-                        preview={"status": "preparing"},
-                    )
-                    session.add(approval)
-                    await session.flush()
-                    step.approval_id = approval.id
-                    step.status = StepStatus.awaiting_approval
             transition_run(
                 run,
                 RunStatus.awaiting_approval,
@@ -1079,7 +1112,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                     "retryable": False,
                 },
                 dispatch=None,
-                metadata={"plan_hash": plan_version.plan_hash},
+                metadata={"plan_hash": plan_hash},
             )
             await audit(
                 session,
@@ -1087,8 +1120,8 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 "run.planned",
                 {
                     "plan": run.plan,
-                    "plan_version_id": plan_version.id,
-                    "plan_hash": plan_version.plan_hash,
+                    "plan_version_id": plan_version_id,
+                    "plan_hash": plan_hash,
                 },
                 run.id,
             )

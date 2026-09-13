@@ -312,6 +312,60 @@ async def test_connect_click_never_discovers_uncached_action_schemas(broker_api,
     boundary.list_mcp_tools.assert_not_awaited()
 
 
+async def test_named_disconnected_provider_gets_visible_plan_before_connection(
+    broker_api, monkeypatch
+):
+    async with broker_api.factory() as session:
+        session.add(
+            WorkflowRun(
+                id="canva-preflight-run",
+                workspace_id=broker_api.context.workspace_id,
+                prompt="Please make a presentation on Canva about the weather in Munich tomorrow",
+                inputs={"requested_tools": ["Canva"]},
+                status=RunStatus.queued,
+            )
+        )
+        await session.commit()
+
+    monkeypatch.setattr(orchestrator, "SessionLocal", broker_api.factory)
+    monkeypatch.setattr(
+        orchestrator,
+        "managed_connector_client",
+        lambda: SimpleNamespace(configured=False),
+    )
+
+    await orchestrator._plan_run(
+        "canva-preflight-run", broker_api.context.workspace_id
+    )
+
+    async with broker_api.factory() as session:
+        run = await session.get(WorkflowRun, "canva-preflight-run")
+        steps = list(
+            await session.scalars(
+                select(RunStep)
+                .where(RunStep.run_id == "canva-preflight-run")
+                .order_by(RunStep.position)
+            )
+        )
+        requirement = await session.scalar(
+            select(ConnectionRequirement).where(
+                ConnectionRequirement.run_id == "canva-preflight-run"
+            )
+        )
+        assert run.status == RunStatus.waiting_for_action
+        assert [step["operation"] for step in run.plan["steps"]] == [
+            "weather.forecast",
+            "canva.presentation.create",
+        ]
+        assert [step.operation for step in steps] == [
+            "weather.forecast",
+            "canva.presentation.create",
+        ]
+        assert run.result["missing_capabilities"] == ["canva"]
+        assert requirement.provider_hint == "canva"
+        assert requirement.required_permissions
+
+
 async def test_api_key_connection_e2e_keeps_the_key_inside_managed_auth(
     broker_api, monkeypatch
 ):
@@ -514,6 +568,62 @@ async def test_paused_workflow_connect_and_automatic_continuation_e2e(
         assert run.status == RunStatus.queued
         assert requirement.status == "satisfied"
         assert requirement.satisfied_by_tool_id == completed["connection_id"]
+
+
+async def test_visible_saved_plan_resumes_at_review_after_connection(
+    broker_api, monkeypatch
+):
+    provider = "visible-plan-e2e"
+    boundary = PipedreamBoundary(
+        action_definition(provider, "oauth"),
+        action_definitions=actions(provider),
+    )
+    use_pipedream(monkeypatch, boundary)
+    plan = WorkflowPlan(
+        name="Visible disconnected plan",
+        interpretation="Show the workflow before requiring its account",
+        steps=[
+            PlanStep(
+                key="read_items",
+                agent="Provider reader",
+                tool_slug=provider,
+                operation=f"{provider}.list-items",
+                arguments={"limit": 5},
+                reason="Read the requested items",
+                expected_output="Provider items",
+            )
+        ],
+    )
+
+    async with broker_api.factory() as session:
+        session.add(
+            WorkflowRun(
+                id="visible-plan-run",
+                workspace_id=broker_api.context.workspace_id,
+                prompt="Read provider items",
+                plan=plan.model_dump(mode="json"),
+                status=RunStatus.waiting_for_action,
+            )
+        )
+        session.add(
+            ConnectionRequirement(
+                id="visible-plan-requirement",
+                workspace_id=broker_api.context.workspace_id,
+                run_id="visible-plan-run",
+                capability=provider,
+                provider_hint=provider,
+                reason="Connect the provider",
+            )
+        )
+        await session.commit()
+
+    _, completed = await connect_account(broker_api, provider, "apn_visible123")
+
+    assert completed["resumed_run_ids"] == ["visible-plan-run"]
+    async with broker_api.factory() as session:
+        run = await session.get(WorkflowRun, "visible-plan-run")
+        assert run.status == RunStatus.awaiting_approval
+        assert run.plan["steps"][0]["operation"] == f"{provider}.list-items"
 
 
 async def test_linear_and_slack_barrier_plans_and_executes_complete_workflow(

@@ -64,6 +64,90 @@ class PlanningBundle(BaseModel):
     plan: WorkflowPlan
 
 
+def _intent_words(value: str) -> str:
+    return " " + re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip() + " "
+
+
+def _inventory_aliases(item: dict) -> set[str]:
+    aliases = {
+        str(item.get("slug") or ""),
+        str(item.get("name") or ""),
+        str(item.get("canonical_provider") or ""),
+    }
+    aliases.update(
+        str(operation).split(".", 1)[0]
+        for operation in item.get("allowed_operations") or []
+    )
+    return {
+        re.sub(r"[^a-z0-9]+", " ", alias.casefold()).strip()
+        for alias in aliases
+        if alias
+    }
+
+
+def intent_bounded_tool_inventory(
+    prompt: str,
+    inventory: list[dict],
+    requested_tool_names: list[str] | tuple[str, ...] | set[str] = (),
+) -> list[dict]:
+    """Bound clear requests to relevant tools before model-based planning."""
+    text = _intent_words(prompt)
+    requested = {_intent_words(str(value)) for value in requested_tool_names if value}
+    external_matches: set[int] = set()
+    for index, item in enumerate(inventory):
+        aliases = _inventory_aliases(item)
+        if str(item.get("slug") or "").casefold() == "aura":
+            continue
+        if any(f" {alias} " in text for alias in aliases if alias):
+            external_matches.add(index)
+            continue
+        if any(
+            any(f" {alias} " in requested_value for alias in aliases if alias)
+            for requested_value in requested
+        ):
+            external_matches.add(index)
+
+    selected = set(external_matches)
+    # Explicit Linear, for example, must not become Jira merely because the
+    # request also contains the generic word "issues".
+    if not external_matches:
+        semantic_aliases: list[tuple[set[str], set[str]]] = [
+            (
+                {"presentation", "presentations", "deck", "decks", "slide", "slides"},
+                {"canva"},
+            ),
+            ({"email", "emails", "inbox", "gmail"}, {"gmail", "google"}),
+            ({"slack", "channel"}, {"slack"}),
+            (
+                {"spreadsheet", "spreadsheets", "sheet", "sheets", "csv"},
+                {"sheets", "google"},
+            ),
+            ({"ticket", "tickets"}, {"jira", "atlassian"}),
+        ]
+        words = set(text.split())
+        provider_roots = {
+            provider
+            for signals, providers in semantic_aliases
+            if words.intersection(signals)
+            for provider in providers
+        }
+        for index, item in enumerate(inventory):
+            if _inventory_aliases(item).intersection(provider_roots):
+                selected.add(index)
+
+    if any(
+        signal in text.split()
+        for signal in ("weather", "forecast", "temperature", "rain")
+    ):
+        selected.update(
+            index
+            for index, item in enumerate(inventory)
+            if "weather.forecast" in (item.get("allowed_operations") or [])
+        )
+
+    return [item for index, item in enumerate(inventory) if index in selected] or inventory
+
+
 def _agent(name: str, instructions: str, output_type):
     return Agent(
         name=name,
@@ -159,13 +243,16 @@ def build_agents() -> dict[str, Agent]:
             requires a broad read window followed by selection using event local dates/times. Notion page.get
             returns metadata only; page body summaries require notion.blocks.children.list.
             Do not promise page body content from a metadata operation.
-            For populated Canva timelines or roadmaps, use canva.presentation.create with
+            For populated Canva presentations, timelines, or roadmaps, use
+            canva.presentation.create with
             structured phases grounded in prior reads. canva.design.create creates a blank
             design and cannot satisfy populated slide requests. After presentation creation
             use job.result.designs[0].id; after export use job.urls[0]. The executor waits
-            for verified job completion. For a PDF attachment, gmail.send must include
-            attachments: [{filename: 'roadmap.pdf', url: '{{steps.export.job.urls.0}}'}].
-            A link in the body does not satisfy a file attachment request. Never invent a file hash.
+            for verified job completion. Only when the user explicitly requests email delivery
+            may the plan introduce Gmail or export an attachment. In that case, gmail.send must
+            include the real requested artifact in attachments and its filename must match the
+            requested artifact. A link in the body does not satisfy a file attachment request.
+            Never introduce Gmail from an unrelated example and never invent a file hash.
             Prefer a listed finite batch operation over an implicit foreach or invented per-item
             variable. A full {{steps.key.array_field}} reference is valid for a structured array or
             object input because AURA resolves and validates its real type before execution. A batch
