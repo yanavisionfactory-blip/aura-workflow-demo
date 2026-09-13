@@ -20,6 +20,8 @@ test("discovered providers are searchable but only released providers are select
         availability: "available",
         connectable: true,
         capability_count: 4,
+        connection_strategy: "oauth",
+        setup_hint: "Provider consent",
       },
       {
         provider: "make",
@@ -34,6 +36,8 @@ test("discovered providers are searchable but only released providers are select
   assert.deepEqual(MARKETPLACE.map((tool) => tool.name), ["Linear", "Make"]);
   assert.deepEqual(CATALOG.map((tool) => tool.name), ["Linear"]);
   assert.equal(catalogEntryFor("linear")?.name, "Linear");
+  assert.equal(catalogEntryFor("linear")?.connectionStrategy, "oauth");
+  assert.match(catalogEntryFor("linear")?.desc, /Provider consent/);
   assert.equal(catalogEntryFor("make"), null);
   assert.equal(searchMarketplace("Linear")[0].name, "Linear");
   assert.deepEqual(
@@ -53,6 +57,8 @@ test("discovered providers are searchable but only released providers are select
       availability: "available",
       connectable: true,
       connection_backend: "pipedream",
+      connection_strategy: "secure_credentials",
+      setup_hint: "Secure credentials required",
     },
     {
       provider: "legacy-key-app",
@@ -60,9 +66,19 @@ test("discovered providers are searchable but only released providers are select
       availability: "coming_soon",
       connectable: false,
     },
+    {
+      provider: "unsupported-app",
+      display_name: "Unsupported App",
+      availability: "requestable",
+      connectable: false,
+      requestable: true,
+    },
   ]);
 
   assert.equal(catalogEntryFor("salesforce")?.connectionBackend, "pipedream");
+  assert.equal(catalogEntryFor("salesforce")?.connectionStrategy, "secure_credentials");
+  assert.equal(catalogEntryFor("salesforce")?.desc, "Secure credentials required");
   assert.equal(catalogEntryFor("legacy-key-app"), null);
   assert.equal(searchMarketplace("Legacy Key App")[0].availability, "coming_soon");
+  assert.equal(searchMarketplace("Unsupported App")[0].requestable, true);
 });
