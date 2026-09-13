@@ -164,8 +164,7 @@ function mergeCatalogEntry(left, right) {
 }
 
 function catalogGroupKey(item) {
-  if (item.provider === "google") return `google:${item.name.toLowerCase()}`;
-  return item.canonicalProvider || canonicalProvider(item.provider);
+  return canonicalProvider(item.name || item.canonicalProvider || item.provider);
 }
 
 export function searchMarketplace(query, limit = 120) {

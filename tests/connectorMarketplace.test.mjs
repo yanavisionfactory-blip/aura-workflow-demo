@@ -96,8 +96,8 @@ test("action and MCP routes appear as one app with both execution paths", () => 
         execution_backend: "pipedream_action",
       },
       {
-        provider: "notion-mcp",
-        canonical_provider: "notion",
+        provider: "notion-mcp-v2",
+        canonical_provider: "notion-mcp-v2",
         display_name: "Notion (MCP)",
         availability: "available",
         connectable: true,
@@ -109,9 +109,9 @@ test("action and MCP routes appear as one app with both execution paths", () => 
 
   assert.deepEqual(MARKETPLACE.map((tool) => tool.name), ["Notion"]);
   assert.equal(CATALOG.length, 1);
-  assert.equal(catalogEntryFor("notion-mcp")?.name, "Notion");
+  assert.equal(catalogEntryFor("notion-mcp-v2")?.name, "Notion");
   assert.deepEqual(
     catalogEntryFor("Notion")?.routes.map((route) => route.provider).sort(),
-    ["notion", "notion-mcp"],
+    ["notion", "notion-mcp-v2"],
   );
 });
