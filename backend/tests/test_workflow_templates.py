@@ -111,7 +111,11 @@ def test_creator_outreach_template_rejects_ambiguous_capability_owners():
 def weather_inventory():
     return [
         {"slug": "aura", "connected": True, "allowed_operations": ["weather.forecast"]},
-        {"slug": "canva", "connected": True, "allowed_operations": ["canva.presentation.create"]},
+        {
+            "slug": "canva",
+            "connected": True,
+            "allowed_operations": ["canva.presentation.create", "canva.export.create"],
+        },
         {"slug": "google", "connected": True, "allowed_operations": ["gmail.send"]},
     ]
 
@@ -208,6 +212,40 @@ def test_weather_presentation_template_builds_only_forecast_and_canva_steps():
     )
 
 
+def test_weather_presentation_template_preserves_explicit_gmail_delivery():
+    plan = weather_presentation_template(
+        "Check tomorrow's weather in Munich, create a presentation in Canva, "
+        "and email it to me with Gmail.",
+        weather_inventory(),
+    )
+
+    assert plan is not None
+    assert [step.operation for step in plan.steps] == [
+        "weather.forecast",
+        "canva.presentation.create",
+        "canva.export.create",
+        "gmail.send",
+    ]
+    assert plan.steps[2].arguments == {
+        "design_id": "{{steps.create_presentation.job.id}}",
+        "format": "pdf",
+    }
+    assert plan.steps[3].arguments["to"] == "me"
+    assert plan.steps[3].arguments["attachments"] == [{
+        "filename": "Munich weather.pdf",
+        "url": "{{steps.export_presentation.job.urls[0]}}",
+    }]
+    assert plan.steps[3].depends_on == ["export_presentation"]
+    assert "email it with Gmail" in plan.interpretation
+
+
+def test_weather_presentation_template_never_guesses_email_recipient():
+    assert weather_presentation_template(
+        "Create a presentation about the weather in Munich tomorrow and email it",
+        weather_inventory(),
+    ) is None
+
+
 def test_weather_presentation_template_is_narrow_and_capability_complete():
     assert weather_presentation_template("Weather in Munich tomorrow", weather_inventory()) is None
     assert weather_presentation_template("Make a weather presentation", weather_inventory()) is None
@@ -237,5 +275,30 @@ def test_compiled_weather_presentation_bypasses_model_planning():
     assert [step.operation for step in plan.steps] == [
         "weather.forecast",
         "canva.presentation.create",
+    ]
+    assert plan.planning_artifacts["compiled_contracts"]
+
+
+def test_compiled_weather_presentation_keeps_requested_email_delivery():
+    plan = asyncio.run(
+        orchestrator._create_compiled_plan(
+            "Check tomorrow's weather in Munich, create a presentation in Canva, "
+            "and email it to me with Gmail.",
+            weather_inventory(),
+            set(),
+            {
+                "aura": native_manifest("aura"),
+                "canva": native_manifest("canva"),
+                "google": native_manifest("google"),
+            },
+            ["Canva", "Gmail"],
+        )
+    )
+
+    assert [step.operation for step in plan.steps] == [
+        "weather.forecast",
+        "canva.presentation.create",
+        "canva.export.create",
+        "gmail.send",
     ]
     assert plan.planning_artifacts["compiled_contracts"]
