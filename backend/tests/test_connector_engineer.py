@@ -1,3 +1,4 @@
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -249,6 +250,30 @@ async def test_release_requires_canary_and_signature_before_catalog_exposure(
             "eligible_for_one_click": True,
         }
     ]
+
+
+async def test_integration_without_certifiable_functions_is_skipped_not_failed(
+    release_session,
+    caplog,
+):
+    client = FakeCatalogClient()
+    client.functions = []
+
+    with caplog.at_level(logging.INFO, logger="app.connector_engineer"):
+        summary = await engineer_nango_catalog(
+            release_session,
+            client=client,
+            settings=settings(),
+        )
+
+    assert summary.rejected == 0
+    assert summary.skipped == 1
+    assert summary.compiled == 0
+    release = await release_session.scalar(select(ManagedConnectorRelease))
+    assert release is None
+    assert client.calls == []
+    assert "connector_engineer_integration_failed" not in caplog.text
+    assert "reason_code=no_certifiable_functions" in caplog.text
 
 
 async def test_failed_candidate_never_replaces_last_good_release(release_session):
