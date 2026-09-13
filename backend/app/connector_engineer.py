@@ -42,6 +42,9 @@ from .pipedream_connect import (
     PipedreamClient,
 )
 from .pipedream_connect import (
+    app_has_executable_strategy as pipedream_has_executable_strategy,
+)
+from .pipedream_connect import (
     connection_strategy as pipedream_connection_strategy,
 )
 from .pipedream_connect import (
@@ -1027,6 +1030,7 @@ async def engineer_pipedream_catalog(
         item
         for item in apps
         if pipedream_connection_strategy(item) != "unsupported"
+        and pipedream_has_executable_strategy(item)
         and _slug(item.get("name_slug") or item.get("name")) not in PROVIDERS
     ]
     summary.skipped = len(apps) - len(eligible)

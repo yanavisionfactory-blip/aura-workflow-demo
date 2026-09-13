@@ -76,6 +76,19 @@ def _slug(value: Any, fallback: str = "connector") -> str:
     return (normalized or fallback)[:120]
 
 
+def _vendor_app(app: dict[str, Any]) -> str:
+    """Preserve Pipedream's canonical app ID for vendor API calls.
+
+    AURA uses hyphenated slugs internally, while Pipedream app IDs commonly use
+    underscores (for example, ``google_sheets``). Those identifiers are not
+    interchangeable at the Connect API boundary.
+    """
+    candidate = str(app.get("name_slug") or "").strip()
+    if re.fullmatch(r"[A-Za-z0-9_-]+", candidate):
+        return candidate[:160]
+    return _slug(app.get("name"))
+
+
 def _canonical(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
 
@@ -408,10 +421,24 @@ class PipedreamClient:
         return apps[: min(max(limit, 1), 100)]
 
     async def get_app(self, provider: str) -> dict[str, Any]:
-        result = await self._request(
-            "GET", f"/v1/connect/apps/{quote(provider, safe='')}"
-        )
-        data = result.get("data", result) if isinstance(result, dict) else {}
+        try:
+            result = await self._request(
+                "GET", f"/v1/connect/apps/{quote(provider, safe='')}"
+            )
+            data = result.get("data", result) if isinstance(result, dict) else {}
+        except PipedreamConnectError as exc:
+            if exc.status_code != 404:
+                raise
+            matches = await self.list_apps(provider, limit=100)
+            data = next(
+                (
+                    item
+                    for item in matches
+                    if _slug(item.get("name_slug") or item.get("name"))
+                    == _slug(provider)
+                ),
+                {},
+            )
         if not isinstance(data, dict):
             raise PipedreamConnectError("This app is not available", retryable=False)
         slug = _slug(data.get("name_slug") or data.get("name"))
@@ -652,14 +679,15 @@ class PipedreamClient:
         )
         if transport_type == "pipedream_mcp":
             tool_name = str(transport.get("tool_name") or "").strip()
-            if not provider or not tool_name:
+            vendor_app = str(transport.get("app") or provider).strip()
+            if not provider or not vendor_app or not tool_name:
                 raise PipedreamConnectError(
                     "The released MCP transport is incomplete", retryable=False
                 )
             return await self.call_mcp_tool(
                 external_user_id,
                 account_id,
-                provider,
+                vendor_app,
                 tool_name,
                 arguments,
             )
@@ -837,7 +865,7 @@ def compile_action_manifest(
         "name": str(app.get("name") or provider.replace("-", " ").title())[:200],
         "description": str(app.get("description") or "")[:4000],
         "base_url": settings.pipedream_base_url.rstrip("/"),
-        "identity": {"app": provider},
+        "identity": {"app": _vendor_app(app)},
         "data_retention": "pipedream_connect",
         "delegation": {"allowed": False, "maximum_depth": 0},
         "connection_strategy": connection_strategy(app),
@@ -887,6 +915,7 @@ def compile_mcp_manifest(
                 "transport": {
                     "type": "pipedream_mcp",
                     "tool_name": tool_name,
+                    "app": _vendor_app(app),
                 },
                 "metadata": {
                     "connector_broker": {
@@ -907,7 +936,7 @@ def compile_mcp_manifest(
         "name": str(app.get("name") or provider.replace("-", " ").title())[:200],
         "description": str(app.get("description") or "")[:4000],
         "base_url": settings.pipedream_base_url.rstrip("/"),
-        "identity": {"app": provider},
+        "identity": {"app": _vendor_app(app)},
         "data_retention": "pipedream_connect",
         "delegation": {"allowed": False, "maximum_depth": 0},
         "connection_strategy": connection_strategy(app),
@@ -997,7 +1026,7 @@ def compile_proxy_manifest(
         "name": str(app.get("name") or provider.replace("-", " ").title())[:200],
         "description": str(app.get("description") or "")[:4000],
         "base_url": settings.pipedream_base_url.rstrip("/"),
-        "identity": {"app": provider},
+        "identity": {"app": _vendor_app(app)},
         "data_retention": "pipedream_connect",
         "delegation": {"allowed": False, "maximum_depth": 0},
         "connection_strategy": connection_strategy(app),
@@ -1043,11 +1072,12 @@ async def certify_app(
     if len(settings.connector_release_signing_key) < 32:
         raise PipedreamConnectError("Connector certification is not configured", retryable=False)
     provider = _slug(app.get("name_slug") or app.get("name"))
+    vendor_app = _vendor_app(app)
     if connection_strategy(app) == "unsupported":
         raise PipedreamConnectError(
             "This app has no secure account connection route", retryable=False
         )
-    actions = await client.list_actions(provider)
+    actions = await client.list_actions(vendor_app)
     manifest: dict[str, Any] | None = None
     if actions:
         try:
@@ -1055,9 +1085,9 @@ async def certify_app(
         except PipedreamConnectError:
             manifest = None
     mcp_error: PipedreamConnectError | None = None
-    if manifest is None:
+    if manifest is None and _is_mcp_app(app):
         try:
-            mcp_tools = await client.list_mcp_tools(provider)
+            mcp_tools = await client.list_mcp_tools(vendor_app)
         except PipedreamConnectError as exc:
             mcp_error = exc
             mcp_tools = []

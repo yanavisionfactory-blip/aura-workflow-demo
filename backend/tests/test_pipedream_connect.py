@@ -28,6 +28,7 @@ from app.models import (
 )
 from app.pipedream_connect import (
     PipedreamClient,
+    PipedreamConnectError,
     app_uses_managed_oauth,
     compile_mcp_manifest,
     compile_proxy_manifest,
@@ -153,6 +154,26 @@ async def test_get_app_uses_the_documented_connect_registry_route():
     client._request.assert_awaited_once_with("GET", "/v1/connect/apps/linear")
 
 
+async def test_get_app_resolves_aura_slug_to_canonical_pipedream_app_id():
+    client = FakePipedream()
+    canonical = {**app_definition(), "name_slug": "google_sheets", "name": "Google Sheets"}
+    client._request = AsyncMock(
+        side_effect=[
+            PipedreamConnectError("not found", retryable=False, status_code=404),
+            {"data": [canonical]},
+            {"data": [canonical]},
+        ]
+    )
+
+    result = await client.get_app("google-sheets")
+
+    assert result["name_slug"] == "google_sheets"
+    assert client._request.await_args_list[0].args == (
+        "GET",
+        "/v1/connect/apps/google-sheets",
+    )
+
+
 def test_marketplace_exposes_every_secure_executable_connection_strategy():
     oauth = marketplace_entry(app_definition(), connectable=True)
     api_key = marketplace_entry(app_definition("keys"), connectable=True)
@@ -213,6 +234,7 @@ def test_action_contract_removes_auth_prop_and_requires_approval_for_writes():
         "version": "1.0.0",
         "auth_prop": "linear",
     }
+    assert manifest["identity"] == {"app": "linear"}
 
 
 def test_mcp_contract_preserves_schema_and_requires_approval_by_default():
@@ -238,6 +260,7 @@ def test_mcp_contract_preserves_schema_and_requires_approval_by_default():
     assert capability["transport"] == {
         "type": "pipedream_mcp",
         "tool_name": "create_project",
+        "app": "lovable-mcp",
     }
     assert capability["requires_approval"] is True
     assert capability["input_schema"]["required"] == ["name"]
@@ -305,6 +328,35 @@ async def test_certification_creates_a_signed_data_only_pack(database):
         assert pack_signature_valid(pack, settings()) is True
         assert pack.evidence["registry_canary"]["customer_account_used"] is False
         assert len(pack.definition["capabilities"]) == 2
+
+
+async def test_certification_preserves_vendor_app_id_for_action_discovery(database):
+    client = FakePipedream()
+    app = {**app_definition(), "name_slug": "google_sheets", "name": "Google Sheets"}
+
+    async with database() as session:
+        pack = await certify_app(session, client, app, settings())
+
+    assert ("list_actions", "google_sheets") in client.calls
+    assert pack.provider_slug == "google-sheets"
+    assert pack.definition["identity"] == {"app": "google_sheets"}
+
+
+async def test_non_mcp_app_without_actions_does_not_probe_mcp(database):
+    client = FakePipedream()
+    client.list_actions = AsyncMock(return_value=[])
+    client.list_mcp_tools = AsyncMock(return_value=[])
+
+    async with database() as session:
+        with pytest.raises(PipedreamConnectError, match="no certified executable"):
+            await certify_app(
+                session,
+                client,
+                {**app_definition("keys"), "has_actions": False},
+                settings(),
+            )
+
+    client.list_mcp_tools.assert_not_awaited()
 
 
 async def test_connector_engineer_prewarms_catalog_without_customer_account(database):
