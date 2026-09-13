@@ -86,7 +86,7 @@ def _vendor_app(app: dict[str, Any]) -> str:
     underscores (for example, ``google_sheets``). Those identifiers are not
     interchangeable at the Connect API boundary.
     """
-    candidate = str(app.get("name_slug") or "").strip()
+    candidate = str(app.get("vendor_app") or app.get("name_slug") or "").strip()
     if re.fullmatch(r"[A-Za-z0-9_-]+", candidate):
         return candidate[:160]
     return _slug(app.get("name"))
@@ -131,6 +131,7 @@ def _is_mcp_app(app: dict[str, Any]) -> bool:
     values = [
         app.get("name_slug"),
         app.get("name"),
+        app.get("display_name"),
         app.get("auth_type"),
         *(app.get("categories") if isinstance(app.get("categories"), list) else []),
     ]
@@ -1095,7 +1096,16 @@ async def certify_app(
         raise PipedreamConnectError(
             "This app has no secure account connection route", retryable=False
         )
-    actions = await client.list_actions(vendor_app)
+    action_error: PipedreamConnectError | None = None
+    try:
+        actions = await client.list_actions(vendor_app)
+    except PipedreamConnectError as exc:
+        # The actions registry and the per-app MCP servers are independent
+        # connector planes. An app can have a complete MCP tool catalog even
+        # when it has no public component actions (or the action lookup is not
+        # available to the current project), so discovery must continue.
+        action_error = exc
+        actions = []
     manifest: dict[str, Any] | None = None
     if actions:
         try:
@@ -1103,7 +1113,7 @@ async def certify_app(
         except PipedreamConnectError:
             manifest = None
     mcp_error: PipedreamConnectError | None = None
-    if manifest is None and _is_mcp_app(app):
+    if manifest is None:
         try:
             mcp_tools = await client.list_mcp_tools(vendor_app)
         except PipedreamConnectError as exc:
@@ -1118,6 +1128,8 @@ async def certify_app(
     if manifest is None:
         if mcp_error and mcp_error.retryable:
             raise mcp_error
+        if action_error and action_error.retryable:
+            raise action_error
         raise PipedreamConnectError(
             "This app has no certified executable capabilities", retryable=False
         )
