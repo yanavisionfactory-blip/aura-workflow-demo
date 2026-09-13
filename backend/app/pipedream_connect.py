@@ -583,8 +583,24 @@ class PipedreamClient:
         except PipedreamConnectError:
             raise
         except Exception as exc:  # noqa: BLE001 - normalize vendor / protocol errors
+            root: BaseException = exc
+            seen: set[int] = set()
+            while id(root) not in seen:
+                seen.add(id(root))
+                if isinstance(root, BaseExceptionGroup) and root.exceptions:
+                    root = root.exceptions[0]
+                    continue
+                nested = root.__cause__ or root.__context__
+                if nested is None:
+                    break
+                root = nested
+            response = getattr(root, "response", None)
+            status_code = getattr(response, "status_code", None)
             raise PipedreamConnectError(
-                "The connector tool catalog is temporarily unavailable"
+                "The connector tool catalog is temporarily unavailable",
+                retryable=status_code is None or status_code in _RETRYABLE_STATUS,
+                status_code=status_code,
+                upstream_code=f"mcp_{_slug(type(root).__name__)}",
             ) from exc
         tools = getattr(result, "tools", [])
         return [
@@ -1096,24 +1112,34 @@ async def certify_app(
         raise PipedreamConnectError(
             "This app has no secure account connection route", retryable=False
         )
-    action_error: PipedreamConnectError | None = None
-    try:
-        actions = await client.list_actions(vendor_app)
-    except PipedreamConnectError as exc:
-        # The actions registry and the per-app MCP servers are independent
-        # connector planes. An app can have a complete MCP tool catalog even
-        # when it has no public component actions (or the action lookup is not
-        # available to the current project), so discovery must continue.
-        action_error = exc
-        actions = []
     manifest: dict[str, Any] | None = None
-    if actions:
-        try:
-            manifest = compile_action_manifest(app, actions, settings)
-        except PipedreamConnectError:
-            manifest = None
+    action_error: PipedreamConnectError | None = None
     mcp_error: PipedreamConnectError | None = None
-    if manifest is None:
+    prefer_mcp = _is_mcp_app(app)
+
+    if prefer_mcp:
+        try:
+            mcp_tools = await client.list_mcp_tools(vendor_app)
+        except PipedreamConnectError as exc:
+            mcp_error = exc
+            mcp_tools = []
+        if mcp_tools:
+            manifest = compile_mcp_manifest(app, mcp_tools, settings)
+    else:
+        try:
+            actions = await client.list_actions(vendor_app)
+        except PipedreamConnectError as exc:
+            # The actions registry and the per-app MCP servers are independent
+            # connector planes. An app can have a complete MCP tool catalog even
+            # when its public component lookup is unavailable to this project.
+            action_error = exc
+            actions = []
+        if actions:
+            try:
+                manifest = compile_action_manifest(app, actions, settings)
+            except PipedreamConnectError:
+                manifest = None
+    if manifest is None and not prefer_mcp:
         try:
             mcp_tools = await client.list_mcp_tools(vendor_app)
         except PipedreamConnectError as exc:

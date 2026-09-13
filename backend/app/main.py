@@ -887,18 +887,32 @@ async def search_connector_broker_apps(
             if long_tail_ready and "mcp" in categories and query in exact_aliases:
                 try:
                     pack = await released_pipedream_pack(session, provider_slug)
-                    if pack is None:
+                    if (
+                        pack is None
+                        or pack.definition.get("execution_strategy") != "mcp"
+                    ):
+                        vendor_definition = await long_tail.get_app(vendor_app)
+                        canonical_vendor_app = str(
+                            vendor_definition.get("name_slug") or vendor_app
+                        )
                         pack = await certify_pipedream_app(
                             session,
                             long_tail,
                             {
+                                **vendor_definition,
                                 "name_slug": provider_slug,
-                                "vendor_app": vendor_app,
+                                "vendor_app": canonical_vendor_app,
                                 "name": display_name,
                                 "display_name": display_name,
-                                "categories": list(categories),
-                                "auth_type": item.get("auth_mode") or "unknown",
-                                "has_actions": False,
+                                "categories": sorted(
+                                    categories
+                                    | {
+                                        str(value).strip().casefold()
+                                        for value in vendor_definition.get("categories") or []
+                                        if value
+                                    }
+                                    | {"mcp"}
+                                ),
                             },
                         )
                         await session.commit()
@@ -907,11 +921,20 @@ async def search_connector_broker_apps(
                         connectable=True,
                         source="connector_broker",
                         connection_backend="pipedream",
-                        connection_strategy="mcp",
+                        connection_strategy=str(
+                            pack.definition.get("connection_strategy") or "unsupported"
+                        ),
                         setup_hint=str(
                             pack.definition.get("connection_setup") or "Provider consent"
                         ),
-                        execution_backend="pipedream_mcp",
+                        execution_backend={
+                            "action": "pipedream_action",
+                            "mcp": "pipedream_mcp",
+                            "proxy": "pipedream_proxy",
+                        }.get(
+                            str(pack.definition.get("execution_strategy")),
+                            "unsupported",
+                        ),
                         capability_count=len(pack.definition.get("capabilities") or []),
                     )
                 except PipedreamConnectError as exc:
