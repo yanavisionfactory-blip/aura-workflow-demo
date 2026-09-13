@@ -1,13 +1,16 @@
+import os
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app import connector_engineer as engineer_module
-from app import main
+from app import main, migrations
 from app.config import Settings
 from app.connector_engineer import (
     EngineeringSummary,
@@ -40,6 +43,43 @@ from app.pipedream_connect import (
     pack_signature_valid,
 )
 from app.security import CredentialVault
+
+
+@pytest.mark.skipif(
+    not os.getenv("AURA_TEST_POSTGRES_URL"),
+    reason="Requires PostgreSQL governance triggers",
+)
+async def test_signed_pack_status_can_change_without_mutating_contents(monkeypatch):
+    engine = create_async_engine(os.environ["AURA_TEST_POSTGRES_URL"])
+    monkeypatch.setattr(migrations, "engine", engine)
+    await migrations.migrate_database()
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    provider = f"immutability-{uuid4()}"
+    try:
+        async with factory() as session:
+            pack = BrokerCapabilityPack(
+                backend="pipedream",
+                provider_slug=provider,
+                display_name="Immutability regression",
+                version=1,
+                status="released",
+                definition={"execution_strategy": "mcp"},
+                definition_hash="a" * 64,
+                signature="b" * 64,
+            )
+            session.add(pack)
+            await session.commit()
+
+            pack.status = "superseded"
+            await session.commit()
+            assert pack.status == "superseded"
+
+            pack.definition = {"execution_strategy": "action"}
+            with pytest.raises(SQLAlchemyError, match="content cannot be changed"):
+                await session.commit()
+            await session.rollback()
+    finally:
+        await engine.dispose()
 
 
 def settings(**overrides) -> Settings:

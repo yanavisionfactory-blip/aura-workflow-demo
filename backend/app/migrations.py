@@ -266,7 +266,7 @@ async def migrate_database() -> None:
                        OR OLD.integration_id IS DISTINCT FROM NEW.integration_id
                        OR OLD.version IS DISTINCT FROM NEW.version
                        OR OLD.display_name IS DISTINCT FROM NEW.display_name
-                       OR OLD.definition IS DISTINCT FROM NEW.definition
+                       OR OLD.definition::jsonb IS DISTINCT FROM NEW.definition::jsonb
                        OR OLD.definition_hash IS DISTINCT FROM NEW.definition_hash
                        OR OLD.signature IS DISTINCT FROM NEW.signature THEN
                         RAISE EXCEPTION 'signed connector release content cannot be changed';
@@ -304,7 +304,7 @@ async def migrate_database() -> None:
                        OR OLD.provider_slug IS DISTINCT FROM NEW.provider_slug
                        OR OLD.version IS DISTINCT FROM NEW.version
                        OR OLD.display_name IS DISTINCT FROM NEW.display_name
-                       OR OLD.definition IS DISTINCT FROM NEW.definition
+                       OR OLD.definition::jsonb IS DISTINCT FROM NEW.definition::jsonb
                        OR OLD.definition_hash IS DISTINCT FROM NEW.definition_hash
                        OR OLD.signature IS DISTINCT FROM NEW.signature THEN
                         RAISE EXCEPTION 'signed broker capability pack content cannot be changed';
