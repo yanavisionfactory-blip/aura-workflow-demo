@@ -1050,9 +1050,10 @@ async def engineer_pipedream_catalog(
             summary.released += 1
         except Exception as exc:  # noqa: BLE001 - isolate one vendor action pack
             logger.warning(
-                "connector_engineer_pipedream_failed provider=%s error_type=%s",
+                "connector_engineer_pipedream_failed provider=%s error_type=%s status_code=%s",
                 provider_slug,
                 type(exc).__name__,
+                getattr(exc, "status_code", None),
             )
             summary.rejected += 1
     await session.commit()
