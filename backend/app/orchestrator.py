@@ -42,6 +42,7 @@ from .models import (
     CapabilityManifest,
     ConnectionRequirement,
     DeadLetterEntry,
+    ManagedConnectorCatalog,
     ManagedConnectorRelease,
     PlanVersion,
     RunStatus,
@@ -628,6 +629,148 @@ def _required_permissions(capability: str, inventory: list[dict]) -> list[str]:
     )
 
 
+_PROVIDER_CANDIDATE_STOP_WORDS = {
+    "add",
+    "analyze",
+    "build",
+    "compare",
+    "connect",
+    "create",
+    "delete",
+    "download",
+    "draft",
+    "find",
+    "format",
+    "get",
+    "list",
+    "make",
+    "monitor",
+    "post",
+    "prepare",
+    "publish",
+    "read",
+    "remove",
+    "review",
+    "schedule",
+    "search",
+    "send",
+    "share",
+    "summarize",
+    "sync",
+    "turn",
+    "update",
+    "upload",
+    "use",
+    "write",
+}
+
+
+def _capitalized_provider_candidates(prompt: str) -> list[str]:
+    """Extract bounded app-name candidates without treating arbitrary prose as apps."""
+    candidates = re.findall(
+        r"(?<![A-Za-z0-9])"
+        r"[A-Z][A-Za-z0-9._+-]*"
+        r"(?:[\s&]+[A-Z][A-Za-z0-9._+-]*){0,2}",
+        prompt,
+    )
+    return list(
+        dict.fromkeys(
+            candidate.strip().rstrip("._+-")
+            for candidate in candidates
+            if candidate.strip().rstrip("._+-").casefold()
+            not in _PROVIDER_CANDIDATE_STOP_WORDS
+        )
+    )[:8]
+
+
+def _catalog_entry_inventory(item: dict, connected_families: set[str]) -> dict:
+    provider = str(item.get("provider") or item.get("slug") or "").strip()
+    canonical = str(item.get("canonical_provider") or provider).strip()
+    family = _connection_family({"canonical_provider": canonical})
+    return {
+        "slug": provider,
+        "name": str(item.get("display_name") or item.get("name") or provider),
+        "canonical_provider": canonical,
+        "connected": family in connected_families,
+        "allowed_operations": list(item.get("capabilities") or []),
+    }
+
+
+async def connection_requirement_inventory(
+    session,
+    prompt: str,
+    execution_inventory: list[dict],
+) -> list[dict]:
+    """Extend certified actions with connectable apps from the canonical marketplace."""
+    combined = list(execution_inventory)
+    connected_families = {
+        _connection_family(item)
+        for item in execution_inventory
+        if item.get("connected", False) and _connection_family(item)
+    }
+    known_families = {
+        _connection_family(item) for item in combined if _connection_family(item)
+    }
+
+    snapshots = list((await session.scalars(select(ManagedConnectorCatalog))).all())
+    for snapshot in snapshots:
+        for item in snapshot.providers or []:
+            if not item.get("connectable"):
+                continue
+            catalog_item = _catalog_entry_inventory(item, connected_families)
+            family = _connection_family(catalog_item)
+            if family and family not in known_families:
+                combined.append(catalog_item)
+                known_families.add(family)
+
+    unresolved = [
+        candidate
+        for candidate in _capitalized_provider_candidates(prompt)
+        if _connection_family({"canonical_provider": candidate}) not in known_families
+    ]
+    if unresolved:
+        from .pipedream_connect import marketplace_entry, pipedream_client
+
+        client = pipedream_client()
+        if client.configured:
+            for candidate in unresolved:
+                try:
+                    apps = await client.list_apps(candidate, limit=10)
+                except Exception as exc:  # noqa: BLE001 - catalog lookup is best effort
+                    logger.warning(
+                        "Connector requirement catalog lookup deferred candidate=%s error_type=%s",
+                        candidate,
+                        type(exc).__name__,
+                    )
+                    continue
+                candidate_family = _connection_family(
+                    {"canonical_provider": candidate}
+                )
+                for app in apps:
+                    entry = marketplace_entry(app, connectable=True)
+                    if not entry.get("connectable"):
+                        continue
+                    aliases = {
+                        _connection_family({"canonical_provider": value})
+                        for value in {
+                            entry.get("provider"),
+                            entry.get("canonical_provider"),
+                            entry.get("display_name"),
+                            *(entry.get("aliases") or []),
+                        }
+                        if value
+                    }
+                    if candidate_family not in aliases:
+                        continue
+                    catalog_item = _catalog_entry_inventory(entry, connected_families)
+                    family = _connection_family(catalog_item)
+                    if family and family not in known_families:
+                        combined.append(catalog_item)
+                        known_families.add(family)
+                    break
+    return combined
+
+
 @trace_run
 async def plan_run(run_id: str, workspace_id: str) -> None:
     async with execution_lock(engine, workspace_id, run_id) as acquired:
@@ -745,6 +888,9 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             for manifest in manifests
             if manifest.tool_id == tool.id
         })
+        requirement_inventory = await connection_requirement_inventory(
+            session, run.prompt, inventory
+        )
         await session.commit()
 
         try:
@@ -761,7 +907,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             missing = complete_connection_requirements(
                 run.prompt,
                 list(plan.planning_artifacts.get("connection_requirements", [])),
-                inventory,
+                requirement_inventory,
             )
             if missing:
                 from .connection_recovery import reuse_managed_connection
@@ -783,7 +929,9 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                             capability=capability,
                             provider_hint=capability,
                             reason=f"Connect {capability} so AURA can finish the saved plan",
-                            required_permissions=_required_permissions(capability, inventory),
+                            required_permissions=_required_permissions(
+                                capability, requirement_inventory
+                            ),
                         )
                     )
                 blocker = {
@@ -910,7 +1058,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             await session.commit()
         except ConnectionRequiredError as exc:
             missing = complete_connection_requirements(
-                run.prompt, exc.missing_capabilities, inventory
+                run.prompt, exc.missing_capabilities, requirement_inventory
             )
             if not missing:
                 await audit(
@@ -983,7 +1131,9 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 run.id,
                 type(exc).__name__,
             )
-            missing = explicit_disconnected_capabilities(run.prompt, inventory)
+            missing = explicit_disconnected_capabilities(
+                run.prompt, requirement_inventory
+            )
             if missing:
                 for capability in missing:
                     session.add(
@@ -996,8 +1146,8 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                             required_permissions=next(
                                 (
                                     item["allowed_operations"]
-                                    for item in inventory
-                                    if item["slug"] == capability
+                                    for item in requirement_inventory
+                                    if _connection_family(item) == capability
                                 ),
                                 [],
                             ),
