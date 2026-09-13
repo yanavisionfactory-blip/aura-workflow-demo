@@ -48,6 +48,7 @@ _SERVICE_ACCOUNT_FIELDS = {
     "service_account",
 }
 _PIPEDREAM_MCP_URL = "https://remote.mcp.pipedream.net/v3"
+_MCP_DISCOVERY_TIMEOUT_SECONDS = 15
 _PROXY_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 # Proxy routes are application code, not vendor-controlled catalog metadata. Add
 # fixed routes here only after their request / response schemas have been
@@ -554,13 +555,14 @@ class PipedreamClient:
             from mcp import ClientSession
             from mcp.client.streamable_http import streamablehttp_client
 
-            async with streamablehttp_client(
-                _PIPEDREAM_MCP_URL,
-                headers=await self._mcp_headers(external_user_id, provider),
-            ) as (read, write, _):
-                async with ClientSession(read, write) as mcp_session:
-                    await mcp_session.initialize()
-                    result = await mcp_session.list_tools()
+            async with asyncio.timeout(_MCP_DISCOVERY_TIMEOUT_SECONDS):
+                async with streamablehttp_client(
+                    _PIPEDREAM_MCP_URL,
+                    headers=await self._mcp_headers(external_user_id, provider),
+                ) as (read, write, _):
+                    async with ClientSession(read, write) as mcp_session:
+                        await mcp_session.initialize()
+                        result = await mcp_session.list_tools()
         except PipedreamConnectError:
             raise
         except Exception as exc:  # noqa: BLE001 - normalize vendor / protocol errors

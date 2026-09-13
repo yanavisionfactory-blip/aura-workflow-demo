@@ -395,6 +395,31 @@ async def test_connector_engineer_prewarms_catalog_without_customer_account(data
         )
 
 
+async def test_connector_engineer_prioritizes_actions_before_mcp_discovery(database):
+    client = FakePipedream()
+    client.list_apps = AsyncMock(
+        return_value=[
+            {
+                **app_definition("keys"),
+                "name_slug": "slow_mcp",
+                "name": "Slow (MCP)",
+                "has_actions": False,
+            },
+            app_definition(),
+        ]
+    )
+
+    async with database() as session:
+        summary = await engineer_pipedream_catalog(
+            session,
+            client=client,
+            settings=settings(connector_engineer_max_integrations_per_scan=1),
+        )
+
+    assert summary.compiled == 1
+    assert client.calls[0] == ("list_actions", "linear")
+
+
 async def test_scheduler_does_not_let_fresh_nango_snapshot_hide_missing_pipedream_scan(
     database, monkeypatch
 ):
