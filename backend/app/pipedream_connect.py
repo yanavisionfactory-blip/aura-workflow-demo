@@ -287,10 +287,11 @@ class PipedreamClient:
                     "grant_type": "client_credentials",
                     "client_id": self.settings.pipedream_client_id,
                     "client_secret": self.settings.pipedream_client_secret,
-                    "scope": (
-                        "connect:apps:* connect:accounts:read connect:accounts:write "
-                        "connect:actions:* connect:proxy connect:tokens:create"
-                    ),
+                    # Pipedream's aggregate Connect scope covers the actions,
+                    # accounts, proxy, and token endpoints used by AURA. Using
+                    # the aggregate prevents issued tokens from losing action
+                    # access when Pipedream evaluates granular scope bundles.
+                    "scope": "connect:*",
                 },
             )
             token = str(result.get("access_token") or "").strip()
