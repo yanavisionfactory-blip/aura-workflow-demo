@@ -5,6 +5,7 @@ import app.orchestrator as orchestrator
 from app.native_connectors import native_manifest
 from app.orchestrator import (
     actionable_connection_capabilities,
+    complete_connection_requirements,
     explicit_disconnected_capabilities,
     planning_error_message,
 )
@@ -91,6 +92,57 @@ def test_only_exact_backend_catalog_provider_becomes_user_connection_action() ->
     assert actionable_connection_capabilities(
         ["HubSpot", "Meta Ads campaign reporting", "custom-mcp"], inventory
     ) == ["hubspot"]
+
+
+def test_complete_requirements_include_every_explicit_missing_provider() -> None:
+    inventory = [
+        {
+            "slug": "linear",
+            "name": "Linear",
+            "canonical_provider": "linear",
+            "connected": False,
+        },
+        {
+            "slug": "slack",
+            "name": "Slack",
+            "canonical_provider": "slack",
+            "connected": False,
+        },
+    ]
+
+    assert complete_connection_requirements(
+        "Read my open Linear issues, summarize them, and prepare the summary for Slack.",
+        ["Slack"],
+        inventory,
+    ) == ["linear", "slack"]
+
+
+def test_complete_requirements_collapse_routes_and_reuse_connected_family() -> None:
+    disconnected = [
+        {
+            "slug": "notion",
+            "name": "Notion",
+            "canonical_provider": "notion",
+            "connected": False,
+        },
+        {
+            "slug": "notion-mcp-v2",
+            "name": "Notion (MCP)",
+            "canonical_provider": "notion",
+            "connected": False,
+        },
+    ]
+    assert complete_connection_requirements(
+        "Read my Notion workspace", ["notion-mcp-v2"], disconnected
+    ) == ["notion"]
+
+    connected = [
+        {**disconnected[0], "connected": True},
+        disconnected[1],
+    ]
+    assert complete_connection_requirements(
+        "Read my Notion workspace", ["notion-mcp-v2"], connected
+    ) == []
 
 
 def test_connector_contract_mismatch_is_replanned_before_reaching_user(monkeypatch) -> None:

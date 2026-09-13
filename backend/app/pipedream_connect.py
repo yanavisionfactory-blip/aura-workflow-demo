@@ -1312,6 +1312,9 @@ async def planning_catalog(
         {
             "slug": row.provider_slug,
             "name": row.display_name,
+            "canonical_provider": canonical_provider_slug(
+                (row.definition.get("identity") or {}).get("app") or row.provider_slug
+            ),
             "kind": "oauth",
             "allowed_operations": [
                 item["name"] for item in row.definition.get("capabilities", [])
