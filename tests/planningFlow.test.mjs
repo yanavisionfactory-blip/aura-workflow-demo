@@ -76,6 +76,7 @@ test("the UI renders a language plan while durable compilation is still running"
   assert.equal(planViewSource.includes("Connections never block plan creation"), true);
   assert.equal(planViewSource.includes("validatingExecution || missingTools.length"), true);
   assert.equal(source.includes('.replace(/^i\\s+will\\s+/i, "")'), true);
+  assert.equal(source.includes("iWill: firstPersonStepCopy(step.iWill || step.reason)"), true);
 });
 
 test("an internal terminal state stays behind the run supervisor", () => {

@@ -621,6 +621,10 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             ) return;
             setPlan((current) => current?.provisional ? {
               ...draft,
+              steps: draft.steps.map((step) => ({
+                ...step,
+                iWill: firstPersonStepCopy(step.iWill || step.reason),
+              })),
               interpretation: draft.interpretation || confirmedIntent,
               estimatedTime: "Plan ready — validating executable details backstage",
               connectionRequirements: current.connectionRequirements || explicitRequirements,
