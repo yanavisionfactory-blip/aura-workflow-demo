@@ -4,11 +4,26 @@ from types import SimpleNamespace
 import app.orchestrator as orchestrator
 from app.native_connectors import native_manifest
 from app.orchestrator import (
+    _capitalized_provider_candidates,
     actionable_connection_capabilities,
     complete_connection_requirements,
+    connection_requirement_inventory,
     explicit_disconnected_capabilities,
     planning_error_message,
 )
+
+
+class _ScalarRows:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def all(self):
+        return self._rows
+
+
+class _CatalogSession:
+    async def scalars(self, _statement):
+        return _ScalarRows([])
 
 
 def test_exhausted_api_credits_are_explained_without_raw_provider_payload() -> None:
@@ -143,6 +158,43 @@ def test_complete_requirements_collapse_routes_and_reuse_connected_family() -> N
     assert complete_connection_requirements(
         "Read my Notion workspace", ["notion-mcp-v2"], connected
     ) == []
+
+
+def test_provider_candidates_ignore_instruction_words() -> None:
+    assert _capitalized_provider_candidates(
+        "Read my open Linear issues and prepare the summary for Slack."
+    ) == ["Linear", "Slack"]
+
+
+def test_requirement_inventory_discovers_exact_connectable_app(monkeypatch) -> None:
+    class _PipedreamClient:
+        configured = True
+
+        async def list_apps(self, query, *, limit):
+            assert query == "Linear"
+            assert limit == 10
+            return [
+                {
+                    "name_slug": "linear",
+                    "name": "Linear",
+                    "auth_type": "oauth",
+                    "has_actions": True,
+                }
+            ]
+
+    monkeypatch.setattr(
+        "app.pipedream_connect.pipedream_client", lambda: _PipedreamClient()
+    )
+
+    inventory = asyncio.run(
+        connection_requirement_inventory(
+            _CatalogSession(),
+            "Read my open Linear issues",
+            [{"slug": "slack", "name": "Slack", "connected": False}],
+        )
+    )
+
+    assert [item["slug"] for item in inventory] == ["slack", "linear"]
 
 
 def test_connector_contract_mismatch_is_replanned_before_reaching_user(monkeypatch) -> None:
