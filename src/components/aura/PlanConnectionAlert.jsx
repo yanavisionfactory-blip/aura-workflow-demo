@@ -86,7 +86,7 @@ export default function PlanConnectionAlert({
             ? `Connecting ${connectingTool}…`
             : connectionEnabled
               ? "Connect remaining accounts"
-              : "Preparing secure connections…"}
+              : "Validating required accounts…"}
         </button>
       </div>
 

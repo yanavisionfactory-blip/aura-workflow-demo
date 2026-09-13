@@ -580,14 +580,38 @@ def _connection_family(item: dict) -> str:
     return re.sub(r"-mcp$", "", normalized)
 
 
+def _connection_capability_families(item: dict) -> set[str]:
+    """Return every app family a connection can actually satisfy.
+
+    Some providers intentionally expose several user-facing apps through one
+    verified account. Google Workspace, for example, is stored as ``google``
+    while its allow-list contains ``gmail.*``, ``calendar.*``, ``drive.*`` and
+    ``sheets.*`` operations. Treating only the storage slug as connected made a
+    healthy Google account look disconnected when a plan named Gmail directly.
+    """
+    families = {_connection_family(item)}
+    for operation in item.get("allowed_operations") or []:
+        namespace = str(operation or "").split(".", 1)[0]
+        family = _connection_family({"canonical_provider": namespace})
+        if family:
+            families.add(family)
+    families.discard("")
+    return families
+
+
+def _connected_capability_families(inventory: list[dict]) -> set[str]:
+    return {
+        family
+        for item in inventory
+        if item.get("connected", False)
+        for family in _connection_capability_families(item)
+    }
+
+
 def explicit_disconnected_capabilities(prompt: str, inventory: list[dict]) -> list[str]:
     """Find every explicitly named, disconnected provider account family."""
     text = " " + re.sub(r"[^a-z0-9]+", " ", prompt.casefold()).strip() + " "
-    connected_families = {
-        _connection_family(item)
-        for item in inventory
-        if item.get("connected", False) and _connection_family(item)
-    }
+    connected_families = _connected_capability_families(inventory)
     missing: list[str] = []
     seen_families: set[str] = set()
     for item in inventory:
@@ -626,11 +650,7 @@ def actionable_connection_capabilities(
     cannot be matched to a disconnected catalog entry, recovery stays backstage
     instead of asking the user for API, MCP, or custom OAuth configuration.
     """
-    connected_families = {
-        _connection_family(item)
-        for item in inventory
-        if item.get("connected", False) and _connection_family(item)
-    }
+    connected_families = _connected_capability_families(inventory)
     aliases: dict[str, str] = {}
     for item in inventory:
         family = _connection_family(item)
@@ -752,11 +772,7 @@ async def connection_requirement_inventory(
 ) -> list[dict]:
     """Extend certified actions with connectable apps from the canonical marketplace."""
     combined = list(execution_inventory)
-    connected_families = {
-        _connection_family(item)
-        for item in execution_inventory
-        if item.get("connected", False) and _connection_family(item)
-    }
+    connected_families = _connected_capability_families(execution_inventory)
     known_families = {
         _connection_family(item) for item in combined if _connection_family(item)
     }

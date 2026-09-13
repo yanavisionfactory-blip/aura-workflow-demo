@@ -2014,21 +2014,30 @@ async def create_connector_broker_session(
 
 def _requirement_accepts_tool(requirement: ConnectionRequirement, tool: ToolConnection) -> bool:
     providers = {
-        tool.slug.casefold(),
-        canonical_provider_slug(tool.slug).casefold(),
-        canonical_provider_slug(_pipedream_tool_vendor_app(tool)).casefold(),
+        canonical_provider_slug(value).casefold()
+        for value in (tool.slug, _pipedream_tool_vendor_app(tool))
+        if str(value or "").strip()
     }
     capability = str(requirement.capability or "").casefold()
     provider_hint = str(requirement.provider_hint or "").casefold()
-    canonical_hint = canonical_provider_slug(provider_hint).casefold()
+    canonical_hint = (
+        canonical_provider_slug(provider_hint).casefold() if provider_hint else ""
+    )
     allowed = {str(item).casefold() for item in tool.allowed_operations or []}
+    providers.update(
+        canonical_provider_slug(operation.split(".", 1)[0]).casefold()
+        for operation in allowed
+        if operation
+    )
+    capability_family = (
+        canonical_provider_slug(capability.split(".", 1)[0]).casefold()
+        if capability
+        else ""
+    )
     return bool(
-        provider_hint in providers
-        or canonical_hint in providers
-        or capability in providers
+        (canonical_hint and canonical_hint in providers)
+        or (capability_family and capability_family in providers)
         or capability in allowed
-        or any(capability.startswith(f"{provider}.") for provider in providers)
-        and capability in allowed
     )
 
 
@@ -4351,7 +4360,10 @@ async def resume_after_connection(
             409,
             {
                 "code": "connection_does_not_satisfy_requirement",
-                "message": "This account does not provide the capability this workflow needs",
+                "message": (
+                    f"{tool.display_name} is connected, but it does not match the remaining "
+                    "account required by this workflow"
+                ),
             },
         )
     for requirement in matched:
