@@ -35,6 +35,8 @@ const NATIVE_FALLBACK = [
   ...tool,
   connectable: true,
   availability: "available",
+  connectionStrategy: "oauth",
+  setupHint: "Provider consent",
   connectionBackend: "native",
 }));
 
@@ -43,11 +45,13 @@ export const MARKETPLACE = [...NATIVE_FALLBACK];
 
 function description(item) {
   const categories = Array.isArray(item.categories) ? item.categories.filter(Boolean) : [];
-  if (item.connectable && item.capability_count) {
-    return `${item.capability_count} verified ${item.capability_count === 1 ? "capability" : "capabilities"}`;
+  const setupHint = String(item.setup_hint || item.setupHint || "").trim();
+  if (item.connectable && setupHint && item.capability_count) {
+    return `${setupHint} · ${item.capability_count} verified ${item.capability_count === 1 ? "capability" : "capabilities"}`;
   }
+  if (item.connectable && setupHint) return setupHint;
   if (categories.length) return categories.slice(0, 2).join(" · ");
-  return item.connectable ? "Verified one-click connection" : "Coming soon";
+  return item.connectable ? "Secure connection available" : "Coming soon";
 }
 
 function normalize(item) {
@@ -61,9 +65,13 @@ function normalize(item) {
     desc: description(item),
     categories: Array.isArray(item.categories) ? item.categories : [],
     connectable: Boolean(item.connectable ?? item.availability === "available"),
+    requestable: Boolean(item.requestable || item.availability === "requestable"),
     availability: item.availability || (item.connectable ? "available" : "verifying"),
     source: item.source || "connector_engineer",
     connectionBackend: item.connection_backend || item.connectionBackend || null,
+    connectionStrategy: item.connection_strategy || item.connectionStrategy || null,
+    executionBackend: item.execution_backend || item.executionBackend || null,
+    setupHint: item.setup_hint || item.setupHint || null,
   };
 }
 
