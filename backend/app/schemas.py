@@ -4,59 +4,37 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
 
-class ToolCreate(BaseModel):
-    slug: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,119}$")
-    display_name: str
-    kind: Literal["api_key", "openapi", "mcp", "agent", "plugin", "webhook", "browser"]
-    base_url: HttpUrl | None = None
-    credentials: dict[str, str] = Field(default_factory=dict)
-    config: dict[str, Any] = Field(default_factory=dict)
-    allowed_operations: list[str] = Field(default_factory=list)
-
-
-class ConnectionDiscover(BaseModel):
-    slug: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,119}$")
-    display_name: str
-    kind: Literal["api_key", "openapi", "mcp", "agent", "plugin", "webhook", "browser"]
-    base_url: HttpUrl
-    credentials: dict[str, str] = Field(default_factory=dict)
-    config: dict[str, Any] = Field(default_factory=dict)
-
-
 class ConnectionResume(BaseModel):
     connection_id: str | None = None
 
 
-class CustomOAuthStart(BaseModel):
-    slug: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,119}$")
-    display_name: str = Field(min_length=2, max_length=200)
-    authorization_url: HttpUrl
-    token_url: HttpUrl
-    api_base_url: HttpUrl
-    client_id: str = Field(min_length=2, max_length=1000)
-    client_secret: str = Field(default="", max_length=4000)
-    scopes: list[str] = Field(default_factory=list, max_length=100)
-    authorization_params: dict[str, str] = Field(default_factory=dict)
-    token_params: dict[str, str] = Field(default_factory=dict)
-    token_auth_method: Literal["client_secret_post", "client_secret_basic", "none"] = (
-        "client_secret_post"
-    )
-    capabilities: list[dict[str, Any]] = Field(default_factory=list, min_length=1, max_length=200)
-    revocation_url: HttpUrl | None = None
+class ConnectorMarketplaceRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=160)
 
-    @field_validator("authorization_url", "token_url", "api_base_url", "revocation_url")
+    @field_validator("name", mode="before")
     @classmethod
-    def require_https(cls, value: HttpUrl | None) -> HttpUrl | None:
-        if value is not None and value.scheme != "https":
-            raise ValueError("Connector endpoints must use HTTPS")
-        return value
+    def normalize_name(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise TypeError("App name must be text")
+        normalized = " ".join(value.split())
+        if any(ord(character) < 32 for character in normalized):
+            raise ValueError("App name contains unsupported characters")
+        return normalized
 
 
-class ConnectorInstallationCreate(BaseModel):
-    package_id: str
-    authentication_type: Literal["oauth2", "api_key", "bearer", "basic", "none"]
-    credentials: dict[str, str] = Field(default_factory=dict)
-    configuration: dict[str, Any] = Field(default_factory=dict)
+class ConnectorBrokerComplete(BaseModel):
+    account_id: str = Field(pattern=r"^apn_[A-Za-z0-9]+$", max_length=500)
+    connection_id: str | None = Field(default=None, max_length=36)
+
+    @field_validator("account_id", mode="before")
+    @classmethod
+    def normalize_account_id(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise TypeError("Account reference must be text")
+        normalized = value.strip()
+        if any(ord(character) < 32 for character in normalized):
+            raise ValueError("Account reference contains unsupported characters")
+        return normalized
 
 
 class ConnectorInstallationUpgrade(BaseModel):
@@ -125,6 +103,23 @@ class RunCreate(BaseModel):
     def validate_memory_selection(self):
         if bool(self.memory_run_id) != bool(self.memory_bindings):
             raise ValueError("Memory requires a source run and explicit input bindings")
+        documents = self.inputs.get("attached_documents", self.inputs.get("documents"))
+        if documents is not None:
+            if not isinstance(documents, list) or len(documents) > 8:
+                raise ValueError("A run may contain no more than eight attached documents")
+            encoded_size = 0
+            for document in documents:
+                if not isinstance(document, dict):
+                    raise ValueError("Attached document metadata must be an object")
+                name = document.get("name")
+                file_url = document.get("file_url")
+                if not isinstance(name, str) or not name.strip() or len(name) > 500:
+                    raise ValueError("Attached documents require a valid filename")
+                if not isinstance(file_url, str) or not file_url.startswith("data:"):
+                    raise ValueError("Attached document content must use an AURA upload reference")
+                encoded_size += len(file_url)
+            if encoded_size > 16_000_000:
+                raise ValueError("Attached document content exceeds the per-run limit")
         return self
 
 

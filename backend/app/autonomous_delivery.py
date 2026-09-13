@@ -22,6 +22,7 @@ from .models import (
     CapabilityManifest,
     DeadLetterEntry,
     DispatchIntent,
+    ManagedConnectorRelease,
     RunStatus,
     RunStep,
     StepAttempt,
@@ -36,7 +37,7 @@ from .native_connectors import (
 )
 from .policy import operation_scope
 from .providers import PROVIDERS
-from .run_supervisor import transition_run
+from .run_supervisor import recovery_counter, recovery_mapping, transition_run
 from .schemas import AutonomousRecoveryOption
 from .security import CredentialVault
 from .universal_connectors import ConnectorError, discover_provider
@@ -67,18 +68,39 @@ AUTONOMY_VERSION = 3
 
 
 def _autonomy(context: dict) -> dict:
-    state = deepcopy(context.get("__aura_autonomy__") or {})
-    if int(state.get("version", 0)) < AUTONOMY_VERSION:
+    state = recovery_mapping(context.get("__aura_autonomy__"))
+    if recovery_counter(state.get("version")) < AUTONOMY_VERSION:
         # A newer recovery engine may safely reconsider a prior platform-limited
         # handoff. Existing attempt counts and receipts remain authoritative.
         state.pop("handoff_reason_code", None)
     state["version"] = AUTONOMY_VERSION
-    state.setdefault("rounds", 0)
-    state.setdefault("step_recoveries", {})
-    state.setdefault("attempt_offsets", {})
-    state.setdefault("review_recoveries", 0)
-    state.setdefault("failure_history", [])
-    state.setdefault("actions_by_failure", {})
+    state["rounds"] = recovery_counter(state.get("rounds"))
+    state["review_recoveries"] = recovery_counter(state.get("review_recoveries"))
+    state["step_recoveries"] = {
+        str(key): recovery_counter(value)
+        for key, value in recovery_mapping(state.get("step_recoveries")).items()
+    }
+    state["attempt_offsets"] = {
+        str(key): recovery_counter(value)
+        for key, value in recovery_mapping(state.get("attempt_offsets")).items()
+    }
+    history = state.get("failure_history")
+    state["failure_history"] = (
+        [deepcopy(item) for item in history if isinstance(item, dict)][-20:]
+        if isinstance(history, list)
+        else []
+    )
+    actions = recovery_mapping(state.get("actions_by_failure"))
+    state["actions_by_failure"] = {
+        str(key): (
+            [str(item) for item in value if isinstance(item, str)]
+            if isinstance(value, list)
+            else [value]
+            if isinstance(value, str)
+            else []
+        )
+        for key, value in actions.items()
+    }
     return state
 
 
@@ -92,7 +114,7 @@ def attempts_for_current_cycle(
     """
     if consequential:
         return attempts
-    offset = int(_autonomy(context)["attempt_offsets"].get(step_id, 0))
+    offset = recovery_counter(_autonomy(context)["attempt_offsets"].get(step_id))
     return attempts[min(max(offset, 0), len(attempts)) :]
 
 
@@ -101,7 +123,7 @@ def reset_read_attempt_cycle(context: dict, step_id: str, attempt_count: int) ->
     state = _autonomy(context)
     state["attempt_offsets"] = {
         **state["attempt_offsets"],
-        step_id: max(0, int(attempt_count)),
+        step_id: recovery_counter(attempt_count),
     }
     context["__aura_autonomy__"] = state
     return context
@@ -167,7 +189,7 @@ async def _failure_evidence(session, run, step) -> dict:
         (
             item
             for item in events
-            if item.payload.get("step_id") == step.id
+            if recovery_mapping(item.payload).get("step_id") == step.id
             and item.event_type
             in {
                 "step.recovery_exhausted",
@@ -180,12 +202,22 @@ async def _failure_evidence(session, run, step) -> dict:
         ),
         None,
     )
-    latest_error = (
-        attempts[0].error
-        if attempts
-        else str(
-            (event.payload if event else {}).get("internal_error") or step.error or run.error or ""
-        )
+    event_payload = recovery_mapping(event.payload) if event else {}
+    # Older and interrupted attempts may have committed before an error string was
+    # recorded.  Passing that nullable column directly to ``re.sub`` raises a
+    # TypeError and previously aborted every global recovery tick for the same run.
+    latest_error = next(
+        (
+            value
+            for value in (
+                attempts[0].error if attempts else None,
+                event_payload.get("internal_error"),
+                step.error,
+                run.error,
+            )
+            if isinstance(value, str) and value.strip()
+        ),
+        "",
     )
     category = _category(latest_error)
     if event:
@@ -241,9 +273,12 @@ async def _safe_options(
     session, run, steps, state, failure: dict | None = None
 ) -> list[AutonomousRecoveryOption]:
     settings = get_settings()
-    delay = _delay(int(state["rounds"]) + 1)
+    delay = _delay(recovery_counter(state.get("rounds")) + 1)
     if steps and all(step.status in {StepStatus.completed, StepStatus.skipped} for step in steps):
-        if int(state["review_recoveries"]) < settings.max_autonomous_review_recoveries:
+        if (
+            recovery_counter(state.get("review_recoveries"))
+            < settings.max_autonomous_review_recoveries
+        ):
             return [
                 AutonomousRecoveryOption(
                     key="retry_final_review",
@@ -262,7 +297,7 @@ async def _safe_options(
         )
     if not step:
         return []
-    per_step = int(state["step_recoveries"].get(step.id, 0))
+    per_step = recovery_counter(state["step_recoveries"].get(step.id))
     if per_step >= settings.max_autonomous_step_recoveries:
         return []
     recorded = isinstance(step.output, dict) and "provider_result" in step.output
@@ -453,9 +488,36 @@ async def _revalidate_connection(session, run, step) -> tuple[bool, bool]:
     if manifest and manifest.status == "revoked":
         return False, False
     try:
-        integration_id, verification = await managed_connector_client().verify_connection(
-            tool.slug, {"connection_id": connection_id}
-        )
+        release_id = (tool.config or {}).get("connector_release_id")
+        release = await session.get(ManagedConnectorRelease, release_id) if release_id else None
+        if release_id:
+            from .connector_engineer import (
+                certify_verified_reads,
+                release_signature_valid,
+                released_connector,
+                verify_released_connection,
+            )
+
+            if (
+                not release
+                or release.status not in {"released", "superseded"}
+                or not release_signature_valid(release)
+            ):
+                release = await released_connector(session, tool.slug)
+            if not release:
+                return False, False
+            integration_id = release.integration_id
+            verification = await verify_released_connection(
+                managed_connector_client(),
+                release,
+                {"connection_id": connection_id},
+            )
+        else:
+            integration_id, verification = (
+                await managed_connector_client().verify_connection(
+                    tool.slug, {"connection_id": connection_id}
+                )
+            )
     except Exception as exc:  # noqa: BLE001 - the next durable delivery may retry the control plane
         return False, bool(getattr(exc, "retryable", True))
     if not verification.get("ok"):
@@ -467,11 +529,31 @@ async def _revalidate_connection(session, run, step) -> tuple[bool, bool]:
         "connection_id": connection_id,
         "integration_id": integration_id,
         "verification_status": "verified",
+        **(
+            {
+                "connector_release_id": release.id,
+                "connector_release_version": release.version,
+                "connector_release_hash": release.definition_hash,
+            }
+            if release_id and release
+            else {}
+        ),
     }
     if manifest:
         manifest.status = "verified"
         manifest.verification = verification
         manifest.verified_at = datetime.now(UTC)
+        if release_id and release:
+            manifest.manifest = release.definition.get("manifest") or {}
+    if release_id and release:
+        tool.allowed_operations = list(verification.get("allowed_operations") or [])
+        await certify_verified_reads(
+            session,
+            run.workspace_id,
+            tool,
+            release,
+            list(verification.get("certified_read_operations") or []),
+        )
     return True, False
 
 
@@ -496,7 +578,7 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
             return "not_applicable"
         context = deepcopy(run.execution_context or {})
         state = _autonomy(context)
-        if int(state["rounds"]) >= settings.max_autonomous_recovery_rounds:
+        if recovery_counter(state.get("rounds")) >= settings.max_autonomous_recovery_rounds:
             await _handoff(session, run, state, "recovery_budget_exhausted")
             await session.commit()
             return "handoff"
@@ -515,7 +597,7 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
                 "status": run.status.value,
                 "completed_steps": sum(step.status == StepStatus.completed for step in steps),
                 "failed_step_ids": [step.id for step in steps if step.status == StepStatus.failed],
-                "recovery_round": int(state["rounds"]) + 1,
+                "recovery_round": recovery_counter(state.get("rounds")) + 1,
                 "failed_step": (
                     {
                         "id": failed_step.id,
@@ -580,7 +662,7 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
                 await session.commit()
                 return "not_applicable"
 
-        state["rounds"] = int(state["rounds"]) + 1
+        state["rounds"] = recovery_counter(state.get("rounds")) + 1
         state["last_action"] = selected.action
         state["last_reason_code"] = selected.reason_code
         state["last_decision_source"] = source
@@ -607,11 +689,11 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
             datetime.now(UTC) + timedelta(seconds=selected.delay_seconds)
         ).isoformat()
         if selected.action == "retry_final_review":
-            state["review_recoveries"] = int(state["review_recoveries"]) + 1
+            state["review_recoveries"] = recovery_counter(state.get("review_recoveries")) + 1
         elif step:
             state["step_recoveries"] = {
                 **state["step_recoveries"],
-                step.id: int(state["step_recoveries"].get(step.id, 0)) + 1,
+                step.id: recovery_counter(state["step_recoveries"].get(step.id)) + 1,
             }
             attempt_count = await _attempt_count(session, step.id)
             consequential = step.consequential or operation_scope(step.operation) != "read"

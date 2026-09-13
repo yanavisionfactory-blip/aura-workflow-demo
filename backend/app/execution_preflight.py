@@ -23,13 +23,22 @@ from .config import get_settings
 from .managed_connectors import managed_connection_reference, managed_connector_client
 from .models import (
     AuditEvent,
+    BrokerCapabilityPack,
     CapabilityManifest,
     DispatchIntent,
+    ManagedConnectorRelease,
     RunStatus,
     ToolConnection,
     ToolKind,
 )
 from .native_connectors import native_manifest
+from .pipedream_connect import (
+    PipedreamConnectError,
+    pipedream_client,
+)
+from .pipedream_connect import (
+    pack_signature_valid as pipedream_pack_signature_valid,
+)
 from .policy import canonical_plan_hash
 from .providers import (
     PROVIDERS,
@@ -38,7 +47,7 @@ from .providers import (
     verify_oauth_credentials,
 )
 from .reliability import classify_failure
-from .run_supervisor import transition_run
+from .run_supervisor import recovery_counter, recovery_mapping, transition_run
 from .security import CredentialVault
 from .universal_connectors import (
     allowed_operations,
@@ -181,6 +190,79 @@ async def _connection_credentials(
         tool.enabled = True
         return {}, manifest.verification, None
 
+    if tool.config.get("managed_by") == "pipedream":
+        pack_id = (tool.config or {}).get("capability_pack_id")
+        pack = await session.get(BrokerCapabilityPack, pack_id) if pack_id else None
+        trusted = bool(
+            pack
+            and pack.backend == "pipedream"
+            and pack.provider_slug == tool.slug
+            and pack.status in {"released", "superseded"}
+            and pack.definition_hash == (tool.config or {}).get("capability_pack_hash")
+            and pipedream_pack_signature_valid(pack)
+        )
+        if not trusted:
+            return (
+                None,
+                None,
+                _blocker(
+                    "connection_unavailable",
+                    f"{tool.display_name} no longer has a trusted action pack.",
+                    action="wait_for_connector_repair",
+                    tool_slug=tool.slug,
+                    connection_id=tool.id,
+                ),
+            )
+        external_user_id = str((tool.config or {}).get("external_user_id") or "")
+        account_id = str(tool.external_connection_id or "")
+        if not external_user_id or not account_id:
+            verification = {
+                "ok": False,
+                "reason": "authorization_required",
+                "retryable": False,
+            }
+        else:
+            try:
+                verification = await pipedream_client().verify_account(
+                    external_user_id, tool.slug, account_id
+                )
+            except PipedreamConnectError as exc:
+                if exc.retryable:
+                    raise RuntimeError("provider_temporarily_unavailable") from exc
+                verification = {
+                    "ok": False,
+                    "reason": "authorization_required",
+                    "retryable": False,
+                }
+        manifest.verification = {
+            **verification,
+            "source": "execution_preflight_connector_broker",
+            "backend": "pipedream",
+        }
+        manifest.verified_at = _now()
+        if not verification.get("ok"):
+            manifest.status = "degraded"
+            tool.enabled = False
+            return (
+                None,
+                verification,
+                _blocker(
+                    "oauth_required",
+                    f"{tool.display_name} authorization is no longer usable.",
+                    action="reconnect_account",
+                    tool_slug=tool.slug,
+                    connection_id=tool.id,
+                    connected_account=_account_label(verification),
+                ),
+            )
+        manifest.status = "verified"
+        manifest.manifest = pack.definition
+        tool.allowed_operations = [
+            item["name"] for item in pack.definition.get("capabilities", []) if item.get("name")
+        ]
+        tool.enabled = True
+        return {}, verification, None
+
     if tool.config.get("managed_by") == "nango":
         reference = managed_connection_reference(tool)
         if not reference:
@@ -195,9 +277,46 @@ async def _connection_credentials(
                     connection_id=tool.id,
                 ),
             )
-        integration_id, verification = await managed_connector_client().verify_connection(
-            tool.slug, {"connection_id": reference}
-        )
+        release_id = (tool.config or {}).get("connector_release_id")
+        release = await session.get(ManagedConnectorRelease, release_id) if release_id else None
+        if release_id:
+            from .connector_engineer import (
+                certify_verified_reads,
+                release_signature_valid,
+                released_connector,
+                verify_released_connection,
+            )
+
+            if (
+                not release
+                or release.status not in {"released", "superseded"}
+                or not release_signature_valid(release)
+            ):
+                release = await released_connector(session, tool.slug)
+            if not release:
+                return (
+                    None,
+                    None,
+                    _blocker(
+                        "connection_unavailable",
+                        f"{tool.display_name} no longer has a verified connector release.",
+                        action="wait_for_connector_repair",
+                        tool_slug=tool.slug,
+                        connection_id=tool.id,
+                    ),
+                )
+            integration_id = release.integration_id
+            verification = await verify_released_connection(
+                managed_connector_client(),
+                release,
+                {"connection_id": reference},
+            )
+        else:
+            integration_id, verification = (
+                await managed_connector_client().verify_connection(
+                    tool.slug, {"connection_id": reference}
+                )
+            )
         manifest.verification = verification
         manifest.verified_at = _now()
         if not verification.get("ok"):
@@ -220,6 +339,25 @@ async def _connection_credentials(
         manifest.status = "verified"
         tool.enabled = True
         tool.config = {**(tool.config or {}), "integration_id": integration_id}
+        if release_id and release:
+            tool.config = {
+                **tool.config,
+                "connector_release_id": release.id,
+                "connector_release_version": release.version,
+                "connector_release_hash": release.definition_hash,
+            }
+            tool.allowed_operations = list(
+                verification.get("allowed_operations") or []
+            )
+            manifest.manifest = release.definition.get("manifest") or {}
+            await certify_verified_reads(
+                session,
+                tool.workspace_id,
+                tool,
+                release,
+                list(verification.get("certified_read_operations") or []),
+            )
+            return {}, verification, None
         credentials = await managed_connector_client().get_credentials(reference, integration_id)
         return credentials, verification, None
 
@@ -302,8 +440,8 @@ async def _connection_credentials(
 
 
 async def _schedule_retry(session, run, report: dict, message: str) -> PreflightOutcome:
-    state = deepcopy((run.execution_context or {}).get("__aura_preflight__") or {})
-    attempt = int(state.get("attempt", 0)) + 1
+    state = recovery_mapping((run.execution_context or {}).get("__aura_preflight__"))
+    attempt = recovery_counter(state.get("attempt")) + 1
     delay = min(120, 5 * 2 ** min(attempt - 1, 5))
     available_at = _now() + timedelta(seconds=delay)
     report.update(
@@ -391,7 +529,7 @@ async def _stop_for_human(session, run, report: dict, blocker: dict) -> Prefligh
 async def preflight_approved_run(session, run, steps: list[Any]) -> PreflightOutcome:
     """Prove readiness once per immutable plan before any workflow step executes."""
     plan_hash = canonical_plan_hash(run.plan)
-    previous = deepcopy((run.execution_context or {}).get("__aura_preflight__") or {})
+    previous = recovery_mapping((run.execution_context or {}).get("__aura_preflight__"))
     if (
         previous.get("version") == PREFLIGHT_VERSION
         and previous.get("plan_hash") == plan_hash
@@ -408,7 +546,7 @@ async def preflight_approved_run(session, run, steps: list[Any]) -> PreflightOut
         "status": "running",
         "started_at": _now().isoformat(),
         "checks": [],
-        "attempt": int(previous.get("attempt", 0)),
+        "attempt": recovery_counter(previous.get("attempt")),
     }
     tool_slugs = sorted(
         {step.tool_slug for step in steps if step.status.value not in {"completed", "skipped"}}

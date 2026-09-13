@@ -35,7 +35,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RECOVERY_BASE_REF: python-control-plane
+  RECOVERY_BASE_REF: main
   INCIDENT_ID: ${{ github.event.client_payload.incident_id || inputs.incident_id }}
   WORKSPACE_ID: ${{ github.event.client_payload.workspace_id || inputs.workspace_id }}
   RUN_ID: ${{ github.event.client_payload.run_id || inputs.run_id }}

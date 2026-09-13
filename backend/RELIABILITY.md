@@ -71,7 +71,9 @@ buttons are not shown when the control plane has determined that repetition is u
 
 - API: `RECOVERY_SCHEDULER_ENABLED=true` starts a 15-second recovery/outbox loop.
   PostgreSQL elects one tick owner across API replicas. Celery Beat is not required
-  for recovery. Scheduled business workflows still use the existing schedule dispatcher.
+  for recovery. Each cycle publishes a liveness heartbeat and has a hard timeout
+  (`SCHEDULER_TICK_TIMEOUT_SECONDS=300` by default). Scheduled business workflows still
+  use the existing schedule dispatcher.
 - `STALE_RUN_SECONDS=600`: inspect queued, planning, running and recovering runs.
   A live execution lock prevents recovery. Approval-paused and terminal runs are excluded.
 - `MAX_RESTART_RECOVERIES=3`: persist recovery count, then pause with saved evidence.
@@ -127,6 +129,20 @@ allow-list. Diagnostics report `owner=system` and `code=autonomous_recovery` whi
 scheduled; recovery rounds and the last action are also exposed by the run evaluation endpoint.
 
 ## Connector certification
+
+The dynamic Connector Engineer continuously reconciles configured Nango OAuth2
+integrations into signed, versioned capability packs. Discovery is not release:
+only isolated definitions that pass every operation on a dedicated canary account
+enter the planning catalog. Customer OAuth sessions are then restricted to that
+exact released integration, and the connection is scope/probe verified before a
+saved workflow resumes. A failed candidate never replaces the last good release;
+repeated failures quarantine an active release and restore its valid predecessor.
+The searchable marketplace is the persisted provider discovery snapshot: `verifying`
+entries are visible for discovery but disabled, while only signed/canaried `available`
+entries can open consent. Bounded scans keep a durable cursor and rotate through the
+eligible catalog instead of repeatedly inspecting the same first batch.
+See [`docs/connector-authorization.md`](docs/connector-authorization.md) for the
+operator variables, release states, and customer-visible boundary.
 
 A verified OAuth connection does not certify its operations. Native contracts expose
 input/output schemas, permission scope, evidence tags, retry semantics and a contract

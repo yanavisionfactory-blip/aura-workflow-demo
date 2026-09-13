@@ -12,6 +12,7 @@ from app.run_supervisor import (
     HUMAN_ACTION_CODES,
     planning_failure_category,
     public_run_projection,
+    recovery_counter,
     recover_planning_failure,
 )
 
@@ -44,6 +45,21 @@ def test_planning_failure_taxonomy_is_stable(error, category):
     assert planning_failure_category(error) == category
 
 
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (None, 0),
+        ("invalid", 0),
+        ([], 0),
+        (-4, 0),
+        ("3", 3),
+        (10_000_000, 1_000_000),
+    ],
+)
+def test_legacy_recovery_counters_are_safely_normalized(value, expected):
+    assert recovery_counter(value) == expected
+
+
 async def test_planning_failure_is_retried_without_becoming_user_failure(database):
     async with database() as session:
         run = WorkflowRun(
@@ -73,9 +89,7 @@ async def test_planning_failure_is_retried_without_becoming_user_failure(databas
         assert state["owner"] == "run_supervisor"
         assert state["attempts"]["planning"] == 1
         assert "private provider trace" not in str(state)
-        intent = await session.scalar(
-            select(DispatchIntent).where(DispatchIntent.run_id == run.id)
-        )
+        intent = await session.scalar(select(DispatchIntent).where(DispatchIntent.run_id == run.id))
         assert intent is not None
         assert intent.kind == "plan"
         assert intent.available_at > datetime.now(timezone.utc).replace(tzinfo=None)

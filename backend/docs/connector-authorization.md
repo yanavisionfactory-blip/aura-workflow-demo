@@ -18,6 +18,53 @@ An exact provider-named integration is preferred; otherwise there must be exactl
 one match. Explicit mappings are checked against the returned integration identity
 and provider before issuing an authorization link.
 
+## Dynamic Connector Engineer
+
+`CONNECTOR_ENGINEER_ENABLED=true` starts a control-plane loop independent of
+workflow delivery. Each scan reads Nango's provider, integration, and deployed
+function catalogs and compiles eligible OAuth2 integrations into data-only AURA
+capability packs. Provider code is never downloaded or executed in the API
+process. The only permitted runtime transports are Nango action invocation and
+Nango synchronized-record reads against the configured Nango origin.
+
+The complete safe provider metadata snapshot is persisted and returned as the
+searchable `marketplace` field. Entries that are merely discovered are labelled
+`verifying` (or `unsupported_auth`) and cannot create a customer connection.
+Only the separate signed `catalog` receives a Connect action. Bounded scans use a
+durable rotating cursor, so a large Nango catalog is reconciled across successive
+ticks instead of repeatedly processing the same first page.
+
+A discovered integration is not a supported connector. A version becomes visible
+to planning and `GET /v1/managed-connectors/status` only after all of these gates:
+
+1. Every module and JSON Schema passes isolated validation.
+2. The normalized immutable definition is hashed and HMAC-signed by AURA.
+3. Every operation passes against the dedicated Nango connection configured in
+   `CONNECTOR_ENGINEER_CANARY_CONNECTIONS_JSON`.
+4. The release transitions to `released`. Failed candidates remain `rejected` and
+   cannot supersede the last good release.
+
+Released definitions are versioned globally; customer connection references
+remain tenant-scoped. Runtime execution verifies the stored release ID, hash,
+signature, provider, integration, and release state before calling Nango. A
+tampered, quarantined, or rolled-back pack is not executable or user-visible.
+Repeated canary failures quarantine the active version and reactivate a valid
+previous release when one exists.
+
+The customer flow remains one click plus the provider's official consent: AURA
+creates a Nango Connect session restricted to the exact released integration,
+the customer authorizes in the provider popup, AURA probes the granted scopes and
+safe read operations, stores only the Nango connection reference, and resumes the
+saved workflow. API keys, MCP endpoints, raw OAuth forms, and provider tokens are
+never requested from or shown to the customer.
+
+An empty canary map intentionally yields `awaiting_canary`, not a partially
+supported connector. Nango catalog entries without an operator-owned integration
+and deployed functions may be found in marketplace search, but remain disabled
+and never expose API keys, endpoints, or OAuth configuration. Do not describe the
+product as supporting arbitrary tools merely because Nango lists a provider;
+only the signed `released` catalog is executable.
+
 ## Preflight evidence and limits
 
 Nango must permit reading integration credentials (`include=credentials`). The
@@ -61,3 +108,11 @@ missing credentials, cross-provider mappings, ambiguous discovery, corrected
 configuration on retry, reconnect, preflight timeout, rejected provisioning, and
 credential redaction. It runs in the normal backend release suite. No per-workflow
 database or connector-specific customer workaround is needed.
+
+Connector Engineer tests additionally cover transport isolation, schema
+compilation, exact integration scoping, dedicated-account canaries, signature
+tamper rejection, failed-candidate containment, previous-release preservation,
+rotating large-catalog coverage, customer capability probes, and Nango
+action/record execution. Administrators can
+inspect `GET /v1/admin/connector-engineer` and trigger a bounded reconciliation
+with `POST /v1/admin/connector-engineer/scan`; neither endpoint returns credentials.

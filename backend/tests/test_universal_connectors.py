@@ -1,12 +1,9 @@
 from types import SimpleNamespace
 
 import pytest
-from pydantic import ValidationError
 
-from app import universal_connectors
-from app import orchestrator
+from app import orchestrator, universal_connectors
 from app.models import ToolKind
-from app.schemas import CustomOAuthStart
 from app.universal_connectors import (
     ConnectorError,
     allowed_operations,
@@ -183,38 +180,3 @@ async def test_planning_preserves_browser_contract_when_refresh_is_unavailable(
 
     assert operations == ["browser.page.read"]
     assert tool.allowed_operations == ["browser.page.read"]
-
-
-def test_custom_oauth_requires_https_endpoints() -> None:
-    with pytest.raises(ValidationError, match="HTTPS"):
-        CustomOAuthStart(
-            slug="internal-crm",
-            display_name="Internal CRM",
-            authorization_url="http://auth.example.com/authorize",
-            token_url="https://auth.example.com/token",
-            api_base_url="https://api.example.com",
-            client_id="client-id",
-            capabilities=[{"name": "records.read", "permission_scope": "read"}],
-        )
-
-
-def test_custom_oauth_accepts_governed_capabilities() -> None:
-    payload = CustomOAuthStart(
-        slug="internal-crm",
-        display_name="Internal CRM",
-        authorization_url="https://auth.example.com/authorize",
-        token_url="https://auth.example.com/token",
-        api_base_url="https://api.example.com",
-        client_id="client-id",
-        client_secret="secret",
-        scopes=["records.read"],
-        capabilities=[
-            {
-                "name": "records.read",
-                "permission_scope": "read",
-                "transport": {"method": "GET", "path": "/records"},
-            }
-        ],
-    )
-    assert payload.token_auth_method == "client_secret_post"
-    assert payload.capabilities[0]["permission_scope"] == "read"
