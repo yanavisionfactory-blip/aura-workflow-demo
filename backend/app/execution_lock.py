@@ -1,7 +1,7 @@
 """Serialize deliveries for a run across workers, including across DB commits."""
 
-from contextlib import asynccontextmanager
 import hashlib
+from contextlib import asynccontextmanager
 
 from sqlalchemy import text
 

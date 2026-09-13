@@ -2,12 +2,13 @@
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
+
 from .db import SessionLocal, set_tenant_context
-from .models import ApprovalSnapshot, AuditEvent, RunStatus, RunStep, ToolConnection, WorkflowRun
 from .extended_outcomes import required_reads
+from .models import ApprovalSnapshot, AuditEvent, RunStatus, RunStep, ToolConnection, WorkflowRun
 
 logger = logging.getLogger(__name__)
 CATEGORIES = {'authorization_required', 'uncertain_write', 'invalid_request', 'contract_or_runtime_error', 'budget_exhausted', 'rate_limited', 'authentication', 'provider_error'}
@@ -22,7 +23,7 @@ def failure_category(payload: dict) -> str | None:
 
 async def log_recent_stops() -> None:
     from .scheduler_runtime import _workspace_ids
-    cutoff = datetime.now(timezone.utc) - timedelta(days=1)
+    cutoff = datetime.now(UTC) - timedelta(days=1)
     for wid in await _workspace_ids():
         async with SessionLocal() as session:
             await set_tenant_context(session, wid)
@@ -50,5 +51,5 @@ async def log_recent_stops() -> None:
 async def log_recent_stops_safely() -> None:
     try:
         await asyncio.wait_for(log_recent_stops(), timeout=15)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - startup diagnostics must never stop the API
         logger.warning('Workflow stop summary unavailable error_type=%s', type(exc).__name__)

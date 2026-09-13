@@ -105,7 +105,12 @@ def _autonomy(context: dict) -> dict:
 
 
 def attempts_for_current_cycle(
-    attempts: list[StepAttempt], context: dict, step_id: str, consequential: bool
+    attempts: list[StepAttempt],
+    context: dict,
+    step_id: str,
+    consequential: bool,
+    *,
+    idempotency_key: str | None = None,
 ) -> list[StepAttempt]:
     """Reads receive a new bounded attempt cycle after an explicit safe recovery.
 
@@ -113,6 +118,16 @@ def attempts_for_current_cycle(
     duplicate external action.
     """
     if consequential:
+        repair = recovery_mapping(
+            recovery_mapping(context.get("__aura_write_repairs__")).get(step_id)
+        )
+        if (
+            repair.get("status") == "approved"
+            and idempotency_key
+            and repair.get("idempotency_key") == idempotency_key
+        ):
+            offset = recovery_counter(repair.get("attempt_offset"))
+            return attempts[min(max(offset, 0), len(attempts)) :]
         return attempts
     offset = recovery_counter(_autonomy(context)["attempt_offsets"].get(step_id))
     return attempts[min(max(offset, 0), len(attempts)) :]

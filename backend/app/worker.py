@@ -98,7 +98,7 @@ def poll_subscription_task(self, subscription_id: str, workspace_id: str) -> Non
 async def index_memory(run_id: str, workspace_id: str) -> None:
     from .db import SessionLocal, engine, set_tenant_context
     from .execution_lock import execution_lock
-    from .models import WorkflowRun, RunStatus
+    from .models import RunStatus, WorkflowRun
     from .semantic_memory import index_run_memory
     async with execution_lock(engine, workspace_id, run_id) as acquired:
         if not acquired:

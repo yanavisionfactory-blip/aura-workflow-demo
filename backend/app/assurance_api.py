@@ -1,13 +1,23 @@
 """Authenticated operation matrix, signed certification, diagnostics and recovery canaries."""
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+
 from fastapi import Body, Depends, HTTPException
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from .models import (ToolConnection, CapabilityManifest, WorkflowRun, OperationCertification,
-                     RecoveryProbe, StepAttempt, DispatchIntent, AuditEvent)
-from .assurance import connection_fingerprint, operation_readiness, validate_attestation, diagnostic
-from .native_connectors import current_capability_manifest
+
+from .assurance import connection_fingerprint, diagnostic, operation_readiness, validate_attestation
 from .config import get_settings
+from .models import (
+    AuditEvent,
+    CapabilityManifest,
+    DispatchIntent,
+    OperationCertification,
+    RecoveryProbe,
+    StepAttempt,
+    ToolConnection,
+    WorkflowRun,
+)
+from .native_connectors import current_capability_manifest
 
 
 def install_routes(app, tenant_context, tenant_session):
@@ -51,6 +61,7 @@ def install_routes(app, tenant_context, tenant_session):
         except (ValueError, KeyError, TypeError) as exc:
             raise HTTPException(422, str(exc)) from exc
         import hashlib
+
         from .assurance import canonical
         identifier = hashlib.sha256(canonical(report)).hexdigest()[:36]
         existing = await session.get(OperationCertification, identifier)
@@ -94,8 +105,9 @@ def install_routes(app, tenant_context, tenant_session):
     async def performance(context=Depends(tenant_context), session: AsyncSession=Depends(tenant_session)):
         admin(context)
         import json
-        from .performance import evaluate_performance
+
         from .models import RunStep
+        from .performance import evaluate_performance
         runs = (await session.scalars(select(WorkflowRun).where(WorkflowRun.workspace_id == context.workspace_id).order_by(WorkflowRun.created_at.desc()).limit(200))).all()
         ids = [run.id for run in runs]
         events = (await session.scalars(select(AuditEvent).where(AuditEvent.workspace_id == context.workspace_id,
@@ -121,19 +133,19 @@ def install_routes(app, tenant_context, tenant_session):
     @app.get("/v1/assurance/operations-health")
     async def health(context=Depends(tenant_context), session: AsyncSession=Depends(tenant_session)):
         admin(context)
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=get_settings().stale_run_seconds)
+        cutoff = datetime.now(UTC) - timedelta(seconds=get_settings().stale_run_seconds)
         runs = (await session.scalars(select(WorkflowRun).where(WorkflowRun.workspace_id == context.workspace_id,
             WorkflowRun.status.in_(["waiting_for_action", "failed", "blocked", "running", "recovering", "queued", "planning"])).order_by(WorkflowRun.updated_at).limit(100))).all()
         return {"runs": [{"run_id": run.id, "status": run.status.value, "diagnostic": diagnostic(run),
-            "stale": run.updated_at.replace(tzinfo=timezone.utc) < cutoff} for run in runs], "limit": 100}
+            "stale": run.updated_at.replace(tzinfo=UTC) < cutoff} for run in runs], "limit": 100}
 
     @app.post("/v1/assurance/recovery-probes")
     async def start_probe(context=Depends(tenant_context), session: AsyncSession=Depends(tenant_session)):
         admin(context)
         from .db import engine
+        from .dispatch import dispatch_pending
         from .execution_lock import execution_lock
         from .recovery_probe import create_probe, probe_evidence
-        from .dispatch import dispatch_pending
         async with execution_lock(engine, context.workspace_id, "create-recovery-probe") as acquired:
             if not acquired:
                 raise HTTPException(409, "A recovery canary is being created")

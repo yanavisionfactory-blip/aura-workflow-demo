@@ -1,7 +1,7 @@
 """Keep legacy native capabilities consistent with recorded provider grants."""
+from .extended_outcomes import required_reads
 from .models import ToolKind
 from .security import CredentialVault
-from .extended_outcomes import required_reads
 
 
 def refresh_granted_readbacks(tool) -> None:

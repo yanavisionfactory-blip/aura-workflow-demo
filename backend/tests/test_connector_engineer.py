@@ -10,9 +10,9 @@ from app.connector_engineer import (
     discovered_marketplace,
     engineer_nango_catalog,
     isolate_definition,
-    requested_marketplace_entry,
     release_signature_valid,
     released_connectors,
+    requested_marketplace_entry,
 )
 from app.db import Base
 from app.managed_connectors import ManagedConnectorError, NangoClient
@@ -158,6 +158,42 @@ def test_compiler_exposes_only_bounded_nango_transports():
         "nango_records"
     ]
     assert definition["modules"][0]["permission_scope"] == "read"
+
+
+def test_compiler_collapses_exact_duplicate_catalog_functions():
+    duplicate = sync_function()
+    definition = compile_nango_definition(
+        integration(),
+        provider(),
+        [duplicate, dict(duplicate)],
+        settings(),
+    )
+
+    assert [module["name"] for module in definition["modules"]] == [
+        "linear.issues.issue.list"
+    ]
+    assert definition["connector_engineer"]["ambiguous_operations_dropped"] == []
+
+
+def test_compiler_drops_only_conflicting_duplicate_from_broad_catalog():
+    safe = {
+        **sync_function("List pull requests"),
+        "name": "pulls",
+        "returns": ["PullRequest"],
+    }
+    definition = compile_nango_definition(
+        {**integration(), "unique_key": "github", "provider": "github"},
+        {**provider(), "name": "github", "display_name": "GitHub"},
+        [sync_function("First issue contract"), sync_function("Second issue contract"), safe],
+        settings(),
+    )
+
+    assert [module["name"] for module in definition["modules"]] == [
+        "github.pulls.pullrequest.list"
+    ]
+    assert definition["connector_engineer"]["ambiguous_operations_dropped"] == [
+        "github.issues.issue.list"
+    ]
 
 
 def test_isolation_fails_closed_on_arbitrary_transport():

@@ -2,8 +2,8 @@ from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
-from app.calendar_time import annotate_calendar_times, calendar_list_errors
 
+from app.calendar_time import annotate_calendar_times, calendar_list_errors
 
 BOUNDS = {'time_min': '2026-09-11T00:00:00Z', 'time_max': '2026-09-12T00:00:00Z'}
 

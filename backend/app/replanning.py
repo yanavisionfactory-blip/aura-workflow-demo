@@ -84,6 +84,24 @@ def _identity_values(value: object, path: tuple[str, ...] = ()) -> dict[tuple[st
     return found
 
 
+def _grounded_identity_value(value: object, evidence: object) -> bool:
+    reference = _reference_root(value)
+    if reference:
+        return True
+    if isinstance(evidence, dict):
+        return any(_grounded_identity_value(value, item) for item in evidence.values())
+    if isinstance(evidence, list):
+        return any(_grounded_identity_value(value, item) for item in evidence)
+    if value == evidence:
+        return True
+    return (
+        isinstance(value, str)
+        and len(value.strip()) >= 3
+        and isinstance(evidence, str)
+        and value.strip().casefold() in evidence.casefold()
+    )
+
+
 def delegated_read_repair_allowed(
     run: WorkflowRun,
     snapshot: ApprovalSnapshot | None,
@@ -145,12 +163,23 @@ def derive_repaired_plan(
     inventory: list[dict],
     inputs: set[str],
     manifests: dict,
+    *,
+    allow_consequential_repair: bool = False,
+    repair_evidence: object = None,
 ) -> WorkflowPlan:
     original_step = original["steps"][position]
-    if operation_scope(original_step["operation"]) != "read" or original_step.get("consequential"):
+    consequential = bool(original_step.get("consequential")) or operation_scope(
+        original_step["operation"]
+    ) != "read"
+    if consequential and not allow_consequential_repair:
         raise ValueError("Automatic repairs are limited to non-consequential reads")
-    if operation_scope(repair.operation) != "read":
+    if not consequential and operation_scope(repair.operation) != "read":
         raise ValueError("A repair cannot introduce a write")
+    if consequential and (
+        repair.tool_slug != original_step["tool_slug"]
+        or repair.operation != original_step["operation"]
+    ):
+        raise ValueError("A consequential repair must preserve its provider and operation")
     manifest = manifests.get(repair.tool_slug)
     if not manifest:
         raise ValueError("Repair connector must have a verified manifest")
@@ -182,6 +211,14 @@ def derive_repaired_plan(
         for key in ("tool_slug", "operation", "arguments")
     ):
         raise ValueError("Repair did not change the failed operation")
+    if consequential:
+        before = _identity_values(original_step.get("arguments", {}))
+        after = _identity_values(serialized["steps"][position].get("arguments", {}))
+        for path, new_value in after.items():
+            if before.get(path) != new_value and not _grounded_identity_value(
+                new_value, repair_evidence
+            ):
+                raise ValueError("A changed write identity must come from accepted evidence")
     return plan
 
 
@@ -204,7 +241,24 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
             )
         ).all()
         step = next((item for item in steps if item.status == StepStatus.failed), None)
-        if not step or step.consequential or operation_scope(step.operation) != "read":
+        if not step:
+            return False
+        attempts = (
+            await session.scalars(
+                select(StepAttempt)
+                .where(StepAttempt.step_id == step.id)
+                .order_by(StepAttempt.attempt_number)
+            )
+        ).all()
+        consequential_repair = step.consequential or operation_scope(step.operation) != "read"
+        latest_attempt = attempts[-1] if attempts else None
+        if consequential_repair and (
+            not step.consequential
+            or operation_scope(step.operation) == "read"
+            or step.output.get("provider_result") is not None
+            or latest_attempt is None
+            or not (latest_attempt.error or "").startswith("[invalid_request]")
+        ):
             return False
         events = (
             await session.scalars(
@@ -227,7 +281,11 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
         )
         if not failure:
             return False
-        if str(failure.payload.get("internal_error", "")).startswith(
+        failure_error = str(
+            failure.payload.get("internal_error")
+            or (latest_attempt.error if latest_attempt else "")
+        )
+        if failure_error.startswith(
             ("[authorization_required]", "[uncertain_write]", "[budget_exhausted]")
         ):
             return False
@@ -279,7 +337,10 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
                         "original_request": run.prompt,
                         "approved_plan": run.plan,
                         "failed_step": run.plan["steps"][step.position],
-                        "failure": failure.payload,
+                        "failure": {**failure.payload, "attempt_error": failure_error},
+                        "repair_mode": (
+                            "reviewable_write" if consequential_repair else "read"
+                        ),
                         "inventory": inventory,
                         "connector_contracts": manifests,
                         "available_input_names": sorted((run.inputs or {}).keys()),
@@ -294,8 +355,14 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
                 inventory,
                 set((run.inputs or {}).keys()),
                 manifests,
+                allow_consequential_repair=consequential_repair,
+                repair_evidence={
+                    "failure": {**failure.payload, "attempt_error": failure_error},
+                    "accepted_prior_outputs": context.get("steps", {}),
+                    "inputs": run.inputs or {},
+                },
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - a failed proposal must preserve the approved run
             session.add(
                 AuditEvent(
                     workspace_id=workspace_id,
@@ -333,7 +400,8 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
             approved_step.get("reduced_scope_arguments"),
         )
         if (
-            approved_target
+            not consequential_repair
+            and approved_target
             and approved_arguments
             and replacement.depends_on == approved_step.get("depends_on", [])
         ):
@@ -381,7 +449,7 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
             )
             await session.commit()
             return "retry"
-        if delegated_read_repair_allowed(
+        if not consequential_repair and delegated_read_repair_allowed(
             run, latest_snapshot, approved_step, replacement, manifests
         ):
             latest = await session.scalar(
@@ -517,7 +585,19 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
         context.setdefault("steps", {}).pop(step.step_key, None)
         for name in step.output_variables:
             context.setdefault("vars", {}).pop(name, None)
-        run.execution_context = reset_read_attempt_cycle(context, step.id, attempt_count)
+        if consequential_repair:
+            write_repairs = recovery_mapping(context.get("__aura_write_repairs__"))
+            write_repairs[step.id] = {
+                "status": "proposed",
+                "attempt_offset": attempt_count,
+                "idempotency_key": step.idempotency_key,
+                "tool_slug": step.tool_slug,
+                "operation": step.operation,
+            }
+            context["__aura_write_repairs__"] = write_repairs
+            run.execution_context = context
+        else:
+            run.execution_context = reset_read_attempt_cycle(context, step.id, attempt_count)
         run.plan, run.plan_approved = candidate, False
         repair_result = {
             **(run.result or {}),
@@ -526,12 +606,17 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
                 "step_id": step.id,
                 "reason": proposal.reason,
                 "attempt": count + 1,
+                "mode": "reviewable_write" if consequential_repair else "read",
             },
         }
         transition_run(
             run,
             RunStatus.awaiting_approval,
-            reason="replan_requires_expanded_authority",
+            reason=(
+                "write_repair_requires_new_approval"
+                if consequential_repair
+                else "replan_requires_expanded_authority"
+            ),
             actor="repair-planner",
             phase="approval",
             supervisor_status="human_action_required",

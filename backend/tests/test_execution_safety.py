@@ -185,6 +185,28 @@ def test_external_connector_keeps_verified_stored_manifest():
     assert _current_capability_manifest("acme-private", stored) is stored
 
 
+def test_native_slug_does_not_replace_signed_pipedream_contract():
+    from app import orchestrator
+
+    tool = SimpleNamespace(
+        slug="slack",
+        allowed_operations=["slack.send-message"],
+        config={"managed_by": "pipedream", "capability_pack_id": "pack"},
+    )
+    assert orchestrator.refresh_native_connection_contract(tool) == ["slack.send-message"]
+    assert tool.allowed_operations == ["slack.send-message"]
+
+
+def test_signed_network_manifest_wins_when_provider_also_has_native_contract():
+    from app.native_connectors import current_capability_manifest
+
+    stored = {
+        "provider_type": "pipedream",
+        "capabilities": [{"name": "slack.send-message"}],
+    }
+    assert current_capability_manifest("slack", stored) is stored
+
+
 
 def test_reduced_calendar_search_keeps_date_scope():
     from app.native_connectors import native_manifest
@@ -194,6 +216,7 @@ def test_reduced_calendar_search_keeps_date_scope():
 
 def test_read_review_distinguishes_capability_tags_from_provider_fields(monkeypatch):
     import asyncio
+
     from app import orchestrator
     seen = []
 
@@ -215,3 +238,41 @@ def test_read_review_distinguishes_capability_tags_from_provider_fields(monkeypa
     assert seen[0][0]["validated_capability_tags"] == ["message_state"]
     assert seen[0][1] == result
     assert contract["required_evidence"] == ["message_state"]
+    assert step.output["outcome_check"] == {
+        "status": "verified",
+        "mode": "accepted_read_receipt",
+        "operation": "gmail.list",
+    }
+
+
+def test_weather_read_receipt_is_verified_without_write_readback_recovery(monkeypatch):
+    import asyncio
+
+    from app import orchestrator
+
+    async def unsupported(*args):
+        return {"status": "unsupported"}
+
+    async def accept(*args):
+        return CriticDecision(action="accept", reasons=["Forecast contract is complete"])
+
+    monkeypatch.setattr(orchestrator, "check_provider_outcome", unsupported)
+    monkeypatch.setattr(orchestrator, "critique_step", accept)
+    step = SimpleNamespace(operation="weather.forecast", output={})
+    result = {
+        "location": "Berlin, Germany",
+        "date": "2026-09-13",
+        "summary": "Clear, high 21°C, low 12°C",
+    }
+    decision = asyncio.run(
+        orchestrator.review_recorded_result(
+            None,
+            None,
+            step,
+            None,
+            {"required_evidence": ["forecast"]},
+            result,
+        )
+    )
+    assert decision.action == "accept"
+    assert step.output["outcome_check"]["status"] == "verified"

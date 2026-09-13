@@ -15,6 +15,7 @@ READBACK_OPERATIONS = {
 }
 
 from .extended_outcomes import EXTRA_READBACK
+
 READBACK_OPERATIONS.update(EXTRA_READBACK)
 
 @dataclass(frozen=True)
@@ -151,8 +152,8 @@ def _matches(expected: Any, actual: Any) -> bool:
         if "T" in expected:
             try:
                 return datetime.fromisoformat(
-                    expected.replace("Z", "+00:00")
-                ) == datetime.fromisoformat(actual.replace("Z", "+00:00"))
+                    expected
+                ) == datetime.fromisoformat(actual)
             except ValueError:
                 pass
     return expected == actual

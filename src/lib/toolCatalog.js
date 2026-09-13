@@ -117,6 +117,7 @@ function normalize(item) {
     connectionStrategy: item.connection_strategy || item.connectionStrategy || null,
     executionBackend: item.execution_backend || item.executionBackend || null,
     setupHint: item.setup_hint || item.setupHint || null,
+    certificationStatus: item.certification_status || item.certificationStatus || null,
   };
 }
 
@@ -160,6 +161,7 @@ function mergeCatalogEntry(left, right) {
     connectable,
     requestable,
     availability: connectable ? "available" : requestable ? "requestable" : "coming_soon",
+    certificationStatus: right.certificationStatus || left.certificationStatus || null,
   };
 }
 

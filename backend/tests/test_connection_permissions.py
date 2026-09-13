@@ -4,8 +4,8 @@ import pytest
 
 from app.connection_permissions import refresh_granted_readbacks, verification_permission_fixes
 from app.models import ToolKind
-from app.security import CredentialVault
 from app.schemas import PlanStep, WorkflowPlan
+from app.security import CredentialVault
 
 
 def connection(**changes):

@@ -147,6 +147,9 @@ def refresh_native_connection_contract(tool: ToolConnection) -> list[str]:
     newly deployed safe capability from forcing the user through an unrelated OAuth
     loop. Provider credentials and approval policy remain independently enforced.
     """
+    config = getattr(tool, "config", None) or {}
+    if config.get("managed_by") == "pipedream" or config.get("connector_release_id"):
+        return list(tool.allowed_operations or [])
     try:
         operations = native_operations(tool.slug)
     except NativeConnectorError:
@@ -206,6 +209,40 @@ def _failure_impacts_trust(exc: Exception) -> bool:
     if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in {401, 403}:
         return False
     return isinstance(exc, (asyncio.TimeoutError, httpx.HTTPError))
+
+
+def _provider_rejection_detail(exc: Exception) -> str | None:
+    """Extract bounded repair evidence from a definitive provider rejection."""
+    if not isinstance(exc, httpx.HTTPStatusError) or exc.response.status_code not in {
+        400,
+        404,
+        422,
+    }:
+        return None
+    try:
+        payload = exc.response.json()
+    except ValueError:
+        payload = None
+    values: list[str] = []
+    if isinstance(payload, dict):
+        for key in ("message", "error", "errorMessages", "errors", "detail"):
+            value = payload.get(key)
+            if isinstance(value, str):
+                values.append(value)
+            elif isinstance(value, list):
+                values.extend(str(item) for item in value if isinstance(item, (str, int, float)))
+            elif isinstance(value, dict):
+                values.extend(
+                    f"{name}: {item}"
+                    for name, item in value.items()
+                    if isinstance(item, (str, int, float))
+                )
+    detail = "; ".join(values).strip() or f"Provider rejected request ({exc.response.status_code})"
+    return re.sub(
+        r"(?i)(token|secret|password|authorization|api[-_ ]?key)\s*[:=]\s*\S+",
+        r"\1=[redacted]",
+        detail,
+    )[:1200]
 
 
 def _friendly_execution_error(error: str | None) -> str:
@@ -1278,6 +1315,15 @@ async def review_recorded_result(session, run, step, snapshot, contract, result)
         from .calendar_time import calendar_list_errors
 
         errors = calendar_list_errors(contract.get("arguments", {}), result)
+        if not errors:
+            step.output = {
+                **step.output,
+                "outcome_check": {
+                    "status": "verified",
+                    "mode": "accepted_read_receipt",
+                    "operation": step.operation,
+                },
+            }
         return CriticDecision(
             action="escalate" if errors else "accept",
             reasons=errors
@@ -1313,7 +1359,22 @@ async def review_recorded_result(session, run, step, snapshot, contract, result)
     )
     review_contract = {key: value for key, value in contract.items() if key != "required_evidence"}
     review_contract["validated_capability_tags"] = contract.get("required_evidence", [])
-    return await critique_step(review_contract, evidence)
+    decision = await critique_step(review_contract, evidence)
+    # A read receipt is the provider observation itself. Once its typed output,
+    # completeness requirements and semantic contract are accepted, mark that
+    # evidence verified instead of asking a write-oriented read-back checker to
+    # verify the same read again. Consequential operations still require their
+    # dedicated provider read-back contract above.
+    if decision.action == "accept" and operation_scope(step.operation) == "read":
+        step.output = {
+            **step.output,
+            "outcome_check": {
+                "status": "verified",
+                "mode": "accepted_read_receipt",
+                "operation": step.operation,
+            },
+        }
+    return decision
 
 
 @trace_run
@@ -2028,7 +2089,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     }
                     try:
                         resolved_arguments = await prepare_attachments(resolved_arguments, urls)
-                    except Exception:
+                    except Exception:  # noqa: BLE001 - preserve the completed export across any attachment failure
                         message = (
                             "PDF preparation failed before sending. The completed Canva "
                             "export is preserved; retry file preparation."
@@ -2240,7 +2301,10 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             await session.commit()
 
             async def call(
-                active_tool: ToolConnection, operation: str, arguments: dict
+                active_tool: ToolConnection,
+                operation: str,
+                arguments: dict,
+                step: RunStep = step,
             ) -> tuple[dict | None, str | None]:
                 consequential = step.consequential or operation_scope(operation) != "read"
                 if operation == "gmail.send" and arguments.get("attachments"):
@@ -2286,6 +2350,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     run.execution_context or {},
                     step.id,
                     consequential,
+                    idempotency_key=step.idempotency_key,
                 )
                 if existing:
                     latest = max(existing, key=lambda item: item.attempt_number)
@@ -2592,7 +2657,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         )
                     except Exception as exc:
                         failure = classify_failure(exc, read=not consequential)
-                        last_error = str(exc)
+                        last_error = _provider_rejection_detail(exc) or str(exc)
                         failure_impacts_trust = _failure_impacts_trust(exc)
                         logger.exception(
                             "Workflow step failed run_id=%s step_id=%s tool=%s operation=%s error_type=%s",
@@ -2624,7 +2689,11 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             approved_step = plan_steps[step.position]
 
             async def delegated_call(
-                active_tool: ToolConnection, operation: str, arguments: dict
+                active_tool: ToolConnection,
+                operation: str,
+                arguments: dict,
+                step: RunStep = step,
+                approved_step: dict = approved_step,
             ) -> tuple[dict | None, str | None]:
                 delegation = delegations.get(step.step_key)
                 execution_agent = (
@@ -3046,7 +3115,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     outputs,
                     (run.execution_context or {}).get("final_review_evidence"),
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - preserve completed work across final-review outages
                 logger.warning(
                     "Final evidence preparation unavailable run_id=%s error_type=%s",
                     run.id,

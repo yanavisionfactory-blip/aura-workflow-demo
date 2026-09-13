@@ -3,7 +3,7 @@
 import copy
 import hashlib
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from jsonschema import Draft202012Validator
 from sqlalchemy import select
@@ -88,7 +88,7 @@ async def poll_subscription(subscription_id: str, workspace_id: str) -> dict:
             or not subscription.active
         ):
             return {"active": False, "interval_seconds": 0, "run_id": None}
-        subscription.last_polled_at = datetime.now(timezone.utc)
+        subscription.last_polled_at = datetime.now(UTC)
         subscription.next_poll_at = subscription.last_polled_at + timedelta(
             seconds=subscription.interval_seconds
         )

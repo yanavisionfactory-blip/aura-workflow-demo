@@ -28,6 +28,7 @@ from .connector_engineer import (
     connector_engineer_tick,
     discovered_marketplace,
     discovered_pipedream_marketplace,
+    queue_pipedream_certification,
     release_descriptor,
     released_connector,
     released_connectors,
@@ -96,9 +97,6 @@ from .pipedream_connect import (
     pipedream_client,
 )
 from .pipedream_connect import (
-    certify_app as certify_pipedream_app,
-)
-from .pipedream_connect import (
     marketplace_entry as pipedream_marketplace_entry,
 )
 from .pipedream_connect import (
@@ -158,7 +156,6 @@ from .schemas import (
     WorkspaceRecordCreate,
     WorkspaceRecordUpdate,
 )
-
 from .security import (
     CredentialVault,
     create_oauth_state,
@@ -651,7 +648,7 @@ def _canonical_marketplace_entries(items: list[dict]) -> list[dict]:
         None: 3,
     }
     merged: list[dict] = []
-    for _display_key, candidates in grouped.items():
+    for candidates in grouped.values():
         primary = min(
             candidates,
             key=lambda item: (
@@ -818,11 +815,9 @@ async def managed_connector_status(
     marketplace_by_provider = {
         item["provider"]: {
             **item,
-            "availability": "available"
-            if item["provider"] in available_by_provider
-            else "coming_soon"
-            if item.get("eligible_for_one_click")
-            else "coming_soon",
+            "availability": (
+                "available" if item["provider"] in available_by_provider else "coming_soon"
+            ),
             "connectable": item["provider"] in available_by_provider,
         }
         for item in discovered["providers"]
@@ -1023,9 +1018,7 @@ async def search_connector_broker_apps(
                         canonical_vendor_app = str(
                             vendor_definition.get("name_slug") or vendor_app
                         )
-                        pack = await certify_pipedream_app(
-                            session,
-                            long_tail,
+                        queued = queue_pipedream_certification(
                             {
                                 **vendor_definition,
                                 "name_slug": provider_slug,
@@ -1041,30 +1034,36 @@ async def search_connector_broker_apps(
                                     }
                                     | {"mcp"}
                                 ),
-                            },
+                            }
                         )
-                        await session.commit()
-                    discovered_entry.update(
-                        availability="available",
-                        connectable=True,
-                        source="connector_broker",
-                        connection_backend="pipedream",
-                        connection_strategy=str(
-                            pack.definition.get("connection_strategy") or "unsupported"
-                        ),
-                        setup_hint=str(
-                            pack.definition.get("connection_setup") or "Provider consent"
-                        ),
-                        execution_backend={
-                            "action": "pipedream_action",
-                            "mcp": "pipedream_mcp",
-                            "proxy": "pipedream_proxy",
-                        }.get(
-                            str(pack.definition.get("execution_strategy")),
-                            "unsupported",
-                        ),
-                        capability_count=len(pack.definition.get("capabilities") or []),
-                    )
+                        discovered_entry.update(
+                            availability="coming_soon",
+                            connectable=False,
+                            certification_status="queued" if queued else "in_progress",
+                            setup_hint=connection_setup_label(vendor_definition),
+                        )
+                    else:
+                        discovered_entry.update(
+                            availability="available",
+                            connectable=True,
+                            source="connector_broker",
+                            connection_backend="pipedream",
+                            connection_strategy=str(
+                                pack.definition.get("connection_strategy") or "unsupported"
+                            ),
+                            setup_hint=str(
+                                pack.definition.get("connection_setup") or "Provider consent"
+                            ),
+                            execution_backend={
+                                "action": "pipedream_action",
+                                "mcp": "pipedream_mcp",
+                                "proxy": "pipedream_proxy",
+                            }.get(
+                                str(pack.definition.get("execution_strategy")),
+                                "unsupported",
+                            ),
+                            capability_count=len(pack.definition.get("capabilities") or []),
+                        )
                 except PipedreamConnectError as exc:
                     logger.warning(
                         "connector_broker_mcp_certification_failed provider=%s "
@@ -1089,7 +1088,25 @@ async def search_connector_broker_apps(
                     entries[item["provider"]] = item
         else:
             for app_definition in apps:
-                item = pipedream_marketplace_entry(app_definition, connectable=True)
+                provider_slug = str(
+                    app_definition.get("name_slug") or app_definition.get("name") or ""
+                )
+                pack = await released_pipedream_pack(session, provider_slug)
+                item = pipedream_marketplace_entry(
+                    app_definition,
+                    connectable=bool(pack and pipedream_pack_signature_valid(pack)),
+                )
+                if pack and pipedream_pack_signature_valid(pack):
+                    item.update(
+                        capability_count=len(pack.definition.get("capabilities") or []),
+                        execution_backend=f"pipedream_{pack.definition.get('execution_strategy')}",
+                    )
+                elif item.get("availability") != "requestable":
+                    queued = queue_pipedream_certification(app_definition)
+                    item.update(
+                        certification_status="queued" if queued else "in_progress",
+                        setup_hint=connection_setup_label(app_definition),
+                    )
                 current = entries.get(item["provider"])
                 if current is None or not current.get("connectable"):
                     entries[item["provider"]] = item
@@ -1882,9 +1899,14 @@ async def create_connector_broker_session(
                         "message": "This app has no supported secure connection route",
                     },
                 )
-            # This is a data-only contract hydration and schema validation. It
-            # never executes a customer action or asks for provider credentials.
-            pack = await certify_pipedream_app(session, client, app_definition)
+            queue_pipedream_certification(app_definition)
+            raise HTTPException(
+                409,
+                {
+                    "code": "connector_certification_in_progress",
+                    "message": "AURA is preparing this secure connection. Search again in a moment.",
+                },
+            )
         else:
             app_definition = {}
             strategy = str(pack.definition.get("connection_strategy") or "mcp")
@@ -4467,13 +4489,15 @@ async def approve_plan(
             422, {"message": "AURA is still preparing this workflow", "fixes": argument_fixes}
         )
     for stored, planned in zip(steps, plan.steps, strict=True):
-        if stored.output.get("provider_result") is not None:
-            if planned.model_dump(mode="json") != PlanStep.model_validate(
-                run.plan["steps"][stored.position]
-            ).model_dump(mode="json"):
-                raise HTTPException(
-                    409, "A revised plan cannot change a step with a recorded provider result"
-                )
+        if stored.output.get("provider_result") is not None and (
+            planned.model_dump(mode="json")
+            != PlanStep.model_validate(run.plan["steps"][stored.position]).model_dump(
+                mode="json"
+            )
+        ):
+            raise HTTPException(
+                409, "A revised plan cannot change a step with a recorded provider result"
+            )
     normalized_arguments = plan.model_dump(mode="json") != original_plan_json
 
     latest_version = await session.scalar(
@@ -4544,6 +4568,27 @@ async def approve_plan(
             )
     run.plan = plan_json
     execution_context = dict(run.execution_context or {})
+    write_repairs = {
+        str(key): dict(value)
+        for key, value in (execution_context.get("__aura_write_repairs__") or {}).items()
+        if isinstance(value, dict)
+    }
+    for stored in steps:
+        repair = write_repairs.get(stored.id)
+        if (
+            repair
+            and repair.get("status") == "proposed"
+            and repair.get("tool_slug") == stored.tool_slug
+            and repair.get("operation") == stored.operation
+            and stored.status != StepStatus.completed
+        ):
+            repair.update(
+                status="approved",
+                idempotency_key=stored.idempotency_key,
+                approved_plan_hash=plan_hash,
+            )
+    if write_repairs:
+        execution_context["__aura_write_repairs__"] = write_repairs
     execution_context["__aura_authority__"] = {
         "version": 1,
         "approved_plan_hash": plan_hash,

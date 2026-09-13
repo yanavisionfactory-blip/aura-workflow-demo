@@ -1,16 +1,18 @@
 import base64
 from copy import deepcopy
+from email import policy
+from email.parser import BytesParser
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from email.parser import BytesParser
-from email import policy
+
 import pytest
 from pptx import Presentation
-from app.presentation_content import render_timeline
+
 from app import file_delivery
-from app.providers import ProviderExecutor
 from app.outcome_checks import build_outcome_check, evaluate_outcome_check
+from app.presentation_content import render_timeline
+from app.providers import ProviderExecutor
 
 PDF = b'%PDF-1.7\nroadmap fixture\n%%EOF'
 URL = 'https://export-download.canva.com/fixture.pdf'
@@ -59,7 +61,7 @@ async def test_gmail_sends_real_pdf_and_rejects_changed_file_before_post(monkeyp
     receipt = await executor._gmail_send(a)
     sent = executor._request.call_args.kwargs['json']['raw']
     message = BytesParser(policy=policy.default).parsebytes(base64.urlsafe_b64decode(sent+'='*(-len(sent)%4)))
-    assert list(message.iter_attachments())[0].get_payload(decode=True) == PDF
+    assert next(iter(message.iter_attachments())).get_payload(decode=True) == PDF
     executor._request.reset_mock()
     monkeypatch.setattr(file_delivery, 'download_pdf', AsyncMock(return_value=PDF+b'changed'))
     with pytest.raises(ValueError):
@@ -113,7 +115,9 @@ async def test_download_redirect_cannot_escape_canva_and_html_is_not_a_pdf(monke
 
 
 async def test_canva_import_posts_real_populated_presentation_once(monkeypatch):
-    import httpx, json
+    import json
+
+    import httpx
     calls = []
     def handler(request):
         calls.append(request)

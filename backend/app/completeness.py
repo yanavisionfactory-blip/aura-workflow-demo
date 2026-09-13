@@ -16,7 +16,7 @@ async def read_notion_tree(request, block_id, *, page_size=100, max_requests=20,
         result = await request("GET", f"blocks/{quote(parent_id, safe='')}/children", params=params)
         requests += 1
         if not isinstance(result.get("results"), list):
-            raise ValueError("Notion block listing has no results array")
+            raise TypeError("Notion block listing has no results array")
         target = roots if parent_block is None else children.setdefault(parent_block, [])
         for block in result["results"]:
             identifier = block.get("id")

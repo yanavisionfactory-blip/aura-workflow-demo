@@ -1,7 +1,7 @@
 import os
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
@@ -16,6 +16,7 @@ from app.connector_engineer import (
     EngineeringSummary,
     connector_engineer_tick,
     engineer_pipedream_catalog,
+    queue_pipedream_certification,
 )
 from app.db import Base
 from app.models import (
@@ -33,16 +34,24 @@ from app.pipedream_connect import (
     PipedreamClient,
     PipedreamConnectError,
     app_uses_managed_oauth,
+    certify_app,
+    compile_action_manifest,
     compile_mcp_manifest,
     compile_proxy_manifest,
     connection_strategy,
-    certify_app,
-    compile_action_manifest,
     marketplace_entry,
     opaque_external_user_id,
     pack_signature_valid,
+    released_pack,
 )
 from app.security import CredentialVault
+
+
+@pytest.fixture(autouse=True)
+def clear_pending_certifications():
+    engineer_module._drain_pipedream_certifications()
+    yield
+    engineer_module._drain_pipedream_certifications()
 
 
 @pytest.mark.skipif(
@@ -461,6 +470,38 @@ async def test_connector_engineer_prewarms_catalog_without_customer_account(data
         )
 
 
+async def test_search_queued_long_tail_app_is_certified_backstage(database):
+    obscure = {
+        **app_definition(),
+        "name_slug": "obscure-pilot-app",
+        "name": "Obscure Pilot App",
+    }
+    client = FakePipedream()
+    client.list_apps = AsyncMock(return_value=[])
+    assert queue_pipedream_certification(obscure) is True
+
+    async with database() as session:
+        summary = await engineer_pipedream_catalog(
+            session,
+            client=client,
+            settings=settings(connector_engineer_max_integrations_per_scan=1),
+        )
+        pack = await released_pack(session, "obscure-pilot-app", settings())
+        snapshot = await session.scalar(
+            select(ManagedConnectorCatalog).where(
+                ManagedConnectorCatalog.source == "pipedream"
+            )
+        )
+
+    assert summary.released == 1
+    assert pack is not None
+    entry = next(
+        item for item in snapshot.providers if item["provider"] == "obscure-pilot-app"
+    )
+    assert entry["connectable"] is True
+    assert entry["availability"] == "available"
+
+
 async def test_connector_engineer_prioritizes_actions_before_mcp_discovery(database):
     client = FakePipedream()
     client.list_apps = AsyncMock(
@@ -630,7 +671,7 @@ async def test_broker_session_prefers_nango_for_certified_provider(monkeypatch):
     managed_session.assert_awaited_once()
 
 
-async def test_exact_nango_mcp_search_certifies_pipedream_bridge(monkeypatch, database):
+async def test_exact_nango_mcp_search_queues_pipedream_bridge(monkeypatch, database):
     config = settings()
     client = SimpleNamespace(
         configured=True,
@@ -644,15 +685,7 @@ async def test_exact_nango_mcp_search_certifies_pipedream_bridge(monkeypatch, da
             }
         ),
     )
-    pack = SimpleNamespace(
-        definition={
-            "connection_setup": "Provider consent",
-            "connection_strategy": "oauth",
-            "execution_strategy": "mcp",
-            "capabilities": [{"name": "lovable-mcp.list-projects"}],
-        }
-    )
-    certify = AsyncMock(return_value=pack)
+    queued = Mock(return_value=True)
     monkeypatch.setattr(main, "settings", config)
     monkeypatch.setattr(
         main, "managed_connector_client", lambda: SimpleNamespace(configured=True)
@@ -676,7 +709,7 @@ async def test_exact_nango_mcp_search_certifies_pipedream_bridge(monkeypatch, da
         ),
     )
     monkeypatch.setattr(main, "released_pipedream_pack", AsyncMock(return_value=None))
-    monkeypatch.setattr(main, "certify_pipedream_app", certify)
+    monkeypatch.setattr(main, "queue_pipedream_certification", queued)
 
     async with database() as session:
         result = await main.search_connector_broker_apps(
@@ -688,10 +721,9 @@ async def test_exact_nango_mcp_search_certifies_pipedream_bridge(monkeypatch, da
 
     entry = result["apps"][0]
     assert entry["provider"] == "lovable-mcp"
-    assert entry["connectable"] is True
-    assert entry["connection_strategy"] == "oauth"
-    assert entry["execution_backend"] == "pipedream_mcp"
-    synthetic = certify.await_args.args[2]
+    assert entry["connectable"] is False
+    assert entry["certification_status"] == "queued"
+    synthetic = queued.call_args.args[0]
     assert synthetic["name_slug"] == "lovable-mcp"
     assert synthetic["vendor_app"] == "lovable"
     assert synthetic["auth_type"] == "oauth2"

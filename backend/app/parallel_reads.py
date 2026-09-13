@@ -1,7 +1,7 @@
 """Prefetch only ready, typed native reads; all database work remains sequential."""
 import asyncio
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 
@@ -89,7 +89,7 @@ async def prefetch_ready_reads(session, run, steps, position, snapshot, context,
                 credentials, changed = await refresh_oauth_credentials(settings, tool.slug, credentials, tool.config)
                 if changed:
                     tool.encrypted_credentials = vault.encrypt(credentials)
-        except Exception:
+        except Exception:  # noqa: BLE001, S112 - sequential execution reports the preparation failure
             continue  # Normal path classifies and reports preparation errors.
         timeout = float(snapshot.policy_snapshot["step_timeout_seconds"])
         budget = model_budget.get()
@@ -109,28 +109,28 @@ async def prefetch_ready_reads(session, run, steps, position, snapshot, context,
     attempts = []
     for step, tool, trust, arguments, executor, timeout in prepared:
         step.status = StepStatus.running
-        step.started_at = datetime.now(timezone.utc)
+        step.started_at = datetime.now(UTC)
         attempt = StepAttempt(workspace_id=run.workspace_id, run_id=run.id, step_id=step.id,
             attempt_number=1, status="running", tool_slug=tool.slug, operation=step.operation)
         session.add(attempt)
         attempts.append(attempt)
-    run.updated_at = datetime.now(timezone.utc)
+    run.updated_at = datetime.now(UTC)
     await session.commit()  # Every attempt exists before any network dispatch.
 
     async def fetch(item):
-        step, tool, trust, arguments, executor, timeout = item
+        step, _tool, _trust, arguments, executor, timeout = item
         started = time.perf_counter()
         try:
             result = await asyncio.wait_for(executor.execute(step.operation, arguments), timeout)
             return result, None, (time.perf_counter() - started) * 1000
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - gathered provider failures are classified below
             return None, exc, (time.perf_counter() - started) * 1000
 
     results = await asyncio.gather(*(fetch(item) for item in prepared))
     for item, attempt, (result, error, latency) in zip(prepared, attempts, results, strict=True):
         step, tool, trust, arguments, executor, timeout = item
         attempt.latency_ms = latency
-        attempt.completed_at = datetime.now(timezone.utc)
+        attempt.completed_at = datetime.now(UTC)
         if error is None:
             attempt.status = "succeeded"
             step.output = {"step_id": step.id, "provider_result": result, "tool": tool.slug,

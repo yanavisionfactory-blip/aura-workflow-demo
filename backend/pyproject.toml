@@ -33,3 +33,8 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.ruff.lint]
+# FastAPI dependencies are intentionally declared as callable defaults so the
+# framework can inspect endpoint signatures and generate the OpenAPI contract.
+ignore = ["B008"]

@@ -608,7 +608,7 @@ class PipedreamClient:
                         result = await mcp_session.list_tools()
         except PipedreamConnectError:
             raise
-        except Exception as exc:  # noqa: BLE001 - normalize vendor / protocol errors
+        except Exception as exc:
             root: BaseException = exc
             seen: set[int] = set()
             while id(root) not in seen:
@@ -654,13 +654,12 @@ class PipedreamClient:
                 headers=await self._mcp_headers(
                     external_user_id, provider, account_id
                 ),
-            ) as (read, write, _):
-                async with ClientSession(read, write) as mcp_session:
-                    await mcp_session.initialize()
-                    result = await mcp_session.call_tool(tool_name, arguments)
+            ) as (read, write, _), ClientSession(read, write) as mcp_session:
+                await mcp_session.initialize()
+                result = await mcp_session.call_tool(tool_name, arguments)
         except PipedreamConnectError:
             raise
-        except Exception as exc:  # noqa: BLE001 - normalize vendor / protocol errors
+        except Exception as exc:
             raise PipedreamConnectError("The connector tool call failed") from exc
         payload = (
             result.model_dump(mode="json", by_alias=True, exclude_none=True)

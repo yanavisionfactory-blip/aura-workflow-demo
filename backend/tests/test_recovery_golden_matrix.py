@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.code_repair_sandbox import send_callback, validate_repair
 from app.db import Base
-from app.models import ApprovalSnapshot, RunStatus, StepStatus, WorkflowRun, Workspace
+from app.models import RunStatus, StepStatus, WorkflowRun, Workspace
 from app.native_connectors import native_manifest, native_operations
 from app.recovery_engineer import (
     diagnose_run,

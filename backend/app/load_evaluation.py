@@ -6,24 +6,25 @@ Run: python -m app.load_evaluation --report engine-load.json
 """
 import argparse
 import asyncio
-from contextlib import ExitStack
-from datetime import datetime, timezone
 import json
 import os
+import uuid
+from contextlib import ExitStack
+from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
 from unittest.mock import patch
-import uuid
+
 from sqlalchemy import select
 from sqlalchemy.engine import make_url
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from .policy import DEFAULT_POLICY, canonical_plan_hash
-from .schemas import WorkflowPlan, PlanStep, CriticDecision, OutcomeVerification, UnifiedDeliverable
+from .agent_runtime import normalize_plan_graph
 from .native_connectors import native_manifest, native_operations
 from .operation_contracts import compile_contracts
-from .agent_runtime import normalize_plan_graph
 from .performance import percentile
+from .policy import DEFAULT_POLICY, canonical_plan_hash
+from .schemas import CriticDecision, OutcomeVerification, PlanStep, UnifiedDeliverable, WorkflowPlan
 
 WORKLOADS = ("single_read", "dependent_reads", "parallel_reads", "receipt_resume", "verified_write")
 
@@ -47,7 +48,20 @@ async def evaluate(url, *, samples=30, concurrencies=(1, 2, 4, 8), provider_dela
     os.environ.setdefault("SESSION_SIGNING_KEY", uuid.uuid4().hex + uuid.uuid4().hex)
     os.environ.setdefault("DATABASE_URL", url)
     from . import db, execution_preflight, orchestrator
-    from .models import Workspace, WorkflowRun, RunStep, RunStatus, StepStatus, PlanVersion, ApprovalSnapshot, StepAttempt, AuditEvent, ToolConnection, ToolKind, CapabilityManifest
+    from .models import (
+        ApprovalSnapshot,
+        AuditEvent,
+        CapabilityManifest,
+        PlanVersion,
+        RunStatus,
+        RunStep,
+        StepAttempt,
+        StepStatus,
+        ToolConnection,
+        ToolKind,
+        WorkflowRun,
+        Workspace,
+    )
     if samples < 30 or samples > 100 or any(c not in (1, 2, 4, 8) for c in concurrencies):
         raise ValueError("Use 30–100 samples and supported bounded concurrency")
     engine = create_async_engine(url, **({"pool_size": 16, "max_overflow": 8} if url.startswith("postgresql") else {}))
@@ -88,7 +102,7 @@ async def evaluate(url, *, samples=30, concurrencies=(1, 2, 4, 8), provider_dela
             "ok": True,
             "status_code": 200,
             "retryable": False,
-            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "checked_at": datetime.now(UTC).isoformat(),
             "capability_count": len(manifest.get("capabilities", [])),
             "fixture": True,
         }
@@ -120,7 +134,12 @@ async def evaluate(url, *, samples=30, concurrencies=(1, 2, 4, 8), provider_dela
                             session.add(CapabilityManifest(workspace_id=workspace, tool_id=tool.id, status="verified", provider_type="api_key", manifest=native_manifest("notion")))
                         await session.commit()
                     rows = []
-                    async def one(index):
+                    async def one(
+                        index,
+                        workload=workload,
+                        workspace=workspace,
+                        rows=rows,
+                    ):
                         started = perf_counter()
                         count = 1 if workload in {"single_read", "verified_write"} else 3
                         plan = WorkflowPlan(name="Load fixture", interpretation="Read fixed public fixtures", steps=[
@@ -134,9 +153,10 @@ async def evaluate(url, *, samples=30, concurrencies=(1, 2, 4, 8), provider_dela
                                 reason="Create isolated fixture", expected_output="Verified page")]
                         planning_ms = None
                         if live:
+                            from time import monotonic
+
                             from .agent_telemetry import calls
                             from .reliability import CallBudget, model_budget
-                            from time import monotonic
                             requests = {
                                 "single_read": "Read today's public weather forecast in Berlin and summarize its date, high/low temperature and rain probability.",
                                 "dependent_reads": "Read today's weather in Berlin. Then use the returned date to read Paris weather, then London's weather on that date. Summarize all three cities. Use dependent steps and pass the first step's date to the later reads.",
@@ -191,7 +211,7 @@ async def evaluate(url, *, samples=30, concurrencies=(1, 2, 4, 8), provider_dela
                             run = await session.get(WorkflowRun, rid)
                             attempts = (await session.scalars(select(StepAttempt).where(StepAttempt.run_id == rid))).all()
                             steps = (await session.scalars(select(RunStep).where(RunStep.run_id == rid))).all()
-                            events = (await session.scalars(select(AuditEvent).where(AuditEvent.run_id == rid, AuditEvent.event_type == "run.agent_metrics"))).all()
+                            (await session.scalars(select(AuditEvent).where(AuditEvent.run_id == rid, AuditEvent.event_type == "run.agent_metrics"))).all()
                             first = min((step.completed_at for step in steps if step.completed_at), default=None)
                             passed = run.status == RunStatus.completed and len(attempts) == count and all(a.attempt_number == 1 for a in attempts)
                             rows.append({"passed": passed, "compile_ms": compiled_ms, "planning_ms": planning_ms, "delivery_ms": elapsed, "total_ms": (perf_counter()-started)*1000,
@@ -199,11 +219,16 @@ async def evaluate(url, *, samples=30, concurrencies=(1, 2, 4, 8), provider_dela
                                 "provider_attempts": len(attempts), "status": run.status.value,
                                 "error": run.error if run.error else None})
                     semaphore = asyncio.Semaphore(concurrency)
-                    async def bounded(index):
+                    async def bounded(
+                        index,
+                        rows=rows,
+                        semaphore=semaphore,
+                        one=one,
+                    ):
                         async with semaphore:
                             try:
                                 await one(index)
-                            except Exception as exc:
+                            except Exception as exc:  # noqa: BLE001 - every isolated load case is recorded
                                 rows.append({"passed": False, "delivery_ms": 0, "compile_ms": 0, "planning_ms": None, "first_result_ms": None, "total_ms": 0, "error_type": type(exc).__name__})
                     started = perf_counter()
                     await asyncio.gather(*(bounded(i) for i in range(samples)))
@@ -220,7 +245,7 @@ async def evaluate(url, *, samples=30, concurrencies=(1, 2, 4, 8), provider_dela
                         "failures": [r for r in rows if not r["passed"]][:3]})
     finally:
         await engine.dispose()
-    return {"passed": all(r["passed"] for r in reports), "evaluated_at": datetime.now(timezone.utc).isoformat(),
+    return {"passed": all(r["passed"] for r in reports), "evaluated_at": datetime.now(UTC).isoformat(),
         "release": os.getenv("GITHUB_SHA"), "database": "postgresql" if url.startswith("postgresql") else "sqlite",
         "scope": "isolated_public_weather_with_live_model_and_provider" if live else "execution_engine_with_deterministic_provider_and_model_fixtures", "production_load_certified": False, "live_profile_passed": live and all(r["passed"] for r in reports), "execution_locks_exercised": url.startswith("postgresql"),
         "provider_delay_ms": None if live else provider_delay*1000, "model_delay_ms": None if live else model_delay*1000, "workloads": reports}

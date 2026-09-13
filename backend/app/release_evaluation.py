@@ -8,14 +8,15 @@ import argparse
 import asyncio
 import json
 import os
+from datetime import UTC, datetime
 from pathlib import Path
-from datetime import datetime, timezone
 
 from jsonschema import Draft202012Validator
+
+from .extended_outcomes import observe_check
 from .native_connectors import native_manifest
 from .operation_contracts import output_errors
 from .outcome_checks import build_outcome_check, evaluate_outcome_check
-from .extended_outcomes import observe_check
 from .providers import ProviderExecutor, verify_oauth_credentials
 
 
@@ -31,7 +32,7 @@ def save(path, value):
 async def evaluate(fixtures, ledger_path, report_path, allow_writes=False):
     ledger = json.loads(ledger_path.read_text()) if ledger_path.exists() else {}
     report = {"release": os.getenv("GITHUB_SHA", os.getenv("RAILWAY_GIT_COMMIT_SHA")),
-              "evaluated_at": datetime.now(timezone.utc).isoformat(), "cases": []}
+              "evaluated_at": datetime.now(UTC).isoformat(), "cases": []}
     for fixture in fixtures:
         row = {"case": fixture["id"], "operation": fixture["operation"], "status": "failed"}
         try:
@@ -94,7 +95,7 @@ async def evaluate(fixtures, ledger_path, report_path, allow_writes=False):
                 scenarios.append("read_back")
             row.update(status="passed", resumed_from_receipt=bool(saved) and not lost_response_resume, write=write,
                 provider_account_id=expected, passed_scenarios=scenarios)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - release evidence records every isolated failure
             # Diagnostics never include raw credentials, arguments or provider content.
             row["error_type"] = type(exc).__name__
         report["cases"].append(row)

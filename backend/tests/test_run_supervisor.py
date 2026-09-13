@@ -1,6 +1,6 @@
 """Golden contracts for browser-independent, backstage run recovery."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import select
@@ -12,8 +12,8 @@ from app.run_supervisor import (
     HUMAN_ACTION_CODES,
     planning_failure_category,
     public_run_projection,
-    recovery_counter,
     recover_planning_failure,
+    recovery_counter,
 )
 
 
@@ -92,7 +92,7 @@ async def test_planning_failure_is_retried_without_becoming_user_failure(databas
         intent = await session.scalar(select(DispatchIntent).where(DispatchIntent.run_id == run.id))
         assert intent is not None
         assert intent.kind == "plan"
-        assert intent.available_at > datetime.now(timezone.utc).replace(tzinfo=None)
+        assert intent.available_at > datetime.now(UTC).replace(tzinfo=None)
 
         public = public_run_projection(run, None)
         assert public["public_status"] == "recovering"

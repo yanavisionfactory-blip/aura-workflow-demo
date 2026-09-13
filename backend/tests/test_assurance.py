@@ -1,24 +1,23 @@
 import hashlib
 import hmac
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import select
+
 from app.assurance import (
     canonical,
     connection_fingerprint,
-    validate_attestation,
-    operation_readiness,
     diagnostic,
+    operation_readiness,
+    validate_attestation,
 )
-from app.completeness import read_notion_tree, incomplete_evidence
+from app.completeness import incomplete_evidence, read_notion_tree
+from app.models import OperationCertification, RunStatus, WorkflowRun
 from app.native_connectors import native_manifest
 from app.performance import evaluate_performance
-from app.models import OperationCertification, WorkflowRun, RunStatus
 from app.run_supervisor import transition_run
-from test_system_reliability import database
 
 
 def signed_fixture():
@@ -28,7 +27,7 @@ def signed_fixture():
     module = next(
         m for m in native_manifest("notion")["capabilities"] if m["name"] == "notion.page.update"
     )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     report = {
         "workspace_id": "w",
         "tool_id": "tool",
@@ -75,7 +74,7 @@ def test_certification_accepts_complete_signed_connection_scoped_evidence():
     signature = hmac.new(key.encode(), canonical(report), hashlib.sha256).hexdigest()
     assert validate_attestation(
         report, signature, key, workspace_id="w", tool=tool, contract=module
-    ) > datetime.now(timezone.utc)
+    ) > datetime.now(UTC)
 
 
 async def test_notion_pagination_and_nested_reads_preserve_evidence():
@@ -158,7 +157,7 @@ async def test_readiness_changes_with_permission_revocation_and_expiry(database)
             contract_hash=status["contract_hash"],
             connection_fingerprint=connection_fingerprint(tool),
             report={},
-            expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+            expires_at=datetime.now(UTC) + timedelta(days=1),
         )
         session.add(cert)
         await session.commit()
@@ -177,8 +176,8 @@ async def test_probe_yields_only_its_own_checkpoint_and_resumes_without_replay(
 ):
     from app import orchestrator
     from app.config import get_settings
+    from app.models import AuditEvent
     from app.recovery_probe import create_probe, probe_evidence
-    from app.models import RunStep, AuditEvent
     from app.schemas import CriticDecision, OutcomeVerification, UnifiedDeliverable
 
     monkeypatch.setattr(get_settings(), "recovery_probe_enabled", True)
@@ -244,10 +243,12 @@ async def test_probe_yields_only_its_own_checkpoint_and_resumes_without_replay(
 )
 async def test_postgres_canary_recovers_at_its_private_deadline_and_preserves_guards(monkeypatch):
     import uuid
-    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-    from app import migrations, scheduler_runtime, dispatch, worker, orchestrator
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app import dispatch, migrations, orchestrator, scheduler_runtime, worker
     from app.config import get_settings
-    from app.models import Workspace, RecoveryProbe
+    from app.models import RecoveryProbe, Workspace
     from app.recovery_probe import create_probe, probe_evidence
     from app.schemas import CriticDecision, OutcomeVerification, UnifiedDeliverable
 
@@ -298,7 +299,7 @@ async def test_postgres_canary_recovers_at_its_private_deadline_and_preserves_gu
         assert calls == ["read"]
         assert await scheduler_runtime.recover_stale_runs() == []
         recovered = await scheduler_runtime.recover_stale_runs(
-            now=datetime.now(timezone.utc) + timedelta(seconds=35)
+            now=datetime.now(UTC) + timedelta(seconds=35)
         )
         assert recovered == [(run_id, tenant, "execute")]
         await orchestrator._execute_run(run_id, tenant)
@@ -311,8 +312,8 @@ async def test_postgres_canary_recovers_at_its_private_deadline_and_preserves_gu
 
 
 async def test_jira_collection_contracts_and_continuation_are_preserved(monkeypatch):
-    from app.providers import ProviderExecutor
     from app.operation_contracts import output_errors
+    from app.providers import ProviderExecutor
 
     calls = []
 
@@ -342,6 +343,7 @@ async def test_injected_lost_response_reconciles_witness_without_second_write(
     tmp_path, monkeypatch
 ):
     import json
+
     from app import release_evaluation
 
     monkeypatch.setenv("FIXTURE_CREDS", '{"access_token":"fixture"}')
@@ -381,9 +383,10 @@ async def test_injected_lost_response_reconciles_witness_without_second_write(
 
 
 def test_native_catalog_cannot_advertise_missing_output_contracts():
+    from jsonschema import Draft202012Validator
+
     from app.native_connectors import NATIVE_CONNECTORS
     from app.operation_contracts import output_errors
-    from jsonschema import Draft202012Validator
 
     for slug in NATIVE_CONNECTORS:
         for module in native_manifest(slug)["capabilities"]:
@@ -394,8 +397,8 @@ def test_native_catalog_cannot_advertise_missing_output_contracts():
 
 
 def test_dispatch_receipts_cannot_supply_completed_outcome_evidence():
-    from app.operation_contracts import output_errors
     from app.native_connectors import native_manifest
+    from app.operation_contracts import output_errors
 
     module = next(
         m

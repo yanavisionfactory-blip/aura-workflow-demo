@@ -21,8 +21,9 @@ from .security import CredentialVault
 async def check_provider_outcome(session, run, step, snapshot) -> dict:
     # The deadline includes credential refresh, all child reads and provider backoff.
     timeout = 45.0
-    from .reliability import model_budget
     from time import monotonic
+
+    from .reliability import model_budget
     budget = model_budget.get()
     if budget:
         timeout = min(timeout, max(0.01, budget.deadline - monotonic()))
@@ -148,7 +149,7 @@ async def _check_provider_outcome(session, run, step, snapshot) -> dict:
             # Eventual consistency can briefly expose old values; retry only the read.
             if result["status"] in {"verified", "pending"}:
                 break
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - provider read-back failures use the shared classifier
             from .reliability import classify_failure
             failure = classify_failure(exc, read=True)
             result = {

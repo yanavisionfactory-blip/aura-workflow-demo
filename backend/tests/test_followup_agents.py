@@ -1,10 +1,8 @@
 import base64
-from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
-from test_agent_loop import runtime  # shared real-database fixture
 
 from app import replanning, semantic_memory
 from app.models import (
@@ -17,7 +15,6 @@ from app.models import (
     StepStatus,
     ToolConnection,
     ToolKind,
-    WorkflowMemory,
     WorkflowRun,
 )
 from app.native_connectors import native_manifest, native_operations
@@ -335,6 +332,203 @@ async def test_automatic_replanning_never_rewrites_an_attempted_write(runtime, m
 
     monkeypatch.setattr(replanning, "_run", forbidden)
     assert await maybe_replan_run("run", "w") is False
+
+
+async def test_definitively_rejected_write_becomes_grounded_reviewable_plan(
+    runtime, monkeypatch
+):
+    monkeypatch.setattr(replanning, "SessionLocal", runtime)
+    completed_one = PlanStep(
+        key="completed_one",
+        agent="jira",
+        tool_slug="jira",
+        operation="jira.issue.update",
+        arguments={"issue_id_or_key": "AURA-1", "fields": {"summary": "One"}},
+        reason="Update first approved issue",
+        expected_output="Updated issue",
+        consequential=True,
+    )
+    completed_two = completed_one.model_copy(
+        update={
+            "key": "completed_two",
+            "arguments": {"issue_id_or_key": "AURA-2", "fields": {"summary": "Two"}},
+        }
+    )
+    failed = completed_one.model_copy(
+        update={
+            "key": "failed_assignment",
+            "arguments": {
+                "issue_id_or_key": "AURA-3",
+                "fields": {"assignee": {"accountId": "account-priya"}},
+            },
+            "reason": "Assign the third approved issue",
+        }
+    )
+    original = WorkflowPlan(
+        name="Jira batch",
+        interpretation="Apply approved Jira updates",
+        steps=[completed_one, completed_two, failed],
+    ).model_dump(mode="json")
+    digest = canonical_plan_hash(original)
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        run.prompt = "Update the Jira issues and assign the third to the project lead"
+        run.plan = original
+        run.execution_context = {
+            "steps": {
+                "lookup_project": {
+                    "project_lead": {"accountId": "account-lead", "name": "Project lead"}
+                },
+                "completed_one": {"key": "AURA-1"},
+                "completed_two": {"key": "AURA-2"},
+            }
+        }
+        transition_run(
+            run,
+            RunStatus.waiting_for_action,
+            reason="test_fixture_definitive_write_rejection",
+            actor="test",
+            dispatch=None,
+        )
+        version = await session.get(PlanVersion, "version")
+        version.plan, version.plan_hash = original, digest
+        snapshot = await session.get(replanning.ApprovalSnapshot, "snapshot")
+        snapshot.plan_hash = digest
+        snapshot.permission_snapshot = {"jira": native_operations("jira")}
+        stored = await session.get(RunStep, "step")
+        stored.step_key = completed_one.key
+        stored.tool_slug = "jira"
+        stored.operation = completed_one.operation
+        stored.arguments = completed_one.arguments
+        stored.consequential = True
+        stored.status = StepStatus.completed
+        stored.output = {"provider_result": {"key": "AURA-1"}}
+        session.add(
+            RunStep(
+                id="completed-two",
+                run_id="run",
+                position=1,
+                step_key=completed_two.key,
+                agent="jira",
+                tool_slug="jira",
+                operation=completed_two.operation,
+                arguments=completed_two.arguments,
+                consequential=True,
+                status=StepStatus.completed,
+                output={"provider_result": {"key": "AURA-2"}},
+                idempotency_key="completed-two",
+            )
+        )
+        session.add(
+            RunStep(
+                id="failed-write",
+                run_id="run",
+                position=2,
+                step_key=failed.key,
+                agent="jira",
+                tool_slug="jira",
+                operation=failed.operation,
+                arguments=failed.arguments,
+                consequential=True,
+                status=StepStatus.failed,
+                idempotency_key="failed-priya",
+            )
+        )
+        tool = await session.get(ToolConnection, "tool")
+        tool.slug = "jira"
+        tool.kind = ToolKind.oauth
+        tool.allowed_operations = native_operations("jira")
+        manifest = await session.get(CapabilityManifest, "manifest")
+        manifest.manifest = native_manifest("jira")
+        session.add(
+            StepAttempt(
+                workspace_id="w",
+                run_id="run",
+                step_id="failed-write",
+                attempt_number=1,
+                status="failed",
+                tool_slug="jira",
+                operation="jira.issue.update",
+                error="[invalid_request] Priya is not assignable to this Jira project",
+            )
+        )
+        session.add(
+            AuditEvent(
+                workspace_id="w",
+                run_id="run",
+                actor="executor",
+                event_type="step.recovery_exhausted",
+                payload={
+                    "step_id": "failed-write",
+                    "internal_error": (
+                        "[invalid_request] Priya is not assignable to this Jira project"
+                    ),
+                },
+            )
+        )
+        await session.commit()
+
+    observed_request = {}
+
+    async def proposal(_agent, payload):
+        observed_request.update(payload)
+        return StepRepair(
+            tool_slug="jira",
+            operation="jira.issue.update",
+            arguments={
+                "issue_id_or_key": "AURA-3",
+                "fields": {"assignee": {"accountId": "account-lead"}},
+            },
+            reason="Use the project lead returned by the accepted project lookup",
+        )
+
+    monkeypatch.setattr(replanning, "_run", proposal)
+    assert await maybe_replan_run("run", "w") is True
+
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        first = await session.get(RunStep, "step")
+        second = await session.get(RunStep, "completed-two")
+        repaired = await session.get(RunStep, "failed-write")
+        assert observed_request["repair_mode"] == "reviewable_write"
+        assert run.status == RunStatus.awaiting_approval
+        assert run.plan_approved is False
+        assert first.status == second.status == StepStatus.completed
+        assert first.output["provider_result"]["key"] == "AURA-1"
+        assert second.output["provider_result"]["key"] == "AURA-2"
+        assert repaired.arguments["fields"]["assignee"]["accountId"] == "account-lead"
+        marker = run.execution_context["__aura_write_repairs__"]["failed-write"]
+        assert marker["status"] == "proposed"
+        assert marker["attempt_offset"] == 1
+        versions = (
+            await session.scalars(select(PlanVersion).order_by(PlanVersion.version))
+        ).all()
+        assert versions[-1].status == "draft"
+
+    from app import main
+    from app.schemas import PlanApproval
+
+    dispatched = []
+
+    async def dispatch(workspace_id):
+        dispatched.append(workspace_id)
+
+    monkeypatch.setattr(main, "dispatch_pending", dispatch)
+    async with runtime() as session:
+        result = await main.approve_plan(
+            "run",
+            PlanApproval(approved=True, approve_consequential=False),
+            main.TenantContext("w", "alice", "owner"),
+            session,
+        )
+        run = await session.get(WorkflowRun, "run")
+        marker = run.execution_context["__aura_write_repairs__"]["failed-write"]
+        repaired = await session.get(RunStep, "failed-write")
+        assert result["status"] == RunStatus.running.value
+        assert marker["status"] == "approved"
+        assert marker["idempotency_key"] == repaired.idempotency_key
+        assert repaired.status == StepStatus.awaiting_approval
+        assert dispatched == ["w"]
 
 
 def gmail_observation():

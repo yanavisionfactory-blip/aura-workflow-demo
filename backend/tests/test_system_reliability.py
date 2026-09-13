@@ -1,7 +1,7 @@
 """Release gates for shared contracts, dispatch and bounded failures."""
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from time import monotonic
 from types import SimpleNamespace
 
@@ -16,7 +16,13 @@ from app.db import Base
 from app.models import DispatchIntent, RunStatus, WorkflowRun, Workspace
 from app.native_connectors import NATIVE_CONNECTORS, native_manifest
 from app.operation_contracts import KNOWN, compile_contracts, enrich_operation, output_errors
-from app.reliability import BudgetExceeded, CallBudget, bounded_model_call, classify_failure, model_budget
+from app.reliability import (
+    BudgetExceeded,
+    CallBudget,
+    bounded_model_call,
+    classify_failure,
+    model_budget,
+)
 from app.schemas import PlanStep, WorkflowPlan
 
 
@@ -74,6 +80,25 @@ def test_failure_categories_and_write_uncertainty(status, retryable, category):
     assert not classify_failure(error, read=False).retryable
     if status == 429:
         assert failure.retry_after == 120
+
+
+@pytest.mark.parametrize(
+    "status,category",
+    [
+        (400, "invalid_request"),
+        (404, "invalid_request"),
+        (422, "invalid_request"),
+        (409, "uncertain_write"),
+        (500, "uncertain_write"),
+    ],
+)
+def test_write_failures_distinguish_definitive_rejection_from_uncertainty(
+    status, category
+):
+    request = httpx.Request("POST", "https://provider.example/items")
+    response = httpx.Response(status, request=request)
+    error = httpx.HTTPStatusError("fixture failure", request=request, response=response)
+    assert classify_failure(error, read=False).category == category
 
 
 async def test_model_budget_prevents_additional_calls_and_isolated_contexts():
@@ -190,7 +215,7 @@ async def test_readiness_exposes_only_safe_scheduler_diagnostics(
         async def aclose(self):
             return None
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     scheduler_state.update(
         started_at=now,
         last_tick_at=now,
@@ -246,7 +271,7 @@ async def test_outbox_is_atomic_and_survives_broker_failure(database, monkeypatc
     async with database() as session:
         intent = await session.scalar(select(DispatchIntent))
         assert intent.status == "pending" and intent.attempts == 1
-        intent.available_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        intent.available_at = datetime.now(UTC) - timedelta(seconds=1)
         await session.commit()
     sent = []
     monkeypatch.setattr(worker.plan_run_task, "delay", lambda *args: sent.append(args))
@@ -275,8 +300,9 @@ async def test_dispatch_never_resumes_approval_paused_or_completed_runs(database
 async def test_postgres_scheduler_and_dispatch_concurrency(monkeypatch):
     import os
     import uuid
-    from app.execution_lock import execution_lock
+
     from app import migrations
+    from app.execution_lock import execution_lock
     engine = create_async_engine(os.environ['AURA_TEST_POSTGRES_URL'])
     factory = async_sessionmaker(engine, expire_on_commit=False)
     monkeypatch.setattr(migrations, "engine", engine)
@@ -288,7 +314,7 @@ async def test_postgres_scheduler_and_dispatch_concurrency(monkeypatch):
     async def tenants():
         return [tenant]
     monkeypatch.setattr(scheduler_runtime, "_workspace_ids", tenants)
-    old = datetime.now(timezone.utc) - timedelta(hours=1)
+    old = datetime.now(UTC) - timedelta(hours=1)
     statuses = [RunStatus.queued, RunStatus.planning, RunStatus.running, RunStatus.recovering,
                 RunStatus.awaiting_approval, RunStatus.completed, RunStatus.cancelled, RunStatus.waiting_for_action]
     identifiers = {status: str(uuid.uuid4()) for status in statuses}
@@ -334,6 +360,7 @@ async def test_postgres_scheduler_and_dispatch_concurrency(monkeypatch):
             assert run.execution_context["restart_recoveries"] == 3
     finally:
         from sqlalchemy import delete
+
         from app.models import AuditEvent
         async with factory() as session:
             await session.execute(delete(DispatchIntent).where(DispatchIntent.workspace_id == tenant))
@@ -346,10 +373,17 @@ async def test_postgres_scheduler_and_dispatch_concurrency(monkeypatch):
 
 async def test_parallel_reads_checkpoint_before_io_and_do_not_replay(database, monkeypatch):
     from app import orchestrator, parallel_reads
-    from app.models import RunStep, StepAttempt, StepStatus, ToolConnection, ToolKind, CapabilityManifest
-    from app.policy import DEFAULT_POLICY
-    from app.native_connectors import native_operations
     from app.config import get_settings
+    from app.models import (
+        CapabilityManifest,
+        RunStep,
+        StepAttempt,
+        StepStatus,
+        ToolConnection,
+        ToolKind,
+    )
+    from app.native_connectors import native_operations
+    from app.policy import DEFAULT_POLICY
     monkeypatch.setattr(get_settings(), "parallel_reads_enabled", True)
     monkeypatch.setattr(get_settings(), "agent_managed_execution_enabled", False)
     monkeypatch.setattr(orchestrator.CredentialVault, "decrypt", lambda self, value: {"access_token": "fixture"})

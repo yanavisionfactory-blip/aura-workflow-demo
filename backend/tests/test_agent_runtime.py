@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC
 from types import SimpleNamespace
 
 from app import agent_runtime
@@ -1510,8 +1511,8 @@ def test_create_plan_does_not_reprompt_for_mechanical_graph_repairs(monkeypatch)
 
 
 def test_planning_clock_resolves_weekdays_across_year_boundary():
-    from datetime import datetime, timezone
-    context = agent_runtime.planning_temporal_context(datetime(2026, 12, 31, 12, tzinfo=timezone.utc))
+    from datetime import datetime
+    context = agent_runtime.planning_temporal_context(datetime(2026, 12, 31, 12, tzinfo=UTC))
     assert context["this_week_dates"]["friday"] == "2027-01-01"
     assert context["next_occurrence_dates"]["monday"] == "2027-01-04"
     assert context["user_timezone"] is None

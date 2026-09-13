@@ -3,7 +3,6 @@ from copy import deepcopy
 from types import SimpleNamespace
 
 from sqlalchemy import select
-from test_agent_loop import runtime  # shared real-database fixture
 
 from app import (
     agent_runtime,
@@ -573,6 +572,33 @@ def test_attempt_cycles_reset_reads_but_never_writes():
     context = {"__aura_autonomy__": {"attempt_offsets": {"step": 2}}}
     assert attempts_for_current_cycle(attempts, context, "step", False) == []
     assert attempts_for_current_cycle(attempts, context, "step", True) == attempts
+
+
+def test_newly_approved_repaired_write_uses_a_fresh_attempt_cycle():
+    attempts = [SimpleNamespace(attempt_number=1), SimpleNamespace(attempt_number=2)]
+    context = {
+        "__aura_write_repairs__": {
+            "step": {
+                "status": "approved",
+                "attempt_offset": 2,
+                "idempotency_key": "changed-approved-payload",
+            }
+        }
+    }
+    assert attempts_for_current_cycle(
+        attempts,
+        context,
+        "step",
+        True,
+        idempotency_key="changed-approved-payload",
+    ) == []
+    assert attempts_for_current_cycle(
+        attempts,
+        context,
+        "step",
+        True,
+        idempotency_key="old-or-unapproved-payload",
+    ) == attempts
 
 
 async def test_delivery_supervisor_cannot_invent_recovery_authority(monkeypatch):

@@ -36,6 +36,7 @@ async def test_duplicate_delivery_lock_and_release_after_exception():
 async def test_tenant_context_survives_checkpoint_commits():
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import async_sessionmaker
+
     from app.db import set_tenant_context
 
     engine = create_async_engine(os.environ["AURA_TEST_POSTGRES_URL"])
@@ -66,6 +67,7 @@ async def test_tenant_context_survives_checkpoint_commits():
 )
 async def test_memory_table_migration_has_forced_tenant_policy(monkeypatch):
     from sqlalchemy import text
+
     from app import migrations
 
     engine = create_async_engine(os.environ["AURA_TEST_POSTGRES_URL"])

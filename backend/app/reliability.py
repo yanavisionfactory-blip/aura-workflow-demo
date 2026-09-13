@@ -2,7 +2,7 @@
 import asyncio
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from time import monotonic
 
@@ -33,6 +33,11 @@ def classify_failure(exc: Exception, *, read: bool) -> Failure:
         return Failure("authorization_required", False)
     if isinstance(exc, BudgetExceeded):
         return Failure("budget_exhausted", False)
+    # These responses prove the provider rejected the request before accepting
+    # the requested mutation. A changed payload may therefore be proposed for a
+    # fresh human approval without treating the original write as uncertain.
+    if status in (400, 404, 422):
+        return Failure("invalid_request", False)
     if not read:
         return Failure("uncertain_write", False)
     if exc.__class__.__name__ in {"ManagedConnectorError", "ConnectorConfigurationError"}:
@@ -46,7 +51,7 @@ def classify_failure(exc: Exception, *, read: bool) -> Failure:
             delay = float(value)
         except (ValueError, TypeError):
             try:
-                delay = (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds()
+                delay = (parsedate_to_datetime(value) - datetime.now(UTC)).total_seconds()
             except (ValueError, TypeError, OverflowError):
                 delay = 1
         return Failure("rate_limited", True, max(1, delay))

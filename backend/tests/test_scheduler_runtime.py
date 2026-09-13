@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -16,9 +16,9 @@ def test_schedule_is_workspace_scoped_and_protected_by_rls() -> None:
 
 
 def test_next_occurrence_is_deterministic() -> None:
-    current = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)
+    current = datetime(2026, 9, 4, 12, 0, tzinfo=UTC)
     assert next_occurrence(current, 300) == datetime(
-        2026, 9, 4, 12, 5, tzinfo=timezone.utc
+        2026, 9, 4, 12, 5, tzinfo=UTC
     )
 
 

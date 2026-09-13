@@ -1,8 +1,9 @@
 """Render approved, bounded timeline content as one editable widescreen slide."""
 from io import BytesIO
+
 from pptx import Presentation
-from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
+from pptx.util import Inches, Pt
 
 PHASE_SCHEMA = {"type": "object", "additionalProperties": False,
     "required": ["period", "title", "items"], "properties": {
