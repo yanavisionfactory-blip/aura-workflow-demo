@@ -520,23 +520,52 @@ _PROMPT_CAPABILITY_ALIASES = {
 }
 
 
+def _connection_family(item: dict) -> str:
+    value = str(
+        item.get("canonical_provider")
+        or item.get("provider")
+        or item.get("slug")
+        or ""
+    ).strip().casefold()
+    normalized = re.sub(r"[^a-z0-9]+", "-", value).strip("-")
+    return re.sub(r"-mcp$", "", normalized)
+
+
 def explicit_disconnected_capabilities(prompt: str, inventory: list[dict]) -> list[str]:
-    """Find explicitly named catalog providers without guessing user intent."""
+    """Find every explicitly named, disconnected provider account family."""
     text = " " + re.sub(r"[^a-z0-9]+", " ", prompt.casefold()).strip() + " "
+    connected_families = {
+        _connection_family(item)
+        for item in inventory
+        if item.get("connected", False) and _connection_family(item)
+    }
     missing: list[str] = []
+    seen_families: set[str] = set()
     for item in inventory:
-        if item.get("connected", False):
+        family = _connection_family(item)
+        if (
+            item.get("connected", False)
+            or not family
+            or family in connected_families
+            or family in seen_families
+        ):
             continue
         slug = str(item.get("slug") or "").strip().casefold()
         name = str(item.get("name") or "").strip().casefold()
         aliases = {
             re.sub(r"[^a-z0-9]+", " ", value).strip()
-            for value in {slug, name, *_PROMPT_CAPABILITY_ALIASES.get(slug, set())}
+            for value in {
+                slug,
+                name,
+                family,
+                *_PROMPT_CAPABILITY_ALIASES.get(slug, set()),
+            }
             if value
         }
         if any(alias and f" {alias} " in text for alias in aliases):
-            missing.append(slug or name)
-    return list(dict.fromkeys(missing))
+            missing.append(family)
+            seen_families.add(family)
+    return missing
 
 
 def actionable_connection_capabilities(
@@ -548,16 +577,23 @@ def actionable_connection_capabilities(
     cannot be matched to a disconnected catalog entry, recovery stays backstage
     instead of asking the user for API, MCP, or custom OAuth configuration.
     """
+    connected_families = {
+        _connection_family(item)
+        for item in inventory
+        if item.get("connected", False) and _connection_family(item)
+    }
     aliases: dict[str, str] = {}
     for item in inventory:
-        if item.get("connected", False):
+        family = _connection_family(item)
+        if item.get("connected", False) or not family or family in connected_families:
             continue
         slug = str(item.get("slug") or "").strip().casefold()
         name = str(item.get("name") or "").strip().casefold()
         if slug:
-            aliases[re.sub(r"[^a-z0-9]+", "-", slug).strip("-")] = slug
+            aliases[re.sub(r"[^a-z0-9]+", "-", slug).strip("-")] = family
         if name:
-            aliases[re.sub(r"[^a-z0-9]+", "-", name).strip("-")] = slug or name
+            aliases[re.sub(r"[^a-z0-9]+", "-", name).strip("-")] = family
+        aliases[family] = family
 
     actionable: list[str] = []
     for value in requested:
@@ -568,6 +604,28 @@ def actionable_connection_capabilities(
         if slug and slug not in actionable:
             actionable.append(slug)
     return actionable
+
+
+def complete_connection_requirements(
+    prompt: str,
+    planner_reported: list[str],
+    inventory: list[dict],
+) -> list[str]:
+    """Combine deterministic prompt providers with the planner's exact matches."""
+    explicit = explicit_disconnected_capabilities(prompt, inventory)
+    planned = actionable_connection_capabilities(planner_reported, inventory)
+    return list(dict.fromkeys([*explicit, *planned]))
+
+
+def _required_permissions(capability: str, inventory: list[dict]) -> list[str]:
+    return next(
+        (
+            list(item.get("allowed_operations") or [])
+            for item in inventory
+            if _connection_family(item) == capability
+        ),
+        [],
+    )
 
 
 @trace_run
@@ -653,6 +711,9 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             {
                 "slug": tool.slug,
                 "name": tool.display_name,
+                "canonical_provider": (tool.config or {}).get("canonical_provider")
+                or (tool.config or {}).get("vendor_app")
+                or tool.slug,
                 "kind": tool.kind.value,
                 "allowed_operations": tool.allowed_operations,
                 "connected": True,
@@ -697,18 +758,70 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                     set((run.inputs or {}).keys()),
                     manifests_by_slug,
                 )
-            missing = list(plan.planning_artifacts.get("connection_requirements", []))
+            missing = complete_connection_requirements(
+                run.prompt,
+                list(plan.planning_artifacts.get("connection_requirements", [])),
+                inventory,
+            )
             if missing:
                 from .connection_recovery import reuse_managed_connection
                 from .semantic_memory import source_owner
 
                 owner = await source_owner(session, workspace_id, run.id)
-                for slug in missing[:3]:
+                for slug in list(missing):
                     if await reuse_managed_connection(
                         session, managed_connector_client(), slug, workspace_id, owner
                     ):
                         missing.remove(slug)
                 plan.planning_artifacts["connection_requirements"] = missing
+            if missing:
+                for capability in missing:
+                    session.add(
+                        ConnectionRequirement(
+                            workspace_id=workspace_id,
+                            run_id=run.id,
+                            capability=capability,
+                            provider_hint=capability,
+                            reason=f"Connect {capability} so AURA can finish the saved plan",
+                            required_permissions=_required_permissions(capability, inventory),
+                        )
+                    )
+                blocker = {
+                    "kind": "human_action",
+                    "code": "connection_required",
+                    "message": "One or more capability providers must be connected",
+                    "action": "connect_account",
+                    "missing_capabilities": missing,
+                    "retryable": False,
+                }
+                transition_run(
+                    run,
+                    RunStatus.waiting_for_action,
+                    reason="planning_catalog_connection_required",
+                    actor="tool-router",
+                    phase="connection",
+                    supervisor_status="human_action_required",
+                    error=blocker["message"],
+                    result={
+                        "status": "waiting_for_connection",
+                        "missing_capabilities": missing,
+                    },
+                    blocker=blocker,
+                    dispatch=None,
+                )
+                await audit(
+                    session,
+                    workspace_id,
+                    "run.connection_required",
+                    {
+                        "missing_capabilities": missing,
+                        "source": "complete_requirement_set",
+                    },
+                    run.id,
+                    actor="tool-router",
+                )
+                await session.commit()
+                return
             run.plan = plan.model_dump(mode="json")
             logger.info(
                 "Workflow plan ready run_id=%s graph=%s",
@@ -764,24 +877,6 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                     await session.flush()
                     step.approval_id = approval.id
                     step.status = StepStatus.awaiting_approval
-            for slug in sorted(set(plan.planning_artifacts.get("connection_requirements", []))):
-                session.add(
-                    ConnectionRequirement(
-                        workspace_id=workspace_id,
-                        run_id=run.id,
-                        capability=slug,
-                        provider_hint=slug,
-                        reason=f"Connect {slug} before starting this reviewed plan",
-                        required_permissions=next(
-                            (
-                                item["allowed_operations"]
-                                for item in inventory
-                                if item["slug"] == slug
-                            ),
-                            [],
-                        ),
-                    )
-                )
             transition_run(
                 run,
                 RunStatus.awaiting_approval,
@@ -814,8 +909,8 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             )
             await session.commit()
         except ConnectionRequiredError as exc:
-            missing = actionable_connection_capabilities(
-                exc.missing_capabilities, inventory
+            missing = complete_connection_requirements(
+                run.prompt, exc.missing_capabilities, inventory
             )
             if not missing:
                 await audit(

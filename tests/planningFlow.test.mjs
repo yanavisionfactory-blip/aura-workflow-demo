@@ -34,6 +34,24 @@ test("a missing provider becomes an actionable connection state", () => {
   assert.deepEqual(planningConnectionRequirements(run), ["meta-ads"]);
 });
 
+test("the connection checklist preserves every unsatisfied provider", () => {
+  const run = {
+    status: "waiting_for_action",
+    connection_requirements: [
+      { canonical_provider: "linear", status: "required" },
+      { canonical_provider: "slack", status: "required" },
+      { canonical_provider: "notion", status: "satisfied" },
+    ],
+    result: {
+      status: "waiting_for_connection",
+      missing_capabilities: ["linear", "slack"],
+    },
+  };
+
+  assert.equal(planningDisposition(run), "connection");
+  assert.deepEqual(planningConnectionRequirements(run), ["linear", "slack"]);
+});
+
 test("unfinished planning remains on the plan loader", () => {
   for (const status of ["queued", "planning", "recovering", undefined]) {
     assert.equal(planningDisposition({ status }), "wait");
