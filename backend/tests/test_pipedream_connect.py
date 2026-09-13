@@ -29,6 +29,9 @@ from app.models import (
 from app.pipedream_connect import (
     PipedreamClient,
     app_uses_managed_oauth,
+    compile_mcp_manifest,
+    compile_proxy_manifest,
+    connection_strategy,
     certify_app,
     compile_action_manifest,
     marketplace_entry,
@@ -58,6 +61,7 @@ def app_definition(auth_type="oauth") -> dict:
         "name_slug": "linear",
         "name": "Linear",
         "auth_type": auth_type,
+        "has_actions": True,
         "categories": ["Project Management"],
         "img_src": "https://cdn.pipedream.com/app_linear.png",
     }
@@ -105,19 +109,35 @@ async def test_oauth_token_requests_only_documented_connect_scopes():
         "connect:accounts:read",
         "connect:accounts:write",
         "connect:actions:*",
+        "connect:proxy",
         "connect:tokens:create",
     ]
 
 
-def test_marketplace_only_marks_managed_oauth_apps_connectable():
+def test_marketplace_exposes_every_secure_executable_connection_strategy():
     oauth = marketplace_entry(app_definition(), connectable=True)
     api_key = marketplace_entry(app_definition("keys"), connectable=True)
+    service_account = marketplace_entry(
+        app_definition("client_credentials"), connectable=True
+    )
+    unsupported = marketplace_entry(
+        {**app_definition("none"), "has_actions": False}, connectable=True
+    )
 
     assert app_uses_managed_oauth(app_definition()) is True
+    assert connection_strategy(app_definition("keys")) == "secure_credentials"
     assert oauth["availability"] == "available"
+    assert oauth["connection_strategy"] == "oauth"
+    assert oauth["setup_hint"] == "Provider consent"
     assert oauth["connection_backend"] == "pipedream"
-    assert api_key["availability"] == "coming_soon"
-    assert api_key["connectable"] is False
+    assert api_key["availability"] == "available"
+    assert api_key["connectable"] is True
+    assert api_key["connection_strategy"] == "secure_credentials"
+    assert api_key["setup_hint"] == "Secure credentials required"
+    assert service_account["connection_strategy"] == "service_account"
+    assert service_account["setup_hint"] == "Administrator setup required"
+    assert unsupported["availability"] == "requestable"
+    assert unsupported["requestable"] is True
     assert "logo_url" not in marketplace_entry(
         {**app_definition(), "img_src": "https://tracking.example/linear.png"},
         connectable=True,
@@ -153,6 +173,67 @@ def test_action_contract_removes_auth_prop_and_requires_approval_for_writes():
         "action_id": "linear-create-issue",
         "version": "1.0.0",
         "auth_prop": "linear",
+    }
+
+
+def test_mcp_contract_preserves_schema_and_requires_approval_by_default():
+    manifest = compile_mcp_manifest(
+        {**app_definition(), "name": "Lovable (MCP)", "name_slug": "lovable-mcp"},
+        [
+            {
+                "name": "create_project",
+                "description": "Create a project",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"],
+                },
+            }
+        ],
+        settings(),
+    )
+
+    capability = manifest["capabilities"][0]
+    assert manifest["execution_strategy"] == "mcp"
+    assert manifest["connection_strategy"] == "mcp"
+    assert capability["transport"] == {
+        "type": "pipedream_mcp",
+        "tool_name": "create_project",
+    }
+    assert capability["requires_approval"] is True
+    assert capability["input_schema"]["required"] == ["name"]
+
+
+def test_proxy_contract_accepts_only_fixed_reviewed_routes():
+    proxy_app = {
+        **app_definition("keys"),
+        "connect": {"proxy_enabled": True},
+    }
+    manifest = compile_proxy_manifest(
+        proxy_app,
+        [
+            {
+                "name": "list-items",
+                "method": "GET",
+                "path": "/v1/items",
+                "permission_scope": "read",
+            },
+            {
+                "name": "unsafe",
+                "method": "POST",
+                "path": "https://attacker.example/items",
+            },
+        ],
+        settings(),
+    )
+
+    assert [item["name"] for item in manifest["capabilities"]] == [
+        "linear.list-items"
+    ]
+    assert manifest["capabilities"][0]["transport"] == {
+        "type": "pipedream_proxy",
+        "method": "GET",
+        "path": "/v1/items",
     }
 
 
@@ -210,14 +291,17 @@ async def test_connector_engineer_prewarms_catalog_without_customer_account(data
         packs = list((await session.scalars(select(BrokerCapabilityPack))).all())
         assert summary.status == "completed"
         assert summary.discovered == 2
-        assert summary.compiled == 1
+        assert summary.compiled == 2
         assert snapshot.provider_count == 2
         assert [item["availability"] for item in snapshot.providers] == [
             "available",
-            "coming_soon",
+            "available",
         ]
-        assert len(packs) == 1
-        assert packs[0].evidence["registry_canary"]["customer_account_used"] is False
+        assert len(packs) == 2
+        assert all(
+            pack.evidence["registry_canary"]["customer_account_used"] is False
+            for pack in packs
+        )
 
 
 async def test_scheduler_does_not_let_fresh_nango_snapshot_hide_missing_pipedream_scan(
@@ -299,6 +383,52 @@ async def test_action_execution_injects_only_the_opaque_account_reference():
     assert payload["external_user_id"] == "aura_user"
     assert payload["configured_props"]["linear"] == {"authProvisionId": "apn_123"}
     assert "client_secret" not in str(payload)
+
+
+async def test_mcp_execution_passes_only_opaque_account_context():
+    client = FakePipedream()
+    client.call_mcp_tool = AsyncMock(return_value={"content": []})
+    capability = compile_mcp_manifest(
+        {**app_definition(), "name": "Lovable (MCP)", "name_slug": "lovable-mcp"},
+        [{"name": "list_projects", "inputSchema": {"type": "object"}}],
+        settings(),
+    )["capabilities"][0]
+
+    result = await client.run_action(
+        "aura_user", "apn_123", capability, {"limit": 10}
+    )
+
+    assert result == {"content": []}
+    client.call_mcp_tool.assert_awaited_once_with(
+        "aura_user",
+        "apn_123",
+        "lovable-mcp",
+        "list_projects",
+        {"limit": 10},
+    )
+
+
+async def test_proxy_execution_cannot_accept_a_model_supplied_url():
+    client = FakePipedream()
+    client._request = AsyncMock(return_value={"items": []})
+    transport = {
+        "type": "pipedream_proxy",
+        "method": "GET",
+        "path": "/v1/items",
+    }
+
+    result = await client.proxy_request(
+        "aura_user",
+        "apn_123",
+        transport,
+        {"query": {"limit": 10}, "url": "https://attacker.example"},
+    )
+
+    assert result == {"items": []}
+    request = client._request.await_args
+    assert request.args[0] == "GET"
+    assert request.args[1].endswith("/proxy/L3YxL2l0ZW1zP2xpbWl0PTEw")
+    assert "attacker" not in str(request)
 
 
 async def test_broker_session_prefers_nango_for_certified_provider(monkeypatch):
