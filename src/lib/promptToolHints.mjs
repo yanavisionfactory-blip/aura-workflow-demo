@@ -22,13 +22,21 @@ const SEMANTIC_HINTS = [
   { label: "Meta Ads", keywords: ["meta ads", "facebook ads", "meta advertising"] },
 ];
 
-function catalogPhrases(tool) {
+function catalogPhrases(tool, ambiguousProviders = new Set()) {
+  const providerKeys = new Set([
+    normalize(tool?.provider),
+    normalize(tool?.canonicalProvider),
+  ].filter(Boolean));
   return [
     tool?.name,
     tool?.provider,
     tool?.canonicalProvider,
     ...(Array.isArray(tool?.aliases) ? tool.aliases : []),
-  ].filter(Boolean);
+  ].filter((phrase) => {
+    if (!phrase) return false;
+    const key = normalize(phrase);
+    return !providerKeys.has(key) || !ambiguousProviders.has(key);
+  });
 }
 
 /**
@@ -40,6 +48,18 @@ export function promptToolHints(value = "", catalog = [], limit = 6) {
   const text = normalize(value);
   if (!text) return [];
 
+  const providerCounts = new Map();
+  catalog.forEach((tool) => {
+    const keys = new Set([
+      normalize(tool?.provider),
+      normalize(tool?.canonicalProvider),
+    ].filter(Boolean));
+    keys.forEach((key) => providerCounts.set(key, (providerCounts.get(key) || 0) + 1));
+  });
+  const ambiguousProviders = new Set(
+    [...providerCounts].filter(([, count]) => count > 1).map(([key]) => key),
+  );
+
   const candidates = [];
   const add = (label, position, priority) => {
     if (!label || candidates.some((item) => item.label === label)) return;
@@ -47,7 +67,7 @@ export function promptToolHints(value = "", catalog = [], limit = 6) {
   };
 
   catalog.forEach((tool) => {
-    const positions = catalogPhrases(tool)
+    const positions = catalogPhrases(tool, ambiguousProviders)
       .map(normalize)
       .filter((phrase) => containsPhrase(text, phrase))
       .map((phrase) => text.indexOf(phrase));
