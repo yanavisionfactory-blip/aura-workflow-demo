@@ -1,10 +1,9 @@
 """Discover, validate, canary, release, and roll back connector capability packs.
 
-Connector Engineer only compiles data returned by Nango. It never downloads or
-executes provider code in the AURA process, and it never uses customer accounts
-as release canaries. A connector becomes user-visible only when an immutable
-versioned pack is signed and every compiled operation passes against an explicit
-dedicated Nango connection.
+Connector Engineer only compiles connector metadata and schemas. It never
+downloads or executes provider code in the AURA process, and it never uses
+customer accounts as release canaries. A connector becomes user-visible only
+when an immutable versioned pack is signed.
 """
 
 from __future__ import annotations
@@ -43,7 +42,7 @@ from .pipedream_connect import (
     PipedreamClient,
 )
 from .pipedream_connect import (
-    app_uses_managed_oauth as pipedream_uses_managed_oauth,
+    connection_strategy as pipedream_connection_strategy,
 )
 from .pipedream_connect import (
     certify_app as certify_pipedream_app,
@@ -1012,6 +1011,7 @@ async def engineer_pipedream_catalog(
         sort_direction="desc",
     )
     entries = [pipedream_marketplace_entry(item, connectable=True) for item in apps]
+    entries_by_provider = {item["provider"]: item for item in entries}
     snapshot = await session.scalar(
         select(ManagedConnectorCatalog).where(ManagedConnectorCatalog.source == "pipedream")
     )
@@ -1025,7 +1025,7 @@ async def engineer_pipedream_catalog(
     eligible = [
         item
         for item in apps
-        if pipedream_uses_managed_oauth(item)
+        if pipedream_connection_strategy(item) != "unsupported"
         and _slug(item.get("name_slug") or item.get("name")) not in PROVIDERS
     ]
     summary.skipped = len(apps) - len(eligible)
@@ -1033,7 +1033,18 @@ async def engineer_pipedream_catalog(
         provider_slug = _slug(app_definition.get("name_slug") or app_definition.get("name"))
         try:
             async with session.begin_nested():
-                await certify_pipedream_app(session, client, app_definition, settings)
+                pack = await certify_pipedream_app(
+                    session, client, app_definition, settings
+                )
+            entry = entries_by_provider.get(provider_slug)
+            if entry is not None:
+                entry.update(
+                    availability="available",
+                    connectable=True,
+                    requestable=False,
+                    capability_count=len(pack.definition.get("capabilities") or []),
+                    execution_backend=f"pipedream_{pack.definition.get('execution_strategy')}",
+                )
             summary.compiled += 1
             summary.released += 1
         except Exception as exc:  # noqa: BLE001 - isolate one vendor action pack
