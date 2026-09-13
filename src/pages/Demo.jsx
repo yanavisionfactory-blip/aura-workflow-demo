@@ -440,6 +440,7 @@ export default function Demo() {
   const pythonPlanRef = useRef(null);
   const pythonPollGenerationRef = useRef(0);
   const languageDraftGenerationRef = useRef(0);
+  const handleConfirmRef = useRef(null);
   const runRequestKeyRef = useRef(null);
   const lastPlanningIntentRef = useRef("");
 
@@ -536,15 +537,17 @@ export default function Demo() {
     if (mock) {
       pendingMock.current = mock;
       setInterpretation(mock.plan.interpretation);
-      setPhase("confirm");
+      setPlan(mock.plan);
+      setPlanLoading(false);
+      setPhase("plan");
       return;
     }
 
-    // Confirmation is deliberately local and instant. The Python planner performs
-    // intent understanding once after the user confirms or edits this text.
-    setPhase("confirm");
+    // The first submit must always produce a readable language plan. Intent
+    // review remains available from Back, but it never gates plan display.
     setInterpretation(prompt);
     setInterpretationLoading(false);
+    handleConfirmRef.current?.(prompt);
   }, []);
 
   const startAlternativePlan = useCallback((run, userApproach = "") => {
@@ -815,6 +818,10 @@ Rules:
     },
     []
   );
+
+  // handleSubmit is declared earlier for the existing recovery callbacks; the
+  // ref lets the first user action enter this planner without a second click.
+  handleConfirmRef.current = handleConfirm;
 
   const handlePlanRevision = useCallback(
     (instruction) => handleConfirm(interpretation, instruction),
