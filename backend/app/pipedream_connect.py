@@ -338,10 +338,10 @@ class PipedreamClient:
     ) -> list[dict[str, Any]]:
         """Return the broad registry plus a reliable public-action signal.
 
-        The global registry includes Connect Proxy metadata while the Connect
-        registry can filter for public actions. Merging the two lets AURA expose
-        non-OAuth and MCP candidates without claiming an execution route that
-        has not been discovered.
+        The Connect app registry includes managed-auth and Connect Proxy
+        metadata and can also filter for public actions. Querying it twice lets
+        AURA expose the full connection catalog without claiming that every app
+        already has a prebuilt action.
         """
         if sort_key not in {"name", "name_slug", "featured_weight"}:
             sort_key = "name"
@@ -349,8 +349,13 @@ class PipedreamClient:
             sort_direction = "asc"
         registry = await self._request(
             "GET",
-            "/v1/apps",
-            params={"q": query[:160] or None},
+            "/v1/connect/apps",
+            params={
+                "q": query[:160] or None,
+                "limit": min(max(limit, 1), 100),
+                "sort_key": sort_key,
+                "sort_direction": sort_direction,
+            },
         )
         action_result = await self._request(
             "GET",
@@ -395,7 +400,9 @@ class PipedreamClient:
         return apps[: min(max(limit, 1), 100)]
 
     async def get_app(self, provider: str) -> dict[str, Any]:
-        result = await self._request("GET", f"/v1/apps/{quote(provider, safe='')}")
+        result = await self._request(
+            "GET", f"/v1/connect/apps/{quote(provider, safe='')}"
+        )
         data = result.get("data", result) if isinstance(result, dict) else {}
         if not isinstance(data, dict):
             raise PipedreamConnectError("This app is not available", retryable=False)
