@@ -1510,6 +1510,11 @@ async def create_connector_broker_session(
             # This is a data-only contract hydration and schema validation. It
             # never executes a customer action or asks for provider credentials.
             pack = await certify_pipedream_app(session, client, app_definition)
+        vendor_app = str(
+            (pack.definition.get("identity") or {}).get("app")
+            or app_definition.get("name_slug")
+            or provider
+        )
         external_user_id = str(
             ((selected_tool.config or {}).get("external_user_id") if selected_tool else None)
             or opaque_external_user_id(context.workspace_id, context.subject, settings)
@@ -1536,7 +1541,7 @@ async def create_connector_broker_session(
     return {
         "backend": "pipedream",
         "provider": provider,
-        "app": provider,
+        "app": vendor_app,
         "token": grant["token"],
         "expires_at": grant.get("expires_at"),
         "external_user_id": external_user_id,
@@ -1652,9 +1657,10 @@ async def complete_connector_broker_connection(
         ((selected_tool.config or {}).get("external_user_id") if selected_tool else None)
         or opaque_external_user_id(context.workspace_id, context.subject, settings)
     )
+    vendor_app = str((pack.definition.get("identity") or {}).get("app") or provider)
     try:
         verification = await client.verify_account(
-            external_user_id, provider, payload.account_id
+            external_user_id, vendor_app, payload.account_id
         )
     except PipedreamConnectError as exc:
         raise HTTPException(503 if exc.retryable else 409, str(exc)) from exc
