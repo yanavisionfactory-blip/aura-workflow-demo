@@ -93,7 +93,8 @@ from .native_connectors import (
 )
 from .pipedream_connect import (
     PipedreamConnectError,
-    app_uses_managed_oauth,
+    connection_setup_label,
+    connection_strategy,
     opaque_external_user_id,
     pipedream_client,
 )
@@ -785,7 +786,14 @@ async def managed_connector_status(
             "nango_configured": client.configured,
             "pipedream_configured": long_tail_ready,
             "pipedream_released_packs": released_long_tail_count,
-            "oauth_only": True,
+            "oauth_only": False,
+            "connection_strategies": [
+                "oauth",
+                "secure_credentials",
+                "service_account",
+                "mcp",
+                "proxy",
+            ],
         },
     }
 
@@ -865,13 +873,20 @@ async def search_connector_broker_apps(
     if long_tail_ready:
         try:
             apps = await long_tail.list_apps(q, limit=limit)
-        except PipedreamConnectError as exc:
-            raise HTTPException(503, str(exc)) from exc
-        for app_definition in apps:
-            item = pipedream_marketplace_entry(app_definition, connectable=True)
-            current = entries.get(item["provider"])
-            if current is None or not current.get("connectable"):
-                entries[item["provider"]] = item
+        except PipedreamConnectError:
+            cached = await discovered_pipedream_marketplace(session)
+            for item in cached["providers"]:
+                if not matches(item):
+                    continue
+                current = entries.get(item["provider"])
+                if current is None or not current.get("connectable"):
+                    entries[item["provider"]] = item
+        else:
+            for app_definition in apps:
+                item = pipedream_marketplace_entry(app_definition, connectable=True)
+                current = entries.get(item["provider"])
+                if current is None or not current.get("connectable"):
+                    entries[item["provider"]] = item
 
     ordered = sorted(
         entries.values(),
@@ -1481,12 +1496,13 @@ async def create_connector_broker_session(
         )
     try:
         app_definition = await client.get_app(provider)
-        if not app_uses_managed_oauth(app_definition):
+        strategy = connection_strategy(app_definition)
+        if strategy == "unsupported":
             raise HTTPException(
                 409,
                 {
-                    "code": "managed_oauth_unavailable",
-                    "message": "This app is coming soon",
+                    "code": "secure_connection_unavailable",
+                    "message": "This app has no supported secure connection route",
                 },
             )
         pack = await released_pipedream_pack(session, provider)
@@ -1512,6 +1528,7 @@ async def create_connector_broker_session(
                 "backend": "pipedream",
                 "connection_id": selected_tool.id if selected_tool else None,
                 "capability_pack_id": pack.id,
+                "connection_strategy": strategy,
             },
         )
     )
@@ -1526,6 +1543,8 @@ async def create_connector_broker_session(
         "project_environment": settings.pipedream_environment,
         "account_id": selected_tool.external_connection_id if selected_tool else None,
         "connection_id": selected_tool.id if selected_tool else None,
+        "connection_strategy": strategy,
+        "setup_hint": connection_setup_label(app_definition),
     }
 
 
@@ -1662,6 +1681,12 @@ async def complete_connector_broker_connection(
     connection_config = {
         "managed_by": "pipedream",
         "external_user_id": external_user_id,
+        "connection_strategy": str(
+            pack.definition.get("connection_strategy") or "secure_credentials"
+        ),
+        "execution_strategy": str(
+            pack.definition.get("execution_strategy") or "action"
+        ),
         "capability_pack_id": pack.id,
         "capability_pack_version": pack.version,
         "capability_pack_hash": pack.definition_hash,

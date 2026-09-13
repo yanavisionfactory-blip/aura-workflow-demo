@@ -8,6 +8,7 @@ inside the control plane.
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import hmac
 import json
@@ -16,7 +17,7 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from time import monotonic
 from typing import Any
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
 from jsonschema import Draft202012Validator
@@ -29,6 +30,29 @@ from .models import BrokerCapabilityPack
 
 _SAFE_TOKEN = re.compile(r"[^a-z0-9]+")
 _OAUTH_AUTH_TYPES = {"oauth", "oauth2", "oauth_2", "oauth-2", "oauth 2"}
+_NO_AUTH_TYPES = {"", "none", "no_auth", "no-auth", "public", "unknown"}
+_SERVICE_ACCOUNT_AUTH_TYPES = {
+    "client_credentials",
+    "client-credentials",
+    "jwt",
+    "service_account",
+    "service-account",
+}
+_SERVICE_ACCOUNT_FIELDS = {
+    "certificate",
+    "client_certificate",
+    "client_id",
+    "client_secret",
+    "jwt",
+    "private_key",
+    "service_account",
+}
+_PIPEDREAM_MCP_URL = "https://remote.mcp.pipedream.net/v3"
+_PROXY_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+# Proxy routes are application code, not vendor-controlled catalog metadata. Add
+# fixed routes here only after their request / response schemas have been
+# reviewed. The model never receives an arbitrary URL or path parameter.
+_CERTIFIED_PROXY_OPERATIONS: dict[str, tuple[dict[str, Any], ...]] = {}
 _RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
 
 
@@ -70,21 +94,110 @@ def app_uses_managed_oauth(app: dict[str, Any]) -> bool:
     return str(app.get("auth_type") or "").strip().casefold() in _OAUTH_AUTH_TYPES
 
 
+def _custom_fields(app: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = app.get("custom_fields_json")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            raw = []
+    return [item for item in raw or [] if isinstance(item, dict)] if isinstance(raw, list) else []
+
+
+def _is_mcp_app(app: dict[str, Any]) -> bool:
+    values = [
+        app.get("name_slug"),
+        app.get("name"),
+        app.get("auth_type"),
+        *(app.get("categories") if isinstance(app.get("categories"), list) else []),
+    ]
+    tokens = set(re.findall(r"[a-z0-9]+", " ".join(str(item or "") for item in values).casefold()))
+    return "mcp" in tokens
+
+
+def connection_strategy(app: dict[str, Any]) -> str:
+    """Classify the user setup flow without exposing the connector vendor."""
+    if _is_mcp_app(app):
+        return "mcp"
+    if app_uses_managed_oauth(app):
+        return "oauth"
+    auth_type = str(app.get("auth_type") or "").strip().casefold()
+    fields = {str(item.get("name") or "").strip().casefold() for item in _custom_fields(app)}
+    if auth_type in _SERVICE_ACCOUNT_AUTH_TYPES or {
+        "client_id",
+        "client_secret",
+    } <= fields or fields & (_SERVICE_ACCOUNT_FIELDS - {"client_id", "client_secret"}):
+        return "service_account"
+    if auth_type not in _NO_AUTH_TYPES or fields:
+        return "secure_credentials"
+    return "unsupported"
+
+
+def connection_setup_label(app: dict[str, Any]) -> str:
+    strategy = connection_strategy(app)
+    if strategy == "service_account":
+        return "Administrator setup required"
+    if strategy == "secure_credentials" or (
+        strategy == "mcp" and not app_uses_managed_oauth(app)
+    ):
+        return "Secure credentials required"
+    if strategy in {"oauth", "mcp"}:
+        return "Provider consent"
+    return "No secure connection route"
+
+
+def _has_actions(app: dict[str, Any]) -> bool:
+    return bool(app.get("has_actions") or int(app.get("action_count") or 0) > 0)
+
+
+def _proxy_enabled(app: dict[str, Any]) -> bool:
+    connect = app.get("connect") if isinstance(app.get("connect"), dict) else {}
+    return connect.get("proxy_enabled") is True
+
+
+def _has_certified_proxy(app: dict[str, Any]) -> bool:
+    provider = _slug(app.get("name_slug") or app.get("name"))
+    return _proxy_enabled(app) and bool(_CERTIFIED_PROXY_OPERATIONS.get(provider))
+
+
+def app_has_executable_strategy(app: dict[str, Any]) -> bool:
+    if connection_strategy(app) == "unsupported":
+        return False
+    return _has_actions(app) or _is_mcp_app(app) or _has_certified_proxy(app)
+
+
 def marketplace_entry(app: dict[str, Any], *, connectable: bool) -> dict[str, Any]:
     provider = _slug(app.get("name_slug") or app.get("name"))
     categories = app.get("categories") if isinstance(app.get("categories"), list) else []
     oauth = app_uses_managed_oauth(app)
+    strategy = connection_strategy(app)
+    executable = app_has_executable_strategy(app)
+    available = bool(connectable and executable)
+    requestable = strategy == "unsupported"
+    execution_backend = (
+        "pipedream_mcp"
+        if _is_mcp_app(app)
+        else "pipedream_action"
+        if _has_actions(app)
+        else "pipedream_proxy"
+        if _has_certified_proxy(app)
+        else None
+    )
     entry = {
         "provider": provider,
         "display_name": str(app.get("name") or provider.replace("-", " ").title())[:200],
         "categories": [str(item) for item in categories if item][:12],
         "auth_mode": "OAUTH2" if oauth else str(app.get("auth_type") or "UNKNOWN").upper(),
         "eligible_for_one_click": oauth,
-        "availability": "available" if connectable and oauth else "coming_soon",
-        "connectable": bool(connectable and oauth),
+        "connection_strategy": strategy,
+        "setup_hint": connection_setup_label(app),
+        "availability": "available" if available else "requestable" if requestable else "coming_soon",
+        "connectable": available,
+        "requestable": requestable,
         "source": "pipedream",
         "connection_backend": "pipedream",
         "capability_count": int(app.get("action_count") or 0),
+        "execution_backend": execution_backend,
     }
     logo = _trusted_logo(app.get("img_src"))
     if logo:
@@ -153,7 +266,7 @@ class PipedreamClient:
                     "client_secret": self.settings.pipedream_client_secret,
                     "scope": (
                         "connect:apps:* connect:accounts:read connect:accounts:write "
-                        "connect:actions:* connect:tokens:create"
+                        "connect:actions:* connect:proxy connect:tokens:create"
                     ),
                 },
             )
@@ -223,11 +336,23 @@ class PipedreamClient:
         sort_key: str = "name",
         sort_direction: str = "asc",
     ) -> list[dict[str, Any]]:
+        """Return the broad registry plus a reliable public-action signal.
+
+        The global registry includes Connect Proxy metadata while the Connect
+        registry can filter for public actions. Merging the two lets AURA expose
+        non-OAuth and MCP candidates without claiming an execution route that
+        has not been discovered.
+        """
         if sort_key not in {"name", "name_slug", "featured_weight"}:
             sort_key = "name"
         if sort_direction not in {"asc", "desc"}:
             sort_direction = "asc"
-        result = await self._request(
+        registry = await self._request(
+            "GET",
+            "/v1/apps",
+            params={"q": query[:160] or None},
+        )
+        action_result = await self._request(
             "GET",
             "/v1/connect/apps",
             params={
@@ -238,13 +363,39 @@ class PipedreamClient:
                 "has_actions": "true",
             },
         )
-        data = result.get("data", []) if isinstance(result, dict) else result
-        return [item for item in data if isinstance(item, dict)]
+        data = registry.get("data", []) if isinstance(registry, dict) else registry
+        action_data = (
+            action_result.get("data", [])
+            if isinstance(action_result, dict)
+            else action_result
+        )
+        action_slugs = {
+            _slug(item.get("name_slug") or item.get("name"))
+            for item in action_data
+            if isinstance(item, dict)
+        }
+        apps = [
+            {
+                **item,
+                "has_actions": _slug(item.get("name_slug") or item.get("name"))
+                in action_slugs,
+            }
+            for item in data
+            if isinstance(item, dict)
+        ]
+        if not apps:
+            apps = [{**item, "has_actions": True} for item in action_data if isinstance(item, dict)]
+
+        def ordering(item: dict[str, Any]) -> int | str:
+            if sort_key == "featured_weight":
+                return int(item.get(sort_key) or 0)
+            return str(item.get(sort_key) or "").casefold()
+
+        apps.sort(key=ordering, reverse=sort_direction == "desc")
+        return apps[: min(max(limit, 1), 100)]
 
     async def get_app(self, provider: str) -> dict[str, Any]:
-        result = await self._request(
-            "GET", f"/v1/connect/apps/{quote(provider, safe='')}"
-        )
+        result = await self._request("GET", f"/v1/apps/{quote(provider, safe='')}")
         data = result.get("data", result) if isinstance(result, dict) else {}
         if not isinstance(data, dict):
             raise PipedreamConnectError("This app is not available", retryable=False)
@@ -333,6 +484,143 @@ class PipedreamClient:
             after = cursor
         return actions[:maximum]
 
+    async def _mcp_headers(
+        self,
+        external_user_id: str,
+        provider: str,
+        account_id: str | None = None,
+    ) -> dict[str, str]:
+        headers = {
+            "Authorization": f"Bearer {await self._oauth_token()}",
+            "x-pd-project-id": self.settings.pipedream_project_id,
+            "x-pd-environment": self.settings.pipedream_environment,
+            "x-pd-external-user-id": external_user_id,
+            "x-pd-app-slug": provider,
+            "x-pd-registry": "public",
+        }
+        if account_id:
+            headers["x-pd-account-id"] = account_id
+        return headers
+
+    async def list_mcp_tools(
+        self,
+        provider: str,
+        *,
+        external_user_id: str = "aura_catalog_certifier",
+    ) -> list[dict[str, Any]]:
+        try:
+            from mcp import ClientSession
+            from mcp.client.streamable_http import streamablehttp_client
+
+            async with streamablehttp_client(
+                _PIPEDREAM_MCP_URL,
+                headers=await self._mcp_headers(external_user_id, provider),
+            ) as (read, write, _):
+                async with ClientSession(read, write) as mcp_session:
+                    await mcp_session.initialize()
+                    result = await mcp_session.list_tools()
+        except PipedreamConnectError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - normalize vendor / protocol errors
+            raise PipedreamConnectError(
+                "The connector tool catalog is temporarily unavailable"
+            ) from exc
+        tools = getattr(result, "tools", [])
+        return [
+            item.model_dump(mode="json", by_alias=True, exclude_none=True)
+            if hasattr(item, "model_dump")
+            else dict(item)
+            for item in tools
+            if hasattr(item, "model_dump") or isinstance(item, dict)
+        ]
+
+    async def call_mcp_tool(
+        self,
+        external_user_id: str,
+        account_id: str,
+        provider: str,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        try:
+            from mcp import ClientSession
+            from mcp.client.streamable_http import streamablehttp_client
+
+            async with streamablehttp_client(
+                _PIPEDREAM_MCP_URL,
+                headers=await self._mcp_headers(
+                    external_user_id, provider, account_id
+                ),
+            ) as (read, write, _):
+                async with ClientSession(read, write) as mcp_session:
+                    await mcp_session.initialize()
+                    result = await mcp_session.call_tool(tool_name, arguments)
+        except PipedreamConnectError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - normalize vendor / protocol errors
+            raise PipedreamConnectError("The connector tool call failed") from exc
+        payload = (
+            result.model_dump(mode="json", by_alias=True, exclude_none=True)
+            if hasattr(result, "model_dump")
+            else dict(result)
+            if isinstance(result, dict)
+            else {}
+        )
+        if payload.get("isError") or payload.get("is_error"):
+            raise PipedreamConnectError("The connector tool call failed", retryable=False)
+        return payload
+
+    async def proxy_request(
+        self,
+        external_user_id: str,
+        account_id: str,
+        transport: dict[str, Any],
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        method = str(transport.get("method") or "").upper()
+        target = str(transport.get("path") or "")
+        parsed = urlsplit(target)
+        if (
+            method not in _PROXY_METHODS
+            or not target.startswith("/")
+            or target.startswith("//")
+            or parsed.scheme
+            or parsed.netloc
+            or ".." in parsed.path.split("/")
+        ):
+            raise PipedreamConnectError(
+                "The released proxy route is invalid", retryable=False
+            )
+        query = arguments.get("query")
+        if query is not None:
+            if not isinstance(query, dict):
+                raise PipedreamConnectError(
+                    "The connector query is invalid", retryable=False
+                )
+            encoded_query = urlencode(query, doseq=True)
+            if encoded_query:
+                target = f"{target}{'&' if '?' in target else '?'}{encoded_query}"
+        encoded_target = base64.urlsafe_b64encode(target.encode()).decode().rstrip("=")
+        request_kwargs: dict[str, Any] = {
+            "params": {
+                "external_user_id": external_user_id,
+                "account_id": account_id,
+            }
+        }
+        if "body" in arguments:
+            request_kwargs["json"] = arguments["body"]
+        result = await self._request(
+            method,
+            (
+                f"/v1/connect/{quote(self.settings.pipedream_project_id, safe='')}"
+                f"/proxy/{encoded_target}"
+            ),
+            **request_kwargs,
+        )
+        if not isinstance(result, dict):
+            raise PipedreamConnectError("The connector proxy returned an invalid response")
+        return result
+
     async def run_action(
         self,
         external_user_id: str,
@@ -341,8 +629,40 @@ class PipedreamClient:
         arguments: dict[str, Any],
     ) -> dict[str, Any]:
         transport = capability.get("transport") or {}
-        if transport.get("type") != "pipedream_action":
-            raise PipedreamConnectError("The released action transport is invalid", retryable=False)
+        transport_type = transport.get("type")
+        provider = _slug(
+            ((capability.get("metadata") or {}).get("connector_broker") or {}).get(
+                "provider"
+            )
+        )
+        if transport_type == "pipedream_mcp":
+            tool_name = str(transport.get("tool_name") or "").strip()
+            if not provider or not tool_name:
+                raise PipedreamConnectError(
+                    "The released MCP transport is incomplete", retryable=False
+                )
+            return await self.call_mcp_tool(
+                external_user_id,
+                account_id,
+                provider,
+                tool_name,
+                arguments,
+            )
+        if transport_type == "pipedream_proxy":
+            if not provider:
+                raise PipedreamConnectError(
+                    "The released proxy transport is incomplete", retryable=False
+                )
+            return await self.proxy_request(
+                external_user_id,
+                account_id,
+                transport,
+                arguments,
+            )
+        if transport_type != "pipedream_action":
+            raise PipedreamConnectError(
+                "The released action transport is invalid", retryable=False
+            )
         action_id = str(transport.get("action_id") or "").strip()
         auth_prop = str(transport.get("auth_prop") or "").strip()
         if not action_id or not auth_prop:
@@ -505,6 +825,169 @@ def compile_action_manifest(
         "identity": {"app": provider},
         "data_retention": "pipedream_connect",
         "delegation": {"allowed": False, "maximum_depth": 0},
+        "connection_strategy": connection_strategy(app),
+        "connection_setup": connection_setup_label(app),
+        "execution_strategy": "action",
+        "capabilities": capabilities,
+    }
+
+
+def compile_mcp_manifest(
+    app: dict[str, Any], tools: list[dict[str, Any]], settings: Settings | None = None
+) -> dict[str, Any]:
+    settings = settings or get_settings()
+    provider = _slug(app.get("name_slug") or app.get("name"))
+    capabilities: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for tool in tools[: settings.pipedream_max_actions_per_app]:
+        tool_name = str(tool.get("name") or "").strip()
+        if not tool_name:
+            continue
+        operation = _operation_name(provider, tool)
+        if operation in seen:
+            continue
+        seen.add(operation)
+        input_schema = tool.get("inputSchema") or tool.get("input_schema") or {
+            "type": "object"
+        }
+        if not isinstance(input_schema, dict):
+            continue
+        annotations = tool.get("annotations") if isinstance(tool.get("annotations"), dict) else {}
+        scope = (
+            "destructive"
+            if annotations.get("destructiveHint") is True
+            else "read"
+            if annotations.get("readOnlyHint") is True
+            else "write"
+        )
+        capabilities.append(
+            {
+                "name": operation,
+                "module_type": "search" if scope == "read" else "action",
+                "description": str(tool.get("description") or tool_name)[:4000],
+                "input_schema": input_schema,
+                "output_schema": {"type": "object"},
+                "permission_scope": scope,
+                "requires_approval": scope != "read",
+                "transport": {
+                    "type": "pipedream_mcp",
+                    "tool_name": tool_name,
+                },
+                "metadata": {
+                    "connector_broker": {
+                        "backend": "pipedream",
+                        "provider": provider,
+                        "vendor_registry": "public",
+                    }
+                },
+            }
+        )
+    if not capabilities:
+        raise PipedreamConnectError(
+            "This app has no safe executable MCP tools", retryable=False
+        )
+    return {
+        "schema_version": "1.0",
+        "provider_type": "pipedream",
+        "name": str(app.get("name") or provider.replace("-", " ").title())[:200],
+        "description": str(app.get("description") or "")[:4000],
+        "base_url": settings.pipedream_base_url.rstrip("/"),
+        "identity": {"app": provider},
+        "data_retention": "pipedream_connect",
+        "delegation": {"allowed": False, "maximum_depth": 0},
+        "connection_strategy": connection_strategy(app),
+        "connection_setup": connection_setup_label(app),
+        "execution_strategy": "mcp",
+        "capabilities": capabilities,
+    }
+
+
+def compile_proxy_manifest(
+    app: dict[str, Any],
+    operations: tuple[dict[str, Any], ...] | list[dict[str, Any]],
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    """Compile only fixed, code-reviewed proxy routes into executable capabilities."""
+    settings = settings or get_settings()
+    provider = _slug(app.get("name_slug") or app.get("name"))
+    if not _proxy_enabled(app):
+        raise PipedreamConnectError(
+            "This app does not support the secure API proxy", retryable=False
+        )
+    capabilities: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in operations:
+        method = str(item.get("method") or "").upper()
+        path = str(item.get("path") or "")
+        parsed = urlsplit(path)
+        if (
+            method not in _PROXY_METHODS
+            or not path.startswith("/")
+            or path.startswith("//")
+            or parsed.scheme
+            or parsed.netloc
+            or ".." in parsed.path.split("/")
+        ):
+            continue
+        operation = f"{provider}.{_slug(item.get('name'), 'api-request')}"[:200]
+        if operation in seen:
+            continue
+        seen.add(operation)
+        scope = str(item.get("permission_scope") or "write")
+        if scope not in {"read", "write", "destructive"}:
+            scope = "write"
+        input_schema = item.get("input_schema")
+        if not isinstance(input_schema, dict):
+            input_schema = {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "query": {"type": "object"},
+                    "body": {},
+                },
+            }
+        output_schema = item.get("output_schema")
+        if not isinstance(output_schema, dict):
+            output_schema = {"type": "object"}
+        capabilities.append(
+            {
+                "name": operation,
+                "module_type": "search" if scope == "read" else "action",
+                "description": str(item.get("description") or operation)[:4000],
+                "input_schema": input_schema,
+                "output_schema": output_schema,
+                "permission_scope": scope,
+                "requires_approval": scope != "read",
+                "transport": {
+                    "type": "pipedream_proxy",
+                    "method": method,
+                    "path": path,
+                },
+                "metadata": {
+                    "connector_broker": {
+                        "backend": "pipedream",
+                        "provider": provider,
+                        "vendor_registry": "aura_proxy_allowlist",
+                    }
+                },
+            }
+        )
+    if not capabilities:
+        raise PipedreamConnectError(
+            "This app has no certified API proxy operations", retryable=False
+        )
+    return {
+        "schema_version": "1.0",
+        "provider_type": "pipedream",
+        "name": str(app.get("name") or provider.replace("-", " ").title())[:200],
+        "description": str(app.get("description") or "")[:4000],
+        "base_url": settings.pipedream_base_url.rstrip("/"),
+        "identity": {"app": provider},
+        "data_retention": "pipedream_connect",
+        "delegation": {"allowed": False, "maximum_depth": 0},
+        "connection_strategy": connection_strategy(app),
+        "connection_setup": connection_setup_label(app),
+        "execution_strategy": "proxy",
         "capabilities": capabilities,
     }
 
@@ -540,16 +1023,48 @@ async def certify_app(
     app: dict[str, Any],
     settings: Settings | None = None,
 ) -> BrokerCapabilityPack:
-    """Validate and sign one vendor action version once, before user consent."""
+    """Validate and sign one vendor capability version once, before user consent."""
     settings = settings or get_settings()
     if len(settings.connector_release_signing_key) < 32:
         raise PipedreamConnectError("Connector certification is not configured", retryable=False)
     provider = _slug(app.get("name_slug") or app.get("name"))
+    if connection_strategy(app) == "unsupported":
+        raise PipedreamConnectError(
+            "This app has no secure account connection route", retryable=False
+        )
     actions = await client.list_actions(provider)
-    manifest = compile_action_manifest(app, actions, settings)
+    manifest: dict[str, Any] | None = None
+    if actions:
+        try:
+            manifest = compile_action_manifest(app, actions, settings)
+        except PipedreamConnectError:
+            manifest = None
+    mcp_error: PipedreamConnectError | None = None
+    if manifest is None:
+        try:
+            mcp_tools = await client.list_mcp_tools(provider)
+        except PipedreamConnectError as exc:
+            mcp_error = exc
+            mcp_tools = []
+        if mcp_tools:
+            manifest = compile_mcp_manifest(app, mcp_tools, settings)
+    if manifest is None:
+        proxy_operations = _CERTIFIED_PROXY_OPERATIONS.get(provider, ())
+        if proxy_operations:
+            manifest = compile_proxy_manifest(app, proxy_operations, settings)
+    if manifest is None:
+        if mcp_error and mcp_error.retryable:
+            raise mcp_error
+        raise PipedreamConnectError(
+            "This app has no certified executable capabilities", retryable=False
+        )
     try:
         for capability in manifest["capabilities"]:
-            if (capability.get("transport") or {}).get("type") != "pipedream_action":
+            if (capability.get("transport") or {}).get("type") not in {
+                "pipedream_action",
+                "pipedream_mcp",
+                "pipedream_proxy",
+            }:
                 raise ValueError("untrusted_transport")
             if capability.get("permission_scope") != "read" and not capability.get(
                 "requires_approval"
@@ -601,15 +1116,17 @@ async def certify_app(
                 "checks": [
                     "pipedream_origin_only",
                     "public_registry_only",
-                    "data_only_action_contract",
+                    "data_only_capability_contract",
                     "json_schemas_valid",
                     "writes_require_approval",
+                    "proxy_routes_are_fixed_and_allowlisted",
                 ],
             },
             "registry_canary": {
                 "passed": True,
                 "checked_at": now.isoformat(),
-                "action_count": len(manifest["capabilities"]),
+                "capability_count": len(manifest["capabilities"]),
+                "execution_strategy": manifest["execution_strategy"],
                 "customer_account_used": False,
             },
         },
