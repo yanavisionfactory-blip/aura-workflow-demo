@@ -805,7 +805,17 @@ async def _engineer_integration(
     provider_slug = _slug(integration.get("provider"))
     integration_id = str(integration.get("unique_key") or "").strip()
     functions = await client.list_functions(integration_id)
-    raw = compile_nango_definition(integration, provider, functions, settings)
+    try:
+        raw = compile_nango_definition(integration, provider, functions, settings)
+    except ValueError as exc:
+        # A configured Nango integration may legitimately have no deployed
+        # syncs/actions yet (GitHub in the pilot workspace is one example).
+        # It is discoverable, but there is nothing AURA can honestly certify.
+        # Treat that as a skipped connector plane so the broker can continue to
+        # its Pipedream fallback instead of emitting a recurring failure.
+        if str(exc) == "no_safe_nango_capabilities":
+            return "no_capabilities"
+        raise
     definition, definition_hash, isolation = isolate_definition(raw, settings)
     if not isolation.passed:
         raise ValueError(isolation.reason_code or "connector_isolation_failed")
@@ -1017,6 +1027,14 @@ async def engineer_nango_catalog(
                 outcome = await _engineer_integration(
                     session, client, integration, provider, settings
                 )
+            if outcome == "no_capabilities":
+                logger.info(
+                    "connector_engineer_integration_skipped "
+                    "provider=%s reason_code=no_certifiable_functions",
+                    provider_slug,
+                )
+                summary.skipped += 1
+                continue
             summary.compiled += 1
             if outcome == "released":
                 summary.released += 1
