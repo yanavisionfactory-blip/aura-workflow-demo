@@ -8,6 +8,7 @@ from app.agent_runtime import (
     create_plan,
     critique_step,
     deterministic_plan_fixes,
+    intent_bounded_tool_inventory,
     materialize_action_arguments,
     normalize_plan_graph,
     prepare_execution_directive,
@@ -52,6 +53,42 @@ def approved_read_plan() -> dict:
             expected_output="CRM records",
         )
     ).model_dump(mode="json")
+
+
+def test_clear_weather_presentation_intent_excludes_unrequested_gmail() -> None:
+    inventory = [
+        {"slug": "aura", "name": "AURA Intelligence", "allowed_operations": ["weather.forecast"]},
+        {"slug": "canva", "name": "Canva", "allowed_operations": ["canva.presentation.create"]},
+        {"slug": "google", "name": "Google Workspace", "allowed_operations": ["gmail.send"]},
+    ]
+
+    bounded = intent_bounded_tool_inventory(
+        "Make a presentation on Canva about the weather in Munich tomorrow",
+        inventory,
+        ["Canva"],
+    )
+
+    assert {item["slug"] for item in bounded} == {"aura", "canva"}
+
+
+def test_explicit_linear_provider_does_not_expand_generic_issue_to_jira() -> None:
+    inventory = [
+        {"slug": "linear", "name": "Linear", "allowed_operations": ["linear.list-issues"]},
+        {"slug": "jira", "name": "Jira", "allowed_operations": ["jira.issue.search"]},
+    ]
+
+    bounded = intent_bounded_tool_inventory("Read my open Linear issues", inventory)
+
+    assert [item["slug"] for item in bounded] == ["linear"]
+
+
+def test_open_ended_intent_preserves_the_full_inventory() -> None:
+    inventory = [
+        {"slug": "alpha", "name": "Alpha", "allowed_operations": ["alpha.read"]},
+        {"slug": "beta", "name": "Beta", "allowed_operations": ["beta.read"]},
+    ]
+
+    assert intent_bounded_tool_inventory("Help me automate this", inventory) == inventory
 
 
 def test_senior_orchestrator_assigns_every_incomplete_step(monkeypatch) -> None:

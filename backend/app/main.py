@@ -2032,6 +2032,40 @@ def _requirement_accepts_tool(requirement: ConnectionRequirement, tool: ToolConn
     )
 
 
+def _resume_after_connections(run: WorkflowRun, actor: str) -> None:
+    """Resume a visible saved plan at review; plan only when no draft exists."""
+    if (run.plan or {}).get("steps"):
+        transition_run(
+            run,
+            RunStatus.awaiting_approval,
+            reason="connections_satisfied_for_saved_plan",
+            actor=actor,
+            phase="approval",
+            supervisor_status="human_action_required",
+            error=None,
+            result={},
+            blocker={
+                "kind": "human_action",
+                "code": "plan_approval_required",
+                "message": "Review and approve the compiled workflow plan.",
+                "action": "review_plan",
+                "retryable": False,
+            },
+        )
+        return
+    transition_run(
+        run,
+        RunStatus.queued,
+        reason="broker_connection_verified",
+        actor=actor,
+        phase="planning",
+        supervisor_status="active",
+        error=None,
+        result={},
+        blocker=None,
+    )
+
+
 async def _satisfy_matching_connection_requirements(
     session: AsyncSession,
     context: TenantContext,
@@ -2070,17 +2104,7 @@ async def _satisfy_matching_connection_requirements(
             requirement.satisfied_at = now
         if len(matched) != len(pending):
             continue
-        transition_run(
-            run,
-            RunStatus.queued,
-            reason="broker_connection_verified",
-            actor="run-supervisor",
-            phase="planning",
-            supervisor_status="active",
-            error=None,
-            result={},
-            blocker=None,
-        )
+        _resume_after_connections(run, "run-supervisor")
         session.add(
             AuditEvent(
                 workspace_id=context.workspace_id,
@@ -4351,17 +4375,7 @@ async def resume_after_connection(
                 for item in remaining
             ],
         }
-    transition_run(
-        run,
-        RunStatus.queued,
-        reason="connections_satisfied",
-        actor=context.subject,
-        phase="planning",
-        supervisor_status="active",
-        error=None,
-        result={},
-        blocker=None,
-    )
+    _resume_after_connections(run, context.subject)
     session.add(
         AuditEvent(
             workspace_id=context.workspace_id,

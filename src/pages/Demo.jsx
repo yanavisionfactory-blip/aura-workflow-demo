@@ -251,10 +251,12 @@ const uiPlanFromRun = (run) => ({
 });
 
 const uiConnectionPlanFromRun = (run, interpretation) => ({
-  workflowName: "",
+  ...uiPlanFromRun(run),
+  workflowName: run.plan?.name || "",
   interpretation: run.plan?.interpretation || interpretation || run.prompt,
-  estimatedTime: "Planning resumes after the connection is verified",
-  steps: [],
+  estimatedTime: run.plan?.steps?.length
+    ? "Plan ready — connect the required accounts to enable execution"
+    : "Planning resumes after the connection is verified",
   connectionRequirements: planningConnectionRequirements(run),
   connectionChecklist: Array.isArray(run.connection_requirements)
     ? run.connection_requirements
@@ -618,6 +620,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               const disposition = planningDisposition(run);
               if (disposition === "review") break;
               if (disposition === "connection") {
+                pythonPlanRef.current = run.plan || null;
                 setPlan(uiConnectionPlanFromRun(run, editedInterpretation));
                 return;
               }
@@ -790,6 +793,7 @@ Rules:
           return;
         }
         if (disposition === "connection") {
+          pythonPlanRef.current = run.plan || null;
           setPlan(uiConnectionPlanFromRun(run, interpretation));
           return;
         }

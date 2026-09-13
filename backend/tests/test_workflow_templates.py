@@ -1,4 +1,8 @@
-from app.workflow_templates import creator_outreach_template
+import asyncio
+
+from app import orchestrator
+from app.native_connectors import native_manifest
+from app.workflow_templates import creator_outreach_template, weather_presentation_template
 
 
 def inventory():
@@ -98,3 +102,64 @@ def test_creator_outreach_template_rejects_ambiguous_capability_owners():
     ambiguous.append({**ambiguous[-1], "slug": "second-approval-form"})
 
     assert creator_outreach_template(PROMPT, ambiguous) is None
+
+
+def weather_inventory():
+    return [
+        {"slug": "aura", "connected": True, "allowed_operations": ["weather.forecast"]},
+        {"slug": "canva", "connected": True, "allowed_operations": ["canva.presentation.create"]},
+        {"slug": "google", "connected": True, "allowed_operations": ["gmail.send"]},
+    ]
+
+
+def test_weather_presentation_template_builds_only_forecast_and_canva_steps():
+    plan = weather_presentation_template(
+        "Please make a presentation on Canva about the weather in Munich tomorrow",
+        weather_inventory(),
+    )
+
+    assert plan is not None
+    assert [step.operation for step in plan.steps] == [
+        "weather.forecast",
+        "canva.presentation.create",
+    ]
+    assert plan.steps[0].arguments == {"location": "Munich", "date": "tomorrow"}
+    assert plan.steps[1].depends_on == ["weather"]
+    assert plan.steps[1].consequential is True
+    assert all(step.tool_slug != "google" for step in plan.steps)
+    assert plan.planning_artifacts["planner_recovery_mode"] == (
+        "audited_weather_presentation_template"
+    )
+
+
+def test_weather_presentation_template_is_narrow_and_capability_complete():
+    assert weather_presentation_template("Weather in Munich tomorrow", weather_inventory()) is None
+    assert weather_presentation_template("Make a weather presentation", weather_inventory()) is None
+
+    ambiguous = weather_inventory()
+    ambiguous.append({**ambiguous[1], "slug": "other-canva"})
+    assert weather_presentation_template(
+        "Make a presentation about the weather in Munich tomorrow", ambiguous
+    ) is None
+
+
+def test_compiled_weather_presentation_bypasses_model_planning():
+    plan = asyncio.run(
+        orchestrator._create_compiled_plan(
+            "Please make a presentation on Canva about the weather in Munich tomorrow",
+            weather_inventory(),
+            set(),
+            {
+                "aura": native_manifest("aura"),
+                "canva": native_manifest("canva"),
+                "google": native_manifest("google"),
+            },
+            ["Canva"],
+        )
+    )
+
+    assert [step.operation for step in plan.steps] == [
+        "weather.forecast",
+        "canva.presentation.create",
+    ]
+    assert plan.planning_artifacts["compiled_contracts"]

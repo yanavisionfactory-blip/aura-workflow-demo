@@ -195,8 +195,18 @@ export default function PlanView({
   const effectiveConnections = useMemo(() => {
     const next = { ...connections };
     requiredReconnectTools.forEach((toolName) => { next[toolName] = false; });
+    const authoritativeRequirements = plan.connectionChecklist?.length
+      ? plan.connectionChecklist.filter((requirement) => requirement.status !== "satisfied")
+      : (plan.connectionRequirements || []);
+    authoritativeRequirements.forEach((requirement) => {
+      const raw = typeof requirement === "string"
+        ? requirement
+        : requirement.canonical_provider || requirement.provider_hint || requirement.capability;
+      const name = resolveRequirementTool(raw);
+      if (name) next[name] = false;
+    });
     return next;
-  }, [connections, requiredReconnectTools]);
+  }, [connections, requiredReconnectTools, plan.connectionChecklist, plan.connectionRequirements]);
 
   const missingTools = connectionsReady
     ? planTools.filter((tool) => !effectiveConnections[tool.name])

@@ -5,30 +5,10 @@ import ValueProp from "./ValueProp";
 import ResourceComposer from "./ResourceComposer";
 import { base44 } from "@/api/base44Client";
 import { attachDocument, getAttachedDocuments, removeDocument, subscribeDocuments } from "@/lib/documentStore";
-import { catalogEntryFor } from "@/lib/toolCatalog";
+import { CATALOG, catalogEntryFor } from "@/lib/toolCatalog";
+import { promptToolHints } from "@/lib/promptToolHints.mjs";
 
 const EXAMPLE_ICONS = [FileBarChart, Mail, ListChecks, RefreshCw];
-
-const toolHints = [
-  { keywords: ["lead", "crm", "contact", "deal", "pipeline"], label: "HubSpot" },
-  { keywords: ["slack", "notify", "message", "team", "channel", "ping"], label: "Slack" },
-  { keywords: ["email", "send", "gmail", "inbox", "follow-up", "follow up"], label: "Gmail" },
-  { keywords: ["calendar", "schedule", "meeting", "book", "invite"], label: "Google Calendar" },
-  { keywords: ["salesforce", "opportunity", "account", "sf"], label: "Salesforce" },
-  { keywords: ["notion", "doc", "document", "page", "note", "wiki"], label: "Notion" },
-  { keywords: ["sheet", "spreadsheet", "report", "csv", "data"], label: "Google Sheets" },
-  { keywords: ["meta", "ads", "campaign", "facebook"], label: "Meta Ads" },
-  { keywords: ["ticket", "support", "issue", "jira", "bug", "task"], label: "Jira" },
-];
-
-function getHints(text) {
-  if (!text) return [];
-  const lower = text.toLowerCase();
-  return toolHints
-    .filter((h) => catalogEntryFor(h.label) && h.keywords.some((k) => lower.includes(k)))
-    .map((h) => h.label)
-    .slice(0, 3);
-}
 
 export default function CommandInput({ onSubmit, disabled, examples, onPickExample }) {
   const [value, setValue] = useState("");
@@ -51,13 +31,14 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
 
   useEffect(() => subscribeDocuments(setDocuments), []);
 
-  const autoHints = getHints(value).filter((h) => !removedTools.includes(h));
+  const autoHints = promptToolHints(value, CATALOG).filter((h) => !removedTools.includes(h));
   const hints = [...new Set([...autoHints, ...manualTools])];
 
   const handleSubmit = () => {
     const text = value.trim();
     if (text && !disabled) {
-      onSubmit(text, hints, { tools: hints, documents });
+      const requestedTools = hints.filter((label) => catalogEntryFor(label));
+      onSubmit(text, requestedTools, { tools: requestedTools, documents });
       setValue("");
     }
   };
