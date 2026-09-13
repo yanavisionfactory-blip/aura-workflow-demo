@@ -114,6 +114,45 @@ async def test_oauth_token_requests_only_documented_connect_scopes():
     ]
 
 
+async def test_app_discovery_uses_the_connect_registry_for_catalog_and_actions():
+    client = FakePipedream()
+    client._request = AsyncMock(
+        side_effect=[
+            {
+                "data": [
+                    app_definition(),
+                    {
+                        **app_definition("keys"),
+                        "name_slug": "api-key-app",
+                        "name": "API Key App",
+                    },
+                ]
+            },
+            {"data": [app_definition()]},
+        ]
+    )
+
+    apps = await client.list_apps("linear", limit=25)
+
+    assert [item["has_actions"] for item in apps] == [False, True]
+    assert [call.args[:2] for call in client._request.await_args_list] == [
+        ("GET", "/v1/connect/apps"),
+        ("GET", "/v1/connect/apps"),
+    ]
+    assert "has_actions" not in client._request.await_args_list[0].kwargs["params"]
+    assert client._request.await_args_list[1].kwargs["params"]["has_actions"] == "true"
+
+
+async def test_get_app_uses_the_documented_connect_registry_route():
+    client = FakePipedream()
+    client._request = AsyncMock(return_value={"data": app_definition()})
+
+    result = await client.get_app("linear")
+
+    assert result["name_slug"] == "linear"
+    client._request.assert_awaited_once_with("GET", "/v1/connect/apps/linear")
+
+
 def test_marketplace_exposes_every_secure_executable_connection_strategy():
     oauth = marketplace_entry(app_definition(), connectable=True)
     api_key = marketplace_entry(app_definition("keys"), connectable=True)
