@@ -66,9 +66,11 @@ class PipedreamConnectError(RuntimeError):
         *,
         retryable: bool = True,
         status_code: int | None = None,
+        upstream_code: str | None = None,
     ):
         self.retryable = retryable
         self.status_code = status_code
+        self.upstream_code = upstream_code
         super().__init__(message)
 
 
@@ -333,10 +335,23 @@ class PipedreamClient:
                 await asyncio.sleep(0.15 * (2**attempt))
                 continue
             if not response.is_success:
+                # Keep upstream response bodies private, but retain a short,
+                # normalized error identifier so operators can distinguish
+                # scopes, project access, and plan restrictions.
+                upstream_code = None
+                try:
+                    error_payload = response.json()
+                except ValueError:
+                    error_payload = None
+                if isinstance(error_payload, dict):
+                    raw_code = error_payload.get("code") or error_payload.get("error")
+                    if isinstance(raw_code, str) and raw_code.strip():
+                        upstream_code = _slug(raw_code, "unknown")[:120]
                 raise PipedreamConnectError(
                     "The connector network rejected this request",
                     retryable=response.status_code in _RETRYABLE_STATUS,
                     status_code=response.status_code,
+                    upstream_code=upstream_code,
                 )
             try:
                 result = response.json()
