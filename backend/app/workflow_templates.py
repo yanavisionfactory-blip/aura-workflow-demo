@@ -180,67 +180,176 @@ def weather_presentation_template(
     if not location or len(location) > 80:
         return None
 
+    email_delivery_requested = bool(
+        re.search(r"\b(?:email|e-mail|gmail)\b", requested)
+    )
+    recipient_match = re.search(
+        r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
+        prompt,
+        re.IGNORECASE,
+    )
+    own_inbox_requested = bool(
+        re.search(r"\b(?:to\s+me|my\s+(?:email|gmail|inbox))\b", requested)
+    )
+    recipient = (
+        recipient_match.group(0)
+        if recipient_match
+        else "me" if own_inbox_requested else None
+    )
+    if email_delivery_requested and not recipient:
+        # A deterministic template must not guess an external recipient.
+        return None
+
     weather = _owner(inventory, {"weather.forecast"})
     canva = _owner(inventory, {"canva.presentation.create"})
-    if not weather or not canva:
+    canva_export = (
+        _owner(inventory, {"canva.export.create"})
+        if email_delivery_requested
+        else None
+    )
+    gmail = _owner(inventory, {"gmail.send"}) if email_delivery_requested else None
+    if (
+        not weather
+        or not canva
+        or (email_delivery_requested and (not canva_export or not gmail))
+    ):
         return None
 
     weather_slug = str(weather["slug"])
     canva_slug = str(canva["slug"])
+    export_slug = str(canva_export["slug"]) if canva_export else None
+    gmail_slug = str(gmail["slug"]) if gmail else None
+    filename_stem = re.sub(r"[^A-Za-z0-9 _-]+", "", location).strip() or "weather"
+    filename = f"{filename_stem} weather.pdf"
+    steps = [
+        {
+            "key": "weather",
+            "agent": "Weather Research Agent",
+            "tool_slug": weather_slug,
+            "operation": "weather.forecast",
+            "arguments": {"location": location, "date": relative_date},
+            "reason": "Retrieve the requested public forecast before composing the presentation.",
+            "expected_output": "Location, forecast date, and grounded weather summary.",
+            "required_evidence": ["forecast"],
+        },
+        {
+            "key": "create_presentation",
+            "agent": "Canva Presentation Agent",
+            "tool_slug": canva_slug,
+            "operation": "canva.presentation.create",
+            "arguments": {
+                "title": f"{location} weather",
+                "subtitle": "Forecast for {{steps.weather.date}}",
+                "phases": [{
+                    "period": "{{steps.weather.date}}",
+                    "title": "Weather forecast",
+                    "items": ["{{steps.weather.summary}}"],
+                }],
+            },
+            "reason": "Create the requested populated presentation from the retrieved forecast.",
+            "expected_output": "Verified Canva presentation creation job and design identity.",
+            "consequential": True,
+            "depends_on": ["weather"],
+            "required_evidence": ["dispatch_receipt", "populated_presentation"],
+        },
+    ]
+    if email_delivery_requested:
+        steps.extend(
+            [
+                {
+                    "key": "export_presentation",
+                    "agent": "Canva Presentation Agent",
+                    "tool_slug": export_slug,
+                    "operation": "canva.export.create",
+                    "arguments": {
+                        "design_id": "{{steps.create_presentation.job.id}}",
+                        "format": "pdf",
+                    },
+                    "reason": "Export the completed presentation as the requested PDF attachment.",
+                    "expected_output": "Verified Canva PDF export job and download URL.",
+                    "consequential": True,
+                    "depends_on": ["create_presentation"],
+                    "required_evidence": ["dispatch_receipt"],
+                },
+                {
+                    "key": "email_presentation",
+                    "agent": "Gmail Delivery Agent",
+                    "tool_slug": gmail_slug,
+                    "operation": "gmail.send",
+                    "arguments": {
+                        "to": recipient,
+                        "subject": f"{location} weather forecast",
+                        "body": (
+                            f"Attached is the requested {relative_date} weather presentation "
+                            f"for {location}."
+                        ),
+                        "attachments": [{
+                            "filename": filename,
+                            "url": "{{steps.export_presentation.job.urls[0]}}",
+                        }],
+                    },
+                    "reason": "Email the verified presentation PDF to the requested inbox.",
+                    "expected_output": "Verified Gmail message receipt with the PDF attached.",
+                    "consequential": True,
+                    "depends_on": ["export_presentation"],
+                    "required_evidence": ["write_receipt"],
+                },
+            ]
+        )
+
+    interpretation = (
+        f"Retrieve the public weather forecast for {location} {relative_date}, create one "
+        "populated Canva presentation grounded only in that forecast"
+    )
+    if email_delivery_requested:
+        interpretation += ", export it as a PDF, and email it with Gmail."
+    else:
+        interpretation += "."
     plan = WorkflowPlan.model_validate(
         {
             "name": f"{location} weather presentation",
-            "interpretation": (
-                f"Retrieve the public weather forecast for {location} {relative_date} and "
-                "create one populated Canva presentation grounded only in that forecast."
-            ),
-            "steps": [
-                {
-                    "key": "weather",
-                    "agent": "Weather Research Agent",
-                    "tool_slug": weather_slug,
-                    "operation": "weather.forecast",
-                    "arguments": {"location": location, "date": relative_date},
-                    "reason": "Retrieve the requested public forecast before composing the presentation.",
-                    "expected_output": "Location, forecast date, and grounded weather summary.",
-                    "required_evidence": ["forecast"],
-                },
-                {
-                    "key": "create_presentation",
-                    "agent": "Canva Presentation Agent",
-                    "tool_slug": canva_slug,
-                    "operation": "canva.presentation.create",
-                    "arguments": {
-                        "title": f"{location} weather",
-                        "subtitle": "Forecast for {{steps.weather.date}}",
-                        "phases": [{
-                            "period": "{{steps.weather.date}}",
-                            "title": "Weather forecast",
-                            "items": ["{{steps.weather.summary}}"],
-                        }],
-                    },
-                    "reason": "Create the requested populated presentation from the retrieved forecast.",
-                    "expected_output": "Verified Canva presentation creation job and design identity.",
-                    "consequential": True,
-                    "depends_on": ["weather"],
-                    "required_evidence": ["dispatch_receipt", "populated_presentation"],
-                },
-            ],
+            "interpretation": interpretation,
+            "steps": steps,
         }
     )
+    deliverables = ["One populated Canva presentation"]
+    constraints = ["Use the current public forecast"]
+    success_metrics = ["The Canva creation job returns a verified design identity"]
+    tools = [
+        {"slug": weather_slug, "role": "public weather forecast"},
+        {"slug": canva_slug, "role": "populated presentation creation"},
+    ]
+    missing = [canva_slug] if not canva.get("connected", True) else []
+    architecture = ["forecast", "compose", "approve", "create", "verify"]
+    if email_delivery_requested:
+        deliverables.append("One verified Gmail message with the presentation PDF attached")
+        constraints.append("Attach the verified Canva PDF; do not substitute a body link")
+        success_metrics.append("Gmail read-back confirms the requested PDF attachment")
+        tools.extend(
+            [
+                {"slug": export_slug, "role": "verified PDF export"},
+                {"slug": gmail_slug, "role": "approved email delivery"},
+            ]
+        )
+        if not canva_export.get("connected", True) and export_slug not in missing:
+            missing.append(export_slug)
+        if not gmail.get("connected", True) and gmail_slug not in missing:
+            missing.append(gmail_slug)
+        architecture = [
+            "forecast", "compose", "approve", "create", "export", "attach", "send", "verify"
+        ]
+    else:
+        constraints.append("Do not introduce email delivery")
     plan.planning_artifacts = {
         "objective_spec": {
             "goal": f"Create a Canva presentation for {location}'s {relative_date} weather.",
-            "deliverables": ["One populated Canva presentation"],
-            "constraints": ["Use the current public forecast", "Do not introduce email delivery"],
-            "success_metrics": ["The Canva creation job returns a verified design identity"],
+            "deliverables": deliverables,
+            "constraints": constraints,
+            "success_metrics": success_metrics,
             "required_inputs": [],
         },
         "toolset_proposal": {
-            "tools": [
-                {"slug": weather_slug, "role": "public weather forecast"},
-                {"slug": canva_slug, "role": "populated presentation creation"},
-            ],
+            "tools": tools,
             "missing_capabilities": [],
         },
         "preflight_evaluation": {
@@ -249,16 +358,14 @@ def weather_presentation_template(
             "risk_score": 0.3,
             "permission_scope": "write",
         },
-        "architecture": ["forecast", "compose", "approve", "create", "verify"],
+        "architecture": architecture,
         "senior_orchestrator": {
             "action": "approve",
             "reason": "Audited weather-presentation template passed deterministic preflight.",
             "source": "audited_template",
         },
         "planner_recovery_mode": "audited_weather_presentation_template",
-        "connection_requirements": (
-            [canva_slug] if not canva.get("connected", True) else []
-        ),
+        "connection_requirements": missing,
     }
     return plan
 
