@@ -79,6 +79,21 @@ test("the UI renders a language plan while durable compilation is still running"
   assert.equal(source.includes("iWill: firstPersonStepCopy(step.iWill || step.reason)"), true);
 });
 
+test("the first prompt submission opens the language plan without a confirmation gate", () => {
+  const source = readFileSync(
+    new URL("../src/pages/Demo.jsx", import.meta.url),
+    "utf8",
+  );
+  const submitStart = source.indexOf("const handleSubmit = useCallback");
+  const submitEnd = source.indexOf("const startAlternativePlan", submitStart);
+  const submitSource = source.slice(submitStart, submitEnd);
+
+  assert.ok(submitStart >= 0 && submitEnd > submitStart);
+  assert.equal(submitSource.includes("handleConfirmRef.current?.(prompt)"), true);
+  assert.equal(submitSource.includes('setPhase("confirm")'), false);
+  assert.equal(submitSource.includes('setPhase("plan")'), true);
+});
+
 test("an internal terminal state stays behind the run supervisor", () => {
   for (const status of ["failed", "blocked"]) {
     assert.equal(planningDisposition({
