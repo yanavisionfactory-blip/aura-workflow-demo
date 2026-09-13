@@ -94,6 +94,7 @@ const cleanSentence = (value, fallback = "Complete this step") => {
 const firstPersonStepCopy = (value, fallback = "complete this step") => {
   const text = String(value || fallback)
     .replace(/^aura\s+will\s+/i, "")
+    .replace(/^i\s+will\s+/i, "")
     .replace(/^i(?:'|’)ll\s+/i, "")
     .replace(/[.\s]+$/, "")
     .trim();
