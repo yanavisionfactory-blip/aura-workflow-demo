@@ -183,6 +183,24 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                 "labels": {"type": "array", "items": _TEXT},
                 "priority": {"type": "object"},
             }),
+            _module(
+                "jira.issues.create_from_blocks",
+                "action",
+                "Create an approved bounded Jira task batch from retrieved Notion blocks. If no project key or query is supplied, execution proceeds only when exactly one Jira project is available.",
+                required=("source_blocks",),
+                properties={
+                    "source_blocks": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 100,
+                        "items": {"type": "object"},
+                    },
+                    "project_key": _TEXT,
+                    "project_query": _TEXT,
+                    "issue_type": _TEXT,
+                    "max_issues": {**_POSITIVE_INTEGER, "maximum": 20},
+                },
+            ),
             _module("jira.issue.update", "action", "Update an approved Jira issue.", required=("issue_id_or_key", "fields"), properties={
                 "issue_id_or_key": _TEXT,
                 "fields": {"type": "object"},

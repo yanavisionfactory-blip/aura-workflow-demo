@@ -2,7 +2,11 @@ import asyncio
 
 from app import orchestrator
 from app.native_connectors import native_manifest
-from app.workflow_templates import creator_outreach_template, weather_presentation_template
+from app.workflow_templates import (
+    creator_outreach_template,
+    notion_to_jira_template,
+    weather_presentation_template,
+)
 
 
 def inventory():
@@ -110,6 +114,78 @@ def weather_inventory():
         {"slug": "canva", "connected": True, "allowed_operations": ["canva.presentation.create"]},
         {"slug": "google", "connected": True, "allowed_operations": ["gmail.send"]},
     ]
+
+
+def notion_jira_inventory(*, connected: bool = False):
+    return [
+        {
+            "slug": "notion",
+            "connected": connected,
+            "allowed_operations": [
+                "notion.search",
+                "notion.blocks.children.list",
+            ],
+        },
+        {
+            "slug": "jira",
+            "connected": connected,
+            "allowed_operations": ["jira.issues.create_from_blocks"],
+        },
+    ]
+
+
+def test_notion_to_jira_template_is_immediate_even_when_both_tools_are_disconnected():
+    plan = notion_to_jira_template(
+        "Read my research notes from Notion and turn the action items into Jira tasks",
+        notion_jira_inventory(),
+    )
+
+    assert plan is not None
+    assert [step.operation for step in plan.steps] == [
+        "notion.search",
+        "notion.blocks.children.list",
+        "jira.issues.create_from_blocks",
+    ]
+    assert plan.steps[1].arguments["block_id"] == (
+        "{{steps.find_research_notes.results[0].id}}"
+    )
+    assert plan.steps[2].arguments["source_blocks"] == (
+        "{{steps.read_research_notes.results}}"
+    )
+    assert plan.steps[2].consequential is True
+    assert plan.planning_artifacts["connection_requirements"] == ["notion", "jira"]
+    assert plan.planning_artifacts["timings_ms"]["model"] == 0
+
+
+def test_notion_to_jira_template_is_narrow_and_capability_complete():
+    inventory = notion_jira_inventory(connected=True)
+    assert notion_to_jira_template("Read my Notion notes", inventory) is None
+    inventory[-1]["allowed_operations"] = ["jira.issue.create"]
+    assert notion_to_jira_template(
+        "Turn Notion action items into Jira tasks", inventory
+    ) is None
+
+
+def test_compiled_notion_to_jira_plan_bypasses_model_planning():
+    plan = asyncio.run(
+        orchestrator._create_compiled_plan(
+            "Read my research notes from Notion and turn the action items into Jira tasks",
+            notion_jira_inventory(),
+            set(),
+            {
+                "notion": native_manifest("notion"),
+                "jira": native_manifest("jira"),
+            },
+            ["Notion", "Jira"],
+        )
+    )
+
+    assert [step.operation for step in plan.steps] == [
+        "notion.search",
+        "notion.blocks.children.list",
+        "jira.issues.create_from_blocks",
+    ]
+    assert plan.planning_artifacts["compiled_contracts"]
 
 
 def test_weather_presentation_template_builds_only_forecast_and_canva_steps():

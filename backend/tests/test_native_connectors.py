@@ -174,6 +174,17 @@ def test_jira_catalog_requires_approval_for_issue_writes():
         "jira.issue.create",
         {"project_key": "AURA", "summary": "Prepare launch brief"},
     )
+    bulk = next(
+        item
+        for item in manifest["capabilities"]
+        if item["name"] == "jira.issues.create_from_blocks"
+    )
+    assert bulk["requires_approval"] is True
+    assert normalize_module_arguments(
+        manifest,
+        "jira.issues.create_from_blocks",
+        {"source_blocks": "{{steps.read_notes.results}}", "max_issues": 20},
+    ) == {"source_blocks": "{{steps.read_notes.results}}", "max_issues": 20}
 
 
 def test_native_manifest_has_versioned_schema_and_transport():

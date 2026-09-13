@@ -16,6 +16,144 @@ def _owner(inventory: list[dict], operations: set[str]) -> dict | None:
     return matches[0] if len(matches) == 1 else None
 
 
+def notion_to_jira_template(
+    prompt: str,
+    inventory: list[dict],
+) -> WorkflowPlan | None:
+    """Return an immediate executable plan for a bounded Notion-to-Jira request.
+
+    The adapter intentionally owns the finite block-to-task normalization and
+    Jira bulk request.  That keeps the reviewable plan independent of connection
+    state without asking a model to invent a foreach graph or provider IDs.
+    """
+    requested = prompt.casefold()
+    if "notion" not in requested or "jira" not in requested:
+        return None
+    if not any(marker in requested for marker in ("action item", "to-do", "todo")):
+        return None
+    if not any(marker in requested for marker in ("task", "ticket", "issue")):
+        return None
+
+    page_match = re.search(
+        r"(?:my|the)\s+(.{1,80}?)\s+(?:in|from)\s+notion\b",
+        prompt,
+        re.IGNORECASE,
+    )
+    page_query = page_match.group(1).strip(" \t\n\r,.") if page_match else "research notes"
+    if not page_query or page_query.casefold() in {"action items", "tasks", "tickets"}:
+        page_query = "research notes"
+
+    notion = _owner(
+        inventory,
+        {"notion.search", "notion.blocks.children.list"},
+    )
+    jira = _owner(inventory, {"jira.issues.create_from_blocks"})
+    if not notion or not jira:
+        return None
+
+    notion_slug = str(notion["slug"])
+    jira_slug = str(jira["slug"])
+    plan = WorkflowPlan.model_validate(
+        {
+            "name": "Turn Notion action items into Jira tasks",
+            "interpretation": (
+                f"Read the {page_query} page in Notion, extract its action items, "
+                "and create the approved task batch in Jira."
+            ),
+            "steps": [
+                {
+                    "key": "find_research_notes",
+                    "agent": "Notion Research Agent",
+                    "tool_slug": notion_slug,
+                    "operation": "notion.search",
+                    "arguments": {
+                        "query": page_query,
+                        "page_size": 10,
+                        "filter": {"value": "page", "property": "object"},
+                    },
+                    "reason": "Find the named Notion page without asking for an internal page ID.",
+                    "expected_output": "The matching Notion page identity and metadata.",
+                    "required_evidence": ["resource_metadata"],
+                },
+                {
+                    "key": "read_research_notes",
+                    "agent": "Notion Research Agent",
+                    "tool_slug": notion_slug,
+                    "operation": "notion.blocks.children.list",
+                    "arguments": {
+                        "block_id": "{{steps.find_research_notes.results[0].id}}",
+                        "page_size": 100,
+                    },
+                    "reason": "Read the actual page blocks so Jira tasks are grounded in the notes.",
+                    "expected_output": "The current Notion page blocks containing the action items.",
+                    "depends_on": ["find_research_notes"],
+                    "required_evidence": ["page_body"],
+                },
+                {
+                    "key": "create_jira_tasks",
+                    "agent": "Jira Task Agent",
+                    "tool_slug": jira_slug,
+                    "operation": "jira.issues.create_from_blocks",
+                    "arguments": {
+                        "source_blocks": "{{steps.read_research_notes.results}}",
+                        "issue_type": "Task",
+                        "max_issues": 20,
+                    },
+                    "reason": (
+                        "Convert the retrieved action-item blocks into one bounded Jira bulk "
+                        "request after approval."
+                    ),
+                    "expected_output": "A verified receipt for every Jira task created.",
+                    "consequential": True,
+                    "depends_on": ["read_research_notes"],
+                    "required_evidence": ["write_receipt"],
+                },
+            ],
+        }
+    )
+    missing = [
+        slug
+        for slug, item in ((notion_slug, notion), (jira_slug, jira))
+        if not item.get("connected", True)
+    ]
+    plan.planning_artifacts = {
+        "objective_spec": {
+            "goal": "Create Jira tasks from action items in the named Notion page.",
+            "deliverables": ["One bounded batch of Jira tasks"],
+            "constraints": [
+                "Use only retrieved Notion page content",
+                "Do not create any Jira issue before approval",
+                "Do not guess a Jira project when more than one is available",
+            ],
+            "success_metrics": ["Every created issue has a Jira receipt"],
+            "required_inputs": [],
+        },
+        "toolset_proposal": {
+            "tools": [
+                {"slug": notion_slug, "role": "Notion page discovery and content read"},
+                {"slug": jira_slug, "role": "Approved Jira bulk task creation"},
+            ],
+            "missing_capabilities": [],
+        },
+        "preflight_evaluation": {
+            "passed": True,
+            "estimated_risk": "medium",
+            "risk_score": 0.4,
+            "permission_scope": "write",
+        },
+        "architecture": ["find", "read", "extract", "approve", "bulk create", "verify"],
+        "senior_orchestrator": {
+            "action": "approve",
+            "reason": "Audited Notion-to-Jira template passed deterministic preflight.",
+            "source": "audited_template",
+        },
+        "planner_recovery_mode": "audited_notion_to_jira_template",
+        "connection_requirements": missing,
+        "timings_ms": {"model": 0, "repair": 0, "total": 0},
+    }
+    return plan
+
+
 def weather_presentation_template(
     prompt: str,
     inventory: list[dict],

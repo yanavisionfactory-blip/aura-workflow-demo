@@ -366,6 +366,66 @@ async def test_named_disconnected_provider_gets_visible_plan_before_connection(
         assert requirement.required_permissions
 
 
+async def test_notion_and_jira_get_a_complete_visible_plan_before_connections(
+    broker_api, monkeypatch
+):
+    async with broker_api.factory() as session:
+        session.add(
+            WorkflowRun(
+                id="notion-jira-preflight-run",
+                workspace_id=broker_api.context.workspace_id,
+                prompt=(
+                    "Read my research notes from Notion and turn the action items "
+                    "into Jira tasks"
+                ),
+                inputs={"requested_tools": ["Notion", "Jira"]},
+                status=RunStatus.queued,
+            )
+        )
+        await session.commit()
+
+    monkeypatch.setattr(orchestrator, "SessionLocal", broker_api.factory)
+    monkeypatch.setattr(
+        orchestrator,
+        "managed_connector_client",
+        lambda: SimpleNamespace(configured=False),
+    )
+
+    await orchestrator._plan_run(
+        "notion-jira-preflight-run", broker_api.context.workspace_id
+    )
+
+    async with broker_api.factory() as session:
+        run = await session.get(WorkflowRun, "notion-jira-preflight-run")
+        steps = list(
+            await session.scalars(
+                select(RunStep)
+                .where(RunStep.run_id == "notion-jira-preflight-run")
+                .order_by(RunStep.position)
+            )
+        )
+        requirements = list(
+            await session.scalars(
+                select(ConnectionRequirement).where(
+                    ConnectionRequirement.run_id == "notion-jira-preflight-run"
+                )
+            )
+        )
+        assert run.status == RunStatus.waiting_for_action
+        assert [step["operation"] for step in run.plan["steps"]] == [
+            "notion.search",
+            "notion.blocks.children.list",
+            "jira.issues.create_from_blocks",
+        ]
+        assert [step.operation for step in steps] == [
+            "notion.search",
+            "notion.blocks.children.list",
+            "jira.issues.create_from_blocks",
+        ]
+        assert set(run.result["missing_capabilities"]) == {"notion", "jira"}
+        assert {item.provider_hint for item in requirements} == {"notion", "jira"}
+
+
 async def test_api_key_connection_e2e_keeps_the_key_inside_managed_auth(
     broker_api, monkeypatch
 ):

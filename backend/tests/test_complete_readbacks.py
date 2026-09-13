@@ -33,6 +33,23 @@ def cases():
     yield ("notion.blocks.children.append", {"block_id": "page", "children": [child]}, {"results": [{"id": "block"}]}, tree)
     yield ("notion.page.create", {"parent": {"page_id": "parent"}, "properties": {}, "children": [child]}, {"id": "page"},
         {"checks": [{"id": "page", "parent": {"page_id": "parent"}, "properties": {}, "archived": False}, tree]})
+    yield (
+        "jira.issues.create_from_blocks",
+        {"source_blocks": [{"type": "to_do"}]},
+        {
+            "issues": [{"id": "1", "key": "AURA-1"}, {"id": "2", "key": "AURA-2"}],
+            "errors": [],
+            "project_key": "AURA",
+            "requested_summaries": ["Prepare launch brief", "Confirm pilot owners"],
+            "issue_type": "Task",
+        },
+        {
+            "checks": [
+                {"id": "1", "key": "AURA-1", "fields": {"summary": "Prepare launch brief", "project": {"key": "AURA"}, "issuetype": {"name": "Task"}}},
+                {"id": "2", "key": "AURA-2", "fields": {"summary": "Confirm pilot owners", "project": {"key": "AURA"}, "issuetype": {"name": "Task"}}},
+            ]
+        },
+    )
 
 
 @pytest.mark.parametrize("operation,arguments,receipt,observed", list(cases()))
@@ -92,6 +109,19 @@ def test_batch_receipts_and_permissions_cover_all_resources():
         build_outcome_check("airtable.create", args, {"records": [{"id": "r"}]})
     with pytest.raises(ValueError):
         build_outcome_check("airtable.create", args, {"records": [{"id": "r"}, {"id": "r"}]})
+    jira_args = {"source_blocks": [{"type": "to_do"}]}
+    with pytest.raises(ValueError):
+        build_outcome_check(
+            "jira.issues.create_from_blocks",
+            jira_args,
+            {
+                "issues": [{"id": "1", "key": "AURA-1"}, {"id": "1", "key": "AURA-1"}],
+                "errors": [],
+                "project_key": "AURA",
+                "requested_summaries": ["One", "Two"],
+                "issue_type": "Task",
+            },
+        )
     assert required_reads("notion.page.create", {"children": [{}]}) == {"notion.page.get", "notion.blocks.children.list"}
 
 
