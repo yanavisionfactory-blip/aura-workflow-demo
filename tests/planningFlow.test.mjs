@@ -54,10 +54,27 @@ test("the connection checklist preserves every unsatisfied provider", () => {
   assert.deepEqual(planningConnectionRequirements(run), ["linear", "slack"]);
 });
 
-test("unfinished planning remains on the plan loader", () => {
+test("unfinished durable planning remains in background wait state", () => {
   for (const status of ["queued", "planning", "recovering", undefined]) {
     assert.equal(planningDisposition({ status }), "wait");
   }
+});
+
+test("the UI renders a language plan while durable compilation is still running", () => {
+  const source = readFileSync(
+    new URL("../src/pages/Demo.jsx", import.meta.url),
+    "utf8",
+  );
+  const planViewSource = readFileSync(
+    new URL("../src/components/aura/PlanView.jsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.equal(source.includes("instantLanguagePlan(confirmedIntent"), true);
+  assert.equal(source.includes("languageDraftPrompt(confirmedIntent"), true);
+  assert.equal(source.includes("Executable planning unavailable; the language plan remains visible"), true);
+  assert.equal(planViewSource.includes("Connections never block plan creation"), true);
+  assert.equal(planViewSource.includes("validatingExecution || missingTools.length"), true);
 });
 
 test("an internal terminal state stays behind the run supervisor", () => {

@@ -43,6 +43,7 @@ import {
 } from "@/lib/planningFlow.mjs";
 import { hasDurablePlan, planningRequestPrompt } from "@/lib/runtimePlan.mjs";
 import { weatherStepTitle } from "@/lib/planPresentation.mjs";
+import { instantLanguagePlan, languageDraftPrompt } from "@/lib/languagePlan.mjs";
 
 const STEP_DURATION = 2.6;
 
@@ -437,6 +438,7 @@ export default function Demo() {
   const pythonRunIdRef = useRef(null);
   const pythonPlanRef = useRef(null);
   const pythonPollGenerationRef = useRef(0);
+  const languageDraftGenerationRef = useRef(0);
   const runRequestKeyRef = useRef(null);
   const lastPlanningIntentRef = useRef("");
 
@@ -481,6 +483,7 @@ export default function Demo() {
   const reset = useCallback(() => {
     clearTimeouts();
     pythonPollGenerationRef.current += 1;
+    languageDraftGenerationRef.current += 1;
     runRequestKeyRef.current = null;
     lastPlanningIntentRef.current = "";
     pendingMock.current = null;
@@ -586,11 +589,52 @@ Write ONE clear, conversational sentence restating what they want — but offer 
     (editedInterpretation, revisionInstruction = "", allowLegacyPlanner = false) => {
       setInterpretation(editedInterpretation);
       if (!allowLegacyPlanner) {
-        setPlanLoading(true);
+        const confirmedIntent = editedInterpretation.trim() || originalPromptRef.current;
+        const explicitRequirements = promptConnectionRequirements(
+          confirmedIntent,
+          CATALOG.map((tool) => ({ ...tool, slug: tool.provider })),
+          getAllConnections(),
+        );
+        const immediatePlan = {
+          ...instantLanguagePlan(confirmedIntent, CATALOG, userSelectedToolsRef.current),
+          connectionRequirements: explicitRequirements,
+        };
+        const languageDraftGeneration = ++languageDraftGenerationRef.current;
+
+        // The readable plan is independent from connector readiness. Show a
+        // useful language draft now; refine and compile it in parallel.
+        setPlan(immediatePlan);
+        setPlanLoading(false);
         setPhase("plan");
+
+        aura.integrations.Core
+          .InvokeLLM({
+            prompt: languageDraftPrompt(confirmedIntent, userSelectedToolsRef.current),
+            response_json_schema: PLAN_SCHEMA,
+          })
+          .then((draft) => {
+            if (
+              languageDraftGenerationRef.current !== languageDraftGeneration
+              || !Array.isArray(draft?.steps)
+              || draft.steps.length === 0
+            ) return;
+            setPlan((current) => current?.provisional ? {
+              ...draft,
+              interpretation: draft.interpretation || confirmedIntent,
+              estimatedTime: "Plan ready — validating executable details backstage",
+              connectionRequirements: current.connectionRequirements || explicitRequirements,
+              provisional: true,
+              compileState: current.compileState || "validating",
+              compileError: current.compileError,
+            } : current);
+          })
+          .catch(() => {
+            // The immediate language draft is already visible. Exact execution
+            // compilation remains authoritative and continues independently.
+          });
+
         return (async () => {
           try {
-            const confirmedIntent = editedInterpretation.trim() || originalPromptRef.current;
             const previousRunId = pythonRunIdRef.current;
             const startFresh = shouldStartFreshPlanningRun({
               nextIntent: confirmedIntent,
@@ -631,7 +675,19 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               if (disposition === "review") break;
               if (disposition === "connection") {
                 pythonPlanRef.current = run.plan || null;
-                setPlan(uiConnectionPlanFromRun(run, editedInterpretation));
+                const connectionPlan = uiConnectionPlanFromRun(run, editedInterpretation);
+                setPlan((current) => connectionPlan.steps.length ? {
+                  ...connectionPlan,
+                  provisional: false,
+                  compileState: "waiting_for_connection",
+                } : {
+                  ...(current || immediatePlan),
+                  ...connectionPlan,
+                  workflowName: connectionPlan.workflowName || current?.workflowName || immediatePlan.workflowName,
+                  steps: current?.steps?.length ? current.steps : immediatePlan.steps,
+                  provisional: true,
+                  compileState: "waiting_for_connection",
+                });
                 return;
               }
               if (disposition === "unavailable") throw new Error(
@@ -640,36 +696,25 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               await new Promise((resolve) => setTimeout(resolve, 1000));
             }
             pythonPlanRef.current = run.plan;
-            setPlan(uiPlanFromRun(run));
+            setPlan({
+              ...uiPlanFromRun(run),
+              provisional: false,
+              compileState: "ready",
+            });
           } catch (error) {
-            console.warn("Python planning unavailable; no executable plan was created", error);
+            console.warn("Executable planning unavailable; the language plan remains visible", error);
             if (pythonRunIdRef.current) forgetActivePythonRun(pythonRunIdRef.current);
             pythonRunIdRef.current = null;
             pythonPlanRef.current = null;
             runRequestKeyRef.current = null;
-            const explicitRequirements = promptConnectionRequirements(
-              editedInterpretation || originalPromptRef.current,
-              CATALOG.map((tool) => ({
-                  ...tool,
-                  slug: tool.provider,
-                })),
-              getAllConnections()
-            );
-            setPlan(explicitRequirements.length
-              ? {
-                interpretation: editedInterpretation,
-                workflowName: "",
-                estimatedTime: "Planning resumes after the connection is verified",
-                steps: [],
-                connectionRequirements: explicitRequirements,
-              }
-              : {
-                interpretation: editedInterpretation,
-                workflowName: "",
-                estimatedTime: "",
-                steps: [],
-                error: error?.message || "AURA couldn't build the plan right now.",
-              });
+            setPlan((current) => ({
+              ...(current || immediatePlan),
+              estimatedTime: "Plan ready — executable details need another validation pass",
+              connectionRequirements: explicitRequirements,
+              provisional: true,
+              compileState: "blocked",
+              compileError: error?.message || "AURA couldn't validate the executable details right now.",
+            }));
           } finally {
             setPlanLoading(false);
           }
@@ -785,7 +830,12 @@ Rules:
     const connections = Array.isArray(recoveries) ? recoveries : [];
     const connectionIds = [...new Set(connections.map((item) => item?.connectionId).filter(Boolean))];
     if (!runId || connectionIds.length === 0) return handleRetryPlanning();
-    setPlanLoading(true);
+    setPlan((current) => current ? {
+      ...current,
+      provisional: true,
+      compileState: "validating",
+      compileError: "",
+    } : current);
     try {
       for (const connectionId of connectionIds) {
         const latest = await getPythonRun(runId);
@@ -799,12 +849,23 @@ Rules:
         const disposition = planningDisposition(run);
         if (disposition === "review") {
           pythonPlanRef.current = run.plan;
-          setPlan(uiPlanFromRun(run));
+          setPlan({ ...uiPlanFromRun(run), provisional: false, compileState: "ready" });
           return;
         }
         if (disposition === "connection") {
           pythonPlanRef.current = run.plan || null;
-          setPlan(uiConnectionPlanFromRun(run, interpretation));
+          const connectionPlan = uiConnectionPlanFromRun(run, interpretation);
+          setPlan((current) => connectionPlan.steps.length ? {
+            ...connectionPlan,
+            provisional: false,
+            compileState: "waiting_for_connection",
+          } : {
+            ...(current || connectionPlan),
+            ...connectionPlan,
+            steps: current?.steps || [],
+            provisional: true,
+            compileState: "waiting_for_connection",
+          });
           return;
         }
         if (disposition === "unavailable") {
@@ -813,13 +874,12 @@ Rules:
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     } catch (error) {
-      setPlan({
-        interpretation,
-        workflowName: "",
-        estimatedTime: "",
-        steps: [],
-        error: error?.message || "AURA couldn't resume planning right now.",
-      });
+      setPlan((current) => ({
+        ...(current || { interpretation, workflowName: "", steps: [] }),
+        provisional: true,
+        compileState: "blocked",
+        compileError: error?.message || "AURA couldn't resume executable validation right now.",
+      }));
     } finally {
       setPlanLoading(false);
     }
