@@ -75,6 +75,7 @@ test("the UI renders a language plan while durable compilation is still running"
   assert.equal(source.includes("Executable planning unavailable; the language plan remains visible"), true);
   assert.equal(planViewSource.includes("Connections never block plan creation"), true);
   assert.equal(planViewSource.includes("validatingExecution || missingTools.length"), true);
+  assert.equal(source.includes('.replace(/^i\\s+will\\s+/i, "")'), true);
 });
 
 test("an internal terminal state stays behind the run supervisor", () => {
