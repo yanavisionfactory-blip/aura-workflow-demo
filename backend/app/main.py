@@ -127,6 +127,7 @@ from .providers import (
 )
 from .run_supervisor import SUPERVISOR_VERSION, transition_run
 from .schemas import (
+    AgentConnectionCreate,
     AiGenerateRequest,
     ApprovalDecision,
     ConnectionResume,
@@ -174,6 +175,7 @@ from .trigger_runtime import (
 )
 from .universal_connectors import (
     ConnectorError,
+    agent_credentials,
     discover_provider,
     validate_public_endpoint,
     verify_provider,
@@ -581,6 +583,9 @@ async def list_tools(
                 "canonical_provider": (tool.config or {}).get("canonical_provider")
                 or canonical_provider_slug(tool.slug),
                 "execution_strategy": (tool.config or {}).get("execution_strategy"),
+                "is_agent": (tool.config or {}).get("managed_by") == "agent_gateway",
+                "agent_protocol": (tool.config or {}).get("agent_protocol"),
+                "agent_owner": (tool.config or {}).get("owner"),
                 "status": manifest.status
                 if manifest
                 else ("connected" if tool.enabled else "disabled"),
@@ -602,6 +607,247 @@ async def list_tools(
             }
         )
     return result
+
+
+def _agent_connection_view(tool: ToolConnection, manifest: CapabilityManifest) -> dict:
+    agent_manifest = manifest.manifest or {}
+    skills = []
+    for capability in agent_manifest.get("capabilities", []):
+        metadata = capability.get("metadata") or {}
+        declared = metadata.get("skills") or []
+        if declared:
+            skills.extend(declared)
+        else:
+            skills.append(
+                {
+                    "id": capability.get("name"),
+                    "name": capability.get("description") or capability.get("name"),
+                }
+            )
+    unique_skills = []
+    seen_skills = set()
+    for skill in skills:
+        key = str(skill.get("id") or skill.get("name") or "").strip()
+        if not key or key in seen_skills:
+            continue
+        seen_skills.add(key)
+        unique_skills.append(skill)
+    return {
+        "id": tool.id,
+        "slug": tool.slug,
+        "name": tool.display_name,
+        "owner": (tool.config or {}).get("owner") or agent_manifest.get("owner"),
+        "protocol": (tool.config or {}).get("agent_protocol")
+        or agent_manifest.get("agent_protocol"),
+        "endpoint": (tool.config or {}).get("registration_endpoint") or tool.base_url,
+        "status": manifest.status,
+        "enabled": tool.enabled,
+        "version": agent_manifest.get("version"),
+        "skills": unique_skills,
+        "allowed_operations": list(tool.allowed_operations or []),
+        "data_access": list(agent_manifest.get("data_access") or []),
+        "data_retention": agent_manifest.get("data_retention"),
+        "side_effects": agent_manifest.get("side_effects", "artifact_only"),
+        "authentication": (tool.config or {}).get("authentication", "none"),
+        "limits": agent_manifest.get("limits") or {},
+        "verified_at": manifest.verified_at.isoformat() if manifest.verified_at else None,
+    }
+
+
+async def _discover_agent_payload(payload: AgentConnectionCreate) -> tuple[dict, dict, ToolKind]:
+    endpoint = str(payload.endpoint)
+    manifest_url = str(payload.manifest_url) if payload.manifest_url else None
+    credentials = agent_credentials(payload.authentication, payload.credential)
+    config = {
+        "managed_by": "agent_gateway",
+        "agent_protocol": payload.protocol,
+        "name": payload.name,
+        "owner": payload.owner,
+        "manifest_url": manifest_url,
+        "authentication": payload.authentication,
+        "data_access": payload.data_access,
+        "data_retention": payload.data_retention,
+        "max_runtime_seconds": payload.max_runtime_seconds,
+        "max_cost_usd": payload.max_cost_usd,
+    }
+    kind = ToolKind.mcp if payload.protocol == "mcp" else ToolKind.agent
+    manifest = await discover_provider(kind.value, endpoint, credentials, config)
+    return manifest, credentials, kind
+
+
+@app.post("/v1/agents/validate")
+async def validate_agent_connection(
+    payload: AgentConnectionCreate,
+    context: TenantContext = Depends(tenant_context),
+) -> dict:
+    del context
+    try:
+        manifest, _, _ = await _discover_agent_payload(payload)
+    except (ConnectorError, httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(422, f"AURA could not verify that agent: {exc}") from exc
+    return {
+        "valid": True,
+        "name": manifest["name"],
+        "owner": manifest["owner"],
+        "protocol": manifest["agent_protocol"],
+        "version": manifest["version"],
+        "capabilities": manifest["capabilities"],
+        "data_access": manifest["data_access"],
+        "data_retention": manifest["data_retention"],
+        "side_effects": manifest["side_effects"],
+        "limits": manifest["limits"],
+    }
+
+
+@app.get("/v1/agents")
+async def list_agent_connections(
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> list[dict]:
+    tools = (
+        await session.scalars(
+            select(ToolConnection).where(ToolConnection.workspace_id == context.workspace_id)
+        )
+    ).all()
+    agent_tools = [
+        tool for tool in tools if (tool.config or {}).get("managed_by") == "agent_gateway"
+    ]
+    if not agent_tools:
+        return []
+    manifests = (
+        await session.scalars(
+            select(CapabilityManifest).where(
+                CapabilityManifest.tool_id.in_([tool.id for tool in agent_tools])
+            )
+        )
+    ).all()
+    by_tool = {manifest.tool_id: manifest for manifest in manifests}
+    return [
+        _agent_connection_view(tool, by_tool[tool.id])
+        for tool in agent_tools
+        if tool.id in by_tool
+    ]
+
+
+@app.post("/v1/agents", status_code=201)
+async def connect_agent(
+    payload: AgentConnectionCreate,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    try:
+        manifest, credentials, kind = await _discover_agent_payload(payload)
+    except (ConnectorError, httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(422, f"AURA could not verify that agent: {exc}") from exc
+
+    registration_endpoint = str(payload.endpoint)
+    current = (
+        await session.scalars(
+            select(ToolConnection).where(ToolConnection.workspace_id == context.workspace_id)
+        )
+    ).all()
+    tool = next(
+        (
+            item
+            for item in current
+            if (item.config or {}).get("managed_by") == "agent_gateway"
+            and (item.config or {}).get("agent_protocol") == payload.protocol
+            and (item.config or {}).get("registration_endpoint") == registration_endpoint
+        ),
+        None,
+    )
+    normalized_name = "-".join(
+        part for part in "".join(
+            character.lower() if character.isalnum() else " "
+            for character in payload.name
+        ).split() if part
+    )[:70] or "external"
+    digest = hashlib.sha256(
+        f"{payload.protocol}:{registration_endpoint}".encode()
+    ).hexdigest()[:10]
+    slug = f"agent-{normalized_name}-{digest}"
+    config = {
+        "managed_by": "agent_gateway",
+        "agent_protocol": payload.protocol,
+        "registration_endpoint": registration_endpoint,
+        "manifest_url": str(payload.manifest_url) if payload.manifest_url else None,
+        "owner": payload.owner,
+        "authentication": payload.authentication,
+        "data_access": payload.data_access,
+        "data_retention": payload.data_retention,
+        "max_runtime_seconds": payload.max_runtime_seconds,
+        "max_cost_usd": payload.max_cost_usd,
+        "artifact_only": True,
+        "may_access_aura_tools": False,
+    }
+    vault = CredentialVault()
+    if tool:
+        tool.slug = slug
+        tool.display_name = manifest["name"]
+        tool.kind = kind
+        tool.base_url = manifest["base_url"]
+        tool.encrypted_credentials = vault.encrypt(credentials)
+        tool.config = config
+        tool.allowed_operations = discovered_operations(manifest)
+        tool.enabled = True
+    else:
+        tool = ToolConnection(
+            workspace_id=context.workspace_id,
+            slug=slug,
+            display_name=manifest["name"],
+            kind=kind,
+            base_url=manifest["base_url"],
+            encrypted_credentials=vault.encrypt(credentials),
+            config=config,
+            allowed_operations=discovered_operations(manifest),
+            enabled=True,
+        )
+        session.add(tool)
+        await session.flush()
+    manifest_record = await session.scalar(
+        select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id)
+    )
+    verification = {
+        "ok": True,
+        "source": "agent_gateway_discovery",
+        "protocol": payload.protocol,
+        "capability_count": len(manifest.get("capabilities") or []),
+        "credentials_isolated": True,
+    }
+    if manifest_record:
+        manifest_record.provider_type = kind.value
+        manifest_record.status = "verified"
+        manifest_record.manifest = manifest
+        manifest_record.verification = verification
+        manifest_record.verified_at = datetime.now(UTC)
+    else:
+        manifest_record = CapabilityManifest(
+            workspace_id=context.workspace_id,
+            tool_id=tool.id,
+            provider_type=kind.value,
+            status="verified",
+            manifest=manifest,
+            verification=verification,
+            verified_at=datetime.now(UTC),
+        )
+        session.add(manifest_record)
+    session.add(
+        AuditEvent(
+            workspace_id=context.workspace_id,
+            actor=context.subject,
+            event_type="agent.connected",
+            payload={
+                "tool_id": tool.id,
+                "slug": tool.slug,
+                "protocol": payload.protocol,
+                "owner": payload.owner,
+                "capability_count": len(tool.allowed_operations),
+                "credentials_isolated": True,
+            },
+        )
+    )
+    await session.commit()
+    return _agent_connection_view(tool, manifest_record)
 
 
 def _marketplace_route(item: dict) -> dict:
@@ -3193,6 +3439,31 @@ async def test_connection(
             result = await verify_oauth_credentials(tool.slug, credentials)
         except (httpx.HTTPError, ValueError):
             result = {"ok": False, "reason": "authorization_required"}
+    elif (tool.config or {}).get("managed_by") == "agent_gateway":
+        try:
+            refreshed_manifest = await discover_provider(
+                tool.kind.value,
+                str((tool.config or {}).get("registration_endpoint") or tool.base_url),
+                credentials,
+                tool.config or {},
+            )
+            result = {
+                "ok": True,
+                "source": "agent_gateway_discovery",
+                "protocol": (tool.config or {}).get("agent_protocol"),
+                "capability_count": len(refreshed_manifest.get("capabilities") or []),
+                "credentials_isolated": True,
+            }
+            manifest.manifest = refreshed_manifest
+            tool.base_url = refreshed_manifest["base_url"]
+            tool.allowed_operations = discovered_operations(refreshed_manifest)
+            tool.enabled = True
+        except (ConnectorError, httpx.HTTPError, ValueError):
+            result = {
+                "ok": False,
+                "reason": "agent_endpoint_unavailable",
+                "retryable": True,
+            }
     elif tool.kind == ToolKind.browser:
         try:
             refreshed_manifest = await discover_provider(

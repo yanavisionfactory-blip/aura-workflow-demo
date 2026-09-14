@@ -426,6 +426,18 @@ def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict]) -> None:
         )
         if not manifest:
             continue
+        capability = next(
+            (
+                item
+                for item in manifest.get("capabilities", [])
+                if item.get("name") == planned_step.operation
+            ),
+            None,
+        )
+        if capability and capability.get("requires_approval"):
+            # Approval declarations in verified connector contracts outrank an
+            # optimistic planner classification, including external agents.
+            planned_step.consequential = True
         planned_step.arguments = normalize_module_arguments(
             manifest, planned_step.operation, planned_step.arguments
         )
@@ -2656,16 +2668,26 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                                 active_tool.slug,
                                 manifest_record.manifest if manifest_record else None,
                             )
+                            provider_timeout = float(
+                                snapshot.policy_snapshot[
+                                    "gateway_timeout_seconds"
+                                    if active_tool.kind.value == "mcp"
+                                    else "step_timeout_seconds"
+                                ]
+                            )
+                            if (active_tool.config or {}).get("managed_by") == "agent_gateway":
+                                provider_timeout = min(
+                                    provider_timeout,
+                                    float(
+                                        (current_manifest.get("limits") or {}).get(
+                                            "max_runtime_seconds", provider_timeout
+                                        )
+                                    ),
+                                )
                             executor = ProviderExecutor(
                                 credentials,
                                 active_tool.base_url,
-                                timeout_seconds=float(
-                                    snapshot.policy_snapshot[
-                                        "gateway_timeout_seconds"
-                                        if active_tool.kind.value == "mcp"
-                                        else "step_timeout_seconds"
-                                    ]
-                                ),
+                                timeout_seconds=provider_timeout,
                                 provider_kind=active_tool.kind.value,
                                 capability_manifest=current_manifest,
                             )

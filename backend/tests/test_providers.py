@@ -647,3 +647,128 @@ def test_legacy_callback_keeps_the_same_uri_during_token_exchange():
     assert oauth_exchange_callback_url(
         settings, PROVIDERS["jira"], "atlassian"
     ) == "https://api.example.com/v1/oauth/atlassian/callback"
+
+
+def _a2a_manifest() -> dict:
+    return {
+        "agent_protocol": "a2a",
+        "capabilities": [
+            {
+                "name": "agent.task.run",
+                "input_schema": {
+                    "type": "object",
+                    "required": ["goal"],
+                    "properties": {
+                        "goal": {"type": "string"},
+                        "context": {"type": "object"},
+                    },
+                },
+                "transport": {
+                    "protocol_version": "1.0",
+                    "send_path": "/message:send",
+                    "status_path": "/tasks/{task_id}",
+                    "cancel_path": "/tasks/{task_id}:cancel",
+                },
+            }
+        ],
+    }
+
+
+def test_a2a_agent_returns_only_completed_artifacts(monkeypatch):
+    executor = ProviderExecutor(
+        {"access_token": "agent-only-token"},
+        "https://agent.example.com/a2a/v1",
+        provider_kind="agent",
+        capability_manifest=_a2a_manifest(),
+    )
+    request = AsyncMock(
+        return_value={
+            "task": {
+                "id": "task-1",
+                "status": {"state": "TASK_STATE_COMPLETED"},
+                "artifacts": [
+                    {"artifactId": "report-1", "parts": [{"text": "Finished"}]}
+                ],
+            }
+        }
+    )
+    monkeypatch.setattr(executor, "_request", request)
+
+    result = asyncio.run(
+        executor.execute(
+            "agent.task.run",
+            {"goal": "Research the approved market", "context": {"brief": "Approved"}},
+        )
+    )
+
+    assert result["task_id"] == "task-1"
+    assert result["status"] == "completed"
+    assert result["artifacts"][0]["artifactId"] == "report-1"
+    payload = request.await_args.kwargs["json"]
+    assert request.await_args.kwargs["headers"] == {
+        "A2A-Version": "1.0",
+        "Accept": "application/a2a+json",
+        "Content-Type": "application/a2a+json",
+    }
+    assert payload["message"]["metadata"]["delegation"] == {
+        "depth": 0,
+        "may_delegate": False,
+    }
+    assert "agent-only-token" not in str(payload)
+
+
+def test_a2a_agent_rejects_requests_for_aura_tools(monkeypatch):
+    executor = ProviderExecutor(
+        {},
+        "https://agent.example.com/a2a/v1",
+        provider_kind="agent",
+        capability_manifest=_a2a_manifest(),
+    )
+    monkeypatch.setattr(
+        executor,
+        "_request",
+        AsyncMock(
+            return_value={
+                "task": {
+                    "id": "task-1",
+                    "status": {"state": "TASK_STATE_COMPLETED"},
+                    "artifacts": [
+                        {
+                            "parts": [
+                                {"data": {"tool_requests": [{"operation": "gmail.send"}]}}
+                            ]
+                        }
+                    ],
+                }
+            }
+        ),
+    )
+
+    with pytest.raises(ValueError, match="cannot invoke AURA tools"):
+        asyncio.run(executor.execute("agent.task.run", {"goal": "Send a report"}))
+
+
+def test_a2a_agent_cancels_remote_task_when_budget_expires(monkeypatch):
+    executor = ProviderExecutor(
+        {},
+        "https://agent.example.com/a2a/v1",
+        timeout_seconds=0.01,
+        provider_kind="agent",
+        capability_manifest=_a2a_manifest(),
+    )
+    request = AsyncMock(
+        side_effect=[
+            {"task": {"id": "task-1", "status": {"state": "TASK_STATE_WORKING"}}},
+            {"task": {"id": "task-1", "status": {"state": "TASK_STATE_WORKING"}}},
+            {"status": "TASK_STATE_CANCELED"},
+        ]
+    )
+    monkeypatch.setattr(executor, "_request", request)
+
+    with pytest.raises(TimeoutError, match="execution budget"):
+        asyncio.run(executor.execute("agent.task.run", {"goal": "Long research task"}))
+
+    assert request.await_args_list[-1].args == (
+        "POST",
+        "https://agent.example.com/a2a/v1/tasks/task-1:cancel",
+    )
