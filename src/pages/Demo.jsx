@@ -443,6 +443,7 @@ export default function Demo() {
   const handleConfirmRef = useRef(null);
   const runRequestKeyRef = useRef(null);
   const lastPlanningIntentRef = useRef("");
+  const historySavePromiseRef = useRef(null);
 
   const clearTimeouts = () => {
     timeoutRefs.current.forEach(clearTimeout);
@@ -488,6 +489,7 @@ export default function Demo() {
     languageDraftGenerationRef.current += 1;
     runRequestKeyRef.current = null;
     lastPlanningIntentRef.current = "";
+    historySavePromiseRef.current = null;
     pendingMock.current = null;
     resolvedErrorRef.current = false;
     approvedStepsRef.current = [];
@@ -665,8 +667,9 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             runRequestKeyRef.current ||= globalThis.crypto?.randomUUID?.()
               || `aura-${Date.now()}-${Math.random().toString(36).slice(2)}`;
             const resources = attachedResourcesRef.current || {};
-            const created = await createPythonRunResilient(planningPrompt, currentWorkflowIdRef.current, runRequestKeyRef.current, {
+            const created = await createPythonRunResilient(planningPrompt, null, runRequestKeyRef.current, {
               requested_tools: userSelectedToolsRef.current,
+              saved_workflow_id: currentWorkflowIdRef.current,
               attached_documents: (resources.documents || []).map(({ name, file_url, size }) => ({
                 name,
                 file_url,
@@ -911,6 +914,71 @@ Rules:
     setPhase("plan");
   }, [interpretation]);
 
+  const ensureSavedWorkflowRun = async () => {
+    if (currentRunIdRef.current) return currentRunIdRef.current;
+    if (historySavePromiseRef.current) return historySavePromiseRef.current;
+
+    historySavePromiseRef.current = (async () => {
+      let workflowId = currentWorkflowIdRef.current;
+      const now = new Date().toISOString();
+      const name = workflowName || plan?.workflowName || originalPromptRef.current.slice(0, 60) || "Workflow";
+      const workflowUpdate = {
+        steps: approvedStepsRef.current,
+        interpretation: plan?.interpretation || interpretation,
+        last_run_status: "running",
+        last_run_date: now,
+      };
+
+      if (!workflowId) {
+        const [existing] = await aura.entities.Workflow
+          .filter({ prompt: originalPromptRef.current }, "-created_date", 1)
+          .catch(() => []);
+        if (existing) {
+          workflowId = existing.id;
+          await aura.entities.Workflow.update(existing.id, {
+            ...workflowUpdate,
+            run_count: (Number(existing.run_count) || 0) + 1,
+          });
+        } else {
+          const workflow = await aura.entities.Workflow.create({
+            name,
+            prompt: originalPromptRef.current,
+            ...workflowUpdate,
+            run_count: 1,
+          });
+          workflowId = workflow.id;
+        }
+        currentWorkflowIdRef.current = workflowId;
+      } else {
+        const [existing] = await aura.entities.Workflow.filter({ id: workflowId }, "-created_date", 1);
+        await aura.entities.Workflow.update(workflowId, {
+          ...workflowUpdate,
+          ...(workflowName ? { name: workflowName } : {}),
+          run_count: (Number(existing?.run_count) || 0) + 1,
+        });
+      }
+
+      const savedRun = await aura.entities.WorkflowRun.create({
+        backend_run_id: pythonRunIdRef.current,
+        workflow_id: workflowId,
+        prompt: originalPromptRef.current,
+        title: name,
+        status: "running",
+        steps: approvedStepsRef.current,
+        backend_created_at: now,
+        backend_updated_at: now,
+      });
+      currentRunIdRef.current = savedRun.id;
+      return savedRun.id;
+    })();
+
+    try {
+      return await historySavePromiseRef.current;
+    } finally {
+      historySavePromiseRef.current = null;
+    }
+  };
+
   // ---- Approve plan -> preview (both mock and custom) ----
   const handleApprove = useCallback((steps, name = "") => {
     approvedStepsRef.current = steps;
@@ -1106,6 +1174,13 @@ Rules:
   const startPythonPreparation = async (reviewedUiSteps) => {
     const runId = pythonRunIdRef.current;
     if (!runId || !pythonPlanRef.current) return;
+    try {
+      await ensureSavedWorkflowRun();
+    } catch (error) {
+      console.error("Could not save workflow history", error);
+      keepPlanInReview("AURA couldn't save this workflow yet, so it has not started. Please try again.");
+      return;
+    }
     const generation = ++pythonPollGenerationRef.current;
     setPhase("executing");
     setStartTime(Date.now());
@@ -1156,6 +1231,13 @@ Rules:
   const startPythonExecution = async (editedUiSteps = null, prepared = false, observeOnly = false) => {
     const runId = pythonRunIdRef.current;
     if (!runId || !pythonPlanRef.current) return;
+    try {
+      await ensureSavedWorkflowRun();
+    } catch (error) {
+      console.error("Could not save workflow history", error);
+      keepPlanInReview("AURA couldn't save this workflow yet, so it has not started. Please try again.");
+      return;
+    }
     const generation = ++pythonPollGenerationRef.current;
     setPhase("executing");
     setStartTime(Date.now());
@@ -1350,7 +1432,7 @@ Generate a results summary in plain, human-friendly language (not technical).
       notifyWorkflowError(res.title || originalPromptRef.current);
     }
 
-    if (currentRunIdRef.current && !resultsFromBackend) {
+    if (currentRunIdRef.current) {
       try {
         await aura.entities.WorkflowRun.update(currentRunIdRef.current, {
           status: executionStatus === "failed" || errorMsg ? "failed" : "completed",
@@ -1360,6 +1442,7 @@ Generate a results summary in plain, human-friendly language (not technical).
           outcomes: res.outcomes,
           steps: approvedStepsRef.current,
           duration_seconds: startTime ? (Date.now() - startTime) / 1000 : null,
+          backend_updated_at: new Date().toISOString(),
         });
       } catch (e) {
         /* ignore */
