@@ -95,9 +95,13 @@ test("suggests only a connected verified agent named in the prompt", () => {
   assert.deepEqual(agentPromptHints("Ask Design Agent for a campaign", agents), []);
 });
 
-test("agent connection is reachable from both connection surfaces", () => {
+test("agent connection stays inside the existing resource choosers", () => {
   const command = readFileSync(
     new URL("../src/components/aura/CommandInput.jsx", import.meta.url),
+    "utf8",
+  );
+  const composer = readFileSync(
+    new URL("../src/components/aura/ResourceComposer.jsx", import.meta.url),
     "utf8",
   );
   const menu = readFileSync(
@@ -105,7 +109,11 @@ test("agent connection is reachable from both connection surfaces", () => {
     "utf8",
   );
 
-  assert.equal(command.includes("Connect agent"), true);
+  assert.equal(command.includes("AgentConnectDialog"), false);
+  assert.equal(command.includes("tools, docs & agents"), true);
+  assert.equal(composer.includes('setTab("agents")'), true);
+  assert.equal(composer.includes("<AgentConnectionForm"), true);
   assert.equal(menu.includes('setTab("agents")'), true);
   assert.equal(menu.includes("<AgentConnectionForm"), true);
+  assert.equal(menu.includes(">Add agent</button>"), false);
 });
