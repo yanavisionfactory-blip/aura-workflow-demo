@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -671,6 +672,9 @@ class ProviderExecutor:
     async def _execute_capability(self, operation: str, arguments: dict[str, Any]) -> dict:
         capability = capability_for(self.capability_manifest, operation)
         transport = capability.get("transport", {})
+        agent_protocol = self.capability_manifest.get("agent_protocol")
+        if self.provider_kind == "agent" and operation == "agent.task.run":
+            return await self._agent_task_run(arguments, transport, str(agent_protocol or "aura"))
         if self.provider_kind == "mcp":
             return await self._mcp_call(
                 {"tool_name": transport.get("tool_name", operation), "arguments": arguments}
@@ -725,9 +729,189 @@ class ProviderExecutor:
             kwargs["json"] = payload
         return await self._request(method, url, **kwargs)
 
+    @staticmethod
+    def _agent_state(task: dict) -> str:
+        status = task.get("status") or {}
+        if isinstance(status, dict):
+            state = status.get("state") or status.get("status")
+        else:
+            state = status
+        return str(state or task.get("state") or "completed").lower()
+
+    @staticmethod
+    def _agent_artifacts(task: dict) -> list[dict]:
+        artifacts = task.get("artifacts") or task.get("outputs") or []
+        if isinstance(artifacts, dict):
+            artifacts = [artifacts]
+        return [item for item in artifacts if isinstance(item, dict)]
+
+    @staticmethod
+    def _reject_agent_tool_requests(payload: dict) -> None:
+        pending: list[Any] = [payload]
+        prohibited = {"tool_requests", "requested_actions", "aura_tool_requests"}
+        while pending:
+            value = pending.pop()
+            if isinstance(value, dict):
+                if any(value.get(key) for key in prohibited):
+                    raise ValueError(
+                        "External agents cannot invoke AURA tools in this release"
+                    )
+                pending.extend(value.values())
+            elif isinstance(value, list):
+                pending.extend(value)
+
+    async def _cancel_agent_task(
+        self,
+        task_id: str,
+        path_template: str,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        if not self.base_url or not task_id or not path_template:
+            return
+        path = path_template.replace("{task_id}", quote(task_id, safe=""))
+        try:
+            await self._request(
+                "POST",
+                f"{self.base_url.rstrip('/')}/{path.lstrip('/')}",
+                json={},
+                headers=headers or {},
+            )
+        except Exception:  # noqa: BLE001 - cancellation remains best effort
+            return
+
+    async def _agent_task_run(
+        self,
+        arguments: dict[str, Any],
+        transport: dict[str, Any],
+        protocol: str,
+    ) -> dict:
+        if not self.base_url:
+            raise ValueError("Agent connection has no endpoint")
+        goal = str(arguments.get("goal") or "").strip()
+        if not goal:
+            raise ValueError("agent.task.run requires a bounded goal")
+        send_path = str(
+            transport.get("send_path")
+            or ("/message:send" if protocol == "a2a" else "/invoke")
+        )
+        status_path = str(transport.get("status_path") or "/tasks/{task_id}")
+        cancel_path = str(
+            transport.get("cancel_path")
+            or ("/tasks/{task_id}:cancel" if protocol == "a2a" else "/tasks/{task_id}/cancel")
+        )
+        declared_limits = self.capability_manifest.get("limits") or {}
+        budget = {
+            "max_runtime_seconds": min(
+                self.timeout_seconds,
+                float(declared_limits.get("max_runtime_seconds") or self.timeout_seconds),
+            ),
+            "max_cost_usd": float(declared_limits.get("max_cost_usd") or 0),
+        }
+        if protocol == "a2a":
+            protocol_version = str(transport.get("protocol_version") or "").strip()
+            if not protocol_version:
+                raise ValueError("A2A connection has no negotiated protocol version")
+            request_headers = {
+                "A2A-Version": protocol_version,
+                "Accept": "application/a2a+json",
+                "Content-Type": "application/a2a+json",
+            }
+            parts: list[dict[str, Any]] = [{"text": goal}]
+            if arguments.get("context"):
+                parts.append({"data": arguments["context"]})
+            payload = {
+                "message": {
+                    "messageId": hashlib.sha256(
+                        json.dumps(arguments, sort_keys=True).encode()
+                    ).hexdigest()[:32],
+                    "role": "ROLE_USER",
+                    "parts": parts,
+                    "metadata": {
+                        "skill_id": arguments.get("skill_id"),
+                        "delegation": {"depth": 0, "may_delegate": False},
+                        "aura_budget": budget,
+                    },
+                },
+                "configuration": {
+                    "acceptedOutputModes": arguments.get("accepted_output_modes") or []
+                },
+            }
+        else:
+            request_headers = {}
+            payload = {
+                "capability": "agent.task.run",
+                "input": {
+                    "goal": goal,
+                    "context": arguments.get("context") or {},
+                    "skill_id": arguments.get("skill_id"),
+                    "accepted_output_modes": arguments.get("accepted_output_modes") or [],
+                },
+                "delegation": {"depth": 0, "may_delegate": False},
+                "budget": budget,
+            }
+        send_url = f"{self.base_url.rstrip('/')}/{send_path.lstrip('/')}"
+        response = await self._request(
+            "POST", send_url, json=payload, headers=request_headers
+        )
+        if not isinstance(response, dict):
+            raise TypeError("Agent returned an invalid task response")
+        self._reject_agent_tool_requests(response)
+        message = response.get("message")
+        if message is not None and not isinstance(message, dict):
+            raise TypeError("Agent returned an invalid message")
+        if message and not response.get("task") and not response.get("task_id"):
+            return {
+                "task_id": None,
+                "status": "completed",
+                "artifacts": [{"name": "Agent response", "parts": message.get("parts", [])}],
+                "message": message,
+            }
+        task = response.get("task") if isinstance(response.get("task"), dict) else response
+        task_id = str(task.get("id") or task.get("task_id") or response.get("task_id") or "")
+        terminal = {"completed", "failed", "canceled", "cancelled", "rejected"}
+        terminal.update({f"task_state_{state}" for state in terminal})
+        deadline = time.monotonic() + self.timeout_seconds
+        try:
+            while self._agent_state(task) not in terminal:
+                if not task_id:
+                    raise ValueError("Agent returned a non-terminal task without an identifier")
+                if time.monotonic() >= deadline:
+                    await self._cancel_agent_task(task_id, cancel_path, request_headers)
+                    raise TimeoutError("Agent task exceeded its execution budget")
+                await asyncio.sleep(0.5)
+                path = status_path.replace("{task_id}", quote(task_id, safe=""))
+                polled = await self._request(
+                    "GET",
+                    f"{self.base_url.rstrip('/')}/{path.lstrip('/')}",
+                    headers=request_headers,
+                )
+                if not isinstance(polled, dict):
+                    raise TypeError("Agent returned an invalid task status")
+                self._reject_agent_tool_requests(polled)
+                task = polled.get("task") if isinstance(polled.get("task"), dict) else polled
+        except asyncio.CancelledError:
+            await asyncio.shield(
+                self._cancel_agent_task(task_id, cancel_path, request_headers)
+            )
+            raise
+        state = self._agent_state(task)
+        if state not in {"completed", "task_state_completed"}:
+            raise ValueError(f"Agent task ended with status {state}")
+        artifacts = self._agent_artifacts(task)
+        if not artifacts and not task.get("message"):
+            raise ValueError("Agent completed without returning an artifact")
+        return {
+            "task_id": task_id or None,
+            "status": "completed",
+            "artifacts": artifacts,
+            "message": task.get("message"),
+        }
+
     async def _request(self, method: str, url: str, **kwargs: Any) -> dict:
+        headers = self._headers()
+        headers.update(kwargs.pop("headers", {}) or {})
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-            response = await client.request(method, url, headers=self._headers(), **kwargs)
+            response = await client.request(method, url, headers=headers, **kwargs)
             response.raise_for_status()
             if response.status_code == 204:
                 return {"status_code": 204}

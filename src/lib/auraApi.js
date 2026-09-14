@@ -103,6 +103,27 @@ export async function listPythonTools() {
   return request("/v1/tools");
 }
 
+export async function listAgentConnections() {
+  await ensureWorkspace();
+  return request("/v1/agents");
+}
+
+export async function validateAgentConnection(payload) {
+  await ensureWorkspace();
+  return request("/v1/agents/validate", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function connectAgentConnection(payload) {
+  await ensureWorkspace();
+  return request("/v1/agents", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 let managedConnectorStatus = null;
 
 export async function getManagedConnectorStatus(refresh = false) {

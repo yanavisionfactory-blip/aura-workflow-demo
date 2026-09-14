@@ -39,6 +39,15 @@ def test_destructive_plan_requires_explicit_approval() -> None:
     assert decision["permission_scope"] == "destructive"
 
 
+def test_remote_agent_task_requires_explicit_approval() -> None:
+    decision = evaluate_plan_policy(
+        workflow("agent.task.run"), {"crm": 1.0}, DEFAULT_POLICY
+    )
+
+    assert decision["requires_explicit_approval"] is True
+    assert decision["permission_scope"] == "write"
+
+
 def test_runtime_blocks_revoked_permission() -> None:
     decision = runtime_policy_check(
         approved_cost=10,

@@ -28,6 +28,10 @@ def canonical_plan_hash(plan: dict) -> str:
 
 def operation_scope(operation: str) -> str:
     normalized = operation.lower()
+    if normalized == "agent.task.run":
+        # A remote agent receives approved workspace context. Treat that
+        # disclosure as consequential even when it can only return artifacts.
+        return "write"
     if any(word in normalized for word in ("delete", "destroy", "purge", "revoke")):
         return "destructive"
     if normalized.endswith((".get", ".list", ".search", ".creator_info")):
@@ -132,4 +136,3 @@ def runtime_policy_check(
         elif ratio > float(policy["cost_soft_ratio"]):
             reasons.append("Actual cost exceeded the soft-warning threshold")
     return {"action": action, "reasons": reasons}
-

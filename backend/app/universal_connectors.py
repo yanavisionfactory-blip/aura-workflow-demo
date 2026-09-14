@@ -1,9 +1,12 @@
 import ipaddress
+import re
 import socket
 from datetime import UTC, datetime
 from urllib.parse import urljoin, urlparse
 
 import httpx
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
@@ -40,6 +43,213 @@ def _headers(credentials: dict[str, str]) -> dict[str, str]:
     name = credentials.get("header", "Authorization")
     prefix = credentials.get("prefix", "Bearer")
     return {name: f"{prefix} {token}".strip(), "Accept": "application/json"}
+
+
+def agent_credentials(authentication: str, credential: str | None) -> dict[str, str]:
+    """Build credentials for the agent endpoint only, never for AURA tools."""
+    secret = str(credential or "").strip()
+    if authentication == "none":
+        return {}
+    if not secret:
+        raise ConnectorError("The selected agent authentication method requires a credential")
+    if authentication == "bearer":
+        return {"access_token": secret}
+    if authentication == "api_key":
+        return {"api_key": secret, "header": "X-API-Key", "prefix": ""}
+    raise ConnectorError("Unsupported agent authentication method")
+
+
+def _same_origin(left: str, right: str) -> bool:
+    left_url = urlparse(left)
+    right_url = urlparse(right)
+    return (
+        left_url.scheme,
+        left_url.hostname,
+        left_url.port or 443,
+    ) == (
+        right_url.scheme,
+        right_url.hostname,
+        right_url.port or 443,
+    )
+
+
+def _agent_task_capability(
+    skills: list[dict], protocol: str, protocol_version: str | None = None
+) -> dict:
+    skill_ids = [str(item.get("id") or item.get("name") or "").strip() for item in skills]
+    skill_ids = [item for item in skill_ids if item]
+    skill_labels = [
+        str(item.get("name") or item.get("id") or "").strip() for item in skills
+    ]
+    description = "Delegate one bounded task to this external agent and receive artifacts."
+    if skill_labels:
+        description += " Available skills: " + ", ".join(skill_labels[:12]) + "."
+    properties: dict = {
+        "goal": {"type": "string", "minLength": 3, "maxLength": 20_000},
+        "context": {"type": "object"},
+        "accepted_output_modes": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {"type": "string", "maxLength": 200},
+        },
+    }
+    if skill_ids:
+        properties["skill_id"] = {"type": "string", "enum": skill_ids}
+    return {
+        "name": "agent.task.run",
+        "description": description,
+        "input_schema": {
+            "type": "object",
+            "required": ["goal"],
+            "additionalProperties": False,
+            "properties": properties,
+        },
+        "output_schema": {
+            "type": "object",
+            "required": ["status", "artifacts"],
+            "properties": {
+                "task_id": {"type": ["string", "null"]},
+                "status": {"type": "string"},
+                "artifacts": {"type": "array", "items": {"type": "object"}},
+                "message": {"type": ["object", "null"]},
+            },
+        },
+        # Sending workspace context to another service is consequential even
+        # when the remote agent is only allowed to return artifacts.
+        "permission_scope": "write",
+        "requires_approval": True,
+        "transport": {
+            "protocol": protocol,
+            **({"protocol_version": protocol_version} if protocol_version else {}),
+            "send_path": "/message:send" if protocol == "a2a" else "/invoke",
+            "status_path": "/tasks/{task_id}",
+            "cancel_path": (
+                "/tasks/{task_id}:cancel" if protocol == "a2a" else "/tasks/{task_id}/cancel"
+            ),
+        },
+        "metadata": {
+            "external_agent": True,
+            "artifact_only": True,
+            "skills": skills,
+        },
+    }
+
+
+def _agent_manifest_metadata(
+    manifest: dict,
+    *,
+    raw: dict,
+    protocol: str,
+    config: dict,
+) -> dict:
+    owner = str(config.get("owner") or raw.get("owner") or "").strip()
+    if not owner:
+        provider = raw.get("provider") or {}
+        owner = str(provider.get("organization") or provider.get("name") or "").strip()
+    if not owner:
+        raise ConnectorError("Agent owner is required")
+    name = str(config.get("name") or manifest.get("name") or "").strip()
+    if not name:
+        raise ConnectorError("Agent name is required")
+    capabilities = []
+    for capability in manifest.get("capabilities", []):
+        try:
+            Draft202012Validator.check_schema(capability.get("input_schema") or {})
+            Draft202012Validator.check_schema(capability.get("output_schema") or {})
+        except SchemaError as exc:
+            raise ConnectorError("Agent capability contains an invalid JSON Schema") from exc
+        capabilities.append(
+            {
+                **capability,
+                "permission_scope": "write",
+                "requires_approval": True,
+                "metadata": {
+                    **(capability.get("metadata") or {}),
+                    "external_agent": True,
+                    "artifact_only": True,
+                },
+            }
+        )
+    return {
+        **manifest,
+        "name": name,
+        "agent_protocol": protocol,
+        "version": str(raw.get("version") or raw.get("protocolVersion") or "1.0"),
+        "owner": owner,
+        "data_access": list(config.get("data_access") or raw.get("data_access") or []),
+        "data_retention": str(
+            config.get("data_retention")
+            or raw.get("data_retention")
+            or "provider-defined"
+        ),
+        "side_effects": "artifact_only",
+        "authentication": str(config.get("authentication") or "none"),
+        "limits": {
+            "max_runtime_seconds": int(config.get("max_runtime_seconds") or 30),
+            "max_cost_usd": float(config.get("max_cost_usd") or 5.0),
+        },
+        "cancellation": {"supported": protocol in {"a2a", "aura"}},
+        "retry": {"supported": True, "controlled_by": "aura"},
+        "delegation": {"allowed": False, "maximum_depth": 0},
+        "capabilities": capabilities,
+    }
+
+
+def _a2a_manifest(raw: dict, base_url: str, config: dict) -> dict:
+    skills = raw.get("skills") or []
+    if (
+        not isinstance(skills, list)
+        or not skills
+        or any(
+            not isinstance(skill, dict)
+            or not str(skill.get("id") or skill.get("name") or "").strip()
+            for skill in skills
+        )
+    ):
+        raise ConnectorError("The A2A Agent Card did not declare any skills")
+    interfaces = raw.get("supportedInterfaces") or raw.get("supported_interfaces") or []
+    execution_url = str(raw.get("url") or base_url)
+    protocol_version = str(raw.get("protocolVersion") or "").strip()
+    if interfaces:
+        supported = next(
+            (
+                interface
+                for interface in interfaces
+                if isinstance(interface, dict)
+                and str(interface.get("protocolBinding") or "").lower()
+                in {"http+json", "http_json", "rest"}
+            ),
+            None,
+        )
+        if not supported:
+            raise ConnectorError("The A2A agent must expose an HTTP+JSON interface")
+        execution_url = str(supported.get("url") or execution_url)
+        protocol_version = str(
+            supported.get("protocolVersion") or protocol_version
+        ).strip()
+    if not re.fullmatch(r"\d+\.\d+", protocol_version):
+        raise ConnectorError("The A2A Agent Card must declare a valid protocolVersion")
+    _public_endpoint(execution_url)
+    if not _same_origin(execution_url, base_url):
+        raise ConnectorError("The A2A task interface must use the registered agent origin")
+    manifest = normalize_manifest(
+        {
+            "name": raw.get("name"),
+            "description": raw.get("description", ""),
+            "identity": {"owner": config.get("owner") or raw.get("provider") or {}},
+            "capabilities": [
+                _agent_task_capability(skills, "a2a", protocol_version)
+            ],
+        },
+        "agent",
+        execution_url,
+    )
+    return _agent_manifest_metadata(
+        manifest,
+        raw={**raw, "version": raw.get("protocolVersion") or raw.get("version")},
+        protocol="a2a",
+        config=config,
+    )
 
 
 def _capability(name: str, method: str, path: str, input_schema: dict | None = None) -> dict:
@@ -139,7 +349,15 @@ async def discover_provider(kind: str, base_url: str, credentials: dict, config:
                     for tool in result.tools
                 ],
             }
-            return normalize_manifest(raw, kind, base_url)
+            manifest = normalize_manifest(raw, kind, base_url)
+            if config.get("agent_protocol") == "mcp":
+                return _agent_manifest_metadata(
+                    manifest,
+                    raw=raw,
+                    protocol="mcp",
+                    config=config,
+                )
+            return manifest
     if kind == "openapi":
         spec_url = config.get("spec_url") or urljoin(base_url.rstrip("/") + "/", "openapi.json")
         _public_endpoint(spec_url)
@@ -157,13 +375,55 @@ async def discover_provider(kind: str, base_url: str, credentials: dict, config:
             kind,
             base_url,
         )
+    if kind == "agent" and config.get("agent_protocol") == "a2a":
+        parsed = urlparse(base_url)
+        default_manifest_url = (
+            f"{parsed.scheme}://{parsed.netloc}/.well-known/agent-card.json"
+        )
+        manifest_url = config.get("manifest_url") or default_manifest_url
+        _public_endpoint(manifest_url)
+        return _a2a_manifest(
+            await _json("GET", manifest_url, credentials),
+            base_url,
+            config,
+        )
     if kind in {"agent", "plugin"}:
         default = (
             ".well-known/aura-agent.json" if kind == "agent" else ".well-known/aura-plugin.json"
         )
         manifest_url = config.get("manifest_url") or urljoin(base_url.rstrip("/") + "/", default)
         _public_endpoint(manifest_url)
-        return normalize_manifest(await _json("GET", manifest_url, credentials), kind, base_url)
+        raw = await _json("GET", manifest_url, credentials)
+        if kind == "agent":
+            skills = raw.get("skills") or [
+                {
+                    "id": capability.get("name") or capability.get("id"),
+                    "name": capability.get("description")
+                    or capability.get("name")
+                    or capability.get("id"),
+                    "description": capability.get("description", ""),
+                }
+                for capability in (raw.get("capabilities") or raw.get("tools") or [])
+                if isinstance(capability, dict)
+                and (capability.get("name") or capability.get("id"))
+            ]
+            if not skills:
+                raise ConnectorError("The AURA Agent manifest did not declare any skills")
+            task_manifest = {
+                "name": raw.get("name") or raw.get("display_name"),
+                "description": raw.get("description", ""),
+                "identity": raw.get("identity", {}),
+                "capabilities": [_agent_task_capability(skills, "aura")],
+            }
+            manifest = normalize_manifest(task_manifest, kind, base_url)
+            return _agent_manifest_metadata(
+                manifest,
+                raw=raw,
+                protocol=str(config.get("agent_protocol") or "aura"),
+                config=config,
+            )
+        manifest = normalize_manifest(raw, kind, base_url)
+        return manifest
     if kind == "webhook":
         return normalize_manifest(
             {

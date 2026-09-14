@@ -8,6 +8,69 @@ class ConnectionResume(BaseModel):
     connection_id: str | None = None
 
 
+class AgentConnectionCreate(BaseModel):
+    protocol: Literal["a2a", "mcp", "aura"]
+    name: str = Field(min_length=2, max_length=200)
+    owner: str = Field(min_length=2, max_length=200)
+    endpoint: HttpUrl
+    manifest_url: HttpUrl | None = None
+    authentication: Literal["none", "bearer", "api_key"] = "none"
+    credential: str | None = Field(default=None, max_length=8_000)
+    data_access: list[str] = Field(default_factory=list, max_length=20)
+    data_retention: str = Field(default="provider-defined", min_length=2, max_length=500)
+    max_runtime_seconds: int = Field(default=30, ge=5, le=300)
+    max_cost_usd: float = Field(default=5.0, ge=0, le=1_000)
+
+    @field_validator("endpoint", "manifest_url")
+    @classmethod
+    def agent_urls_are_public_contracts(cls, value: HttpUrl | None) -> HttpUrl | None:
+        if value is None:
+            return value
+        if value.scheme != "https":
+            raise ValueError("Agent URLs must use HTTPS")
+        if value.username or value.password or value.query or value.fragment:
+            raise ValueError(
+                "Agent URLs cannot contain credentials, query parameters, or fragments"
+            )
+        return value
+
+    @field_validator("name", "owner", "data_retention", mode="before")
+    @classmethod
+    def normalize_agent_text(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise TypeError("Agent fields must be text")
+        normalized = " ".join(value.split())
+        if any(ord(character) < 32 for character in normalized):
+            raise ValueError("Agent fields contain unsupported characters")
+        return normalized
+
+    @field_validator("data_access", mode="before")
+    @classmethod
+    def normalize_data_access(cls, value: Any) -> list[str]:
+        if value in (None, ""):
+            return []
+        if not isinstance(value, list):
+            raise TypeError("Agent data access must be a list")
+        normalized = [" ".join(str(item).split()) for item in value if str(item).strip()]
+        if any(len(item) > 200 for item in normalized):
+            raise ValueError("Agent data access entries must be 200 characters or fewer")
+        return list(dict.fromkeys(normalized))
+
+    @model_validator(mode="after")
+    def credential_matches_authentication(self):
+        if self.authentication == "none" and self.credential:
+            raise ValueError("Choose an authentication method before entering a credential")
+        if self.authentication != "none" and not (self.credential or "").strip():
+            raise ValueError("The selected authentication method requires a credential")
+        if self.manifest_url and (
+            self.manifest_url.scheme,
+            self.manifest_url.host,
+            self.manifest_url.port or 443,
+        ) != (self.endpoint.scheme, self.endpoint.host, self.endpoint.port or 443):
+            raise ValueError("The agent manifest URL must use the agent endpoint origin")
+        return self
+
+
 class ConnectorMarketplaceRequest(BaseModel):
     name: str = Field(min_length=2, max_length=160)
 

@@ -1,12 +1,15 @@
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowRight, Sparkles, X, Plus, FileBarChart, Mail, ListChecks, RefreshCw, Paperclip } from "lucide-react";
+import { ArrowRight, Sparkles, X, Plus, FileBarChart, Mail, ListChecks, RefreshCw, Paperclip, Bot } from "lucide-react";
 import ValueProp from "./ValueProp";
 import ResourceComposer from "./ResourceComposer";
+import AgentConnectDialog from "./AgentConnectDialog";
 import { base44 } from "@/api/base44Client";
 import { attachDocument, getAttachedDocuments, removeDocument, subscribeDocuments } from "@/lib/documentStore";
 import { CATALOG, catalogEntryFor } from "@/lib/toolCatalog";
 import { promptToolHints } from "@/lib/promptToolHints.mjs";
+import { agentPromptHints } from "@/lib/agentConnections.mjs";
+import { listAgentConnections } from "@/lib/auraApi";
 
 const EXAMPLE_ICONS = [FileBarChart, Mail, ListChecks, RefreshCw];
 
@@ -17,6 +20,8 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
   const [removedTools, setRemovedTools] = useState([]);
   const [documents, setDocuments] = useState(getAttachedDocuments);
   const [showComposer, setShowComposer] = useState(false);
+  const [showAgentConnect, setShowAgentConnect] = useState(false);
+  const [agents, setAgents] = useState([]);
   const [examplesCollapsed, setExamplesCollapsed] = useState(false);
   const inputRef = useRef(null);
 
@@ -31,13 +36,24 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
 
   useEffect(() => subscribeDocuments(setDocuments), []);
 
+  useEffect(() => {
+    const refreshAgents = () => listAgentConnections().then(setAgents).catch(() => {});
+    refreshAgents();
+    window.addEventListener("aura:agent-connected", refreshAgents);
+    return () => window.removeEventListener("aura:agent-connected", refreshAgents);
+  }, []);
+
   const autoHints = promptToolHints(value, CATALOG).filter((h) => !removedTools.includes(h));
-  const hints = [...new Set([...autoHints, ...manualTools])];
+  const autoAgentHints = agentPromptHints(value, agents).filter((h) => !removedTools.includes(h));
+  const hints = [...new Set([...autoHints, ...autoAgentHints, ...manualTools])];
 
   const handleSubmit = () => {
     const text = value.trim();
     if (text && !disabled) {
-      const requestedTools = hints.filter((label) => catalogEntryFor(label));
+      const agentNames = new Set(agents.map((agent) => agent.name));
+      const requestedTools = hints.filter(
+        (label) => catalogEntryFor(label) || agentNames.has(label),
+      );
       onSubmit(text, requestedTools, { tools: requestedTools, documents });
       setValue("");
     }
@@ -140,8 +156,18 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
           )}
         </AnimatePresence>
 
-        <div className="flex items-center justify-between px-4 pb-3">
-          <span className="text-[11px] text-muted-foreground/60">Press Enter to run · Shift+Enter for a new line</span>
+        <div className="flex items-center justify-between gap-3 px-4 pb-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setShowAgentConnect(true)}
+              className="flex shrink-0 items-center gap-1.5 rounded-lg border border-primary/20 px-2.5 py-1.5 text-[11px] font-medium text-primary transition-colors hover:bg-primary/10"
+            >
+              <Bot className="h-3.5 w-3.5" />
+              Connect agent
+            </button>
+            <span className="hidden text-[11px] text-muted-foreground/60 sm:inline">Press Enter to run · Shift+Enter for a new line</span>
+          </div>
           <motion.button
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
@@ -154,6 +180,20 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
           </motion.button>
         </div>
       </div>
+
+      <AgentConnectDialog
+        open={showAgentConnect}
+        onClose={() => setShowAgentConnect(false)}
+        onConnected={(agent) => {
+          setAgents((current) => [
+            ...current.filter((item) => item.id !== agent.id),
+            agent,
+          ]);
+          setManualTools((current) => [...new Set([...current, agent.name])]);
+          setRemovedTools((current) => current.filter((name) => name !== agent.name));
+          setShowAgentConnect(false);
+        }}
+      />
 
       {/* Example cards — stay visible, just less prominent once you've run a few workflows */}
       <motion.div
