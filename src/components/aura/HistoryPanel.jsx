@@ -2,6 +2,13 @@ import { useState, useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Loader2, Layers } from "lucide-react";
 import { base44 } from "@/api/base44Client";
+import { listPythonRuns } from "@/lib/auraApi";
+import {
+  backendRunHistoryProjection,
+  isExecutedBackendRun,
+  workflowForBackendRun,
+  workflowRollup,
+} from "@/lib/workflowHistory.mjs";
 import WorkflowList from "./WorkflowList";
 import WorkflowDetail from "./WorkflowDetail";
 import HistoryRunDetail from "./HistoryRunDetail";
@@ -18,11 +25,60 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun }) {
     if (!open) return;
     setLoading(true);
     (async () => {
-      let [wfs, rs, sch] = await Promise.all([
+      let [wfs, rs, sch, backendRuns] = await Promise.all([
         base44.entities.Workflow.list("-created_date", 50).catch(() => []),
         base44.entities.WorkflowRun.list("-created_date", 100).catch(() => []),
         base44.entities.Schedule.list("-created_date", 50).catch(() => []),
+        listPythonRuns({ limit: 100 }).catch(() => []),
       ]);
+
+      // The durable executor is authoritative. Mirror approved executions into
+      // the user-facing saved-workflow records, including runs completed before
+      // this persistence bridge was released.
+      const executedRuns = backendRuns
+        .filter(isExecutedBackendRun)
+        .sort((a, b) => Date.parse(a.created_at || 0) - Date.parse(b.created_at || 0));
+      let historyChanged = false;
+      for (const backendRun of executedRuns) {
+        const projection = backendRunHistoryProjection(backendRun);
+        let savedRun = rs.find((run) => run.backend_run_id === backendRun.id);
+        let workflow = savedRun
+          ? wfs.find((item) => item.id === savedRun.workflow_id)
+          : workflowForBackendRun(backendRun, wfs);
+        try {
+          if (!workflow) {
+            workflow = await base44.entities.Workflow.create({
+              ...projection.workflow,
+              run_count: 0,
+            });
+            wfs = [workflow, ...wfs];
+          }
+          const runData = { ...projection.run, workflow_id: workflow.id };
+          if (savedRun) {
+            savedRun = await base44.entities.WorkflowRun.update(savedRun.id, runData);
+            rs = rs.map((item) => item.id === savedRun.id ? savedRun : item);
+          } else {
+            savedRun = await base44.entities.WorkflowRun.create(runData);
+            rs = [savedRun, ...rs];
+          }
+          historyChanged = true;
+        } catch (error) {
+          console.warn("Could not synchronize durable workflow history", error);
+        }
+      }
+
+      if (historyChanged) {
+        for (const workflow of wfs) {
+          const rollup = workflowRollup(workflow.id, rs);
+          if (rollup.run_count === 0) continue;
+          try {
+            const updated = await base44.entities.Workflow.update(workflow.id, rollup);
+            wfs = wfs.map((item) => item.id === updated.id ? updated : item);
+          } catch (error) {
+            console.warn("Could not update saved workflow summary", error);
+          }
+        }
+      }
 
       // Backfill: adopt orphaned runs from before the saved-workflow feature
       const orphaned = rs.filter((r) => !r.workflow_id);

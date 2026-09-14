@@ -25,7 +25,7 @@ export default function WorkflowDetail({ workflow, runs, onBack, onOpenRun, onRe
 
   const wfRuns = runs
     .filter((r) => r.workflow_id === workflow.id)
-    .sort((a, b) => new Date(b.created_date) - new Date(a.created_date));
+    .sort((a, b) => new Date(b.backend_created_at || b.created_date) - new Date(a.backend_created_at || a.created_date));
 
   return (
     <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="flex flex-col h-full">
@@ -96,7 +96,7 @@ export default function WorkflowDetail({ workflow, runs, onBack, onOpenRun, onRe
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium truncate">{primary}</p>
                       <p className="text-[11px] text-muted-foreground/60 mt-0.5 truncate">
-                        {format(new Date(run.created_date), "MMM d, h:mm a")}{dur ? ` · ${dur}` : ""} · <span className={cfg.color}>{cfg.label}</span>
+                        {format(new Date(run.backend_created_at || run.created_date), "MMM d, h:mm a")}{dur ? ` · ${dur}` : ""} · <span className={cfg.color}>{cfg.label}</span>
                       </p>
                     </div>
                     <ChevronRight className="w-3.5 h-3.5 text-muted-foreground/30 flex-shrink-0" />

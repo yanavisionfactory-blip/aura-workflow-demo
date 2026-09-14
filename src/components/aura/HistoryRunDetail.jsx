@@ -67,7 +67,7 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
           </div>
         )}
         <p className="text-xs text-muted-foreground mt-1">
-          {formatDistanceToNow(new Date(run.created_date), { addSuffix: true })}
+          {formatDistanceToNow(new Date(run.backend_created_at || run.created_date), { addSuffix: true })}
           {run.duration_seconds ? ` · ${run.duration_seconds.toFixed(1)}s` : ""}
         </p>
       </div>
