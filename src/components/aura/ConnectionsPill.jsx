@@ -345,9 +345,8 @@ export default function ConnectionsPill() {
                 </section>
               </div>
 
-              <div className="grid grid-cols-3 gap-2 border-t border-white/6 px-5 py-4">
+              <div className="grid grid-cols-2 gap-2 border-t border-white/6 px-5 py-4">
                 <button type="button" onClick={() => openConnect("apps")} className="flex items-center justify-center gap-1.5 rounded-xl border border-primary/30 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"><Plus className="h-3.5 w-3.5" />Find apps</button>
-                <button type="button" onClick={() => openConnect("agents")} className="flex items-center justify-center gap-1.5 rounded-xl border border-primary/30 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"><Bot className="h-3.5 w-3.5" />Add agent</button>
                 <button type="button" onClick={() => openConnect("documents")} className="flex items-center justify-center gap-1.5 rounded-xl border border-white/10 py-2.5 text-sm font-medium transition-colors hover:bg-white/5"><Paperclip className="h-3.5 w-3.5" />Attach docs</button>
               </div>
             </motion.aside>
@@ -372,8 +371,8 @@ export default function ConnectionsPill() {
 
               <div className="flex gap-1 border-b border-white/6 px-5 pt-3">
                 <button type="button" onClick={() => setTab("apps")} className={`flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium ${tab === "apps" ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`}><Link2 className="h-3.5 w-3.5" />Apps</button>
-                <button type="button" onClick={() => setTab("agents")} className={`flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium ${tab === "agents" ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`}><Bot className="h-3.5 w-3.5" />Agents</button>
                 <button type="button" onClick={() => setTab("documents")} className={`flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium ${tab === "documents" ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`}><Paperclip className="h-3.5 w-3.5" />Documents</button>
+                <button type="button" onClick={() => setTab("agents")} className={`flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium ${tab === "agents" ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`}><Bot className="h-3.5 w-3.5" />Agents</button>
               </div>
 
               {error && <p className="mx-5 mt-3 rounded-lg border border-red-400/20 bg-red-400/5 p-2 text-xs text-red-400">{error}</p>}
