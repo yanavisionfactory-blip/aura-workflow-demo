@@ -95,4 +95,6 @@ test("execution and the My workflows panel are wired to durable history", () => 
   assert.equal(demo.includes("backend_run_id: pythonRunIdRef.current"), true);
   assert.equal(history.includes("listPythonRuns({ limit: 100 })"), true);
   assert.equal(history.includes("run.backend_run_id === backendRun.id"), true);
+  assert.equal(history.includes('import { aura } from "@/api/auraClient"'), true);
+  assert.equal(history.includes("base44.entities"), false);
 });
