@@ -1,5 +1,5 @@
-from datetime import datetime
 from typing import Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
@@ -201,17 +201,55 @@ class WorkflowUpdate(BaseModel):
 
 
 class WorkflowScheduleCreate(BaseModel):
-    workflow_id: str
+    source_run_id: str
     name: str = Field(min_length=2, max_length=240)
-    interval_seconds: int = Field(ge=60, le=2_592_000)
-    start_at: datetime | None = None
+    cadence: Literal["daily", "weekly", "monthly"] = "weekly"
+    timezone: str = Field(default="UTC", min_length=1, max_length=100)
+    local_time: str = Field(default="08:00", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    day_of_week: int | None = Field(default=None, ge=0, le=6)
+    day_of_month: int | None = Field(default=None, ge=1, le=31)
+    approval_mode: Literal["review", "writes", "auto"] = "writes"
+    notify_on_completion: bool = True
+    notify_on_attention: bool = True
+    history_workflow_id: str | None = Field(default=None, max_length=120)
+
+    @model_validator(mode="after")
+    def validate_calendar_schedule(self):
+        try:
+            ZoneInfo(self.timezone)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError("timezone must be a valid IANA timezone") from exc
+        if self.cadence == "weekly" and self.day_of_week is None:
+            raise ValueError("weekly schedules require day_of_week")
+        if self.cadence == "monthly" and self.day_of_month is None:
+            raise ValueError("monthly schedules require day_of_month")
+        return self
 
 
 class WorkflowScheduleUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=240)
-    interval_seconds: int | None = Field(default=None, ge=60, le=2_592_000)
     enabled: bool | None = None
-    next_run_at: datetime | None = None
+    cadence: Literal["daily", "weekly", "monthly"] | None = None
+    timezone: str | None = Field(default=None, min_length=1, max_length=100)
+    local_time: str | None = Field(
+        default=None, pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$"
+    )
+    day_of_week: int | None = Field(default=None, ge=0, le=6)
+    day_of_month: int | None = Field(default=None, ge=1, le=31)
+    approval_mode: Literal["review", "writes", "auto"] | None = None
+    notify_on_completion: bool | None = None
+    notify_on_attention: bool | None = None
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError("timezone must be a valid IANA timezone") from exc
+        return value
 
 
 class WorkspaceRecordCreate(BaseModel):

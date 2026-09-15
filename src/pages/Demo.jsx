@@ -1783,6 +1783,9 @@ Generate a results summary in plain, human-friendly language (not technical).
                     activity={execSteps}
                     prompt={originalPrompt}
                     interpretation={interpretation}
+                    backendRunId={pythonRunIdRef.current}
+                    historyWorkflowId={currentWorkflowIdRef.current}
+                    scheduleTitle={workflowName || plan?.workflowName}
                   />
                 ) : (
                   <div className="flex flex-col items-center gap-4">

@@ -40,3 +40,22 @@ export function notifyWorkflowError(title, reason) {
     /* ignore */
   }
 }
+
+export function notifyScheduledWorkflow(title, status, reason = "") {
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") return false;
+  const completed = status === "completed";
+  try {
+    new Notification(
+      completed ? "AURA completed a scheduled workflow" : "A scheduled workflow needs you",
+      {
+        body: completed
+          ? `${title} is ready.`
+          : `${title}${reason ? ` — ${reason}` : " is waiting for your review."}`,
+      }
+    );
+    return true;
+  } catch (e) {
+    /* ignore */
+    return false;
+  }
+}

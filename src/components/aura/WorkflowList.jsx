@@ -7,7 +7,7 @@ const statusConfig = {
   failed:    { icon: AlertCircle,  color: "text-red-400",      bg: "bg-red-400/10",      label: "Needs attention" },
 };
 
-export default function WorkflowList({ workflows, scheduledPrompts, onSelect }) {
+export default function WorkflowList({ workflows, scheduledPrompts, scheduledWorkflowIds, onSelect }) {
   if (workflows.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-48 text-center px-6">
@@ -25,7 +25,7 @@ export default function WorkflowList({ workflows, scheduledPrompts, onSelect }) 
       {workflows.map((wf) => {
         const cfg = statusConfig[wf.last_run_status] || statusConfig.completed;
         const Icon = cfg.icon;
-        const scheduled = scheduledPrompts.has(wf.prompt);
+        const scheduled = scheduledWorkflowIds.has(wf.id) || scheduledPrompts.has(wf.prompt);
         return (
           <button
             key={wf.id}

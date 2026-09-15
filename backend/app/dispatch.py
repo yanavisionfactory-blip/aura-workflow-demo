@@ -102,6 +102,7 @@ async def dispatch_pending(workspace_id: str | None = None) -> int:
 
 async def recovery_tick() -> dict:
     from .scheduler_runtime import (
+        dispatch_due_schedules,
         recover_engineer_runs,
         recover_stale_runs,
         recover_waiting_runs,
@@ -112,11 +113,15 @@ async def recovery_tick() -> dict:
     async with execution_lock(engine, "system", "recovery-scheduler") as acquired:
         if not acquired:
             return {"leader": False}
+        _mark_scheduler_progress("due_schedules")
+        scheduled = await dispatch_due_schedules()
+        _mark_scheduler_progress("dispatch_after_schedules")
+        published = await dispatch_pending()
         _mark_scheduler_progress("stale_runs")
         recovered = await recover_stale_runs(stale_after_seconds=settings.stale_run_seconds)
         # Never make normal outbox delivery wait behind optional model-assisted recovery.
         _mark_scheduler_progress("dispatch_after_stale")
-        published = await dispatch_pending()
+        published += await dispatch_pending()
         _mark_scheduler_progress("autonomous_recovery")
         supervised = await recover_waiting_runs()
         _mark_scheduler_progress("dispatch_after_autonomous")
@@ -127,6 +132,7 @@ async def recovery_tick() -> dict:
         published += await dispatch_pending()
         result = {
             "leader": True,
+            "scheduled": len(scheduled),
             "recovered": len(recovered),
             "supervised": len(supervised),
             "engineered": len(engineered),

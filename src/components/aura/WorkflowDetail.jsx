@@ -1,9 +1,23 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { ArrowLeft, Pencil, Check, X, RefreshCw, Clock, ChevronRight } from "lucide-react";
+import {
+  ArrowLeft,
+  CalendarClock,
+  Check,
+  ChevronRight,
+  Clock,
+  Loader2,
+  Pause,
+  Pencil,
+  Play,
+  RefreshCw,
+  Trash2,
+  X,
+} from "lucide-react";
 import { aura } from "@/api/auraClient";
 import { formatDistanceToNow, format } from "date-fns";
 import { announceWorkflowHistoryChanged } from "@/lib/workflowHistory.mjs";
+import { scheduleSummary } from "@/lib/workflowSchedule.mjs";
 import RunAgainModal from "./RunAgainModal";
 
 const runStatusConfig = {
@@ -12,10 +26,22 @@ const runStatusConfig = {
   failed:    { color: "text-red-400",      dot: "bg-red-400",     label: "Needs attention" },
 };
 
-export default function WorkflowDetail({ workflow, runs, onBack, onOpenRun, onRerun, onEditRun }) {
+export default function WorkflowDetail({
+  workflow,
+  runs,
+  schedules = [],
+  onBack,
+  onOpenRun,
+  onRerun,
+  onEditRun,
+  onUpdateSchedule,
+  onDeleteSchedule,
+}) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(workflow.name || "");
   const [modalMode, setModalMode] = useState(null);
+  const [busyScheduleId, setBusyScheduleId] = useState(null);
+  const [scheduleError, setScheduleError] = useState("");
 
   const handleSave = async () => {
     const n = name.trim();
@@ -30,6 +56,31 @@ export default function WorkflowDetail({ workflow, runs, onBack, onOpenRun, onRe
   const wfRuns = runs
     .filter((r) => r.workflow_id === workflow.id)
     .sort((a, b) => new Date(b.backend_created_at || b.created_date) - new Date(a.backend_created_at || a.created_date));
+
+  const toggleSchedule = async (schedule) => {
+    setBusyScheduleId(schedule.id);
+    setScheduleError("");
+    try {
+      await onUpdateSchedule(schedule.id, { enabled: !schedule.enabled });
+    } catch (error) {
+      setScheduleError(error?.message || "AURA could not update this schedule.");
+    } finally {
+      setBusyScheduleId(null);
+    }
+  };
+
+  const removeSchedule = async (schedule) => {
+    if (!window.confirm(`Remove the schedule “${schedule.name}”?`)) return;
+    setBusyScheduleId(schedule.id);
+    setScheduleError("");
+    try {
+      await onDeleteSchedule(schedule.id);
+    } catch (error) {
+      setScheduleError(error?.message || "AURA could not remove this schedule.");
+    } finally {
+      setBusyScheduleId(null);
+    }
+  };
 
   return (
     <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="flex flex-col h-full">
@@ -76,6 +127,65 @@ export default function WorkflowDetail({ workflow, runs, onBack, onOpenRun, onRe
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {schedules.length > 0 && (
+          <div>
+            <p className="text-[11px] uppercase tracking-wider text-muted-foreground/50 font-medium mb-2">Schedule</p>
+            <div className="space-y-2">
+              {schedules.map((schedule) => {
+                const busy = busyScheduleId === schedule.id;
+                const nextRun = schedule.next_run_at
+                  ? format(new Date(schedule.next_run_at), "MMM d, h:mm a")
+                  : "Not scheduled";
+                return (
+                  <div key={schedule.id} className="rounded-xl border border-primary/15 bg-primary/5 p-3">
+                    <div className="flex items-start gap-2.5">
+                      <CalendarClock className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <p className="truncate text-xs font-medium">{scheduleSummary(schedule)}</p>
+                          <span className={`rounded-md px-1.5 py-0.5 text-[9px] font-medium ${schedule.enabled ? "bg-emerald-400/10 text-emerald-400" : "bg-white/5 text-muted-foreground"}`}>
+                            {schedule.enabled ? "Active" : "Paused"}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-[10px] text-muted-foreground/60">
+                          {schedule.enabled ? `Next run ${nextRun}` : "No runs while paused"} · {schedule.timezone}
+                        </p>
+                        <p className="mt-0.5 text-[10px] text-muted-foreground/50">
+                          {schedule.approval_mode === "auto"
+                            ? "Runs automatically"
+                            : schedule.approval_mode === "writes"
+                              ? "Approval required before external changes"
+                              : "Review required for every run"}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="mt-2.5 flex justify-end gap-1.5">
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => toggleSchedule(schedule)}
+                        className="flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1.5 text-[10px] text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground disabled:opacity-50"
+                      >
+                        {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : schedule.enabled ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />}
+                        {schedule.enabled ? "Pause" : "Resume"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => removeSchedule(schedule)}
+                        className="flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1.5 text-[10px] text-muted-foreground transition-colors hover:border-red-400/20 hover:bg-red-400/5 hover:text-red-300 disabled:opacity-50"
+                      >
+                        <Trash2 className="h-3 w-3" /> Remove
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {scheduleError && <p className="mt-2 text-[10px] text-red-300">{scheduleError}</p>}
+          </div>
+        )}
+
         <div>
           <p className="text-[11px] uppercase tracking-wider text-muted-foreground/50 font-medium mb-2">Run history</p>
           {wfRuns.length === 0 ? (
