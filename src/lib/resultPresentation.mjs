@@ -110,11 +110,16 @@ export function selectPrimaryOutcome(results = {}) {
   return { ...outcome, provider: providerForOutcome(outcome) };
 }
 
-export function supportingReceipts(results = {}, activity = [], primary = null) {
+export function supportingReceipts(results = {}, activity = [], primary = null, presentation = null) {
   const primaryProvider = String(primary?.provider || providerForOutcome(primary || {})).toLowerCase();
+  const hasCompiledSelection = Array.isArray(presentation?.supporting_step_keys);
+  const supportingKeys = new Set(presentation?.supporting_step_keys || []);
   const completed = activity
     .filter((step) => step.status === "completed")
-    .filter((step) => !primaryProvider || String(step.tool || "").toLowerCase() !== primaryProvider)
+    .filter((step) => !hasCompiledSelection || supportingKeys.has(step.stepKey || step.key))
+    .filter((step) => hasCompiledSelection
+      || !primaryProvider
+      || String(step.tool || "").toLowerCase() !== primaryProvider)
     .map((step) => {
       const providerResult = step.output?.provider_result || {};
       const operation = String(step.output?.operation || "").toLowerCase();
@@ -126,7 +131,7 @@ export function supportingReceipts(results = {}, activity = [], primary = null) 
         || (designId ? `https://www.canva.com/design/${encodeURIComponent(designId)}/edit` : null);
       const tool = step.tool || "AURA";
       return {
-        key: `${tool}:${step.action || step.liveOutput || "completed"}`,
+        key: `${step.stepKey || step.key || tool}:${step.action || step.liveOutput || "completed"}`,
         tool,
         title: cleanReceiptText(step.liveOutput) || cleanReceiptText(step.action) || "Completed",
         link,
@@ -134,7 +139,7 @@ export function supportingReceipts(results = {}, activity = [], primary = null) 
       };
     });
 
-  if (completed.length) {
+  if (hasCompiledSelection || completed.length) {
     return completed.filter((receipt, index, all) =>
       all.findIndex((candidate) => candidate.key === receipt.key) === index
     );
@@ -173,8 +178,9 @@ const canvaDownloadUrl = (outputs = []) => {
   return null;
 };
 
-const canvaArtifactFromOutputs = (outputs = [], context = {}) => {
-  const canva = outputs.find((output) => output.operation === "canva.presentation.create");
+const canvaArtifactFromOutputs = (outputs = [], context = {}, stepKey = null) => {
+  const canva = outputs.find((output) => output.operation === "canva.presentation.create"
+    && (!stepKey || output.step_key === stepKey));
   if (!canva) return null;
   const result = canva.provider_result || {};
   const designId = canvaDesignId(result);
@@ -208,10 +214,19 @@ const outputScore = (output = {}, contextTitle = "") => {
     - (["gmail.send", "slack.post"].includes(operation) ? 30 : 0);
 };
 
-export function primaryResultFromOutputs(outputs = [], context = {}) {
+export function primaryResultFromOutputs(outputs = [], context = {}, presentation = null) {
   const completed = outputs.filter((output) => output && typeof output === "object");
-  const gmail = [...completed].reverse().find((output) => output.operation === "gmail.send");
-  const artifact = canvaArtifactFromOutputs(completed, context);
+  const explicitPrimary = presentation?.primary_step_key
+    ? completed.find((output) => output.step_key === presentation.primary_step_key)
+    : null;
+  const gmail = explicitPrimary
+    ? (explicitPrimary.operation === "gmail.send" ? explicitPrimary : null)
+    : [...completed].reverse().find((output) => output.operation === "gmail.send");
+  const artifact = canvaArtifactFromOutputs(
+    completed,
+    context,
+    presentation?.artifact_step_key || null
+  );
   if (gmail) {
     const receipt = gmail.provider_result || {};
     const recipient = String(receipt.recipient || gmail.resolved_arguments?.to || "").trim();
@@ -242,7 +257,7 @@ export function primaryResultFromOutputs(outputs = [], context = {}) {
     };
   }
 
-  if (artifact) {
+  if (artifact && (!explicitPrimary || explicitPrimary.operation === "canva.presentation.create")) {
     return {
       ...artifact,
       detail: context.deliverable || context.summary || "Your presentation is ready.",
@@ -250,7 +265,7 @@ export function primaryResultFromOutputs(outputs = [], context = {}) {
     };
   }
 
-  const linked = completed
+  const linked = explicitPrimary || completed
     .filter((output) => safeHttpsUrl(output.provider_result?.result_url))
     .sort((left, right) => outputScore(right, context.title) - outputScore(left, context.title))[0];
   const link = safeHttpsUrl(linked?.provider_result?.result_url);

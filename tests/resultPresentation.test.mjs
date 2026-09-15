@@ -102,6 +102,28 @@ test("shared Google execution identifies a Gmail result precisely", () => {
   assert.equal(primary.linkLabel, "Open in Gmail");
 });
 
+test("compiled result contract overrides provider-order guessing", () => {
+  const primary = primaryResultFromOutputs([
+    {
+      step_key: "create_tasks",
+      tool: "jira",
+      operation: "jira.issue.create",
+      provider_result: { result_url: "https://example.atlassian.net/browse/PROJ-1" },
+    },
+    {
+      step_key: "send_notice",
+      tool: "google",
+      operation: "gmail.send",
+      provider_result: { result_url: "https://mail.google.com/mail/u/0/#sent/message-1" },
+    },
+  ], { title: "Jira tasks created" }, {
+    primary_step_key: "create_tasks",
+  });
+
+  assert.equal(primary.provider, "Jira");
+  assert.equal(primary.link, "https://example.atlassian.net/browse/PROJ-1");
+});
+
 test("provider aliases keep supporting receipts from repeating the primary result", () => {
   const results = {
     title: "Campaign breakdown created",
@@ -143,6 +165,30 @@ test("supporting receipts omit the final delivery tool and retain creation recei
   assert.equal(receipts[1].linkLabel, "View in Canva");
 });
 
+test("compiled supporting step selection hides transport-only receipts", () => {
+  const receipts = supportingReceipts({}, [
+    { stepKey: "weather", tool: "AURA", action: "Read weather", status: "completed" },
+    { stepKey: "export", tool: "Canva", action: "Export PDF", status: "completed" },
+    { stepKey: "send", tool: "Gmail", action: "Send email", status: "completed" },
+  ], { provider: "Gmail" }, {
+    supporting_step_keys: ["weather"],
+  });
+
+  assert.deepEqual(receipts.map((receipt) => receipt.title), ["Read weather"]);
+});
+
+test("an explicit empty supporting contract does not recreate fallback receipts", () => {
+  const receipts = supportingReceipts({
+    outcomes: [{ title: "Fallback outcome", detail: "Legacy fallback" }],
+  }, [
+    { stepKey: "send", tool: "Gmail", action: "Send email", status: "completed" },
+  ], { provider: "Gmail" }, {
+    supporting_step_keys: [],
+  });
+
+  assert.deepEqual(receipts, []);
+});
+
 test("the results UI uses supporting app receipts without duplicate run details", () => {
   const source = readFileSync(new URL("../src/components/aura/ResultsView.jsx", import.meta.url), "utf8");
   assert.equal(source.includes("Your result"), true);
@@ -159,4 +205,11 @@ test("the results UI uses supporting app receipts without duplicate run details"
   assert.equal(source.includes("Tools used"), false);
   assert.equal(source.includes("What happened"), false);
   assert.equal(source.includes("Still tracking"), false);
+});
+
+test("completed backend runs consume resolved presentation metrics", () => {
+  const source = readFileSync(new URL("../src/pages/Demo.jsx", import.meta.url), "utf8");
+  assert.equal(source.includes("run.result?.result_presentation"), true);
+  assert.equal(source.includes("metrics: resultPresentation?.metrics || []"), true);
+  assert.equal(source.includes("label: completedCount === 1"), false);
 });

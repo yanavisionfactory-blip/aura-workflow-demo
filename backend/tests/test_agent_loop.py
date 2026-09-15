@@ -318,7 +318,9 @@ async def test_review_resume_after_write_does_not_replay_provider(runtime, monke
         await session.commit()
     await orchestrator._execute_run("run", "w")
     async with runtime() as session:
-        assert (await session.get(WorkflowRun, "run")).status == RunStatus.completed
+        completed = await session.get(WorkflowRun, "run")
+        assert completed.status == RunStatus.completed
+        assert completed.result["result_presentation"]["primary_step_key"] == "write"
     assert provider_calls == 1
     assert reviews == 2
 

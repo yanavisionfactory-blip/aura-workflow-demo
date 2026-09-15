@@ -1021,6 +1021,7 @@ Rules:
         && run.automation_state?.status === "retrying";
       return {
         id: step.id,
+        stepKey: step.key,
         tool: planned?.tool || planToolName(step),
         action: planned?.title || planned?.action || friendlyStepTitle(step),
         riskLevel: step.consequential ? "modify" : "read",
@@ -1274,18 +1275,25 @@ Rules:
         if (active >= 0) setCurrentStepIdx(active);
         if (run.status === "completed") {
           forgetActivePythonRun(runId);
-          const outputs = run.result?.outputs || [];
+          const stepKeysById = new Map(
+            (run.steps || []).map((step) => [step.id, step.key])
+          );
+          const outputs = (run.result?.outputs || []).map((output) => ({
+            ...output,
+            step_key: output.step_key || stepKeysById.get(output.step_id),
+          }));
           const synthesis = run.result?.unified_deliverable || {};
-          const completedCount = run.result?.completed_steps ?? outputs.length;
+          const resultPresentation = run.result?.result_presentation || null;
           const primaryResult = primaryResultFromOutputs(outputs, {
             title: run.plan?.name || "Workflow completed",
             summary: synthesis.summary,
             deliverable: synthesis.deliverable,
-          });
+          }, resultPresentation);
           finishExecution({
             title: primaryResult.completionTitle || run.plan?.name || "Workflow completed",
             summary: primaryResult.completionSummary || synthesis.summary || "AURA completed the requested workflow.",
-            metrics: [{ value: String(completedCount), label: completedCount === 1 ? "step completed" : "steps completed" }],
+            metrics: resultPresentation?.metrics || [],
+            resultPresentation,
             primaryResult,
             outcomes: [{
               type: "document",

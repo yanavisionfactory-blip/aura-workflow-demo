@@ -33,7 +33,12 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   const primaryResult = useMemo(() => selectPrimaryOutcome(results), [results]);
   const metrics = useMemo(() => meaningfulMetrics(results.metrics || []), [results.metrics]);
   const receipts = useMemo(
-    () => supportingReceipts(results, activity || [], primaryResult),
+    () => supportingReceipts(
+      results,
+      activity || [],
+      primaryResult,
+      results.resultPresentation
+    ),
     [activity, primaryResult, results]
   );
   const creatorsOutcome = (results.outcomes || []).find((outcome) =>

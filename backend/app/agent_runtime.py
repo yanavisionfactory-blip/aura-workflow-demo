@@ -199,7 +199,16 @@ def build_agents() -> dict[str, Agent]:
             invoking that approved write is the policy check itself, so do not require its result
             before the call. Filter on prior public evidence and duplicate lists first, and allow
             downstream writes only for records with an explicit approved receipt. Unknown is never
-            approval.""",
+            approval.
+            Always declare result_contract in this same planning response. primary_step_key is the
+            step that fulfills the user's requested final outcome, not automatically the most visual
+            or last step. When the user explicitly requests delivery, the delivery step is primary and
+            the created file or design is artifact_step_key. supporting_step_keys contain useful
+            completed work but omit low-level transport-only steps such as an intermediate export.
+            Add at most three metric_sources, and only for user-meaningful scalar fields that exist in
+            the supplied operation output contracts. Never use step counts, estimates, invented values,
+            credentials, identifiers, or URLs as metrics. AURA resolves these fields from verified tool
+            receipts after execution; this contract must not require another agent call.""",
             AgentOutputSchema(PlanningBundle, strict_json_schema=False),
         ),
         "intent": _agent(
@@ -261,7 +270,14 @@ def build_agents() -> dict[str, Agent]:
             designates an approval or policy form, that consequential call is allowed to establish
             the non-public policy decision; do not circularly require its approval result before
             invoking it. Any dependent write must select only explicit approved records, never
-            rejected or unknown records.""",
+            rejected or unknown records.
+            Always declare result_contract. Choose primary_step_key by the user's requested completion
+            condition. If delivery was requested, make the delivery step primary and preserve the
+            created file or design as artifact_step_key. supporting_step_keys should include meaningful
+            supporting work while omitting low-level transport-only steps. Add no more than three
+            metric_sources and only when their exact scalar value_path appears in the selected
+            operation's supplied output contract. Never present step counts, estimates, IDs, URLs,
+            secrets, or invented values as metrics.""",
             AgentOutputSchema(WorkflowPlan, strict_json_schema=False),
         ),
         "evaluator": _agent(

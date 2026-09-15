@@ -72,6 +72,7 @@ from .providers import (
     verify_oauth_credentials,
 )
 from .replanning import maybe_replan_run
+from .result_presentation import resolve_result_presentation
 from .run_supervisor import (
     recover_planning_failure,
     transition_run,
@@ -3031,6 +3032,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             step.status = StepStatus.completed
             step.output = {
                 "step_id": step.id,
+                "step_key": step.step_key,
                 "provider_result": result,
                 "resolved_arguments": resolved_arguments,
                 "tool": step.tool_slug,
@@ -3177,6 +3179,24 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             if check.get("status") not in {"verified", "unsupported"}:
                 outcome_failures.append(step.step_key)
         outputs = [step.output for step in steps if step.status == StepStatus.completed]
+        outputs_by_step = {
+            step.step_key: step.output
+            for step in steps
+            if step.status == StepStatus.completed
+        }
+        try:
+            result_presentation = resolve_result_presentation(
+                run.plan,
+                outputs_by_step,
+            )
+        except Exception:
+            logger.exception("Could not resolve result presentation run_id=%s", run.id)
+            result_presentation = {
+                "version": 1,
+                "source": "safe_fallback",
+                "metrics": [],
+                "supporting_step_keys": [],
+            }
         synthesis = None
         if outcome_failures:
             verification = OutcomeVerification(
@@ -3214,6 +3234,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         "partial": True,
                         "completed_steps": len(outputs),
                         "outputs": outputs,
+                        "result_presentation": result_presentation,
                         "verification": {
                             "status": "unverified",
                             "reasons": ["Final evidence preparation unavailable"],
@@ -3277,6 +3298,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             "partial": verification.status != "verified",
             "completed_steps": len(outputs),
             "outputs": outputs,
+            "result_presentation": result_presentation,
             "verification": verification_data,
         }
         if synthesis is not None:
@@ -3309,6 +3331,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             "partial": False,
             "completed_steps": len(outputs),
             "outputs": outputs,
+            "result_presentation": result_presentation,
             "unified_deliverable": synthesis.model_dump(mode="json"),
             "verification": verification_data,
         }

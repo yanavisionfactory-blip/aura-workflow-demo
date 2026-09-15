@@ -270,6 +270,50 @@ class PlanStep(BaseModel):
     required_evidence: list[str] = Field(default_factory=list, max_length=10)
 
 
+class ResultMetricSource(BaseModel):
+    """One user-meaningful scalar read from a verified step receipt."""
+
+    step_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,119}$")
+    value_path: str = Field(
+        min_length=1,
+        max_length=240,
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$",
+    )
+    label: str = Field(min_length=1, max_length=80)
+    format: Literal[
+        "text",
+        "number",
+        "percent",
+        "temperature_c",
+        "temperature_f",
+        "currency_usd",
+    ] = "text"
+    precision: int = Field(default=0, ge=0, le=4)
+
+    @field_validator("label", mode="before")
+    @classmethod
+    def normalize_metric_label(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise TypeError("Result metric labels must be text")
+        return " ".join(value.split())
+
+
+class ResultContract(BaseModel):
+    """Declares which approved steps become the user-facing completion result."""
+
+    primary_step_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,119}$")
+    completion_step_key: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_]{0,119}$",
+    )
+    artifact_step_key: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_]{0,119}$",
+    )
+    supporting_step_keys: list[str] = Field(default_factory=list, max_length=20)
+    metric_sources: list[ResultMetricSource] = Field(default_factory=list, max_length=3)
+
+
 class ObjectiveSpec(BaseModel):
     goal: str
     deliverables: list[str] = Field(default_factory=list)
@@ -385,6 +429,7 @@ class WorkflowPlan(BaseModel):
     name: str
     interpretation: str
     steps: list[PlanStep] = Field(min_length=1, max_length=20)
+    result_contract: ResultContract | None = None
     planning_artifacts: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -407,6 +452,51 @@ class WorkflowPlan(BaseModel):
                 # allowing a silent skip or retrying a mechanical repair.
                 step.condition = None
             known.add(step.key)
+
+        if self.result_contract is None:
+            required_steps = [step for step in self.steps if not step.optional] or self.steps
+            primary = required_steps[-1]
+            supporting = [step.key for step in self.steps if step.key != primary.key]
+            self.result_contract = ResultContract(
+                primary_step_key=primary.key,
+                completion_step_key=primary.key,
+                supporting_step_keys=supporting,
+            )
+            return self
+
+        contract = self.result_contract
+        contract.completion_step_key = (
+            contract.completion_step_key or contract.primary_step_key
+        )
+        referenced_keys = {
+            contract.primary_step_key,
+            contract.completion_step_key,
+            *(
+                [contract.artifact_step_key]
+                if contract.artifact_step_key is not None
+                else []
+            ),
+            *contract.supporting_step_keys,
+            *(metric.step_key for metric in contract.metric_sources),
+        }
+        unknown_result_keys = referenced_keys - known
+        if unknown_result_keys:
+            raise ValueError(
+                "Result contract references missing steps: "
+                + ", ".join(sorted(unknown_result_keys))
+            )
+        completion_step = next(
+            step for step in self.steps if step.key == contract.completion_step_key
+        )
+        if completion_step.optional:
+            raise ValueError("The completion result step cannot be optional")
+        contract.supporting_step_keys = list(
+            dict.fromkeys(
+                key
+                for key in contract.supporting_step_keys
+                if key != contract.primary_step_key
+            )
+        )
         return self
 
 

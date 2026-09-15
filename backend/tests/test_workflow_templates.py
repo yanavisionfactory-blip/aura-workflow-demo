@@ -82,6 +82,8 @@ def test_creator_outreach_template_builds_bounded_policy_gate():
     assert plan.planning_artifacts["planner_recovery_mode"] == (
         "audited_policy_batch_template"
     )
+    assert plan.result_contract.primary_step_key == "append_approved_creators"
+    assert plan.result_contract.completion_step_key == "exclude_existing"
 
 
 def test_creator_outreach_template_is_narrow_and_capability_complete():
@@ -210,6 +212,13 @@ def test_weather_presentation_template_builds_only_forecast_and_canva_steps():
     assert plan.planning_artifacts["planner_recovery_mode"] == (
         "audited_weather_presentation_template"
     )
+    assert plan.result_contract.primary_step_key == "create_presentation"
+    assert plan.result_contract.artifact_step_key == "create_presentation"
+    assert [metric.value_path for metric in plan.result_contract.metric_sources] == [
+        "temperature_high",
+        "temperature_low",
+        "precipitation_probability",
+    ]
 
 
 def test_weather_presentation_template_preserves_explicit_gmail_delivery():
@@ -237,6 +246,9 @@ def test_weather_presentation_template_preserves_explicit_gmail_delivery():
     }]
     assert plan.steps[3].depends_on == ["export_presentation"]
     assert "email it with Gmail" in plan.interpretation
+    assert plan.result_contract.primary_step_key == "email_presentation"
+    assert plan.result_contract.artifact_step_key == "create_presentation"
+    assert "export_presentation" not in plan.result_contract.supporting_step_keys
 
 
 def test_weather_presentation_template_never_guesses_email_recipient():

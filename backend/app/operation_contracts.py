@@ -68,7 +68,20 @@ KNOWN.update({
     }}, ["account_identity"]),
     "jira.projects.list": ({**envelope("values"), "properties": {"values": {"type": "array", "items": {"type": "object", "required": ["id", "key"], "properties": {"id": TEXT, "key": TEXT}}}, "isLast": {"type": "boolean"}, "startAt": {"type": "integer"}, "total": {"type": "integer"}}}, ["project_metadata"]),
     "jira.issues.search": ({**envelope("issues"), "properties": {"issues": {"type": "array", "items": {"type": "object", "required": ["id"], "properties": {"id": TEXT, "key": TEXT, "fields": OBJECT}}}, "isLast": {"type": "boolean"}, "nextPageToken": TEXT}}, ["issue_state"]),
-    "weather.forecast": ({"type": "object", "required": ["location", "date", "summary"], "properties": {"location": TEXT, "date": TEXT, "summary": TEXT}}, ["forecast"]),
+    "weather.forecast": ({
+        "type": "object",
+        "required": ["location", "date", "summary"],
+        "properties": {
+            "location": TEXT,
+            "date": TEXT,
+            "summary": TEXT,
+            "temperature_high": {"type": "number"},
+            "temperature_low": {"type": "number"},
+            "precipitation_probability": {"type": "number"},
+            "wind_speed": {"type": "number"},
+            "weather_code": {"type": "number"},
+        },
+    }, ["forecast"]),
     "web.search": (
         {
             "type": "object",
