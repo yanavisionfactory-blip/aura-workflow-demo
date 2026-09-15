@@ -1,17 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import {
-  Activity,
   AlertTriangle,
   ArrowRight,
   CalendarClock,
   Check,
   CheckCircle2,
-  ChevronDown,
   ExternalLink,
   FileDown,
   FileText,
-  Loader2,
   MailCheck,
   Paperclip,
   Plus,
@@ -20,7 +17,6 @@ import {
   Share2,
   Zap,
 } from "lucide-react";
-import ProofLine from "./ProofLine";
 import AccessRequestModal from "./AccessRequestModal";
 import BreakdownTable from "./BreakdownTable";
 import ScheduleModal from "./ScheduleModal";
@@ -28,31 +24,11 @@ import CreatorApprovalList from "./CreatorApprovalList";
 import { buildSummaryText } from "@/lib/auraSummary";
 import { meaningfulMetrics, selectPrimaryOutcome, supportingReceipts } from "@/lib/resultPresentation.mjs";
 
-const statusStyle = {
-  completed: { label: "Completed", dot: "bg-emerald-400", text: "text-emerald-400" },
-  running: { label: "Running", dot: "bg-accent", text: "text-accent" },
-  failed: { label: "Failed", dot: "bg-amber-400", text: "text-amber-400" },
-  pending: { label: "Pending", dot: "bg-slate-500", text: "text-muted-foreground" },
-};
-
 export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, workflowPrompt, activity, prompt, interpretation }) {
   const isFailure = results.status === "failed" || results.status === "needs_attention";
   const [showModal, setShowModal] = useState(false);
-  const [showRunDetails, setShowRunDetails] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [deferred, setDeferred] = useState(results.deferred || []);
   const [showSchedule, setShowSchedule] = useState(false);
-
-  useEffect(() => {
-    setDeferred(results.deferred || []);
-    if (!results.deferred || results.deferred.length === 0) return;
-    const timer = window.setTimeout(() => {
-      setDeferred((previous) => previous.map((item, index) => index === 0
-        ? { ...item, arrived: "2 leads replied — Acme Corp confirmed a call for Thursday, and TechNova asked for pricing. Reply drafts are ready for your review." }
-        : item));
-    }, 9000);
-    return () => window.clearTimeout(timer);
-  }, [results.deferred]);
 
   const primaryResult = useMemo(() => selectPrimaryOutcome(results), [results]);
   const metrics = useMemo(() => meaningfulMetrics(results.metrics || []), [results.metrics]);
@@ -271,12 +247,23 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
           <h3 className="mb-3 text-sm font-medium">Also completed</h3>
           <div className="grid gap-2 sm:grid-cols-2">
             {receipts.map((receipt) => (
-              <div key={receipt.key} className="flex items-start gap-2.5 rounded-xl border border-white/[0.06] bg-card/30 px-3.5 py-3">
+              <div key={receipt.key} className="flex items-center gap-2.5 rounded-xl border border-white/[0.06] bg-card/30 px-3.5 py-3">
                 <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <p className="text-[11px] font-medium text-muted-foreground">{receipt.tool}</p>
                   <p className="mt-0.5 text-sm leading-snug">{receipt.title}</p>
                 </div>
+                {receipt.link && (
+                  <a
+                    href={receipt.link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-primary"
+                  >
+                    {receipt.linkLabel || `View in ${receipt.tool}`}
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                )}
               </div>
             ))}
           </div>
@@ -286,99 +273,9 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
       {creatorsOutcome && <CreatorApprovalList items={creatorsOutcome.items} />}
 
       <motion.section
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.3 }}
-        className="mb-5 overflow-hidden rounded-xl border border-white/[0.07] bg-card/25"
-      >
-        <button
-          type="button"
-          onClick={() => setShowRunDetails((visible) => !visible)}
-          aria-expanded={showRunDetails}
-          className="flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left hover:bg-white/[0.025]"
-        >
-          <span className="flex items-center gap-2 text-sm font-medium">
-            <Activity className="h-4 w-4 text-primary" />
-            {showRunDetails ? "Hide run details" : "View run details"}
-          </span>
-          <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${showRunDetails ? "rotate-180" : ""}`} />
-        </button>
-
-        {showRunDetails && (
-          <div className="space-y-5 border-t border-white/[0.06] px-4 py-4">
-            {activity?.length > 0 && (
-              <div>
-                <p className="mb-2.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/60">Workflow activity</p>
-                <div className="space-y-2">
-                  {activity.map((step, index) => {
-                    const status = statusStyle[step.status] || statusStyle.pending;
-                    return (
-                      <div key={`${step.tool || "step"}-${index}`} className="flex gap-3 rounded-lg border border-white/5 bg-[#090f1e]/35 p-3">
-                        <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${status.dot}`} />
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <p className="text-xs font-medium">{step.tool || `Step ${index + 1}`}</p>
-                            <span className={`text-[10px] ${status.text}`}>{status.label}</span>
-                          </div>
-                          <p className="mt-1 text-xs text-muted-foreground">{step.action}</p>
-                          {step.liveOutput && <p className="mt-1 text-[11px] text-muted-foreground/70">{step.liveOutput}</p>}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {results.outcomes?.length > 0 && (
-              <div>
-                <p className="mb-2.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/60">Output receipts</p>
-                <div className="space-y-2">
-                  {results.outcomes.map((outcome, index) => (
-                    <div key={index} className="space-y-1.5">
-                      <ProofLine outcome={outcome} />
-                      {outcome.items?.length > 0 && (
-                        <div className="ml-4 grid gap-1.5 border-l border-white/[0.06] pl-4 sm:grid-cols-2">
-                          {outcome.items.map((item, itemIndex) => (
-                            <div key={itemIndex} className="rounded-lg bg-white/[0.025] px-3 py-2">
-                              <p className="text-xs font-medium">{item.label}</p>
-                              {item.detail && <p className="mt-0.5 text-[11px] text-muted-foreground">{item.detail}</p>}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {deferred.length > 0 && (
-              <div>
-                <p className="mb-2.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/60">Background receipts</p>
-                <div className="space-y-2">
-                  {deferred.map((item, index) => (
-                    <div key={index} className="flex items-start gap-2.5 rounded-lg border border-white/5 bg-[#090f1e]/35 p-3">
-                      {item.arrived
-                        ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
-                        : <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-accent" />}
-                      <div>
-                        <p className="text-xs font-medium">{item.title}</p>
-                        <p className="mt-1 text-[11px] text-muted-foreground">{item.arrived || item.detail}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </motion.section>
-
-      <motion.section
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.38 }}
+        transition={{ delay: 0.3 }}
         className="mb-4 rounded-2xl border border-primary/15 bg-primary/[0.04] p-5"
       >
         <h3 className="text-sm font-medium">What would you like to do next?</h3>

@@ -115,11 +115,24 @@ export function supportingReceipts(results = {}, activity = [], primary = null) 
   const completed = activity
     .filter((step) => step.status === "completed")
     .filter((step) => !primaryProvider || String(step.tool || "").toLowerCase() !== primaryProvider)
-    .map((step) => ({
-      key: `${step.tool || "AURA"}:${step.action || step.liveOutput || "completed"}`,
-      tool: step.tool || "AURA",
-      title: cleanReceiptText(step.liveOutput) || cleanReceiptText(step.action) || "Completed",
-    }));
+    .map((step) => {
+      const providerResult = step.output?.provider_result || {};
+      const operation = String(step.output?.operation || "").toLowerCase();
+      const designId = operation === "canva.presentation.create"
+        ? (providerResult.job?.result?.designs || providerResult.result?.designs || providerResult.designs || [])
+          .find((design) => design?.id)?.id
+        : null;
+      const link = safeHttpsUrl(providerResult.result_url)
+        || (designId ? `https://www.canva.com/design/${encodeURIComponent(designId)}/edit` : null);
+      const tool = step.tool || "AURA";
+      return {
+        key: `${tool}:${step.action || step.liveOutput || "completed"}`,
+        tool,
+        title: cleanReceiptText(step.liveOutput) || cleanReceiptText(step.action) || "Completed",
+        link,
+        linkLabel: link ? `View in ${tool}` : null,
+      };
+    });
 
   if (completed.length) {
     return completed.filter((receipt, index, all) =>
@@ -134,6 +147,8 @@ export function supportingReceipts(results = {}, activity = [], primary = null) 
       key: `${outcome.title || "outcome"}:${index}`,
       tool: providerForOutcome(outcome) || "AURA",
       title: outcome.title || outcome.detail || "Completed",
+      link: safeHttpsUrl(outcome.link),
+      linkLabel: outcome.linkLabel || null,
     }));
 }
 
