@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import {
+  backendRunNeedsSync,
   backendRunHistoryProjection,
   historyStatusForBackendRun,
   isExecutedBackendRun,
+  upsertHistoryRecord,
   workflowForBackendRun,
   workflowRollup,
 } from "../src/lib/workflowHistory.mjs";
@@ -82,6 +84,24 @@ test("workflow rollups are derived from saved run records without double countin
   assert.deepEqual(rollup.steps, [{ tool: "Canva" }]);
 });
 
+test("unchanged backend history is not written again", () => {
+  const projected = backendRunHistoryProjection(backendRun).run;
+  assert.equal(backendRunNeedsSync({ ...projected, id: "saved-run" }, projected), false);
+  assert.equal(backendRunNeedsSync({ ...projected, status: "running" }, projected), true);
+  assert.equal(backendRunNeedsSync(null, projected), true);
+});
+
+test("live history updates replace existing records without duplication", () => {
+  const records = [{ id: "run-1", status: "running" }];
+  assert.deepEqual(upsertHistoryRecord(records, { id: "run-1", status: "completed" }), [
+    { id: "run-1", status: "completed" },
+  ]);
+  assert.deepEqual(upsertHistoryRecord(records, { id: "run-2", status: "running" }).map((run) => run.id), [
+    "run-2",
+    "run-1",
+  ]);
+});
+
 test("execution and the My workflows panel are wired to durable history", () => {
   const demo = readFileSync(new URL("../src/pages/Demo.jsx", import.meta.url), "utf8");
   const history = readFileSync(
@@ -95,6 +115,19 @@ test("execution and the My workflows panel are wired to durable history", () => 
   assert.equal(demo.includes("backend_run_id: pythonRunIdRef.current"), true);
   assert.equal(history.includes("listPythonRuns({ limit: 100 })"), true);
   assert.equal(history.includes("run.backend_run_id === backendRun.id"), true);
+  assert.equal(history.indexOf("setLoading(false)") < history.indexOf("reconcileDurableHistory(saved.workflows"), true);
+  assert.equal(history.includes("WORKFLOW_HISTORY_CHANGED_EVENT"), true);
   assert.equal(history.includes('import { aura } from "@/api/auraClient"'), true);
   assert.equal(history.includes("base44.entities"), false);
+});
+
+test("workflow detail edits use the durable AURA data client", () => {
+  for (const file of ["WorkflowDetail.jsx", "HistoryRunDetail.jsx"]) {
+    const source = readFileSync(
+      new URL(`../src/components/aura/${file}`, import.meta.url),
+      "utf8",
+    );
+    assert.equal(source.includes('import { aura } from "@/api/auraClient"'), true, file);
+    assert.equal(source.includes("base44.entities"), false, file);
+  }
 });

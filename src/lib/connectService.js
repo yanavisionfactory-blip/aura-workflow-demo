@@ -16,6 +16,11 @@ import {
   replaceToolCatalog,
 } from "@/lib/toolCatalog";
 
+const HYDRATION_TTL_MS = 30_000;
+let hydrationPromise = null;
+let hydratedTools = null;
+let hydratedAt = 0;
+
 export async function connectTool(toolName, opts = {}) {
   if (!pythonRuntimeEnabled) {
     throw new Error("AURA's secure connection service is not available right now.");
@@ -52,7 +57,7 @@ export async function connectTool(toolName, opts = {}) {
     if (!isVerifiedConnection(verification)) {
       throw new Error(`AURA is still restoring ${toolName} access. Your work is preserved.`);
     }
-    await hydrateConnections();
+    await hydrateConnections({ force: true });
     return {
       method: result.managed ? "managed" : "oauth",
       connected: true,
@@ -64,38 +69,50 @@ export async function connectTool(toolName, opts = {}) {
     throw error;
   }
 }
-export async function hydrateConnections() {
+export async function hydrateConnections({ force = false } = {}) {
   if (!pythonRuntimeEnabled) {
     throw new Error("AURA's secure connection service is not configured.");
   }
-  const status = await getManagedConnectorStatus(true).catch(() => null);
-  if (status) replaceToolCatalog(status);
-
-  const tools = await listPythonTools();
-  const health = await Promise.all(tools.map(async (tool) => {
-    if (!tool.enabled || tool.kind !== "oauth") return { tool, connected: Boolean(tool.enabled) };
-    try {
-      const result = await testPythonConnection(tool.id);
-      return { tool, connected: isVerifiedConnection(result) };
-    } catch {
-      return { tool, connected: false };
-    }
-  }));
-
-  const map = {};
-  for (const { tool, connected } of health) {
-    if (!connected) continue;
-    if (tool.display_name) map[tool.display_name] = true;
-    CATALOG.filter((entry) =>
-      entry.provider === tool.slug ||
-      entry.canonicalProvider === tool.canonical_provider ||
-      entry.routes?.some((route) => route.provider === tool.slug)
-    ).forEach((entry) => {
-      map[entry.name] = true;
-    });
+  if (!force && hydratedTools && Date.now() - hydratedAt < HYDRATION_TTL_MS) {
+    return hydratedTools;
   }
-  replaceConnections(map);
-  return tools;
+  if (hydrationPromise) return hydrationPromise;
+
+  hydrationPromise = (async () => {
+    const status = await getManagedConnectorStatus(force).catch(() => null);
+    if (status) replaceToolCatalog(status);
+
+    const tools = await listPythonTools();
+    const health = await Promise.all(tools.map(async (tool) => {
+      if (!tool.enabled || tool.kind !== "oauth") return { tool, connected: Boolean(tool.enabled) };
+      try {
+        const result = await testPythonConnection(tool.id);
+        return { tool, connected: isVerifiedConnection(result) };
+      } catch {
+        return { tool, connected: false };
+      }
+    }));
+
+    const map = {};
+    for (const { tool, connected } of health) {
+      if (!connected) continue;
+      if (tool.display_name) map[tool.display_name] = true;
+      CATALOG.filter((entry) =>
+        entry.provider === tool.slug ||
+        entry.canonicalProvider === tool.canonical_provider ||
+        entry.routes?.some((route) => route.provider === tool.slug)
+      ).forEach((entry) => {
+        map[entry.name] = true;
+      });
+    }
+    replaceConnections(map);
+    hydratedTools = tools;
+    hydratedAt = Date.now();
+    return tools;
+  })().finally(() => {
+    hydrationPromise = null;
+  });
+  return hydrationPromise;
 }
 
 export async function getToolConnection(toolName, connectionId = null, providerOverride = null) {
@@ -119,7 +136,7 @@ export async function disconnectTool(toolName, connectionId = null) {
   const tool = await getToolConnection(toolName, connectionId);
   if (!tool) throw new Error(`${toolName} is not connected.`);
   await disconnectPythonConnection(tool.id);
-  await hydrateConnections();
+  await hydrateConnections({ force: true });
   return { disconnected: true };
 }
 
@@ -139,7 +156,7 @@ export async function reconnectTool(toolName, connectionId = null) {
       timeoutMs: 120000,
       reservedWindow: authorizationWindow,
     });
-    await hydrateConnections();
+    await hydrateConnections({ force: true });
     return result;
   } catch (error) {
     if (authorizationWindow && !authorizationWindow.closed) authorizationWindow.close();

@@ -170,7 +170,7 @@ export default function ConnectionsPill() {
     setError("");
     try {
       await requestManagedConnector(tool.name);
-      await hydrateConnections();
+      await hydrateConnections({ force: true });
       setCatalogRevision((value) => value + 1);
     } catch (cause) {
       setError(cause.message || `AURA could not request ${tool.name}.`);

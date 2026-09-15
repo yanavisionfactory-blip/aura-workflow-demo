@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { ArrowLeft, Pencil, Check, X, RefreshCw, Clock, ChevronRight } from "lucide-react";
-import { base44 } from "@/api/base44Client";
+import { aura } from "@/api/auraClient";
 import { formatDistanceToNow, format } from "date-fns";
+import { announceWorkflowHistoryChanged } from "@/lib/workflowHistory.mjs";
 import RunAgainModal from "./RunAgainModal";
 
 const runStatusConfig = {
@@ -19,7 +20,10 @@ export default function WorkflowDetail({ workflow, runs, onBack, onOpenRun, onRe
   const handleSave = async () => {
     const n = name.trim();
     if (!n || n === workflow.name) { setEditing(false); setName(workflow.name || ""); return; }
-    try { await base44.entities.Workflow.update(workflow.id, { name: n }); } catch (e) { /* ignore */ }
+    try {
+      const updated = await aura.entities.Workflow.update(workflow.id, { name: n });
+      announceWorkflowHistoryChanged({ workflow: updated });
+    } catch (e) { /* ignore */ }
     setEditing(false);
   };
 

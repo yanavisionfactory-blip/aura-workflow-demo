@@ -109,6 +109,14 @@ def notion_to_jira_template(
                     "required_evidence": ["write_receipt"],
                 },
             ],
+            "result_contract": {
+                "primary_step_key": "create_jira_tasks",
+                "completion_step_key": "create_jira_tasks",
+                "supporting_step_keys": [
+                    "find_research_notes",
+                    "read_research_notes",
+                ],
+            },
         }
     )
     missing = [
@@ -310,6 +318,40 @@ def weather_presentation_template(
             "name": f"{location} weather presentation",
             "interpretation": interpretation,
             "steps": steps,
+            "result_contract": {
+                "primary_step_key": (
+                    "email_presentation"
+                    if email_delivery_requested
+                    else "create_presentation"
+                ),
+                "completion_step_key": (
+                    "email_presentation"
+                    if email_delivery_requested
+                    else "create_presentation"
+                ),
+                "artifact_step_key": "create_presentation",
+                "supporting_step_keys": ["weather", "create_presentation"],
+                "metric_sources": [
+                    {
+                        "step_key": "weather",
+                        "value_path": "temperature_high",
+                        "label": "High",
+                        "format": "temperature_c",
+                    },
+                    {
+                        "step_key": "weather",
+                        "value_path": "temperature_low",
+                        "label": "Low",
+                        "format": "temperature_c",
+                    },
+                    {
+                        "step_key": "weather",
+                        "value_path": "precipitation_probability",
+                        "label": "Chance of rain",
+                        "format": "percent",
+                    },
+                ],
+            },
         }
     )
     deliverables = ["One populated Canva presentation"]
@@ -639,6 +681,15 @@ def creator_outreach_template(
                     "required_evidence": ["write_receipt"],
                 },
             ],
+            "result_contract": {
+                "primary_step_key": "append_approved_creators",
+                "completion_step_key": "exclude_existing",
+                "supporting_step_keys": [
+                    "screen_candidates",
+                    "exclude_existing",
+                    "submit_candidates",
+                ],
+            },
         }
     )
     plan.planning_artifacts = {

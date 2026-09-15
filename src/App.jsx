@@ -35,40 +35,22 @@ function AuthLanding() {
   );
 }
 
-function LoadingScreen({ label }) {
-  return (
-    <main className="min-h-screen bg-[#080d1b] text-white grid place-items-center">
-      <div className="text-center">
-        <div className="mx-auto mb-4 h-7 w-7 animate-spin rounded-full border-2 border-slate-700 border-t-violet-400" />
-        <p className="text-sm text-slate-400">{label}</p>
-      </div>
-    </main>
-  );
-}
-
 function ProductRoutes() {
-  const { isLoadingAuth, isLoadingWorkspace, workspace, workspaceError, reconnectWorkspace } = useAuth();
-
-  if (isLoadingAuth) return <LoadingScreen label="Checking your session…" />;
-  if (isLoadingWorkspace) return <LoadingScreen label="Opening your workspace…" />;
-  if (workspaceError) {
-    return (
-      <main className="min-h-screen bg-[#080d1b] text-white grid place-items-center p-6">
-        <section className="w-full max-w-md rounded-2xl border border-white/10 bg-white/5 p-8 text-center">
-          <h1 className="text-xl font-semibold">AURA couldn’t open your workspace</h1>
-          <p className="mt-3 text-sm text-slate-400">Your session is safe. AURA tried to reconnect automatically.</p>
-          <button type="button" onClick={reconnectWorkspace} className="mt-6 rounded-lg bg-violet-500 px-4 py-2 text-sm font-medium">Try again</button>
-        </section>
-      </main>
-    );
-  }
-  if (!workspace) return <LoadingScreen label="Preparing your workspace…" />;
+  const { workspaceError, reconnectWorkspace } = useAuth();
 
   return (
-    <Routes>
-      <Route path="/" element={<Demo />} />
-      <Route path="*" element={<PageNotFound />} />
-    </Routes>
+    <>
+      <Routes>
+        <Route path="/" element={<Demo />} />
+        <Route path="*" element={<PageNotFound />} />
+      </Routes>
+      {workspaceError && (
+        <div role="alert" className="fixed bottom-4 left-1/2 z-[100] flex -translate-x-1/2 items-center gap-3 rounded-xl border border-amber-300/20 bg-[#111827]/95 px-4 py-3 text-sm text-slate-200 shadow-2xl backdrop-blur">
+          <span>AURA is reconnecting your workspace. The demo remains available.</span>
+          <button type="button" onClick={reconnectWorkspace} className="rounded-lg bg-violet-500 px-3 py-1.5 text-xs font-medium text-white">Retry now</button>
+        </div>
+      )}
+    </>
   );
 }
 

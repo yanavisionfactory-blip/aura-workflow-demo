@@ -16,9 +16,10 @@ import HistoryPanel from "@/components/aura/HistoryPanel";
 import EditRunReviewModal from "@/components/aura/EditRunReviewModal";
 import { detectNewConsequential } from "@/lib/editRunDetect";
 import { requestNotifyPermission, notifyWorkflowComplete, notifyWorkflowError } from "@/lib/auraNotify";
-import { connectTool, hydrateConnections } from "@/lib/connectService";
+import { connectTool } from "@/lib/connectService";
 import { getAllConnections } from "@/lib/connectionsStore";
 import { CATALOG, catalogEntryFor } from "@/lib/toolCatalog";
+import { announceWorkflowHistoryChanged } from "@/lib/workflowHistory.mjs";
 import {
   approvePythonPlan,
   cancelPythonRun,
@@ -44,6 +45,7 @@ import {
 import { hasDurablePlan, planningRequestPrompt } from "@/lib/runtimePlan.mjs";
 import { weatherStepTitle } from "@/lib/planPresentation.mjs";
 import { instantLanguagePlan, languageDraftPrompt } from "@/lib/languagePlan.mjs";
+import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
 
 const STEP_DURATION = 2.6;
 
@@ -147,14 +149,6 @@ const friendlyStepTitle = (step) => {
   if (/update|change|sync/.test(reason)) return `Update ${tool}`;
   if (/create|add/.test(reason)) return `Create in ${tool}`;
   return `Use ${tool}`;
-};
-
-const resultLinkFromOutputs = (outputs = []) => {
-  for (const output of [...outputs].reverse()) {
-    const url = output?.provider_result?.result_url;
-    if (typeof url === "string" && url.startsWith("https://")) return url;
-  }
-  return null;
 };
 
 const resolvedPreviewStep = (planned, runtime) => {
@@ -920,6 +914,7 @@ Rules:
 
     historySavePromiseRef.current = (async () => {
       let workflowId = currentWorkflowIdRef.current;
+      let savedWorkflow = null;
       const now = new Date().toISOString();
       const name = workflowName || plan?.workflowName || originalPromptRef.current.slice(0, 60) || "Workflow";
       const workflowUpdate = {
@@ -935,23 +930,23 @@ Rules:
           .catch(() => []);
         if (existing) {
           workflowId = existing.id;
-          await aura.entities.Workflow.update(existing.id, {
+          savedWorkflow = await aura.entities.Workflow.update(existing.id, {
             ...workflowUpdate,
             run_count: (Number(existing.run_count) || 0) + 1,
           });
         } else {
-          const workflow = await aura.entities.Workflow.create({
+          savedWorkflow = await aura.entities.Workflow.create({
             name,
             prompt: originalPromptRef.current,
             ...workflowUpdate,
             run_count: 1,
           });
-          workflowId = workflow.id;
+          workflowId = savedWorkflow.id;
         }
         currentWorkflowIdRef.current = workflowId;
       } else {
         const [existing] = await aura.entities.Workflow.filter({ id: workflowId }, "-created_date", 1);
-        await aura.entities.Workflow.update(workflowId, {
+        savedWorkflow = await aura.entities.Workflow.update(workflowId, {
           ...workflowUpdate,
           ...(workflowName ? { name: workflowName } : {}),
           run_count: (Number(existing?.run_count) || 0) + 1,
@@ -969,6 +964,7 @@ Rules:
         backend_updated_at: now,
       });
       currentRunIdRef.current = savedRun.id;
+      announceWorkflowHistoryChanged({ workflow: savedWorkflow, run: savedRun });
       return savedRun.id;
     })();
 
@@ -1025,6 +1021,7 @@ Rules:
         && run.automation_state?.status === "retrying";
       return {
         id: step.id,
+        stepKey: step.key,
         tool: planned?.tool || planToolName(step),
         action: planned?.title || planned?.action || friendlyStepTitle(step),
         riskLevel: step.consequential ? "modify" : "read",
@@ -1278,14 +1275,26 @@ Rules:
         if (active >= 0) setCurrentStepIdx(active);
         if (run.status === "completed") {
           forgetActivePythonRun(runId);
-          const outputs = run.result?.outputs || [];
+          const stepKeysById = new Map(
+            (run.steps || []).map((step) => [step.id, step.key])
+          );
+          const outputs = (run.result?.outputs || []).map((output) => ({
+            ...output,
+            step_key: output.step_key || stepKeysById.get(output.step_id),
+          }));
           const synthesis = run.result?.unified_deliverable || {};
-          const completedCount = run.result?.completed_steps ?? outputs.length;
-          const resultLink = resultLinkFromOutputs(outputs);
-          finishExecution({
+          const resultPresentation = run.result?.result_presentation || null;
+          const primaryResult = primaryResultFromOutputs(outputs, {
             title: run.plan?.name || "Workflow completed",
-            summary: synthesis.summary || "AURA completed the requested workflow.",
-            metrics: [{ value: String(completedCount), label: completedCount === 1 ? "step completed" : "steps completed" }],
+            summary: synthesis.summary,
+            deliverable: synthesis.deliverable,
+          }, resultPresentation);
+          finishExecution({
+            title: primaryResult.completionTitle || run.plan?.name || "Workflow completed",
+            summary: primaryResult.completionSummary || synthesis.summary || "AURA completed the requested workflow.",
+            metrics: resultPresentation?.metrics || [],
+            resultPresentation,
+            primaryResult,
             outcomes: [{
               type: "document",
               title: "Result",
@@ -1294,8 +1303,8 @@ Rules:
                 label: "Summary",
                 detail: synthesis.deliverable || synthesis.summary || "The workflow completed successfully.",
               }],
-              link: resultLink,
-              linkLabel: resultLink ? "View result" : undefined,
+              link: primaryResult.link,
+              linkLabel: primaryResult.linkLabel,
             }],
             nextSteps: [],
           }, null, "completed");
@@ -1432,9 +1441,11 @@ Generate a results summary in plain, human-friendly language (not technical).
       notifyWorkflowError(res.title || originalPromptRef.current);
     }
 
+    let updatedRun = null;
+    let updatedWorkflow = null;
     if (currentRunIdRef.current) {
       try {
-        await aura.entities.WorkflowRun.update(currentRunIdRef.current, {
+        updatedRun = await aura.entities.WorkflowRun.update(currentRunIdRef.current, {
           status: executionStatus === "failed" || errorMsg ? "failed" : "completed",
           title: workflowName || res.title,
           summary: res.summary,
@@ -1457,13 +1468,17 @@ Generate a results summary in plain, human-friendly language (not technical).
           steps: approvedStepsRef.current,
         };
         if (workflowName) wfSet.name = workflowName;
-        await aura.entities.Workflow.updateMany(
+        const updated = await aura.entities.Workflow.updateMany(
           { id: currentWorkflowIdRef.current },
           { $set: wfSet }
         );
+        updatedWorkflow = updated[0] || null;
       } catch (e) {
         /* ignore */
       }
+    }
+    if (updatedRun || updatedWorkflow) {
+      announceWorkflowHistoryChanged({ workflow: updatedWorkflow, run: updatedRun });
     }
   };
 
@@ -1579,7 +1594,7 @@ Generate a results summary in plain, human-friendly language (not technical).
           last_summary: m.results.summary,
           run_count: 1,
         });
-        await aura.entities.WorkflowRun.create({
+        const run = await aura.entities.WorkflowRun.create({
           prompt: PROMPT,
           status: "completed",
           workflow_id: wf.id,
@@ -1590,6 +1605,7 @@ Generate a results summary in plain, human-friendly language (not technical).
           steps: m.plan.steps,
           duration_seconds: 11,
         });
+        announceWorkflowHistoryChanged({ workflow: wf, run });
       } catch (e) {
         /* ignore */
       }
@@ -1597,7 +1613,6 @@ Generate a results summary in plain, human-friendly language (not technical).
   }, []);
 
   useEffect(() => {
-    hydrateConnections().catch(() => null);
     return () => {
       pythonPollGenerationRef.current += 1;
       clearTimeouts();
