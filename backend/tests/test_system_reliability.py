@@ -192,6 +192,38 @@ async def test_scheduler_cycle_times_out_instead_of_hanging(scheduler_state, mon
     assert scheduler_state["tick_in_progress"] is False
 
 
+async def test_api_recovery_tick_dispatches_due_schedules_without_separate_beat(
+    monkeypatch,
+):
+    calls = []
+
+    @asynccontextmanager
+    async def elected(*args, **kwargs):
+        yield True
+
+    async def due():
+        calls.append("due")
+        return [("scheduled-run", "workspace")]
+
+    async def none(*args, **kwargs):
+        return []
+
+    async def publish(*args, **kwargs):
+        return 0
+
+    monkeypatch.setattr(dispatch, "execution_lock", elected)
+    monkeypatch.setattr(scheduler_runtime, "dispatch_due_schedules", due)
+    monkeypatch.setattr(scheduler_runtime, "recover_stale_runs", none)
+    monkeypatch.setattr(scheduler_runtime, "recover_waiting_runs", none)
+    monkeypatch.setattr(scheduler_runtime, "recover_engineer_runs", none)
+    monkeypatch.setattr(dispatch, "dispatch_pending", publish)
+
+    result = await dispatch.recovery_tick()
+
+    assert calls == ["due"]
+    assert result["scheduled"] == 1
+
+
 async def test_readiness_exposes_only_safe_scheduler_diagnostics(
     scheduler_state, monkeypatch
 ):

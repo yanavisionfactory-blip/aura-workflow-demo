@@ -3938,24 +3938,35 @@ def _workflow_view(workflow: Workflow) -> dict:
     }
 
 
-def _schedule_view(schedule: WorkflowSchedule) -> dict:
+def _schedule_view(schedule: WorkflowSchedule, workflow: Workflow | None = None) -> dict:
     return {
         "id": schedule.id,
         "workflow_id": schedule.workflow_id,
+        "history_workflow_id": schedule.history_workflow_id,
+        "workflow_prompt": workflow.prompt if workflow else None,
+        "workflow_name": workflow.name if workflow else schedule.name,
         "name": schedule.name,
         "interval_seconds": schedule.interval_seconds,
+        "cadence": schedule.cadence,
+        "timezone": schedule.timezone,
+        "local_time": schedule.local_time,
+        "day_of_week": schedule.day_of_week,
+        "day_of_month": schedule.day_of_month,
+        "approval_mode": schedule.approval_mode,
+        "notify_on_completion": schedule.notify_on_completion,
+        "notify_on_attention": schedule.notify_on_attention,
         "enabled": schedule.enabled,
         "next_run_at": schedule.next_run_at,
         "last_run_at": schedule.last_run_at,
+        "last_run_id": schedule.last_run_id,
+        "created_by_role": schedule.created_by_role,
         "created_at": schedule.created_at,
         "updated_at": schedule.updated_at,
     }
 
 
-def _as_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
+def _schedule_interval_seconds(cadence: str) -> int:
+    return {"daily": 86_400, "weekly": 604_800, "monthly": 2_592_000}[cadence]
 
 
 @app.post("/v1/workflows", status_code=201)
@@ -4016,20 +4027,105 @@ async def create_workflow_schedule(
     context: TenantContext = Depends(tenant_context),
     session: AsyncSession = Depends(tenant_session),
 ) -> dict:
-    workflow = await session.get(Workflow, payload.workflow_id)
+    source = await session.get(WorkflowRun, payload.source_run_id)
+    if (
+        not source
+        or source.workspace_id != context.workspace_id
+        or source.status != RunStatus.completed
+        or not source.plan_approved
+        or not (source.plan or {}).get("steps")
+        or await source_owner(session, context.workspace_id, source.id) != context.subject
+    ):
+        raise HTTPException(409, "Only your completed, approved workflow can be scheduled")
+    approval_snapshot = await session.scalar(
+        select(ApprovalSnapshot)
+        .where(ApprovalSnapshot.run_id == source.id)
+        .order_by(ApprovalSnapshot.approved_at.desc())
+        .limit(1)
+    )
+    if not approval_snapshot:
+        raise HTTPException(409, "The approved workflow snapshot is unavailable")
+    if (
+        payload.approval_mode == "auto"
+        and approval_snapshot.approver_subject != context.subject
+    ):
+        raise HTTPException(403, "Automatic schedules require your own prior approval")
+    if payload.approval_mode == "auto" and context.role not in {"owner", "admin"}:
+        source_steps = (
+            await session.scalars(select(RunStep).where(RunStep.run_id == source.id))
+        ).all()
+        if any(step.consequential for step in source_steps):
+            raise HTTPException(
+                403, "Automatic schedules with external changes require an administrator"
+            )
+
+    workflow = await session.get(Workflow, source.workflow_id) if source.workflow_id else None
     if not workflow or workflow.workspace_id != context.workspace_id:
-        raise HTTPException(404, "Workflow not found")
+        workflow = Workflow(
+            workspace_id=context.workspace_id,
+            name=payload.name,
+            prompt=source.prompt,
+            plan=source.plan,
+            variables=source.inputs,
+            enabled=True,
+        )
+        session.add(workflow)
+        await session.flush()
+        source.workflow_id = workflow.id
+    else:
+        workflow.name = payload.name
+        workflow.prompt = source.prompt
+        workflow.plan = source.plan
+        workflow.variables = source.inputs
+        workflow.enabled = True
+
+    from .scheduler_runtime import next_calendar_occurrence
+
+    now = datetime.now(UTC)
     schedule = WorkflowSchedule(
         workspace_id=context.workspace_id,
         workflow_id=workflow.id,
         name=payload.name,
-        interval_seconds=payload.interval_seconds,
-        next_run_at=_as_utc(payload.start_at or datetime.now(UTC)),
+        interval_seconds=_schedule_interval_seconds(payload.cadence),
+        cadence=payload.cadence,
+        timezone=payload.timezone,
+        local_time=payload.local_time,
+        day_of_week=payload.day_of_week,
+        day_of_month=payload.day_of_month,
+        approval_mode=payload.approval_mode,
+        notify_on_completion=payload.notify_on_completion,
+        notify_on_attention=payload.notify_on_attention,
+        history_workflow_id=payload.history_workflow_id,
+        next_run_at=next_calendar_occurrence(
+            now,
+            cadence=payload.cadence,
+            timezone=payload.timezone,
+            local_time=payload.local_time,
+            day_of_week=payload.day_of_week,
+            day_of_month=payload.day_of_month,
+        ),
         created_by=context.subject,
+        created_by_role=context.role,
     )
     session.add(schedule)
+    await session.flush()
+    session.add(
+        AuditEvent(
+            workspace_id=context.workspace_id,
+            run_id=source.id,
+            actor=context.subject,
+            event_type="schedule.created",
+            payload={
+                "schedule_id": schedule.id,
+                "workflow_id": workflow.id,
+                "cadence": schedule.cadence,
+                "timezone": schedule.timezone,
+                "approval_mode": schedule.approval_mode,
+            },
+        )
+    )
     await session.commit()
-    return _schedule_view(schedule)
+    return _schedule_view(schedule, workflow)
 
 
 @app.get("/v1/workflow-schedules")
@@ -4044,7 +4140,15 @@ async def list_workflow_schedules(
             .order_by(WorkflowSchedule.created_at.desc())
         )
     ).all()
-    return [_schedule_view(schedule) for schedule in schedules]
+    workflows = {
+        workflow.id: workflow
+        for workflow in (
+            await session.scalars(
+                select(Workflow).where(Workflow.workspace_id == context.workspace_id)
+            )
+        ).all()
+    }
+    return [_schedule_view(schedule, workflows.get(schedule.workflow_id)) for schedule in schedules]
 
 
 @app.patch("/v1/workflow-schedules/{schedule_id}")
@@ -4058,16 +4162,22 @@ async def update_workflow_schedule(
     if not schedule or schedule.workspace_id != context.workspace_id:
         raise HTTPException(404, "Workflow schedule not found")
     changes = payload.model_dump(exclude_unset=True)
-    if "next_run_at" in changes:
-        changes["next_run_at"] = _as_utc(changes["next_run_at"])
-    if "interval_seconds" in changes and "next_run_at" not in changes:
-        changes["next_run_at"] = datetime.now(UTC) + timedelta(
-            seconds=changes["interval_seconds"]
-        )
+    recurrence_fields = {"cadence", "timezone", "local_time", "day_of_week", "day_of_month"}
     for field, value in changes.items():
         setattr(schedule, field, value)
+    if schedule.cadence == "weekly" and schedule.day_of_week is None:
+        raise HTTPException(422, "Weekly schedules require a day of week")
+    if schedule.cadence == "monthly" and schedule.day_of_month is None:
+        raise HTTPException(422, "Monthly schedules require a day of month")
+    if "cadence" in changes:
+        schedule.interval_seconds = _schedule_interval_seconds(schedule.cadence)
+    if recurrence_fields & changes.keys() or changes.get("enabled") is True:
+        from .scheduler_runtime import schedule_next_occurrence
+
+        schedule.next_run_at = schedule_next_occurrence(schedule, datetime.now(UTC))
+    workflow = await session.get(Workflow, schedule.workflow_id)
     await session.commit()
-    return _schedule_view(schedule)
+    return _schedule_view(schedule, workflow)
 
 
 @app.delete("/v1/workflow-schedules/{schedule_id}", status_code=204)

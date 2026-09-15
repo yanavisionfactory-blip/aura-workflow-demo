@@ -2,7 +2,18 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Loader2, Layers } from "lucide-react";
 import { aura } from "@/api/auraClient";
-import { listPythonRuns } from "@/lib/auraApi";
+import {
+  deleteWorkflowSchedule,
+  getPythonRun,
+  listPythonRuns,
+  listWorkflowSchedules,
+  updateWorkflowSchedule,
+} from "@/lib/auraApi";
+import { notifyScheduledWorkflow } from "@/lib/auraNotify";
+import {
+  schedulesForWorkflow,
+  WORKFLOW_SCHEDULE_CHANGED_EVENT,
+} from "@/lib/workflowSchedule.mjs";
 import {
   backendRunNeedsSync,
   backendRunHistoryProjection,
@@ -24,8 +35,7 @@ async function loadSavedHistory() {
     savedHistoryPromise = Promise.all([
       aura.entities.Workflow.list("-created_date", 50).catch(() => []),
       aura.entities.WorkflowRun.list("-created_date", 100).catch(() => []),
-      aura.entities.Schedule.list("-created_date", 50).catch(() => []),
-    ]).then(([workflows, runs, schedules]) => ({ workflows, runs, schedules }))
+    ]).then(([workflows, runs]) => ({ workflows, runs }))
       .finally(() => {
         savedHistoryPromise = null;
       });
@@ -130,6 +140,63 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun }) {
   const [selectedRun, setSelectedRun] = useState(null);
   const [loading, setLoading] = useState(true);
   const hasHistorySnapshot = useRef(false);
+  const schedulesRef = useRef([]);
+  const observedScheduledRunsRef = useRef(new Set());
+
+  useEffect(() => {
+    schedulesRef.current = schedules;
+  }, [schedules]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const attentionStatuses = new Set([
+      "awaiting_approval",
+      "blocked",
+      "cancelled",
+      "failed",
+      "waiting_for_action",
+    ]);
+    const checkScheduledRuns = async () => {
+      const freshSchedules = await listWorkflowSchedules().catch(() => schedulesRef.current);
+      if (cancelled) return;
+      schedulesRef.current = freshSchedules;
+      setSchedules(freshSchedules);
+      let historyNeedsSync = false;
+      for (const schedule of freshSchedules) {
+        if (!schedule.last_run_id) continue;
+        const run = await getPythonRun(schedule.last_run_id).catch(() => null);
+        if (cancelled) return;
+        if (!run) continue;
+        const observationKey = `${run.id}:${run.updated_at}:${run.status}`;
+        if (!observedScheduledRunsRef.current.has(observationKey)) {
+          observedScheduledRunsRef.current.add(observationKey);
+          historyNeedsSync = true;
+        }
+        const shouldNotify = (run.status === "completed" && schedule.notify_on_completion)
+          || (attentionStatuses.has(run.status) && schedule.notify_on_attention);
+        if (!shouldNotify) continue;
+        const notificationKey = `aura_schedule_notice:${schedule.id}:${run.id}:${run.status}`;
+        if (localStorage.getItem(notificationKey)) continue;
+        if (notifyScheduledWorkflow(schedule.name, run.status, run.error)) {
+          localStorage.setItem(notificationKey, new Date().toISOString());
+        }
+      }
+      if (historyNeedsSync) {
+        const snapshot = await loadSavedHistory();
+        const reconciled = await reconcileDurableHistory(snapshot.workflows, snapshot.runs);
+        if (!cancelled) {
+          hasHistorySnapshot.current = true;
+          setWorkflows(reconciled.workflows);
+          setRuns(reconciled.runs);
+        }
+      }
+    };
+    const interval = window.setInterval(checkScheduledRuns, 15000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -138,9 +205,11 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun }) {
       hasHistorySnapshot.current = true;
       setWorkflows(saved.workflows);
       setRuns(saved.runs);
-      setSchedules(saved.schedules);
       setLoading(false);
     });
+    listWorkflowSchedules().then((items) => {
+      if (!cancelled) setSchedules(items);
+    }).catch(() => {});
     return () => { cancelled = true; };
   }, []);
 
@@ -154,8 +223,10 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun }) {
       hasHistorySnapshot.current = true;
       setWorkflows(saved.workflows);
       setRuns(saved.runs);
-      setSchedules(saved.schedules);
       setLoading(false);
+      listWorkflowSchedules().then((items) => {
+        if (!cancelled) setSchedules(items);
+      }).catch(() => {});
 
       // Historical repair never blocks the panel. Saved records render first;
       // the durable executor is reconciled quietly afterward.
@@ -195,18 +266,51 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun }) {
         setSelectedRun((previous) => previous?.id === run.id ? run : previous);
       }
     };
+    const handleScheduleChanged = (event) => {
+      const { schedule, deletedId } = event.detail || {};
+      if (deletedId) {
+        setSchedules((previous) => previous.filter((item) => item.id !== deletedId));
+      } else if (schedule?.id) {
+        setSchedules((previous) => upsertHistoryRecord(previous, schedule));
+      }
+    };
     window.addEventListener(WORKFLOW_HISTORY_CHANGED_EVENT, handleHistoryChanged);
+    window.addEventListener(WORKFLOW_SCHEDULE_CHANGED_EVENT, handleScheduleChanged);
     return () => {
       unsubWf();
       unsubRun();
       window.removeEventListener(WORKFLOW_HISTORY_CHANGED_EVENT, handleHistoryChanged);
+      window.removeEventListener(WORKFLOW_SCHEDULE_CHANGED_EVENT, handleScheduleChanged);
     };
   }, []);
 
   const scheduledPrompts = useMemo(
-    () => new Set(schedules.map((s) => s.prompt).filter(Boolean)),
+    () => new Set(
+      schedules.filter((schedule) => schedule.enabled)
+        .map((schedule) => schedule.workflow_prompt)
+        .filter(Boolean)
+    ),
     [schedules]
   );
+  const scheduledWorkflowIds = useMemo(
+    () => new Set(
+      schedules.filter((schedule) => schedule.enabled)
+        .map((schedule) => schedule.history_workflow_id)
+        .filter(Boolean)
+    ),
+    [schedules]
+  );
+
+  const updateSchedule = async (scheduleId, changes) => {
+    const updated = await updateWorkflowSchedule(scheduleId, changes);
+    setSchedules((previous) => upsertHistoryRecord(previous, updated));
+    return updated;
+  };
+
+  const deleteSchedule = async (scheduleId) => {
+    await deleteWorkflowSchedule(scheduleId);
+    setSchedules((previous) => previous.filter((item) => item.id !== scheduleId));
+  };
 
   const handleWfRerun = (wf, approval) => { onClose(); onRerun(wf, approval); };
   const handleWfEdit = (wf, approval) => { onClose(); onEditRun(wf, approval); };
@@ -273,15 +377,23 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun }) {
                 <WorkflowDetail
                   workflow={selectedWorkflow}
                   runs={runs}
+                  schedules={schedulesForWorkflow(schedules, selectedWorkflow)}
                   onBack={() => setSelectedWorkflow(null)}
                   onOpenRun={(r) => setSelectedRun(r)}
                   onRerun={handleWfRerun}
                   onEditRun={handleWfEdit}
+                  onUpdateSchedule={updateSchedule}
+                  onDeleteSchedule={deleteSchedule}
                 />
               ) : (
                 <>
-                  {workflows.length > 0 && <StatsHeader workflows={workflows} />}
-                  <WorkflowList workflows={workflows} scheduledPrompts={scheduledPrompts} onSelect={(wf) => setSelectedWorkflow(wf)} />
+                  {workflows.length > 0 && <StatsHeader workflows={workflows} schedules={schedules} />}
+                  <WorkflowList
+                    workflows={workflows}
+                    scheduledPrompts={scheduledPrompts}
+                    scheduledWorkflowIds={scheduledWorkflowIds}
+                    onSelect={(wf) => setSelectedWorkflow(wf)}
+                  />
                 </>
               )}
             </div>
@@ -292,9 +404,10 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun }) {
   );
 }
 
-function StatsHeader({ workflows }) {
+function StatsHeader({ workflows, schedules }) {
   const total = workflows.length;
   const ok = workflows.filter((w) => w.last_run_status === "completed").length;
+  const activeSchedules = schedules.filter((schedule) => schedule.enabled).length;
   return (
     <div className="px-4 pt-3 pb-1 flex items-center gap-5">
       <div>
@@ -305,6 +418,12 @@ function StatsHeader({ workflows }) {
         <div>
           <p className="text-lg font-semibold leading-none text-emerald-400">{ok}</p>
           <p className="text-[10px] text-muted-foreground/60 mt-1">Last run successful</p>
+        </div>
+      )}
+      {activeSchedules > 0 && (
+        <div>
+          <p className="text-lg font-semibold leading-none text-primary">{activeSchedules}</p>
+          <p className="text-[10px] text-muted-foreground/60 mt-1">Active schedules</p>
         </div>
       )}
     </div>

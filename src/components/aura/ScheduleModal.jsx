@@ -1,7 +1,13 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, CalendarClock, Check, Bell, BellOff, ShieldAlert, Eye, FileCheck2, Zap } from "lucide-react";
-import { base44 } from "@/api/base44Client";
+import { createWorkflowSchedule } from "@/lib/auraApi";
+import { requestNotifyPermission } from "@/lib/auraNotify";
+import {
+  announceWorkflowScheduleChanged,
+  browserTimezone,
+  schedulePayload,
+} from "@/lib/workflowSchedule.mjs";
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const CADENCES = [
@@ -13,26 +19,38 @@ const CADENCES = [
 function computeNextRun(cadence, dayOfWeek, dayOfMonth, time) {
   const [h, m] = time.split(":").map(Number);
   const now = new Date();
+  if (cadence === "monthly") {
+    const inMonth = (year, month) => {
+      const finalDay = new Date(year, month + 1, 0).getDate();
+      return new Date(year, month, Math.min(dayOfMonth, finalDay), h, m, 0, 0);
+    };
+    let monthly = inMonth(now.getFullYear(), now.getMonth());
+    if (monthly <= now) monthly = inMonth(now.getFullYear(), now.getMonth() + 1);
+    return monthly.toISOString();
+  }
   let next = new Date(now);
   next.setHours(h, m, 0, 0);
   if (next <= now) next.setDate(next.getDate() + 1);
   if (cadence === "weekly") {
     while (next.getDay() !== dayOfWeek) next.setDate(next.getDate() + 1);
-  } else if (cadence === "monthly") {
-    next.setDate(dayOfMonth);
-    next.setHours(h, m, 0, 0);
-    if (next <= now) next.setMonth(next.getMonth() + 1);
   }
   return next.toISOString();
 }
 
 const APPROVAL_LEVELS = [
-  { value: "review", icon: Eye, label: "Review every run" },
-  { value: "writes", icon: FileCheck2, label: "Ask before sending/changing anything" },
-  { value: "auto", icon: Zap, label: "Run automatically" },
+  { value: "review", icon: Eye, label: "Review every run", detail: "AURA prepares the plan, then waits for you." },
+  { value: "writes", icon: FileCheck2, label: "Ask before sending/changing anything", detail: "Read steps can run; external changes wait for approval." },
+  { value: "auto", icon: Zap, label: "Run automatically", detail: "Uses this approved plan. Safety or access changes still pause it." },
 ];
 
-export default function ScheduleModal({ open, onClose, prompt, title }) {
+export default function ScheduleModal({
+  open,
+  onClose,
+  title,
+  backendRunId,
+  historyWorkflowId,
+  onScheduled,
+}) {
   const [cadence, setCadence] = useState("weekly");
   const [dayOfWeek, setDayOfWeek] = useState(1);
   const [dayOfMonth, setDayOfMonth] = useState(1);
@@ -41,11 +59,13 @@ export default function ScheduleModal({ open, onClose, prompt, title }) {
   const [notifyErrors, setNotifyErrors] = useState(true);
   const [approval, setApproval] = useState("writes");
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [savedSchedule, setSavedSchedule] = useState(null);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     if (open) {
-      setSaved(false);
+      setSavedSchedule(null);
+      setError("");
       setCadence("weekly");
       setDayOfWeek(1);
       setDayOfMonth(1);
@@ -56,7 +76,7 @@ export default function ScheduleModal({ open, onClose, prompt, title }) {
     }
   }, [open]);
 
-  const nextRun = computeNextRun(cadence, dayOfWeek, dayOfMonth, time);
+  const nextRun = savedSchedule?.next_run_at || computeNextRun(cadence, dayOfWeek, dayOfMonth, time);
   const nextLabel = new Date(nextRun).toLocaleString(undefined, {
     weekday: "short",
     month: "short",
@@ -73,23 +93,34 @@ export default function ScheduleModal({ open, onClose, prompt, title }) {
       : `on day ${dayOfMonth} of each month at ${time}`;
 
   const handleSave = async () => {
-    setSaving(true);
-    try {
-      await base44.entities.Schedule.create({
-        prompt: prompt || "",
-        title: title || "Scheduled workflow",
-        cadence,
-        day_of_week: cadence === "weekly" ? dayOfWeek : null,
-        day_of_month: cadence === "monthly" ? dayOfMonth : null,
-        time,
-        enabled: true,
-        next_run: nextRun,
-      });
-      setSaved(true);
-    } catch (e) {
-      /* ignore */
+    if (!backendRunId) {
+      setError("This result is not attached to a completed AURA run yet.");
+      return;
     }
-    setSaving(false);
+    setSaving(true);
+    setError("");
+    if (notifyCompleted || notifyErrors) requestNotifyPermission();
+    try {
+      const schedule = await createWorkflowSchedule(schedulePayload({
+        backendRunId,
+        historyWorkflowId,
+        title,
+        cadence,
+        dayOfWeek,
+        dayOfMonth,
+        time,
+        approvalMode: approval,
+        notifyCompleted,
+        notifyAttention: notifyErrors,
+      }));
+      setSavedSchedule(schedule);
+      announceWorkflowScheduleChanged({ schedule });
+      onScheduled?.(schedule);
+    } catch (saveError) {
+      setError(saveError?.message || "AURA could not save this schedule. Please try again.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -110,7 +141,7 @@ export default function ScheduleModal({ open, onClose, prompt, title }) {
             transition={{ type: "spring", stiffness: 260, damping: 24 }}
             className="fixed inset-0 z-50 flex items-center justify-center p-4"
           >
-            <div className="w-full max-w-md bg-card border border-white/10 rounded-2xl shadow-2xl pointer-events-auto overflow-hidden">
+            <div className="max-h-[calc(100vh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl border border-white/10 bg-card shadow-2xl pointer-events-auto">
               <div className="flex items-center gap-2 px-5 py-4 border-b border-white/6">
                 <CalendarClock className="w-4 h-4 text-primary" />
                 <h3 className="text-sm font-semibold">Schedule this workflow</h3>
@@ -122,7 +153,7 @@ export default function ScheduleModal({ open, onClose, prompt, title }) {
                 </button>
               </div>
 
-              {saved ? (
+              {savedSchedule ? (
                 <div className="p-6 text-center">
                   <div className="inline-flex p-3 rounded-2xl bg-emerald-400/10 border border-emerald-400/20 mb-3">
                     <Check className="w-6 h-6 text-emerald-400" />
@@ -205,7 +236,7 @@ export default function ScheduleModal({ open, onClose, prompt, title }) {
                   {/* Notify me */}
                   <div>
                     <label className="text-[10px] uppercase tracking-wider text-muted-foreground/60 flex items-center gap-1.5">
-                      <Bell className="w-3 h-3" /> Notify me
+                      <Bell className="w-3 h-3" /> In-app alerts
                     </label>
                     <div className="mt-1.5 space-y-1.5">
                       <button
@@ -215,7 +246,7 @@ export default function ScheduleModal({ open, onClose, prompt, title }) {
                         <span className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${notifyCompleted ? "bg-primary border-primary" : "border-white/15"}`}>
                           {notifyCompleted && <Check className="w-3 h-3 text-primary-foreground" />}
                         </span>
-                        <span className="text-xs">When completed</span>
+                        <span className="text-xs">When a scheduled run completes</span>
                       </button>
                       <button
                         onClick={() => setNotifyErrors((v) => !v)}
@@ -227,6 +258,9 @@ export default function ScheduleModal({ open, onClose, prompt, title }) {
                         <span className="text-xs">Immediately if something needs attention</span>
                       </button>
                     </div>
+                    {(notifyCompleted || notifyErrors) && (
+                      <p className="mt-1.5 text-[10px] text-muted-foreground/50">Browser alerts appear while this AURA page is open.</p>
+                    )}
                     {!notifyCompleted && !notifyErrors && (
                       <p className="text-[10px] text-muted-foreground/50 mt-1.5 flex items-center gap-1">
                         <BellOff className="w-3 h-3" /> You'll only hear from AURA when you open the app.
@@ -252,7 +286,10 @@ export default function ScheduleModal({ open, onClose, prompt, title }) {
                             }`}
                           >
                             <Icon className={`w-3.5 h-3.5 flex-shrink-0 ${active ? "text-primary" : "text-muted-foreground"}`} />
-                            <span className={`text-xs ${active ? "text-primary font-medium" : ""}`}>{opt.label}</span>
+                            <span className="min-w-0 flex-1">
+                              <span className={`block text-xs ${active ? "text-primary font-medium" : ""}`}>{opt.label}</span>
+                              <span className="mt-0.5 block text-[10px] leading-snug text-muted-foreground/60">{opt.detail}</span>
+                            </span>
                             <span className={`ml-auto w-3.5 h-3.5 rounded-full border flex-shrink-0 flex items-center justify-center ${active ? "border-primary bg-primary" : "border-white/15"}`}>
                               {active && <span className="w-1.5 h-1.5 rounded-full bg-primary-foreground" />}
                             </span>
@@ -267,7 +304,12 @@ export default function ScheduleModal({ open, onClose, prompt, title }) {
                       Runs <span className="text-primary font-medium">{summary}</span>
                     </p>
                     <p className="text-[11px] text-muted-foreground mt-1">First run {nextLabel}</p>
+                    <p className="text-[10px] text-muted-foreground/60 mt-1">Timezone: {browserTimezone()}</p>
                   </div>
+
+                  {error && (
+                    <p role="alert" className="text-xs leading-relaxed text-red-300">{error}</p>
+                  )}
 
                   <div className="flex justify-end gap-2 pt-1">
                     <button

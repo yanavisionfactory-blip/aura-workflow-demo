@@ -24,7 +24,18 @@ import CreatorApprovalList from "./CreatorApprovalList";
 import { buildSummaryText } from "@/lib/auraSummary";
 import { meaningfulMetrics, selectPrimaryOutcome, supportingReceipts } from "@/lib/resultPresentation.mjs";
 
-export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, workflowPrompt, activity, prompt, interpretation }) {
+export default function ResultsView({
+  results,
+  onNewWorkflow,
+  onStartWorkflow,
+  workflowPrompt,
+  activity,
+  prompt,
+  interpretation,
+  backendRunId,
+  historyWorkflowId,
+  scheduleTitle,
+}) {
   const isFailure = results.status === "failed" || results.status === "needs_attention";
   const [showModal, setShowModal] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -361,8 +372,9 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
       <ScheduleModal
         open={showSchedule}
         onClose={() => setShowSchedule(false)}
-        prompt={workflowPrompt}
-        title={results.title}
+        title={scheduleTitle || results.title}
+        backendRunId={backendRunId}
+        historyWorkflowId={historyWorkflowId}
       />
     </motion.div>
   );

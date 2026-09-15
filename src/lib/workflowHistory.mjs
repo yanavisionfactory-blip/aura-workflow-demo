@@ -42,12 +42,18 @@ const durationSeconds = (run) => {
 };
 
 export function isExecutedBackendRun(run = {}) {
-  return Boolean(run.id && run.plan_approved && Array.isArray(run.plan?.steps));
+  const scheduled = Boolean(run.execution_context?.schedule?.id);
+  return Boolean(run.id && (
+    (run.plan_approved && Array.isArray(run.plan?.steps))
+    || scheduled
+  ));
 }
 
 export function historyStatusForBackendRun(run = {}) {
   if (run.status === "completed") return "completed";
-  if (FAILED_STATUSES.has(run.status)) return "failed";
+  const scheduledAttention = Boolean(run.execution_context?.schedule?.id)
+    && ["awaiting_approval", "waiting_for_action"].includes(run.status);
+  if (FAILED_STATUSES.has(run.status) || scheduledAttention) return "failed";
   return "running";
 }
 
@@ -111,7 +117,8 @@ export function backendRunNeedsSync(savedRun = null, projectedRun = {}) {
 }
 
 export function workflowForBackendRun(run = {}, workflows = []) {
-  const explicitId = run.inputs?.saved_workflow_id;
+  const explicitId = run.inputs?.saved_workflow_id
+    || run.execution_context?.schedule?.history_workflow_id;
   if (explicitId) {
     const explicit = workflows.find((workflow) => workflow.id === explicitId);
     if (explicit) return explicit;

@@ -498,6 +498,32 @@ export async function listPythonRuns({ active = false, limit = 20 } = {}) {
   return request(`/v1/runs?active=${active ? "true" : "false"}&limit=${limit}`);
 }
 
+export async function createWorkflowSchedule(payload) {
+  await ensureWorkspace();
+  return request("/v1/workflow-schedules", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function listWorkflowSchedules() {
+  await ensureWorkspace();
+  return request("/v1/workflow-schedules");
+}
+
+export async function updateWorkflowSchedule(scheduleId, changes) {
+  await ensureWorkspace();
+  return request(`/v1/workflow-schedules/${scheduleId}`, {
+    method: "PATCH",
+    body: JSON.stringify(changes),
+  });
+}
+
+export async function deleteWorkflowSchedule(scheduleId) {
+  await ensureWorkspace();
+  return request(`/v1/workflow-schedules/${scheduleId}`, { method: "DELETE" });
+}
+
 export async function getResumablePythonRun() {
   const remembered = rememberedActivePythonRun();
   if (remembered) {

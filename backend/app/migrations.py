@@ -95,6 +95,20 @@ async def migrate_database() -> None:
                     "ALTER TABLE workflows ADD COLUMN IF NOT EXISTS variables JSON DEFAULT '{}'::json"
                 )
             )
+            for statement in (
+                "ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS cadence VARCHAR(20) DEFAULT 'interval'",
+                "ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS timezone VARCHAR(100) DEFAULT 'UTC'",
+                "ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS local_time VARCHAR(5) DEFAULT '08:00'",
+                "ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS day_of_week INTEGER",
+                "ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS day_of_month INTEGER",
+                "ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS approval_mode VARCHAR(20) DEFAULT 'writes'",
+                "ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS notify_on_completion BOOLEAN DEFAULT TRUE",
+                "ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS notify_on_attention BOOLEAN DEFAULT TRUE",
+                "ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS history_workflow_id VARCHAR(120)",
+                "ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS last_run_id VARCHAR(36)",
+                "ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS created_by_role VARCHAR(30) DEFAULT 'member'",
+            ):
+                await connection.execute(text(statement))
             await connection.execute(
                 text(
                     "ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS inputs JSON DEFAULT '{}'::json"

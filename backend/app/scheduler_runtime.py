@@ -1,4 +1,7 @@
+import calendar
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import exists, or_, select
 
@@ -6,14 +9,23 @@ from .config import get_settings
 from .db import SessionLocal, engine, set_tenant_context
 from .execution_lock import execution_lock
 from .models import (
+    Approval,
+    ApprovalSnapshot,
     AuditEvent,
+    DispatchIntent,
+    PlanVersion,
+    PolicyConfig,
     RecoveryProbe,
     RunStatus,
+    RunStep,
+    StepStatus,
     Workflow,
     WorkflowRun,
     WorkflowSchedule,
     Workspace,
 )
+from .policy import DEFAULT_POLICY, canonical_plan_hash, evaluate_plan_policy
+from .providers import idempotency_key
 from .run_supervisor import (
     SUPERVISOR_VERSION,
     is_unavoidable_human_blocker,
@@ -30,6 +42,321 @@ async def _workspace_ids() -> list[str]:
 
 def next_occurrence(current: datetime, interval_seconds: int) -> datetime:
     return current + timedelta(seconds=interval_seconds)
+
+
+def _normalized_local(candidate: datetime, timezone: ZoneInfo) -> datetime:
+    """Return a real local instant, advancing through a DST gap when needed."""
+    return candidate.astimezone(UTC).astimezone(timezone)
+
+
+def next_calendar_occurrence(
+    after: datetime,
+    *,
+    cadence: str,
+    timezone: str,
+    local_time: str,
+    day_of_week: int | None = None,
+    day_of_month: int | None = None,
+) -> datetime:
+    """Find the next wall-clock occurrence and return it as UTC.
+
+    ``day_of_week`` follows the browser convention: Sunday=0 through Saturday=6.
+    Monthly dates beyond the end of a month run on that month's final day.
+    """
+    zone = ZoneInfo(timezone)
+    current = after if after.tzinfo else after.replace(tzinfo=UTC)
+    local_now = current.astimezone(zone)
+    hour, minute = (int(part) for part in local_time.split(":", 1))
+
+    def candidate(year: int, month: int, day: int) -> datetime:
+        local = datetime(year, month, day, hour, minute, tzinfo=zone)
+        return _normalized_local(local, zone)
+
+    if cadence == "daily":
+        local_candidate = candidate(local_now.year, local_now.month, local_now.day)
+        if local_candidate <= local_now:
+            tomorrow = local_now.date() + timedelta(days=1)
+            local_candidate = candidate(tomorrow.year, tomorrow.month, tomorrow.day)
+    elif cadence == "weekly":
+        if day_of_week is None:
+            raise ValueError("Weekly schedules require day_of_week")
+        python_weekday = (day_of_week + 6) % 7
+        days_ahead = (python_weekday - local_now.weekday()) % 7
+        target = local_now.date() + timedelta(days=days_ahead)
+        local_candidate = candidate(target.year, target.month, target.day)
+        if local_candidate <= local_now:
+            target += timedelta(days=7)
+            local_candidate = candidate(target.year, target.month, target.day)
+    elif cadence == "monthly":
+        if day_of_month is None:
+            raise ValueError("Monthly schedules require day_of_month")
+
+        def monthly_candidate(year: int, month: int) -> datetime:
+            final_day = calendar.monthrange(year, month)[1]
+            return candidate(year, month, min(day_of_month, final_day))
+
+        local_candidate = monthly_candidate(local_now.year, local_now.month)
+        if local_candidate <= local_now:
+            year = local_now.year + (1 if local_now.month == 12 else 0)
+            month = 1 if local_now.month == 12 else local_now.month + 1
+            local_candidate = monthly_candidate(year, month)
+    else:
+        raise ValueError(f"Unsupported schedule cadence: {cadence}")
+    return local_candidate.astimezone(UTC)
+
+
+def schedule_next_occurrence(schedule: WorkflowSchedule, after: datetime) -> datetime:
+    if schedule.cadence in {"daily", "weekly", "monthly"}:
+        return next_calendar_occurrence(
+            after,
+            cadence=schedule.cadence,
+            timezone=schedule.timezone,
+            local_time=schedule.local_time,
+            day_of_week=schedule.day_of_week,
+            day_of_month=schedule.day_of_month,
+        )
+    return next_occurrence(after, schedule.interval_seconds)
+
+
+def _scheduled_execution_context(schedule: WorkflowSchedule, workflow: Workflow) -> dict:
+    inputs = deepcopy(workflow.variables or {})
+    return {
+        "execution_mode": "unattended",
+        "inputs": inputs,
+        "vars": inputs,
+        "steps": {},
+        "schedule": {
+            "id": schedule.id,
+            "approval_mode": schedule.approval_mode,
+            "history_workflow_id": schedule.history_workflow_id,
+            "notify_on_completion": schedule.notify_on_completion,
+            "notify_on_attention": schedule.notify_on_attention,
+        },
+        "__aura_supervisor__": {
+            "version": SUPERVISOR_VERSION,
+            "owner": "run_supervisor",
+            "phase": "planning" if schedule.approval_mode == "review" else "execution",
+            "status": "active",
+            "attempts": {},
+            "failure_history": [],
+        },
+    }
+
+
+async def _latest_approved_source(session, workflow: Workflow):
+    source = await session.scalar(
+        select(WorkflowRun)
+        .where(
+            WorkflowRun.workspace_id == workflow.workspace_id,
+            WorkflowRun.workflow_id == workflow.id,
+            WorkflowRun.status == RunStatus.completed,
+            WorkflowRun.plan_approved.is_(True),
+        )
+        .order_by(WorkflowRun.updated_at.desc())
+        .limit(1)
+    )
+    if not source:
+        return None, None, []
+    snapshot = await session.scalar(
+        select(ApprovalSnapshot)
+        .where(ApprovalSnapshot.run_id == source.id)
+        .order_by(ApprovalSnapshot.approved_at.desc())
+        .limit(1)
+    )
+    steps = (
+        await session.scalars(
+            select(RunStep).where(RunStep.run_id == source.id).order_by(RunStep.position)
+        )
+    ).all()
+    return source, snapshot, steps
+
+
+async def _build_review_run(
+    session,
+    schedule: WorkflowSchedule,
+    workflow: Workflow,
+    context: dict,
+    request_key: str,
+    attention_reason: str | None = None,
+) -> WorkflowRun:
+    context["schedule"]["approval_mode"] = "review"
+    context["__aura_supervisor__"]["phase"] = "planning"
+    if attention_reason:
+        context["schedule"]["attention_reason"] = attention_reason
+    run = WorkflowRun(
+        workspace_id=schedule.workspace_id,
+        workflow_id=workflow.id,
+        prompt=workflow.prompt,
+        inputs=deepcopy(workflow.variables or {}),
+        execution_context=context,
+        status=RunStatus.queued,
+        request_key=request_key,
+    )
+    session.add(run)
+    await session.flush()
+    return run
+
+
+async def _build_scheduled_run(
+    session,
+    schedule: WorkflowSchedule,
+    workflow: Workflow,
+    scheduled_for: datetime,
+) -> WorkflowRun:
+    context = _scheduled_execution_context(schedule, workflow)
+    request_key = f"schedule:{schedule.id}:{scheduled_for.isoformat()}"
+    if schedule.approval_mode == "review":
+        return await _build_review_run(
+            session, schedule, workflow, context, request_key
+        )
+
+    source, source_snapshot, source_steps = await _latest_approved_source(session, workflow)
+    if not source or not source_snapshot or not source_steps:
+        # A missing immutable approval can never be repaired by guessing. Prepare a
+        # fresh plan for review and preserve the recurring schedule.
+        return await _build_review_run(
+            session,
+            schedule,
+            workflow,
+            context,
+            request_key,
+            "approved_source_unavailable",
+        )
+
+    plan = deepcopy(source.plan)
+    plan_hash = canonical_plan_hash(plan)
+    if plan_hash != source_snapshot.plan_hash:
+        return await _build_review_run(
+            session,
+            schedule,
+            workflow,
+            context,
+            request_key,
+            "approved_plan_changed",
+        )
+    from .schemas import WorkflowPlan
+
+    current_policy_record = await session.scalar(
+        select(PolicyConfig)
+        .where(
+            PolicyConfig.workspace_id == schedule.workspace_id,
+            PolicyConfig.active.is_(True),
+        )
+        .order_by(PolicyConfig.version.desc())
+        .limit(1)
+    )
+    current_policy = {
+        **DEFAULT_POLICY,
+        **(
+            current_policy_record.configuration
+            if current_policy_record
+            else {}
+        ),
+    }
+    policy_decision = evaluate_plan_policy(
+        WorkflowPlan.model_validate(plan), {}, current_policy
+    )
+    if policy_decision["blocked"]:
+        return await _build_review_run(
+            session,
+            schedule,
+            workflow,
+            context,
+            request_key,
+            "current_policy_requires_review",
+        )
+    context["__aura_authority__"] = {
+        "version": 1,
+        "approved_plan_hash": plan_hash,
+        "allow_autonomous_read_repairs": False,
+        "read_repair_count": 0,
+        "recurring_schedule_id": schedule.id,
+        "recurring_authority_mode": schedule.approval_mode,
+    }
+    run = WorkflowRun(
+        workspace_id=schedule.workspace_id,
+        workflow_id=workflow.id,
+        prompt=workflow.prompt,
+        inputs=deepcopy(workflow.variables or {}),
+        execution_context=context,
+        status=RunStatus.running,
+        plan=plan,
+        plan_approved=True,
+        request_key=request_key,
+    )
+    session.add(run)
+    await session.flush()
+    plan_version = PlanVersion(
+        workspace_id=schedule.workspace_id,
+        run_id=run.id,
+        version=1,
+        status="approved",
+        plan=plan,
+        plan_hash=plan_hash,
+        created_by=schedule.created_by,
+        approved_at=datetime.now(UTC),
+    )
+    session.add(plan_version)
+    await session.flush()
+    session.add(
+        ApprovalSnapshot(
+            workspace_id=schedule.workspace_id,
+            run_id=run.id,
+            plan_version_id=plan_version.id,
+            plan_hash=plan_hash,
+            approver_subject=schedule.created_by,
+            approver_role=schedule.created_by_role,
+            policy_snapshot=current_policy,
+            permission_snapshot=deepcopy(source_snapshot.permission_snapshot),
+            risk_snapshot=deepcopy(source_snapshot.risk_snapshot),
+            cost_snapshot=deepcopy(source_snapshot.cost_snapshot),
+        )
+    )
+    for stored in source_steps:
+        step = RunStep(
+            run_id=run.id,
+            position=stored.position,
+            step_key=stored.step_key,
+            agent=stored.agent,
+            tool_slug=stored.tool_slug,
+            operation=stored.operation,
+            arguments=deepcopy(stored.arguments),
+            depends_on=deepcopy(stored.depends_on),
+            dependency_mode=stored.dependency_mode,
+            condition=deepcopy(stored.condition),
+            output_variables=deepcopy(stored.output_variables),
+            consequential=stored.consequential,
+            status=(
+                StepStatus.awaiting_approval
+                if stored.consequential and schedule.approval_mode == "writes"
+                else StepStatus.pending
+            ),
+            idempotency_key=idempotency_key(
+                run.id, stored.position, stored.operation, stored.arguments
+            ),
+        )
+        session.add(step)
+        await session.flush()
+        if stored.consequential:
+            approval = Approval(
+                run_id=run.id,
+                step_id=step.id,
+                status="pending" if schedule.approval_mode == "writes" else "approved",
+                preview={"status": "preparing"},
+                decided_by=(schedule.created_by if schedule.approval_mode == "auto" else None),
+                decided_at=(datetime.now(UTC) if schedule.approval_mode == "auto" else None),
+            )
+            session.add(approval)
+            await session.flush()
+            step.approval_id = approval.id
+    session.add(
+        DispatchIntent(
+            workspace_id=schedule.workspace_id,
+            run_id=run.id,
+            kind="execute",
+        )
+    )
+    return run
 
 
 def recovery_action(status: RunStatus, execution_context: dict | None = None) -> str | None:
@@ -96,38 +423,34 @@ async def dispatch_due_schedules(now: datetime | None = None) -> list[tuple[str,
                 if not workflow or not workflow.enabled:
                     schedule.enabled = False
                     continue
-                run = WorkflowRun(
-                    workspace_id=schedule.workspace_id,
-                    workflow_id=workflow.id,
-                    prompt=workflow.prompt,
-                    inputs=workflow.variables,
-                    execution_context={
-                        "execution_mode": "unattended",
-                        "inputs": workflow.variables,
-                        "vars": workflow.variables,
-                        "steps": {},
-                        "__aura_supervisor__": {
-                            "version": SUPERVISOR_VERSION,
-                            "owner": "run_supervisor",
-                            "phase": "planning",
-                            "status": "active",
-                            "attempts": {},
-                            "failure_history": [],
-                        },
-                    },
-                    status=RunStatus.queued,
+                scheduled_for = schedule.next_run_at
+                run = await _build_scheduled_run(
+                    session, schedule, workflow, scheduled_for
                 )
-                session.add(run)
-                await session.flush()
                 schedule.last_run_at = current
-                schedule.next_run_at = next_occurrence(current, schedule.interval_seconds)
+                schedule.last_run_id = run.id
+                schedule.next_run_at = schedule_next_occurrence(schedule, current)
+                session.add(
+                    AuditEvent(
+                        workspace_id=schedule.workspace_id,
+                        run_id=run.id,
+                        actor=schedule.created_by,
+                        event_type="run.created",
+                        payload={"schedule_id": schedule.id, "scheduled_for": scheduled_for.isoformat()},
+                    )
+                )
                 session.add(
                     AuditEvent(
                         workspace_id=schedule.workspace_id,
                         run_id=run.id,
                         actor="workflow-scheduler",
                         event_type="schedule.dispatched",
-                        payload={"schedule_id": schedule.id, "workflow_id": workflow.id},
+                        payload={
+                            "schedule_id": schedule.id,
+                            "workflow_id": workflow.id,
+                            "scheduled_for": scheduled_for.isoformat(),
+                            "approval_mode": schedule.approval_mode,
+                        },
                     )
                 )
                 dispatched.append((run.id, schedule.workspace_id))
