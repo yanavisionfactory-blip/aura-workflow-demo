@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useLayoutEffect, useMemo, useState } from "react";
 import { useAuth as useClerkAuth, useUser } from "@clerk/react";
 
 import {
@@ -26,7 +26,7 @@ export const AuthProvider = ({ children }) => {
   const [isLoadingWorkspace, setIsLoadingWorkspace] = useState(false);
   const [reconnectSequence, setReconnectSequence] = useState(0);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     setAuraTokenProvider((options) => clerk.getToken(options));
     return () => setAuraTokenProvider(null);
   }, [clerk.getToken]);
@@ -38,7 +38,7 @@ export const AuthProvider = ({ children }) => {
     return rows;
   }, [clerk.isLoaded, clerk.isSignedIn]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!clerk.isLoaded || !clerk.isSignedIn) {
       clearWorkspace();
       setWorkspace(null);

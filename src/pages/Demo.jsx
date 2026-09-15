@@ -16,9 +16,10 @@ import HistoryPanel from "@/components/aura/HistoryPanel";
 import EditRunReviewModal from "@/components/aura/EditRunReviewModal";
 import { detectNewConsequential } from "@/lib/editRunDetect";
 import { requestNotifyPermission, notifyWorkflowComplete, notifyWorkflowError } from "@/lib/auraNotify";
-import { connectTool, hydrateConnections } from "@/lib/connectService";
+import { connectTool } from "@/lib/connectService";
 import { getAllConnections } from "@/lib/connectionsStore";
 import { CATALOG, catalogEntryFor } from "@/lib/toolCatalog";
+import { announceWorkflowHistoryChanged } from "@/lib/workflowHistory.mjs";
 import {
   approvePythonPlan,
   cancelPythonRun,
@@ -920,6 +921,7 @@ Rules:
 
     historySavePromiseRef.current = (async () => {
       let workflowId = currentWorkflowIdRef.current;
+      let savedWorkflow = null;
       const now = new Date().toISOString();
       const name = workflowName || plan?.workflowName || originalPromptRef.current.slice(0, 60) || "Workflow";
       const workflowUpdate = {
@@ -935,23 +937,23 @@ Rules:
           .catch(() => []);
         if (existing) {
           workflowId = existing.id;
-          await aura.entities.Workflow.update(existing.id, {
+          savedWorkflow = await aura.entities.Workflow.update(existing.id, {
             ...workflowUpdate,
             run_count: (Number(existing.run_count) || 0) + 1,
           });
         } else {
-          const workflow = await aura.entities.Workflow.create({
+          savedWorkflow = await aura.entities.Workflow.create({
             name,
             prompt: originalPromptRef.current,
             ...workflowUpdate,
             run_count: 1,
           });
-          workflowId = workflow.id;
+          workflowId = savedWorkflow.id;
         }
         currentWorkflowIdRef.current = workflowId;
       } else {
         const [existing] = await aura.entities.Workflow.filter({ id: workflowId }, "-created_date", 1);
-        await aura.entities.Workflow.update(workflowId, {
+        savedWorkflow = await aura.entities.Workflow.update(workflowId, {
           ...workflowUpdate,
           ...(workflowName ? { name: workflowName } : {}),
           run_count: (Number(existing?.run_count) || 0) + 1,
@@ -969,6 +971,7 @@ Rules:
         backend_updated_at: now,
       });
       currentRunIdRef.current = savedRun.id;
+      announceWorkflowHistoryChanged({ workflow: savedWorkflow, run: savedRun });
       return savedRun.id;
     })();
 
@@ -1432,9 +1435,11 @@ Generate a results summary in plain, human-friendly language (not technical).
       notifyWorkflowError(res.title || originalPromptRef.current);
     }
 
+    let updatedRun = null;
+    let updatedWorkflow = null;
     if (currentRunIdRef.current) {
       try {
-        await aura.entities.WorkflowRun.update(currentRunIdRef.current, {
+        updatedRun = await aura.entities.WorkflowRun.update(currentRunIdRef.current, {
           status: executionStatus === "failed" || errorMsg ? "failed" : "completed",
           title: workflowName || res.title,
           summary: res.summary,
@@ -1457,13 +1462,17 @@ Generate a results summary in plain, human-friendly language (not technical).
           steps: approvedStepsRef.current,
         };
         if (workflowName) wfSet.name = workflowName;
-        await aura.entities.Workflow.updateMany(
+        const updated = await aura.entities.Workflow.updateMany(
           { id: currentWorkflowIdRef.current },
           { $set: wfSet }
         );
+        updatedWorkflow = updated[0] || null;
       } catch (e) {
         /* ignore */
       }
+    }
+    if (updatedRun || updatedWorkflow) {
+      announceWorkflowHistoryChanged({ workflow: updatedWorkflow, run: updatedRun });
     }
   };
 
@@ -1579,7 +1588,7 @@ Generate a results summary in plain, human-friendly language (not technical).
           last_summary: m.results.summary,
           run_count: 1,
         });
-        await aura.entities.WorkflowRun.create({
+        const run = await aura.entities.WorkflowRun.create({
           prompt: PROMPT,
           status: "completed",
           workflow_id: wf.id,
@@ -1590,6 +1599,7 @@ Generate a results summary in plain, human-friendly language (not technical).
           steps: m.plan.steps,
           duration_seconds: 11,
         });
+        announceWorkflowHistoryChanged({ workflow: wf, run });
       } catch (e) {
         /* ignore */
       }
@@ -1597,7 +1607,6 @@ Generate a results summary in plain, human-friendly language (not technical).
   }, []);
 
   useEffect(() => {
-    hydrateConnections().catch(() => null);
     return () => {
       pythonPollGenerationRef.current += 1;
       clearTimeouts();

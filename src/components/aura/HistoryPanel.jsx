@@ -1,17 +1,126 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Loader2, Layers } from "lucide-react";
 import { aura } from "@/api/auraClient";
 import { listPythonRuns } from "@/lib/auraApi";
 import {
+  backendRunNeedsSync,
   backendRunHistoryProjection,
   isExecutedBackendRun,
+  upsertHistoryRecord,
+  WORKFLOW_HISTORY_CHANGED_EVENT,
   workflowForBackendRun,
   workflowRollup,
 } from "@/lib/workflowHistory.mjs";
 import WorkflowList from "./WorkflowList";
 import WorkflowDetail from "./WorkflowDetail";
 import HistoryRunDetail from "./HistoryRunDetail";
+
+let reconciliationPromise = null;
+let savedHistoryPromise = null;
+
+async function loadSavedHistory() {
+  if (!savedHistoryPromise) {
+    savedHistoryPromise = Promise.all([
+      aura.entities.Workflow.list("-created_date", 50).catch(() => []),
+      aura.entities.WorkflowRun.list("-created_date", 100).catch(() => []),
+      aura.entities.Schedule.list("-created_date", 50).catch(() => []),
+    ]).then(([workflows, runs, schedules]) => ({ workflows, runs, schedules }))
+      .finally(() => {
+        savedHistoryPromise = null;
+      });
+  }
+  return savedHistoryPromise;
+}
+
+async function reconcileDurableHistory(initialWorkflows, initialRuns) {
+  if (reconciliationPromise) return reconciliationPromise;
+  reconciliationPromise = (async () => {
+    let workflows = initialWorkflows;
+    let runs = initialRuns;
+    const backendRuns = await listPythonRuns({ limit: 100 }).catch(() => []);
+    const executedRuns = backendRuns
+      .filter(isExecutedBackendRun)
+      .sort((a, b) => Date.parse(a.created_at || 0) - Date.parse(b.created_at || 0));
+    let historyChanged = false;
+
+    for (const backendRun of executedRuns) {
+      const projection = backendRunHistoryProjection(backendRun);
+      let savedRun = runs.find((run) => run.backend_run_id === backendRun.id);
+      let workflow = savedRun
+        ? workflows.find((item) => item.id === savedRun.workflow_id)
+        : workflowForBackendRun(backendRun, workflows);
+      try {
+        if (!workflow) {
+          workflow = await aura.entities.Workflow.create({
+            ...projection.workflow,
+            run_count: 0,
+          });
+          workflows = upsertHistoryRecord(workflows, workflow);
+        }
+        const runData = { ...projection.run, workflow_id: workflow.id };
+        if (savedRun && !backendRunNeedsSync(savedRun, runData)) continue;
+        savedRun = savedRun
+          ? await aura.entities.WorkflowRun.update(savedRun.id, runData)
+          : await aura.entities.WorkflowRun.create(runData);
+        runs = upsertHistoryRecord(runs, savedRun);
+        historyChanged = true;
+      } catch (error) {
+        console.warn("Could not synchronize durable workflow history", error);
+      }
+    }
+
+    if (historyChanged) {
+      const updatedWorkflows = await Promise.all(workflows.map(async (workflow) => {
+        const rollup = workflowRollup(workflow.id, runs);
+        if (rollup.run_count === 0) return workflow;
+        try {
+          return await aura.entities.Workflow.update(workflow.id, rollup);
+        } catch (error) {
+          console.warn("Could not update saved workflow summary", error);
+          return workflow;
+        }
+      }));
+      workflows = updatedWorkflows;
+    }
+
+    const orphaned = runs.filter((run) => !run.workflow_id);
+    if (orphaned.length > 0) {
+      const groups = {};
+      orphaned.forEach((run) => { (groups[run.prompt] = groups[run.prompt] || []).push(run); });
+      for (const prompt of Object.keys(groups)) {
+        const group = groups[prompt].sort((a, b) => new Date(b.created_date) - new Date(a.created_date));
+        const latest = group[0];
+        try {
+          const workflow = await aura.entities.Workflow.create({
+            name: (prompt || "Workflow").slice(0, 60),
+            prompt,
+            interpretation: latest.summary || prompt,
+            steps: latest.steps || [],
+            last_run_status: latest.status,
+            last_run_date: latest.created_date,
+            last_summary: latest.summary,
+            run_count: group.length,
+          });
+          await aura.entities.WorkflowRun.updateMany(
+            { id: { $in: group.map((run) => run.id) } },
+            { $set: { workflow_id: workflow.id } }
+          ).catch(() => {});
+        } catch (error) {
+          console.warn("Could not adopt earlier workflow history", error);
+        }
+      }
+      const refreshed = await loadSavedHistory();
+      workflows = refreshed.workflows;
+      runs = refreshed.runs;
+    }
+
+    return { workflows, runs };
+  })().finally(() => {
+    reconciliationPromise = null;
+  });
+  return reconciliationPromise;
+}
 
 export default function HistoryPanel({ open, onClose, onRerun, onEditRun }) {
   const [workflows, setWorkflows] = useState([]);
@@ -20,105 +129,46 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun }) {
   const [selectedWorkflow, setSelectedWorkflow] = useState(null);
   const [selectedRun, setSelectedRun] = useState(null);
   const [loading, setLoading] = useState(true);
+  const hasHistorySnapshot = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadSavedHistory().then((saved) => {
+      if (cancelled) return;
+      hasHistorySnapshot.current = true;
+      setWorkflows(saved.workflows);
+      setRuns(saved.runs);
+      setSchedules(saved.schedules);
+      setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     if (!open) return;
-    setLoading(true);
+    let cancelled = false;
+    setLoading(!hasHistorySnapshot.current);
     (async () => {
-      let [wfs, rs, sch, backendRuns] = await Promise.all([
-        aura.entities.Workflow.list("-created_date", 50).catch(() => []),
-        aura.entities.WorkflowRun.list("-created_date", 100).catch(() => []),
-        aura.entities.Schedule.list("-created_date", 50).catch(() => []),
-        listPythonRuns({ limit: 100 }).catch(() => []),
-      ]);
-
-      // The durable executor is authoritative. Mirror approved executions into
-      // the user-facing saved-workflow records, including runs completed before
-      // this persistence bridge was released.
-      const executedRuns = backendRuns
-        .filter(isExecutedBackendRun)
-        .sort((a, b) => Date.parse(a.created_at || 0) - Date.parse(b.created_at || 0));
-      let historyChanged = false;
-      for (const backendRun of executedRuns) {
-        const projection = backendRunHistoryProjection(backendRun);
-        let savedRun = rs.find((run) => run.backend_run_id === backendRun.id);
-        let workflow = savedRun
-          ? wfs.find((item) => item.id === savedRun.workflow_id)
-          : workflowForBackendRun(backendRun, wfs);
-        try {
-          if (!workflow) {
-            workflow = await aura.entities.Workflow.create({
-              ...projection.workflow,
-              run_count: 0,
-            });
-            wfs = [workflow, ...wfs];
-          }
-          const runData = { ...projection.run, workflow_id: workflow.id };
-          if (savedRun) {
-            savedRun = await aura.entities.WorkflowRun.update(savedRun.id, runData);
-            rs = rs.map((item) => item.id === savedRun.id ? savedRun : item);
-          } else {
-            savedRun = await aura.entities.WorkflowRun.create(runData);
-            rs = [savedRun, ...rs];
-          }
-          historyChanged = true;
-        } catch (error) {
-          console.warn("Could not synchronize durable workflow history", error);
-        }
-      }
-
-      if (historyChanged) {
-        for (const workflow of wfs) {
-          const rollup = workflowRollup(workflow.id, rs);
-          if (rollup.run_count === 0) continue;
-          try {
-            const updated = await aura.entities.Workflow.update(workflow.id, rollup);
-            wfs = wfs.map((item) => item.id === updated.id ? updated : item);
-          } catch (error) {
-            console.warn("Could not update saved workflow summary", error);
-          }
-        }
-      }
-
-      // Backfill: adopt orphaned runs from before the saved-workflow feature
-      const orphaned = rs.filter((r) => !r.workflow_id);
-      if (orphaned.length > 0) {
-        const groups = {};
-        orphaned.forEach((r) => { (groups[r.prompt] = groups[r.prompt] || []).push(r); });
-        for (const prompt of Object.keys(groups)) {
-          const grp = groups[prompt].sort((a, b) => new Date(b.created_date) - new Date(a.created_date));
-          const latest = grp[0];
-          try {
-            const wf = await aura.entities.Workflow.create({
-              name: (prompt || "Workflow").slice(0, 60),
-              prompt,
-              interpretation: latest.summary || prompt,
-              steps: latest.steps || [],
-              last_run_status: latest.status,
-              last_run_date: latest.created_date,
-              last_summary: latest.summary,
-              run_count: grp.length,
-            });
-            await aura.entities.WorkflowRun.updateMany(
-              { id: { $in: grp.map((r) => r.id) } },
-              { $set: { workflow_id: wf.id } }
-            ).catch(() => {});
-          } catch (e) { /* ignore */ }
-        }
-        wfs = await aura.entities.Workflow.list("-created_date", 50).catch(() => wfs);
-        rs = await aura.entities.WorkflowRun.list("-created_date", 100).catch(() => rs);
-      }
-
-      setWorkflows(wfs);
-      setRuns(rs);
-      setSchedules(sch);
+      const saved = await loadSavedHistory();
+      if (cancelled) return;
+      hasHistorySnapshot.current = true;
+      setWorkflows(saved.workflows);
+      setRuns(saved.runs);
+      setSchedules(saved.schedules);
       setLoading(false);
+
+      // Historical repair never blocks the panel. Saved records render first;
+      // the durable executor is reconciled quietly afterward.
+      const reconciled = await reconcileDurableHistory(saved.workflows, saved.runs);
+      if (cancelled) return;
+      setWorkflows(reconciled.workflows);
+      setRuns(reconciled.runs);
     })();
+    return () => { cancelled = true; };
   }, [open]);
 
   // Live updates
   useEffect(() => {
-    if (!open) return;
     const unsubWf = aura.entities.Workflow.subscribe((event) => {
       if (event.type === "create") setWorkflows((p) => [event.data, ...p]);
       else if (event.type === "update") {
@@ -133,8 +183,25 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun }) {
         setSelectedRun((prev) => (prev?.id === event.id ? event.data : prev));
       }
     });
-    return () => { unsubWf(); unsubRun(); };
-  }, [open]);
+    const handleHistoryChanged = (event) => {
+      const { workflow, run } = event.detail || {};
+      if (workflow || run) hasHistorySnapshot.current = true;
+      if (workflow) {
+        setWorkflows((previous) => upsertHistoryRecord(previous, workflow));
+        setSelectedWorkflow((previous) => previous?.id === workflow.id ? workflow : previous);
+      }
+      if (run) {
+        setRuns((previous) => upsertHistoryRecord(previous, run));
+        setSelectedRun((previous) => previous?.id === run.id ? run : previous);
+      }
+    };
+    window.addEventListener(WORKFLOW_HISTORY_CHANGED_EVENT, handleHistoryChanged);
+    return () => {
+      unsubWf();
+      unsubRun();
+      window.removeEventListener(WORKFLOW_HISTORY_CHANGED_EVENT, handleHistoryChanged);
+    };
+  }, []);
 
   const scheduledPrompts = useMemo(
     () => new Set(schedules.map((s) => s.prompt).filter(Boolean)),

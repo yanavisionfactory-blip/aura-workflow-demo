@@ -2,9 +2,10 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { ArrowLeft, CheckCircle2, RefreshCw, Pencil, ChevronDown, ChevronUp, MessageSquare, Users, Mail, FileText, BarChart3, Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { base44 } from "@/api/base44Client";
+import { aura } from "@/api/auraClient";
 import { formatDistanceToNow } from "date-fns";
 import { conjugateAction } from "@/lib/auraVerbs";
+import { announceWorkflowHistoryChanged } from "@/lib/workflowHistory.mjs";
 import RunAgainModal from "./RunAgainModal";
 
 const outcomeIcons = {
@@ -26,7 +27,10 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
   const handleSave = async () => {
     const n = name.trim();
     if (!n || n === run.title) { setEditing(false); setName(run.title || ""); return; }
-    try { await base44.entities.WorkflowRun.update(run.id, { title: n }); } catch (e) { /* ignore */ }
+    try {
+      const updated = await aura.entities.WorkflowRun.update(run.id, { title: n });
+      announceWorkflowHistoryChanged({ run: updated });
+    } catch (e) { /* ignore */ }
     setEditing(false);
   };
 

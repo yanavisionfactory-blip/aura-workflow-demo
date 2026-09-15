@@ -107,7 +107,7 @@ export default function PlanView({
   const [connectionsReady, setConnectionsReady] = useState(false);
   useEffect(() => {
     const unsubscribe = subscribeConnections(setConnections);
-    hydrateConnections()
+    hydrateConnections({ force: true })
       .then(() => setConnectionsReady(true))
       .catch(() => setConnectionsReady(false));
     return () => { unsubscribe(); };

@@ -1,5 +1,19 @@
 const FAILED_STATUSES = new Set(["blocked", "cancelled", "failed"]);
 
+export const WORKFLOW_HISTORY_CHANGED_EVENT = "aura:workflow-history-changed";
+
+export function announceWorkflowHistoryChanged(detail = {}) {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(WORKFLOW_HISTORY_CHANGED_EVENT, { detail }));
+}
+
+export function upsertHistoryRecord(records = [], record = null) {
+  if (!record?.id) return records;
+  const existingIndex = records.findIndex((item) => item.id === record.id);
+  if (existingIndex < 0) return [record, ...records];
+  return records.map((item, index) => index === existingIndex ? record : item);
+}
+
 const displayToolName = (slug = "") => {
   const names = {
     aura: "AURA Intelligence",
@@ -86,6 +100,14 @@ export function backendRunHistoryProjection(run = {}) {
       backend_updated_at: run.updated_at || runDate,
     },
   };
+}
+
+export function backendRunNeedsSync(savedRun = null, projectedRun = {}) {
+  if (!savedRun) return true;
+  return savedRun.backend_updated_at !== projectedRun.backend_updated_at
+    || savedRun.status !== projectedRun.status
+    || savedRun.title !== projectedRun.title
+    || savedRun.summary !== projectedRun.summary;
 }
 
 export function workflowForBackendRun(run = {}, workflows = []) {

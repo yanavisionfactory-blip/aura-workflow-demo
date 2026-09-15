@@ -4,6 +4,7 @@ const API_URL = (import.meta.env.VITE_AURA_API_URL || "").replace(/\/$/, "");
 const WORKSPACE_KEY = "aura_python_workspace_id";
 const ACTIVE_RUN_KEY = "aura_active_python_run_id";
 let tokenProvider = null;
+let workspaceBootstrapPromise = null;
 
 export const pythonRuntimeEnabled = Boolean(API_URL);
 
@@ -79,12 +80,18 @@ export async function ensureWorkspace() {
 }
 
 export async function bootstrapWorkspace(name = "My AURA Workspace") {
-  const workspace = await request(`/v1/auth/bootstrap?name=${encodeURIComponent(name)}`, {
-    method: "POST",
-    workspaceId: null,
-  });
-  selectWorkspace(workspace.workspace_id);
-  return workspace;
+  if (!workspaceBootstrapPromise) {
+    workspaceBootstrapPromise = request(`/v1/auth/bootstrap?name=${encodeURIComponent(name)}`, {
+      method: "POST",
+      workspaceId: null,
+    }).then((workspace) => {
+      selectWorkspace(workspace.workspace_id);
+      return workspace;
+    }).finally(() => {
+      workspaceBootstrapPromise = null;
+    });
+  }
+  return workspaceBootstrapPromise;
 }
 
 export async function listPythonWorkspaces() {
