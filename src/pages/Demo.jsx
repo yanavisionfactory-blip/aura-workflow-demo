@@ -45,6 +45,7 @@ import {
 import { hasDurablePlan, planningRequestPrompt } from "@/lib/runtimePlan.mjs";
 import { weatherStepTitle } from "@/lib/planPresentation.mjs";
 import { instantLanguagePlan, languageDraftPrompt } from "@/lib/languagePlan.mjs";
+import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
 
 const STEP_DURATION = 2.6;
 
@@ -148,14 +149,6 @@ const friendlyStepTitle = (step) => {
   if (/update|change|sync/.test(reason)) return `Update ${tool}`;
   if (/create|add/.test(reason)) return `Create in ${tool}`;
   return `Use ${tool}`;
-};
-
-const resultLinkFromOutputs = (outputs = []) => {
-  for (const output of [...outputs].reverse()) {
-    const url = output?.provider_result?.result_url;
-    if (typeof url === "string" && url.startsWith("https://")) return url;
-  }
-  return null;
 };
 
 const resolvedPreviewStep = (planned, runtime) => {
@@ -1284,11 +1277,16 @@ Rules:
           const outputs = run.result?.outputs || [];
           const synthesis = run.result?.unified_deliverable || {};
           const completedCount = run.result?.completed_steps ?? outputs.length;
-          const resultLink = resultLinkFromOutputs(outputs);
+          const primaryResult = primaryResultFromOutputs(outputs, {
+            title: run.plan?.name || "Workflow completed",
+            summary: synthesis.summary,
+            deliverable: synthesis.deliverable,
+          });
           finishExecution({
             title: run.plan?.name || "Workflow completed",
             summary: synthesis.summary || "AURA completed the requested workflow.",
             metrics: [{ value: String(completedCount), label: completedCount === 1 ? "step completed" : "steps completed" }],
+            primaryResult,
             outcomes: [{
               type: "document",
               title: "Result",
@@ -1297,8 +1295,8 @@ Rules:
                 label: "Summary",
                 detail: synthesis.deliverable || synthesis.summary || "The workflow completed successfully.",
               }],
-              link: resultLink,
-              linkLabel: resultLink ? "View result" : undefined,
+              link: primaryResult.link,
+              linkLabel: primaryResult.linkLabel,
             }],
             nextSteps: [],
           }, null, "completed");

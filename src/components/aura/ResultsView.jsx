@@ -1,39 +1,41 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import {
-  CheckCircle2,
-  ArrowRight,
-  BarChart3,
-  RefreshCw,
-  Zap,
   Activity,
-  Share2,
-  Check,
-  FileDown,
-  Clock,
-  Loader2,
-  CalendarClock,
-  ChevronDown,
-  Plus,
-  Wrench,
   AlertTriangle,
+  ArrowRight,
+  CalendarClock,
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  ExternalLink,
+  FileDown,
+  FileText,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Share2,
+  Zap,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import ProofLine from "./ProofLine";
 import AccessRequestModal from "./AccessRequestModal";
 import BreakdownTable from "./BreakdownTable";
 import ScheduleModal from "./ScheduleModal";
-import FullActivityModal from "./FullActivityModal";
 import CreatorApprovalList from "./CreatorApprovalList";
 import { buildSummaryText } from "@/lib/auraSummary";
-import { INTERFACE_TOOLS } from "@/lib/demoData";
+import { meaningfulMetrics, selectPrimaryOutcome, supportingReceipts } from "@/lib/resultPresentation.mjs";
+
+const statusStyle = {
+  completed: { label: "Completed", dot: "bg-emerald-400", text: "text-emerald-400" },
+  running: { label: "Running", dot: "bg-accent", text: "text-accent" },
+  failed: { label: "Failed", dot: "bg-amber-400", text: "text-amber-400" },
+  pending: { label: "Pending", dot: "bg-slate-500", text: "text-muted-foreground" },
+};
 
 export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, workflowPrompt, activity, prompt, interpretation }) {
   const isFailure = results.status === "failed" || results.status === "needs_attention";
   const [showModal, setShowModal] = useState(false);
-  const resultsSectionRef = useRef(null);
-  const [showActivity, setShowActivity] = useState(false);
-  const [showOutput, setShowOutput] = useState(false);
+  const [showRunDetails, setShowRunDetails] = useState(false);
   const [copied, setCopied] = useState(false);
   const [deferred, setDeferred] = useState(results.deferred || []);
   const [showSchedule, setShowSchedule] = useState(false);
@@ -41,370 +43,367 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   useEffect(() => {
     setDeferred(results.deferred || []);
     if (!results.deferred || results.deferred.length === 0) return;
-    const t = setTimeout(() => {
-      setDeferred((prev) =>
-        prev.map((d, i) =>
-          i === 0
-            ? { ...d, arrived: "2 leads replied — Acme Corp confirmed a call for Thursday, and TechNova asked for pricing. Reply drafts are ready for your review." }
-            : d
-        )
-      );
+    const timer = window.setTimeout(() => {
+      setDeferred((previous) => previous.map((item, index) => index === 0
+        ? { ...item, arrived: "2 leads replied — Acme Corp confirmed a call for Thursday, and TechNova asked for pricing. Reply drafts are ready for your review." }
+        : item));
     }, 9000);
-    return () => clearTimeout(t);
+    return () => window.clearTimeout(timer);
   }, [results.deferred]);
+
+  const primaryResult = useMemo(() => selectPrimaryOutcome(results), [results]);
+  const metrics = useMemo(() => meaningfulMetrics(results.metrics || []), [results.metrics]);
+  const receipts = useMemo(
+    () => supportingReceipts(results, activity || [], primaryResult),
+    [activity, primaryResult, results]
+  );
+  const creatorsOutcome = (results.outcomes || []).find((outcome) =>
+    outcome.type === "creators" && outcome.items?.length > 0
+  );
+  const nextSteps = results.nextSteps || [];
 
   const summaryArgs = {
     title: results.title,
     summary: results.summary,
-    metrics: results.metrics,
+    metrics,
     outcomes: results.outcomes,
     activity,
     prompt,
     interpretation,
-    nextSteps: results.nextSteps,
+    nextSteps,
   };
 
   const handleShare = async () => {
-    const text = buildSummaryText(summaryArgs);
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(buildSummaryText(summaryArgs));
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (e) {
-      /* clipboard unavailable */
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch (error) {
+      console.warn("Could not copy the result summary", error);
     }
   };
 
   const handleDownload = () => {
-    const text = buildSummaryText(summaryArgs);
-    const blob = new Blob([text], { type: "text/plain" });
+    const blob = new Blob([buildSummaryText(summaryArgs)], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `aura-summary-${(results.title || "workflow").replace(/\s+/g, "-").toLowerCase()}.txt`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `aura-summary-${(results.title || "workflow").replace(/\s+/g, "-").toLowerCase()}.txt`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
     URL.revokeObjectURL(url);
   };
 
-  // The concrete, tabular output shown in the "Results" section when there's
-  // no dedicated breakdown table.
-  const outputOutcome = (results.outcomes || []).find((o) => o.items && o.items.length > 0 && o.type !== "creators");
-  // Creators pending the manager's approval (creator-outreach runs only).
-  const creatorsOutcome = (results.outcomes || []).find((o) => o.type === "creators" && o.items && o.items.length > 0);
-
-  const showInternalResult = () => {
-    setShowOutput(true);
-    requestAnimationFrame(() => {
-      resultsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-  };
-
-  // Distinct external tools that actually ran (from the live activity), with
-  // their connection source. Interface tools are tagged "via AURA Interface"
-  // so the difficult-connection arc is visible in the proof block.
-  const toolsUsed = useMemo(() => {
-    const seen = new Set();
-    const out = [];
-    (activity || []).forEach((s) => {
-      if (s.status !== "completed") return;
-      const name = s.tool;
-      if (!name || name === "AURA Intelligence" || seen.has(name)) return;
-      seen.add(name);
-      out.push({ name, viaInterface: !!INTERFACE_TOOLS[name] });
-    });
-    return out;
-  }, [activity]);
-
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="w-full max-w-3xl mx-auto">
-      {/* Completion header */}
       <motion.div
-        initial={{ opacity: 0, scale: 0.9 }}
+        initial={{ opacity: 0, scale: 0.96 }}
         animate={{ opacity: 1, scale: 1 }}
         transition={{ type: "spring", stiffness: 200, damping: 20 }}
         className="text-center mb-6"
       >
         <div className={`inline-flex p-3 rounded-2xl border mb-4 ${isFailure ? "bg-amber-400/10 border-amber-400/20" : "bg-emerald-400/10 border-emerald-400/20 glow-success"}`}>
-          {isFailure ? <AlertTriangle className="w-8 h-8 text-amber-400" /> : <CheckCircle2 className="w-8 h-8 text-emerald-400" />}
+          {isFailure
+            ? <AlertTriangle className="w-8 h-8 text-amber-400" />
+            : <CheckCircle2 className="w-8 h-8 text-emerald-400" />}
         </div>
         <h2 className="text-2xl font-bold mb-1">{results.title || "Workflow complete"}</h2>
         <p className="text-sm text-muted-foreground max-w-xl mx-auto">{results.summary}</p>
       </motion.div>
 
-      {/* Key metrics */}
-      {results.metrics && results.metrics.length > 0 && (
+      {metrics.length > 0 && (
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}
-          className="grid grid-cols-3 gap-3 mb-6"
+          className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6"
         >
-          {results.metrics.map((m, i) => (
-            <div key={i} className="rounded-xl border border-white/6 bg-card/40 p-4 text-center">
-              <div className="text-2xl font-bold">{m.value}</div>
-              <div className="text-xs text-muted-foreground mt-1">{m.label}</div>
+          {metrics.map((metric, index) => (
+            <div key={index} className="rounded-xl border border-white/[0.06] bg-card/40 p-4 text-center">
+              <div className="text-2xl font-bold text-primary">{metric.value}</div>
+              <div className="text-xs text-muted-foreground mt-1">{metric.label}</div>
             </div>
           ))}
         </motion.div>
       )}
 
-      {/* What happened */}
-      {results.outcomes && results.outcomes.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-          className="mb-6"
-        >
-          <h3 className="text-sm font-medium mb-3">What happened</h3>
-          <div className="space-y-2">
-            {results.outcomes.map((outcome, i) => (
-              <ProofLine key={i} outcome={outcome} onDetails={showInternalResult} />
-            ))}
-          </div>
-        </motion.div>
-      )}
-
-      {/* Creators pending approval — approve here, AURA sends the email later */}
-      {creatorsOutcome && <CreatorApprovalList items={creatorsOutcome.items} />}
-
-      {/* Tools used — per-tool proof, with the View activity entry point */}
-      {toolsUsed.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.28 }}
-          className="mb-6 p-4 rounded-xl border border-white/6 bg-card/40"
-        >
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <Wrench className="w-3.5 h-3.5 text-muted-foreground/70" />
-              <h3 className="text-sm font-medium">Tools used</h3>
-            </div>
-            <button
-              onClick={() => setShowActivity(true)}
-              className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full border border-primary/20 text-primary hover:bg-primary/10 transition-colors"
-            >
-              <Activity className="w-3 h-3" /> View activity
-            </button>
-          </div>
-          <div className="flex flex-wrap gap-2 mt-3">
-            {toolsUsed.map((t) => (
-              <div
-                key={t.name}
-                className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-secondary/40 border border-white/8"
-              >
-                <Check className="w-3 h-3 text-emerald-400" />
-                <span className="font-medium">{t.name}</span>
-                {t.viaInterface && (
-                  <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
-                    via AURA Interface
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-        </motion.div>
-      )}
-
-      {/* Results — the actual useful output (table / report / document) */}
-      <motion.div
-        ref={resultsSectionRef}
+      <motion.section
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.35 }}
-        className="mb-6"
+        transition={{ delay: 0.18 }}
+        className="mb-5 overflow-hidden rounded-2xl border border-primary/20 bg-gradient-to-br from-primary/[0.08] via-card/60 to-card/30 shadow-lg shadow-primary/[0.04]"
       >
-        <button
-          onClick={() => setShowOutput((s) => !s)}
-          className="flex items-center gap-2 text-sm font-medium hover:text-primary transition-colors"
-        >
-          <BarChart3 className="w-4 h-4 text-primary" />
-          <span>Results</span>
-          <span className="text-[11px] text-muted-foreground">— the actual output</span>
-          <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform ${showOutput ? "rotate-180" : ""}`} />
-        </button>
-        {showOutput &&
-          (results.breakdown ? (
-            <div className="mt-3">
+        <div className="flex flex-col gap-5 p-5 sm:p-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0 flex-1">
+              <div className="mb-3 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.14em] text-primary">
+                <FileText className="h-4 w-4" />
+                Your result
+              </div>
+              <h3 className="text-lg font-semibold leading-snug">{primaryResult.title || results.title || "Workflow result"}</h3>
+              {primaryResult.provider && (
+                <span className="mt-2 inline-flex rounded-full border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[11px] text-muted-foreground">
+                  Created in {primaryResult.provider}
+                </span>
+              )}
+              <p className="mt-4 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">Preview</p>
+              <p className="mt-1.5 whitespace-pre-line text-sm leading-relaxed text-muted-foreground">
+                {primaryResult.detail || results.summary}
+              </p>
+            </div>
+
+            <div className="flex shrink-0 flex-wrap gap-2 sm:max-w-[15rem] sm:justify-end">
+              {primaryResult.link && (
+                <a
+                  href={primaryResult.link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-primary to-accent px-3.5 py-2 text-xs font-semibold text-white shadow-lg shadow-primary/20"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  {primaryResult.linkLabel || "Open result"}
+                </a>
+              )}
+              {primaryResult.downloadUrl ? (
+                <a
+                  href={primaryResult.downloadUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-2 text-xs font-medium hover:bg-white/[0.08]"
+                >
+                  <FileDown className="h-3.5 w-3.5" /> Download
+                </a>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleDownload}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-2 text-xs font-medium hover:bg-white/[0.08]"
+                >
+                  <FileDown className="h-3.5 w-3.5" /> Download summary
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={handleShare}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-2 text-xs font-medium hover:bg-white/[0.08]"
+              >
+                {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Share2 className="h-3.5 w-3.5" />}
+                {copied ? "Copied" : "Share"}
+              </button>
+            </div>
+          </div>
+
+          {results.breakdown ? (
+            <div className="overflow-hidden rounded-xl border border-white/[0.06] bg-[#090f1e]/55">
               <BreakdownTable breakdown={results.breakdown} />
             </div>
-          ) : outputOutcome ? (
-            <div className="mt-3 rounded-xl border border-white/6 bg-card/40 overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-b border-white/5 bg-card/30">
-                      <th className="text-left font-medium text-muted-foreground/60 px-4 py-2 whitespace-nowrap">Item</th>
-                      <th className="text-left font-medium text-muted-foreground/60 px-4 py-2 whitespace-nowrap">What happened</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {outputOutcome.items.map((it, i) => (
-                      <tr key={i} className="border-b border-white/[0.03] last:border-0 hover:bg-white/[0.02]">
-                        <td className="px-4 py-2 whitespace-nowrap font-medium">{it.label}</td>
-                        <td className="px-4 py-2 text-muted-foreground">{it.detail}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+          ) : primaryResult.items?.length > 0 ? (
+            <div className="grid gap-2 border-t border-white/[0.06] pt-4 sm:grid-cols-2">
+              {primaryResult.items.slice(0, 4).map((item, index) => (
+                <div key={index} className="rounded-xl border border-white/[0.06] bg-[#090f1e]/45 px-3.5 py-3">
+                  <p className="text-sm font-medium">{item.label}</p>
+                  {item.detail && <p className="mt-1 text-xs text-muted-foreground">{item.detail}</p>}
+                </div>
+              ))}
             </div>
-          ) : (
-            <p className="mt-3 text-xs text-muted-foreground">No structured output for this run.</p>
-          ))}
-      </motion.div>
+          ) : null}
+        </div>
+      </motion.section>
 
-      {/* Still tracking — deferred results */}
-      {deferred.length > 0 && (
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.45 }} className="mb-5">
-          <h3 className="text-sm font-medium mb-3 flex items-center gap-2">
-            <Clock className="w-4 h-4 text-accent" />
-            Still tracking
-          </h3>
-          <div className="space-y-2">
-            {deferred.map((d, i) => (
-              <div
-                key={i}
-                className={`p-3 rounded-xl border flex items-start gap-3 ${
-                  d.arrived ? "border-emerald-400/20 bg-emerald-400/[0.03]" : "border-accent/20 bg-card/30"
-                }`}
-              >
-                {d.arrived ? (
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
-                ) : (
-                  <Loader2 className="w-4 h-4 text-accent flex-shrink-0 mt-0.5 animate-spin" />
-                )}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="text-sm font-medium">{d.title}</p>
-                    {!d.arrived && d.eta && (
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-accent/10 text-accent border border-accent/20">{d.eta}</span>
-                    )}
-                    {d.arrived && (
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-400/10 text-emerald-400 border border-emerald-400/20">Arrived</span>
-                    )}
-                  </div>
-                  {d.arrived ? (
-                    <p className="text-xs text-muted-foreground mt-1">{d.arrived}</p>
-                  ) : (
-                    <p className="text-xs text-muted-foreground mt-1">{d.detail}</p>
-                  )}
-                  {!d.arrived && (
-                    <p className="text-[11px] text-muted-foreground/50 mt-1">Aura will keep watching and surface the outcome here when it's ready.</p>
-                  )}
+      {receipts.length > 0 && (
+        <motion.section
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.24 }}
+          className="mb-5"
+        >
+          <h3 className="mb-3 text-sm font-medium">Also completed</h3>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {receipts.map((receipt) => (
+              <div key={receipt.key} className="flex items-start gap-2.5 rounded-xl border border-white/[0.06] bg-card/30 px-3.5 py-3">
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+                <div className="min-w-0">
+                  <p className="text-[11px] font-medium text-muted-foreground">{receipt.tool}</p>
+                  <p className="mt-0.5 text-sm leading-snug">{receipt.title}</p>
                 </div>
               </div>
             ))}
           </div>
-        </motion.div>
+        </motion.section>
       )}
 
-      {/* Suggested next */}
-      {!isFailure && <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }} className="mb-5">
-        <h3 className="text-sm font-medium mb-3 flex items-center gap-2">
-          <ArrowRight className="w-4 h-4 text-primary" />
-          Suggested next
-        </h3>
-        <div className="flex flex-wrap gap-2">
-          {results.nextSteps.map((step, i) => (
-            <button
-              key={i}
-              onClick={() => onStartWorkflow(step)}
-              className="text-xs px-3 py-1.5 rounded-full border border-primary/20 text-primary hover:bg-primary/10 transition-colors"
-            >
-              {step}
-            </button>
-          ))}
-        </div>
-      </motion.div>}
+      {creatorsOutcome && <CreatorApprovalList items={creatorsOutcome.items} />}
 
-      {/* Run this again? */}
-      <motion.div
-        initial={{ opacity: 0, y: 12 }}
+      <motion.section
+        initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.55 }}
-        className="mt-2 mb-4 p-4 rounded-2xl border border-primary/15 bg-primary/[0.04]"
+        transition={{ delay: 0.3 }}
+        className="mb-5 overflow-hidden rounded-xl border border-white/[0.07] bg-card/25"
       >
-        <div className="flex items-center gap-2 mb-1">
-          <p className="text-sm font-medium">What would you like to do next?</p>
-        </div>
-        <p className="text-[11px] text-muted-foreground/70 mb-3">{isFailure ? "AURA saved the completed work. Try again now or adjust the workflow." : "Run it again, automate it for later, or start something new."}</p>
-        <div className="flex gap-2">
-          <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            onClick={() => onStartWorkflow(prompt)}
-            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 text-sm font-medium transition-colors"
-          >
-            <RefreshCw className="w-4 h-4" />
-            Run again
-          </motion.button>
-          {!isFailure && <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            onClick={() => setShowSchedule(true)}
-            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-gradient-to-r from-primary to-accent text-white text-sm font-semibold shadow-lg shadow-primary/20"
-          >
-            <CalendarClock className="w-4 h-4" />
-            Schedule
-          </motion.button>}
-          <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            onClick={onNewWorkflow}
-            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 text-sm font-medium transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            New workflow
-          </motion.button>
-        </div>
-      </motion.div>
-
-      {/* Action footer — proof + connect */}
-      <motion.div
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.6 }}
-        className="flex items-center justify-between gap-3 flex-wrap pt-4 border-t border-white/6"
-      >
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setShowActivity(true)} className="gap-1.5 border-white/10 text-xs">
-            <Activity className="w-3.5 h-3.5" /> Activity
-          </Button>
-          <Button variant="outline" size="sm" onClick={handleShare} className="gap-1.5 border-white/10 text-xs">
-            {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Share2 className="w-3.5 h-3.5" />}
-            {copied ? "Copied" : "Share"}
-          </Button>
-          <Button variant="outline" size="sm" onClick={handleDownload} className="gap-1.5 border-white/10 text-xs">
-            <FileDown className="w-3.5 h-3.5" /> Download
-          </Button>
-        </div>
-        {!isFailure && <motion.button
-          whileHover={{ scale: 1.03 }}
-          whileTap={{ scale: 0.97 }}
-          onClick={() => setShowModal(true)}
-          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-primary to-accent text-white text-xs font-semibold shadow-lg shadow-primary/20"
+        <button
+          type="button"
+          onClick={() => setShowRunDetails((visible) => !visible)}
+          aria-expanded={showRunDetails}
+          className="flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left hover:bg-white/[0.025]"
         >
-          <Zap className="w-3.5 h-3.5" /> Connect & run for real
-        </motion.button>}
-      </motion.div>
+          <span className="flex items-center gap-2 text-sm font-medium">
+            <Activity className="h-4 w-4 text-primary" />
+            {showRunDetails ? "Hide run details" : "View run details"}
+          </span>
+          <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${showRunDetails ? "rotate-180" : ""}`} />
+        </button>
 
-      <FullActivityModal
-        status={results.status}
-        open={showActivity}
-        onClose={() => setShowActivity(false)}
-        activity={activity}
-        title={results.title}
-        summary={results.summary}
-        prompt={prompt}
-        interpretation={interpretation}
-        outcomes={results.outcomes}
-        metrics={results.metrics}
-        nextSteps={results.nextSteps}
-      />
+        {showRunDetails && (
+          <div className="space-y-5 border-t border-white/[0.06] px-4 py-4">
+            {activity?.length > 0 && (
+              <div>
+                <p className="mb-2.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/60">Workflow activity</p>
+                <div className="space-y-2">
+                  {activity.map((step, index) => {
+                    const status = statusStyle[step.status] || statusStyle.pending;
+                    return (
+                      <div key={`${step.tool || "step"}-${index}`} className="flex gap-3 rounded-lg border border-white/5 bg-[#090f1e]/35 p-3">
+                        <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${status.dot}`} />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-xs font-medium">{step.tool || `Step ${index + 1}`}</p>
+                            <span className={`text-[10px] ${status.text}`}>{status.label}</span>
+                          </div>
+                          <p className="mt-1 text-xs text-muted-foreground">{step.action}</p>
+                          {step.liveOutput && <p className="mt-1 text-[11px] text-muted-foreground/70">{step.liveOutput}</p>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {results.outcomes?.length > 0 && (
+              <div>
+                <p className="mb-2.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/60">Output receipts</p>
+                <div className="space-y-2">
+                  {results.outcomes.map((outcome, index) => (
+                    <div key={index} className="space-y-1.5">
+                      <ProofLine outcome={outcome} />
+                      {outcome.items?.length > 0 && (
+                        <div className="ml-4 grid gap-1.5 border-l border-white/[0.06] pl-4 sm:grid-cols-2">
+                          {outcome.items.map((item, itemIndex) => (
+                            <div key={itemIndex} className="rounded-lg bg-white/[0.025] px-3 py-2">
+                              <p className="text-xs font-medium">{item.label}</p>
+                              {item.detail && <p className="mt-0.5 text-[11px] text-muted-foreground">{item.detail}</p>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {deferred.length > 0 && (
+              <div>
+                <p className="mb-2.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/60">Background receipts</p>
+                <div className="space-y-2">
+                  {deferred.map((item, index) => (
+                    <div key={index} className="flex items-start gap-2.5 rounded-lg border border-white/5 bg-[#090f1e]/35 p-3">
+                      {item.arrived
+                        ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+                        : <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-accent" />}
+                      <div>
+                        <p className="text-xs font-medium">{item.title}</p>
+                        <p className="mt-1 text-[11px] text-muted-foreground">{item.arrived || item.detail}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </motion.section>
+
+      <motion.section
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.38 }}
+        className="mb-4 rounded-2xl border border-primary/15 bg-primary/[0.04] p-5"
+      >
+        <h3 className="text-sm font-medium">What would you like to do next?</h3>
+        <p className="mt-1 text-[11px] text-muted-foreground/70">
+          {isFailure
+            ? "AURA saved the completed work. Try again now or adjust the workflow."
+            : "Continue from this result, automate it for later, or start something new."}
+        </p>
+
+        {!isFailure && nextSteps.length > 0 && (
+          <div className="my-4 border-y border-white/[0.06] py-4">
+            <p className="mb-2.5 flex items-center gap-2 text-xs font-medium text-foreground/90">
+              <ArrowRight className="h-3.5 w-3.5 text-primary" /> Suggested next
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {nextSteps.map((step, index) => (
+                <button
+                  key={index}
+                  type="button"
+                  onClick={() => onStartWorkflow(step)}
+                  className="rounded-full border border-primary/20 px-3 py-1.5 text-xs text-primary transition-colors hover:bg-primary/10"
+                >
+                  {step}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className={`mt-4 grid gap-2 ${isFailure ? "grid-cols-2" : "grid-cols-1 sm:grid-cols-3"}`}>
+          <motion.button
+            whileHover={{ scale: 1.01 }}
+            whileTap={{ scale: 0.99 }}
+            type="button"
+            onClick={() => onStartWorkflow(prompt)}
+            className="flex items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-sm font-medium transition-colors hover:bg-white/10"
+          >
+            <RefreshCw className="h-4 w-4" /> Run again
+          </motion.button>
+          {!isFailure && (
+            <motion.button
+              whileHover={{ scale: 1.01 }}
+              whileTap={{ scale: 0.99 }}
+              type="button"
+              onClick={() => setShowSchedule(true)}
+              className="flex items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-primary to-accent px-3 py-2.5 text-sm font-semibold text-white shadow-lg shadow-primary/20"
+            >
+              <CalendarClock className="h-4 w-4" /> Schedule
+            </motion.button>
+          )}
+          <motion.button
+            whileHover={{ scale: 1.01 }}
+            whileTap={{ scale: 0.99 }}
+            type="button"
+            onClick={onNewWorkflow}
+            className="flex items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-sm font-medium transition-colors hover:bg-white/10"
+          >
+            <Plus className="h-4 w-4" /> New workflow
+          </motion.button>
+        </div>
+      </motion.section>
+
+      {!isFailure && (
+        <div className="flex justify-end border-t border-white/[0.06] pt-4">
+          <motion.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            type="button"
+            onClick={() => setShowModal(true)}
+            className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-primary to-accent px-3.5 py-2 text-xs font-semibold text-white shadow-lg shadow-primary/20"
+          >
+            <Zap className="h-3.5 w-3.5" /> Connect & run for real
+          </motion.button>
+        </div>
+      )}
 
       <AccessRequestModal open={showModal} onClose={() => setShowModal(false)} workflowPrompt={workflowPrompt} />
       <ScheduleModal
