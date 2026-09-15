@@ -16,7 +16,7 @@ test("process counters do not masquerade as meaningful result metrics", () => {
   ]), [{ value: "18°C", label: "afternoon temperature" }]);
 });
 
-test("a Canva deliverable remains primary when Gmail runs afterward", () => {
+test("email delivery becomes primary while preserving the attached Canva result", () => {
   const primary = primaryResultFromOutputs([
     {
       tool: "canva",
@@ -26,12 +26,34 @@ test("a Canva deliverable remains primary when Gmail runs afterward", () => {
     {
       tool: "google",
       operation: "gmail.send",
-      provider_result: { result_url: "https://mail.google.com/mail/u/0/#sent/message-1" },
+      provider_result: {
+        result_url: "https://mail.google.com/mail/u/0/#sent/message-1",
+        recipient: "yana@example.com",
+        subject: "Munich weather forecast",
+        attachments: [{ filename: "munich-weather.pdf" }],
+      },
     },
   ], {
     title: "Munich weather presentation",
     deliverable: "A populated presentation using tomorrow's forecast.",
   });
+
+  assert.equal(primary.provider, "Gmail");
+  assert.equal(primary.providerVerb, "Sent with");
+  assert.equal(primary.link, "https://mail.google.com/mail/u/0/#sent/message-1");
+  assert.equal(primary.linkLabel, "Open in Gmail");
+  assert.equal(primary.recipient, "yana@example.com");
+  assert.equal(primary.artifact.provider, "Canva");
+  assert.equal(primary.artifact.link, "https://www.canva.com/design/design-123/edit");
+  assert.equal(primary.artifact.linkLabel, "View presentation");
+});
+
+test("a Canva presentation remains primary when it is not delivered elsewhere", () => {
+  const primary = primaryResultFromOutputs([{
+    tool: "canva",
+    operation: "canva.presentation.create",
+    provider_result: { job: { result: { designs: [{ id: "design-123" }] } } },
+  }], { title: "Munich weather presentation" });
 
   assert.equal(primary.provider, "Canva");
   assert.equal(primary.link, "https://www.canva.com/design/design-123/edit");
@@ -98,21 +120,24 @@ test("provider aliases keep supporting receipts from repeating the primary resul
   assert.deepEqual(receipts.map((receipt) => receipt.tool), ["Meta Ads"]);
 });
 
-test("supporting receipts omit the primary tool and unfinished steps", () => {
+test("supporting receipts omit the final delivery tool and retain creation receipts", () => {
   const receipts = supportingReceipts({}, [
     { tool: "AURA Intelligence", action: "Check Munich weather", status: "completed", liveOutput: "→ Forecast retrieved" },
     { tool: "Canva", action: "Create presentation", status: "completed", liveOutput: "→ Presentation created" },
     { tool: "Gmail", action: "Email presentation", status: "completed", liveOutput: "→ Email delivered" },
     { tool: "Slack", action: "Post a message", status: "failed" },
-  ], { provider: "Canva" });
-  assert.deepEqual(receipts.map((receipt) => receipt.tool), ["AURA Intelligence", "Gmail"]);
-  assert.deepEqual(receipts.map((receipt) => receipt.title), ["Forecast retrieved", "Email delivered"]);
+  ], { provider: "Gmail" });
+  assert.deepEqual(receipts.map((receipt) => receipt.tool), ["AURA Intelligence", "Canva"]);
+  assert.deepEqual(receipts.map((receipt) => receipt.title), ["Forecast retrieved", "Presentation created"]);
 });
 
 test("the results UI has one deliverable and one run-details disclosure", () => {
   const source = readFileSync(new URL("../src/components/aura/ResultsView.jsx", import.meta.url), "utf8");
   assert.equal(source.includes("Your result"), true);
   assert.equal(source.includes(">Preview</p>"), true);
+  assert.equal(source.includes("Sent email"), true);
+  assert.equal(source.includes("View presentation"), true);
+  assert.equal(source.includes("Attached and delivered"), true);
   assert.equal(source.includes("Also completed"), true);
   assert.equal(source.includes("View run details"), true);
   assert.equal(source.includes("outcome.items.map"), true);

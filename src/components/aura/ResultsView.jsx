@@ -12,7 +12,10 @@ import {
   FileDown,
   FileText,
   Loader2,
+  MailCheck,
+  Paperclip,
   Plus,
+  Presentation,
   RefreshCw,
   Share2,
   Zap,
@@ -144,13 +147,34 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
               <h3 className="text-lg font-semibold leading-snug">{primaryResult.title || results.title || "Workflow result"}</h3>
               {primaryResult.provider && (
                 <span className="mt-2 inline-flex rounded-full border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[11px] text-muted-foreground">
-                  Created in {primaryResult.provider}
+                  {primaryResult.providerVerb || "Created in"} {primaryResult.provider}
                 </span>
               )}
-              <p className="mt-4 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">Preview</p>
-              <p className="mt-1.5 whitespace-pre-line text-sm leading-relaxed text-muted-foreground">
-                {primaryResult.detail || results.summary}
-              </p>
+              {primaryResult.kind === "email" ? (
+                <div className="mt-4 overflow-hidden rounded-xl border border-white/[0.07] bg-[#090f1e]/45">
+                  <div className="flex items-center gap-2 border-b border-white/[0.06] px-3.5 py-3 text-xs font-medium">
+                    <MailCheck className="h-4 w-4 text-primary" /> Sent email
+                  </div>
+                  <div className="space-y-2 px-3.5 py-3 text-xs">
+                    {primaryResult.recipient && (
+                      <p><span className="text-muted-foreground">To:</span> {primaryResult.recipient}</p>
+                    )}
+                    {primaryResult.subject && (
+                      <p><span className="text-muted-foreground">Subject:</span> {primaryResult.subject}</p>
+                    )}
+                    <p className="whitespace-pre-line border-t border-white/[0.06] pt-2.5 leading-relaxed text-muted-foreground">
+                      {primaryResult.body || primaryResult.detail || results.summary}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <p className="mt-4 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">Preview</p>
+                  <p className="mt-1.5 whitespace-pre-line text-sm leading-relaxed text-muted-foreground">
+                    {primaryResult.detail || results.summary}
+                  </p>
+                </>
+              )}
             </div>
 
             <div className="flex shrink-0 flex-wrap gap-2 sm:max-w-[15rem] sm:justify-end">
@@ -163,6 +187,17 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
                 >
                   <ExternalLink className="h-3.5 w-3.5" />
                   {primaryResult.linkLabel || "Open result"}
+                </a>
+              )}
+              {primaryResult.artifact?.link && (
+                <a
+                  href={primaryResult.artifact.link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-primary/25 bg-primary/[0.06] px-3.5 py-2 text-xs font-medium text-primary hover:bg-primary/[0.12]"
+                >
+                  <Presentation className="h-3.5 w-3.5" />
+                  {primaryResult.artifact.linkLabel || "View presentation"}
                 </a>
               )}
               {primaryResult.downloadUrl ? (
@@ -197,6 +232,21 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
           {results.breakdown ? (
             <div className="overflow-hidden rounded-xl border border-white/[0.06] bg-[#090f1e]/55">
               <BreakdownTable breakdown={results.breakdown} />
+            </div>
+          ) : primaryResult.artifact ? (
+            <div className="flex flex-col gap-3 border-t border-white/[0.06] pt-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                  <Paperclip className="h-4 w-4" />
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium">{primaryResult.artifact.title}</p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    {primaryResult.attachments?.[0]?.filename || `Created in ${primaryResult.artifact.provider}`}
+                  </p>
+                </div>
+              </div>
+              <span className="shrink-0 text-[11px] font-medium text-emerald-400">Attached and delivered</span>
             </div>
           ) : primaryResult.items?.length > 0 ? (
             <div className="grid gap-2 border-t border-white/[0.06] pt-4 sm:grid-cols-2">

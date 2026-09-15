@@ -1283,8 +1283,8 @@ Rules:
             deliverable: synthesis.deliverable,
           });
           finishExecution({
-            title: run.plan?.name || "Workflow completed",
-            summary: synthesis.summary || "AURA completed the requested workflow.",
+            title: primaryResult.completionTitle || run.plan?.name || "Workflow completed",
+            summary: primaryResult.completionSummary || synthesis.summary || "AURA completed the requested workflow.",
             metrics: [{ value: String(completedCount), label: completedCount === 1 ? "step completed" : "steps completed" }],
             primaryResult,
             outcomes: [{

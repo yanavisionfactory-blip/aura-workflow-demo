@@ -158,6 +158,29 @@ const canvaDownloadUrl = (outputs = []) => {
   return null;
 };
 
+const canvaArtifactFromOutputs = (outputs = [], context = {}) => {
+  const canva = outputs.find((output) => output.operation === "canva.presentation.create");
+  if (!canva) return null;
+  const result = canva.provider_result || {};
+  const designId = canvaDesignId(result);
+  const link = safeHttpsUrl(result.result_url)
+    || (designId ? `https://www.canva.com/design/${encodeURIComponent(designId)}/edit` : null);
+  return {
+    title: context.artifactTitle || context.title || "Canva presentation",
+    provider: "Canva",
+    kind: "presentation",
+    link,
+    linkLabel: "View presentation",
+    downloadUrl: canvaDownloadUrl(outputs),
+  };
+};
+
+const sentTitle = (value = "") => {
+  const title = String(value).trim();
+  if (!title) return "Email sent";
+  return /\b(sent|emailed|delivered)\b/i.test(title) ? title : `${title} sent`;
+};
+
 const outputScore = (output = {}, contextTitle = "") => {
   const operation = String(output.operation || "").toLowerCase();
   const provider = providerForOutput(output);
@@ -172,20 +195,43 @@ const outputScore = (output = {}, contextTitle = "") => {
 
 export function primaryResultFromOutputs(outputs = [], context = {}) {
   const completed = outputs.filter((output) => output && typeof output === "object");
-  const canva = completed.find((output) => output.operation === "canva.presentation.create");
-  if (canva) {
-    const result = canva.provider_result || {};
-    const designId = canvaDesignId(result);
-    const openUrl = safeHttpsUrl(result.result_url)
-      || (designId ? `https://www.canva.com/design/${encodeURIComponent(designId)}/edit` : null);
+  const gmail = [...completed].reverse().find((output) => output.operation === "gmail.send");
+  const artifact = canvaArtifactFromOutputs(completed, context);
+  if (gmail) {
+    const receipt = gmail.provider_result || {};
+    const recipient = String(receipt.recipient || gmail.resolved_arguments?.to || "").trim();
+    const subject = String(receipt.subject || gmail.resolved_arguments?.subject || "").trim();
+    const body = String(receipt.body || gmail.resolved_arguments?.body || "").trim();
+    const attachments = Array.isArray(receipt.attachments)
+      ? receipt.attachments
+      : (Array.isArray(gmail.resolved_arguments?.attachments) ? gmail.resolved_arguments.attachments : []);
+    const link = safeHttpsUrl(receipt.result_url);
     return {
-      title: context.title || "Canva presentation",
+      title: sentTitle(context.title),
+      completionTitle: sentTitle(context.title),
+      completionSummary: recipient
+        ? `Delivered through Gmail to ${recipient}${artifact ? " with the finished presentation attached." : "."}`
+        : `Delivered through Gmail${artifact ? " with the finished presentation attached." : "."}`,
+      detail: context.deliverable || context.summary || "The requested email was sent successfully.",
+      provider: "Gmail",
+      providerVerb: "Sent with",
+      kind: "email",
+      link,
+      linkLabel: "Open in Gmail",
+      recipient,
+      subject,
+      body,
+      attachments,
+      artifact,
+      downloadUrl: artifact?.downloadUrl || null,
+    };
+  }
+
+  if (artifact) {
+    return {
+      ...artifact,
       detail: context.deliverable || context.summary || "Your presentation is ready.",
-      provider: "Canva",
-      kind: "presentation",
-      link: openUrl,
       linkLabel: "Open in Canva",
-      downloadUrl: canvaDownloadUrl(completed),
     };
   }
 
