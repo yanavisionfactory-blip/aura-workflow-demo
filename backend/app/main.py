@@ -61,6 +61,10 @@ from .models import (
     PlanVersion,
     PolicyConfig,
     PollingSubscription,
+    ProcessDefinition,
+    ProcessEvent,
+    ProcessInstance,
+    ProcessStageRun,
     RecoveryIncident,
     RunStatus,
     RunStep,
@@ -143,6 +147,11 @@ from .schemas import (
     PlanStep,
     PolicyUpdate,
     PollingSubscriptionCreate,
+    ProcessDefinitionCreate,
+    ProcessDefinitionUpdate,
+    ProcessEventCreate,
+    ProcessInstanceAction,
+    ProcessInstanceCreate,
     RecoveryPipelineResult,
     ResumeDecision,
     RunCreate,
@@ -723,9 +732,7 @@ async def list_agent_connections(
     ).all()
     by_tool = {manifest.tool_id: manifest for manifest in manifests}
     return [
-        _agent_connection_view(tool, by_tool[tool.id])
-        for tool in agent_tools
-        if tool.id in by_tool
+        _agent_connection_view(tool, by_tool[tool.id]) for tool in agent_tools if tool.id in by_tool
     ]
 
 
@@ -756,15 +763,17 @@ async def connect_agent(
         ),
         None,
     )
-    normalized_name = "-".join(
-        part for part in "".join(
-            character.lower() if character.isalnum() else " "
-            for character in payload.name
-        ).split() if part
-    )[:70] or "external"
-    digest = hashlib.sha256(
-        f"{payload.protocol}:{registration_endpoint}".encode()
-    ).hexdigest()[:10]
+    normalized_name = (
+        "-".join(
+            part
+            for part in "".join(
+                character.lower() if character.isalnum() else " " for character in payload.name
+            ).split()
+            if part
+        )[:70]
+        or "external"
+    )
+    digest = hashlib.sha256(f"{payload.protocol}:{registration_endpoint}".encode()).hexdigest()[:10]
     slug = f"agent-{normalized_name}-{digest}"
     config = {
         "managed_by": "agent_gateway",
@@ -967,11 +976,15 @@ async def managed_connector_status(
         long_tail_client.configured and len(settings.connector_release_signing_key) >= 32
     )
     dynamic = await released_connectors(session) if client.configured else []
-    discovered = await discovered_marketplace(session) if client.configured else {
-        "providers": [],
-        "provider_count": 0,
-        "refreshed_at": None,
-    }
+    discovered = (
+        await discovered_marketplace(session)
+        if client.configured
+        else {
+            "providers": [],
+            "provider_count": 0,
+            "refreshed_at": None,
+        }
+    )
     discovered_long_tail = (
         await discovered_pipedream_marketplace(session)
         if long_tail_ready
@@ -1104,9 +1117,7 @@ async def managed_connector_status(
         if item.get("connectable")
     ]
     canonical_catalog = _canonical_marketplace_entries(catalog)
-    canonical_marketplace = _canonical_marketplace_entries(
-        list(marketplace_by_provider.values())
-    )
+    canonical_marketplace = _canonical_marketplace_entries(list(marketplace_by_provider.values()))
     return {
         "configured": bool(client.configured or native_ready or long_tail_ready),
         # Only built-ins or signed/canaried releases are selectable. Discovery
@@ -1137,9 +1148,7 @@ async def managed_connector_status(
                 and len(settings.connector_release_signing_key) >= 32
             ),
             "released": len(dynamic_catalog),
-            "last_scan_completed_at": connector_engineer_observation.get(
-                "last_scan_completed_at"
-            ),
+            "last_scan_completed_at": connector_engineer_observation.get("last_scan_completed_at"),
         },
         "connector_broker": {
             "configured": bool(client.configured or native_ready or long_tail_ready),
@@ -1231,9 +1240,7 @@ async def search_connector_broker_apps(
                 "connection_backend": None,
             }
             categories = {
-                str(value).strip().casefold()
-                for value in item.get("categories") or []
-                if value
+                str(value).strip().casefold() for value in item.get("categories") or [] if value
             }
             display_name = str(item.get("display_name") or "").strip()
             display_alias = (
@@ -1243,9 +1250,7 @@ async def search_connector_broker_apps(
             )
             provider_slug = str(item.get("provider") or "").strip()
             vendor_app = (
-                provider_slug[:-4]
-                if provider_slug.casefold().endswith("-mcp")
-                else provider_slug
+                provider_slug[:-4] if provider_slug.casefold().endswith("-mcp") else provider_slug
             )
             exact_aliases = {
                 provider_slug.casefold(),
@@ -1256,14 +1261,9 @@ async def search_connector_broker_apps(
             if long_tail_ready and "mcp" in categories and query in exact_aliases:
                 try:
                     pack = await released_pipedream_pack(session, provider_slug)
-                    if (
-                        pack is None
-                        or pack.definition.get("execution_strategy") != "mcp"
-                    ):
+                    if pack is None or pack.definition.get("execution_strategy") != "mcp":
                         vendor_definition = await long_tail.get_app(vendor_app)
-                        canonical_vendor_app = str(
-                            vendor_definition.get("name_slug") or vendor_app
-                        )
+                        canonical_vendor_app = str(vendor_definition.get("name_slug") or vendor_app)
                         queued = queue_pipedream_certification(
                             {
                                 **vendor_definition,
@@ -1389,8 +1389,7 @@ async def request_marketplace_connector(
             item
             for item in discovered["providers"]
             if str(item.get("provider") or "").casefold() == entry["provider"].casefold()
-            or str(item.get("display_name") or "").casefold()
-            == entry["display_name"].casefold()
+            or str(item.get("display_name") or "").casefold() == entry["display_name"].casefold()
         ),
         None,
     )
@@ -1486,14 +1485,10 @@ async def connector_engineer_status(
                 "version": release.version,
                 "status": release.status,
                 "definition_hash": release.definition_hash,
-                "released_at": release.released_at.isoformat()
-                if release.released_at
-                else None,
+                "released_at": release.released_at.isoformat() if release.released_at else None,
                 "canary": {
                     "passed": (release.evidence or {}).get("canary", {}).get("passed"),
-                    "checked_at": (release.evidence or {}).get("canary", {}).get(
-                        "checked_at"
-                    ),
+                    "checked_at": (release.evidence or {}).get("canary", {}).get("checked_at"),
                     "operation_count": len(
                         (release.evidence or {}).get("canary", {}).get("operations", [])
                     ),
@@ -1509,9 +1504,7 @@ async def connector_engineer_status(
                 "version": release.version,
                 "status": release.status,
                 "definition_hash": release.definition_hash,
-                "certified_at": release.certified_at.isoformat()
-                if release.certified_at
-                else None,
+                "certified_at": release.certified_at.isoformat() if release.certified_at else None,
                 "isolation": (release.evidence or {}).get("isolation") or {},
                 "registry_canary": (release.evidence or {}).get("registry_canary") or {},
             }
@@ -1575,17 +1568,13 @@ async def create_managed_connector_session(
                     selected_reference,
                     include_errors=True,
                     **(
-                        {"integration_id": release_integration_id}
-                        if release_integration_id
-                        else {}
+                        {"integration_id": release_integration_id} if release_integration_id else {}
                     ),
                 )
                 if not scoped:
                     raise HTTPException(404, "Connection not found")
             reconnect_arguments = (
-                {"integration_id": release_integration_id}
-                if release_integration_id
-                else {}
+                {"integration_id": release_integration_id} if release_integration_id else {}
             )
             result = await client.create_reconnect_session(
                 provider,
@@ -1607,11 +1596,7 @@ async def create_managed_connector_session(
                 provider,
                 context.workspace_id,
                 context.subject,
-                **(
-                    {"integration_id": release_integration_id}
-                    if release_integration_id
-                    else {}
-                ),
+                **({"integration_id": release_integration_id} if release_integration_id else {}),
             )
             if len(matches) > 1:
                 raise HTTPException(
@@ -1632,9 +1617,7 @@ async def create_managed_connector_session(
                 existing = matches[0]
                 if release:
                     integration_id = release.integration_id
-                    verification = await verify_released_connection(
-                        client, release, existing
-                    )
+                    verification = await verify_released_connection(client, release, existing)
                 else:
                     integration_id, verification = await client.verify_connection(
                         provider, existing
@@ -1671,9 +1654,7 @@ async def create_managed_connector_session(
                     context.workspace_id,
                     context.subject,
                     **(
-                        {"integration_id": release_integration_id}
-                        if release_integration_id
-                        else {}
+                        {"integration_id": release_integration_id} if release_integration_id else {}
                     ),
                 )
                 result["mode"] = "connect"
@@ -1737,11 +1718,7 @@ async def sync_managed_connector(
             context.subject,
             selected_reference,
             include_errors=True,
-            **(
-                {"integration_id": release_integration_id}
-                if release_integration_id
-                else {}
-            ),
+            **({"integration_id": release_integration_id} if release_integration_id else {}),
         )
     except ManagedConnectorError as exc:
         raise HTTPException(503, str(exc)) from exc
@@ -1979,16 +1956,10 @@ async def _activate_pipedream_account_family(
     packs = await _released_pipedream_family_packs(session, vendor_app)
     if requested_pack.provider_slug not in {item.provider_slug for item in packs}:
         packs.append(requested_pack)
-    existing_family = await _pipedream_family_tools(
-        session, context.workspace_id, vendor_app
-    )
+    existing_family = await _pipedream_family_tools(session, context.workspace_id, vendor_app)
     existing_by_slug = {item.slug: item for item in existing_family}
     holder = next(
-        (
-            item
-            for item in existing_family
-            if item.external_connection_id == account_id
-        ),
+        (item for item in existing_family if item.external_connection_id == account_id),
         None,
     )
     activated: list[ToolConnection] = []
@@ -2031,9 +2002,7 @@ async def _activate_pipedream_account_family(
             "connection_strategy": str(
                 pack.definition.get("connection_strategy") or "secure_credentials"
             ),
-            "execution_strategy": str(
-                pack.definition.get("execution_strategy") or "action"
-            ),
+            "execution_strategy": str(pack.definition.get("execution_strategy") or "action"),
             "capability_pack_id": pack.id,
             "capability_pack_version": pack.version,
             "capability_pack_hash": pack.definition_hash,
@@ -2060,13 +2029,9 @@ async def _activate_pipedream_account_family(
             "canonical_provider": canonical_provider_slug(vendor_app),
         }
         manifest.verified_at = datetime.now(UTC)
-        resumed.update(
-            await _satisfy_matching_connection_requirements(session, context, tool)
-        )
+        resumed.update(await _satisfy_matching_connection_requirements(session, context, tool))
         activated.append(tool)
-    requested_tool = next(
-        item for item in activated if item.slug == requested_pack.provider_slug
-    )
+    requested_tool = next(item for item in activated if item.slug == requested_pack.provider_slug)
     return requested_tool, activated, sorted(resumed)
 
 
@@ -2165,9 +2130,7 @@ async def create_connector_broker_session(
             ((selected_tool.config or {}).get("external_user_id") if selected_tool else None)
             or opaque_external_user_id(context.workspace_id, context.subject, settings)
         )
-        family_tools = await _pipedream_family_tools(
-            session, context.workspace_id, vendor_app
-        )
+        family_tools = await _pipedream_family_tools(session, context.workspace_id, vendor_app)
         reusable = next(
             (
                 item
@@ -2266,9 +2229,7 @@ def _requirement_accepts_tool(requirement: ConnectionRequirement, tool: ToolConn
     }
     capability = str(requirement.capability or "").casefold()
     provider_hint = str(requirement.provider_hint or "").casefold()
-    canonical_hint = (
-        canonical_provider_slug(provider_hint).casefold() if provider_hint else ""
-    )
+    canonical_hint = canonical_provider_slug(provider_hint).casefold() if provider_hint else ""
     allowed = {str(item).casefold() for item in tool.allowed_operations or []}
     providers.update(
         canonical_provider_slug(operation.split(".", 1)[0]).casefold()
@@ -2276,9 +2237,7 @@ def _requirement_accepts_tool(requirement: ConnectionRequirement, tool: ToolConn
         if operation
     )
     capability_family = (
-        canonical_provider_slug(capability.split(".", 1)[0]).casefold()
-        if capability
-        else ""
+        canonical_provider_slug(capability.split(".", 1)[0]).casefold() if capability else ""
     )
     return bool(
         (canonical_hint and canonical_hint in providers)
@@ -2404,9 +2363,7 @@ async def complete_connector_broker_connection(
     )
     vendor_app = str((pack.definition.get("identity") or {}).get("app") or provider)
     try:
-        verification = await client.verify_account(
-            external_user_id, vendor_app, payload.account_id
-        )
+        verification = await client.verify_account(external_user_id, vendor_app, payload.account_id)
     except PipedreamConnectError as exc:
         raise HTTPException(503 if exc.retryable else 409, str(exc)) from exc
     if not verification.get("ok"):
@@ -3372,11 +3329,7 @@ async def test_connection(
         try:
             selected_reference = managed_connection_reference(tool) or tool.config["connection_id"]
             release_id = (tool.config or {}).get("connector_release_id")
-            release = (
-                await session.get(ManagedConnectorRelease, release_id)
-                if release_id
-                else None
-            )
+            release = await session.get(ManagedConnectorRelease, release_id) if release_id else None
             if release_id:
                 from .connector_engineer import release_signature_valid
 
@@ -3387,9 +3340,7 @@ async def test_connection(
                 ):
                     release = await released_connector(session, tool.slug)
                 if not release:
-                    raise ManagedConnectorError(
-                        "The connector release is temporarily unavailable"
-                    )
+                    raise ManagedConnectorError("The connector release is temporarily unavailable")
                 result = await verify_released_connection(
                     managed_connector_client(),
                     release,
@@ -4045,10 +3996,7 @@ async def create_workflow_schedule(
     )
     if not approval_snapshot:
         raise HTTPException(409, "The approved workflow snapshot is unavailable")
-    if (
-        payload.approval_mode == "auto"
-        and approval_snapshot.approver_subject != context.subject
-    ):
+    if payload.approval_mode == "auto" and approval_snapshot.approver_subject != context.subject:
         raise HTTPException(403, "Automatic schedules require your own prior approval")
     if payload.approval_mode == "auto" and context.role not in {"owner", "admin"}:
         source_steps = (
@@ -4191,6 +4139,548 @@ async def delete_workflow_schedule(
         raise HTTPException(404, "Workflow schedule not found")
     await session.delete(schedule)
     await session.commit()
+
+
+def _process_definition_view(
+    definition: ProcessDefinition,
+    *,
+    active_instances: int = 0,
+    completed_instances: int = 0,
+) -> dict:
+    return {
+        "id": definition.id,
+        "name": definition.name,
+        "objective": definition.objective,
+        "context_instructions": definition.context_instructions,
+        "trigger": {
+            "type": definition.trigger_type,
+            **(definition.trigger_config or {}),
+        },
+        "stages": definition.stages,
+        "approval_mode": definition.approval_mode,
+        "failure_policy": definition.failure_policy,
+        "enabled": definition.enabled,
+        "next_trigger_at": definition.next_trigger_at,
+        "version": definition.version,
+        "active_instances": active_instances,
+        "completed_instances": completed_instances,
+        "created_at": definition.created_at,
+        "updated_at": definition.updated_at,
+    }
+
+
+async def _process_instance_view(
+    session: AsyncSession,
+    instance: ProcessInstance,
+    definition: ProcessDefinition | None = None,
+) -> dict:
+    definition = definition or await session.get(ProcessDefinition, instance.process_definition_id)
+    stages = definition.stages if definition and isinstance(definition.stages, list) else []
+    stage = (
+        stages[instance.current_stage_index]
+        if 0 <= instance.current_stage_index < len(stages)
+        else None
+    )
+    run = await session.get(WorkflowRun, instance.last_run_id) if instance.last_run_id else None
+    receipts = (
+        await session.scalars(
+            select(ProcessStageRun)
+            .where(ProcessStageRun.process_instance_id == instance.id)
+            .order_by(ProcessStageRun.position, ProcessStageRun.attempt)
+        )
+    ).all()
+    return {
+        "id": instance.id,
+        "process_definition_id": instance.process_definition_id,
+        "process_name": definition.name if definition else None,
+        "subject_key": instance.subject_key,
+        "status": instance.status,
+        "current_stage_index": instance.current_stage_index,
+        "current_stage_key": instance.current_stage_key,
+        "current_stage_name": stage.get("name") if isinstance(stage, dict) else None,
+        "state": instance.state,
+        "next_wake_at": instance.next_wake_at,
+        "last_run_id": instance.last_run_id,
+        "last_run_status": run.status.value if run else None,
+        "error_code": instance.error_code,
+        "stage_runs": [
+            {
+                "id": receipt.id,
+                "stage_key": receipt.stage_key,
+                "position": receipt.position,
+                "attempt": receipt.attempt,
+                "run_id": receipt.run_id,
+                "status": receipt.status,
+                "started_at": receipt.started_at,
+                "completed_at": receipt.completed_at,
+            }
+            for receipt in receipts
+        ],
+        "started_at": instance.started_at,
+        "completed_at": instance.completed_at,
+        "updated_at": instance.updated_at,
+    }
+
+
+async def _validated_process_stages(
+    session: AsyncSession,
+    payload: ProcessDefinitionCreate,
+    context: TenantContext,
+) -> tuple[list[dict], list[WorkflowRun]]:
+    normalized: list[dict] = []
+    sources: list[WorkflowRun] = []
+    for stage in payload.stages:
+        source = await session.get(WorkflowRun, stage.source_run_id)
+        if (
+            not source
+            or source.workspace_id != context.workspace_id
+            or source.status != RunStatus.completed
+            or not source.plan_approved
+            or not (source.plan or {}).get("steps")
+            or await source_owner(session, context.workspace_id, source.id) != context.subject
+        ):
+            raise HTTPException(
+                409,
+                "Every process stage must use one of your completed, approved workflows",
+            )
+        snapshot = await session.scalar(
+            select(ApprovalSnapshot)
+            .where(ApprovalSnapshot.run_id == source.id)
+            .order_by(ApprovalSnapshot.approved_at.desc())
+            .limit(1)
+        )
+        if not snapshot:
+            raise HTTPException(409, "An approved workflow snapshot is unavailable")
+        if payload.approval_mode == "auto" and snapshot.approver_subject != context.subject:
+            raise HTTPException(403, "Automatic processes require your own prior approval")
+        source_steps = (
+            await session.scalars(select(RunStep).where(RunStep.run_id == source.id))
+        ).all()
+        if (
+            payload.approval_mode == "auto"
+            and context.role not in {"owner", "admin"}
+            and any(item.consequential for item in source_steps)
+        ):
+            raise HTTPException(
+                403,
+                "Automatic processes with external changes require an administrator",
+            )
+
+        workflow = await session.get(Workflow, source.workflow_id) if source.workflow_id else None
+        if not workflow or workflow.workspace_id != context.workspace_id:
+            workflow = Workflow(
+                workspace_id=context.workspace_id,
+                name=stage.name,
+                prompt=source.prompt,
+                plan=source.plan,
+                variables=source.inputs,
+                enabled=True,
+            )
+            session.add(workflow)
+            await session.flush()
+            source.workflow_id = workflow.id
+        else:
+            workflow.enabled = True
+        stored_stage = stage.model_dump(mode="json")
+        stored_stage["workflow_id"] = workflow.id
+        normalized.append(stored_stage)
+        sources.append(source)
+    return normalized, sources
+
+
+@app.post("/v1/processes", status_code=201)
+async def create_process_definition(
+    payload: ProcessDefinitionCreate,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    stages, sources = await _validated_process_stages(session, payload, context)
+    trigger = payload.trigger.model_dump(mode="json", exclude={"type"})
+    trigger = {key: value for key, value in trigger.items() if value is not None}
+    next_trigger_at = None
+    if payload.trigger.type == "schedule":
+        from .scheduler_runtime import next_calendar_occurrence
+
+        next_trigger_at = next_calendar_occurrence(
+            datetime.now(UTC),
+            cadence=payload.trigger.cadence,
+            timezone=payload.trigger.timezone,
+            local_time=payload.trigger.local_time,
+            day_of_week=payload.trigger.day_of_week,
+            day_of_month=payload.trigger.day_of_month,
+        )
+    definition = ProcessDefinition(
+        workspace_id=context.workspace_id,
+        name=payload.name,
+        objective=payload.objective,
+        context_instructions=payload.context_instructions,
+        trigger_type=payload.trigger.type,
+        trigger_config=trigger,
+        stages=stages,
+        approval_mode=payload.approval_mode,
+        failure_policy=payload.failure_policy,
+        next_trigger_at=next_trigger_at,
+        created_by=context.subject,
+        created_by_role=context.role,
+    )
+    session.add(definition)
+    await session.flush()
+    session.add(
+        AuditEvent(
+            workspace_id=context.workspace_id,
+            run_id=sources[0].id,
+            actor=context.subject,
+            event_type="process.definition.created",
+            payload={
+                "process_definition_id": definition.id,
+                "trigger_type": definition.trigger_type,
+                "stage_count": len(stages),
+                "approval_mode": definition.approval_mode,
+                "failure_policy": definition.failure_policy,
+            },
+        )
+    )
+    initial_instance = None
+    if payload.start_immediately:
+        from .process_runtime import advance_process_instance, start_process_instance
+
+        initial_instance, _, _ = await start_process_instance(
+            session,
+            definition,
+            subject_key=None,
+            state={},
+            event_type="process.manual.start",
+            dedupe_key=f"process-create:{definition.id}",
+            actor=context.subject,
+        )
+        await advance_process_instance(session, definition, initial_instance)
+    await session.commit()
+    if initial_instance:
+        await dispatch_pending(context.workspace_id)
+    response = _process_definition_view(definition)
+    response["initial_instance"] = (
+        await _process_instance_view(session, initial_instance, definition)
+        if initial_instance
+        else None
+    )
+    return response
+
+
+@app.get("/v1/processes")
+async def list_process_definitions(
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> list[dict]:
+    definitions = (
+        await session.scalars(
+            select(ProcessDefinition)
+            .where(ProcessDefinition.workspace_id == context.workspace_id)
+            .order_by(ProcessDefinition.created_at.desc())
+        )
+    ).all()
+    status_counts = (
+        await session.execute(
+            select(
+                ProcessInstance.process_definition_id,
+                ProcessInstance.status,
+                func.count(),
+            )
+            .where(ProcessInstance.workspace_id == context.workspace_id)
+            .group_by(ProcessInstance.process_definition_id, ProcessInstance.status)
+        )
+    ).all()
+    counts: dict[str, dict[str, int]] = {}
+    for definition_id, status, count in status_counts:
+        bucket = counts.setdefault(definition_id, {"active": 0, "completed": 0})
+        if status == "completed":
+            bucket["completed"] += int(count)
+        elif status != "stopped":
+            bucket["active"] += int(count)
+    return [
+        _process_definition_view(
+            definition,
+            active_instances=counts.get(definition.id, {}).get("active", 0),
+            completed_instances=counts.get(definition.id, {}).get("completed", 0),
+        )
+        for definition in definitions
+    ]
+
+
+@app.patch("/v1/processes/{process_id}")
+async def update_process_definition(
+    process_id: str,
+    payload: ProcessDefinitionUpdate,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    definition = await session.get(ProcessDefinition, process_id)
+    if not definition or definition.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Process not found")
+    changes = payload.model_dump(exclude_unset=True)
+    structural_fields = {
+        "objective",
+        "context_instructions",
+        "trigger",
+        "stages",
+        "approval_mode",
+        "failure_policy",
+    }
+    if structural_fields & changes.keys():
+        active_instances = await session.scalar(
+            select(func.count())
+            .select_from(ProcessInstance)
+            .where(
+                ProcessInstance.process_definition_id == definition.id,
+                ProcessInstance.status.in_({"pending", "waiting", "waiting_event", "running", "paused"}),
+            )
+        )
+        if active_instances:
+            raise HTTPException(409, "Pause or finish active process cases before editing this process")
+        current_trigger = {
+            "type": definition.trigger_type,
+            **(definition.trigger_config or {}),
+        }
+        candidate = ProcessDefinitionCreate(
+            name=changes.get("name", definition.name),
+            objective=changes.get("objective", definition.objective),
+            context_instructions=changes.get(
+                "context_instructions", definition.context_instructions
+            ),
+            trigger=changes.get("trigger", current_trigger),
+            stages=changes.get("stages", definition.stages),
+            approval_mode=changes.get("approval_mode", definition.approval_mode),
+            failure_policy=changes.get("failure_policy", definition.failure_policy),
+        )
+        normalized_stages, _ = await _validated_process_stages(session, candidate, context)
+        definition.objective = candidate.objective
+        definition.context_instructions = candidate.context_instructions
+        definition.stages = normalized_stages
+        definition.approval_mode = candidate.approval_mode
+        definition.failure_policy = candidate.failure_policy
+        definition.trigger_type = candidate.trigger.type
+        definition.trigger_config = {
+            key: value
+            for key, value in candidate.trigger.model_dump(mode="json", exclude={"type"}).items()
+            if value is not None
+        }
+        if candidate.trigger.type == "schedule":
+            from .scheduler_runtime import next_calendar_occurrence
+
+            definition.next_trigger_at = next_calendar_occurrence(
+                datetime.now(UTC),
+                cadence=candidate.trigger.cadence,
+                timezone=candidate.trigger.timezone,
+                local_time=candidate.trigger.local_time,
+                day_of_week=candidate.trigger.day_of_week,
+                day_of_month=candidate.trigger.day_of_month,
+            )
+        else:
+            definition.next_trigger_at = None
+    if "name" in changes:
+        definition.name = changes["name"]
+    if "enabled" in changes:
+        definition.enabled = changes["enabled"]
+        if definition.enabled and definition.trigger_type == "schedule":
+            trigger = definition.trigger_config or {}
+            from .scheduler_runtime import next_calendar_occurrence
+
+            definition.next_trigger_at = next_calendar_occurrence(
+                datetime.now(UTC),
+                cadence=trigger["cadence"],
+                timezone=trigger.get("timezone", "UTC"),
+                local_time=trigger.get("local_time", "08:00"),
+                day_of_week=trigger.get("day_of_week"),
+                day_of_month=trigger.get("day_of_month"),
+            )
+    if changes:
+        definition.version += 1
+        session.add(
+            AuditEvent(
+                workspace_id=context.workspace_id,
+                run_id=None,
+                actor=context.subject,
+                event_type="process.definition.updated",
+                payload={
+                    "process_definition_id": definition.id,
+                    "changed_fields": sorted(changes),
+                    "version": definition.version,
+                },
+            )
+        )
+    await session.commit()
+    return _process_definition_view(definition)
+
+
+@app.post("/v1/processes/{process_id}/instances", status_code=201)
+async def create_process_instance(
+    process_id: str,
+    payload: ProcessInstanceCreate,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    definition = await session.get(ProcessDefinition, process_id)
+    if not definition or definition.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Process not found")
+    from .process_runtime import advance_process_instance, start_process_instance
+
+    instance, _, _ = await start_process_instance(
+        session,
+        definition,
+        subject_key=payload.subject_key,
+        state=payload.state,
+        event_type="process.manual.start",
+        dedupe_key=f"process-manual:{definition.id}:{secrets.token_urlsafe(18)}",
+        actor=context.subject,
+    )
+    await advance_process_instance(session, definition, instance)
+    await session.commit()
+    await dispatch_pending(context.workspace_id)
+    return await _process_instance_view(session, instance, definition)
+
+
+@app.get("/v1/processes/{process_id}/instances")
+async def list_process_instances(
+    process_id: str,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> list[dict]:
+    definition = await session.get(ProcessDefinition, process_id)
+    if not definition or definition.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Process not found")
+    instances = (
+        await session.scalars(
+            select(ProcessInstance)
+            .where(
+                ProcessInstance.workspace_id == context.workspace_id,
+                ProcessInstance.process_definition_id == process_id,
+            )
+            .order_by(ProcessInstance.created_at.desc())
+            .limit(50)
+        )
+    ).all()
+    return [await _process_instance_view(session, item, definition) for item in instances]
+
+
+@app.post("/v1/process-instances/{instance_id}/actions")
+async def update_process_instance(
+    instance_id: str,
+    payload: ProcessInstanceAction,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    instance = await session.get(ProcessInstance, instance_id)
+    if not instance or instance.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Process instance not found")
+    definition = await session.get(ProcessDefinition, instance.process_definition_id)
+    now = datetime.now(UTC)
+    state = dict(instance.state or {})
+    if payload.action == "pause":
+        if instance.status not in {"pending", "waiting", "waiting_event", "running"}:
+            raise HTTPException(409, "This process instance cannot be paused")
+        state["paused_from"] = instance.status
+        instance.state = state
+        instance.status = "paused"
+        instance.next_wake_at = None
+    elif payload.action == "resume":
+        if instance.status != "paused":
+            raise HTTPException(409, "Only a paused process instance can be resumed")
+        previous = state.pop("paused_from", "pending")
+        instance.state = state
+        instance.status = previous if previous in {"waiting_event", "running"} else "pending"
+        instance.next_wake_at = None if instance.status in {"waiting_event", "running"} else now
+        if instance.status == "running" and not instance.last_run_id:
+            instance.status = "pending"
+            instance.next_wake_at = now
+    else:
+        if instance.status in {"completed", "stopped"}:
+            raise HTTPException(409, "This process instance is already finished")
+        instance.status = "stopped"
+        instance.next_wake_at = None
+        instance.completed_at = now
+    session.add(
+        AuditEvent(
+            workspace_id=context.workspace_id,
+            run_id=instance.last_run_id,
+            actor=context.subject,
+            event_type=f"process.instance.{payload.action}",
+            payload={
+                "process_definition_id": instance.process_definition_id,
+                "process_instance_id": instance.id,
+            },
+        )
+    )
+    if payload.action == "resume" and definition:
+        from .process_runtime import advance_process_instance
+
+        await advance_process_instance(session, definition, instance, now=now)
+    await session.commit()
+    await dispatch_pending(context.workspace_id)
+    return await _process_instance_view(session, instance, definition)
+
+
+@app.post("/v1/process-events", status_code=202)
+async def create_process_event(
+    payload: ProcessEventCreate,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    definition = await session.get(ProcessDefinition, payload.process_definition_id)
+    if not definition or definition.workspace_id != context.workspace_id or not definition.enabled:
+        raise HTTPException(404, "Enabled process not found")
+    instance = None
+    if payload.process_instance_id:
+        instance = await session.get(ProcessInstance, payload.process_instance_id)
+        if not instance or instance.workspace_id != context.workspace_id:
+            raise HTTPException(404, "Process instance not found")
+    elif not definition.enabled:
+        raise HTTPException(404, "Enabled process not found")
+    from .process_runtime import accept_process_event, advance_process_instance
+
+    try:
+        instance, event, created = await accept_process_event(
+            session,
+            definition,
+            event_type=payload.event_type,
+            dedupe_key=payload.dedupe_key,
+            payload=payload.payload,
+            subject_key=payload.subject_key,
+            instance=instance,
+            actor=context.subject,
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except IntegrityError:
+        # Concurrent deliveries can both miss the first lookup. The database
+        # uniqueness boundary chooses one winner; the loser returns that same
+        # durable event and case instead of surfacing a transient 500.
+        await session.rollback()
+        await set_tenant_context(session, context.workspace_id)
+        event = await session.scalar(
+            select(ProcessEvent).where(
+                ProcessEvent.workspace_id == context.workspace_id,
+                ProcessEvent.dedupe_key == payload.dedupe_key,
+            )
+        )
+        if not event:
+            raise
+        instance = await session.get(ProcessInstance, event.process_instance_id)
+        definition = await session.get(ProcessDefinition, payload.process_definition_id)
+        return {
+            "event_id": event.id,
+            "event_status": event.status,
+            "deduplicated": True,
+            "instance": await _process_instance_view(session, instance, definition),
+        }
+    if created and event.status == "processed":
+        await advance_process_instance(session, definition, instance)
+    await session.commit()
+    await dispatch_pending(context.workspace_id)
+    return {
+        "event_id": event.id,
+        "event_status": event.status,
+        "deduplicated": not created,
+        "instance": await _process_instance_view(session, instance, definition),
+    }
 
 
 @app.post("/v1/runs", status_code=202)
@@ -4708,9 +5198,7 @@ async def resume_after_connection(
     if not tool:
         raise HTTPException(422, "A verified connection is required")
     matched = [
-        requirement
-        for requirement in requirements
-        if _requirement_accepts_tool(requirement, tool)
+        requirement for requirement in requirements if _requirement_accepts_tool(requirement, tool)
     ]
     if not matched:
         already_recorded = int(
@@ -4898,9 +5386,7 @@ async def approve_plan(
     for stored, planned in zip(steps, plan.steps, strict=True):
         if stored.output.get("provider_result") is not None and (
             planned.model_dump(mode="json")
-            != PlanStep.model_validate(run.plan["steps"][stored.position]).model_dump(
-                mode="json"
-            )
+            != PlanStep.model_validate(run.plan["steps"][stored.position]).model_dump(mode="json")
         ):
             raise HTTPException(
                 409, "A revised plan cannot change a step with a recorded provider result"

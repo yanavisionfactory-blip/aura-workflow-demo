@@ -79,16 +79,17 @@ celery -A app.worker.celery worker --loglevel=INFO
 
 Use a modest worker concurrency for the Railway service size, for example `--concurrency=4`, rather than Celery's CPU-derived default.
 
-The API's elected recovery loop dispatches persisted schedules and interrupted-run recovery by
-default, so schedules do not depend on an open browser or a separate service. If
+The API's elected recovery loop dispatches persisted workflow schedules, due process stages, and
+interrupted-run recovery by default, so schedules and autonomous processes do not depend on an open
+browser or a separate service. If
 `RECOVERY_SCHEDULER_ENABLED=false` on every API replica, run one separate scheduler service:
 
 ```bash
 celery -A app.worker.celery beat --loglevel=INFO
 ```
 
-Only one beat service should run. Multiple workers remain safe: due schedules and stale runs are
-claimed with database row locks, and generated steps retain stable idempotency keys.
+Only one beat service should run. Multiple workers remain safe: due schedules, process cases, and
+stale runs are claimed with database row locks, and generated steps retain stable idempotency keys.
 
 ## GitHub Pages
 

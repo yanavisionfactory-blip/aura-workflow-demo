@@ -231,9 +231,7 @@ class WorkflowScheduleUpdate(BaseModel):
     enabled: bool | None = None
     cadence: Literal["daily", "weekly", "monthly"] | None = None
     timezone: str | None = Field(default=None, min_length=1, max_length=100)
-    local_time: str | None = Field(
-        default=None, pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$"
-    )
+    local_time: str | None = Field(default=None, pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
     day_of_week: int | None = Field(default=None, ge=0, le=6)
     day_of_month: int | None = Field(default=None, ge=1, le=31)
     approval_mode: Literal["review", "writes", "auto"] | None = None
@@ -250,6 +248,126 @@ class WorkflowScheduleUpdate(BaseModel):
         except ZoneInfoNotFoundError as exc:
             raise ValueError("timezone must be a valid IANA timezone") from exc
         return value
+
+
+class ProcessTrigger(BaseModel):
+    type: Literal["manual", "event", "schedule"] = "manual"
+    event_type: str | None = Field(
+        default=None,
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.:-]{1,159}$",
+    )
+    cadence: Literal["daily", "weekly", "monthly"] | None = None
+    timezone: str = Field(default="UTC", min_length=1, max_length=100)
+    local_time: str = Field(default="08:00", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    day_of_week: int | None = Field(default=None, ge=0, le=6)
+    day_of_month: int | None = Field(default=None, ge=1, le=31)
+
+    @model_validator(mode="after")
+    def validate_trigger(self):
+        if self.type == "event" and not self.event_type:
+            raise ValueError("event triggers require event_type")
+        if self.type == "schedule":
+            if not self.cadence:
+                raise ValueError("schedule triggers require cadence")
+            try:
+                ZoneInfo(self.timezone)
+            except ZoneInfoNotFoundError as exc:
+                raise ValueError("timezone must be a valid IANA timezone") from exc
+            if self.cadence == "weekly" and self.day_of_week is None:
+                raise ValueError("weekly process triggers require day_of_week")
+            if self.cadence == "monthly" and self.day_of_month is None:
+                raise ValueError("monthly process triggers require day_of_month")
+        return self
+
+
+class ProcessStageCreate(BaseModel):
+    key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,119}$")
+    name: str = Field(min_length=2, max_length=200)
+    source_run_id: str = Field(min_length=1, max_length=36)
+    wait_seconds: int = Field(default=0, ge=0, le=2_592_000)
+    start_on_event: str | None = Field(
+        default=None,
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.:-]{1,159}$",
+    )
+    next_stage_key: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_]{0,119}$",
+    )
+    context_instructions: str | None = Field(default=None, max_length=4_000)
+
+
+class ProcessDefinitionCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=240)
+    objective: str = Field(min_length=3, max_length=20_000)
+    context_instructions: str = Field(default="", max_length=20_000)
+    trigger: ProcessTrigger = Field(default_factory=ProcessTrigger)
+    stages: list[ProcessStageCreate] = Field(min_length=2, max_length=20)
+    approval_mode: Literal["review", "writes", "auto"] = "writes"
+    failure_policy: Literal["pause", "retry", "notify"] = "pause"
+    start_immediately: bool = False
+
+    @model_validator(mode="after")
+    def validate_stage_graph(self):
+        keys = [stage.key for stage in self.stages]
+        if len(keys) != len(set(keys)):
+            raise ValueError("process stage keys must be unique")
+        positions = {key: position for position, key in enumerate(keys)}
+        for position, stage in enumerate(self.stages):
+            if stage.next_stage_key is None:
+                continue
+            if stage.next_stage_key not in positions:
+                raise ValueError("process stages can only transition to declared stages")
+            if positions[stage.next_stage_key] <= position:
+                raise ValueError("Process v1 transitions must move forward without loops")
+        if self.start_immediately and self.trigger.type != "manual":
+            raise ValueError("only manual processes can start immediately")
+        return self
+
+
+class ProcessDefinitionUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=240)
+    objective: str | None = Field(default=None, min_length=3, max_length=20_000)
+    context_instructions: str | None = Field(default=None, max_length=20_000)
+    trigger: ProcessTrigger | None = None
+    stages: list[ProcessStageCreate] | None = Field(default=None, min_length=2, max_length=20)
+    approval_mode: Literal["review", "writes", "auto"] | None = None
+    failure_policy: Literal["pause", "retry", "notify"] | None = None
+    enabled: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_stage_graph(self):
+        if self.stages is None:
+            return self
+        keys = [stage.key for stage in self.stages]
+        if len(keys) != len(set(keys)):
+            raise ValueError("process stage keys must be unique")
+        positions = {key: position for position, key in enumerate(keys)}
+        for position, stage in enumerate(self.stages):
+            if stage.next_stage_key is None:
+                continue
+            if stage.next_stage_key not in positions:
+                raise ValueError("process stages can only transition to declared stages")
+            if positions[stage.next_stage_key] <= position:
+                raise ValueError("Process v1 transitions must move forward without loops")
+        return self
+
+
+class ProcessInstanceCreate(BaseModel):
+    subject_key: str | None = Field(default=None, max_length=240)
+    state: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProcessInstanceAction(BaseModel):
+    action: Literal["pause", "resume", "stop"]
+
+
+class ProcessEventCreate(BaseModel):
+    process_definition_id: str
+    event_type: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.:-]{1,159}$")
+    dedupe_key: str = Field(min_length=1, max_length=240)
+    subject_key: str | None = Field(default=None, max_length=240)
+    process_instance_id: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class WorkspaceRecordCreate(BaseModel):
@@ -503,17 +621,11 @@ class WorkflowPlan(BaseModel):
             return self
 
         contract = self.result_contract
-        contract.completion_step_key = (
-            contract.completion_step_key or contract.primary_step_key
-        )
+        contract.completion_step_key = contract.completion_step_key or contract.primary_step_key
         referenced_keys = {
             contract.primary_step_key,
             contract.completion_step_key,
-            *(
-                [contract.artifact_step_key]
-                if contract.artifact_step_key is not None
-                else []
-            ),
+            *([contract.artifact_step_key] if contract.artifact_step_key is not None else []),
             *contract.supporting_step_keys,
             *(metric.step_key for metric in contract.metric_sources),
         }
@@ -530,9 +642,7 @@ class WorkflowPlan(BaseModel):
             raise ValueError("The completion result step cannot be optional")
         contract.supporting_step_keys = list(
             dict.fromkeys(
-                key
-                for key in contract.supporting_step_keys
-                if key != contract.primary_step_key
+                key for key in contract.supporting_step_keys if key != contract.primary_step_key
             )
         )
         return self

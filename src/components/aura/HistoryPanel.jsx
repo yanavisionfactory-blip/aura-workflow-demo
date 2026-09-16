@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Loader2, Layers } from "lucide-react";
+import { Check, GitBranch, Layers, Loader2, X } from "lucide-react";
 import { aura } from "@/api/auraClient";
 import {
   deleteWorkflowSchedule,
@@ -26,6 +26,8 @@ import {
 import WorkflowList from "./WorkflowList";
 import WorkflowDetail from "./WorkflowDetail";
 import HistoryRunDetail from "./HistoryRunDetail";
+import ProcessPanel from "./ProcessPanel";
+import ProcessModal from "./ProcessModal";
 
 let reconciliationPromise = null;
 let savedHistoryPromise = null;
@@ -138,6 +140,10 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun }) {
   const [schedules, setSchedules] = useState([]);
   const [selectedWorkflow, setSelectedWorkflow] = useState(null);
   const [selectedRun, setSelectedRun] = useState(null);
+  const [activeTab, setActiveTab] = useState("workflows");
+  const [selectingProcess, setSelectingProcess] = useState(false);
+  const [selectedProcessWorkflowIds, setSelectedProcessWorkflowIds] = useState([]);
+  const [showProcessBuilder, setShowProcessBuilder] = useState(false);
   const [loading, setLoading] = useState(true);
   const hasHistorySnapshot = useRef(false);
   const schedulesRef = useRef([]);
@@ -300,6 +306,34 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun }) {
     ),
     [schedules]
   );
+  const latestProcessRuns = useMemo(() => {
+    const byWorkflow = new Map();
+    runs
+      .filter((run) => run.workflow_id && run.backend_run_id && run.status === "completed")
+      .sort((left, right) => Date.parse(right.backend_updated_at || right.updated_date || right.created_date || 0)
+        - Date.parse(left.backend_updated_at || left.updated_date || left.created_date || 0))
+      .forEach((run) => {
+        if (!byWorkflow.has(run.workflow_id)) byWorkflow.set(run.workflow_id, run);
+      });
+    return byWorkflow;
+  }, [runs]);
+  const eligibleProcessWorkflowIds = useMemo(
+    () => new Set(latestProcessRuns.keys()),
+    [latestProcessRuns]
+  );
+  const processSelections = useMemo(
+    () => selectedProcessWorkflowIds.map((workflowId) => {
+      const workflow = workflows.find((item) => item.id === workflowId);
+      const run = latestProcessRuns.get(workflowId);
+      return workflow && run ? {
+        workflowId,
+        name: workflow.name || workflow.prompt || "Approved workflow",
+        prompt: workflow.prompt || "",
+        backendRunId: run.backend_run_id,
+      } : null;
+    }).filter(Boolean),
+    [latestProcessRuns, selectedProcessWorkflowIds, workflows]
+  );
 
   const updateSchedule = async (scheduleId, changes) => {
     const updated = await updateWorkflowSchedule(scheduleId, changes);
@@ -314,6 +348,17 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun }) {
 
   const handleWfRerun = (wf, approval) => { onClose(); onRerun(wf, approval); };
   const handleWfEdit = (wf, approval) => { onClose(); onEditRun(wf, approval); };
+
+  const stopProcessSelection = () => {
+    setSelectingProcess(false);
+    setSelectedProcessWorkflowIds([]);
+  };
+
+  const toggleProcessWorkflow = (workflow) => {
+    setSelectedProcessWorkflowIds((current) => current.includes(workflow.id)
+      ? current.filter((id) => id !== workflow.id)
+      : [...current, workflow.id]);
+  };
 
   const selectedWf = workflows.find((w) => w.id === selectedRun?.workflow_id) || null;
 
@@ -340,13 +385,36 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun }) {
                 <Layers className="w-4 h-4 text-primary" />
                 <span className="font-semibold text-sm">My workflows</span>
               </div>
-              <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/5 text-muted-foreground hover:text-foreground transition-colors">
+              <button onClick={() => { stopProcessSelection(); onClose(); }} className="p-1.5 rounded-lg hover:bg-white/5 text-muted-foreground hover:text-foreground transition-colors">
                 <X className="w-4 h-4" />
               </button>
             </div>
 
+            <div className="grid grid-cols-2 gap-1 border-b border-white/6 px-4 py-2">
+              <button
+                type="button"
+                onClick={() => setActiveTab("workflows")}
+                className={`flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs transition-colors ${activeTab === "workflows" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-white/5"}`}
+              >
+                <Layers className="h-3.5 w-3.5" /> Workflows
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedWorkflow(null);
+                  setSelectedRun(null);
+                  setActiveTab("processes");
+                }}
+                className={`flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs transition-colors ${activeTab === "processes" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-white/5"}`}
+              >
+                <GitBranch className="h-3.5 w-3.5" /> Processes
+              </button>
+            </div>
+
             <div className="flex-1 overflow-y-auto">
-              {loading ? (
+              {activeTab === "processes" ? (
+                <ProcessPanel />
+              ) : loading ? (
                 <div className="flex items-center justify-center h-32">
                   <Loader2 className="w-5 h-5 text-muted-foreground animate-spin" />
                 </div>
@@ -388,16 +456,61 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun }) {
               ) : (
                 <>
                   {workflows.length > 0 && <StatsHeader workflows={workflows} schedules={schedules} />}
+                  {workflows.length > 0 && !selectingProcess && (
+                    <div className="px-3 pb-1 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => setSelectingProcess(true)}
+                        className="flex w-full items-center gap-3 rounded-xl border border-primary/20 bg-primary/[0.055] px-3.5 py-3 text-left transition-colors hover:bg-primary/[0.1]"
+                      >
+                        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary"><GitBranch className="h-4 w-4" /></span>
+                        <span className="min-w-0 flex-1"><span className="block text-sm font-medium text-primary">Build a process</span><span className="mt-0.5 block text-[10px] text-muted-foreground">Select workflows to run one after another.</span></span>
+                      </button>
+                    </div>
+                  )}
+                  {selectingProcess && (
+                    <div className="sticky top-0 z-10 border-b border-white/6 bg-card/95 px-4 py-3 backdrop-blur">
+                      <div className="flex items-center justify-between gap-3">
+                        <div><p className="text-xs font-medium">Select workflows</p><p className="mt-0.5 text-[10px] text-muted-foreground">Choose at least two. You can reorder them next.</p></div>
+                        <span className="rounded-full border border-primary/20 bg-primary/10 px-2 py-1 text-[10px] text-primary">{selectedProcessWorkflowIds.length} selected</span>
+                      </div>
+                      <div className="mt-3 grid grid-cols-2 gap-2">
+                        <button type="button" onClick={stopProcessSelection} className="rounded-lg border border-white/10 px-3 py-2 text-xs text-muted-foreground hover:bg-white/5">Cancel</button>
+                        <button
+                          type="button"
+                          onClick={() => setShowProcessBuilder(true)}
+                          disabled={processSelections.length < 2}
+                          className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-gradient-to-r from-primary to-accent px-3 py-2 text-xs font-medium text-white disabled:opacity-40"
+                        >
+                          <Check className="h-3.5 w-3.5" /> Continue
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   <WorkflowList
                     workflows={workflows}
                     scheduledPrompts={scheduledPrompts}
                     scheduledWorkflowIds={scheduledWorkflowIds}
                     onSelect={(wf) => setSelectedWorkflow(wf)}
+                    selectionMode={selectingProcess}
+                    selectedWorkflowIds={new Set(selectedProcessWorkflowIds)}
+                    eligibleWorkflowIds={eligibleProcessWorkflowIds}
+                    onToggle={toggleProcessWorkflow}
                   />
                 </>
               )}
             </div>
           </motion.div>
+          <ProcessModal
+            open={showProcessBuilder}
+            onClose={() => setShowProcessBuilder(false)}
+            selectedWorkflows={processSelections}
+            onCreated={() => {
+              setShowProcessBuilder(false);
+              stopProcessSelection();
+              setActiveTab("processes");
+            }}
+          />
         </>
       )}
     </AnimatePresence>

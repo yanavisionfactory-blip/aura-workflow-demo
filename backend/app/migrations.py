@@ -21,6 +21,10 @@ DIRECT_TENANT_TABLES = (
     "tool_trust_states",
     "workflows",
     "workflow_schedules",
+    "process_definitions",
+    "process_instances",
+    "process_events",
+    "process_stage_runs",
     "workspace_records",
     "workflow_runs",
     "workflow_memories",
@@ -107,6 +111,11 @@ async def migrate_database() -> None:
                 "ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS history_workflow_id VARCHAR(120)",
                 "ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS last_run_id VARCHAR(36)",
                 "ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS created_by_role VARCHAR(30) DEFAULT 'member'",
+            ):
+                await connection.execute(text(statement))
+            for statement in (
+                "ALTER TABLE process_definitions ADD COLUMN IF NOT EXISTS context_instructions TEXT DEFAULT ''",
+                "ALTER TABLE process_definitions ADD COLUMN IF NOT EXISTS failure_policy VARCHAR(20) DEFAULT 'pause'",
             ):
                 await connection.execute(text(statement))
             await connection.execute(

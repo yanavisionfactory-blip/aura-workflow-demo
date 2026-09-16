@@ -16,6 +16,7 @@ from app.models import (
     RunStatus,
     RunStep,
     StepStatus,
+    TenantMembership,
     Workflow,
     WorkflowRun,
     WorkflowSchedule,
@@ -94,6 +95,7 @@ def test_only_interrupted_active_states_are_recoverable() -> None:
 def test_celery_beat_dispatches_and_recovers_workflows() -> None:
     tasks = {entry["task"] for entry in celery.conf.beat_schedule.values()}
     assert "aura.dispatch_due_schedules" in tasks
+    assert "aura.dispatch_due_processes" in tasks
     assert "aura.recover_stale_runs" in tasks
 
 
@@ -157,6 +159,11 @@ async def test_due_schedule_clones_approved_plan_with_real_approval_behavior(
     due = datetime(2026, 9, 15, 8, 0, tzinfo=UTC)
     async with database() as session:
         session.add(Workspace(id="w", name="Test"))
+        session.add(
+            TenantMembership(
+                workspace_id="w", subject="alice", role="owner", active=True
+            )
+        )
         session.add(
             Workflow(
                 id="workflow",

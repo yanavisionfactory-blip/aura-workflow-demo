@@ -474,6 +474,125 @@ class WorkflowSchedule(Base):
     )
 
 
+class ProcessDefinition(Base):
+    """Versioned, workspace-owned orchestration above approved workflows."""
+
+    __tablename__ = "process_definitions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(240))
+    objective: Mapped[str] = mapped_column(Text)
+    context_instructions: Mapped[str] = mapped_column(Text, default="")
+    trigger_type: Mapped[str] = mapped_column(String(20), default="manual", index=True)
+    trigger_config: Mapped[dict] = mapped_column(JSON, default=dict)
+    stages: Mapped[list] = mapped_column(JSON, default=list)
+    approval_mode: Mapped[str] = mapped_column(String(20), default="writes")
+    failure_policy: Mapped[str] = mapped_column(String(20), default="pause")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    next_trigger_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_by: Mapped[str] = mapped_column(String(240))
+    created_by_role: Mapped[str] = mapped_column(String(30), default="member")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class ProcessInstance(Base):
+    """One durable case moving through a deterministic process definition."""
+
+    __tablename__ = "process_instances"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    process_definition_id: Mapped[str] = mapped_column(
+        ForeignKey("process_definitions.id", ondelete="CASCADE"), index=True
+    )
+    subject_key: Mapped[str] = mapped_column(String(240), index=True)
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    current_stage_index: Mapped[int] = mapped_column(Integer, default=0)
+    current_stage_key: Mapped[str] = mapped_column(String(120))
+    current_attempt: Mapped[int] = mapped_column(Integer, default=1)
+    state: Mapped[dict] = mapped_column(JSON, default=dict)
+    next_wake_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    last_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("workflow_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    error_code: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class ProcessEvent(Base):
+    """Idempotent event that starts or advances one process instance."""
+
+    __tablename__ = "process_events"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "dedupe_key", name="uq_process_event_dedupe"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    process_definition_id: Mapped[str] = mapped_column(
+        ForeignKey("process_definitions.id", ondelete="CASCADE"), index=True
+    )
+    process_instance_id: Mapped[str] = mapped_column(
+        ForeignKey("process_instances.id", ondelete="CASCADE"), index=True
+    )
+    event_type: Mapped[str] = mapped_column(String(160), index=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    dedupe_key: Mapped[str] = mapped_column(String(240))
+    status: Mapped[str] = mapped_column(String(30), default="processed")
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ProcessStageRun(Base):
+    """Immutable association between a process stage attempt and a workflow run."""
+
+    __tablename__ = "process_stage_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "process_instance_id",
+            "stage_key",
+            "attempt",
+            name="uq_process_stage_attempt",
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    process_definition_id: Mapped[str] = mapped_column(
+        ForeignKey("process_definitions.id", ondelete="CASCADE"), index=True
+    )
+    process_instance_id: Mapped[str] = mapped_column(
+        ForeignKey("process_instances.id", ondelete="CASCADE"), index=True
+    )
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("workflow_runs.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    stage_key: Mapped[str] = mapped_column(String(120))
+    position: Mapped[int] = mapped_column(Integer)
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(30), default="running")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class WorkspaceRecord(Base):
     """Workspace-owned UI state formerly stored in Base44 entities."""
 

@@ -11,7 +11,7 @@ from jsonschema import Draft202012Validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app import dispatch, scheduler_runtime, worker
+from app import dispatch, process_runtime, scheduler_runtime, worker
 from app.db import Base
 from app.models import DispatchIntent, RunStatus, WorkflowRun, Workspace
 from app.native_connectors import NATIVE_CONNECTORS, native_manifest
@@ -211,7 +211,11 @@ async def test_api_recovery_tick_dispatches_due_schedules_without_separate_beat(
     async def publish(*args, **kwargs):
         return 0
 
+    async def no_processes():
+        return {"triggered": 0, "dispatched": 0, "advanced": 0, "attention": 0}
+
     monkeypatch.setattr(dispatch, "execution_lock", elected)
+    monkeypatch.setattr(process_runtime, "dispatch_due_processes", no_processes)
     monkeypatch.setattr(scheduler_runtime, "dispatch_due_schedules", due)
     monkeypatch.setattr(scheduler_runtime, "recover_stale_runs", none)
     monkeypatch.setattr(scheduler_runtime, "recover_waiting_runs", none)

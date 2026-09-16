@@ -5,6 +5,7 @@ from celery import Celery
 from .config import get_settings
 from .orchestrator import execute_run, plan_run
 from .polling_runtime import poll_subscription
+from .process_runtime import dispatch_due_processes
 from .scheduler_runtime import dispatch_due_schedules, recover_stale_runs
 
 _runner = None
@@ -41,6 +42,10 @@ celery.conf.beat_schedule = {
         "task": "aura.dispatch_due_schedules",
         "schedule": 30.0,
     },
+    "dispatch-due-processes": {
+        "task": "aura.dispatch_due_processes",
+        "schedule": 30.0,
+    },
     "recover-stale-workflow-runs": {
         "task": "aura.recover_stale_runs",
         "schedule": 300.0,
@@ -64,6 +69,15 @@ def dispatch_due_schedules_task() -> int:
     from .dispatch import dispatch_pending
     _run_async(dispatch_pending())
     return len(dispatched)
+
+
+@celery.task(name="aura.dispatch_due_processes")
+def dispatch_due_processes_task() -> dict[str, int]:
+    result = _run_async(dispatch_due_processes())
+    from .dispatch import dispatch_pending
+
+    _run_async(dispatch_pending())
+    return result
 
 
 @celery.task(name="aura.recover_stale_runs")
