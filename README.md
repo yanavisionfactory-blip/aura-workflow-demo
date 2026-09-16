@@ -1,6 +1,6 @@
 # AURA
 
-AURA is a multi-tenant workflow automation application. The React frontend authenticates with Clerk and sends the current session token to the Python control plane. Workflows, runs, schedules, access requests, connection state, and orchestration records are stored by workspace.
+AURA is a multi-tenant workflow automation application. The React frontend authenticates with Clerk and sends the current session token to the Python control plane. Workflows, runs, schedules, autonomous process cases, access requests, connection state, and orchestration records are stored by workspace.
 
 `main` is the single controlled release source for both the GitHub Pages frontend and the Railway Python control plane. Production changes must be reconciled and tested on a branch from `main`, then merged through one reviewed pull request.
 
@@ -21,7 +21,7 @@ VITE_CLERK_PUBLISHABLE_KEY=pk_test_...
 
 ## Backend
 
-See [`docs/PYTHON_BACKEND.md`](docs/PYTHON_BACKEND.md), [`backend/RELIABILITY.md`](backend/RELIABILITY.md), and [`docs/production-deployment.md`](docs/production-deployment.md) for PostgreSQL, Redis, Clerk, encryption, worker, and connector-network configuration. Start the API and Celery worker before using the frontend.
+See [`docs/PYTHON_BACKEND.md`](docs/PYTHON_BACKEND.md), [`docs/autonomous-processes.md`](docs/autonomous-processes.md), [`backend/RELIABILITY.md`](backend/RELIABILITY.md), and [`docs/production-deployment.md`](docs/production-deployment.md) for PostgreSQL, Redis, Clerk, encryption, worker, and connector-network configuration. Start the API and Celery worker before using the frontend.
 
 ## Release validation
 

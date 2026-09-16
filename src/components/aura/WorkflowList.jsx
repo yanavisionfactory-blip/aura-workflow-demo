@@ -1,4 +1,4 @@
-import { CheckCircle2, AlertCircle, Loader2, Clock, ChevronRight, CalendarClock, Layers } from "lucide-react";
+import { Check, CheckCircle2, AlertCircle, Loader2, Clock, ChevronRight, CalendarClock, Layers } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
 const statusConfig = {
@@ -7,7 +7,16 @@ const statusConfig = {
   failed:    { icon: AlertCircle,  color: "text-red-400",      bg: "bg-red-400/10",      label: "Needs attention" },
 };
 
-export default function WorkflowList({ workflows, scheduledPrompts, scheduledWorkflowIds, onSelect }) {
+export default function WorkflowList({
+  workflows,
+  scheduledPrompts,
+  scheduledWorkflowIds,
+  onSelect,
+  selectionMode = false,
+  selectedWorkflowIds = new Set(),
+  eligibleWorkflowIds = new Set(),
+  onToggle,
+}) {
   if (workflows.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-48 text-center px-6">
@@ -26,11 +35,16 @@ export default function WorkflowList({ workflows, scheduledPrompts, scheduledWor
         const cfg = statusConfig[wf.last_run_status] || statusConfig.completed;
         const Icon = cfg.icon;
         const scheduled = scheduledWorkflowIds.has(wf.id) || scheduledPrompts.has(wf.prompt);
+        const eligible = !selectionMode || eligibleWorkflowIds.has(wf.id);
+        const selected = selectedWorkflowIds.has(wf.id);
         return (
           <button
             key={wf.id}
-            onClick={() => onSelect(wf)}
-            className="w-full text-left p-3.5 rounded-xl border border-white/5 bg-card/40 hover:bg-card/80 hover:border-white/10 transition-all group"
+            type="button"
+            onClick={() => selectionMode ? eligible && onToggle(wf) : onSelect(wf)}
+            disabled={!eligible}
+            aria-pressed={selectionMode ? selected : undefined}
+            className={`w-full text-left p-3.5 rounded-xl border transition-all group ${selected ? "border-primary/35 bg-primary/[0.08]" : "border-white/5 bg-card/40 hover:bg-card/80 hover:border-white/10"} ${eligible ? "" : "cursor-not-allowed opacity-45"}`}
           >
             <div className="flex items-start gap-3">
               <div className={`flex-shrink-0 w-8 h-8 rounded-lg ${cfg.bg} flex items-center justify-center mt-0.5`}>
@@ -58,8 +72,17 @@ export default function WorkflowList({ workflows, scheduledPrompts, scheduledWor
                   )}
                 </div>
               </div>
-              <ChevronRight className="w-4 h-4 text-muted-foreground/30 group-hover:text-muted-foreground transition-colors flex-shrink-0 mt-1" />
+              {selectionMode ? (
+                <span className={`mt-1 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md border ${selected ? "border-primary bg-primary text-primary-foreground" : "border-white/15 text-transparent"}`}>
+                  <Check className="h-3.5 w-3.5" />
+                </span>
+              ) : (
+                <ChevronRight className="w-4 h-4 text-muted-foreground/30 group-hover:text-muted-foreground transition-colors flex-shrink-0 mt-1" />
+              )}
             </div>
+            {selectionMode && !eligible && (
+              <p className="mt-2 pl-11 text-[10px] text-muted-foreground/60">Run and approve this workflow before adding it to a process.</p>
+            )}
           </button>
         );
       })}

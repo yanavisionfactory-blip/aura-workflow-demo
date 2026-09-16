@@ -524,6 +524,56 @@ export async function deleteWorkflowSchedule(scheduleId) {
   return request(`/v1/workflow-schedules/${scheduleId}`, { method: "DELETE" });
 }
 
+export async function createProcessDefinition(payload) {
+  await ensureWorkspace();
+  return request("/v1/processes", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function listProcessDefinitions() {
+  await ensureWorkspace();
+  return request("/v1/processes");
+}
+
+export async function updateProcessDefinition(processId, changes) {
+  await ensureWorkspace();
+  return request(`/v1/processes/${processId}`, {
+    method: "PATCH",
+    body: JSON.stringify(changes),
+  });
+}
+
+export async function createProcessInstance(processId, payload = {}) {
+  await ensureWorkspace();
+  return request(`/v1/processes/${processId}/instances`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function listProcessInstances(processId) {
+  await ensureWorkspace();
+  return request(`/v1/processes/${processId}/instances`);
+}
+
+export async function updateProcessInstance(instanceId, action) {
+  await ensureWorkspace();
+  return request(`/v1/process-instances/${instanceId}/actions`, {
+    method: "POST",
+    body: JSON.stringify({ action }),
+  });
+}
+
+export async function sendProcessEvent(payload) {
+  await ensureWorkspace();
+  return request("/v1/process-events", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function getResumablePythonRun() {
   const remembered = rememberedActivePythonRun();
   if (remembered) {

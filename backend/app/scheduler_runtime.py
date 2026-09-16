@@ -19,6 +19,7 @@ from .models import (
     RunStatus,
     RunStep,
     StepStatus,
+    TenantMembership,
     Workflow,
     WorkflowRun,
     WorkflowSchedule,
@@ -143,17 +144,21 @@ def _scheduled_execution_context(schedule: WorkflowSchedule, workflow: Workflow)
     }
 
 
-async def _latest_approved_source(session, workflow: Workflow):
+async def _latest_approved_source(
+    session,
+    workflow: Workflow,
+    source_run_id: str | None = None,
+):
+    criteria = [
+        WorkflowRun.workspace_id == workflow.workspace_id,
+        WorkflowRun.workflow_id == workflow.id,
+        WorkflowRun.status == RunStatus.completed,
+        WorkflowRun.plan_approved.is_(True),
+    ]
+    if source_run_id:
+        criteria.append(WorkflowRun.id == source_run_id)
     source = await session.scalar(
-        select(WorkflowRun)
-        .where(
-            WorkflowRun.workspace_id == workflow.workspace_id,
-            WorkflowRun.workflow_id == workflow.id,
-            WorkflowRun.status == RunStatus.completed,
-            WorkflowRun.plan_approved.is_(True),
-        )
-        .order_by(WorkflowRun.updated_at.desc())
-        .limit(1)
+        select(WorkflowRun).where(*criteria).order_by(WorkflowRun.updated_at.desc()).limit(1)
     )
     if not source:
         return None, None, []
@@ -178,16 +183,19 @@ async def _build_review_run(
     context: dict,
     request_key: str,
     attention_reason: str | None = None,
+    authority_kind: str = "schedule",
+    run_inputs: dict | None = None,
 ) -> WorkflowRun:
-    context["schedule"]["approval_mode"] = "review"
+    authority = context.setdefault(authority_kind, {})
+    authority["approval_mode"] = "review"
     context["__aura_supervisor__"]["phase"] = "planning"
     if attention_reason:
-        context["schedule"]["attention_reason"] = attention_reason
+        authority["attention_reason"] = attention_reason
     run = WorkflowRun(
         workspace_id=schedule.workspace_id,
         workflow_id=workflow.id,
         prompt=workflow.prompt,
-        inputs=deepcopy(workflow.variables or {}),
+        inputs=deepcopy(run_inputs if run_inputs is not None else (workflow.variables or {})),
         execution_context=context,
         status=RunStatus.queued,
         request_key=request_key,
@@ -197,20 +205,44 @@ async def _build_review_run(
     return run
 
 
-async def _build_scheduled_run(
+async def build_approved_workflow_run(
     session,
     schedule: WorkflowSchedule,
     workflow: Workflow,
     scheduled_for: datetime,
+    *,
+    execution_context: dict | None = None,
+    request_key: str | None = None,
+    authority_kind: str = "schedule",
+    source_run_id: str | None = None,
+    run_inputs: dict | None = None,
 ) -> WorkflowRun:
-    context = _scheduled_execution_context(schedule, workflow)
-    request_key = f"schedule:{schedule.id}:{scheduled_for.isoformat()}"
+    """Clone an approved workflow through the existing governed run path.
+
+    Schedules and processes provide different lifecycle metadata, but both use
+    the same immutable approval, current-policy evaluation, approval behavior,
+    idempotent steps, and transactional outbox.
+    """
+    context = (
+        deepcopy(execution_context)
+        if execution_context
+        else _scheduled_execution_context(schedule, workflow)
+    )
+    request_key = request_key or f"schedule:{schedule.id}:{scheduled_for.isoformat()}"
     if schedule.approval_mode == "review":
         return await _build_review_run(
-            session, schedule, workflow, context, request_key
+            session,
+            schedule,
+            workflow,
+            context,
+            request_key,
+            authority_kind=authority_kind,
+            run_inputs=run_inputs,
         )
 
-    source, source_snapshot, source_steps = await _latest_approved_source(session, workflow)
+    source, source_snapshot, source_steps = await _latest_approved_source(
+        session, workflow, source_run_id
+    )
     if not source or not source_snapshot or not source_steps:
         # A missing immutable approval can never be repaired by guessing. Prepare a
         # fresh plan for review and preserve the recurring schedule.
@@ -221,6 +253,27 @@ async def _build_scheduled_run(
             context,
             request_key,
             "approved_source_unavailable",
+            authority_kind,
+            run_inputs,
+        )
+
+    current_creator = await session.scalar(
+        select(TenantMembership).where(
+            TenantMembership.workspace_id == schedule.workspace_id,
+            TenantMembership.subject == schedule.created_by,
+            TenantMembership.active.is_(True),
+        )
+    )
+    if not current_creator:
+        return await _build_review_run(
+            session,
+            schedule,
+            workflow,
+            context,
+            request_key,
+            "recurring_authority_revoked",
+            authority_kind,
+            run_inputs,
         )
 
     plan = deepcopy(source.plan)
@@ -233,6 +286,34 @@ async def _build_scheduled_run(
             context,
             request_key,
             "approved_plan_changed",
+            authority_kind,
+            run_inputs,
+        )
+    if schedule.approval_mode == "auto" and source_snapshot.approver_subject != schedule.created_by:
+        return await _build_review_run(
+            session,
+            schedule,
+            workflow,
+            context,
+            request_key,
+            "recurring_authority_owner_changed",
+            authority_kind,
+            run_inputs,
+        )
+    if (
+        schedule.approval_mode == "auto"
+        and current_creator.role not in {"owner", "admin"}
+        and any(step.consequential for step in source_steps)
+    ):
+        return await _build_review_run(
+            session,
+            schedule,
+            workflow,
+            context,
+            request_key,
+            "recurring_authority_role_changed",
+            authority_kind,
+            run_inputs,
         )
     from .schemas import WorkflowPlan
 
@@ -247,15 +328,9 @@ async def _build_scheduled_run(
     )
     current_policy = {
         **DEFAULT_POLICY,
-        **(
-            current_policy_record.configuration
-            if current_policy_record
-            else {}
-        ),
+        **(current_policy_record.configuration if current_policy_record else {}),
     }
-    policy_decision = evaluate_plan_policy(
-        WorkflowPlan.model_validate(plan), {}, current_policy
-    )
+    policy_decision = evaluate_plan_policy(WorkflowPlan.model_validate(plan), {}, current_policy)
     if policy_decision["blocked"]:
         return await _build_review_run(
             session,
@@ -264,20 +339,25 @@ async def _build_scheduled_run(
             context,
             request_key,
             "current_policy_requires_review",
+            authority_kind,
+            run_inputs,
         )
     context["__aura_authority__"] = {
         "version": 1,
         "approved_plan_hash": plan_hash,
         "allow_autonomous_read_repairs": False,
         "read_repair_count": 0,
-        "recurring_schedule_id": schedule.id,
+        "authority_kind": authority_kind,
+        "authority_id": schedule.id,
         "recurring_authority_mode": schedule.approval_mode,
     }
+    if authority_kind == "schedule":
+        context["__aura_authority__"]["recurring_schedule_id"] = schedule.id
     run = WorkflowRun(
         workspace_id=schedule.workspace_id,
         workflow_id=workflow.id,
         prompt=workflow.prompt,
-        inputs=deepcopy(workflow.variables or {}),
+        inputs=deepcopy(run_inputs if run_inputs is not None else (workflow.variables or {})),
         execution_context=context,
         status=RunStatus.running,
         plan=plan,
@@ -305,7 +385,7 @@ async def _build_scheduled_run(
             plan_version_id=plan_version.id,
             plan_hash=plan_hash,
             approver_subject=schedule.created_by,
-            approver_role=schedule.created_by_role,
+            approver_role=current_creator.role,
             policy_snapshot=current_policy,
             permission_snapshot=deepcopy(source_snapshot.permission_snapshot),
             risk_snapshot=deepcopy(source_snapshot.risk_snapshot),
@@ -357,6 +437,20 @@ async def _build_scheduled_run(
         )
     )
     return run
+
+
+async def _build_scheduled_run(
+    session,
+    schedule: WorkflowSchedule,
+    workflow: Workflow,
+    scheduled_for: datetime,
+) -> WorkflowRun:
+    return await build_approved_workflow_run(
+        session,
+        schedule,
+        workflow,
+        scheduled_for,
+    )
 
 
 def recovery_action(status: RunStatus, execution_context: dict | None = None) -> str | None:
@@ -424,9 +518,7 @@ async def dispatch_due_schedules(now: datetime | None = None) -> list[tuple[str,
                     schedule.enabled = False
                     continue
                 scheduled_for = schedule.next_run_at
-                run = await _build_scheduled_run(
-                    session, schedule, workflow, scheduled_for
-                )
+                run = await _build_scheduled_run(session, schedule, workflow, scheduled_for)
                 schedule.last_run_at = current
                 schedule.last_run_id = run.id
                 schedule.next_run_at = schedule_next_occurrence(schedule, current)
@@ -436,7 +528,10 @@ async def dispatch_due_schedules(now: datetime | None = None) -> list[tuple[str,
                         run_id=run.id,
                         actor=schedule.created_by,
                         event_type="run.created",
-                        payload={"schedule_id": schedule.id, "scheduled_for": scheduled_for.isoformat()},
+                        payload={
+                            "schedule_id": schedule.id,
+                            "scheduled_for": scheduled_for.isoformat(),
+                        },
                     )
                 )
                 session.add(

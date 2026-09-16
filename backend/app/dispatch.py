@@ -101,6 +101,7 @@ async def dispatch_pending(workspace_id: str | None = None) -> int:
 
 
 async def recovery_tick() -> dict:
+    from .process_runtime import dispatch_due_processes
     from .scheduler_runtime import (
         dispatch_due_schedules,
         recover_engineer_runs,
@@ -113,9 +114,11 @@ async def recovery_tick() -> dict:
     async with execution_lock(engine, "system", "recovery-scheduler") as acquired:
         if not acquired:
             return {"leader": False}
+        _mark_scheduler_progress("due_processes")
+        processes = await dispatch_due_processes()
         _mark_scheduler_progress("due_schedules")
         scheduled = await dispatch_due_schedules()
-        _mark_scheduler_progress("dispatch_after_schedules")
+        _mark_scheduler_progress("dispatch_after_triggers")
         published = await dispatch_pending()
         _mark_scheduler_progress("stale_runs")
         recovered = await recover_stale_runs(stale_after_seconds=settings.stale_run_seconds)
@@ -132,6 +135,7 @@ async def recovery_tick() -> dict:
         published += await dispatch_pending()
         result = {
             "leader": True,
+            "processes": processes,
             "scheduled": len(scheduled),
             "recovered": len(recovered),
             "supervised": len(supervised),
