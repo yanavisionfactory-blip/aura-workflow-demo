@@ -245,6 +245,9 @@ def test_weather_presentation_template_preserves_explicit_gmail_delivery():
         "url": "{{steps.export_presentation.job.urls[0]}}",
     }]
     assert plan.steps[3].depends_on == ["export_presentation"]
+    assert plan.steps[1].approval_group == "weather_presentation_delivery"
+    assert plan.steps[2].consequential is False
+    assert plan.steps[3].approval_group == "weather_presentation_delivery"
     assert "email it with Gmail" in plan.interpretation
     assert plan.result_contract.primary_step_key == "email_presentation"
     assert plan.result_contract.artifact_step_key == "create_presentation"
@@ -314,3 +317,40 @@ def test_compiled_weather_presentation_keeps_requested_email_delivery():
         "gmail.send",
     ]
     assert plan.planning_artifacts["compiled_contracts"]
+    assert plan.steps[2].consequential is False
+
+
+def test_canva_export_is_governed_without_a_second_human_approval():
+    export = next(
+        capability
+        for capability in native_manifest("canva")["capabilities"]
+        if capability["name"] == "canva.export.create"
+    )
+
+    assert export["permission_scope"] == "write"
+    assert export["requires_approval"] is False
+
+
+def test_future_gmail_review_keeps_transport_reference_server_side():
+    arguments = {
+        "to": "me",
+        "subject": "Munich weather forecast",
+        "body": "Attached is the requested presentation.",
+        "attachments": [{
+            "filename": "Munich weather.pdf",
+            "url": "{{steps.export_presentation.job.urls[0]}}",
+        }],
+    }
+
+    prepared = orchestrator._future_group_review_arguments(
+        "gmail.send",
+        arguments,
+        {"steps": {"weather": {"summary": "Clear"}}},
+    )
+
+    assert prepared == arguments
+    assert orchestrator._future_group_review_arguments(
+        "gmail.send",
+        {**arguments, "subject": "{{steps.missing.subject}}"},
+        {"steps": {}},
+    ) is None

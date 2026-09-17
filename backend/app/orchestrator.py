@@ -106,6 +106,39 @@ _TEXT_DOCUMENT_TYPES = {
 }
 
 
+def _future_group_review_arguments(
+    operation: str,
+    arguments: dict,
+    context: dict,
+) -> dict | None:
+    """Prepare future delivery values without inventing provider outputs."""
+    if operation != "gmail.send":
+        return None
+    prepared: dict = {}
+    try:
+        for key, value in arguments.items():
+            if key != "attachments":
+                prepared[key] = resolve_value(value, context)
+                continue
+            if not isinstance(value, list):
+                return None
+            attachments = []
+            for item in value:
+                if not isinstance(item, dict):
+                    return None
+                filename = resolve_value(item.get("filename"), context)
+                url = item.get("url")
+                if not isinstance(filename, str) or not isinstance(url, str):
+                    return None
+                # The URL remains a typed workflow reference at review time and
+                # is resolved only after the approved Canva design is exported.
+                attachments.append({**item, "filename": filename, "url": url})
+            prepared[key] = attachments
+    except WorkflowContextError:
+        return None
+    return prepared
+
+
 def _planning_prompt_with_documents(prompt: str, inputs: dict | None) -> str:
     """Add bounded uploaded text to the model call without exposing data URLs."""
     documents = (inputs or {}).get("attached_documents", (inputs or {}).get("documents"))
@@ -2176,7 +2209,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         )
                         await session.commit()
                         return
-                approval.preview = {
+                approval_preview = {
                     "status": "ready",
                     "operation": step.operation,
                     "arguments": resolved_arguments,
@@ -2187,6 +2220,84 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         tool.display_name,
                     ),
                 }
+                approval_group = plan_steps[step.position].get("approval_group")
+                if approval_group:
+                    group_id = f"{run.id}:{approval_group}"
+                    grouped_steps = []
+                    for future_step in steps[step.position + 1 :]:
+                        future_plan_step = plan_steps[future_step.position]
+                        if (
+                            future_plan_step.get("approval_group") != approval_group
+                            or future_step.status != StepStatus.awaiting_approval
+                            or not future_step.approval_id
+                        ):
+                            continue
+                        future_arguments = _future_group_review_arguments(
+                            future_step.operation,
+                            future_step.arguments,
+                            context,
+                        )
+                        if future_arguments is None:
+                            continue
+                        future_approval = await session.get(Approval, future_step.approval_id)
+                        future_tool = await session.scalar(
+                            select(ToolConnection).where(
+                                ToolConnection.workspace_id == workspace_id,
+                                ToolConnection.slug == future_step.tool_slug,
+                                ToolConnection.enabled.is_(True),
+                            )
+                        )
+                        if (
+                            not future_approval
+                            or future_approval.status != "pending"
+                            or not future_tool
+                        ):
+                            continue
+                        future_manifest_record = await session.scalar(
+                            select(CapabilityManifest).where(
+                                CapabilityManifest.tool_id == future_tool.id,
+                                CapabilityManifest.status == "verified",
+                            )
+                        )
+                        future_manifest = _current_capability_manifest(
+                            future_step.tool_slug,
+                            future_manifest_record.manifest
+                            if future_manifest_record
+                            else None,
+                        )
+                        try:
+                            future_arguments = normalize_module_arguments(
+                                future_manifest,
+                                future_step.operation,
+                                future_arguments,
+                            )
+                        except (NativeConnectorError, ValueError):
+                            continue
+                        future_capability = next(
+                            (
+                                item
+                                for item in future_manifest.get("capabilities", [])
+                                if item.get("name") == future_step.operation
+                            ),
+                            {},
+                        )
+                        future_approval.preview = {
+                            "status": "ready",
+                            "operation": future_step.operation,
+                            "arguments": future_arguments,
+                            "review_contract": build_review_contract(
+                                future_step.operation,
+                                future_arguments,
+                                future_capability,
+                                future_tool.display_name,
+                            ),
+                            "group_id": group_id,
+                        }
+                        grouped_steps.append(future_step.id)
+                    if grouped_steps:
+                        approval_preview["group_id"] = group_id
+                        approval_preview["grouped_step_ids"] = grouped_steps
+                approval.preview = approval_preview
                 run.execution_context = deepcopy(context)
                 transition_run(
                     run,
@@ -2215,6 +2326,52 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 )
                 await session.commit()
                 return
+
+            if (
+                step.operation == "gmail.send"
+                and resolved_arguments.get("attachments")
+                and any(
+                    not isinstance(item, dict) or not item.get("sha256")
+                    for item in resolved_arguments["attachments"]
+                )
+            ):
+                from .file_delivery import prepare_attachments
+
+                export_urls = {
+                    url
+                    for completed_step in steps
+                    if completed_step.status == StepStatus.completed
+                    and completed_step.operation == "canva.export.create"
+                    and completed_step.output.get("outcome_check", {}).get("status")
+                    == "verified"
+                    for url in completed_step.output.get("outcome_check", {})
+                    .get("observed", {})
+                    .get("job", {})
+                    .get("urls", [])
+                }
+                try:
+                    resolved_arguments = await prepare_attachments(
+                        resolved_arguments,
+                        export_urls,
+                    )
+                except Exception:  # noqa: BLE001 - preserve completed upstream artifacts
+                    message = (
+                        "PDF preparation failed before sending. The completed Canva "
+                        "presentation is preserved; retry file preparation."
+                    )
+                    transition_run(
+                        run,
+                        RunStatus.waiting_for_action,
+                        reason="attachment_preparation_failed",
+                        actor="recovery-engineer",
+                        phase="execution",
+                        supervisor_status="recovering",
+                        error=message,
+                        dispatch=None,
+                        metadata={"step_id": step.id},
+                    )
+                    await session.commit()
+                    return
 
             tool = await session.scalar(
                 select(ToolConnection).where(

@@ -257,6 +257,7 @@ def weather_presentation_template(
             "reason": "Create the requested populated presentation from the retrieved forecast.",
             "expected_output": "Verified Canva presentation creation job and design identity.",
             "consequential": True,
+            "approval_group": "weather_presentation_delivery",
             "depends_on": ["weather"],
             "required_evidence": ["dispatch_receipt", "populated_presentation"],
         },
@@ -275,7 +276,10 @@ def weather_presentation_template(
                     },
                     "reason": "Export the completed presentation as the requested PDF attachment.",
                     "expected_output": "Verified Canva PDF export job and download URL.",
-                    "consequential": True,
+                    # This is a delivery derivative of the reviewed presentation.
+                    # It remains a governed write but does not ask the user to
+                    # approve an opaque design id and file format separately.
+                    "consequential": False,
                     "depends_on": ["create_presentation"],
                     "required_evidence": ["dispatch_receipt"],
                 },
@@ -299,6 +303,7 @@ def weather_presentation_template(
                     "reason": "Email the verified presentation PDF to the requested inbox.",
                     "expected_output": "Verified Gmail message receipt with the PDF attached.",
                     "consequential": True,
+                    "approval_group": "weather_presentation_delivery",
                     "depends_on": ["export_presentation"],
                     "required_evidence": ["write_receipt"],
                 },
