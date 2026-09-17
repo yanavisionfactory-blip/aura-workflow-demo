@@ -431,6 +431,12 @@ class PlanStep(BaseModel):
     reason: str
     expected_output: str
     consequential: bool = False
+    # Consequential steps in the same group are reviewed together when their
+    # user-editable values can be prepared safely before the first write.
+    approval_group: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_]{0,119}$",
+    )
     optional: bool = False
     fallback_tool_slug: str | None = None
     fallback_operation: str | None = None

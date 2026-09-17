@@ -27,6 +27,7 @@ def _module(
     required: tuple[str, ...] = (),
     properties: dict[str, dict[str, Any]] | None = None,
     permission_scope: str | None = None,
+    requires_approval: bool | None = None,
 ) -> dict[str, Any]:
     if module_type not in {"trigger", "search", "action"}:
         raise NativeConnectorError(f"Invalid module type: {module_type}")
@@ -45,7 +46,7 @@ def _module(
         "input_schema": schema,
         "output_schema": {"type": "object"},
         "permission_scope": scope,
-        "requires_approval": scope != "read",
+        "requires_approval": scope != "read" if requires_approval is None else requires_approval,
         "transport": {"builtin": name},
     }
 
@@ -225,7 +226,11 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                 "query": _TEXT, "limit": {**_POSITIVE_INTEGER, "maximum": 50}
             }),
             _module("gmail.send", "action", "Send an approved email.", required=("to", "body"), properties={
-                "to": {"type": "string", "format": "email"}, "subject": _TEXT, "body": _TEXT,
+                "to": {
+                    "type": "string",
+                    "pattern": r"^(?:me|[^\s@]+@[^\s@]+\.[^\s@]+)$",
+                    "description": "An email address, or 'me' for the connected Gmail account.",
+                }, "subject": _TEXT, "body": _TEXT,
                 "attachments": ATTACHMENTS_SCHEMA,
             }),
             _module("gmail.get", "search", "Read a specific Gmail message for outcome verification.", required=("message_id",), properties={"message_id": _TEXT, "verify_attachments": {"type": "boolean"}}),
@@ -397,7 +402,17 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
             _module("canva.design.get", "search", "Read Canva design metadata.", required=("design_id",), properties={"design_id": _TEXT}),
             _module("canva.design.create", "action", "Create an approved Canva design.", required=("design_type",), properties={"design_type": {"type": "object"}, "title": _TEXT, "asset_id": _TEXT}),
             _module("canva.folder.items.list", "search", "List items in a Canva folder.", required=("folder_id",), properties={"folder_id": _TEXT, "continuation": _TEXT, "limit": {**_POSITIVE_INTEGER, "maximum": 100}}),
-            _module("canva.export.create", "action", "Start an approved design export.", required=("design_id", "format"), properties={"design_id": _TEXT, "format": {"type": "string", "enum": ["pdf", "jpg", "png", "gif", "pptx", "mp4", "csv", "html_bundle", "html_standalone"]}}),
+            _module(
+                "canva.export.create",
+                "action",
+                "Render an approved Canva design into the delivery format selected in the workflow.",
+                required=("design_id", "format"),
+                properties={"design_id": _TEXT, "format": {"type": "string", "enum": ["pdf", "jpg", "png", "gif", "pptx", "mp4", "csv", "html_bundle", "html_standalone"]}},
+                permission_scope="write",
+                # Export is a deterministic derivative of an already approved
+                # design, not a second user-facing content decision.
+                requires_approval=False,
+            ),
             _module("canva.export.get", "search", "Check an export and retrieve its download links.", required=("export_id",), properties={"export_id": _TEXT}),
         ],
     },

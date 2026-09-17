@@ -94,3 +94,34 @@ test("rich structured previews cannot approve incomplete nested values", () => {
   assert.equal(validateReviewArguments(contract, { phases: [{ period: "", title: "Launch", items: [""] }] }).length, 2);
   assert.deepEqual(validateReviewArguments(contract, { phases: [{ period: "Q1", title: "Launch", items: ["Ship"] }] }), []);
 });
+
+test("the connected Gmail account alias is accepted by the review contract", () => {
+  const contract = {
+    fields: [{
+      key: "to",
+      path: ["to"],
+      type: "string",
+      required: true,
+      pattern: "^(?:me|[^\\s@]+@[^\\s@]+\\.[^\\s@]+)$",
+    }],
+  };
+
+  assert.deepEqual(validateReviewArguments(contract, { to: "me" }), []);
+  assert.deepEqual(validateReviewArguments(contract, { to: "person@example.com" }), []);
+  assert.equal(validateReviewArguments(contract, { to: "not an address" }).length, 1);
+});
+
+test("derived Canva export stays in preparation instead of becoming another approval", () => {
+  const step = resolvedApprovalStep(
+    { tool: "Canva", title: "Export presentation", riskLevel: "modify" },
+    {
+      consequential: false,
+      operation: "canva.export.create",
+      status: "pending",
+    },
+    "Canva",
+  );
+
+  assert.equal(step.riskLevel, "read");
+  assert.equal(step.approvalPending, false);
+});

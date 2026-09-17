@@ -20,7 +20,11 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .agent_runtime import deterministic_plan_fixes
-from .approval_review import build_review_contract
+from .approval_review import (
+    build_review_contract,
+    public_review_preview,
+    public_step_arguments,
+)
 from .autonomous_delivery import reset_read_attempt_cycle
 from .config import get_settings
 from .connector_engineer import (
@@ -5180,7 +5184,7 @@ async def _run_view(session: AsyncSession, run: WorkflowRun) -> dict:
                 "agent": s.agent,
                 "tool_slug": s.tool_slug,
                 "operation": s.operation,
-                "arguments": s.arguments,
+                "arguments": public_step_arguments(s.operation, s.arguments),
                 "depends_on": s.depends_on,
                 "dependency_mode": s.dependency_mode,
                 "condition": s.condition,
@@ -5192,7 +5196,7 @@ async def _run_view(session: AsyncSession, run: WorkflowRun) -> dict:
                 "approval_status": approvals_by_step[s.id].status
                 if s.id in approvals_by_step
                 else None,
-                "approval_preview": approvals_by_step[s.id].preview
+                "approval_preview": public_review_preview(approvals_by_step[s.id].preview)
                 if s.id in approvals_by_step
                 else None,
                 "output": s.output,
@@ -5788,11 +5792,16 @@ async def decide_approval(
     if payload.approved:
         from .workflow_context import WorkflowContextError, canonical_action_arguments
 
+        stored_arguments = dict(approval.preview.get("arguments", {}))
         proposed = (
-            payload.edited_arguments
+            {**stored_arguments, **payload.edited_arguments}
             if payload.edited_arguments is not None
-            else approval.preview.get("arguments", {})
+            else stored_arguments
         )
+        if step.operation == "gmail.send" and "attachments" in stored_arguments:
+            # Browser clients may edit the message but never replace the
+            # approved server-side attachment transport or signed URL.
+            proposed["attachments"] = stored_arguments["attachments"]
         try:
             canonical = canonical_action_arguments(
                 step.operation, proposed, run.execution_context or {}
@@ -5847,7 +5856,7 @@ async def decide_approval(
                 raise HTTPException(409, "AURA is still preparing this app action")
             try:
                 edited_arguments = normalize_module_arguments(
-                    manifest, step.operation, payload.edited_arguments
+                    manifest, step.operation, canonical
                 )
             except ValueError as exc:
                 raise HTTPException(422, f"The reviewed action is incomplete: {exc}") from exc
@@ -5909,6 +5918,7 @@ async def decide_approval(
                 run.id, step.position, step.operation, edited_arguments
             )
             approval.preview = {
+                "status": "ready",
                 "operation": step.operation,
                 "arguments": edited_arguments,
                 "review_contract": build_review_contract(
@@ -5924,13 +5934,48 @@ async def decide_approval(
                     ),
                     tool.display_name,
                 ),
+                **{
+                    key: approval.preview[key]
+                    for key in ("group_id", "grouped_step_ids")
+                    if key in approval.preview
+                },
             }
         step.status = StepStatus.pending
     else:
         step.status = StepStatus.skipped
-    # Staged review is sequential: after each decision the worker executes the
-    # approved action (or skips the rejected one), then prepares the next
-    # consequential action from the newly accepted context.
+    approval_group = approval.preview.get("group_id")
+    if approval_group:
+        run_approvals = (
+            await session.scalars(select(Approval).where(Approval.run_id == run.id))
+        ).all()
+        group_waiting = any(
+            item.id != approval.id
+            and item.status == "pending"
+            and item.preview.get("status") == "ready"
+            and item.preview.get("group_id") == approval_group
+            for item in run_approvals
+        )
+        if group_waiting:
+            transition_run(
+                run,
+                RunStatus.awaiting_approval,
+                reason="approval_group_partially_decided",
+                actor=context.subject,
+                phase="approval",
+                supervisor_status="human_action_required",
+                error=None,
+                dispatch=None,
+                metadata={"approval_id": approval.id, "group_id": approval_group},
+                allow_same=True,
+            )
+            await session.commit()
+            return {
+                "approval_id": approval.id,
+                "status": approval.status,
+                "run_id": run.id,
+            }
+    # Dispatch once the whole cohesive review has been decided. Ungrouped
+    # consequential actions retain the existing staged approval behavior.
     transition_run(
         run,
         RunStatus.running,

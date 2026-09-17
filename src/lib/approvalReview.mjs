@@ -52,7 +52,12 @@ const previewForArguments = (contract, args) => {
 };
 
 export const resolvedApprovalStep = (planned, runtime, toolName = "App") => {
-  if (!runtime?.consequential) return planned;
+  if (!runtime?.consequential) {
+    if (runtime?.operation === "canva.export.create") {
+      return { ...planned, riskLevel: "read", preview: undefined, approvalPending: false };
+    }
+    return planned;
+  }
   if (runtime.approval_status !== "pending" || runtime.approval_preview?.status !== "ready") {
     return { ...planned, riskLevel: "read", preview: undefined, approvalPending: true };
   }

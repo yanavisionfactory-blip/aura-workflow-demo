@@ -20,6 +20,12 @@ _LONG_TEXT_KEYS = {
     "text",
 }
 
+_PROTECTED_REVIEW_FIELDS = {
+    # Attachment URLs, fingerprints, and sizes are AURA transport values. The
+    # user reviews the attachment identity, never the signed delivery secret.
+    "gmail.send": {"attachments"},
+}
+
 
 def _label(value: str) -> str:
     words = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", value).replace("_", " ").replace("-", " ")
@@ -149,6 +155,7 @@ def build_review_contract(
     required = set(schema.get("required") or [])
     ordered_keys = list(properties)
     ordered_keys.extend(key for key in arguments if key not in properties)
+    protected = _PROTECTED_REVIEW_FIELDS.get(operation, set())
     fields = [
         _field_contract(
             key,
@@ -157,8 +164,23 @@ def build_review_contract(
             arguments.get(key),
         )
         for key in ordered_keys
+        if key not in protected
     ]
     kind = _review_kind(operation)
+    artifacts = []
+    if operation == "gmail.send":
+        for attachment in arguments.get("attachments") or []:
+            if not isinstance(attachment, dict):
+                continue
+            filename = attachment.get("filename")
+            if isinstance(filename, str) and filename.strip():
+                artifacts.append(
+                    {
+                        "kind": "attachment",
+                        "name": filename.strip(),
+                        "source": "Prepared from the approved Canva presentation",
+                    }
+                )
     return {
         "version": 1,
         "kind": kind,
@@ -167,4 +189,34 @@ def build_review_contract(
         "description": capability.get("description") or "Review the exact values AURA will submit.",
         "fields": fields,
         "editable_paths": [field["path"] for field in fields if field["editable"]],
+        "artifacts": artifacts,
     }
+
+
+def public_review_preview(preview: dict | None) -> dict | None:
+    """Remove provider transport secrets from the browser review contract."""
+    if not isinstance(preview, dict):
+        return preview
+    public = dict(preview)
+    if preview.get("operation") != "gmail.send":
+        return public
+    arguments = dict(preview.get("arguments") or {})
+    arguments.pop("attachments", None)
+    public["arguments"] = arguments
+    contract = dict(preview.get("review_contract") or {})
+    contract["fields"] = [
+        dict(field) for field in contract.get("fields") or [] if field.get("key") != "attachments"
+    ]
+    contract["editable_paths"] = [
+        path for path in contract.get("editable_paths") or [] if path != ["attachments"]
+    ]
+    public["review_contract"] = contract
+    return public
+
+
+def public_step_arguments(operation: str, arguments: dict | None) -> dict:
+    """Return only user-facing arguments for a runtime step projection."""
+    public = dict(arguments or {})
+    if operation == "gmail.send":
+        public.pop("attachments", None)
+    return public

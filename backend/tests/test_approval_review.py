@@ -1,4 +1,8 @@
-from app.approval_review import build_review_contract
+from app.approval_review import (
+    build_review_contract,
+    public_review_preview,
+    public_step_arguments,
+)
 from app.native_connectors import NATIVE_CONNECTORS, native_manifest
 
 
@@ -25,6 +29,54 @@ def test_email_review_contract_is_editable_and_schema_driven():
     body = next(field for field in contract["fields"] if field["key"] == "body")
     assert body["control"] == "textarea"
     assert body["required"] is True
+
+
+def test_email_review_contract_replaces_attachment_transport_with_receipt():
+    contract = build_review_contract(
+        "gmail.send",
+        {
+            "to": "me",
+            "body": "Attached",
+            "attachments": [{
+                "filename": "Munich weather.pdf",
+                "url": "https://export-download.canva.com/private?signature=secret",
+                "sha256": "a" * 64,
+            }],
+        },
+        _capability("google", "gmail.send"),
+        "Gmail",
+    )
+
+    assert "attachments" not in {field["key"] for field in contract["fields"]}
+    assert contract["artifacts"] == [{
+        "kind": "attachment",
+        "name": "Munich weather.pdf",
+        "source": "Prepared from the approved Canva presentation",
+    }]
+
+    public = public_review_preview({
+        "status": "ready",
+        "operation": "gmail.send",
+        "arguments": {
+            "to": "me",
+            "body": "Attached",
+            "attachments": [{
+                "filename": "Munich weather.pdf",
+                "url": "https://export-download.canva.com/private?signature=secret",
+            }],
+        },
+        "review_contract": contract,
+    })
+    assert public["arguments"] == {"to": "me", "body": "Attached"}
+    assert "signature=secret" not in str(public)
+    assert public_step_arguments(
+        "gmail.send",
+        {
+            "to": "me",
+            "body": "Attached",
+            "attachments": [{"url": "https://secret.example/signed"}],
+        },
+    ) == {"to": "me", "body": "Attached"}
 
 
 def test_presentation_review_contract_keeps_structured_phases_editable():
@@ -95,5 +147,9 @@ def test_every_native_consequential_action_has_a_reviewable_field_contract():
                 definition["name"],
             )
 
-            assert [field["key"] for field in contract["fields"]] == list(properties)
+            expected = [
+                key for key in properties
+                if not (capability["name"] == "gmail.send" and key == "attachments")
+            ]
+            assert [field["key"] for field in contract["fields"]] == expected
             assert all(field["editable"] for field in contract["fields"])
