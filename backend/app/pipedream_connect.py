@@ -602,10 +602,9 @@ class PipedreamClient:
                 async with streamablehttp_client(
                     _PIPEDREAM_MCP_URL,
                     headers=await self._mcp_headers(external_user_id, provider),
-                ) as (read, write, _):
-                    async with ClientSession(read, write) as mcp_session:
-                        await mcp_session.initialize()
-                        result = await mcp_session.list_tools()
+                ) as (read, write, _), ClientSession(read, write) as mcp_session:
+                    await mcp_session.initialize()
+                    result = await mcp_session.list_tools()
         except PipedreamConnectError:
             raise
         except Exception as exc:
