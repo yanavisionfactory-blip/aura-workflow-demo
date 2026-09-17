@@ -23,6 +23,7 @@ from .agent_runtime import (
     verify_outcome,
 )
 from .agent_telemetry import trace_run
+from .approval_review import build_review_contract
 from .autonomous_delivery import (
     RECONCILIABLE_WRITES,
     attempts_for_current_cycle,
@@ -2179,6 +2180,12 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     "status": "ready",
                     "operation": step.operation,
                     "arguments": resolved_arguments,
+                    "review_contract": build_review_contract(
+                        step.operation,
+                        resolved_arguments,
+                        capability,
+                        tool.display_name,
+                    ),
                 }
                 run.execution_context = deepcopy(context)
                 transition_run(

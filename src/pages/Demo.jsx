@@ -46,6 +46,10 @@ import { hasDurablePlan, planningRequestPrompt } from "@/lib/runtimePlan.mjs";
 import { weatherStepTitle } from "@/lib/planPresentation.mjs";
 import { instantLanguagePlan, languageDraftPrompt } from "@/lib/languagePlan.mjs";
 import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
+import {
+  editedArgumentsForStep,
+  resolvedApprovalStep,
+} from "@/lib/approvalReview.mjs";
 
 const STEP_DURATION = 2.6;
 
@@ -149,68 +153,6 @@ const friendlyStepTitle = (step) => {
   if (/update|change|sync/.test(reason)) return `Update ${tool}`;
   if (/create|add/.test(reason)) return `Create in ${tool}`;
   return `Use ${tool}`;
-};
-
-const resolvedPreviewStep = (planned, runtime) => {
-  if (!runtime?.consequential) return planned;
-  if (runtime.approval_status !== "pending" || runtime.approval_preview?.status !== "ready") {
-    return { ...planned, riskLevel: "read", preview: undefined, approvalPending: true };
-  }
-  const args = runtime.approval_preview.arguments;
-  let preview;
-  if (runtime.operation === "gmail.send") {
-    preview = {
-      type: "email",
-      to: args.to || "me",
-      subject: args.subject || "",
-      body: args.body || "",
-      note: "Prepared from the completed workflow steps.",
-    };
-  } else if (runtime.operation.startsWith("jira.issue.")) {
-    preview = {
-      type: "jira",
-      title: runtime.operation === "jira.issue.create" ? "Jira task preview" : "Jira update preview",
-      project: args.project_key || args.projectKey || args.project || "",
-      summary: args.summary || "",
-      description: args.description || "",
-      assignee: args.assignee_id || args.assignee || "",
-    };
-  } else {
-    preview = {
-      type: "list",
-      title: `${planToolName(runtime)} change preview`,
-      items: Object.entries(args).map(([label, value]) => ({
-        label,
-        detail: typeof value === "string" ? value : JSON.stringify(value),
-      })),
-    };
-  }
-  return {
-    ...planned,
-    riskLevel: "modify",
-    arguments: args,
-    resolvedArguments: args,
-    approvalId: runtime.approval_id,
-    preview,
-  };
-};
-
-const editedArgumentsForStep = (step) => {
-  const args = { ...(step.resolvedArguments || step.arguments || {}) };
-  const preview = step.preview || {};
-  if (preview.type === "email") {
-    return { ...args, to: preview.to, subject: preview.subject, body: preview.body };
-  }
-  if (preview.type === "jira") {
-    return {
-      ...args,
-      project_key: preview.project,
-      summary: preview.summary,
-      description: preview.description,
-      assignee_id: preview.assignee,
-    };
-  }
-  return args;
 };
 
 const uiPlanFromRun = (run) => ({
@@ -392,6 +334,7 @@ export default function Demo() {
   const [execSteps, setExecSteps] = useState([]);
   const [currentStepIdx, setCurrentStepIdx] = useState(0);
   const [approvedSteps, setApprovedSteps] = useState([]);
+  const [previewError, setPreviewError] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [startTime, setStartTime] = useState(null);
   const [workflowName, setWorkflowName] = useState("");
@@ -488,6 +431,7 @@ export default function Demo() {
     resolvedErrorRef.current = false;
     approvedStepsRef.current = [];
     setApprovedSteps([]);
+    setPreviewError("");
     execTemplateRef.current = [];
     currentRunIdRef.current = null;
     currentWorkflowIdRef.current = null;
@@ -1002,6 +946,7 @@ Rules:
   }, [editRunMode, autoApprove, keepPlanInReview]);
 
   const handlePreviewApprove = useCallback((editedSteps) => {
+    setPreviewError("");
     if (editedSteps && editedSteps.length) {
       approvedStepsRef.current = editedSteps;
       setApprovedSteps(editedSteps);
@@ -1201,10 +1146,11 @@ Rules:
         if (active >= 0) setCurrentStepIdx(active);
         if (run.status === "awaiting_approval") {
           const prepared = reviewedUiSteps.map((step, index) =>
-            resolvedPreviewStep(step, run.steps?.[index])
+            resolvedApprovalStep(step, run.steps?.[index], planToolName(run.steps?.[index] || step))
           );
           approvedStepsRef.current = prepared;
           setApprovedSteps(prepared);
+          setPreviewError("");
           setPhase("preview");
           return;
         }
@@ -1242,9 +1188,8 @@ Rules:
       ...pythonPlanRef.current,
       steps: pythonPlanRef.current.steps.map((step, index) => {
         const ui = editedUiSteps?.[index];
-        if (!ui?.preview) return step;
-        const patch = ui.preview.type === "email" ? { to: ui.preview.to, subject: ui.preview.subject, body: ui.preview.body } : {};
-        return { ...step, arguments: { ...step.arguments, ...patch } };
+        if (!ui) return step;
+        return { ...step, arguments: editedArgumentsForStep(ui) };
       }),
     };
     try {
@@ -1312,7 +1257,7 @@ Rules:
         }
         if (run.status === "awaiting_approval") {
           const preparedSteps = approvedStepsRef.current.map((step, index) =>
-            resolvedPreviewStep(step, run.steps?.[index])
+            resolvedApprovalStep(step, run.steps?.[index], planToolName(run.steps?.[index] || step))
           );
           approvedStepsRef.current = preparedSteps;
           setApprovedSteps(preparedSteps);
@@ -1332,6 +1277,19 @@ Rules:
       }
     } catch (error) {
       console.error("Python workflow execution failed", error);
+      if (prepared && [409, 422].includes(error?.status)) {
+        const latest = await getPythonRun(runId).catch(() => null);
+        if (latest?.status === "awaiting_approval") {
+          const refreshed = approvedStepsRef.current.map((step, index) =>
+            resolvedApprovalStep(step, latest.steps?.[index], planToolName(latest.steps?.[index] || step))
+          );
+          approvedStepsRef.current = refreshed;
+          setApprovedSteps(refreshed);
+          setPreviewError(error.message || "Review the highlighted values and try again.");
+          setPhase("preview");
+          return;
+        }
+      }
       await recoverRunStatus();
     }
   };
@@ -1714,7 +1672,7 @@ Generate a results summary in plain, human-friendly language (not technical).
                 transition={{ duration: 0.4 }}
                 className="w-full flex justify-center"
               >
-                <PreviewView preview={previewData} steps={approvedSteps} approvalStep={approvalStep} onApprove={handlePreviewApprove} onBack={() => setPhase("plan")} />
+                <PreviewView preview={previewData} steps={approvedSteps} approvalStep={approvalStep} error={previewError} onApprove={handlePreviewApprove} onBack={() => setPhase("plan")} />
               </motion.div>
             )}
 
