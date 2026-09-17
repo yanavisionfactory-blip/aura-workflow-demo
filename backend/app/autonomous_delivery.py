@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 
-from .agent_runtime import supervise_recovery
+from .agent_runtime import is_governed_derivative_step, supervise_recovery
 from .config import get_settings
 from .db import SessionLocal, set_tenant_context
 from .managed_connectors import managed_connection_reference, managed_connector_client
@@ -38,7 +38,7 @@ from .native_connectors import (
 from .policy import operation_scope
 from .providers import PROVIDERS
 from .run_supervisor import recovery_counter, recovery_mapping, transition_run
-from .schemas import AutonomousRecoveryOption
+from .schemas import AutonomousRecoveryOption, WorkflowPlan
 from .security import CredentialVault
 from .universal_connectors import ConnectorError, discover_provider
 
@@ -64,7 +64,7 @@ RECONCILIABLE_WRITES = {
     "hubspot.company.update",
     "mailchimp.campaign.send",
 }
-AUTONOMY_VERSION = 3
+AUTONOMY_VERSION = 4
 
 
 def _autonomy(context: dict) -> dict:
@@ -121,8 +121,14 @@ def attempts_for_current_cycle(
         repair = recovery_mapping(
             recovery_mapping(context.get("__aura_write_repairs__")).get(step_id)
         )
+        safe_rejection = (
+            repair.get("status") == "rejected_without_effect"
+            and repair.get("reason_code") == "provider_explicit_404"
+            and repair.get("tool_slug") == "canva"
+            and repair.get("operation") == "canva.export.create"
+        )
         if (
-            repair.get("status") == "approved"
+            (repair.get("status") == "approved" or safe_rejection)
             and idempotency_key
             and repair.get("idempotency_key") == idempotency_key
         ):
@@ -131,6 +137,44 @@ def attempts_for_current_cycle(
         return attempts
     offset = recovery_counter(_autonomy(context)["attempt_offsets"].get(step_id))
     return attempts[min(max(offset, 0), len(attempts)) :]
+
+
+def record_rejected_write_retry(
+    context: dict,
+    step: RunStep,
+    attempt_count: int,
+) -> dict:
+    """Open a new attempt cycle only after a provider proved no write occurred."""
+    context = deepcopy(context)
+    repairs = recovery_mapping(context.get("__aura_write_repairs__"))
+    repairs[step.id] = {
+        "status": "rejected_without_effect",
+        "reason_code": "provider_explicit_404",
+        "attempt_offset": recovery_counter(attempt_count),
+        "idempotency_key": step.idempotency_key,
+        "tool_slug": step.tool_slug,
+        "operation": step.operation,
+    }
+    context["__aura_write_repairs__"] = repairs
+    return context
+
+
+def governed_derivative_rejection(run: WorkflowRun, step: RunStep, error: str | None) -> bool:
+    """Prove that the exact approved Canva derivative was rejected without effect."""
+    lowered = str(error or "").lower()
+    if not lowered.startswith("[invalid_request]") or not re.search(r"\b404\b", lowered):
+        return False
+    try:
+        plan = WorkflowPlan.model_validate(run.plan)
+        planned_step = plan.steps[step.position]
+    except (IndexError, TypeError, ValueError):
+        return False
+    return bool(
+        planned_step.key == step.step_key
+        and planned_step.tool_slug == step.tool_slug
+        and planned_step.operation == step.operation
+        and is_governed_derivative_step(plan, planned_step)
+    )
 
 
 def reset_read_attempt_cycle(context: dict, step_id: str, attempt_count: int) -> dict:
@@ -339,6 +383,16 @@ async def _safe_options(
     fingerprint = str(failure["fingerprint"])
     tried_for_failure = set(state["actions_by_failure"].get(fingerprint, []))
     consequential = step.consequential or operation_scope(step.operation) != "read"
+    if governed_derivative_rejection(run, step, str(failure.get("error") or "")):
+        return [
+            AutonomousRecoveryOption(
+                key="retry_governed_derivative",
+                action="retry_step",
+                step_id=step.id,
+                reason_code="provider_rejected_derivative_not_ready",
+                delay_seconds=delay,
+            )
+        ]
     if consequential:
         if attempts and step.operation in RECONCILIABLE_WRITES:
             return [
@@ -712,7 +766,15 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
             }
             attempt_count = await _attempt_count(session, step.id)
             consequential = step.consequential or operation_scope(step.operation) != "read"
-            if selected.action in {"retry_step", "revalidate_connection"} and not consequential:
+            if (
+                selected.action == "retry_step"
+                and selected.reason_code == "provider_rejected_derivative_not_ready"
+                and governed_derivative_rejection(
+                    run, step, str((failure or {}).get("error") or "")
+                )
+            ):
+                context = record_rejected_write_retry(context, step, attempt_count)
+            elif selected.action in {"retry_step", "revalidate_connection"} and not consequential:
                 state["attempt_offsets"] = {
                     **state["attempt_offsets"],
                     step.id: attempt_count,
@@ -868,6 +930,21 @@ async def _handoff(session, run, state: dict, reason_code: str) -> None:
     context = deepcopy(run.execution_context or {})
     context["__aura_autonomy__"] = state
     run.execution_context = context
+    transition_run(
+        run,
+        RunStatus.waiting_for_action,
+        reason="autonomous_recovery_exhausted",
+        actor="senior-orchestrator",
+        phase="execution",
+        supervisor_status="human_action_required",
+        error=(
+            "AURA tried every policy-safe automatic recovery. Completed work is saved; "
+            "review the remaining step before trying it again."
+        ),
+        dispatch=None,
+        metadata={"reason_code": reason_code},
+        allow_same=run.status == RunStatus.waiting_for_action,
+    )
     session.add(
         AuditEvent(
             workspace_id=run.workspace_id,

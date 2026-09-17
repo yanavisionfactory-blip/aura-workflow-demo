@@ -31,7 +31,7 @@ from app.models import (
 )
 from app.policy import canonical_plan_hash
 from app.run_supervisor import transition_run
-from app.schemas import AutonomousRecoveryOption, CriticDecision
+from app.schemas import AutonomousRecoveryOption, CriticDecision, PlanStep, WorkflowPlan
 
 
 async def _failed_read(runtime, error="[timeout] provider timed out"):
@@ -358,6 +358,138 @@ async def test_uncertain_create_is_never_automatically_replayed(runtime, monkeyp
         ).all()
 
 
+async def test_rejected_governed_canva_export_is_retried_autonomously(runtime, monkeypatch):
+    monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
+    plan = WorkflowPlan(
+        name="Deliver presentation",
+        interpretation="Create and export an approved presentation",
+        steps=[
+            PlanStep(
+                key="create_presentation",
+                agent="designer",
+                tool_slug="canva",
+                operation="canva.presentation.create",
+                arguments={"title": "Munich weather", "phases": []},
+                reason="Create the reviewed presentation",
+                expected_output="Canva design",
+                consequential=True,
+            ),
+            PlanStep(
+                key="export_presentation",
+                agent="designer",
+                tool_slug="canva",
+                operation="canva.export.create",
+                arguments={
+                    "design_id": "{{steps.create_presentation.job.id}}",
+                    "format": "pdf",
+                },
+                reason="Export the reviewed presentation",
+                expected_output="PDF",
+                consequential=False,
+                depends_on=["create_presentation"],
+            ),
+        ],
+    ).model_dump(mode="json")
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        transition_run(
+            run,
+            RunStatus.waiting_for_action,
+            reason="test_fixture_canva_not_ready",
+            actor="test",
+            dispatch=None,
+        )
+        run.plan = plan
+        step = await session.get(RunStep, "step")
+        step.position = 1
+        step.step_key = "export_presentation"
+        step.tool_slug = "canva"
+        step.operation = "canva.export.create"
+        step.arguments = {"design_id": "design-1", "format": "pdf"}
+        step.consequential = False
+        step.status = StepStatus.failed
+        step.idempotency_key = "export-once"
+        step.error = "AURA couldn't complete this step safely."
+        tool = await session.get(ToolConnection, "tool")
+        tool.slug = "canva"
+        tool.allowed_operations = ["canva.export.create"]
+        session.add(
+            StepAttempt(
+                workspace_id="w",
+                run_id="run",
+                step_id="step",
+                attempt_number=1,
+                status="failed",
+                tool_slug="canva",
+                operation="canva.export.create",
+                error="[invalid_request] Canva returned 404 Not Found",
+            )
+        )
+        await session.commit()
+
+    assert await autonomously_recover_run("run", "w") == "scheduled"
+
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        step = await session.get(RunStep, "step")
+        repair = run.execution_context["__aura_write_repairs__"]["step"]
+        assert run.status == RunStatus.recovering
+        assert step.status == StepStatus.pending
+        assert repair["status"] == "rejected_without_effect"
+        assert repair["reason_code"] == "provider_explicit_404"
+        assert repair["attempt_offset"] == 1
+        assert run.execution_context["__aura_autonomy__"]["last_reason_code"] == (
+            "provider_rejected_derivative_not_ready"
+        )
+
+
+async def test_ordinary_write_404_is_never_replayed(runtime, monkeypatch):
+    monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        transition_run(
+            run,
+            RunStatus.waiting_for_action,
+            reason="test_fixture_write_rejected",
+            actor="test",
+            dispatch=None,
+        )
+        step = await session.get(RunStep, "step")
+        step.status = StepStatus.failed
+        session.add(
+            StepAttempt(
+                workspace_id="w",
+                run_id="run",
+                step_id="step",
+                attempt_number=1,
+                status="failed",
+                tool_slug="test",
+                operation="records.create",
+                error="[invalid_request] provider returned 404 Not Found",
+            )
+        )
+        await session.commit()
+
+    assert await autonomously_recover_run("run", "w") == "not_applicable"
+
+
+async def test_autonomous_handoff_becomes_a_truthful_user_decision(runtime, monkeypatch):
+    monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
+    await _failed_read(runtime)
+
+    assert await autonomous_delivery.mark_autonomous_handoff("run", "w") is True
+
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        supervisor = run.execution_context["__aura_supervisor__"]
+        assert run.status == RunStatus.waiting_for_action
+        assert supervisor["status"] == "human_action_required"
+        assert run.execution_context["__aura_autonomy__"]["handoff_reason_code"] == (
+            "no_safe_recovery"
+        )
+        assert "policy-safe automatic recovery" in run.error
+
+
 async def test_known_update_uses_readback_reconciliation_without_new_attempt_cycle(
     runtime, monkeypatch
 ):
@@ -598,6 +730,29 @@ def test_newly_approved_repaired_write_uses_a_fresh_attempt_cycle():
         "step",
         True,
         idempotency_key="old-or-unapproved-payload",
+    ) == attempts
+
+
+def test_explicitly_rejected_canva_export_uses_a_fresh_attempt_cycle():
+    attempts = [SimpleNamespace(attempt_number=1)]
+    context = {
+        "__aura_write_repairs__": {
+            "step": {
+                "status": "rejected_without_effect",
+                "reason_code": "provider_explicit_404",
+                "attempt_offset": 1,
+                "idempotency_key": "export-once",
+                "tool_slug": "canva",
+                "operation": "canva.export.create",
+            }
+        }
+    }
+    assert attempts_for_current_cycle(
+        attempts, context, "step", True, idempotency_key="export-once"
+    ) == []
+    context["__aura_write_repairs__"]["step"]["operation"] = "canva.design.create"
+    assert attempts_for_current_cycle(
+        attempts, context, "step", True, idempotency_key="export-once"
     ) == attempts
 
 

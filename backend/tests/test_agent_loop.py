@@ -478,6 +478,115 @@ async def test_recovery_api_does_not_allow_unknown_write_fallback(runtime):
         assert "reconcile" in exc.value.detail
 
 
+async def test_recovery_api_retries_only_a_proven_rejected_canva_derivative(
+    runtime, monkeypatch
+):
+    from app import main
+    from app.schemas import PlanStep, ResumeDecision, WorkflowPlan
+
+    async def no_dispatch(*args):
+        pass
+
+    monkeypatch.setattr(main, "dispatch_pending", no_dispatch)
+    plan = WorkflowPlan(
+        name="Deliver presentation",
+        interpretation="Create and export an approved presentation",
+        steps=[
+            PlanStep(
+                key="create_presentation",
+                agent="designer",
+                tool_slug="canva",
+                operation="canva.presentation.create",
+                arguments={"title": "Munich weather", "phases": []},
+                reason="Create the reviewed presentation",
+                expected_output="Canva design",
+                consequential=True,
+            ),
+            PlanStep(
+                key="export_presentation",
+                agent="designer",
+                tool_slug="canva",
+                operation="canva.export.create",
+                arguments={
+                    "design_id": "{{steps.create_presentation.job.id}}",
+                    "format": "pdf",
+                },
+                reason="Export the reviewed presentation",
+                expected_output="PDF",
+                consequential=False,
+                depends_on=["create_presentation"],
+            ),
+        ],
+    ).model_dump(mode="json")
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        transition_run(
+            run,
+            RunStatus.waiting_for_action,
+            reason="test_fixture_canva_export_rejected",
+            actor="test",
+            dispatch=None,
+        )
+        run.plan = plan
+        run.execution_context = {
+            **run.execution_context,
+            "__aura_autonomy__": {
+                "version": 4,
+                "handoff_reason_code": "recovery_budget_exhausted",
+            },
+        }
+        step = await session.get(RunStep, "step")
+        step.position = 1
+        step.step_key = "export_presentation"
+        step.tool_slug = "canva"
+        step.operation = "canva.export.create"
+        step.arguments = {"design_id": "design-1", "format": "pdf"}
+        step.consequential = False
+        step.status = StepStatus.failed
+        step.idempotency_key = "export-once"
+        session.add(
+            StepAttempt(
+                workspace_id="w",
+                run_id="run",
+                step_id="step",
+                attempt_number=1,
+                status="failed",
+                tool_slug="canva",
+                operation="canva.export.create",
+                error="[invalid_request] Canva returned 404 Not Found",
+            )
+        )
+        await session.commit()
+
+        run.execution_context = main.record_rejected_write_retry(
+            run.execution_context, step, 1
+        )
+        blocker = main._run_blocker(run, [step], {}, [], {"step"})
+        assert blocker["code"] == "governed_derivative_retry_required"
+        assert blocker["action"] == "retry_step"
+        assert blocker["retryable"] is True
+        await session.commit()
+
+        result = await main.resume_run(
+            "run",
+            ResumeDecision(action="retry", step_id="step"),
+            main.TenantContext("w", "alice", "owner"),
+            session,
+        )
+
+        await session.refresh(run)
+        assert result["status"] == "recovering"
+        assert "handoff_reason_code" not in run.execution_context["__aura_autonomy__"]
+        assert run.execution_context["__aura_write_repairs__"]["step"] == {
+            "status": "rejected_without_effect",
+            "reason_code": "provider_explicit_404",
+            "attempt_offset": 1,
+            "idempotency_key": "export-once",
+            "tool_slug": "canva",
+            "operation": "canva.export.create",
+        }
+
+
 async def test_evaluation_endpoint_is_tenant_scoped(runtime):
     from fastapi import HTTPException
 

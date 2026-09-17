@@ -6,6 +6,7 @@ from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from pptx import Presentation
 
@@ -132,6 +133,42 @@ async def test_canva_import_posts_real_populated_presentation_once(monkeypatch):
     result = await ProviderExecutor({'access_token': 'private'})._canva_presentation_create(
         {'title': 'Roadmap', 'phases': [{'period': 'Day 1', 'title': 'Build', 'items': ['First milestone']}]})
     assert result['job']['id'] == 'import-1' and len(calls) == 1
+
+
+async def test_canva_export_waits_for_new_import_to_become_ready(monkeypatch):
+    request = httpx.Request('POST', 'https://api.canva.com/rest/v1/exports')
+    not_ready = httpx.HTTPStatusError(
+        'not ready',
+        request=request,
+        response=httpx.Response(404, request=request),
+    )
+    executor = ProviderExecutor({'access_token': 'private'})
+    executor._canva_request = AsyncMock(
+        side_effect=[not_ready, not_ready, {'job': {'id': 'export-1'}}]
+    )
+    sleep = AsyncMock()
+    monkeypatch.setattr('app.providers.asyncio.sleep', sleep)
+
+    result = await executor._canva_export_create({'design_id': 'design-1', 'format': 'pdf'})
+
+    assert result['job']['id'] == 'export-1'
+    assert executor._canva_request.await_count == 3
+    assert [call.args[0] for call in sleep.await_args_list] == [1, 2]
+
+
+async def test_canva_export_does_not_replay_an_uncertain_failure(monkeypatch):
+    request = httpx.Request('POST', 'https://api.canva.com/rest/v1/exports')
+    uncertain = httpx.ReadTimeout('provider response lost', request=request)
+    executor = ProviderExecutor({'access_token': 'private'})
+    executor._canva_request = AsyncMock(side_effect=uncertain)
+    sleep = AsyncMock()
+    monkeypatch.setattr('app.providers.asyncio.sleep', sleep)
+
+    with pytest.raises(httpx.ReadTimeout):
+        await executor._canva_export_create({'design_id': 'design-1', 'format': 'pdf'})
+
+    executor._canva_request.assert_awaited_once()
+    sleep.assert_not_awaited()
 
 
 async def test_gmail_receipt_reads_attachment_bytes_only_when_requested(monkeypatch):

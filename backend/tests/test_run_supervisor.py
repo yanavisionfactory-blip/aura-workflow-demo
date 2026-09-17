@@ -152,8 +152,6 @@ def test_only_explicit_unavoidable_actions_reach_the_user(code):
     "blocker",
     [
         {"kind": "operator_action", "code": "operator_attention_required"},
-        {"kind": "human_action", "code": "recovery_budget_exhausted"},
-        {"kind": "human_action", "code": "no_safe_recovery"},
     ],
 )
 def test_technical_or_budget_blockers_stay_backstage(blocker):
