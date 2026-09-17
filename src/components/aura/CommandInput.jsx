@@ -1,12 +1,12 @@
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowRight, Sparkles, X, Plus, FileBarChart, Mail, ListChecks, RefreshCw, Paperclip } from "lucide-react";
+import { ArrowRight, Sparkles, X, Plus, Check, FileBarChart, Mail, ListChecks, RefreshCw, Paperclip } from "lucide-react";
 import ValueProp from "./ValueProp";
 import ResourceComposer from "./ResourceComposer";
 import { base44 } from "@/api/base44Client";
 import { attachDocument, getAttachedDocuments, removeDocument, subscribeDocuments } from "@/lib/documentStore";
 import { CATALOG, catalogEntryFor } from "@/lib/toolCatalog";
-import { promptToolHints } from "@/lib/promptToolHints.mjs";
+import { promptToolChoices, promptToolHints } from "@/lib/promptToolHints.mjs";
 
 const EXAMPLE_ICONS = [FileBarChart, Mail, ListChecks, RefreshCw];
 
@@ -31,17 +31,28 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
 
   useEffect(() => subscribeDocuments(setDocuments), []);
 
-  const autoHints = promptToolHints(value, CATALOG).filter((h) => !removedTools.includes(h));
-  const hints = [...new Set([...autoHints, ...manualTools])];
+  useEffect(() => {
+    const currentSuggestions = new Set(promptToolHints(value, CATALOG));
+    setRemovedTools((previous) => {
+      const next = previous.filter((tool) => currentSuggestions.has(tool));
+      return next.length === previous.length ? previous : next;
+    });
+  }, [value]);
+
+  const suggestedTools = promptToolHints(value, CATALOG);
+  const toolChoices = promptToolChoices(suggestedTools, manualTools, removedTools);
+  const selectedTools = toolChoices.filter((choice) => choice.selected).map((choice) => choice.label);
 
   const handleSubmit = () => {
     const text = value.trim();
     if (text && !disabled) {
-      const requestedTools = hints.filter(
+      const requestedTools = selectedTools.filter(
         (label) => catalogEntryFor(label) || manualTools.includes(label),
       );
       onSubmit(text, requestedTools, { tools: requestedTools, documents });
       setValue("");
+      setManualTools([]);
+      setRemovedTools([]);
     }
   };
 
@@ -85,22 +96,51 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
               exit={{ opacity: 0, height: 0 }}
               className="px-4 pb-2 flex items-center gap-1.5 flex-wrap"
             >
-              <span className="text-[10px] text-muted-foreground/35">AURA will use</span>
-              {hints.map((h) => (
-                <motion.button
-                  key={h}
+              <span className="text-[10px] text-muted-foreground/45">
+                {suggestedTools.length ? "AURA suggests" : "Selected resources"}
+              </span>
+              {toolChoices.map((choice) => (
+                <motion.span
+                  key={choice.label}
                   initial={{ opacity: 0, scale: 0.85 }}
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.85 }}
-                  onClick={() => {
-                    setRemovedTools((prev) => [...prev, h]);
-                    setManualTools((prev) => prev.filter((t) => t !== h));
-                  }}
-                  className="group flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-primary/8 text-primary/60 border border-primary/15 hover:bg-red-500/10 hover:border-red-400/20 hover:text-red-400/70 transition-all"
+                  className={`group flex items-center rounded-full border overflow-hidden transition-all ${choice.selected
+                    ? "bg-primary/12 text-primary border-primary/30"
+                    : "bg-secondary/70 text-muted-foreground border-white/10 hover:border-primary/25 hover:text-foreground"
+                  }`}
                 >
-                  {h}
-                  <X className="w-2.5 h-2.5 opacity-0 group-hover:opacity-100 transition-opacity" />
-                </motion.button>
+                  <button
+                    type="button"
+                    aria-pressed={choice.selected}
+                    aria-label={`${choice.selected ? "Deselect" : "Select"} ${choice.label}`}
+                    onClick={() => {
+                      setManualTools((previous) => choice.selected
+                        ? previous.filter((tool) => tool !== choice.label)
+                        : [...new Set([...previous, choice.label])]);
+                      setRemovedTools((previous) => previous.filter((tool) => tool !== choice.label));
+                    }}
+                    className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium transition-colors"
+                  >
+                    {choice.selected
+                      ? <Check className="w-2.5 h-2.5" />
+                      : <Plus className="w-2.5 h-2.5" />}
+                    {choice.label}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`${choice.suggested ? "Dismiss suggestion" : "Remove selection"}: ${choice.label}`}
+                    onClick={() => {
+                      setManualTools((previous) => previous.filter((tool) => tool !== choice.label));
+                      if (choice.suggested) {
+                        setRemovedTools((previous) => [...new Set([...previous, choice.label])]);
+                      }
+                    }}
+                    className="self-stretch flex items-center px-1.5 border-l border-current/10 opacity-45 hover:opacity-100 hover:bg-red-500/10 hover:text-red-300 transition-all"
+                  >
+                    <X className="w-2.5 h-2.5" />
+                  </button>
+                </motion.span>
               ))}
               {documents.map((d) => (
                 <motion.button
@@ -126,7 +166,7 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
                 <ResourceComposer
                   open={showComposer}
                   onClose={() => setShowComposer(false)}
-                  pinnedTools={hints}
+                  pinnedTools={selectedTools}
                   pinnedDocs={documents}
                   onAddTool={(name) => {
                     setManualTools((prev) => [...new Set([...prev, name])]);
