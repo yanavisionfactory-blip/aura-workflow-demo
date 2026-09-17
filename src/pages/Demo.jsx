@@ -456,8 +456,7 @@ export default function Demo() {
   }, []);
 
   const handlePageBack = useCallback(() => {
-    if (phase === "input") window.history.back();
-    else if (phase === "confirm") reset();
+    if (phase === "confirm") reset();
     else if (phase === "plan") setPhase("confirm");
     else if (phase === "preview") setPhase("plan");
     else if (phase === "executing" || phase === "error") setPhase("plan");
@@ -1609,8 +1608,7 @@ Generate a results summary in plain, human-friendly language (not technical).
       <div className="relative z-10 flex flex-col min-h-screen">
         <TopBar
           onHistoryOpen={() => setHistoryOpen(true)}
-          onBack={handlePageBack}
-          backLabel={phase === "input" ? "Return" : "Back"}
+          onBack={phase === "input" ? undefined : handlePageBack}
         />
 
         <main className="flex-1 flex items-center justify-center px-4 py-8 md:py-12">
