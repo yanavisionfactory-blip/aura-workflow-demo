@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .agent_runtime import deterministic_plan_fixes
+from .approval_review import build_review_contract
 from .autonomous_delivery import reset_read_attempt_cycle
 from .config import get_settings
 from .connector_engineer import (
@@ -5805,6 +5806,11 @@ async def decide_approval(
                 "status": "ready",
                 "operation": step.operation,
                 "arguments": canonical,
+                "review_contract": build_review_contract(
+                    step.operation,
+                    canonical,
+                    tool_name=getattr(step, "tool_slug", None),
+                ),
             }
             await session.commit()
             return {
@@ -5905,6 +5911,19 @@ async def decide_approval(
             approval.preview = {
                 "operation": step.operation,
                 "arguments": edited_arguments,
+                "review_contract": build_review_contract(
+                    step.operation,
+                    edited_arguments,
+                    next(
+                        (
+                            item
+                            for item in manifest.get("capabilities", [])
+                            if item.get("name") == step.operation
+                        ),
+                        {},
+                    ),
+                    tool.display_name,
+                ),
             }
         step.status = StepStatus.pending
     else:
