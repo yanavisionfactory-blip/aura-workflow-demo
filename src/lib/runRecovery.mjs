@@ -1,6 +1,18 @@
 // Presentation only. The resume endpoint remains the authority for recovery.
 export const needsRecovery = (status) => ["waiting_for_action", "blocked", "failed"].includes(status);
 
+export function visibleRecoveryStepStatus(run = {}, step = {}) {
+  return run.public_status === "recovering" && step.status === "failed"
+    ? "recovering"
+    : step.status;
+}
+
+export function recoveryProgressMessage(run = {}, step = {}) {
+  return run.public_status === "recovering" && step.status === "failed"
+    ? "AURA is resolving this safely. Completed work is preserved."
+    : "";
+}
+
 export function alternativeRecoveryPrompt(run = {}, userApproach = "") {
   const original = String(run.prompt || "Continue the saved workflow").trim();
   const approach = String(userApproach || "").trim();
@@ -31,6 +43,9 @@ export function recoveryForRun(run = {}) {
       resource_not_found: "AURA could not find the required resource.",
       resource_access_denied: "The connected account cannot access the required resource.",
       external_effect_uncertain: "AURA cannot safely repeat an external action.",
+      recovery_budget_exhausted: "AURA couldn't complete the remaining step automatically.",
+      no_safe_recovery: "AURA couldn't complete the remaining step automatically.",
+      governed_derivative_retry_required: "Canva is taking longer than expected to prepare the finished presentation.",
     };
     const fixes = {
       connect_account: "Connect the requested account once; AURA will preserve this run and continue from the same point.",
@@ -39,7 +54,9 @@ export function recoveryForRun(run = {}) {
       review_plan: "Review the plan and start it when it is correct.",
       review_submission: "Review the exact prepared payload. AURA will submit it only after you approve it.",
       inspect_run: "Review the provider result before deciding what should happen next; completed work and receipts are preserved.",
+      retry_step: "Try only the remaining export again. The presentation is saved and AURA will not recreate it.",
     };
+    const retryAction = blocker.action === "retry_step" && blocker.retryable === true;
     return {
       index: blockerIndex >= 0 ? blockerIndex : null,
       stepId: blocker.step_id || null,
@@ -52,9 +69,13 @@ export function recoveryForRun(run = {}) {
       what: labels[blocker.code] || "AURA stopped at a required human decision.",
       why: blocker.message || "AURA cannot safely continue this run without this decision.",
       fix: fixes[blocker.action] || "Resolve the exact blocker shown above, then return to this saved run.",
-      canRetry: connectionAction,
+      canRetry: connectionAction || retryAction,
       canSkip: false,
-      buttonLabel: blocker.action === "reconnect_account" ? "Reconnect account" : "Connect account",
+      buttonLabel: retryAction
+        ? "Try export again"
+        : blocker.action === "reconnect_account"
+          ? "Reconnect account"
+          : "Connect account",
       subtitle: "This is a required human action. Everything else remains saved and unattended.",
     };
   }
@@ -78,6 +99,13 @@ export function recoveryForRun(run = {}) {
   let fix = retry
     ? "Try this step again. AURA will keep the work already completed."
     : "Check the current status. AURA has kept the work already completed.";
+  if (run.autonomy_state?.handoff_reason_code) {
+    what = "AURA couldn't complete the remaining step automatically.";
+    why = "AURA already tried every policy-safe automatic recovery. Your completed work is preserved.";
+    fix = retry
+      ? "Try only the remaining step again. AURA will reuse the completed work."
+      : "Review the remaining step before deciding whether to continue.";
+  }
   if (/configuration|administrator|client.id/.test(text)) {
     retry = false;
     what = "This app's connection setup needs correcting.";

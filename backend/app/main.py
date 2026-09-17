@@ -25,7 +25,11 @@ from .approval_review import (
     public_review_preview,
     public_step_arguments,
 )
-from .autonomous_delivery import reset_read_attempt_cycle
+from .autonomous_delivery import (
+    governed_derivative_rejection,
+    record_rejected_write_retry,
+    reset_read_attempt_cycle,
+)
 from .config import get_settings
 from .connector_engineer import (
     certify_verified_reads,
@@ -5063,6 +5067,21 @@ def _run_blocker(
     handoff_code = autonomy.get("handoff_reason_code")
     failed_step = next((step for step in steps if step.status == StepStatus.failed), None)
     if handoff_code:
+        repair = (
+            ((run.execution_context or {}).get("__aura_write_repairs__") or {}).get(
+                failed_step.id
+            )
+            if failed_step
+            else None
+        ) or {}
+        safe_derivative_retry = bool(
+            failed_step
+            and repair.get("status") == "rejected_without_effect"
+            and repair.get("reason_code") == "provider_explicit_404"
+            and repair.get("idempotency_key") == failed_step.idempotency_key
+            and repair.get("tool_slug") == "canva"
+            and repair.get("operation") == "canva.export.create"
+        )
         messages = {
             "connection_authorization_required": (
                 "The selected app account no longer grants the access this workflow needs."
@@ -5076,20 +5095,32 @@ def _run_blocker(
             ),
         }
         return {
-            "code": handoff_code,
+            "code": (
+                "governed_derivative_retry_required"
+                if safe_derivative_retry
+                else handoff_code
+            ),
             "kind": "human_action",
-            "message": messages.get(
-                handoff_code,
-                run.error or "AURA needs a human decision before it can continue safely.",
+            "message": (
+                "Canva still has not made the completed presentation available for export. "
+                "AURA exhausted its automatic readiness checks, but Canva confirmed that no "
+                "duplicate export was created."
+                if safe_derivative_retry
+                else messages.get(
+                    handoff_code,
+                    run.error or "AURA needs a human decision before it can continue safely.",
+                )
             ),
             "action": (
                 "reconnect_account"
                 if handoff_code == "connection_authorization_required"
+                else "retry_step"
+                if safe_derivative_retry
                 else "inspect_run"
             ),
             "tool_slug": failed_step.tool_slug if failed_step else None,
             "step_id": failed_step.id if failed_step else None,
-            "retryable": False,
+            "retryable": safe_derivative_retry,
         }
     if run.status in {RunStatus.failed, RunStatus.blocked, RunStatus.waiting_for_action}:
         if failed_step:
@@ -6198,6 +6229,28 @@ async def resume_run(
             step.status = StepStatus.awaiting_approval
     step.error = None
     execution_context = dict(run.execution_context or {})
+    autonomy_state = dict(execution_context.get("__aura_autonomy__") or {})
+    autonomy_state.pop("handoff_reason_code", None)
+    autonomy_state["next_attempt_at"] = None
+    if autonomy_state:
+        execution_context["__aura_autonomy__"] = autonomy_state
+    if payload.action == "retry":
+        latest_attempt = await session.scalar(
+            select(StepAttempt)
+            .where(StepAttempt.step_id == step.id)
+            .order_by(StepAttempt.attempt_number.desc())
+            .limit(1)
+        )
+        if latest_attempt and governed_derivative_rejection(run, step, latest_attempt.error):
+            attempt_count = int(
+                await session.scalar(
+                    select(func.count(StepAttempt.id)).where(StepAttempt.step_id == step.id)
+                )
+                or 0
+            )
+            execution_context = record_rejected_write_retry(
+                execution_context, step, attempt_count
+            )
     if (
         payload.action in {"retry", "fallback"}
         and not step.consequential

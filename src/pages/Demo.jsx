@@ -34,7 +34,9 @@ import {
 import {
   alternativeRecoveryPrompt,
   needsRecovery,
+  recoveryProgressMessage,
   recoveryForRun,
+  visibleRecoveryStepStatus,
 } from "@/lib/runRecovery.mjs";
 import {
   approvalStartFailure,
@@ -973,17 +975,20 @@ Rules:
       const preflightRetrying = index === 0
         && step.status === "pending"
         && run.automation_state?.status === "retrying";
+      const recoveryMessage = recoveryProgressMessage(run, step);
       return {
         id: step.id,
         stepKey: step.key,
         tool: planned?.tool || planToolName(step),
         action: planned?.title || planned?.action || friendlyStepTitle(step),
         riskLevel: step.consequential ? "modify" : "read",
-        status: preflightRetrying ? "recovering" : step.status,
+        status: preflightRetrying ? "recovering" : visibleRecoveryStepStatus(run, step),
         started_at: step.started_at,
         completed_at: step.completed_at,
         liveOutput: preflightRetrying
           ? `→ ${run.automation_state.message || "AURA is retrying a temporary preflight failure automatically"}`
+          : recoveryMessage
+          ? `→ ${recoveryMessage}`
           : step.error
           ? `→ ${step.error}`
           : step.status === "completed"

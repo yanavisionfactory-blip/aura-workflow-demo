@@ -4,7 +4,9 @@ import { readFileSync } from 'node:fs';
 import {
   alternativeRecoveryPrompt,
   needsRecovery,
+  recoveryProgressMessage,
   recoveryForRun,
+  visibleRecoveryStepStatus,
 } from '../src/lib/runRecovery.mjs';
 
 const run = (patch = {}) => ({ id: 'saved-run', status: 'waiting_for_action',
@@ -23,6 +25,39 @@ test('AURA always launches into the original prompt flow', () => {
 test('all real interrupted states route to recovery, not final results', () => {
   for (const status of ['waiting_for_action', 'blocked', 'failed']) assert.equal(needsRecovery(status), true);
   for (const status of ['completed', 'awaiting_approval', 'running', 'cancelled']) assert.equal(needsRecovery(status), false);
+});
+
+test('backstage recovery never renders a raw failed step', () => {
+  const recovering = { public_status: 'recovering' };
+  const failed = { status: 'failed', error: 'private provider failure' };
+  assert.equal(visibleRecoveryStepStatus(recovering, failed), 'recovering');
+  assert.match(recoveryProgressMessage(recovering, failed), /resolving.*preserved/i);
+  assert.equal(visibleRecoveryStepStatus({ public_status: 'waiting_for_action' }, failed), 'failed');
+});
+
+test('manual recovery appears only after AURA exhausts automatic recovery', () => {
+  const result = recoveryForRun(run({
+    autonomy_state: { handoff_reason_code: 'recovery_budget_exhausted' },
+  }));
+  assert.match(result.what, /remaining step automatically/i);
+  assert.match(result.why, /every policy-safe automatic recovery/i);
+  assert.match(result.fix, /remaining step again/i);
+});
+
+test('a proven rejected derivative offers one safe last-resort retry', () => {
+  const result = recoveryForRun(run({
+    blocker: {
+      code: 'governed_derivative_retry_required',
+      kind: 'human_action',
+      action: 'retry_step',
+      retryable: true,
+      step_id: 'failed',
+      message: 'Canva confirmed that no duplicate export was created.',
+    },
+  }));
+  assert.equal(result.canRetry, true);
+  assert.equal(result.buttonLabel, 'Try export again');
+  assert.match(result.fix, /will not recreate/i);
 });
 
 test('alternative recovery plans preserve safety boundaries and user direction', () => {
