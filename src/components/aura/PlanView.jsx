@@ -413,6 +413,14 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         </div>
       )}
 
+      {plan.startError && !connectionOnly && (
+        <div className="mb-4 rounded-xl border border-amber-400/25 bg-amber-400/5 p-3 text-sm text-amber-100">
+          <p className="font-medium">AURA couldn't start this plan</p>
+          <p className="mt-1 text-xs text-amber-100/80">{plan.startError}</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">Nothing was executed. The plan remains here so you can review it and press Start again.</p>
+        </div>
+      )}
+
       <PlanConnectionAlert
         tools={planTools.filter((tool) => catalogEntryFor(tool.name))}
         connections={effectiveConnections}

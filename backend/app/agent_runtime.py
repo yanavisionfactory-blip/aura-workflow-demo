@@ -659,7 +659,11 @@ def deterministic_plan_fixes(
                 f"{step.tool_slug!r}"
             )
         operation = step.operation.lower()
-        if any(marker in operation for marker in write_markers) and not step.consequential:
+        if (
+            any(marker in operation for marker in write_markers)
+            and not step.consequential
+            and not is_governed_derivative_step(plan, step)
+        ):
             fixes.append(f"Step {index} must be marked consequential")
         if bool(step.fallback_tool_slug) != bool(step.fallback_operation):
             fixes.append(f"Step {index} fallback must specify both tool and operation")
@@ -714,6 +718,39 @@ def deterministic_plan_fixes(
                     + ", ".join(missing_inputs)
                 )
     return fixes
+
+
+def is_governed_derivative_step(plan: WorkflowPlan, step) -> bool:
+    """Allow one exact derivative to inherit its source artifact approval.
+
+    A Canva PDF export does create a provider-side export job, but it does not
+    make a new content decision: it renders the exact presentation the user has
+    already reviewed.  The exemption is deliberately structural rather than
+    name-only so another write cannot become approval-free by copying the
+    operation label.
+    """
+    if step.operation != "canva.export.create" or step.tool_slug != "canva":
+        return False
+    if set(step.arguments) != {"design_id", "format"}:
+        return False
+    if step.arguments.get("format") != "pdf":
+        return False
+    match = re.fullmatch(
+        r"\{\{steps\.([a-z][a-z0-9_]{0,119})\.job\.id\}\}",
+        str(step.arguments.get("design_id") or ""),
+    )
+    if not match:
+        return False
+    source_key = match.group(1)
+    if source_key not in step.depends_on:
+        return False
+    source = next((candidate for candidate in plan.steps if candidate.key == source_key), None)
+    return bool(
+        source
+        and source.tool_slug == "canva"
+        and source.operation == "canva.presentation.create"
+        and source.consequential
+    )
 
 
 def autonomous_resource_resolution_context(

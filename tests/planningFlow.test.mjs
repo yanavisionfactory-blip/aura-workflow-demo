@@ -3,12 +3,34 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import {
+  approvalStartFailure,
   planningConnectionRequirements,
   planningConnectionsEnabled,
   planningDisposition,
   promptConnectionRequirements,
   shouldStartFreshPlanningRun,
 } from "../src/lib/planningFlow.mjs";
+
+test("a rejected Start request stays on the reviewable plan", () => {
+  assert.deepEqual(
+    approvalStartFailure(
+      {
+        status: "awaiting_approval",
+        blocker: { code: "plan_approval_required" },
+        plan: { steps: [{ operation: "weather.forecast" }] },
+      },
+      { status: 422, message: "Plan failed authorization" },
+    ),
+    { status: 422, message: "Plan failed authorization" },
+  );
+  assert.equal(
+    approvalStartFailure(
+      { status: "waiting_for_action", blocker: { code: "connection_required" } },
+      { status: 409 },
+    ),
+    null,
+  );
+});
 
 test("a completed backend plan proceeds to user review", () => {
   assert.equal(planningDisposition({

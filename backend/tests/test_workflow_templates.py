@@ -254,6 +254,32 @@ def test_weather_presentation_template_preserves_explicit_gmail_delivery():
     assert "export_presentation" not in plan.result_contract.supporting_step_keys
 
 
+def test_verified_network_manifest_cannot_turn_bounded_export_into_a_second_review():
+    plan = weather_presentation_template(
+        "Check tomorrow's weather in Munich, create a Canva presentation, and email it to me with Gmail.",
+        weather_inventory(),
+    )
+    manifests = {
+        "aura": native_manifest("aura"),
+        "canva": native_manifest("canva"),
+        "google": native_manifest("google"),
+    }
+    manifests["canva"]["provider_type"] = "pipedream"
+    export = next(
+        item
+        for item in manifests["canva"]["capabilities"]
+        if item["name"] == "canva.export.create"
+    )
+    export["requires_approval"] = True
+
+    orchestrator._normalize_planned_steps(plan, manifests)
+
+    export_step = next(
+        step for step in plan.steps if step.operation == "canva.export.create"
+    )
+    assert export_step.consequential is False
+
+
 def test_weather_presentation_template_never_guesses_email_recipient():
     assert weather_presentation_template(
         "Create a presentation about the weather in Munich tomorrow and email it",

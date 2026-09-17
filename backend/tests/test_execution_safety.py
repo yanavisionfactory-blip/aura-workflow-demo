@@ -95,6 +95,39 @@ def test_plan_approval_supports_staged_consequential_review():
     )
 
 
+def test_pdf_export_inherits_reviewed_presentation_approval_only_when_structurally_bounded():
+    from app.agent_runtime import deterministic_plan_fixes, is_governed_derivative_step
+    from app.native_connectors import native_operations
+    from app.workflow_templates import weather_presentation_template
+
+    inventory = [
+        {"slug": "aura", "allowed_operations": native_operations("aura")},
+        {"slug": "canva", "allowed_operations": native_operations("canva")},
+        {"slug": "google", "allowed_operations": native_operations("google")},
+    ]
+    plan = weather_presentation_template(
+        "Check tomorrow's weather in Munich, create a Canva presentation, and email it to me with Gmail.",
+        inventory,
+    )
+    export = next(step for step in plan.steps if step.operation == "canva.export.create")
+
+    assert is_governed_derivative_step(plan, export) is True
+    assert deterministic_plan_fixes(plan, inventory, set()) == []
+
+    unbounded = export.model_copy(
+        update={"arguments": {**export.arguments, "design_id": "unreviewed-design"}}
+    )
+    unsafe_plan = plan.model_copy(
+        update={
+            "steps": [unbounded if step.key == export.key else step for step in plan.steps]
+        }
+    )
+    assert is_governed_derivative_step(unsafe_plan, unbounded) is False
+    assert "Step 3 must be marked consequential" in deterministic_plan_fixes(
+        unsafe_plan, inventory, set()
+    )
+
+
 def test_confirmed_consequential_result_is_never_replayed():
     step = SimpleNamespace(
         consequential=True,

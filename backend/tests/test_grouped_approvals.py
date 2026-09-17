@@ -7,6 +7,7 @@ from app import main
 from app.models import (
     Approval,
     ApprovalSnapshot,
+    CapabilityManifest,
     PlanVersion,
     RunStatus,
     RunStep,
@@ -16,8 +17,122 @@ from app.models import (
     WorkflowRun,
     Workspace,
 )
+from app.native_connectors import native_manifest, native_operations
 from app.policy import canonical_plan_hash
-from app.schemas import ApprovalDecision
+from app.schemas import ApprovalDecision, PlanApproval
+from app.workflow_templates import weather_presentation_template
+
+
+async def test_weather_plan_can_be_started_with_one_review_and_no_export_approval(
+    monkeypatch,
+    database,
+):
+    workspace_id = str(uuid4())
+    run_id = str(uuid4())
+    inventory = [
+        {"slug": "aura", "connected": True, "allowed_operations": native_operations("aura")},
+        {"slug": "canva", "connected": True, "allowed_operations": native_operations("canva")},
+        {"slug": "google", "connected": True, "allowed_operations": native_operations("google")},
+    ]
+    plan = weather_presentation_template(
+        "Check tomorrow's weather in Munich, create a Canva presentation, and email it to me with Gmail.",
+        inventory,
+    )
+    plan_json = plan.model_dump(mode="json")
+    dispatched = []
+
+    async def dispatch(workspace):
+        dispatched.append(workspace)
+
+    monkeypatch.setattr(main, "dispatch_pending", dispatch)
+
+    async with database() as session:
+        session.add(Workspace(id=workspace_id, name="Weather approval"))
+        session.add(
+            WorkflowRun(
+                id=run_id,
+                workspace_id=workspace_id,
+                prompt="Create and email Munich weather",
+                plan=plan_json,
+                plan_approved=False,
+                status=RunStatus.awaiting_approval,
+            )
+        )
+        for slug, kind in (("aura", ToolKind.api_key), ("canva", ToolKind.oauth), ("google", ToolKind.oauth)):
+            tool = ToolConnection(
+                workspace_id=workspace_id,
+                slug=slug,
+                display_name=slug.title(),
+                kind=kind,
+                allowed_operations=native_operations(slug),
+                config={},
+            )
+            session.add(tool)
+            await session.flush()
+            session.add(
+                CapabilityManifest(
+                    workspace_id=workspace_id,
+                    tool_id=tool.id,
+                    status="verified",
+                    provider_type=kind.value,
+                    manifest=native_manifest(slug),
+                )
+            )
+        for position, planned in enumerate(plan.steps):
+            session.add(
+                RunStep(
+                    run_id=run_id,
+                    position=position,
+                    step_key=planned.key,
+                    agent=planned.agent,
+                    tool_slug=planned.tool_slug,
+                    operation=planned.operation,
+                    arguments=planned.arguments,
+                    depends_on=planned.depends_on,
+                    dependency_mode=planned.dependency_mode,
+                    output_variables=planned.output_variables,
+                    consequential=planned.consequential,
+                    status=StepStatus.pending,
+                    idempotency_key=str(uuid4()),
+                )
+            )
+        session.add(
+            PlanVersion(
+                workspace_id=workspace_id,
+                run_id=run_id,
+                version=1,
+                status="draft",
+                plan=plan_json,
+                plan_hash=canonical_plan_hash(plan_json),
+            )
+        )
+        await session.commit()
+
+        result = await main.approve_plan(
+            run_id,
+            PlanApproval(approved=True),
+            SimpleNamespace(workspace_id=workspace_id, subject="owner", role="owner"),
+            session,
+        )
+
+        assert result["status"] == "running"
+        assert dispatched == [workspace_id]
+        approvals = list(
+            (await session.scalars(select(Approval).where(Approval.run_id == run_id))).all()
+        )
+        approved_operations = {
+            (await session.get(RunStep, approval.step_id)).operation
+            for approval in approvals
+        }
+        assert approved_operations == {"canva.presentation.create", "gmail.send"}
+        export = await session.scalar(
+            select(RunStep).where(
+                RunStep.run_id == run_id,
+                RunStep.operation == "canva.export.create",
+            )
+        )
+        assert export.consequential is False
+        assert export.approval_id is None
 
 
 async def test_grouped_artifact_review_dispatches_once_and_preserves_private_attachment(
