@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { promptToolHints } from "../src/lib/promptToolHints.mjs";
+import { promptToolChoices, promptToolHints } from "../src/lib/promptToolHints.mjs";
 
 const catalog = [
   { name: "Canva", provider: "canva", aliases: ["Canva"] },
@@ -36,5 +36,31 @@ test("a shared provider family does not select every sibling app", () => {
   assert.deepEqual(
     promptToolHints("Read Google Drive files and calendar, then draft emails in Gmail", catalog),
     ["Google Drive", "Google Calendar", "Gmail"],
+  );
+});
+
+test("prompt hints are offered as choices instead of being silently selected", () => {
+  assert.deepEqual(
+    promptToolChoices(["AURA Weather", "Canva", "Gmail"]),
+    [
+      { label: "AURA Weather", suggested: true, selected: false },
+      { label: "Canva", suggested: true, selected: false },
+      { label: "Gmail", suggested: true, selected: false },
+    ],
+  );
+});
+
+test("selected, dismissed, and manually added tools keep distinct states", () => {
+  assert.deepEqual(
+    promptToolChoices(
+      ["AURA Weather", "Canva", "Gmail"],
+      ["Canva", "Marketing Agent"],
+      ["Gmail"],
+    ),
+    [
+      { label: "AURA Weather", suggested: true, selected: false },
+      { label: "Canva", suggested: true, selected: true },
+      { label: "Marketing Agent", suggested: false, selected: true },
+    ],
   );
 });

@@ -92,3 +92,29 @@ export function promptToolHints(value = "", catalog = [], limit = 6) {
     .slice(0, limit)
     .map((item) => item.label);
 }
+
+/**
+ * Keep language-derived suggestions separate from the resources the user has
+ * explicitly selected. Suggestions start unselected, may be selected without
+ * disappearing, and may be dismissed for the current prompt.
+ */
+export function promptToolChoices(suggested = [], selected = [], dismissed = []) {
+  const selectedSet = new Set(selected.filter(Boolean));
+  const dismissedSet = new Set(dismissed.filter(Boolean));
+  const seen = new Set();
+  const choices = [];
+
+  suggested.filter(Boolean).forEach((label) => {
+    if (seen.has(label) || dismissedSet.has(label)) return;
+    seen.add(label);
+    choices.push({ label, suggested: true, selected: selectedSet.has(label) });
+  });
+
+  selected.filter(Boolean).forEach((label) => {
+    if (seen.has(label)) return;
+    seen.add(label);
+    choices.push({ label, suggested: false, selected: true });
+  });
+
+  return choices;
+}
