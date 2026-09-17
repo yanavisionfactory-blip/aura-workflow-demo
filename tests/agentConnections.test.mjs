@@ -4,12 +4,21 @@ import test from "node:test";
 
 import {
   AGENT_METHODS,
+  agentAutoconnectPayload,
   agentConnectionPayload,
   agentPromptHints,
 } from "../src/lib/agentConnections.mjs";
 
 test("offers A2A, MCP, and AURA Agent API connections", () => {
   assert.deepEqual(AGENT_METHODS.map((method) => method.id), ["a2a", "mcp", "aura"]);
+});
+
+test("turns one human-facing agent link into an autoconnect request", () => {
+  assert.deepEqual(
+    agentAutoconnectPayload({ source: "  https://agent.example.com/share  " }),
+    { source: "https://agent.example.com/share" },
+  );
+  assert.throws(() => agentAutoconnectPayload({ source: " " }), /sharing link/);
 });
 
 test("normalizes a bounded agent connection payload", () => {
@@ -116,4 +125,20 @@ test("agent connection stays inside the existing resource choosers", () => {
   assert.equal(menu.includes('setTab("agents")'), true);
   assert.equal(menu.includes("<AgentConnectionForm"), true);
   assert.equal(menu.includes(">Add agent</button>"), false);
+});
+
+test("ordinary users never see agent integration engineering fields", () => {
+  const form = readFileSync(
+    new URL("../src/components/aura/AgentConnectionForm.jsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.equal(form.includes("Agent website or sharing link"), true);
+  assert.equal(form.includes("Let AURA connect it"), true);
+  assert.equal(form.includes("Agent endpoint"), false);
+  assert.equal(form.includes("Manifest URL"), false);
+  assert.equal(form.includes("Data-retention policy"), false);
+  assert.equal(form.includes("Runtime limit"), false);
+  assert.equal(form.includes("Cost ceiling"), false);
+  assert.equal(form.includes("AURA Agent API"), false);
 });

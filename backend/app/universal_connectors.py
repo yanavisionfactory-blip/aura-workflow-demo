@@ -147,7 +147,7 @@ def _agent_manifest_metadata(
         provider = raw.get("provider") or {}
         owner = str(provider.get("organization") or provider.get("name") or "").strip()
     if not owner:
-        raise ConnectorError("Agent owner is required")
+        owner = str(urlparse(manifest.get("base_url") or "").hostname or "External agent")
     name = str(config.get("name") or manifest.get("name") or "").strip()
     if not name:
         raise ConnectorError("Agent name is required")
