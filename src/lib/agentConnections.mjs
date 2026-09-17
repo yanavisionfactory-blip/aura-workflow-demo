@@ -21,6 +21,17 @@ export const AGENT_METHODS = Object.freeze([
 
 const clean = (value) => String(value || "").trim().replace(/\s+/g, " ");
 
+export function agentAutoconnectPayload(draft = {}) {
+  const source = String(draft.source || "").trim();
+  if (source.length < 2) {
+    throw new Error("Paste the agent’s website or sharing link.");
+  }
+  if (/\p{Cc}/u.test(source)) {
+    throw new Error("That agent link contains unsupported characters.");
+  }
+  return { source };
+}
+
 export function agentConnectionPayload(draft = {}) {
   const protocol = clean(draft.protocol).toLowerCase();
   if (!AGENT_METHODS.some((method) => method.id === protocol)) {

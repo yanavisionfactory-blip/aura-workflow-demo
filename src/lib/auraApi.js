@@ -131,6 +131,14 @@ export async function connectAgentConnection(payload) {
   });
 }
 
+export async function autoconnectAgent(payload) {
+  await ensureWorkspace();
+  return request("/v1/agents/autoconnect", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 let managedConnectorStatus = null;
 
 export async function getManagedConnectorStatus(refresh = false) {

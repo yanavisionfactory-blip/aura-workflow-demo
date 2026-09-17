@@ -71,6 +71,22 @@ class AgentConnectionCreate(BaseModel):
         return self
 
 
+class AgentConnectionIntent(BaseModel):
+    """A human-facing request; AURA derives the technical connection contract."""
+
+    source: str = Field(min_length=2, max_length=2_000)
+
+    @field_validator("source", mode="before")
+    @classmethod
+    def normalize_source(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise TypeError("The agent website or sharing link must be text")
+        normalized = value.strip()
+        if any(ord(character) < 32 for character in normalized):
+            raise ValueError("The agent website or sharing link contains unsupported characters")
+        return normalized
+
+
 class ConnectorMarketplaceRequest(BaseModel):
     name: str = Field(min_length=2, max_length=160)
 

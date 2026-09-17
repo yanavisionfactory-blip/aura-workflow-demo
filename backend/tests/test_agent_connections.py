@@ -4,7 +4,7 @@ from sqlalchemy import select
 
 from app import main
 from app.models import AuditEvent, CapabilityManifest, ToolConnection, ToolKind, Workspace
-from app.schemas import AgentConnectionCreate
+from app.schemas import AgentConnectionCreate, AgentConnectionIntent
 from app.security import CredentialVault
 
 
@@ -91,6 +91,76 @@ def test_agent_urls_reject_insecure_or_embedded_credentials(url: str) -> None:
 def test_agent_manifest_url_cannot_redirect_the_agent_credential() -> None:
     with pytest.raises(ValidationError, match="manifest URL must use"):
         _payload(manifest_url="https://different.example.com/agent-card.json")
+
+
+def test_agent_source_is_normalized_without_exposing_protocol_choices() -> None:
+    assert main._agent_source_url("research.example.com") == "https://research.example.com/"
+    candidates = main._agent_discovery_candidates("https://research.example.com/")
+    assert [candidate["protocol"] for candidate in candidates[:3]] == [
+        "a2a",
+        "aura",
+        "mcp",
+    ]
+    assert candidates[0]["manifest_url"].endswith("/.well-known/agent-card.json")
+    explicit = main._agent_discovery_candidates(
+        "https://research.example.com/shared/manifest.json"
+    )
+    assert explicit[0]["manifest_url"] == (
+        "https://research.example.com/shared/manifest.json"
+    )
+    assert explicit[1]["manifest_url"] == (
+        "https://research.example.com/shared/manifest.json"
+    )
+
+
+async def test_agent_intent_discovers_the_contract_automatically(monkeypatch) -> None:
+    calls = []
+
+    async def discovered(kind, endpoint, credentials, config):
+        calls.append((kind, endpoint, credentials, config))
+        return _manifest()
+
+    monkeypatch.setattr(main, "discover_provider", discovered)
+    payload, manifest, credentials, kind = await main._discover_agent_intent(
+        AgentConnectionIntent(source="research.example.com/a2a/v1")
+    )
+
+    assert payload.protocol == "a2a"
+    assert payload.name == "Research Agent"
+    assert payload.owner == "Research Co"
+    assert str(payload.endpoint) == "https://research.example.com/a2a/v1"
+    assert str(payload.manifest_url) == (
+        "https://research.example.com/.well-known/agent-card.json"
+    )
+    assert credentials == {}
+    assert kind == ToolKind.agent
+    assert manifest["side_effects"] == "artifact_only"
+    assert calls[0][3]["agent_protocol"] == "a2a"
+
+
+async def test_autoconnect_persists_the_agent_without_user_supplied_technical_fields(
+    database, monkeypatch
+) -> None:
+    async def discovered(_intent):
+        payload = _payload(authentication="none", credential=None)
+        return payload, _manifest(), {}, ToolKind.agent
+
+    monkeypatch.setattr(main, "_discover_agent_intent", discovered)
+    context = main.TenantContext(workspace_id="workspace", subject="owner", role="owner")
+    async with database() as session:
+        session.add(Workspace(id="workspace", name="Workspace"))
+        await session.commit()
+
+        result = await main.autoconnect_agent(
+            AgentConnectionIntent(source="research.example.com"), context, session
+        )
+
+        assert result["connected_by"] == "aura_autodiscovery"
+        assert result["name"] == "Research Agent"
+        tool = await session.scalar(select(ToolConnection))
+        assert tool.config["managed_by"] == "agent_gateway"
+        assert tool.config["may_access_aura_tools"] is False
+        assert CredentialVault().decrypt(tool.encrypted_credentials) == {}
 
 
 async def test_connect_agent_persists_verified_manifest_without_exposing_secret(

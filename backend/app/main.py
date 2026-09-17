@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import hmac
 import json
@@ -132,6 +133,7 @@ from .providers import (
 from .run_supervisor import SUPERVISOR_VERSION, transition_run
 from .schemas import (
     AgentConnectionCreate,
+    AgentConnectionIntent,
     AiGenerateRequest,
     ApprovalDecision,
     ConnectionResume,
@@ -684,6 +686,148 @@ async def _discover_agent_payload(payload: AgentConnectionCreate) -> tuple[dict,
     return manifest, credentials, kind
 
 
+class AgentAuthorizationRequired(ConnectorError):
+    pass
+
+
+def _agent_source_url(source: str) -> str:
+    value = source.strip()
+    if "://" not in value:
+        value = f"https://{value}"
+    parsed = urlsplit(value)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ConnectorError("Paste the agent's website or sharing link")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ConnectorError(
+            "Use the agent's public website or sharing link without login details in the URL"
+        )
+    if any(character.isspace() for character in parsed.netloc):
+        raise ConnectorError("Paste the agent's website or sharing link")
+    normalized = f"{parsed.scheme}://{parsed.netloc}{parsed.path or '/'}"
+    return normalized.rstrip("/") if parsed.path not in {"", "/"} else normalized
+
+
+def _agent_discovery_candidates(source: str) -> list[dict]:
+    parsed = urlsplit(source)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    path = parsed.path or "/"
+    explicit_manifest = path.endswith(".json")
+    registration_endpoint = origin if explicit_manifest or path == "/" else source
+    a2a_manifest = (
+        source if explicit_manifest else f"{origin}/.well-known/agent-card.json"
+    )
+    aura_manifest = (
+        source if explicit_manifest else f"{origin}/.well-known/aura-agent.json"
+    )
+    mcp_endpoint = origin + "/mcp" if explicit_manifest else source
+    candidates = [
+        {
+            "protocol": "a2a",
+            "kind": ToolKind.agent,
+            "endpoint": registration_endpoint,
+            "manifest_url": a2a_manifest,
+        },
+        {
+            "protocol": "aura",
+            "kind": ToolKind.agent,
+            "endpoint": registration_endpoint,
+            "manifest_url": aura_manifest,
+        },
+        {
+            "protocol": "mcp",
+            "kind": ToolKind.mcp,
+            "endpoint": mcp_endpoint,
+            "manifest_url": None,
+        },
+    ]
+    if mcp_endpoint.rstrip("/") != f"{origin}/mcp":
+        candidates.append(
+            {
+                "protocol": "mcp",
+                "kind": ToolKind.mcp,
+                "endpoint": f"{origin}/mcp",
+                "manifest_url": None,
+            }
+        )
+    return candidates
+
+
+async def _discover_agent_intent(
+    intent: AgentConnectionIntent,
+) -> tuple[AgentConnectionCreate, dict, dict, ToolKind]:
+    source = _agent_source_url(intent.source)
+    hostname = urlsplit(source).hostname or "external agent"
+
+    async def probe(candidate: dict) -> tuple[dict, dict | None, bool]:
+        protocol = candidate["protocol"]
+        config = {
+            "managed_by": "agent_gateway",
+            "agent_protocol": protocol,
+            "name": "",
+            "owner": "",
+            "manifest_url": candidate["manifest_url"],
+            "authentication": "none",
+            "data_access": [],
+            "data_retention": "provider-defined",
+            "max_runtime_seconds": 30,
+            "max_cost_usd": 5.0,
+        }
+        try:
+            manifest = await asyncio.wait_for(
+                discover_provider(
+                    candidate["kind"].value,
+                    candidate["endpoint"],
+                    {},
+                    config,
+                ),
+                timeout=12,
+            )
+        except httpx.HTTPStatusError as exc:
+            return candidate, None, exc.response.status_code in {401, 403}
+        except (TimeoutError, ConnectorError, httpx.HTTPError, OSError, ValueError):
+            return candidate, None, False
+        return candidate, manifest, False
+
+    probes = await asyncio.gather(
+        *(probe(candidate) for candidate in _agent_discovery_candidates(source))
+    )
+    authorization_required = any(result[2] for result in probes)
+    for candidate, manifest, _ in probes:
+        if manifest is None:
+            continue
+        protocol = candidate["protocol"]
+
+        limits = manifest.get("limits") or {}
+        data_access = [
+            " ".join(str(item).split())[:200]
+            for item in (manifest.get("data_access") or [])[:20]
+            if str(item).strip()
+        ]
+        payload = AgentConnectionCreate(
+            protocol=protocol,
+            name=str(manifest.get("name") or hostname),
+            owner=str(manifest.get("owner") or hostname),
+            endpoint=candidate["endpoint"],
+            manifest_url=candidate["manifest_url"],
+            authentication="none",
+            data_access=data_access,
+            data_retention=str(manifest.get("data_retention") or "provider-defined")[:500],
+            max_runtime_seconds=max(
+                5, min(300, int(limits.get("max_runtime_seconds") or 30))
+            ),
+            max_cost_usd=max(0, min(1_000, float(limits.get("max_cost_usd") or 5.0))),
+        )
+        return payload, manifest, {}, candidate["kind"]
+
+    if authorization_required:
+        raise AgentAuthorizationRequired(
+            "This agent needs your permission before AURA can connect it"
+        )
+    raise ConnectorError(
+        "AURA could not find a shareable agent at that link. Open the agent and choose Share or Connect, then paste that link here."
+    )
+
+
 @app.post("/v1/agents/validate")
 async def validate_agent_connection(
     payload: AgentConnectionCreate,
@@ -736,17 +880,14 @@ async def list_agent_connections(
     ]
 
 
-@app.post("/v1/agents", status_code=201)
-async def connect_agent(
+async def _persist_agent_connection(
     payload: AgentConnectionCreate,
-    context: TenantContext = Depends(tenant_context),
-    session: AsyncSession = Depends(tenant_session),
+    manifest: dict,
+    credentials: dict,
+    kind: ToolKind,
+    context: TenantContext,
+    session: AsyncSession,
 ) -> dict:
-    try:
-        manifest, credentials, kind = await _discover_agent_payload(payload)
-    except (ConnectorError, httpx.HTTPError, ValueError) as exc:
-        raise HTTPException(422, f"AURA could not verify that agent: {exc}") from exc
-
     registration_endpoint = str(payload.endpoint)
     current = (
         await session.scalars(
@@ -857,6 +998,52 @@ async def connect_agent(
     )
     await session.commit()
     return _agent_connection_view(tool, manifest_record)
+
+
+@app.post("/v1/agents", status_code=201)
+async def connect_agent(
+    payload: AgentConnectionCreate,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    try:
+        manifest, credentials, kind = await _discover_agent_payload(payload)
+    except (ConnectorError, httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(422, f"AURA could not verify that agent: {exc}") from exc
+    return await _persist_agent_connection(
+        payload, manifest, credentials, kind, context, session
+    )
+
+
+@app.post("/v1/agents/autoconnect", status_code=201)
+async def autoconnect_agent(
+    intent: AgentConnectionIntent,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    try:
+        payload, manifest, credentials, kind = await _discover_agent_intent(intent)
+    except AgentAuthorizationRequired as exc:
+        raise HTTPException(
+            409,
+            detail={
+                "code": "agent_authorization_required",
+                "message": str(exc),
+                "authorization_url": _agent_source_url(intent.source),
+            },
+        ) from exc
+    except (ConnectorError, httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(
+            422,
+            detail={"code": "agent_not_discovered", "message": str(exc)},
+        ) from exc
+    result = await _persist_agent_connection(
+        payload, manifest, credentials, kind, context, session
+    )
+    return {
+        **result,
+        "connected_by": "aura_autodiscovery",
+    }
 
 
 def _marketplace_route(item: dict) -> dict:
