@@ -37,6 +37,7 @@ import {
   recoveryForRun,
 } from "@/lib/runRecovery.mjs";
 import {
+  approvalStartFailure,
   planningConnectionRequirements,
   planningDisposition,
   promptConnectionRequirements,
@@ -851,6 +852,15 @@ Rules:
     setPhase("plan");
   }, [interpretation]);
 
+  const keepPlanStartFailureInReview = useCallback((message) => {
+    setPlan((previous) => ({
+      ...(previous || { interpretation, steps: [] }),
+      error: "",
+      startError: message || "AURA couldn't validate this plan for execution. Review it and try again.",
+    }));
+    setPhase("plan");
+  }, [interpretation]);
+
   const ensureSavedWorkflowRun = async () => {
     if (currentRunIdRef.current) return currentRunIdRef.current;
     if (historySavePromiseRef.current) return historySavePromiseRef.current;
@@ -1123,6 +1133,7 @@ Rules:
       return;
     }
     const generation = ++pythonPollGenerationRef.current;
+    setPlan((previous) => previous ? { ...previous, startError: "" } : previous);
     setPhase("executing");
     setStartTime(Date.now());
     setCurrentStepIdx(0);
@@ -1166,6 +1177,12 @@ Rules:
       }
     } catch (error) {
       console.error("Python workflow preparation failed", error);
+      const latest = await getPythonRun(runId).catch(() => null);
+      const startFailure = approvalStartFailure(latest, error);
+      if (startFailure) {
+        keepPlanStartFailureInReview(startFailure.message);
+        return;
+      }
       await recoverRunStatus();
     }
   };
@@ -1181,6 +1198,7 @@ Rules:
       return;
     }
     const generation = ++pythonPollGenerationRef.current;
+    setPlan((previous) => previous ? { ...previous, startError: "" } : previous);
     setPhase("executing");
     setStartTime(Date.now());
     const reviewedPlan = {
@@ -1286,6 +1304,14 @@ Rules:
           setApprovedSteps(refreshed);
           setPreviewError(error.message || "Review the highlighted values and try again.");
           setPhase("preview");
+          return;
+        }
+      }
+      if (!prepared && !observeOnly) {
+        const latest = await getPythonRun(runId).catch(() => null);
+        const startFailure = approvalStartFailure(latest, error);
+        if (startFailure) {
+          keepPlanStartFailureInReview(startFailure.message);
           return;
         }
       }

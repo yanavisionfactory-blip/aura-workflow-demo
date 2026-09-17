@@ -15,6 +15,7 @@ from .agent_runtime import (
     create_plan,
     critique_step,
     intent_bounded_tool_inventory,
+    is_governed_derivative_step,
     materialize_action_arguments,
     prepare_execution_directive,
     prepare_final_review,
@@ -469,7 +470,11 @@ def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict]) -> None:
             ),
             None,
         )
-        if capability and capability.get("requires_approval"):
+        if (
+            capability
+            and capability.get("requires_approval")
+            and not is_governed_derivative_step(plan, planned_step)
+        ):
             # Approval declarations in verified connector contracts outrank an
             # optimistic planner classification, including external agents.
             planned_step.consequential = True

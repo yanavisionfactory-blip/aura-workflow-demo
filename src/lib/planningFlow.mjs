@@ -87,3 +87,14 @@ export function planningDisposition(run = {}) {
   if (UNAVAILABLE_STATUSES.has(run.status)) return "unavailable";
   return "wait";
 }
+
+export function approvalStartFailure(run = {}, error = {}) {
+  const stillAtReview = run.status === "awaiting_approval"
+    && run.blocker?.code === "plan_approval_required"
+    && Boolean(run.plan?.steps?.length);
+  if (!stillAtReview) return null;
+  return {
+    message: error?.message || "AURA couldn't validate this plan for execution. Review it and try again.",
+    status: error?.status || null,
+  };
+}
