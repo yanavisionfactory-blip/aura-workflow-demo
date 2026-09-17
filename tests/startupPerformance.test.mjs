@@ -27,3 +27,11 @@ test("saved workflows are prefetched without running historical repair first", (
   assert.equal(history.includes("savedHistoryPromise"), true);
   assert.equal(history.indexOf("loadSavedHistory().then") < history.indexOf("reconcileDurableHistory(saved.workflows"), true);
 });
+
+test("the root prompt screen does not show a meaningless return action", () => {
+  const demo = readFileSync(new URL("../src/pages/Demo.jsx", import.meta.url), "utf8");
+
+  assert.equal(demo.includes('onBack={phase === "input" ? undefined : handlePageBack}'), true);
+  assert.equal(demo.includes('backLabel={phase === "input" ? "Return" : "Back"}'), false);
+  assert.equal(demo.includes('if (phase === "input") window.history.back()'), false);
+});
