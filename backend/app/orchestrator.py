@@ -91,8 +91,10 @@ from .universal_connectors import (
 )
 from .workflow_context import (
     WorkflowContextError,
+    canonical_action_arguments,
     evaluate_condition,
     referenced_paths,
+    requires_content_composition,
     resolve_value,
     step_context_value,
 )
@@ -1941,7 +1943,11 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     )
                     await session.commit()
                     continue
-                resolved_arguments = resolve_value(step.arguments, context)
+                resolved_arguments = canonical_action_arguments(
+                    step.operation,
+                    resolve_value(step.arguments, context),
+                    context,
+                )
             except WorkflowContextError as exc:
                 if step.status == StepStatus.awaiting_approval:
                     try:
@@ -2071,14 +2077,6 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     manifest_record.manifest if manifest_record else None,
                 )
                 try:
-                    from .workflow_context import (
-                        canonical_action_arguments,
-                        requires_content_composition,
-                    )
-
-                    resolved_arguments = canonical_action_arguments(
-                        step.operation, resolved_arguments, context
-                    )
                     capability = next(
                         (
                             m
