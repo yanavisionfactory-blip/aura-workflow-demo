@@ -325,6 +325,135 @@ async def test_review_resume_after_write_does_not_replay_provider(runtime, monke
     assert reviews == 2
 
 
+async def test_governed_canva_export_uses_imported_design_id(runtime, monkeypatch):
+    from app.native_connectors import native_manifest
+
+    plan = WorkflowPlan(
+        name="Deliver presentation",
+        interpretation="Create an approved presentation and export it",
+        steps=[
+            PlanStep(
+                key="create_presentation",
+                agent="designer",
+                tool_slug="canva",
+                operation="canva.presentation.create",
+                arguments={"title": "Munich weather", "phases": []},
+                reason="Create the reviewed presentation",
+                expected_output="Canva design",
+                consequential=True,
+            ),
+            PlanStep(
+                key="export_presentation",
+                agent="designer",
+                tool_slug="canva",
+                operation="canva.export.create",
+                arguments={
+                    "design_id": "{{steps.create_presentation.job.id}}",
+                    "format": "pdf",
+                },
+                reason="Export the reviewed presentation",
+                expected_output="PDF",
+                consequential=False,
+                depends_on=["create_presentation"],
+            ),
+        ],
+    ).model_dump(mode="json")
+    digest = canonical_plan_hash(plan)
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        run.plan = plan
+        run.execution_context = {
+            "__aura_preflight__": {
+                "version": 2,
+                "plan_hash": digest,
+                "status": "passed",
+                "completed_at": datetime.now(UTC).isoformat(),
+            }
+        }
+        version = await session.get(PlanVersion, "version")
+        version.plan = plan
+        version.plan_hash = digest
+        snapshot = await session.get(ApprovalSnapshot, "snapshot")
+        snapshot.plan_hash = digest
+        snapshot.permission_snapshot = {
+            "canva": ["canva.export.create", "canva.export.get"]
+        }
+        create = await session.get(RunStep, "step")
+        create.position = 0
+        create.step_key = "create_presentation"
+        create.agent = "designer"
+        create.tool_slug = "canva"
+        create.operation = "canva.presentation.create"
+        create.arguments = {"title": "Munich weather", "phases": []}
+        create.status = StepStatus.completed
+        create.output = {
+            "provider_result": {
+                "job": {
+                    "id": "import-job-1",
+                    "status": "success",
+                    "result": {"designs": [{"id": "DAG-design-1"}]},
+                }
+            },
+            "outcome_check": {"status": "verified"},
+        }
+        session.add(
+            RunStep(
+                id="export-step",
+                run_id="run",
+                position=1,
+                step_key="export_presentation",
+                agent="designer",
+                tool_slug="canva",
+                operation="canva.export.create",
+                arguments={
+                    "design_id": "{{steps.create_presentation.job.id}}",
+                    "format": "pdf",
+                },
+                depends_on=["create_presentation"],
+                status=StepStatus.pending,
+                consequential=False,
+                idempotency_key="export-once",
+            )
+        )
+        tool = await session.get(ToolConnection, "tool")
+        tool.slug = "canva"
+        tool.allowed_operations = ["canva.export.create", "canva.export.get"]
+        manifest = await session.get(CapabilityManifest, "manifest")
+        manifest.manifest = native_manifest("canva")
+        await session.commit()
+
+    provider_arguments = []
+
+    async def execute(_self, operation, arguments):
+        assert operation == "canva.export.create"
+        provider_arguments.append(arguments)
+        return {"job": {"id": "export-job-1", "status": "success", "urls": []}}
+
+    async def execute_directive(_prompt, step, arguments, execution_agent):
+        return (
+            ExecutionDirective(
+                action="execute",
+                step_key=step["key"],
+                tool_slug=step["tool_slug"],
+                operation=step["operation"],
+                arguments=arguments,
+                reason="Execute the approved derivative",
+            ),
+            "deterministic",
+        )
+
+    async def accept(*_args):
+        return CriticDecision(action="accept")
+
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", execute)
+    monkeypatch.setattr(orchestrator, "prepare_execution_directive", execute_directive)
+    monkeypatch.setattr(orchestrator, "review_recorded_result", accept)
+
+    await orchestrator._execute_run("run", "w")
+
+    assert provider_arguments == [{"design_id": "DAG-design-1", "format": "pdf"}]
+
+
 async def test_unknown_write_after_restart_is_not_replayed(runtime, monkeypatch):
     async with runtime() as session:
         session.add(
