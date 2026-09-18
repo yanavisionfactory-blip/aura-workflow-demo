@@ -290,6 +290,19 @@ async def test_repaired_platform_schema_retries_before_any_write(runtime, monkey
         step.status = StepStatus.failed
         step.error = "AURA could not prepare the approved action."
         session.add(
+            StepAttempt(
+                workspace_id="w",
+                run_id="run",
+                step_id="step",
+                attempt_number=1,
+                status="failed",
+                provider_dispatched=False,
+                tool_slug="test",
+                operation="records.create",
+                error="[contract_or_runtime_error] local schema validation failed",
+            )
+        )
+        session.add(
             AuditEvent(
                 workspace_id="w",
                 run_id="run",
@@ -309,7 +322,8 @@ async def test_repaired_platform_schema_retries_before_any_write(runtime, monkey
         attempts = (
             await session.scalars(select(StepAttempt).where(StepAttempt.step_id == "step"))
         ).all()
-        assert attempts == []
+        assert len(attempts) == 1
+        assert attempts[0].provider_dispatched is False
         assert run.execution_context["__aura_autonomy__"]["last_reason_code"] == (
             "provider_not_called"
         )

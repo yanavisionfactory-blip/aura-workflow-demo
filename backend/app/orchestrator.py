@@ -59,6 +59,7 @@ from .models import (
 )
 from .native_connectors import (
     NativeConnectorError,
+    coerce_module_arguments,
     current_capability_manifest,
     native_manifest,
     native_operations,
@@ -262,8 +263,11 @@ def _provider_rejection_detail(exc: Exception) -> str | None:
         payload = exc.response.json()
     except ValueError:
         payload = None
-    values: list[str] = []
+    values: list[str] = [f"status={exc.response.status_code}"]
     if isinstance(payload, dict):
+        code = payload.get("code")
+        if isinstance(code, str) and code:
+            values.append(f"code={code}")
         for key in ("message", "error", "errorMessages", "errors", "detail"):
             value = payload.get(key)
             if isinstance(value, str):
@@ -276,7 +280,7 @@ def _provider_rejection_detail(exc: Exception) -> str | None:
                     for name, item in value.items()
                     if isinstance(item, (str, int, float))
                 )
-    detail = "; ".join(values).strip() or f"Provider rejected request ({exc.response.status_code})"
+    detail = "; ".join(values).strip()
     return re.sub(
         r"(?i)(token|secret|password|authorization|api[-_ ]?key)\s*[:=]\s*\S+",
         r"\1=[redacted]",
@@ -2668,6 +2672,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             + 1
                         ),
                         status="running",
+                        provider_dispatched=False,
                         tool_slug=active_tool.slug,
                         operation=operation,
                     )
@@ -2675,6 +2680,16 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     await session.commit()
                     started = time.perf_counter()
                     timed_out = False
+
+                    async def mark_provider_dispatched(
+                        current_attempt: StepAttempt = attempt,
+                    ) -> None:
+                        """Persist the no-return boundary before the external action."""
+                        if current_attempt.provider_dispatched:
+                            return
+                        current_attempt.provider_dispatched = True
+                        await session.commit()
+
                     try:
                         from .reliability import BudgetExceeded, model_budget
 
@@ -2738,6 +2753,16 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             )
                             if not account_id or not external_user_id:
                                 raise RuntimeError("Managed account reference is missing")
+                            input_failures = list(
+                                Draft202012Validator(
+                                    capability.get("input_schema") or {}
+                                ).iter_errors(arguments)
+                            )
+                            if input_failures:
+                                raise ValueError(
+                                    "Connector input failed its released schema"
+                                )
+                            await mark_provider_dispatched()
                             result = await asyncio.wait_for(
                                 pipedream_client().run_action(
                                     external_user_id,
@@ -2778,6 +2803,16 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             connection_reference = managed_connection_reference(active_tool)
                             if not connection_reference:
                                 raise RuntimeError("Managed connection reference is missing")
+                            input_failures = list(
+                                Draft202012Validator(
+                                    capability.get("input_schema") or {}
+                                ).iter_errors(arguments)
+                            )
+                            if input_failures:
+                                raise ValueError(
+                                    "Connector input failed its released schema"
+                                )
+                            await mark_provider_dispatched()
                             result = await asyncio.wait_for(
                                 managed_connector_client().execute_capability(
                                     release.integration_id,
@@ -2861,6 +2896,19 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                                 provider_kind=active_tool.kind.value,
                                 capability_manifest=current_manifest,
                             )
+                            # Connector coercion and schema validation are local
+                            # preparation. Complete them before crossing the
+                            # durable provider-dispatch boundary so AURA can
+                            # repair deterministic contract failures itself.
+                            operation_declared = any(
+                                item.get("name") == operation
+                                for item in current_manifest.get("capabilities", [])
+                            )
+                            if operation_declared:
+                                arguments = coerce_module_arguments(
+                                    current_manifest, operation, arguments
+                                )
+                            await mark_provider_dispatched()
                             result = await asyncio.wait_for(
                                 executor.execute(operation, arguments),
                                 timeout=execution_timeout,
@@ -2891,7 +2939,10 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         await session.commit()
                         return result, None
                     except TimeoutError as exc:
-                        failure = classify_failure(exc, read=not consequential)
+                        failure = classify_failure(
+                            exc,
+                            read=not consequential or not attempt.provider_dispatched,
+                        )
                         timed_out = True
                         last_error = "Step timed out"
                         failure_impacts_trust = _failure_impacts_trust(exc)
@@ -2903,7 +2954,10 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             operation,
                         )
                     except Exception as exc:
-                        failure = classify_failure(exc, read=not consequential)
+                        failure = classify_failure(
+                            exc,
+                            read=not consequential or not attempt.provider_dispatched,
+                        )
                         last_error = _provider_rejection_detail(exc) or str(exc)
                         failure_impacts_trust = _failure_impacts_trust(exc)
                         logger.exception(

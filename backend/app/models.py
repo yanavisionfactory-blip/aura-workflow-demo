@@ -759,6 +759,10 @@ class StepAttempt(Base):
     step_id: Mapped[str] = mapped_column(ForeignKey("run_steps.id", ondelete="CASCADE"), index=True)
     attempt_number: Mapped[int] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(30))
+    # False proves execution failed before the external operation was
+    # dispatched. Existing and unspecified records default to True so legacy
+    # attempts remain conservatively protected from duplicate writes.
+    provider_dispatched: Mapped[bool] = mapped_column(Boolean, default=True)
     tool_slug: Mapped[str] = mapped_column(String(120))
     operation: Mapped[str] = mapped_column(String(160))
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

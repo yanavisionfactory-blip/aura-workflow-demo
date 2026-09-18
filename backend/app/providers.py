@@ -1396,30 +1396,13 @@ class ProviderExecutor:
 
     async def _canva_export_create(self, a: dict) -> dict:
         payload = {"design_id": a["design_id"], "format": {"type": a["format"]}}
-        # Canva can report a successful import before the new design is visible
-        # to the design and export services. Poll the read-only design endpoint
-        # first, then create exactly one export after it becomes visible. A
-        # design_not_found response proves that neither request created an
-        # export, so waiting and trying again is safe. Timeouts, transport
-        # failures, and every other provider response remain non-replayable.
-        design_path = f"designs/{quote(a['design_id'], safe='')}"
-        for delay in (1, 2, 4, 8, 8, None):
-            try:
-                await self._canva_request("GET", design_path)
-                return await self._canva_request("POST", "exports", json=payload)
-            except httpx.HTTPStatusError as exc:
-                try:
-                    error_code = exc.response.json().get("code")
-                except (ValueError, AttributeError):
-                    error_code = None
-                if (
-                    exc.response.status_code != 404
-                    or error_code != "design_not_found"
-                    or delay is None
-                ):
-                    raise
-                await asyncio.sleep(delay)
-        raise RuntimeError("Canva export readiness retry ended unexpectedly")
+        # A successful import job already returns Canva's canonical design id.
+        # Do not probe the design-metadata endpoint before exporting: that read
+        # requires a separate permission and can reject an otherwise authorized
+        # export. Dispatch exactly once. A definitive design_not_found rejection
+        # is handled by the durable recovery supervisor; timeouts and lost
+        # responses remain non-replayable.
+        return await self._canva_request("POST", "exports", json=payload)
 
     async def _canva_export_get(self, a: dict) -> dict:
         return await self._canva_request("GET", f"exports/{quote(a['export_id'], safe='')}")
