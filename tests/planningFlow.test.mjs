@@ -102,6 +102,21 @@ test("the UI renders a language plan while durable compilation is still running"
   assert.equal(source.includes("iWill: firstPersonStepCopy(step.iWill || step.reason)"), true);
 });
 
+test("Start uses combined approval unless staged action review is explicitly enabled", () => {
+  const source = readFileSync(
+    new URL("../src/pages/Demo.jsx", import.meta.url),
+    "utf8",
+  );
+  const api = readFileSync(
+    new URL("../src/lib/auraApi.js", import.meta.url),
+    "utf8",
+  );
+
+  assert.equal(source.includes("VITE_STAGED_ACTION_REVIEW_ENABLED"), true);
+  assert.equal(source.includes("const requiresReview = STAGED_ACTION_REVIEW_ENABLED"), true);
+  assert.match(api, /approvePythonPlan\(runId, editedSteps = null, approveConsequential = true\)/);
+});
+
 test("the first prompt submission opens the language plan without a confirmation gate", () => {
   const source = readFileSync(
     new URL("../src/pages/Demo.jsx", import.meta.url),

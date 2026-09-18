@@ -273,12 +273,6 @@ HUMAN_ACTION_CODES = frozenset(
         "plan_approval_required",
         "external_submission_approval_required",
         "external_effect_uncertain",
-        # These are exposed only after the bounded internal recovery authority
-        # has genuinely been exhausted. Until then the user sees recovery
-        # progress and is never asked to troubleshoot AURA's provider timing.
-        "recovery_budget_exhausted",
-        "no_safe_recovery",
-        "governed_derivative_retry_required",
     }
 )
 

@@ -64,7 +64,7 @@ RECONCILIABLE_WRITES = {
     "hubspot.company.update",
     "mailchimp.campaign.send",
 }
-AUTONOMY_VERSION = 5
+AUTONOMY_VERSION = 6
 
 
 def _autonomy(context: dict) -> dict:
@@ -883,7 +883,7 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
 async def mark_autonomous_handoff(
     run_id: str, workspace_id: str, reason_code: str = "no_safe_recovery"
 ) -> bool:
-    """Persist that autonomous authority ended and human action is genuinely required."""
+    """Persist that bounded delivery recovery ended and internal repair must take over."""
     if not get_settings().autonomous_delivery_enabled:
         return False
     async with SessionLocal() as session:
@@ -956,7 +956,7 @@ async def _handoff(session, run, state: dict, reason_code: str) -> None:
         reason="autonomous_recovery_exhausted",
         actor="senior-orchestrator",
         phase="execution",
-        supervisor_status="human_action_required",
+        supervisor_status="operator_attention",
         error=(
             "AURA tried every policy-safe automatic recovery. Completed work is saved; "
             "review the remaining step before trying it again."
