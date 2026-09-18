@@ -583,6 +583,84 @@ def test_deterministic_validator_blocks_unavailable_operation() -> None:
     assert any("not allow-listed" in fix for fix in fixes)
 
 
+def test_deterministic_validator_binds_unique_tool_for_exact_operation() -> None:
+    workflow = plan(
+        PlanStep(
+            agent="communications",
+            tool_slug="",
+            operation="gmail.send",
+            reason="Send the weather brief",
+            expected_output="Sent message receipt",
+            consequential=True,
+        )
+    )
+    inventory = [
+        {"slug": "aura", "allowed_operations": ["weather.forecast"]},
+        {"slug": "google", "allowed_operations": ["gmail.send"]},
+    ]
+
+    assert deterministic_plan_fixes(workflow, inventory) == []
+    assert workflow.steps[0].tool_slug == "google"
+
+
+def test_deterministic_validator_replaces_unavailable_tool_for_unique_operation() -> None:
+    workflow = plan(
+        PlanStep(
+            agent="communications",
+            tool_slug="gmail",
+            operation="gmail.send",
+            reason="Send the weather brief",
+            expected_output="Sent message receipt",
+            consequential=True,
+        )
+    )
+    inventory = [{"slug": "google", "allowed_operations": ["gmail.send"]}]
+
+    assert deterministic_plan_fixes(workflow, inventory) == []
+    assert workflow.steps[0].tool_slug == "google"
+
+
+def test_deterministic_validator_does_not_guess_ambiguous_tool() -> None:
+    workflow = plan(
+        PlanStep(
+            agent="communications",
+            tool_slug="",
+            operation="message.send",
+            reason="Send the brief",
+            expected_output="Sent message receipt",
+            consequential=True,
+        )
+    )
+    inventory = [
+        {"slug": "google", "allowed_operations": ["message.send"]},
+        {"slug": "slack", "allowed_operations": ["message.send"]},
+    ]
+
+    fixes = deterministic_plan_fixes(workflow, inventory)
+
+    assert fixes == ["Step 1 selects unavailable tool ''"]
+    assert workflow.steps[0].tool_slug == ""
+
+
+def test_deterministic_validator_does_not_bind_unknown_operation() -> None:
+    workflow = plan(
+        PlanStep(
+            agent="communications",
+            tool_slug="",
+            operation="gmail.unsupported",
+            reason="Send the brief",
+            expected_output="Sent message receipt",
+            consequential=True,
+        )
+    )
+    inventory = [{"slug": "google", "allowed_operations": ["gmail.send"]}]
+
+    fixes = deterministic_plan_fixes(workflow, inventory)
+
+    assert fixes == ["Step 1 selects unavailable tool ''"]
+    assert workflow.steps[0].tool_slug == ""
+
+
 def test_deterministic_validator_requires_write_approval() -> None:
     workflow = plan(
         PlanStep(

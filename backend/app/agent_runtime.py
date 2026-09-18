@@ -621,6 +621,22 @@ def deterministic_plan_fixes(
     allowed = {
         item["slug"]: set(item.get("allowed_operations") or []) for item in tool_inventory
     }
+    operation_tools: dict[str, list[str]] = {}
+    for tool_slug, operations in allowed.items():
+        for operation in operations:
+            operation_tools.setdefault(operation, []).append(tool_slug)
+
+    # A planner occasionally returns the exact allow-listed operation while
+    # omitting (or misspelling) its connector slug. Resolve that mechanical
+    # omission locally when the execution inventory makes the mapping
+    # unambiguous. Never guess between multiple capable connectors.
+    for step in plan.steps:
+        if step.tool_slug in allowed:
+            continue
+        candidates = operation_tools.get(step.operation, [])
+        if len(candidates) == 1:
+            step.tool_slug = candidates[0]
+
     write_markers = ("send", "create", "update", "delete", "post", "schedule", "purchase", "append", "destroy", "purge", "revoke")
     fixes: list[str] = []
     variable_producers: dict[str, str] = {}
