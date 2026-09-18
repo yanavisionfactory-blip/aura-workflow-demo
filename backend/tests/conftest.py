@@ -144,7 +144,22 @@ async def runtime(monkeypatch):
                 workspace_id="w",
                 tool_id="tool",
                 status="verified",
-                manifest={"capabilities": []},
+                manifest={
+                    "capabilities": [
+                        {
+                            "name": "records.create",
+                            "input_schema": {
+                                "type": "object",
+                                "properties": {"title": {"type": "string"}},
+                                "required": ["title"],
+                                "additionalProperties": False,
+                            },
+                            "output_schema": {"type": "object"},
+                            "permission_scope": "write",
+                            "requires_approval": True,
+                        }
+                    ]
+                },
                 provider_type="mcp",
             )
         )

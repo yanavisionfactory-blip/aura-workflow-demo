@@ -54,6 +54,39 @@ def test_rejects_unknown_permission_scope() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "capabilities,message",
+    [
+        (
+            [
+                {"name": "records.read"},
+                {"name": "records.read"},
+            ],
+            "must be unique",
+        ),
+        (
+            [
+                {
+                    "name": "records.read",
+                    "input_schema": {"type": "not-a-json-schema-type"},
+                }
+            ],
+            "invalid JSON Schema",
+        ),
+        ([42], "object or name"),
+    ],
+)
+def test_rejects_ambiguous_or_invalid_dynamic_capability_contracts(
+    capabilities, message
+) -> None:
+    with pytest.raises(ConnectorError, match=message):
+        normalize_manifest(
+            {"capabilities": capabilities},
+            "plugin",
+            "https://plugin.example.com",
+        )
+
+
 def test_capability_lookup_never_allows_undeclared_operation() -> None:
     manifest = normalize_manifest(
         {"capabilities": [{"name": "records.read", "permission_scope": "read"}]},

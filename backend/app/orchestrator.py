@@ -371,6 +371,45 @@ def _current_capability_manifest(slug: str, stored: dict | None) -> dict:
     return current_capability_manifest(slug, stored)
 
 
+def _operation_is_consequential(
+    operation: str,
+    capability: dict | None,
+    *,
+    planned_consequential: bool = False,
+) -> bool:
+    """Classify side effects from the verified contract, with a legacy fallback.
+
+    Operation names remain a conservative fallback for old manifests. Once a
+    capability declares its permission scope, that contract is authoritative so
+    unfamiliar write verbs cannot receive read-style retries.
+    """
+    declared_scope = capability.get("permission_scope") if capability else None
+    contract_consequential = (
+        declared_scope != "read"
+        if declared_scope in {"read", "write", "destructive"}
+        else operation_scope(operation) != "read"
+    )
+    return bool(planned_consequential or contract_consequential)
+
+
+def _prepare_provider_arguments(
+    manifest: dict,
+    operation: str,
+    arguments: dict,
+) -> tuple[dict, dict]:
+    """Coerce and fully validate one released capability before dispatch."""
+    capability = capability_for(manifest, operation)
+    prepared = coerce_module_arguments(manifest, operation, arguments)
+    failures = list(
+        Draft202012Validator(capability.get("input_schema") or {}).iter_errors(
+            prepared
+        )
+    )
+    if failures:
+        raise ValueError("Connector input failed its released schema")
+    return prepared, capability
+
+
 def _bounded_read_trust_score(
     operation: str,
     trust_score: float,
@@ -2547,7 +2586,35 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 arguments: dict,
                 step: RunStep = step,
             ) -> tuple[dict | None, str | None]:
-                consequential = step.consequential or operation_scope(operation) != "read"
+                manifest_record = await session.scalar(
+                    select(CapabilityManifest).where(
+                        CapabilityManifest.tool_id == active_tool.id,
+                        CapabilityManifest.status == "verified",
+                    )
+                )
+                runtime_manifest = _current_capability_manifest(
+                    active_tool.slug,
+                    manifest_record.manifest if manifest_record else None,
+                )
+                runtime_capability = next(
+                    (
+                        item
+                        for item in runtime_manifest.get("capabilities", [])
+                        if item.get("name") == operation
+                    ),
+                    None,
+                )
+                consequential = _operation_is_consequential(
+                    operation,
+                    runtime_capability,
+                    planned_consequential=step.consequential,
+                )
+                if consequential and not step.consequential:
+                    # Persist the verified provider contract's side-effect class
+                    # before any attempt. This protects unfamiliar operation names
+                    # (for example, records.mutate) from read-style retries and
+                    # preserves the no-replay decision across worker restarts.
+                    step.consequential = True
                 if operation == "gmail.send" and arguments.get("attachments"):
                     permitted_urls = {
                         url
@@ -2696,12 +2763,6 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         budget = model_budget.get()
                         if budget and time.monotonic() >= budget.deadline:
                             raise BudgetExceeded("Delivery time budget exhausted")
-                        manifest_record = await session.scalar(
-                            select(CapabilityManifest).where(
-                                CapabilityManifest.tool_id == active_tool.id,
-                                CapabilityManifest.status == "verified",
-                            )
-                        )
                         if not manifest_record:
                             raise RuntimeError("Capability provider is not verified")
                         execution_timeout = (
@@ -2742,7 +2803,6 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                                 raise RuntimeError(
                                     "Connector capability pack is no longer trusted"
                                 )
-                            capability = capability_for(pack.definition, operation)
                             account_id = str(
                                 active_tool.config.get("account_id")
                                 or active_tool.external_connection_id
@@ -2753,15 +2813,9 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             )
                             if not account_id or not external_user_id:
                                 raise RuntimeError("Managed account reference is missing")
-                            input_failures = list(
-                                Draft202012Validator(
-                                    capability.get("input_schema") or {}
-                                ).iter_errors(arguments)
+                            arguments, capability = _prepare_provider_arguments(
+                                pack.definition, operation, arguments
                             )
-                            if input_failures:
-                                raise ValueError(
-                                    "Connector input failed its released schema"
-                                )
                             await mark_provider_dispatched()
                             result = await asyncio.wait_for(
                                 pipedream_client().run_action(
@@ -2799,19 +2853,12 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                                     "Connector release is no longer trusted"
                                 )
                             current_manifest = release.definition.get("manifest") or {}
-                            capability = capability_for(current_manifest, operation)
                             connection_reference = managed_connection_reference(active_tool)
                             if not connection_reference:
                                 raise RuntimeError("Managed connection reference is missing")
-                            input_failures = list(
-                                Draft202012Validator(
-                                    capability.get("input_schema") or {}
-                                ).iter_errors(arguments)
+                            arguments, capability = _prepare_provider_arguments(
+                                current_manifest, operation, arguments
                             )
-                            if input_failures:
-                                raise ValueError(
-                                    "Connector input failed its released schema"
-                                )
                             await mark_provider_dispatched()
                             result = await asyncio.wait_for(
                                 managed_connector_client().execute_capability(
@@ -2869,10 +2916,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                                         {"tool_id": active_tool.id, "slug": active_tool.slug},
                                         run.id,
                                     )
-                            current_manifest = _current_capability_manifest(
-                                active_tool.slug,
-                                manifest_record.manifest if manifest_record else None,
-                            )
+                            current_manifest = runtime_manifest
                             provider_timeout = float(
                                 snapshot.policy_snapshot[
                                     "gateway_timeout_seconds"
@@ -2900,14 +2944,9 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             # preparation. Complete them before crossing the
                             # durable provider-dispatch boundary so AURA can
                             # repair deterministic contract failures itself.
-                            operation_declared = any(
-                                item.get("name") == operation
-                                for item in current_manifest.get("capabilities", [])
+                            arguments, _ = _prepare_provider_arguments(
+                                current_manifest, operation, arguments
                             )
-                            if operation_declared:
-                                arguments = coerce_module_arguments(
-                                    current_manifest, operation, arguments
-                                )
                             await mark_provider_dispatched()
                             result = await asyncio.wait_for(
                                 executor.execute(operation, arguments),
