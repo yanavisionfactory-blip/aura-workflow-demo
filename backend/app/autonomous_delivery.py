@@ -64,7 +64,7 @@ RECONCILIABLE_WRITES = {
     "hubspot.company.update",
     "mailchimp.campaign.send",
 }
-AUTONOMY_VERSION = 4
+AUTONOMY_VERSION = 5
 
 
 def _autonomy(context: dict) -> dict:
@@ -162,7 +162,12 @@ def record_rejected_write_retry(
 def governed_derivative_rejection(run: WorkflowRun, step: RunStep, error: str | None) -> bool:
     """Prove that the exact approved Canva derivative was rejected without effect."""
     lowered = str(error or "").lower()
-    if not lowered.startswith("[invalid_request]") or not re.search(r"\b404\b", lowered):
+    explicitly_missing = bool(
+        re.search(r"\b404\b", lowered)
+        or "design_not_found" in lowered
+        or re.search(r"design with id .+ not found", lowered)
+    )
+    if not lowered.startswith("[invalid_request]") or not explicitly_missing:
         return False
     try:
         plan = WorkflowPlan.model_validate(run.plan)
@@ -357,10 +362,10 @@ async def _safe_options(
     if not step:
         return []
     per_step = recovery_counter(state["step_recoveries"].get(step.id))
-    if per_step >= settings.max_autonomous_step_recoveries:
-        return []
     recorded = isinstance(step.output, dict) and "provider_result" in step.output
     if recorded:
+        if per_step >= settings.max_autonomous_step_recoveries:
+            return []
         return [
             AutonomousRecoveryOption(
                 key="retry_recorded_review",
@@ -383,7 +388,22 @@ async def _safe_options(
     fingerprint = str(failure["fingerprint"])
     tried_for_failure = set(state["actions_by_failure"].get(fingerprint, []))
     consequential = step.consequential or operation_scope(step.operation) != "read"
-    if governed_derivative_rejection(run, step, str(failure.get("error") or "")):
+    governed_derivative = governed_derivative_rejection(
+        run, step, str(failure.get("error") or "")
+    )
+    # A Canva design_not_found response explicitly proves that no export was
+    # created. Keep this internal handoff autonomous for the full recovery
+    # budget instead of applying the smaller generic per-step retry limit. The
+    # scheduler's exponential backoff prevents request bursts while the newly
+    # imported design propagates through Canva.
+    step_recovery_limit = (
+        settings.max_autonomous_recovery_rounds
+        if governed_derivative
+        else settings.max_autonomous_step_recoveries
+    )
+    if per_step >= step_recovery_limit:
+        return []
+    if governed_derivative:
         return [
             AutonomousRecoveryOption(
                 key="retry_governed_derivative",

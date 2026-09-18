@@ -136,15 +136,24 @@ async def test_canva_import_posts_real_populated_presentation_once(monkeypatch):
 
 
 async def test_canva_export_waits_for_new_import_to_become_ready(monkeypatch):
-    request = httpx.Request('POST', 'https://api.canva.com/rest/v1/exports')
+    request = httpx.Request('GET', 'https://api.canva.com/rest/v1/designs/design-1')
     not_ready = httpx.HTTPStatusError(
         'not ready',
         request=request,
-        response=httpx.Response(404, request=request),
+        response=httpx.Response(
+            404,
+            request=request,
+            json={'code': 'design_not_found', 'message': 'Design not found'},
+        ),
     )
     executor = ProviderExecutor({'access_token': 'private'})
     executor._canva_request = AsyncMock(
-        side_effect=[not_ready, not_ready, {'job': {'id': 'export-1'}}]
+        side_effect=[
+            not_ready,
+            not_ready,
+            {'design': {'id': 'design-1'}},
+            {'job': {'id': 'export-1'}},
+        ]
     )
     sleep = AsyncMock()
     monkeypatch.setattr('app.providers.asyncio.sleep', sleep)
@@ -152,7 +161,13 @@ async def test_canva_export_waits_for_new_import_to_become_ready(monkeypatch):
     result = await executor._canva_export_create({'design_id': 'design-1', 'format': 'pdf'})
 
     assert result['job']['id'] == 'export-1'
-    assert executor._canva_request.await_count == 3
+    assert executor._canva_request.await_count == 4
+    assert [call.args[:2] for call in executor._canva_request.await_args_list] == [
+        ('GET', 'designs/design-1'),
+        ('GET', 'designs/design-1'),
+        ('GET', 'designs/design-1'),
+        ('POST', 'exports'),
+    ]
     assert [call.args[0] for call in sleep.await_args_list] == [1, 2]
 
 
@@ -160,11 +175,66 @@ async def test_canva_export_does_not_replay_an_uncertain_failure(monkeypatch):
     request = httpx.Request('POST', 'https://api.canva.com/rest/v1/exports')
     uncertain = httpx.ReadTimeout('provider response lost', request=request)
     executor = ProviderExecutor({'access_token': 'private'})
-    executor._canva_request = AsyncMock(side_effect=uncertain)
+    executor._canva_request = AsyncMock(
+        side_effect=[{'design': {'id': 'design-1'}}, uncertain]
+    )
     sleep = AsyncMock()
     monkeypatch.setattr('app.providers.asyncio.sleep', sleep)
 
     with pytest.raises(httpx.ReadTimeout):
+        await executor._canva_export_create({'design_id': 'design-1', 'format': 'pdf'})
+
+    assert executor._canva_request.await_count == 2
+    sleep.assert_not_awaited()
+
+
+async def test_canva_export_waits_when_export_service_lags_design_lookup(monkeypatch):
+    request = httpx.Request('POST', 'https://api.canva.com/rest/v1/exports')
+    not_ready = httpx.HTTPStatusError(
+        'not ready',
+        request=request,
+        response=httpx.Response(
+            404,
+            request=request,
+            json={'code': 'design_not_found', 'message': 'Design not found'},
+        ),
+    )
+    executor = ProviderExecutor({'access_token': 'private'})
+    executor._canva_request = AsyncMock(side_effect=[
+        {'design': {'id': 'design-1'}},
+        not_ready,
+        {'design': {'id': 'design-1'}},
+        {'job': {'id': 'export-1'}},
+    ])
+    sleep = AsyncMock()
+    monkeypatch.setattr('app.providers.asyncio.sleep', sleep)
+
+    result = await executor._canva_export_create({'design_id': 'design-1', 'format': 'pdf'})
+
+    assert result['job']['id'] == 'export-1'
+    assert [call.args[0] for call in executor._canva_request.await_args_list] == [
+        'GET', 'POST', 'GET', 'POST'
+    ]
+    sleep.assert_awaited_once_with(1)
+
+
+async def test_canva_export_retries_only_explicit_design_not_found(monkeypatch):
+    request = httpx.Request('GET', 'https://api.canva.com/rest/v1/designs/design-1')
+    unrelated_404 = httpx.HTTPStatusError(
+        'missing endpoint',
+        request=request,
+        response=httpx.Response(
+            404,
+            request=request,
+            json={'code': 'not_found', 'message': 'Endpoint not found'},
+        ),
+    )
+    executor = ProviderExecutor({'access_token': 'private'})
+    executor._canva_request = AsyncMock(side_effect=unrelated_404)
+    sleep = AsyncMock()
+    monkeypatch.setattr('app.providers.asyncio.sleep', sleep)
+
+    with pytest.raises(httpx.HTTPStatusError):
         await executor._canva_export_create({'design_id': 'design-1', 'format': 'pdf'})
 
     executor._canva_request.assert_awaited_once()
