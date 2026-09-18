@@ -98,7 +98,8 @@ test("the UI renders a language plan while durable compilation is still running"
   assert.equal(source.includes("Executable planning unavailable; the language plan remains visible"), true);
   assert.equal(planViewSource.includes("validating exact actions backstage"), false);
   assert.equal(planViewSource.includes("validatingExecution || missingTools.length"), false);
-  assert.equal(source.includes("queuedPlanStartRef.current = { name }"), true);
+  assert.equal(source.includes("queuedPlanStartRef.current = { name, autoApprove }"), true);
+  assert.equal(source.includes("requiresActionPreview(compiledPlan.steps, queuedStart.autoApprove)"), true);
   assert.equal(source.includes("PLANNING_WAIT_TIMEOUT_MS = 30_000"), true);
   assert.equal(source.includes('.replace(/^i\\s+will\\s+/i, "")'), true);
   assert.equal(source.includes("iWill: firstPersonStepCopy(step.iWill || step.reason)"), true);
@@ -107,7 +108,7 @@ test("the UI renders a language plan while durable compilation is still running"
   assert.equal(source.includes("handleRetryPlanning();"), true);
 });
 
-test("Start always uses one combined approval and cannot re-enable staged review", () => {
+test("consequential plans use one preview followed by one combined approval", () => {
   const source = readFileSync(
     new URL("../src/pages/Demo.jsx", import.meta.url),
     "utf8",
@@ -119,8 +120,23 @@ test("Start always uses one combined approval and cannot re-enable staged review
 
   assert.equal(source.includes("VITE_STAGED_ACTION_REVIEW_ENABLED"), false);
   assert.equal(source.includes("startPythonPreparation"), false);
-  assert.equal(source.includes("startPythonExecution();"), true);
+  assert.equal(source.includes("requiresActionPreview(steps, autoApprove)"), true);
+  assert.equal(source.includes('setPhase("preview")'), true);
+  assert.equal(source.includes("startPythonExecution(editedSteps, prepared)"), true);
   assert.match(api, /approvePythonPlan\(runId, editedSteps = null, approveConsequential = true\)/);
+});
+
+test("the combined preview has a renderer for every supported action family", () => {
+  const preview = readFileSync(
+    new URL("../src/components/aura/PreviewView.jsx", import.meta.url),
+    "utf8",
+  );
+
+  for (const renderer of ["richEmail", "richTicket", "richPresentation", "richDocument"]) {
+    assert.equal(preview.includes(renderer), true);
+  }
+  assert.equal(preview.includes("SchemaArgumentsEditor"), true);
+  assert.equal(preview.includes("reviewSteps.map"), true);
 });
 
 test("the first prompt submission opens the language plan without a confirmation gate", () => {

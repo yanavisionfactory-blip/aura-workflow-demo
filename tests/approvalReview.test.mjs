@@ -3,11 +3,63 @@ import test from "node:test";
 
 import {
   editedArgumentsForStep,
+  fallbackReviewContract,
   mergeLegacyPreviewIntoArguments,
+  plannedApprovalStep,
+  requiresActionPreview,
   resolvedApprovalStep,
   setArgumentAtPath,
   validateReviewArguments,
 } from "../src/lib/approvalReview.mjs";
+
+test("every planned consequential action gets the appropriate review renderer", () => {
+  const cases = [
+    ["gmail.send", { to: "me", subject: "Forecast", body: "Sunny" }, "email"],
+    ["canva.presentation.create", { title: "Forecast", phases: [] }, "presentation"],
+    ["jira.issue.create", { project_key: "AURA", summary: "Review" }, "ticket"],
+    ["report.document.create", { title: "Brief", body: "Complete brief" }, "document"],
+    ["custom.object.create", { name: "Object" }, "action"],
+  ];
+
+  for (const [operation, args, kind] of cases) {
+    const step = plannedApprovalStep(
+      { tool: "App", title: operation, riskLevel: "modify" },
+      { operation, arguments: args, consequential: true },
+      "App",
+    );
+    assert.equal(step.reviewContract.kind, kind);
+    assert.equal(step.reviewContract.operation, operation);
+    assert.deepEqual(step.resolvedArguments, args);
+    assert.equal(step.riskLevel, "modify");
+  }
+});
+
+test("document review includes its complete editable title and body", () => {
+  const contract = fallbackReviewContract(
+    "report.document.create",
+    { title: "Launch brief", body: "Full document content" },
+    "Reports",
+  );
+  const step = plannedApprovalStep(
+    { tool: "Reports", riskLevel: "modify" },
+    {
+      consequential: true,
+      operation: "report.document.create",
+      arguments: { title: "Launch brief", body: "Full document content" },
+    },
+    "Reports",
+  );
+
+  assert.equal(contract.kind, "document");
+  assert.equal(step.preview.docTitle, "Launch brief");
+  assert.equal(step.preview.docBody, "Full document content");
+});
+
+test("one combined preview is required only for consequential plans", () => {
+  assert.equal(requiresActionPreview([{ riskLevel: "read" }, { riskLevel: "modify" }]), true);
+  assert.equal(requiresActionPreview([{ riskLevel: "read" }]), false);
+  assert.equal(requiresActionPreview([{ riskLevel: "modify" }], true), false);
+});
 
 test("runtime review contracts preserve exact editable arguments", () => {
   const step = resolvedApprovalStep(
