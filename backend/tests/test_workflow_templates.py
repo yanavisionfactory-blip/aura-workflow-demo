@@ -346,6 +346,54 @@ def test_compiled_weather_presentation_keeps_requested_email_delivery():
     assert plan.steps[2].consequential is False
 
 
+def test_exact_munich_three_day_request_compiles_immediately_and_cleanly():
+    prompt = (
+        "Check the current weather in Munich and the three-day forecast in Celsius. "
+        "Then create a polished three-slide presentation summarizing today’s conditions, "
+        "the forecast, and practical clothing recommendations. Use a weather tool for live "
+        "data and Canva for the presentation. Include the forecast update time and data "
+        "source. download the presentation in pdf and send it to me in gmail"
+    )
+
+    plan = asyncio.run(
+        orchestrator._create_compiled_plan(
+            prompt,
+            weather_inventory(),
+            set(),
+            {
+                "aura": native_manifest("aura"),
+                "canva": native_manifest("canva"),
+                "google": native_manifest("google"),
+            },
+            ["Canva", "Gmail"],
+        )
+    )
+
+    assert plan.planning_artifacts["planner_recovery_mode"] == (
+        "audited_weather_presentation_template"
+    )
+    assert [step.operation for step in plan.steps] == [
+        "weather.forecast",
+        "canva.presentation.create",
+        "canva.export.create",
+        "gmail.send",
+    ]
+    weather, presentation, _, email = plan.steps
+    assert weather.arguments == {
+        "location": "Munich",
+        "date": "today",
+        "units": "metric",
+        "days": 3,
+    }
+    assert presentation.arguments["title"] == "Munich weather"
+    assert presentation.arguments["layout"] == "slides"
+    assert len(presentation.arguments["phases"]) == 3
+    assert "updated_at" in presentation.arguments["subtitle"]
+    assert "source" in presentation.arguments["subtitle"]
+    assert email.arguments["to"] == "me"
+    assert email.arguments["attachments"][0]["filename"] == "Munich weather.pdf"
+
+
 def test_canva_export_is_governed_without_a_second_human_approval():
     export = next(
         capability

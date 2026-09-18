@@ -1560,7 +1560,10 @@ async def materialize_action_arguments(
     # Native and Nango-backed catalog operations share the same capability
     # contract. Supplying it here prevents a resolver from producing semantically
     # sensible but provider-invalid field names or value types.
-    from .native_connectors import current_capability_manifest, normalize_module_arguments
+    from .native_connectors import (
+        current_capability_manifest,
+        normalize_planned_module_arguments,
+    )
 
     operation = str(step.get("operation", ""))
     manifest = current_capability_manifest(str(step.get("tool_slug", "")), None)
@@ -1614,7 +1617,9 @@ async def materialize_action_arguments(
             if referenced_paths(resolved):
                 raise ValueError("Approval arguments still contain workflow references")
             if capability:
-                resolved = normalize_module_arguments(manifest, operation, resolved)
+                resolved = normalize_planned_module_arguments(
+                    manifest, operation, resolved
+                )
             return resolved
         except Exception as exc:
             last_error = exc

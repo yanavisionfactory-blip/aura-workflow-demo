@@ -16,11 +16,12 @@ def test_closed_contract_enforces_nested_layout_limits_and_optional_fields():
     output = ArgumentOutputSchema(PRESENTATION_SCHEMA)
     assert output.is_strict_json_schema()
     schema = output.json_schema()
-    args = {"title": "Roadmap", "subtitle": None, "phases": [
+    args = {"title": "Roadmap", "subtitle": None, "layout": None, "phases": [
         {"period": "Days 1–30", "title": "Foundation", "items": ["Ship onboarding"]}]}
     Draft202012Validator(schema).validate({"arguments": args})
     parsed = output.validate_json(json.dumps({"arguments": args}))
     assert "subtitle" not in parsed["arguments"]
+    assert "layout" not in parsed["arguments"]
     assert PRESENTATION_SCHEMA == original
     args["phases"][0]["items"] = ["x" * 91]
     assert not Draft202012Validator(schema).is_valid({"arguments": args})

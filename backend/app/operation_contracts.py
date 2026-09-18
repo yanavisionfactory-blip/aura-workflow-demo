@@ -80,6 +80,13 @@ KNOWN.update({
             "precipitation_probability": {"type": "number"},
             "wind_speed": {"type": "number"},
             "weather_code": {"type": "number"},
+            "forecasts": {"type": "array", "items": {"type": "object"}},
+            "forecast_days": {"type": "integer"},
+            "max_precipitation_probability": {"type": "number"},
+            "max_wind_speed": {"type": "number"},
+            "updated_at": TEXT,
+            "source": TEXT,
+            "source_url": TEXT,
         },
     }, ["forecast"]),
     "web.search": (

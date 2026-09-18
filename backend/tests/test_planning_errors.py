@@ -1,8 +1,10 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from app import orchestrator
-from app.native_connectors import native_manifest
+from app.native_connectors import NativeConnectorError, native_manifest
 from app.orchestrator import (
     _capitalized_provider_candidates,
     actionable_connection_capabilities,
@@ -265,6 +267,40 @@ def test_connector_contract_mismatch_is_replanned_before_reaching_user(monkeypat
     )
 
     assert result is repaired
+    assert calls[0] == []
+    assert "unknown inputs" in calls[1][0]
+
+
+def test_connector_contract_validation_is_repaired_only_once(monkeypatch) -> None:
+    calls = []
+
+    async def fake_create_plan(*_args, **kwargs):
+        calls.append(kwargs.get("planner_repair_requirements"))
+        step = SimpleNamespace(
+            key="weather",
+            tool_slug="aura",
+            operation="weather.forecast",
+            arguments={"location": "Munich", "internal_hint": True},
+            reduced_scope_arguments=None,
+            required_evidence=[],
+            output_variables={},
+            depends_on=[],
+        )
+        return SimpleNamespace(steps=[step], planning_artifacts={})
+
+    monkeypatch.setattr(orchestrator, "create_plan", fake_create_plan)
+
+    with pytest.raises(NativeConnectorError, match="unknown inputs"):
+        asyncio.run(
+            orchestrator._create_compiled_plan(
+                "Find Munich weather",
+                [{"slug": "aura"}],
+                set(),
+                {"aura": native_manifest("aura")},
+            )
+        )
+
+    assert len(calls) == 2
     assert calls[0] == []
     assert "unknown inputs" in calls[1][0]
 

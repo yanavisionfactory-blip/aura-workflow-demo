@@ -495,6 +495,47 @@ def test_weather_forecast_returns_plain_language_summary(monkeypatch):
     assert "30% chance" in result["summary"]
 
 
+def test_weather_forecast_returns_requested_range_source_and_update_time(monkeypatch):
+    executor = ProviderExecutor({})
+    request = AsyncMock(side_effect=[
+        {"results": [{
+            "name": "Munich",
+            "admin1": "Bavaria",
+            "country": "Germany",
+            "latitude": 48.1,
+            "longitude": 11.6,
+        }]},
+        {"daily": {
+            "time": ["2026-09-18", "2026-09-19", "2026-09-20"],
+            "weather_code": [1, 2, 3],
+            "temperature_2m_max": [18, 20, 17],
+            "temperature_2m_min": [9, 10, 8],
+            "precipitation_probability_max": [5, 40, 25],
+            "wind_speed_10m_max": [8, 22, 14],
+        }},
+    ])
+    monkeypatch.setattr(executor, "_request", request)
+
+    result = asyncio.run(executor._weather_forecast({
+        "location": "Munich",
+        "date": "today",
+        "days": 3,
+        "units": "metric",
+    }))
+
+    assert result["forecast_days"] == 3
+    assert [item["date"] for item in result["forecasts"]] == [
+        "2026-09-18",
+        "2026-09-19",
+        "2026-09-20",
+    ]
+    assert result["max_precipitation_probability"] == 40
+    assert result["max_wind_speed"] == 22
+    assert result["source"] == "Open-Meteo"
+    assert result["source_url"] == "https://open-meteo.com/"
+    assert result["updated_at"].endswith("+00:00")
+
+
 def test_connection_free_provider_does_not_send_fake_authorization_header():
     executor = ProviderExecutor({})
 

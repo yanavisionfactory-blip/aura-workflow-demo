@@ -313,7 +313,16 @@ def planning_failure_category(exc: BaseException) -> str:
     if any(marker in detail for marker in ("timeout", "timed out", "deadline")):
         return "timeout"
     if any(
-        marker in detail for marker in ("invalid json", "schema", "validation", "could not parse")
+        marker in detail
+        for marker in (
+            "invalid json",
+            "schema",
+            "validation",
+            "could not parse",
+            "must contain at most",
+            "must contain at least",
+            "supported text length",
+        )
     ):
         return "malformed_plan"
     if any(marker in detail for marker in ("capability", "operation unavailable", "contract")):
@@ -354,7 +363,7 @@ async def recover_planning_failure(
 ) -> str:
     """Checkpoint and schedule the next safe planning repair.
 
-    Returns ``scheduled`` or ``internal_incident``.  Both are non-user states.
+    Returns ``scheduled`` or ``internal_incident``. Both are non-user states.
     The incident path is intentionally bounded: a systemic quota/configuration/code
     defect must not burn money forever, and is handed to the internal repair queue.
     """
