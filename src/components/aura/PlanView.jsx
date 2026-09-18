@@ -221,7 +221,6 @@ export default function PlanView({
   const connectionOnly = steps.length === 0 && (plan.connectionRequirements || []).length > 0;
   const connectionCount = needed.length || planTools.length;
   const planningFailure = steps.length === 0 && Boolean(plan.error) && !connectionOnly;
-  const validatingExecution = Boolean(plan.provisional);
   const connectionsCanOpen = planningConnectionsEnabled(plan.compileState);
 
   const onDragEnd = (res) => {
@@ -360,37 +359,22 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         </p>
       </motion.div>
 
-      {validatingExecution && (
-        <div className={`mb-4 rounded-xl border p-3 text-sm ${
-          plan.compileState === "blocked"
-            ? "border-amber-400/25 bg-amber-400/5 text-amber-100"
-            : "border-primary/25 bg-primary/5 text-foreground"
-        }`}>
+      {plan.compileState === "blocked" && (
+        <div className="mb-4 rounded-xl border border-amber-400/25 bg-amber-400/5 p-3 text-sm text-amber-100">
           <div className="flex items-center gap-2 font-medium">
-            {plan.compileState === "blocked"
-              ? <AlertTriangle className="h-4 w-4 text-amber-400" />
-              : <Loader2 className="h-4 w-4 animate-spin text-primary" />}
-            <span>
-              {plan.compileState === "blocked"
-                ? "The language plan is ready; execution validation needs another pass"
-                : plan.compileState === "waiting_for_connection"
-                  ? "The plan is ready; connect the accounts below"
-                  : "The plan is ready; AURA is validating exact actions backstage"}
-            </span>
+            <AlertTriangle className="h-4 w-4 text-amber-400" />
+            <span>AURA couldn't prepare this workflow quickly enough</span>
           </div>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            Connections never block plan creation. AURA enables Start only after every action, scope, and approval boundary is verified.
-          </p>
-          {plan.compileState === "blocked" && plan.compileError && (
+          {plan.compileError && (
             <p className="mt-1 text-[11px] leading-relaxed text-amber-100/70">{plan.compileError}</p>
           )}
-          {plan.compileState === "blocked" && onRetryPlan && (
+          {onRetryPlan && (
             <button
               type="button"
               onClick={onRetryPlan}
               className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-amber-300/20 bg-amber-300/5 px-3 py-1.5 text-xs font-medium text-amber-100 hover:bg-amber-300/10"
             >
-              <RotateCcw className="h-3.5 w-3.5" /> Retry execution validation
+              <RotateCcw className="h-3.5 w-3.5" /> Try again
             </button>
           )}
         </div>
@@ -588,12 +572,10 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         className="mt-5 p-4 rounded-xl border border-white/6 bg-card/50"
       >
         <h3 className="text-sm font-semibold mb-1">
-          {validatingExecution ? "Validating execution" : "Ready to start?"}
+          Ready to start?
         </h3>
         <p className="text-xs text-muted-foreground leading-relaxed mb-3">
-          {validatingExecution
-            ? "You can review the plan now. Start unlocks when AURA has matched every step to a verified action."
-            : "Aura will follow this plan and ask for your approval before sending or changing anything important."}
+          Aura will follow this plan and handle technical preparation during execution.
         </p>
         <div className="mb-3">
           <input
@@ -608,10 +590,10 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
             onClick={() => onApprove(steps, name.trim())}
-            disabled={validatingExecution || missingTools.length > 0 || steps.length === 0 || Boolean(plan.error)}
+            disabled={missingTools.length > 0 || steps.length === 0 || Boolean(plan.error) || plan.compileState === "blocked"}
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {validatingExecution ? "Preparing…" : approveLabel} <ArrowRight className="w-4 h-4" />
+            {approveLabel} <ArrowRight className="w-4 h-4" />
           </motion.button>
         </div>
       </motion.div>

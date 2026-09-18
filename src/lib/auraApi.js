@@ -30,18 +30,31 @@ function messageFrom(data, status) {
 async function request(path, options = {}) {
   if (!API_URL) throw new Error("AURA Python API is not configured");
   const workspaceId = options.workspaceId || localStorage.getItem(WORKSPACE_KEY);
+  const timeoutMs = options.timeoutMs || 0;
+  const fetchOptions = { ...options };
+  delete fetchOptions.timeoutMs;
+  delete fetchOptions.workspaceId;
   const performRequest = async (token) => {
-    const response = await fetch(`${API_URL}${path}`, {
-      ...options,
-      headers: {
-        "Content-Type": "application/json",
-        ...(workspaceId ? { "X-Workspace-Id": workspaceId } : {}),
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(options.headers || {}),
-      },
-    });
-    const data = await response.json().catch(() => ({}));
-    return { response, data };
+    const controller = timeoutMs > 0 ? new AbortController() : null;
+    const timeout = controller
+      ? window.setTimeout(() => controller.abort(), timeoutMs)
+      : null;
+    try {
+      const response = await fetch(`${API_URL}${path}`, {
+        ...fetchOptions,
+        signal: fetchOptions.signal || controller?.signal,
+        headers: {
+          "Content-Type": "application/json",
+          ...(workspaceId ? { "X-Workspace-Id": workspaceId } : {}),
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(fetchOptions.headers || {}),
+        },
+      });
+      const data = await response.json().catch(() => ({}));
+      return { response, data };
+    } finally {
+      if (timeout) window.clearTimeout(timeout);
+    }
   };
 
   let token = tokenProvider ? await tokenProvider() : null;
@@ -489,6 +502,7 @@ export async function createPythonRun(prompt, workflowId = null, requestKey = nu
   await ensureWorkspace();
   const run = await request("/v1/runs", {
     method: "POST",
+    timeoutMs: 10_000,
     headers: requestKey ? { "Idempotency-Key": requestKey } : {},
     body: JSON.stringify({ prompt, workflow_id: workflowId, inputs }),
   });
@@ -498,7 +512,7 @@ export async function createPythonRun(prompt, workflowId = null, requestKey = nu
 
 export async function getPythonRun(runId) {
   await ensureWorkspace();
-  return request(`/v1/runs/${runId}`);
+  return request(`/v1/runs/${runId}`, { timeoutMs: 10_000 });
 }
 
 export async function listPythonRuns({ active = false, limit = 20 } = {}) {

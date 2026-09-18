@@ -55,9 +55,9 @@ import {
 } from "@/lib/approvalReview.mjs";
 
 const STEP_DURATION = 2.6;
-const STAGED_ACTION_REVIEW_ENABLED = /^(1|true|yes)$/i.test(
-  String(import.meta.env.VITE_STAGED_ACTION_REVIEW_ENABLED || ""),
-);
+const PLANNING_WAIT_TIMEOUT_MS = 30_000;
+const PLANNING_POLL_INTERVAL_MS = 750;
+const PLANNING_TRANSIENT_FAILURE_LIMIT = 3;
 
 const planToolName = (step) => {
   if (step.tool_slug === "google") {
@@ -181,9 +181,7 @@ const uiPlanFromRun = (run) => ({
     ],
     riskLevel: step.consequential ? "modify" : "read",
     riskNote: step.consequential
-      ? STAGED_ACTION_REVIEW_ENABLED
-        ? "AURA will prepare the exact action and ask before submitting it."
-        : "This external action is included in the plan you approve with Start."
+      ? "This external action is included in the plan you approve with Start."
       : "",
     preview: step.consequential ? {
       type: step.operation === "gmail.send" ? "email" : "list",
@@ -388,6 +386,8 @@ export default function Demo() {
   const pythonPollGenerationRef = useRef(0);
   const languageDraftGenerationRef = useRef(0);
   const handleConfirmRef = useRef(null);
+  const startPythonExecutionRef = useRef(null);
+  const queuedPlanStartRef = useRef(null);
   const runRequestKeyRef = useRef(null);
   const lastPlanningIntentRef = useRef("");
   const historySavePromiseRef = useRef(null);
@@ -415,7 +415,13 @@ export default function Demo() {
     return null;
   };
 
-  const createPythonRunResilient = async (prompt, workflowId, requestKey, inputs) => {
+  const createPythonRunResilient = async (
+    prompt,
+    workflowId,
+    requestKey,
+    inputs,
+    maxTransientFailures = PLANNING_TRANSIENT_FAILURE_LIMIT,
+  ) => {
     let transientFailures = 0;
     for (;;) {
       try {
@@ -424,6 +430,7 @@ export default function Demo() {
         const transient = !error.status || error.status === 429 || error.status >= 500;
         if (!transient) throw error;
         transientFailures += 1;
+        if (transientFailures >= maxTransientFailures) throw error;
         const delay = Math.min(15000, 1000 * (2 ** Math.min(transientFailures - 1, 4)));
         await new Promise((resolve) => window.setTimeout(resolve, delay));
       }
@@ -437,6 +444,7 @@ export default function Demo() {
     runRequestKeyRef.current = null;
     lastPlanningIntentRef.current = "";
     historySavePromiseRef.current = null;
+    queuedPlanStartRef.current = null;
     pendingMock.current = null;
     resolvedErrorRef.current = false;
     approvedStepsRef.current = [];
@@ -469,7 +477,10 @@ export default function Demo() {
     if (phase === "confirm") reset();
     else if (phase === "plan") setPhase("confirm");
     else if (phase === "preview") setPhase("plan");
-    else if (phase === "executing" || phase === "error") setPhase("plan");
+    else if (phase === "executing" || phase === "error") {
+      queuedPlanStartRef.current = null;
+      setPhase("plan");
+    }
     else if (phase === "results") reset();
   }, [phase, reset]);
 
@@ -611,6 +622,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             }
             lastPlanningIntentRef.current = confirmedIntent;
             const planningPrompt = planningRequestPrompt(confirmedIntent, revisionInstruction);
+            const planningDeadline = Date.now() + PLANNING_WAIT_TIMEOUT_MS;
             runRequestKeyRef.current ||= globalThis.crypto?.randomUUID?.()
               || `aura-${Date.now()}-${Math.random().toString(36).slice(2)}`;
             const resources = attachedResourcesRef.current || {};
@@ -627,11 +639,20 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             const generation = ++pythonPollGenerationRef.current;
             let run;
             for (;;) {
-              run = await getPythonRunResilient(created.id, generation);
+              if (Date.now() >= planningDeadline) {
+                throw new Error("AURA couldn't prepare this workflow within 30 seconds.");
+              }
+              run = await getPythonRunResilient(
+                created.id,
+                generation,
+                PLANNING_TRANSIENT_FAILURE_LIMIT,
+              );
               if (!run) return;
               const disposition = planningDisposition(run);
               if (disposition === "review") break;
               if (disposition === "connection") {
+                queuedPlanStartRef.current = null;
+                setPhase("plan");
                 pythonPlanRef.current = run.plan || null;
                 const connectionPlan = uiConnectionPlanFromRun(run, editedInterpretation);
                 setPlan((current) => connectionPlan.steps.length ? {
@@ -651,27 +672,39 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               if (disposition === "unavailable") throw new Error(
                 run.error || "The execution backend needs more setup before it can build this plan."
               );
-              await new Promise((resolve) => setTimeout(resolve, 1000));
+              await new Promise((resolve) => setTimeout(resolve, PLANNING_POLL_INTERVAL_MS));
             }
             pythonPlanRef.current = run.plan;
-            setPlan({
+            const compiledPlan = {
               ...uiPlanFromRun(run),
               provisional: false,
               compileState: "ready",
-            });
+            };
+            setPlan(compiledPlan);
+            const queuedStart = queuedPlanStartRef.current;
+            if (queuedStart) {
+              queuedPlanStartRef.current = null;
+              approvedStepsRef.current = compiledPlan.steps;
+              setApprovedSteps(compiledPlan.steps);
+              setWorkflowName(queuedStart.name || compiledPlan.workflowName || "");
+              startPythonExecutionRef.current?.();
+            }
           } catch (error) {
             console.warn("Executable planning unavailable; the language plan remains visible", error);
+            const queuedStart = queuedPlanStartRef.current;
+            queuedPlanStartRef.current = null;
+            if (queuedStart) setPhase("plan");
             if (pythonRunIdRef.current) forgetActivePythonRun(pythonRunIdRef.current);
             pythonRunIdRef.current = null;
             pythonPlanRef.current = null;
             runRequestKeyRef.current = null;
             setPlan((current) => ({
               ...(current || immediatePlan),
-              estimatedTime: "Plan ready — executable details need another validation pass",
+              estimatedTime: "Plan ready — preparation timed out",
               connectionRequirements: explicitRequirements,
               provisional: true,
               compileState: "blocked",
-              compileError: error?.message || "AURA couldn't validate the executable details right now.",
+              compileError: error?.message || "AURA couldn't prepare this workflow quickly enough.",
             }));
           } finally {
             setPlanLoading(false);
@@ -948,6 +981,22 @@ Rules:
       return;
     }
     if (!hasDurablePlan(pythonRunIdRef.current, pythonPlanRef.current)) {
+      if (plan?.provisional && plan.compileState !== "blocked") {
+        queuedPlanStartRef.current = { name };
+        setPhase("executing");
+        setStartTime(Date.now());
+        setCurrentStepIdx(0);
+        setExecSteps(steps.map((step, index) => ({
+          tool: step.tool,
+          action: step.title || step.action,
+          riskLevel: step.riskLevel,
+          status: index === 0 ? "running" : "pending",
+          liveOutput: index === 0
+            ? "→ Starting now; AURA is finishing technical preparation backstage"
+            : "",
+        })));
+        return;
+      }
       keepPlanInReview();
       return;
     }
@@ -955,14 +1004,8 @@ Rules:
       startPythonExecution();
       return;
     }
-    const requiresReview = STAGED_ACTION_REVIEW_ENABLED
-      && steps.some((step) => step.riskLevel === "modify");
-    if (!requiresReview) {
-      startPythonExecution();
-      return;
-    }
-    startPythonPreparation(steps);
-  }, [editRunMode, autoApprove, keepPlanInReview]);
+    startPythonExecution();
+  }, [editRunMode, autoApprove, keepPlanInReview, plan]);
 
   const handlePreviewApprove = useCallback((editedSteps) => {
     setPreviewError("");
@@ -1135,71 +1178,6 @@ Rules:
     }
   };
 
-  const startPythonPreparation = async (reviewedUiSteps) => {
-    const runId = pythonRunIdRef.current;
-    if (!runId || !pythonPlanRef.current) return;
-    try {
-      await ensureSavedWorkflowRun();
-    } catch (error) {
-      console.error("Could not save workflow history", error);
-      keepPlanInReview("AURA couldn't save this workflow yet, so it has not started. Please try again.");
-      return;
-    }
-    const generation = ++pythonPollGenerationRef.current;
-    setPlan((previous) => previous ? { ...previous, startError: "" } : previous);
-    setPhase("executing");
-    setStartTime(Date.now());
-    setCurrentStepIdx(0);
-    setExecSteps(reviewedUiSteps.map((step) => ({
-      tool: step.tool,
-      action: step.title || step.action,
-      riskLevel: step.riskLevel,
-      status: "pending",
-      liveOutput: "",
-    })));
-    try {
-      // The reviewed UI is a presentation of this exact immutable backend plan.
-      // Never send UI-only fields as executable steps.
-      await approvePythonPlan(runId, pythonPlanRef.current.steps, false);
-      for (;;) {
-        const run = await getPythonRunResilient(runId, generation);
-        if (!run) return;
-        setExecSteps(mapRuntimeSteps(run));
-        const active = (run.steps || []).findIndex((step) => step.status === "running");
-        if (active >= 0) setCurrentStepIdx(active);
-        if (run.status === "awaiting_approval") {
-          const prepared = reviewedUiSteps.map((step, index) =>
-            resolvedApprovalStep(step, run.steps?.[index], planToolName(run.steps?.[index] || step))
-          );
-          approvedStepsRef.current = prepared;
-          setApprovedSteps(prepared);
-          setPreviewError("");
-          setPhase("preview");
-          return;
-        }
-        if (needsRecovery(run.public_status || run.status)) {
-          showRunRecovery(run);
-          return;
-        }
-        if (run.status === "cancelled") {
-          forgetActivePythonRun(runId);
-          finishExecution(null, run.error || "AURA couldn't complete this workflow after retrying safely.", "failed");
-          return;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 900));
-      }
-    } catch (error) {
-      console.error("Python workflow preparation failed", error);
-      const latest = await getPythonRun(runId).catch(() => null);
-      const startFailure = approvalStartFailure(latest, error);
-      if (startFailure) {
-        keepPlanStartFailureInReview(startFailure.message);
-        return;
-      }
-      await recoverRunStatus();
-    }
-  };
-
   const startPythonExecution = async (editedUiSteps = null, prepared = false, observeOnly = false) => {
     const runId = pythonRunIdRef.current;
     if (!runId || !pythonPlanRef.current) return;
@@ -1331,6 +1309,8 @@ Rules:
       await recoverRunStatus();
     }
   };
+
+  startPythonExecutionRef.current = startPythonExecution;
 
   const runFrom = (startIdx) => {
     const template = execTemplateRef.current;
