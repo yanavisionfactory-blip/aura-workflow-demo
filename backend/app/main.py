@@ -5165,7 +5165,12 @@ async def _run_view(session: AsyncSession, run: WorkflowRun) -> dict:
     ).all()
     attempted_steps = set(
         (
-            await session.scalars(select(StepAttempt.step_id).where(StepAttempt.run_id == run.id))
+            await session.scalars(
+                select(StepAttempt.step_id).where(
+                    StepAttempt.run_id == run.id,
+                    StepAttempt.provider_dispatched.is_(True),
+                )
+            )
         ).all()
     )
     blocker = _run_blocker(run, steps, approvals_by_step, requirements, attempted_steps)
@@ -6180,7 +6185,12 @@ async def resume_run(
         raise HTTPException(404, "Failed step not found")
     if step.consequential and payload.action in {"retry", "fallback"}:
         attempted = await session.scalar(
-            select(StepAttempt.id).where(StepAttempt.step_id == step.id).limit(1)
+            select(StepAttempt.id)
+            .where(
+                StepAttempt.step_id == step.id,
+                StepAttempt.provider_dispatched.is_(True),
+            )
+            .limit(1)
         )
         recorded = isinstance(step.output, dict) and "provider_result" in step.output
         if attempted and (not recorded or payload.action == "fallback"):
@@ -6244,7 +6254,10 @@ async def resume_run(
         if latest_attempt and governed_derivative_rejection(run, step, latest_attempt.error):
             attempt_count = int(
                 await session.scalar(
-                    select(func.count(StepAttempt.id)).where(StepAttempt.step_id == step.id)
+                    select(func.count(StepAttempt.id)).where(
+                        StepAttempt.step_id == step.id,
+                        StepAttempt.provider_dispatched.is_(True),
+                    )
                 )
                 or 0
             )
@@ -6258,7 +6271,10 @@ async def resume_run(
     ):
         attempt_count = int(
             await session.scalar(
-                select(func.count(StepAttempt.id)).where(StepAttempt.step_id == step.id)
+                select(func.count(StepAttempt.id)).where(
+                    StepAttempt.step_id == step.id,
+                    StepAttempt.provider_dispatched.is_(True),
+                )
             )
             or 0
         )

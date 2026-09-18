@@ -138,6 +138,12 @@ async def migrate_database() -> None:
             )
             await connection.execute(
                 text(
+                    "ALTER TABLE step_attempts ADD COLUMN IF NOT EXISTS "
+                    "provider_dispatched BOOLEAN DEFAULT TRUE"
+                )
+            )
+            await connection.execute(
+                text(
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_workspace_run_request ON workflow_runs (workspace_id, request_key) WHERE request_key IS NOT NULL"
                 )
             )

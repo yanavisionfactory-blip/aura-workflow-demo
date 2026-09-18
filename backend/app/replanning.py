@@ -407,7 +407,10 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
         ):
             attempt_count = int(
                 await session.scalar(
-                    select(func.count(StepAttempt.id)).where(StepAttempt.step_id == step.id)
+                    select(func.count(StepAttempt.id)).where(
+                        StepAttempt.step_id == step.id,
+                        StepAttempt.provider_dispatched.is_(True),
+                    )
                 )
                 or 0
             )
@@ -489,7 +492,10 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
             )
             attempt_count = int(
                 await session.scalar(
-                    select(func.count(StepAttempt.id)).where(StepAttempt.step_id == step.id)
+                    select(func.count(StepAttempt.id)).where(
+                        StepAttempt.step_id == step.id,
+                        StepAttempt.provider_dispatched.is_(True),
+                    )
                 )
                 or 0
             )
@@ -568,7 +574,10 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
         replacement = plan.steps[step.position]
         attempt_count = int(
             await session.scalar(
-                select(func.count(StepAttempt.id)).where(StepAttempt.step_id == step.id)
+                select(func.count(StepAttempt.id)).where(
+                    StepAttempt.step_id == step.id,
+                    StepAttempt.provider_dispatched.is_(True),
+                )
             )
             or 0
         )

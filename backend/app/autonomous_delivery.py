@@ -50,6 +50,7 @@ RECOVERABLE_READ_FAILURES = {
 }
 RECOVERABLE_PREDISPATCH_FAILURES = {
     *RECOVERABLE_READ_FAILURES,
+    "contract_or_runtime_error",
     "platform_schema_error",
 }
 CAPABILITY_DRIFT_FAILURES = {
@@ -115,8 +116,12 @@ def attempts_for_current_cycle(
     """Reads receive a new bounded attempt cycle after an explicit safe recovery.
 
     Writes always see their entire attempt history so a lost response can never cause a
-    duplicate external action.
+    duplicate external action. Attempts explicitly recorded before provider dispatch do
+    not consume the provider-attempt budget and cannot represent an external effect.
     """
+    dispatched_attempts = [
+        attempt for attempt in attempts if getattr(attempt, "provider_dispatched", True)
+    ]
     if consequential:
         repair = recovery_mapping(
             recovery_mapping(context.get("__aura_write_repairs__")).get(step_id)
@@ -133,10 +138,14 @@ def attempts_for_current_cycle(
             and repair.get("idempotency_key") == idempotency_key
         ):
             offset = recovery_counter(repair.get("attempt_offset"))
-            return attempts[min(max(offset, 0), len(attempts)) :]
-        return attempts
+            return dispatched_attempts[
+                min(max(offset, 0), len(dispatched_attempts)) :
+            ]
+        return dispatched_attempts
     offset = recovery_counter(_autonomy(context)["attempt_offsets"].get(step_id))
-    return attempts[min(max(offset, 0), len(attempts)) :]
+    return dispatched_attempts[
+        min(max(offset, 0), len(dispatched_attempts)) :
+    ]
 
 
 def record_rejected_write_retry(
@@ -327,7 +336,10 @@ def _delay(round_number: int) -> int:
 async def _attempt_count(session, step_id: str) -> int:
     return int(
         await session.scalar(
-            select(func.count(StepAttempt.id)).where(StepAttempt.step_id == step_id)
+            select(func.count(StepAttempt.id)).where(
+                StepAttempt.step_id == step_id,
+                StepAttempt.provider_dispatched.is_(True),
+            )
         )
         or 0
     )
@@ -383,6 +395,9 @@ async def _safe_options(
             .order_by(StepAttempt.attempt_number)
         )
     ).all()
+    dispatched_attempts = [
+        attempt for attempt in attempts if getattr(attempt, "provider_dispatched", True)
+    ]
     failure = failure or await _failure_evidence(session, run, step)
     category = str(failure["category"])
     fingerprint = str(failure["fingerprint"])
@@ -414,7 +429,7 @@ async def _safe_options(
             )
         ]
     if consequential:
-        if attempts and step.operation in RECONCILIABLE_WRITES:
+        if dispatched_attempts and step.operation in RECONCILIABLE_WRITES:
             return [
                 AutonomousRecoveryOption(
                     key="reconcile_write",
@@ -424,7 +439,7 @@ async def _safe_options(
                     delay_seconds=delay,
                 )
             ]
-        if not attempts and category in RECOVERABLE_PREDISPATCH_FAILURES:
+        if not dispatched_attempts and category in RECOVERABLE_PREDISPATCH_FAILURES:
             return [
                 AutonomousRecoveryOption(
                     key="retry_predispatch_step",

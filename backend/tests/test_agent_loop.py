@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from time import perf_counter
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -323,6 +324,55 @@ async def test_review_resume_after_write_does_not_replay_provider(runtime, monke
         assert completed.result["result_presentation"]["primary_step_key"] == "write"
     assert provider_calls == 1
     assert reviews == 2
+
+
+async def test_local_connector_validation_stays_before_provider_dispatch(runtime, monkeypatch):
+    manifest = {
+        "capabilities": [
+            {
+                "name": "records.create",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"title": {"type": "string", "maxLength": 3}},
+                    "required": ["title"],
+                    "additionalProperties": False,
+                },
+            }
+        ]
+    }
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("Invalid local arguments reached the provider")
+
+    monkeypatch.setattr(orchestrator, "_current_capability_manifest", lambda *_: manifest)
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", forbidden)
+
+    await orchestrator._execute_run("run", "w")
+
+    async with runtime() as session:
+        attempt = await session.scalar(select(StepAttempt))
+        run = await session.get(WorkflowRun, "run")
+        assert attempt is not None
+        assert attempt.provider_dispatched is False
+        assert attempt.error.startswith("[contract_or_runtime_error]")
+        assert run.status == RunStatus.waiting_for_action
+
+
+def test_provider_rejection_keeps_status_and_stable_error_code():
+    request = httpx.Request("POST", "https://api.canva.com/rest/v1/exports")
+    error = httpx.HTTPStatusError(
+        "not ready",
+        request=request,
+        response=httpx.Response(
+            404,
+            request=request,
+            json={"code": "design_not_found", "message": "Design not found"},
+        ),
+    )
+
+    assert orchestrator._provider_rejection_detail(error) == (
+        "status=404; code=design_not_found; Design not found"
+    )
 
 
 async def test_governed_canva_export_uses_imported_design_id(runtime, monkeypatch):
@@ -945,10 +995,16 @@ async def test_uncertain_known_update_reconciles_without_repeating_write(runtime
 
 
 @pytest.mark.parametrize(
-    "attempted,receipt,expected", [(False, False, True), (True, False, False), (False, True, False)]
+    "attempted,dispatched,receipt,expected",
+    [
+        (False, False, False, True),
+        (True, False, False, True),
+        (True, True, False, False),
+        (False, False, True, False),
+    ],
 )
 async def test_recovery_description_uses_durable_dispatch_evidence(
-    runtime, attempted, receipt, expected
+    runtime, attempted, dispatched, receipt, expected
 ):
     from app.main import TenantContext, get_run
 
@@ -973,6 +1029,7 @@ async def test_recovery_description_uses_durable_dispatch_evidence(
                     step_id="step",
                     attempt_number=1,
                     status="running",
+                    provider_dispatched=dispatched,
                     tool_slug="test",
                     operation="records.create",
                 )
