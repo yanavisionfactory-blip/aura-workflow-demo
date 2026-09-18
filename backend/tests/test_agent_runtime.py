@@ -1009,98 +1009,50 @@ def test_create_plan_uses_one_model_round_trip_for_valid_plan(monkeypatch) -> No
     assert result.planning_artifacts["preflight_evaluation"]["passed"] is True
 
 
-def test_senior_repair_gets_bounded_graph_recovery_for_synthetic_variables(
-    monkeypatch,
-) -> None:
-    search_step = PlanStep(
-        key="search",
-        agent="research",
-        tool_slug="aura",
-        operation="web.search",
-        arguments={"query": "TikTok creators"},
-        reason="Find public candidate profiles",
-        expected_output="Search results",
-    )
-    initial = agent_runtime.PlanningBundle(
-        objective=ObjectiveSpec(goal="Research public creators"),
+def test_create_plan_does_not_block_on_advisory_semantic_review(monkeypatch) -> None:
+    proposed = agent_runtime.PlanningBundle(
+        objective=ObjectiveSpec(goal="Email a weather brief"),
         toolset=ToolsetProposal(
             tools=[
                 ToolSelection(
-                    slug="aura", role="research", rationale="Searches public pages"
+                    slug="google", role="delivery", rationale="Sends the brief"
                 )
             ]
         ),
-        plan=plan(search_step),
-    )
-    invalid_manager_repair = initial.model_copy(
-        update={
-            "plan": plan(
-                search_step,
-                PlanStep(
-                    key="read_candidate",
-                    agent="research",
-                    tool_slug="aura",
-                    operation="web.page.read",
-                    arguments={"url": "{{vars.candidate_url}}"},
-                    reason="Inspect a candidate",
-                    expected_output="Rendered public profile",
-                ),
+        plan=plan(
+            PlanStep(
+                key="send",
+                agent="communications",
+                tool_slug="google",
+                operation="gmail.send",
+                arguments={"to": "me", "subject": "Weather", "body": "Brief"},
+                reason="Deliver the requested brief",
+                expected_output="Sent message receipt",
+                consequential=True,
             )
-        }
+        ),
     )
-    valid_graph_repair = initial.model_copy(
-        update={
-            "plan": plan(
-                search_step,
-                PlanStep(
-                    key="read_candidate",
-                    agent="research",
-                    tool_slug="aura",
-                    operation="web.page.read",
-                    arguments={"url": "{{steps.search.results.0.url}}"},
-                    reason="Inspect the first candidate",
-                    expected_output="Rendered public profile",
-                ),
-            )
-        }
-    )
-    planner_results = iter([initial, invalid_manager_repair])
-    staged_payloads = []
-    supervision_calls = 0
+    planner_calls = 0
 
     async def fake_planner(*_args, **_kwargs):
-        return next(planner_results)
+        nonlocal planner_calls
+        planner_calls += 1
+        return proposed
 
-    async def fake_staged(_agents, payload, **_kwargs):
-        staged_payloads.append(payload)
-        return valid_graph_repair
-
-    async def fake_supervision(*_args, **_kwargs):
-        nonlocal supervision_calls
-        supervision_calls += 1
-        if supervision_calls == 1:
-            return (
-                PlanSupervisionDecision(
-                    action="repair",
-                    reason="Inspect at least one candidate",
-                    required_fixes=["Add a bounded candidate inspection"],
-                ),
-                "agent",
-            )
-        return PlanSupervisionDecision(action="approve", reason="Executable"), "agent"
+    async def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("semantic supervision must not block deterministic preflight")
 
     monkeypatch.setattr(agent_runtime, "build_agents", lambda: {"planner": object()})
     monkeypatch.setattr(agent_runtime, "_run_planner", fake_planner)
-    monkeypatch.setattr(agent_runtime, "_run_staged_planner", fake_staged)
-    monkeypatch.setattr(agent_runtime, "supervise_plan", fake_supervision)
+    monkeypatch.setattr(agent_runtime, "supervise_plan", fail_if_called)
 
     result = asyncio.run(
         create_plan(
-            "Research public creators",
+            "Email me a weather brief",
             [
                 {
-                    "slug": "aura",
-                    "allowed_operations": ["web.search", "web.page.read"],
+                    "slug": "google",
+                    "allowed_operations": ["gmail.send"],
                     "connected": True,
                 }
             ],
@@ -1108,85 +1060,14 @@ def test_senior_repair_gets_bounded_graph_recovery_for_synthetic_variables(
         )
     )
 
-    assert result.steps[1].depends_on == ["search"]
-    assert result.planning_artifacts["planner_recovery_mode"] == (
-        "staged_manager_authorization_repair"
-    )
-    assert staged_payloads[0]["required_fixes"] == [
-        "Step 2 references unavailable variable candidate_url"
-    ]
-    assert "implicit foreach" in staged_payloads[0]["response_recovery"]
-
-
-def test_senior_can_request_two_bounded_semantic_repairs(monkeypatch) -> None:
-    def bundle(key: str) -> agent_runtime.PlanningBundle:
-        return agent_runtime.PlanningBundle(
-            objective=ObjectiveSpec(goal="Read CRM records"),
-            toolset=ToolsetProposal(
-                tools=[
-                    ToolSelection(
-                        slug="crm", role="source", rationale="Reads CRM records"
-                    )
-                ]
-            ),
-            plan=plan(
-                PlanStep(
-                    key=key,
-                    agent="data",
-                    tool_slug="crm",
-                    operation="records.read",
-                    reason="Retrieve the records",
-                    expected_output="CRM records",
-                )
-            ),
-        )
-
-    planner_results = iter([bundle("initial"), bundle("first_repair"), bundle("final")])
-    repair_payloads = []
-    supervision_calls = 0
-
-    async def fake_planner(_agent, payload, **_kwargs):
-        if payload.get("required_fixes"):
-            repair_payloads.append(payload)
-        return next(planner_results)
-
-    async def fake_supervision(*_args, **_kwargs):
-        nonlocal supervision_calls
-        supervision_calls += 1
-        if supervision_calls < 3:
-            return (
-                PlanSupervisionDecision(
-                    action="repair",
-                    reason="Needs another bounded correction",
-                    required_fixes=[f"repair {supervision_calls}"],
-                ),
-                "agent",
-            )
-        return PlanSupervisionDecision(action="approve", reason="Executable"), "agent"
-
-    monkeypatch.setattr(agent_runtime, "build_agents", lambda: {"planner": object()})
-    monkeypatch.setattr(agent_runtime, "_run_planner", fake_planner)
-    monkeypatch.setattr(agent_runtime, "supervise_plan", fake_supervision)
-
-    result = asyncio.run(
-        create_plan(
-            "Read CRM records",
-            [
-                {
-                    "slug": "crm",
-                    "allowed_operations": ["records.read"],
-                    "connected": True,
-                }
-            ],
-            available_input_names=set(),
-        )
-    )
-
-    assert result.steps[0].key == "final"
-    assert supervision_calls == 3
-    assert repair_payloads[0]["required_fixes"] == ["repair 1"]
-    assert repair_payloads[1]["required_fixes"] == ["repair 2"]
-    assert "Final bounded senior repair" in repair_payloads[1]["response_recovery"]
+    assert planner_calls == 1
+    assert result.steps[0].key == "send"
+    assert result.planning_artifacts["senior_orchestrator"] == {
+        "action": "approve",
+        "reason": "Deterministic plan and capability checks passed",
+        "required_fixes": [],
+        "source": "deterministic_preflight",
+    }
 
 
 def test_combined_planner_allows_flexible_workflow_arguments() -> None:
