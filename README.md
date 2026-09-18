@@ -17,7 +17,6 @@ Required browser configuration:
 ```env
 VITE_AURA_API_URL=http://localhost:8000
 VITE_CLERK_PUBLISHABLE_KEY=pk_test_...
-VITE_STAGED_ACTION_REVIEW_ENABLED=false
 ```
 
 ## Backend

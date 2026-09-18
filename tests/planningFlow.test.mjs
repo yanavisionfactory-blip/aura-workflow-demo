@@ -96,13 +96,15 @@ test("the UI renders a language plan while durable compilation is still running"
   assert.equal(source.includes("instantLanguagePlan(confirmedIntent"), true);
   assert.equal(source.includes("languageDraftPrompt(confirmedIntent"), true);
   assert.equal(source.includes("Executable planning unavailable; the language plan remains visible"), true);
-  assert.equal(planViewSource.includes("Connections never block plan creation"), true);
-  assert.equal(planViewSource.includes("validatingExecution || missingTools.length"), true);
+  assert.equal(planViewSource.includes("validating exact actions backstage"), false);
+  assert.equal(planViewSource.includes("validatingExecution || missingTools.length"), false);
+  assert.equal(source.includes("queuedPlanStartRef.current = { name }"), true);
+  assert.equal(source.includes("PLANNING_WAIT_TIMEOUT_MS = 30_000"), true);
   assert.equal(source.includes('.replace(/^i\\s+will\\s+/i, "")'), true);
   assert.equal(source.includes("iWill: firstPersonStepCopy(step.iWill || step.reason)"), true);
 });
 
-test("Start uses combined approval unless staged action review is explicitly enabled", () => {
+test("Start always uses one combined approval and cannot re-enable staged review", () => {
   const source = readFileSync(
     new URL("../src/pages/Demo.jsx", import.meta.url),
     "utf8",
@@ -112,8 +114,9 @@ test("Start uses combined approval unless staged action review is explicitly ena
     "utf8",
   );
 
-  assert.equal(source.includes("VITE_STAGED_ACTION_REVIEW_ENABLED"), true);
-  assert.equal(source.includes("const requiresReview = STAGED_ACTION_REVIEW_ENABLED"), true);
+  assert.equal(source.includes("VITE_STAGED_ACTION_REVIEW_ENABLED"), false);
+  assert.equal(source.includes("startPythonPreparation"), false);
+  assert.equal(source.includes("startPythonExecution();"), true);
   assert.match(api, /approvePythonPlan\(runId, editedSteps = null, approveConsequential = true\)/);
 });
 
