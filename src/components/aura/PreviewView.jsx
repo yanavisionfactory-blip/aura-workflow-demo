@@ -497,7 +497,8 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
   const richEmail = contract.operation === "gmail.send";
   const richTicket = contract.operation === "jira.issue.create";
   const richPresentation = contract.operation === "canva.presentation.create";
-  const [editing, setEditing] = useState(() => richEmail || richPresentation);
+  const richDocument = contract.kind === "document";
+  const [editing, setEditing] = useState(() => richEmail || richPresentation || richDocument);
   const updateArguments = (nextArguments) => onUpdate(index, {
     arguments: nextArguments,
     resolvedArguments: nextArguments,
@@ -543,6 +544,7 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
           <>
             {richEmail && <EditableEmail preview={p} onPreviewChange={updatePreview} editing={editing} artifacts={contract.artifacts || []} />}
             {richTicket && <EditableJiraTask preview={p} onPreviewChange={updatePreview} editing={editing} />}
+            {richDocument && <EditableDocument preview={p} onPreviewChange={updatePreview} editing={editing} />}
             {richPresentation && (
               <EditablePresentation
                 args={args}
@@ -552,7 +554,7 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
                 onFieldValidity={fieldValidity}
               />
             )}
-            {!richPresentation && (
+            {!richPresentation && !richDocument && (
               <SchemaArgumentsEditor
                 contract={contract}
                 args={args}

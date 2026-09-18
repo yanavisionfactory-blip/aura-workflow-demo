@@ -10,23 +10,56 @@ const controlForValue = (value) => {
   return "text";
 };
 
-export const fallbackReviewContract = (operation, args = {}, toolName = "App") => ({
-  version: 1,
-  kind: "action",
-  operation,
-  title: `Review the ${toolName} action before running it`,
-  description: "Review the exact values AURA will submit.",
-  fields: Object.entries(args).map(([key, value]) => ({
-    key,
-    path: [key],
-    label: labelForKey(key),
-    type: Array.isArray(value) ? "array" : typeof value === "object" && value !== null ? "object" : typeof value,
-    control: controlForValue(value),
-    required: false,
-    editable: true,
-  })),
-  editable_paths: Object.keys(args).map((key) => [key]),
-});
+const reviewKindForOperation = (operation = "") => {
+  const lowered = String(operation).toLowerCase();
+  if (lowered === "gmail.send" || lowered.includes("email")) return "email";
+  if (lowered === "canva.presentation.create" || lowered.includes("presentation")) return "presentation";
+  if (lowered.startsWith("jira.") || ["ticket", "issue"].some((word) => lowered.includes(word))) return "ticket";
+  if (lowered === "slack.post" || ["message", "notify"].some((word) => lowered.includes(word))) return "message";
+  if (lowered.startsWith("calendar.") || lowered.includes("event")) return "calendar";
+  if (["document", "report", "notion.page", "blocks.children"].some((word) => lowered.includes(word))) return "document";
+  if (["sheets.", "airtable.", "hubspot.", "contact", "company"].some((word) => lowered.includes(word))) return "records";
+  if (["campaign", "tiktok", "publish", "upload"].some((word) => lowered.includes(word))) return "content";
+  if (lowered.startsWith("canva.")) return "design";
+  return "action";
+};
+
+const reviewTitle = (kind, operation, toolName) => {
+  const subject = toolName || labelForKey(String(operation).split(".", 1)[0]);
+  return {
+    email: "Review the email before sending",
+    presentation: "Review the presentation before creating it",
+    ticket: "Review the ticket before creating or changing it",
+    message: "Review the message before sending",
+    calendar: "Review the calendar event before creating it",
+    document: "Review the document before creating or changing it",
+    records: `Review the ${subject} records before changing them`,
+    content: `Review the ${subject} content before publishing`,
+    design: "Review the Canva action before creating it",
+    action: `Review the ${subject} action before running it`,
+  }[kind];
+};
+
+export const fallbackReviewContract = (operation, args = {}, toolName = "App") => {
+  const kind = reviewKindForOperation(operation);
+  return {
+    version: 1,
+    kind,
+    operation,
+    title: reviewTitle(kind, operation, toolName),
+    description: "Review the exact values AURA will submit.",
+    fields: Object.entries(args).map(([key, value]) => ({
+      key,
+      path: [key],
+      label: labelForKey(key),
+      type: Array.isArray(value) ? "array" : typeof value === "object" && value !== null ? "object" : typeof value,
+      control: controlForValue(value),
+      required: false,
+      editable: true,
+    })),
+    editable_paths: Object.keys(args).map((key) => [key]),
+  };
+};
 
 const previewForArguments = (contract, args) => {
   if (contract.kind === "email") {
@@ -48,8 +81,41 @@ const previewForArguments = (contract, args) => {
       assignee: args.assignee_id || args.assignee || "",
     };
   }
+  if (contract.kind === "document") {
+    const content = args.body ?? args.content ?? args.description ?? args.children ?? "";
+    return {
+      type: "document",
+      title: contract.title,
+      docTitle: args.title || args.name || args.summary || "Untitled document",
+      docBody: typeof content === "string" ? content : JSON.stringify(content, null, 2),
+    };
+  }
   return { type: contract.kind, title: contract.title };
 };
+
+export const plannedApprovalStep = (planned, runtime, toolName = "App") => {
+  const args = runtime?.arguments && typeof runtime.arguments === "object"
+    ? runtime.arguments
+    : {};
+  const base = {
+    ...planned,
+    operation: runtime?.operation || planned?.operation,
+    arguments: args,
+    resolvedArguments: args,
+  };
+  if (!runtime?.consequential) return base;
+  const contract = fallbackReviewContract(base.operation, args, toolName);
+  return {
+    ...base,
+    riskLevel: "modify",
+    reviewContract: contract,
+    preview: previewForArguments(contract, args),
+  };
+};
+
+export const requiresActionPreview = (steps = [], autoApprove = false) => (
+  !autoApprove && steps.some((step) => step?.riskLevel === "modify")
+);
 
 export const resolvedApprovalStep = (planned, runtime, toolName = "App") => {
   if (!runtime?.consequential) {

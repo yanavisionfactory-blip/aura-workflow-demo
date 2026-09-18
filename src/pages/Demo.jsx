@@ -51,6 +51,8 @@ import { instantLanguagePlan, languageDraftPrompt } from "@/lib/languagePlan.mjs
 import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
 import {
   editedArgumentsForStep,
+  plannedApprovalStep,
+  requiresActionPreview,
   resolvedApprovalStep,
 } from "@/lib/approvalReview.mjs";
 
@@ -161,14 +163,13 @@ const friendlyStepTitle = (step) => {
   return `Use ${tool}`;
 };
 
-const uiPlanFromRun = (run) => ({
-  workflowName: run.plan?.name || "Saved workflow",
-  interpretation: run.plan?.interpretation || run.prompt,
-  estimatedTime: run.plan?.planning_artifacts?.timings_ms?.total
-    ? `Planned in ${(run.plan.planning_artifacts.timings_ms.total / 1000).toFixed(1)}s`
-    : "Runs durably in the AURA control plane",
-  steps: (run.plan?.steps || []).map((step) => ({
-    tool: planToolName(step),
+const uiPlanStepFromRun = (step) => {
+  const tool = planToolName(step);
+  const planned = {
+    tool,
+    operation: step.operation,
+    arguments: step.arguments || {},
+    resolvedArguments: step.arguments || {},
     title: friendlyStepTitle(step),
     iWill: firstPersonStepCopy(step.reason),
     action: cleanSentence(step.reason),
@@ -176,25 +177,24 @@ const uiPlanFromRun = (run) => ({
     reason: step.reason,
     output: step.expected_output,
     flow: [
-      { label: "Uses", value: planToolName(step) },
+      { label: "Uses", value: tool },
       { label: "Creates", value: step.expected_output },
     ],
     riskLevel: step.consequential ? "modify" : "read",
     riskNote: step.consequential
-      ? "This external action is included in the plan you approve with Start."
+      ? "You'll review this exact action with every other external change before the workflow runs."
       : "",
-    preview: step.consequential ? {
-      type: step.operation === "gmail.send" ? "email" : "list",
-      to: step.arguments?.to || "",
-      subject: step.arguments?.subject || "",
-      body: step.arguments?.body || "",
-      title: step.operation,
-      items: Object.entries(step.arguments || {}).map(([label, value]) => ({
-        label,
-        detail: JSON.stringify(value),
-      })),
-    } : undefined,
-  })),
+  };
+  return plannedApprovalStep(planned, step, tool);
+};
+
+const uiPlanFromRun = (run) => ({
+  workflowName: run.plan?.name || "Saved workflow",
+  interpretation: run.plan?.interpretation || run.prompt,
+  estimatedTime: run.plan?.planning_artifacts?.timings_ms?.total
+    ? `Planned in ${(run.plan.planning_artifacts.timings_ms.total / 1000).toFixed(1)}s`
+    : "Runs durably in the AURA control plane",
+  steps: (run.plan?.steps || []).map(uiPlanStepFromRun),
 });
 
 const uiConnectionPlanFromRun = (run, interpretation) => ({
@@ -388,6 +388,7 @@ export default function Demo() {
   const handleConfirmRef = useRef(null);
   const startPythonExecutionRef = useRef(null);
   const queuedPlanStartRef = useRef(null);
+  const preparedActionPreviewRef = useRef(false);
   const runRequestKeyRef = useRef(null);
   const lastPlanningIntentRef = useRef("");
   const historySavePromiseRef = useRef(null);
@@ -445,6 +446,7 @@ export default function Demo() {
     lastPlanningIntentRef.current = "";
     historySavePromiseRef.current = null;
     queuedPlanStartRef.current = null;
+    preparedActionPreviewRef.current = false;
     pendingMock.current = null;
     resolvedErrorRef.current = false;
     approvedStepsRef.current = [];
@@ -687,6 +689,11 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               approvedStepsRef.current = compiledPlan.steps;
               setApprovedSteps(compiledPlan.steps);
               setWorkflowName(queuedStart.name || compiledPlan.workflowName || "");
+              if (requiresActionPreview(compiledPlan.steps, queuedStart.autoApprove)) {
+                preparedActionPreviewRef.current = false;
+                setPhase("preview");
+                return;
+              }
               startPythonExecutionRef.current?.();
             }
           } catch (error) {
@@ -984,7 +991,7 @@ Rules:
     }
     if (!hasDurablePlan(pythonRunIdRef.current, pythonPlanRef.current)) {
       if (plan?.provisional) {
-        queuedPlanStartRef.current = { name };
+        queuedPlanStartRef.current = { name, autoApprove };
         if (plan.compileState === "blocked") {
           handleRetryPlanning();
           return;
@@ -1006,8 +1013,10 @@ Rules:
       keepPlanInReview();
       return;
     }
-    if (autoApprove) {
-      startPythonExecution();
+    if (requiresActionPreview(steps, autoApprove)) {
+      preparedActionPreviewRef.current = false;
+      setPreviewError("");
+      setPhase("preview");
       return;
     }
     startPythonExecution();
@@ -1023,7 +1032,9 @@ Rules:
       keepPlanInReview();
       return;
     }
-    startPythonExecution(editedSteps, true);
+    const prepared = preparedActionPreviewRef.current;
+    preparedActionPreviewRef.current = false;
+    startPythonExecution(editedSteps, prepared);
   }, [keepPlanInReview]);
 
   const mapRuntimeSteps = (run) => {
@@ -1275,6 +1286,7 @@ Rules:
           );
           approvedStepsRef.current = preparedSteps;
           setApprovedSteps(preparedSteps);
+          preparedActionPreviewRef.current = true;
           setPhase("preview");
           return;
         }
@@ -1300,6 +1312,7 @@ Rules:
           approvedStepsRef.current = refreshed;
           setApprovedSteps(refreshed);
           setPreviewError(error.message || "Review the highlighted values and try again.");
+          preparedActionPreviewRef.current = true;
           setPhase("preview");
           return;
         }
