@@ -697,6 +697,23 @@ async def test_recovered_read_gets_new_provider_attempts_after_old_budget(runtim
         step.status = StepStatus.pending
         tool = await session.get(ToolConnection, "tool")
         tool.allowed_operations = ["records.list"]
+        manifest = await session.get(CapabilityManifest, "manifest")
+        manifest.manifest = {
+            "capabilities": [
+                {
+                    "name": "records.list",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"title": {"type": "string"}},
+                        "required": ["title"],
+                        "additionalProperties": False,
+                    },
+                    "output_schema": {"type": "object"},
+                    "permission_scope": "read",
+                    "requires_approval": False,
+                }
+            ]
+        }
         session.add(
             StepAttempt(
                 workspace_id="w",

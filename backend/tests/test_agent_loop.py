@@ -267,7 +267,22 @@ async def runtime(monkeypatch):
                 workspace_id="w",
                 tool_id="tool",
                 status="verified",
-                manifest={"capabilities": []},
+                manifest={
+                    "capabilities": [
+                        {
+                            "name": "records.create",
+                            "input_schema": {
+                                "type": "object",
+                                "properties": {"title": {"type": "string"}},
+                                "required": ["title"],
+                                "additionalProperties": False,
+                            },
+                            "output_schema": {"type": "object"},
+                            "permission_scope": "write",
+                            "requires_approval": True,
+                        }
+                    ]
+                },
                 provider_type="mcp",
             )
         )
@@ -355,6 +370,91 @@ async def test_local_connector_validation_stays_before_provider_dispatch(runtime
         assert attempt is not None
         assert attempt.provider_dispatched is False
         assert attempt.error.startswith("[contract_or_runtime_error]")
+        assert run.status == RunStatus.waiting_for_action
+
+
+async def test_manifest_declared_write_is_never_retried_by_operation_name(
+    runtime, monkeypatch
+):
+    """A new connector's neutral verb must still receive write-safe semantics."""
+    operation = "records.mutate"
+    manifest = {
+        "capabilities": [
+            {
+                "name": operation,
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"title": {"type": "string"}},
+                    "required": ["title"],
+                    "additionalProperties": False,
+                },
+                "output_schema": {"type": "object"},
+                "permission_scope": "write",
+                "requires_approval": True,
+            }
+        ]
+    }
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        plan = {
+            **run.plan,
+            "steps": [
+                {
+                    **run.plan["steps"][0],
+                    "operation": operation,
+                    "consequential": False,
+                }
+            ],
+        }
+        run.plan = plan
+        version = await session.get(PlanVersion, "version")
+        version.plan = plan
+        version.plan_hash = canonical_plan_hash(plan)
+        run.execution_context = {
+            **run.execution_context,
+            "__aura_preflight__": {
+                **run.execution_context["__aura_preflight__"],
+                "plan_hash": version.plan_hash,
+            },
+        }
+        snapshot = await session.get(ApprovalSnapshot, "snapshot")
+        snapshot.plan_hash = version.plan_hash
+        snapshot.permission_snapshot = {"test": [operation]}
+        step = await session.get(RunStep, "step")
+        step.operation = operation
+        step.consequential = False
+        tool = await session.get(ToolConnection, "tool")
+        tool.allowed_operations = [operation]
+        capability_manifest = await session.get(CapabilityManifest, "manifest")
+        capability_manifest.manifest = manifest
+        await session.commit()
+
+    calls = 0
+
+    async def unavailable(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        request = httpx.Request("POST", "https://provider.example/records")
+        response = httpx.Response(503, request=request)
+        raise httpx.HTTPStatusError(
+            "provider unavailable", request=request, response=response
+        )
+
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", unavailable)
+
+    await orchestrator._execute_run("run", "w")
+
+    async with runtime() as session:
+        attempts = (
+            await session.scalars(select(StepAttempt).where(StepAttempt.step_id == "step"))
+        ).all()
+        step = await session.get(RunStep, "step")
+        run = await session.get(WorkflowRun, "run")
+        assert calls == 1
+        assert len(attempts) == 1
+        assert attempts[0].provider_dispatched is True
+        assert attempts[0].error.startswith("[uncertain_write]")
+        assert step.consequential is True
         assert run.status == RunStatus.waiting_for_action
 
 

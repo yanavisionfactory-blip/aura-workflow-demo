@@ -270,22 +270,40 @@ def _capability(name: str, method: str, path: str, input_schema: dict | None = N
 def normalize_manifest(raw: dict, provider_type: str, base_url: str) -> dict:
     capabilities = raw.get("capabilities") or raw.get("tools") or []
     normalized: list[dict] = []
+    names: set[str] = set()
     for item in capabilities:
         if isinstance(item, str):
             item = {"name": item}
+        if not isinstance(item, dict):
+            raise ConnectorError("Every capability must be an object or name")
         name = item.get("name") or item.get("id")
         if not name:
             raise ConnectorError("Every capability must have a name")
+        name = str(name)
+        if name in names:
+            raise ConnectorError(
+                f"Capability names must be unique; duplicate capability name: {name}"
+            )
+        names.add(name)
         scope = item.get("permission_scope", "read")
         if scope not in {"read", "write", "destructive"}:
             raise ConnectorError(f"Invalid permission scope for {name}")
+        input_schema = item.get("input_schema", {"type": "object"})
+        output_schema = item.get("output_schema", {"type": "object"})
+        if not isinstance(input_schema, dict) or not isinstance(output_schema, dict):
+            raise ConnectorError(f"Capability {name} must declare JSON Schema objects")
+        try:
+            Draft202012Validator.check_schema(input_schema)
+            Draft202012Validator.check_schema(output_schema)
+        except SchemaError as exc:
+            raise ConnectorError(f"Capability {name} contains an invalid JSON Schema") from exc
         normalized.append(
             {
                 "name": name,
                 "module_type": item.get("module_type", "action" if scope != "read" else "search"),
                 "description": item.get("description", ""),
-                "input_schema": item.get("input_schema", {"type": "object"}),
-                "output_schema": item.get("output_schema", {"type": "object"}),
+                "input_schema": input_schema,
+                "output_schema": output_schema,
                 "permission_scope": scope,
                 "requires_approval": bool(item.get("requires_approval", scope != "read")),
                 "transport": item.get("transport", {}),

@@ -87,7 +87,14 @@ async def exercise(directory, crash_point, stage):
                 display_name="Fixture provider", kind=ToolKind.mcp,
                 allowed_operations=["records.create"], config={}))
             session.add(CapabilityManifest(id="manifest", workspace_id="w", tool_id="tool",
-                status="verified", manifest={"capabilities": []}, provider_type="mcp"))
+                status="verified", manifest={"capabilities": [{
+                    "name": "records.create",
+                    "input_schema": {"type": "object", "properties": {
+                        "title": {"type": "string"}}, "required": ["title"],
+                        "additionalProperties": False},
+                    "output_schema": {"type": "object"},
+                    "permission_scope": "write", "requires_approval": True,
+                }]}, provider_type="mcp"))
             await session.commit()
 
     async def provider(*args, **kwargs):

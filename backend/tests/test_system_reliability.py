@@ -16,6 +16,7 @@ from app.db import Base
 from app.models import DispatchIntent, RunStatus, WorkflowRun, Workspace
 from app.native_connectors import NATIVE_CONNECTORS, native_manifest
 from app.operation_contracts import KNOWN, compile_contracts, enrich_operation, output_errors
+from app.orchestrator import _operation_is_consequential, _prepare_provider_arguments
 from app.reliability import (
     BudgetExceeded,
     CallBudget,
@@ -35,6 +36,71 @@ def test_every_native_operation_has_a_versioned_conformance_contract(slug):
         assert module["reliability"]["execution_ready"] is False
         if module["permission_scope"] != "read":
             assert module["reliability"]["retry"]["max_attempts"] == 1
+
+
+@pytest.mark.parametrize("slug", sorted(NATIVE_CONNECTORS))
+def test_every_native_operation_uses_declared_scope_for_runtime_retry_safety(slug):
+    for module in native_manifest(slug)["capabilities"]:
+        assert _operation_is_consequential(module["name"], module) is (
+            module["permission_scope"] != "read"
+        )
+
+
+def test_dynamic_connector_scope_outranks_unfamiliar_or_misleading_names():
+    assert _operation_is_consequential(
+        "records.mutate", {"permission_scope": "write"}
+    )
+    assert not _operation_is_consequential(
+        "reports.create_preview", {"permission_scope": "read"}
+    )
+
+
+def _valid_schema_value(schema):
+    if "const" in schema:
+        return schema["const"]
+    if schema.get("enum"):
+        return schema["enum"][0]
+    schema_type = schema.get("type", "object")
+    if isinstance(schema_type, list):
+        schema_type = next(item for item in schema_type if item != "null")
+    if schema_type == "object":
+        properties = schema.get("properties", {})
+        return {
+            name: _valid_schema_value(properties.get(name, {}))
+            for name in schema.get("required", [])
+        }
+    if schema_type == "array":
+        return [
+            _valid_schema_value(schema.get("items", {}))
+            for _ in range(int(schema.get("minItems", 0)))
+        ]
+    if schema_type == "integer":
+        return int(schema.get("minimum", 0))
+    if schema_type == "number":
+        return float(schema.get("minimum", 0))
+    if schema_type == "boolean":
+        return True
+    if schema.get("format") == "date-time":
+        return "2026-09-18T12:00:00Z"
+    if schema.get("format") == "email":
+        return "aura@example.com"
+    if schema.get("format") == "uri":
+        return "https://example.com/resource"
+    if schema.get("pattern") and "@" in schema["pattern"]:
+        return "aura@example.com"
+    return "value"
+
+
+@pytest.mark.parametrize("slug", sorted(NATIVE_CONNECTORS))
+def test_every_native_operation_accepts_schema_valid_arguments_before_dispatch(slug):
+    manifest = native_manifest(slug)
+    for module in manifest["capabilities"]:
+        arguments = _valid_schema_value(module["input_schema"])
+        prepared, selected = _prepare_provider_arguments(
+            manifest, module["name"], arguments
+        )
+        assert prepared == arguments
+        assert selected["name"] == module["name"]
 
 
 def step(key, operation, **kwargs):
