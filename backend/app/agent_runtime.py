@@ -1250,123 +1250,17 @@ async def create_plan(
     if deterministic_fixes:
         raise ValueError("Plan failed preflight authorization: " + "; ".join(deterministic_fixes))
 
-    supervision, supervision_source = await supervise_plan(
-        prompt, objective, toolset, plan, tool_inventory
+    # Deterministic preflight above is the execution authority. A model-based
+    # semantic reviewer previously rewrote already valid plans and could spend
+    # multiple inference rounds pursuing subjective polish before rejecting the
+    # workflow. Keep planning fast and non-blocking; schema, capability,
+    # dependency, permission, and approval checks still run deterministically,
+    # while runtime verification remains responsible for the delivered outcome.
+    supervision = PlanSupervisionDecision(
+        action="approve",
+        reason="Deterministic plan and capability checks passed",
     )
-    for manager_pass in range(2):
-        if supervision.action == "approve":
-            break
-        repaired_payload = {
-            **request_payload,
-            "rejected_bundle": {
-                "objective": objective.model_dump(mode="json"),
-                "toolset": toolset.model_dump(mode="json"),
-                "plan": plan.model_dump(mode="json"),
-            },
-            "required_fixes": supervision.required_fixes,
-            "senior_orchestrator_review": supervision.model_dump(mode="json"),
-        }
-        if manager_pass:
-            repaired_payload["response_recovery"] = (
-                "Final bounded senior repair. Implement every required fix in one finite graph. "
-                "Resolve each named current sheet exactly once and read each resolved sheet once; "
-                "use those rows to exclude duplicates before the approval gate. Pass the entire "
-                "public-evidence-qualified, duplicate-free array to the listed batch form operation "
-                "instead of selecting index 0 or inventing foreach variables. The designated form "
-                "call itself establishes its private policy decision, so public evidence and sheet "
-                "exclusion are its preconditions; an explicit per-record approved receipt completes "
-                "the remaining private checks. Append only approved_records and rely on the append "
-                "write receipt. Runtime policy already retries recoverable read failures and stops "
-                "on a genuine blocker."
-            )
-        manager_repair_started = perf_counter()
-        try:
-            bundle = await _run_planner(agents["planner"], repaired_payload, max_turns=8)
-        except Exception as repair_error:  # noqa: BLE001 - bounded staged recovery
-            bundle = await _run_staged_planner(agents, repaired_payload, max_turns=8)
-            recovery_mode = (
-                "staged_input_limit_manager_repair"
-                if is_input_limit(repair_error)
-                else "staged_manager_repair"
-            )
-        repair_ms += round((perf_counter() - manager_repair_started) * 1000)
-        objective = bundle.objective
-        toolset = bundle.toolset
-        if _has_only_missing_capabilities(bundle):
-            bundle = await _recover_catalog_tool_selection(
-                agents, request_payload, bundle, max_turns=8
-            )
-            recovery_mode = "staged_manager_capability_repair"
-            objective = bundle.objective
-            toolset = bundle.toolset
-        plan = normalize_plan_graph(bundle.plan)
-        deterministic_fixes = deterministic_plan_fixes(
-            plan, tool_inventory, available_input_names
-        )
-        if deterministic_fixes:
-            # Senior feedback can cause the planner to restructure an otherwise
-            # valid graph and accidentally introduce synthetic loop variables.
-            # Give the smaller staged builder one final, bounded graph repair
-            # instead of surfacing a generic planning failure to the user.
-            repaired_payload = {
-                **request_payload,
-                "rejected_bundle": {
-                    "objective": objective.model_dump(mode="json"),
-                    "toolset": toolset.model_dump(mode="json"),
-                    "plan": plan.model_dump(mode="json"),
-                },
-                "required_fixes": deterministic_fixes,
-                "senior_orchestrator_review": supervision.model_dump(mode="json"),
-                "autonomous_resource_resolution": autonomous_resource_resolution_context(
-                    plan, tool_inventory, available_input_names
-                ),
-                "response_recovery": (
-                    "Repair only the listed graph authorization defects. Every vars.name "
-                    "reference must be produced by output_variables on a strictly earlier "
-                    "step. Otherwise replace it with a concrete steps.key.path reference. "
-                    "Do not invent implicit foreach or loop variables; expand a finite set "
-                    "of indexed step references when multiple items must be inspected."
-                ),
-            }
-            manager_repair_started = perf_counter()
-            bundle = await _run_staged_planner(
-                agents, repaired_payload, max_turns=8
-            )
-            repair_ms += round((perf_counter() - manager_repair_started) * 1000)
-            objective = bundle.objective
-            toolset = bundle.toolset
-            if _has_only_missing_capabilities(bundle):
-                bundle = await _recover_catalog_tool_selection(
-                    agents, request_payload, bundle, max_turns=8
-                )
-                recovery_mode = "staged_manager_capability_repair"
-                objective = bundle.objective
-                toolset = bundle.toolset
-            plan = normalize_plan_graph(bundle.plan)
-            deterministic_fixes = deterministic_plan_fixes(
-                plan, tool_inventory, available_input_names
-            )
-            recovery_mode = "staged_manager_authorization_repair"
-        if deterministic_fixes:
-            raise ValueError(
-                "Senior-orchestrated plan repair failed authorization: "
-                + "; ".join(deterministic_fixes)
-            )
-        supervision, supervision_source = await supervise_plan(
-            prompt, objective, toolset, plan, tool_inventory
-        )
-        if supervision.action == "approve":
-            recovery_mode = (
-                "manager_repair"
-                if recovery_mode == "combined"
-                else recovery_mode
-            )
-            break
-        if manager_pass == 1:
-            raise ValueError(
-                "Senior orchestrator could not approve the repaired plan: "
-                + "; ".join(supervision.required_fixes)
-            )
+    supervision_source = "deterministic_preflight"
 
     operations = [step.operation.lower() for step in plan.steps]
     destructive = any(any(word in operation for word in ("delete", "purchase")) for operation in operations)
