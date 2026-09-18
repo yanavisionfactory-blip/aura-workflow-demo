@@ -102,6 +102,9 @@ test("the UI renders a language plan while durable compilation is still running"
   assert.equal(source.includes("PLANNING_WAIT_TIMEOUT_MS = 30_000"), true);
   assert.equal(source.includes('.replace(/^i\\s+will\\s+/i, "")'), true);
   assert.equal(source.includes("iWill: firstPersonStepCopy(step.iWill || step.reason)"), true);
+  assert.equal(planViewSource.includes('|| plan.compileState === "blocked"'), false);
+  assert.equal(source.includes('if (plan.compileState === "blocked") {'), true);
+  assert.equal(source.includes("handleRetryPlanning();"), true);
 });
 
 test("Start always uses one combined approval and cannot re-enable staged review", () => {

@@ -185,8 +185,26 @@ def weather_presentation_template(
     if not location_match or not relative_date:
         return None
     location = location_match.group(1).strip(" \t\n\r,.")
+    # Stop the location at a following workflow clause. Without this, prompts
+    # such as "weather in Munich and the three-day forecast" treated the whole
+    # clause as a city and produced invalid connector arguments downstream.
+    location = re.split(
+        r"\s+and\s+(?=(?:the\s+)?(?:[\w-]+\s+){0,4}(?:forecast|weather)\b)",
+        location,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0].strip()
     if not location or len(location) > 80:
         return None
+
+    forecast_days = (
+        3
+        if re.search(r"\b(?:three|3)[ -]?day\s+forecast\b", requested)
+        else 1
+    )
+    requested_slide_count = (
+        3 if re.search(r"\b(?:three|3)[ -]?slide\b", requested) else 1
+    )
 
     email_delivery_requested = bool(
         re.search(r"\b(?:email|e-mail|gmail)\b", requested)
@@ -229,13 +247,67 @@ def weather_presentation_template(
     gmail_slug = str(gmail["slug"]) if gmail else None
     filename_stem = re.sub(r"[^A-Za-z0-9 _-]+", "", location).strip() or "weather"
     filename = f"{filename_stem} weather.pdf"
+    weather_arguments = {
+        "location": location,
+        "date": relative_date,
+    }
+    if "fahrenheit" in requested:
+        weather_arguments["units"] = "imperial"
+    elif "celsius" in requested:
+        weather_arguments["units"] = "metric"
+    if forecast_days > 1:
+        weather_arguments["days"] = forecast_days
+
+    presentation_arguments = {
+        "title": f"{location} weather",
+        "subtitle": (
+            "Updated {{steps.weather.updated_at}} · Source: {{steps.weather.source}}"
+        ),
+        "phases": [{
+            "period": "{{steps.weather.date}}",
+            "title": "Weather forecast",
+            "items": ["{{steps.weather.summary}}"],
+        }],
+    }
+    if forecast_days == 3:
+        presentation_arguments["phases"] = [
+            {
+                "period": "Today",
+                "title": "Today's conditions",
+                "items": [
+                    "{{steps.weather.forecasts[0].summary}}",
+                    "Updated {{steps.weather.updated_at}}",
+                ],
+            },
+            {
+                "period": "Next 3 days",
+                "title": "Forecast at a glance",
+                "items": [
+                    "{{steps.weather.forecasts[0].summary}}",
+                    "{{steps.weather.forecasts[1].summary}}",
+                    "{{steps.weather.forecasts[2].summary}}",
+                ],
+            },
+            {
+                "period": "Practical guide",
+                "title": "What to wear",
+                "items": [
+                    "Dress in layers for {{steps.weather.forecasts[0].temperature_low}}°C–{{steps.weather.forecasts[0].temperature_high}}°C.",
+                    "Carry rain protection if needed; peak precipitation risk is {{steps.weather.max_precipitation_probability}}%.",
+                    "Choose an outer layer for winds up to {{steps.weather.max_wind_speed}} km/h.",
+                ],
+            },
+        ]
+        if requested_slide_count == 3:
+            presentation_arguments["layout"] = "slides"
+
     steps = [
         {
             "key": "weather",
             "agent": "Weather Research Agent",
             "tool_slug": weather_slug,
             "operation": "weather.forecast",
-            "arguments": {"location": location, "date": relative_date},
+            "arguments": weather_arguments,
             "reason": "Retrieve the requested public forecast before composing the presentation.",
             "expected_output": "Location, forecast date, and grounded weather summary.",
             "required_evidence": ["forecast"],
@@ -245,15 +317,7 @@ def weather_presentation_template(
             "agent": "Canva Presentation Agent",
             "tool_slug": canva_slug,
             "operation": "canva.presentation.create",
-            "arguments": {
-                "title": f"{location} weather",
-                "subtitle": "Forecast for {{steps.weather.date}}",
-                "phases": [{
-                    "period": "{{steps.weather.date}}",
-                    "title": "Weather forecast",
-                    "items": ["{{steps.weather.summary}}"],
-                }],
-            },
+            "arguments": presentation_arguments,
             "reason": "Create the requested populated presentation from the retrieved forecast.",
             "expected_output": "Verified Canva presentation creation job and design identity.",
             "consequential": True,
@@ -311,7 +375,8 @@ def weather_presentation_template(
         )
 
     interpretation = (
-        f"Retrieve the public weather forecast for {location} {relative_date}, create one "
+        f"Retrieve the {forecast_days}-day public weather forecast for {location} "
+        f"starting {relative_date}, create one "
         "populated Canva presentation grounded only in that forecast"
     )
     if email_delivery_requested:

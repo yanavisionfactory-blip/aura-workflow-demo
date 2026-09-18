@@ -35,6 +35,12 @@ async def database():
     [
         (RuntimeError("error code: 429 rate limit"), "rate_limited"),
         (RuntimeError("Invalid JSON from planner"), "malformed_plan"),
+        (
+            RuntimeError(
+                "canva.presentation.create.title must contain at most 50 characters"
+            ),
+            "malformed_plan",
+        ),
         (TimeoutError("model timed out"), "timeout"),
         (RuntimeError("credit_balance_exhausted"), "operator_quota"),
         (RuntimeError("connector contract drift"), "capability_drift"),

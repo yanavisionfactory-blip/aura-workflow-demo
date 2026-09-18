@@ -363,7 +363,7 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         <div className="mb-4 rounded-xl border border-amber-400/25 bg-amber-400/5 p-3 text-sm text-amber-100">
           <div className="flex items-center gap-2 font-medium">
             <AlertTriangle className="h-4 w-4 text-amber-400" />
-            <span>AURA couldn't prepare this workflow quickly enough</span>
+            <span>AURA couldn't finalize one execution detail</span>
           </div>
           {plan.compileError && (
             <p className="mt-1 text-[11px] leading-relaxed text-amber-100/70">{plan.compileError}</p>
@@ -590,7 +590,7 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
             onClick={() => onApprove(steps, name.trim())}
-            disabled={missingTools.length > 0 || steps.length === 0 || Boolean(plan.error) || plan.compileState === "blocked"}
+            disabled={missingTools.length > 0 || steps.length === 0 || Boolean(plan.error)}
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white disabled:cursor-not-allowed disabled:opacity-40"
           >
             {approveLabel} <ArrowRight className="w-4 h-4" />

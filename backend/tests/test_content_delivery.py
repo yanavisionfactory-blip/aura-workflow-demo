@@ -33,6 +33,30 @@ def test_populated_timeline_has_one_slide_and_all_approved_text():
         assert all(item in texts for item in phase['items'])
 
 
+def test_slide_layout_creates_one_editable_slide_per_phase():
+    arguments = {
+        'title': 'Munich weather',
+        'subtitle': 'Updated now · Source: Open-Meteo',
+        'layout': 'slides',
+        'phases': [
+            {'period': 'Today', 'title': "Today's conditions", 'items': ['Cool and dry']},
+            {'period': 'Next 3 days', 'title': 'Forecast', 'items': ['Tuesday', 'Wednesday']},
+            {'period': 'Practical guide', 'title': 'What to wear', 'items': ['Dress in layers']},
+        ],
+    }
+
+    deck = Presentation(BytesIO(render_timeline(arguments)))
+
+    assert len(deck.slides) == 3
+    for index, phase in enumerate(arguments['phases']):
+        texts = [
+            shape.text for shape in deck.slides[index].shapes if shape.has_text_frame
+        ]
+        assert arguments['title'] in texts
+        assert phase['title'] in texts
+        assert any(phase['items'][0] in text for text in texts)
+
+
 @pytest.mark.parametrize('url', ['http://export-download.canva.com/x', 'https://canva.com.evil.test/x',
     'https://127.0.0.1/a', 'https://export-download.canva.com@evil.test/x',
     'https://export-download.canva.com:444/x', 'file:///etc/passwd'])

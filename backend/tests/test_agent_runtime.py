@@ -1570,3 +1570,34 @@ def test_materializer_repairs_layout_contract_before_returning_for_approval(monk
     assert len(calls) == 2
     assert "at most 5 items" in calls[1]["argument_validation_error"]
     assert len(result["phases"][0]["items"]) == 5
+
+
+def test_materializer_fits_generated_text_without_another_model_retry(monkeypatch):
+    calls = []
+
+    async def fake_run(agent, payload, **kwargs):
+        calls.append(dict(payload))
+        return {
+            "arguments": {
+                "title": "Munich weather, forecast, clothing, source, and update time",
+                "phases": [{
+                    "period": "Today",
+                    "title": "Forecast",
+                    "items": ["Cool and dry"],
+                }],
+            }
+        }
+
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    result = asyncio.run(
+        materialize_action_arguments(
+            "Create a Munich weather presentation",
+            {"tool_slug": "canva", "operation": "canva.presentation.create"},
+            {"steps": {}},
+        )
+    )
+
+    assert len(calls) == 1
+    assert len(result["title"]) <= 50
+    assert result["title"].endswith("…")

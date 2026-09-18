@@ -62,7 +62,7 @@ from .native_connectors import (
     current_capability_manifest,
     native_manifest,
     native_operations,
-    normalize_module_arguments,
+    normalize_planned_module_arguments,
     planning_catalog,
 )
 from .outcome_runtime import check_provider_outcome
@@ -478,7 +478,7 @@ def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict]) -> None:
             # Approval declarations in verified connector contracts outrank an
             # optimistic planner classification, including external agents.
             planned_step.consequential = True
-        planned_step.arguments = normalize_module_arguments(
+        planned_step.arguments = normalize_planned_module_arguments(
             manifest, planned_step.operation, planned_step.arguments
         )
         if planned_step.reduced_scope_arguments is None:
@@ -546,7 +546,10 @@ async def _create_compiled_plan(
         return audited_plan
     inventory = intent_bounded_tool_inventory(prompt, inventory, requested_tool_names)
     repair_requirements: list[str] = []
-    for attempt in range(3):
+    # Connector-contract validation receives one model repair. Safe generated
+    # prose is normalized deterministically before this boundary, so repeating
+    # the same repair cannot improve a persistent schema mismatch.
+    for attempt in range(2):
         plan = await create_plan(
             prompt,
             inventory,
@@ -576,7 +579,7 @@ async def _create_compiled_plan(
             )
             return plan
         except (NativeConnectorError, ValueError) as exc:
-            if attempt == 2:
+            if attempt == 1:
                 raise
             repair_requirements.append(str(exc))
             logger.warning(
@@ -2085,8 +2088,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         {},
                     )
                     if not materialized_for_approval and (
-                        step.operation == "canva.presentation.create"
-                        or requires_content_composition(
+                        requires_content_composition(
                             plan_steps[step.position].get("arguments", {}),
                             capability.get("input_schema", {}),
                             context,
@@ -2095,7 +2097,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         raise NativeConnectorError(
                             "Structured source evidence requires readable content composition before approval"
                         )
-                    resolved_arguments = normalize_module_arguments(
+                    resolved_arguments = normalize_planned_module_arguments(
                         manifest, step.operation, resolved_arguments
                     )
                     if referenced_paths(resolved_arguments):
@@ -2108,7 +2110,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                                 plan_steps[step.position],
                                 context,
                             )
-                            resolved_arguments = normalize_module_arguments(
+                            resolved_arguments = normalize_planned_module_arguments(
                                 manifest, step.operation, resolved_arguments
                             )
                             if referenced_paths(resolved_arguments):
@@ -2271,7 +2273,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             else None,
                         )
                         try:
-                            future_arguments = normalize_module_arguments(
+                            future_arguments = normalize_planned_module_arguments(
                                 future_manifest,
                                 future_step.operation,
                                 future_arguments,

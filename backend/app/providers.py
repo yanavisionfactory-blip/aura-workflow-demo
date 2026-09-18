@@ -6,6 +6,7 @@ import json
 import re
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from email.message import EmailMessage
 from typing import Any
 from urllib.parse import quote, urlencode, urlsplit
@@ -1027,25 +1028,48 @@ class ProviderExecutor:
             if target not in dates:
                 raise ValueError("Requested date is outside the provider forecast range")
             index = dates.index(target)
+        day_count = int(a.get("days") or 1)
+        if index + day_count > len(dates):
+            raise ValueError("Provider forecast does not cover every requested day")
         fields = ("temperature_2m_max", "temperature_2m_min", "precipitation_probability_max", "wind_speed_10m_max", "weather_code")
-        if any(len(daily.get(field) or []) <= index for field in fields):
+        if any(len(daily.get(field) or []) < index + day_count for field in fields):
             raise ValueError("Provider forecast metrics do not cover the requested day")
         symbol = "°F" if units == "imperial" else "°C"
         wind_unit = "mph" if units == "imperial" else "km/h"
-        result = {
-            "location": ", ".join(filter(None, [place.get("name"), place.get("admin1"), place.get("country")])),
-            "date": dates[index] if dates else target,
-            "temperature_high": (daily.get("temperature_2m_max") or [None])[index],
-            "temperature_low": (daily.get("temperature_2m_min") or [None])[index],
-            "precipitation_probability": (daily.get("precipitation_probability_max") or [None])[index],
-            "wind_speed": (daily.get("wind_speed_10m_max") or [None])[index],
-            "weather_code": (daily.get("weather_code") or [None])[index],
-        }
-        result["summary"] = (
-            f"{result['location']}: {result['temperature_low']}{symbol} to "
-            f"{result['temperature_high']}{symbol}, {result['precipitation_probability']}% chance "
-            f"of precipitation, wind up to {result['wind_speed']} {wind_unit}."
+        location_name = ", ".join(
+            filter(None, [place.get("name"), place.get("admin1"), place.get("country")])
         )
+
+        def day_result(day_index: int) -> dict:
+            item = {
+                "location": location_name,
+                "date": dates[day_index],
+                "temperature_high": daily["temperature_2m_max"][day_index],
+                "temperature_low": daily["temperature_2m_min"][day_index],
+                "precipitation_probability": daily["precipitation_probability_max"][day_index],
+                "wind_speed": daily["wind_speed_10m_max"][day_index],
+                "weather_code": daily["weather_code"][day_index],
+            }
+            item["summary"] = (
+                f"{item['date']}: {item['temperature_low']}{symbol} to "
+                f"{item['temperature_high']}{symbol}, {item['precipitation_probability']}% chance "
+                f"of precipitation, wind up to {item['wind_speed']} {wind_unit}."
+            )
+            return item
+
+        forecasts = [day_result(day_index) for day_index in range(index, index + day_count)]
+        result = {
+            **forecasts[0],
+            "forecasts": forecasts,
+            "forecast_days": day_count,
+            "max_precipitation_probability": max(
+                item["precipitation_probability"] for item in forecasts
+            ),
+            "max_wind_speed": max(item["wind_speed"] for item in forecasts),
+            "updated_at": datetime.now(UTC).isoformat(),
+            "source": "Open-Meteo",
+            "source_url": "https://open-meteo.com/",
+        }
         return result
 
     async def _browser_worker_request(self, path: str, payload: dict) -> dict:
@@ -1359,7 +1383,8 @@ class ProviderExecutor:
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             response = await client.post('https://api.canva.com/rest/v1/imports', headers=headers, content=data)
             response.raise_for_status()
-        return {**response.json(), 'source_sha256': hashlib.sha256(data).hexdigest(), 'page_count': 1}
+        page_count = len(a['phases']) if a.get('layout') == 'slides' else 1
+        return {**response.json(), 'source_sha256': hashlib.sha256(data).hexdigest(), 'page_count': page_count}
 
     async def _canva_import_get(self, a: dict) -> dict:
         return await self._canva_request('GET', 'imports/' + quote(a['import_id'], safe=''))

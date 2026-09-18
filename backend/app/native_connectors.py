@@ -147,6 +147,7 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                 properties={
                     "location": _TEXT,
                     "date": _TEXT,
+                    "days": {"type": "integer", "minimum": 1, "maximum": 7},
                     "units": {"type": "string", "enum": ["metric", "imperial"]},
                 },
             ),
@@ -625,15 +626,21 @@ def public_catalog(slug: str) -> dict[str, Any]:
     }
 
 
+def _workflow_reference(value: Any) -> bool:
+    return isinstance(value, str) and bool(
+        re.fullmatch(
+            r"\{\{\s*(?:inputs|vars|steps)\.[a-zA-Z0-9_.\-\[\]'\" ]+\s*\}\}",
+            value,
+        )
+    )
+
+
 def _validate_value(schema: dict[str, Any], value: Any, path: str) -> None:
     # A full workflow reference is a typed value that will be resolved before
     # provider dispatch. Permit it during plan compilation even when the target
     # contract expects an array/object; runtime validation rejects unresolved or
     # wrongly typed results again before any capability call.
-    if isinstance(value, str) and re.fullmatch(
-        r"\{\{\s*(?:inputs|vars|steps)\.[a-zA-Z0-9_.\-\[\]'\" ]+\s*\}\}",
-        value,
-    ):
+    if _workflow_reference(value):
         return
     schema_type = schema.get("type")
     type_checks = {
@@ -689,8 +696,16 @@ def _validate_value(schema: dict[str, Any], value: Any, path: str) -> None:
             for index, item in enumerate(value):
                 _validate_value(item_schema, item, f"{path}[{index}]")
     if schema_type == 'string' and isinstance(value, str) and '{{' not in value:
-        if len(value) < schema.get('minLength', 0) or len(value) > schema.get('maxLength', len(value)):
-            raise NativeConnectorError(f'{path} exceeds the supported text length')
+        minimum = int(schema.get('minLength', 0))
+        maximum = int(schema.get('maxLength', len(value)))
+        if len(value) < minimum:
+            raise NativeConnectorError(
+                f'{path} must contain at least {minimum} characters (received {len(value)})'
+            )
+        if len(value) > maximum:
+            raise NativeConnectorError(
+                f'{path} must contain at most {maximum} characters (received {len(value)})'
+            )
         if schema.get('pattern') and not re.search(schema['pattern'], value):
             raise NativeConnectorError(f'{path} has an invalid format')
 
@@ -724,6 +739,88 @@ def _coerce_value(schema: dict[str, Any], value: Any) -> Any:
     if schema_type == "array" and isinstance(value, list):
         item_schema = schema.get("items", {})
         return [_coerce_value(item_schema, item) for item in value]
+    return value
+
+
+_SAFE_GENERATED_TEXT_FIELDS = {
+    "body",
+    "caption",
+    "comment",
+    "content",
+    "description",
+    "goal",
+    "items",
+    "message",
+    "note",
+    "period",
+    "subject",
+    "subtitle",
+    "summary",
+    "text",
+    "title",
+}
+
+
+def _text_field_name(path: str) -> str:
+    leaf = path.rsplit(".", 1)[-1]
+    return re.sub(r"\[\d+\]$", "", leaf).casefold()
+
+
+def _generated_text_can_be_truncated(schema: dict[str, Any], path: str) -> bool:
+    policy = schema.get("x-aura-overflow")
+    if policy == "truncate":
+        return True
+    if policy == "reject":
+        return False
+    if any(key in schema for key in ("const", "enum", "format", "pattern")):
+        return False
+    return _text_field_name(path) in _SAFE_GENERATED_TEXT_FIELDS
+
+
+def _truncate_generated_text(value: str, maximum: int, minimum: int) -> str:
+    """Fit model-authored prose without silently changing identifiers or user edits."""
+    if maximum <= 0:
+        return ""
+    if len(value) <= maximum:
+        return value
+    if maximum == 1:
+        return value[:1]
+    prefix = value[: maximum - 1].rstrip()
+    boundary = prefix.rsplit(None, 1)[0] if any(char.isspace() for char in prefix) else prefix
+    if len(boundary) >= minimum and len(boundary) >= max(1, maximum // 2):
+        prefix = boundary.rstrip(" ,.;:-")
+    return f"{prefix[: maximum - 1].rstrip()}…"
+
+
+def _normalize_planned_value(schema: dict[str, Any], value: Any, path: str) -> Any:
+    """Normalize safe model-generated prose before the reviewable plan is frozen."""
+    if _workflow_reference(value):
+        return value
+    schema_type = schema.get("type")
+    if schema_type == "object" and isinstance(value, dict):
+        properties = schema.get("properties", {})
+        return {
+            key: _normalize_planned_value(
+                properties.get(key, {}), item, f"{path}.{key}"
+            )
+            for key, item in value.items()
+        }
+    if schema_type == "array" and isinstance(value, list):
+        item_schema = schema.get("items", {})
+        return [
+            _normalize_planned_value(item_schema, item, f"{path}[{index}]")
+            for index, item in enumerate(value)
+        ]
+    if schema_type == "string" and isinstance(value, str) and "{{" not in value:
+        maximum = schema.get("maxLength")
+        if (
+            isinstance(maximum, int)
+            and len(value) > maximum
+            and _generated_text_can_be_truncated(schema, path)
+        ):
+            return _truncate_generated_text(
+                value, maximum, int(schema.get("minLength", 0))
+            )
     return value
 
 
@@ -770,10 +867,13 @@ def _schema_argument_target(key: str, properties: dict[str, Any]) -> str:
     return key
 
 
-def normalize_module_arguments(
-    manifest: dict[str, Any], operation: str, arguments: dict[str, Any]
+def _normalize_module_arguments(
+    manifest: dict[str, Any],
+    operation: str,
+    arguments: dict[str, Any],
+    *,
+    normalize_generated_text: bool,
 ) -> dict[str, Any]:
-    """Normalize harmless model naming variants before an approved plan is frozen."""
     module = next(
         (item for item in manifest.get("capabilities", []) if item.get("name") == operation),
         None,
@@ -796,9 +896,37 @@ def normalize_module_arguments(
                     value = parsed.replace(tzinfo=UTC).isoformat()
             except ValueError:
                 pass  # Normal validation explains genuinely invalid dates.
+        if normalize_generated_text:
+            value = _normalize_planned_value(
+                properties.get(target, {}), value, f"{operation}.{target}"
+            )
         normalized[target] = value
     validate_module_arguments(manifest, operation, normalized)
     return normalized
+
+
+def normalize_module_arguments(
+    manifest: dict[str, Any], operation: str, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    """Normalize naming variants while preserving exact user/execution values."""
+    return _normalize_module_arguments(
+        manifest,
+        operation,
+        arguments,
+        normalize_generated_text=False,
+    )
+
+
+def normalize_planned_module_arguments(
+    manifest: dict[str, Any], operation: str, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    """Fit safe generated prose to connector limits before review and approval."""
+    return _normalize_module_arguments(
+        manifest,
+        operation,
+        arguments,
+        normalize_generated_text=True,
+    )
 
 
 def coerce_module_arguments(

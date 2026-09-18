@@ -9,6 +9,7 @@ from app.native_connectors import (
     native_manifest,
     native_operations,
     normalize_module_arguments,
+    normalize_planned_module_arguments,
     planning_catalog,
     public_catalog,
     validate_module_arguments,
@@ -119,6 +120,58 @@ def test_module_arguments_normalize_common_model_variants_before_approval():
     )
 
     assert normalized == {"location": "Munich", "date": "tomorrow"}
+
+
+def test_generated_presentation_text_is_fitted_recursively_before_review():
+    arguments = {
+        "title": "Munich weather and practical clothing recommendations " * 2,
+        "subtitle": "Current conditions, three-day forecast, update time, and source " * 3,
+        "phases": [
+            {
+                "period": "Today and the next three days in Munich",
+                "title": "Detailed weather forecast and practical recommendations",
+                "items": ["Layering advice for changing conditions throughout every day " * 3],
+            }
+        ],
+    }
+
+    normalized = normalize_planned_module_arguments(
+        native_manifest("canva"), "canva.presentation.create", arguments
+    )
+
+    assert len(normalized["title"]) <= 50
+    assert len(normalized["subtitle"]) <= 120
+    assert len(normalized["phases"][0]["period"]) <= 24
+    assert len(normalized["phases"][0]["title"]) <= 40
+    assert len(normalized["phases"][0]["items"][0]) <= 90
+    assert normalized["title"].endswith("…")
+    with pytest.raises(NativeConnectorError, match="at most 50 characters"):
+        normalize_module_arguments(
+            native_manifest("canva"), "canva.presentation.create", arguments
+        )
+
+
+def test_generated_identifier_is_never_silently_truncated():
+    manifest = {
+        "capabilities": [
+            {
+                "name": "records.get",
+                "input_schema": {
+                    "type": "object",
+                    "required": ["record_id"],
+                    "properties": {
+                        "record_id": {"type": "string", "maxLength": 5}
+                    },
+                    "additionalProperties": False,
+                },
+            }
+        ]
+    }
+
+    with pytest.raises(NativeConnectorError, match="at most 5 characters"):
+        normalize_planned_module_arguments(
+            manifest, "records.get", {"record_id": "record-123"}
+        )
 
 
 def test_module_argument_normalization_still_rejects_unknown_inputs():

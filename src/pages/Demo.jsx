@@ -700,7 +700,9 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             runRequestKeyRef.current = null;
             setPlan((current) => ({
               ...(current || immediatePlan),
-              estimatedTime: "Plan ready — preparation timed out",
+              estimatedTime: error?.message?.includes("within 30 seconds")
+                ? "Plan ready — preparation timed out"
+                : "Plan ready — one execution detail needs repair",
               connectionRequirements: explicitRequirements,
               provisional: true,
               compileState: "blocked",
@@ -981,8 +983,12 @@ Rules:
       return;
     }
     if (!hasDurablePlan(pythonRunIdRef.current, pythonPlanRef.current)) {
-      if (plan?.provisional && plan.compileState !== "blocked") {
+      if (plan?.provisional) {
         queuedPlanStartRef.current = { name };
+        if (plan.compileState === "blocked") {
+          handleRetryPlanning();
+          return;
+        }
         setPhase("executing");
         setStartTime(Date.now());
         setCurrentStepIdx(0);
@@ -1005,7 +1011,7 @@ Rules:
       return;
     }
     startPythonExecution();
-  }, [editRunMode, autoApprove, keepPlanInReview, plan]);
+  }, [editRunMode, autoApprove, keepPlanInReview, handleRetryPlanning, plan]);
 
   const handlePreviewApprove = useCallback((editedSteps) => {
     setPreviewError("");
