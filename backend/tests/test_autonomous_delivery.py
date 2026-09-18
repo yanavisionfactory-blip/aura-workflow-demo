@@ -400,6 +400,15 @@ async def test_rejected_governed_canva_export_is_retried_autonomously(runtime, m
             dispatch=None,
         )
         run.plan = plan
+        run.execution_context = {
+            **(run.execution_context or {}),
+            "__aura_autonomy__": {
+                "version": autonomous_delivery.AUTONOMY_VERSION,
+                # Ordinary steps stop here. A rejected derivative remains safe
+                # to retry because Canva proved that no export was created.
+                "step_recoveries": {"step": 3},
+            },
+        }
         step = await session.get(RunStep, "step")
         step.position = 1
         step.step_key = "export_presentation"
@@ -422,7 +431,9 @@ async def test_rejected_governed_canva_export_is_retried_autonomously(runtime, m
                 status="failed",
                 tool_slug="canva",
                 operation="canva.export.create",
-                error="[invalid_request] Canva returned 404 Not Found",
+                # This is the real sanitized detail returned by Canva. The
+                # response status is not included in the saved attempt text.
+                error="[invalid_request] Design with id 'design-1' not found",
             )
         )
         await session.commit()
@@ -438,6 +449,7 @@ async def test_rejected_governed_canva_export_is_retried_autonomously(runtime, m
         assert repair["status"] == "rejected_without_effect"
         assert repair["reason_code"] == "provider_explicit_404"
         assert repair["attempt_offset"] == 1
+        assert run.execution_context["__aura_autonomy__"]["step_recoveries"]["step"] == 4
         assert run.execution_context["__aura_autonomy__"]["last_reason_code"] == (
             "provider_rejected_derivative_not_ready"
         )

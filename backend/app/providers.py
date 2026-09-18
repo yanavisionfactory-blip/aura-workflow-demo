@@ -1371,16 +1371,27 @@ class ProviderExecutor:
 
     async def _canva_export_create(self, a: dict) -> dict:
         payload = {"design_id": a["design_id"], "format": {"type": a["format"]}}
-        # Canva can report a successful import before the new design is available
-        # to its export service. A 404 explicitly proves that this POST was
-        # rejected, so a bounded readiness retry cannot duplicate an export. Do
-        # not retry timeouts or transport failures: their external effect is
-        # uncertain and the normal write-safety boundary must remain authoritative.
-        for delay in (1, 2, 4, 8, None):
+        # Canva can report a successful import before the new design is visible
+        # to the design and export services. Poll the read-only design endpoint
+        # first, then create exactly one export after it becomes visible. A
+        # design_not_found response proves that neither request created an
+        # export, so waiting and trying again is safe. Timeouts, transport
+        # failures, and every other provider response remain non-replayable.
+        design_path = f"designs/{quote(a['design_id'], safe='')}"
+        for delay in (1, 2, 4, 8, 8, None):
             try:
+                await self._canva_request("GET", design_path)
                 return await self._canva_request("POST", "exports", json=payload)
             except httpx.HTTPStatusError as exc:
-                if exc.response.status_code != 404 or delay is None:
+                try:
+                    error_code = exc.response.json().get("code")
+                except (ValueError, AttributeError):
+                    error_code = None
+                if (
+                    exc.response.status_code != 404
+                    or error_code != "design_not_found"
+                    or delay is None
+                ):
                     raise
                 await asyncio.sleep(delay)
         raise RuntimeError("Canva export readiness retry ended unexpectedly")
