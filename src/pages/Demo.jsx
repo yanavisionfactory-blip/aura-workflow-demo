@@ -55,6 +55,9 @@ import {
 } from "@/lib/approvalReview.mjs";
 
 const STEP_DURATION = 2.6;
+const STAGED_ACTION_REVIEW_ENABLED = /^(1|true|yes)$/i.test(
+  String(import.meta.env.VITE_STAGED_ACTION_REVIEW_ENABLED || ""),
+);
 
 const planToolName = (step) => {
   if (step.tool_slug === "google") {
@@ -177,7 +180,11 @@ const uiPlanFromRun = (run) => ({
       { label: "Creates", value: step.expected_output },
     ],
     riskLevel: step.consequential ? "modify" : "read",
-    riskNote: step.consequential ? "AURA will prepare the exact action and ask before submitting it." : "",
+    riskNote: step.consequential
+      ? STAGED_ACTION_REVIEW_ENABLED
+        ? "AURA will prepare the exact action and ask before submitting it."
+        : "This external action is included in the plan you approve with Start."
+      : "",
     preview: step.consequential ? {
       type: step.operation === "gmail.send" ? "email" : "list",
       to: step.arguments?.to || "",
@@ -948,7 +955,8 @@ Rules:
       startPythonExecution();
       return;
     }
-    const requiresReview = steps.some((step) => step.riskLevel === "modify");
+    const requiresReview = STAGED_ACTION_REVIEW_ENABLED
+      && steps.some((step) => step.riskLevel === "modify");
     if (!requiresReview) {
       startPythonExecution();
       return;
@@ -1232,7 +1240,7 @@ Rules:
           );
         }
       } else {
-        await approvePythonPlan(runId, reviewedPlan.steps, false);
+        await approvePythonPlan(runId, reviewedPlan.steps);
       }
       for (;;) {
         const run = await getPythonRunResilient(runId, generation);

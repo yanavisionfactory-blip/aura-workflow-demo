@@ -485,7 +485,7 @@ async def test_ordinary_write_404_is_never_replayed(runtime, monkeypatch):
     assert await autonomously_recover_run("run", "w") == "not_applicable"
 
 
-async def test_autonomous_handoff_becomes_a_truthful_user_decision(runtime, monkeypatch):
+async def test_autonomous_handoff_stays_with_the_internal_recovery_owner(runtime, monkeypatch):
     monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
     await _failed_read(runtime)
 
@@ -495,7 +495,7 @@ async def test_autonomous_handoff_becomes_a_truthful_user_decision(runtime, monk
         run = await session.get(WorkflowRun, "run")
         supervisor = run.execution_context["__aura_supervisor__"]
         assert run.status == RunStatus.waiting_for_action
-        assert supervisor["status"] == "human_action_required"
+        assert supervisor["status"] == "operator_attention"
         assert run.execution_context["__aura_autonomy__"]["handoff_reason_code"] == (
             "no_safe_recovery"
         )

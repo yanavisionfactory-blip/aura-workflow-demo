@@ -86,8 +86,8 @@ def test_authorization_error_is_replaced_with_connection_guidance():
     ) == "This app connection needs your attention before AURA can continue."
 
 
-def test_plan_approval_supports_staged_consequential_review():
-    assert PlanApproval(approved=True).approve_consequential is False
+def test_plan_approval_runs_smoothly_by_default_and_keeps_staged_review_opt_in():
+    assert PlanApproval(approved=True).approve_consequential is True
     assert PlanApproval(approved=True).allow_autonomous_read_repairs is True
     assert (
         PlanApproval(approved=True, approve_consequential=False).approve_consequential

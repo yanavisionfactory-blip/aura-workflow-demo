@@ -724,11 +724,12 @@ class ApprovalDecision(BaseModel):
 class PlanApproval(BaseModel):
     approved: bool
     edited_steps: list[PlanStep] | None = None
-    # Plan review and provider-action approval are separate user decisions.
-    # Manual plan review never silently approves unresolved provider actions.
-    # Callers must opt into a separately governed pre-authorization mode;
-    # ordinary runs stage safe preparation and then show the exact write preview.
-    approve_consequential: bool = False
+    # Plan review and provider-action approval can be separate user decisions.
+    # The normal Start action keeps the long-standing combined approval path so
+    # a reviewed plan can run without a second, surprise approval interruption.
+    # Callers that explicitly want the richer staged editor can still opt out and
+    # receive the prepared action preview before the provider write.
+    approve_consequential: bool = True
     # The approval snapshot already grants operation-level read permissions.  This
     # flag lets AURA repair a failed read inside that exact permission envelope;
     # writes, new tools, new operations and new literal resource targets still need
