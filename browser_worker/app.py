@@ -938,6 +938,83 @@ def _parse_search_html(html: str, provider: str, limit: int) -> list[dict]:
     return parser.results[:limit]
 
 
+_SEARCH_STOP_WORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "at",
+        "current",
+        "data",
+        "find",
+        "for",
+        "from",
+        "in",
+        "latest",
+        "live",
+        "of",
+        "on",
+        "or",
+        "page",
+        "public",
+        "search",
+        "source",
+        "the",
+        "to",
+        "with",
+    }
+)
+
+
+def _search_query_terms(query: str) -> set[str]:
+    """Return meaningful terms that an organic result should actually match."""
+    without_site_scope = re.sub(r"\bsite:\S+", " ", query.casefold())
+    return {
+        term
+        for term in re.findall(r"[a-z0-9]+", without_site_scope)
+        if len(term) >= 2 and term not in _SEARCH_STOP_WORDS
+    }
+
+
+def _search_site_scope(query: str) -> str | None:
+    match = re.search(r"\bsite:([^\s/]+)", query.casefold())
+    if not match:
+        return None
+    return match.group(1).strip(".") or None
+
+
+def _rank_search_results(query: str, batches: list[list[dict]], limit: int) -> list[dict]:
+    """Merge providers and discard results unrelated to the requested subject."""
+    terms = _search_query_terms(query)
+    site_scope = _search_site_scope(query)
+    ranked: list[tuple[int, int, int, dict]] = []
+    seen: set[str] = set()
+    for provider_index, results in enumerate(batches):
+        for result_index, result in enumerate(results):
+            url = str(result.get("url") or "")
+            if not url or url in seen:
+                continue
+            parsed = urlparse(url)
+            hostname = (parsed.hostname or "").casefold()
+            if site_scope and not (
+                hostname == site_scope or hostname.endswith(f".{site_scope}")
+            ):
+                continue
+            title = str(result.get("title") or "").casefold()
+            snippet = str(result.get("snippet") or "").casefold()
+            url_text = f"{hostname} {parsed.path.casefold()}"
+            title_matches = sum(term in title for term in terms)
+            snippet_matches = sum(term in snippet for term in terms)
+            url_matches = sum(term in url_text for term in terms)
+            score = title_matches * 4 + snippet_matches * 2 + url_matches
+            if terms and score == 0:
+                continue
+            seen.add(url)
+            ranked.append((-score, provider_index, result_index, result))
+    ranked.sort(key=lambda item: item[:3])
+    return [item[3] for item in ranked[:limit]]
+
+
 async def _search_page(search_url: str, limit: int) -> list[dict]:
     """Extract results from both DuckDuckGo HTML and Lite layouts."""
     async with rendered_page(search_url) as page:
@@ -1005,10 +1082,13 @@ async def search(payload: SearchRequest) -> dict:
     pages = await asyncio.gather(
         *(_fetch_search_html(search_url) for _, search_url in search_sources)
     )
-    for (provider, _), html in zip(search_sources, pages, strict=True):
-        results = _parse_search_html(html, provider, payload.limit)
-        if results:
-            return {"query": payload.query, "results": results}
+    batches = [
+        _parse_search_html(html, provider, payload.limit)
+        for (provider, _), html in zip(search_sources, pages, strict=True)
+    ]
+    results = _rank_search_results(payload.query, batches, payload.limit)
+    if results:
+        return {"query": payload.query, "results": results}
     raise HTTPException(503, "Public search providers returned no usable results")
 
 

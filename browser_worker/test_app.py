@@ -89,6 +89,75 @@ async def test_search_uses_independent_html_provider_failover(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_search_ranks_relevant_results_across_all_providers(monkeypatch):
+    unrelated = (
+        '<div data-type="web"><a href="https://www.cnet.com/tech/services-and-software/">'
+        "Best music streaming services</a></div>"
+    )
+    target = "https://www.ecb.europa.eu/stats/eurofxref/"
+    relevant = f'<a href="/url?q={target}"><h3>Euro reference exchange rates</h3></a>'
+    fetch = AsyncMock(side_effect=["", unrelated, relevant, ""])
+    monkeypatch.setattr(worker, "_fetch_search_html", fetch)
+
+    response = await worker.search(
+        worker.SearchRequest(
+            query="official EUR reference exchange rates European Central Bank",
+            limit=5,
+        )
+    )
+
+    assert response["results"] == [
+        {"title": "Euro reference exchange rates", "url": target, "snippet": ""}
+    ]
+    assert fetch.await_count == 4
+
+
+@pytest.mark.asyncio
+async def test_search_rejects_unrelated_nonempty_provider_results(monkeypatch):
+    unrelated = (
+        '<div data-type="web"><a href="https://www.cnet.com/tech/services-and-software/">'
+        "Best music streaming services</a></div>"
+    )
+    monkeypatch.setattr(
+        worker,
+        "_fetch_search_html",
+        AsyncMock(side_effect=["", unrelated, "", ""]),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await worker.search(
+            worker.SearchRequest(query="ECB EUR USD GBP reference rates", limit=5)
+        )
+
+    assert exc.value.status_code == 503
+
+
+def test_search_ranking_honors_site_scope():
+    results = worker._rank_search_results(
+        "site:ecb.europa.eu EUR rates",
+        [
+            [
+                {
+                    "title": "EUR rates",
+                    "url": "https://example.com/rates",
+                    "snippet": "",
+                },
+                {
+                    "title": "Euro reference rates",
+                    "url": "https://www.ecb.europa.eu/stats/eurofxref/",
+                    "snippet": "",
+                },
+            ]
+        ],
+        5,
+    )
+
+    assert [item["url"] for item in results] == [
+        "https://www.ecb.europa.eu/stats/eurofxref/"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_search_never_returns_an_empty_success(monkeypatch):
     monkeypatch.setattr(worker, "_fetch_search_html", AsyncMock(return_value=""))
 
