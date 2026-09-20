@@ -126,7 +126,7 @@ test("consequential plans use one preview followed by one combined approval", ()
   assert.match(api, /approvePythonPlan\(runId, editedSteps = null, approveConsequential = true\)/);
 });
 
-test("the combined preview has a renderer for every supported action family", () => {
+test("the combined preview has rich renderers without technical argument controls", () => {
   const preview = readFileSync(
     new URL("../src/components/aura/PreviewView.jsx", import.meta.url),
     "utf8",
@@ -135,7 +135,9 @@ test("the combined preview has a renderer for every supported action family", ()
   for (const renderer of ["richEmail", "richTicket", "richPresentation", "richDocument"]) {
     assert.equal(preview.includes(renderer), true);
   }
-  assert.equal(preview.includes("SchemaArgumentsEditor"), true);
+  assert.equal(preview.includes("SchemaArgumentsEditor"), false);
+  assert.equal(preview.includes("JsonArgumentField"), false);
+  assert.equal(preview.includes("Exact app values"), false);
   assert.equal(preview.includes("reviewSteps.map"), true);
 });
 
