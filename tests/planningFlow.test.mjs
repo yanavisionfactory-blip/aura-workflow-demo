@@ -139,6 +139,25 @@ test("the combined preview has a renderer for every supported action family", ()
   assert.equal(preview.includes("reviewSteps.map"), true);
 });
 
+test("live tool takeover is an additive dark launch with the standard preview fallback", () => {
+  const preview = readFileSync(
+    new URL("../src/components/aura/PreviewView.jsx", import.meta.url),
+    "utf8",
+  );
+  const liveTool = readFileSync(
+    new URL("../src/components/aura/LiveToolReview.jsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.equal(preview.includes('VITE_LIVE_TOOL_REVIEW_ENABLED === "true"'), true);
+  assert.equal(preview.includes('get("liveToolReview") === "1"'), true);
+  assert.equal(preview.includes("<LiveToolReview"), true);
+  assert.equal(preview.includes("<EditablePresentation"), true);
+  assert.equal(preview.includes("<EditableEmail"), true);
+  assert.equal(liveTool.includes("The standard preview still works"), true);
+  assert.equal(liveTool.includes("closeLiveReviewSession"), true);
+});
+
 test("the first prompt submission opens the language plan without a confirmation gate", () => {
   const source = readFileSync(
     new URL("../src/pages/Demo.jsx", import.meta.url),

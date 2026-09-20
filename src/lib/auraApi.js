@@ -626,6 +626,39 @@ export async function decidePythonApproval(approvalId, approved, editedArguments
   });
 }
 
+export async function createLiveReviewSession(provider) {
+  await ensureWorkspace();
+  return request("/v1/live-review/sessions", {
+    method: "POST",
+    body: JSON.stringify({ provider }),
+    timeoutMs: 40_000,
+  });
+}
+
+export async function getLiveReviewFrame(sessionId) {
+  await ensureWorkspace();
+  return request(`/v1/live-review/sessions/${sessionId}/frame`, {
+    timeoutMs: 15_000,
+  });
+}
+
+export async function sendLiveReviewInput(sessionId, input) {
+  await ensureWorkspace();
+  return request(`/v1/live-review/sessions/${sessionId}/input`, {
+    method: "POST",
+    body: JSON.stringify(input),
+    timeoutMs: 15_000,
+  });
+}
+
+export async function closeLiveReviewSession(sessionId) {
+  await ensureWorkspace();
+  return request(`/v1/live-review/sessions/${sessionId}`, {
+    method: "DELETE",
+    timeoutMs: 15_000,
+  });
+}
+
 export async function resumePythonRun(runId, stepId = null, action = "retry") {
   await ensureWorkspace();
   return request(`/v1/runs/${runId}/resume`, {

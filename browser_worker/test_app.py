@@ -100,6 +100,75 @@ def test_approval_status_never_treats_negative_receipt_as_approved():
 
 
 @pytest.mark.asyncio
+async def test_interactive_session_forwards_pointer_and_keyboard_input():
+    page = SimpleNamespace(
+        is_closed=lambda: False,
+        evaluate=AsyncMock(return_value="Presentation title"),
+        mouse=SimpleNamespace(click=AsyncMock(), dblclick=AsyncMock(), move=AsyncMock(), wheel=AsyncMock()),
+        keyboard=SimpleNamespace(insert_text=AsyncMock(), press=AsyncMock()),
+    )
+    session = worker.InteractiveSession(
+        playwright=object(),
+        browser=object(),
+        context=SimpleNamespace(pages=[page]),
+        page=page,
+        provider="canva",
+        last_activity=datetime.now(timezone.utc),
+    )
+
+    await worker._apply_interactive_input(
+        session,
+        worker.InteractiveSessionInput(type="click", x=120, y=240),
+    )
+    await worker._apply_interactive_input(
+        session,
+        worker.InteractiveSessionInput(type="text", text="private input"),
+    )
+    await worker._apply_interactive_input(
+        session,
+        worker.InteractiveSessionInput(type="key", key="Enter"),
+    )
+
+    page.mouse.click.assert_awaited_once_with(120, 240)
+    page.keyboard.insert_text.assert_awaited_once_with("private input")
+    page.keyboard.press.assert_awaited_once_with("Enter")
+
+
+@pytest.mark.asyncio
+async def test_interactive_pointer_input_requires_coordinates():
+    page = SimpleNamespace(
+        is_closed=lambda: False,
+        evaluate=AsyncMock(return_value="Presentation title"),
+        mouse=SimpleNamespace(click=AsyncMock(), dblclick=AsyncMock(), move=AsyncMock(), wheel=AsyncMock()),
+        keyboard=SimpleNamespace(insert_text=AsyncMock(), press=AsyncMock()),
+    )
+    session = worker.InteractiveSession(
+        playwright=object(),
+        browser=object(),
+        context=SimpleNamespace(pages=[page]),
+        page=page,
+        provider="canva",
+        last_activity=datetime.now(timezone.utc),
+    )
+
+    with pytest.raises(HTTPException, match="requires x and y"):
+        await worker._apply_interactive_input(
+            session,
+            worker.InteractiveSessionInput(type="click"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_interactive_session_blocks_final_provider_action():
+    page = SimpleNamespace(evaluate=AsyncMock(return_value="Send"))
+
+    with pytest.raises(HTTPException, match="stays blocked") as error:
+        await worker._ensure_interactive_action_is_safe(page, "gmail", 20, 30)
+
+    assert error.value.status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_batch_returns_only_explicit_approvals(monkeypatch):
     @asynccontextmanager
     async def context():

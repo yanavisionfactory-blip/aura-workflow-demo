@@ -2,8 +2,15 @@ import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Eye, Mail, Database, ShieldAlert, ArrowLeft, Play, List, FileDown, FileText, Pencil, ListChecks, Check, ChevronDown, Presentation, Plus, Trash2, Paperclip } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import LiveToolReview from "@/components/aura/LiveToolReview";
 import { downloadEmailEml, safeName } from "@/lib/auraDownload";
 import { fallbackReviewContract, mergeLegacyPreviewIntoArguments, setArgumentAtPath, validateReviewArguments } from "@/lib/approvalReview.mjs";
+
+const liveToolReviewEnabled = (
+  import.meta.env.VITE_LIVE_TOOL_REVIEW_ENABLED === "true"
+  && typeof window !== "undefined"
+  && new URLSearchParams(window.location.search).get("liveToolReview") === "1"
+);
 
 function EditableEmail({ preview, onPreviewChange, editing, artifacts = [] }) {
   return (
@@ -498,6 +505,7 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
   const richTicket = contract.operation === "jira.issue.create";
   const richPresentation = contract.operation === "canva.presentation.create";
   const richDocument = contract.kind === "document";
+  const liveProvider = richPresentation ? "canva" : richEmail ? "gmail" : null;
   const [editing, setEditing] = useState(() => richEmail || richPresentation || richDocument);
   const updateArguments = (nextArguments) => onUpdate(index, {
     arguments: nextArguments,
@@ -540,6 +548,12 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
         </div>
       </div>
       <div className="pl-10 space-y-3">
+        {liveToolReviewEnabled && liveProvider && (
+          <LiveToolReview
+            provider={liveProvider}
+            label={liveProvider === "canva" ? "Canva" : "Gmail"}
+          />
+        )}
         {step.reviewContract ? (
           <>
             {richEmail && <EditableEmail preview={p} onPreviewChange={updatePreview} editing={editing} artifacts={contract.artifacts || []} />}

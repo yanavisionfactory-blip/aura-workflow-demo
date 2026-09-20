@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     oauth_callback_overrides: str = ""
     browser_connector_url: str = ""
     browser_connector_token: str = ""
+    # Experimental private browser takeover for approval review. It is entirely
+    # additive: disabling this flag restores the established schema preview.
+    live_tool_review_enabled: bool = False
     resource_aliases_json: str = "{}"
     # Clerk is the production identity provider. The PEM key avoids a network
     # request on every API call; JWKS is supported for key rotation.

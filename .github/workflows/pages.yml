@@ -34,6 +34,8 @@ jobs:
         env:
           VITE_AURA_API_URL: https://impartial-emotion-production-49d4.up.railway.app
           VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
+          # Build the reversible experiment; the UI still requires ?liveToolReview=1.
+          VITE_LIVE_TOOL_REVIEW_ENABLED: "true"
       - name: Disable Jekyll
         run: touch dist/.nojekyll
       - name: Configure Pages

@@ -8,6 +8,20 @@ class ConnectionResume(BaseModel):
     connection_id: str | None = None
 
 
+class LiveReviewSessionCreate(BaseModel):
+    provider: Literal["canva", "gmail"]
+
+
+class LiveReviewSessionInput(BaseModel):
+    type: Literal["click", "double_click", "move", "scroll", "text", "key"]
+    x: float | None = Field(default=None, ge=0, le=1280)
+    y: float | None = Field(default=None, ge=0, le=800)
+    delta_x: float = Field(default=0, ge=-10_000, le=10_000)
+    delta_y: float = Field(default=0, ge=-10_000, le=10_000)
+    text: str | None = Field(default=None, max_length=4_000)
+    key: str | None = Field(default=None, max_length=80)
+
+
 class AgentConnectionCreate(BaseModel):
     protocol: Literal["a2a", "mcp", "aura"]
     name: str = Field(min_length=2, max_length=200)
