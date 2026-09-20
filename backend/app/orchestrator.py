@@ -134,10 +134,8 @@ def _future_group_review_arguments(
                 url = item.get("url")
                 if not isinstance(filename, str) or not isinstance(url, str):
                     return None
-                # The user reviews the logical attachment (its filename and the
-                # approved upstream presentation) with the rest of the grouped
-                # actions. The private download URL is a transport value and is
-                # resolved only after the approved export has completed.
+                # The URL remains a typed workflow reference at review time and
+                # is resolved only after the approved Canva design is exported.
                 attachments.append({**item, "filename": filename, "url": url})
             prepared[key] = attachments
     except WorkflowContextError:

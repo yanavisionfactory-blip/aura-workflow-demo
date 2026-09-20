@@ -95,22 +95,6 @@ stale runs are claimed with database row locks, and generated steps retain stabl
 
 Create the repository Actions secret `CLERK_PUBLISHABLE_KEY`. The public Clerk publishable key is the only authentication value compiled into the browser. The API address is configured by `VITE_AURA_API_URL`.
 
-## Experimental live-tool review
-
-The cloud-browser takeover spike is a dark launch and does not replace the existing approval
-renderer. Leave it disabled for the normal release. To test it, deploy the isolated browser worker,
-configure the API with `BROWSER_CONNECTOR_URL`, `BROWSER_CONNECTOR_TOKEN`, and
-`LIVE_TOOL_REVIEW_ENABLED=true`. Keep `VITE_LIVE_TOOL_REVIEW_ENABLED=false` in production until
-the browser worker can establish an authenticated provider session without showing a login page.
-When both flags are deliberately enabled, the live surface still requires `?liveToolReview=1`.
-Turning either flag off restores the established review UI without a code rollback. Interactive
-sessions are memory-only, credential-isolated, and expire after ten minutes of inactivity. The standard schema preview and
-approval payload remain authoritative while the spike is evaluated. Provider controls that would
-send, publish, share, download, or delete stay blocked inside the experimental browser; the
-established approval execution path remains the only way to perform the final action. Interactive sessions use their own concurrency limit
-(`INTERACTIVE_BROWSER_CONCURRENCY`, default `1`) so a takeover cannot consume the browser slots used
-by normal workflow reads.
-
 ## Encryption-key rotation
 
 1. Generate a new Fernet key and move the old `CREDENTIAL_ENCRYPTION_KEY` into `CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS`.

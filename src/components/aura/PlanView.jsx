@@ -99,7 +99,6 @@ export default function PlanView({
   const [steps, setSteps] = useState(plan.steps);
   const [forceEditIndex, setForceEditIndex] = useState(null);
   const [name, setName] = useState(plan.workflowName || "");
-  const exactPlanPending = plan.provisional === true || plan.compileState === "validating";
   useEffect(() => {
     setSteps(plan.steps || []);
     setName(plan.workflowName || "");
@@ -576,9 +575,7 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
           Ready to start?
         </h3>
         <p className="text-xs text-muted-foreground leading-relaxed mb-3">
-          {exactPlanPending
-            ? "AURA is matching these readable steps to the exact executable plan. Start will unlock without changing the approved steps."
-            : "AURA will execute exactly these steps. No new workflow steps will be added after you press Start."}
+          Aura will follow this plan and handle technical preparation during execution.
         </p>
         <div className="mb-3">
           <input
@@ -593,12 +590,10 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
             onClick={() => onApprove(steps, name.trim())}
-            disabled={exactPlanPending || missingTools.length > 0 || steps.length === 0 || Boolean(plan.error)}
+            disabled={missingTools.length > 0 || steps.length === 0 || Boolean(plan.error)}
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {exactPlanPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            {exactPlanPending ? "Preparing exact plan…" : approveLabel}
-            {!exactPlanPending && <ArrowRight className="w-4 h-4" />}
+            {approveLabel} <ArrowRight className="w-4 h-4" />
           </motion.button>
         </div>
       </motion.div>

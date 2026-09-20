@@ -96,20 +96,19 @@ test("the UI renders a language plan while durable compilation is still running"
   assert.equal(source.includes("instantLanguagePlan(confirmedIntent"), true);
   assert.equal(source.includes("languageDraftPrompt(confirmedIntent"), true);
   assert.equal(source.includes("Executable planning unavailable; the language plan remains visible"), true);
-  assert.equal(planViewSource.includes("exactPlanPending"), true);
-  assert.equal(planViewSource.includes("Preparing exact plan…"), true);
-  assert.equal(planViewSource.includes("No new workflow steps will be added"), true);
-  assert.equal(source.includes("queuedPlanStartRef.current"), false);
-  assert.equal(source.includes("startPythonExecutionRef.current?.()"), false);
+  assert.equal(planViewSource.includes("validating exact actions backstage"), false);
+  assert.equal(planViewSource.includes("validatingExecution || missingTools.length"), false);
+  assert.equal(source.includes("queuedPlanStartRef.current = { name, autoApprove }"), true);
+  assert.equal(source.includes("requiresActionPreview(compiledPlan.steps, queuedStart.autoApprove)"), true);
   assert.equal(source.includes("PLANNING_WAIT_TIMEOUT_MS = 30_000"), true);
   assert.equal(source.includes('.replace(/^i\\s+will\\s+/i, "")'), true);
   assert.equal(source.includes("iWill: firstPersonStepCopy(step.iWill || step.reason)"), true);
-  assert.equal(planViewSource.includes('plan.compileState === "validating"'), true);
+  assert.equal(planViewSource.includes('|| plan.compileState === "blocked"'), false);
   assert.equal(source.includes('if (plan.compileState === "blocked") {'), true);
   assert.equal(source.includes("handleRetryPlanning();"), true);
 });
 
-test("consequential plans prepare exact payloads before asking for approval", () => {
+test("consequential plans use one preview followed by one combined approval", () => {
   const source = readFileSync(
     new URL("../src/pages/Demo.jsx", import.meta.url),
     "utf8",
@@ -119,12 +118,12 @@ test("consequential plans prepare exact payloads before asking for approval", ()
     "utf8",
   );
 
-  assert.equal(source.includes("requiresActionPreview(steps, autoApprove)"), false);
-  assert.equal(source.includes("approvePythonPlan(runId, reviewedPlan.steps, autoApprove)"), true);
-  assert.equal(source.includes('run.status === "awaiting_approval"'), true);
-  assert.equal(source.includes("resolvedApprovalStep"), true);
+  assert.equal(source.includes("VITE_STAGED_ACTION_REVIEW_ENABLED"), false);
+  assert.equal(source.includes("startPythonPreparation"), false);
+  assert.equal(source.includes("requiresActionPreview(steps, autoApprove)"), true);
+  assert.equal(source.includes('setPhase("preview")'), true);
   assert.equal(source.includes("startPythonExecution(editedSteps, prepared)"), true);
-  assert.match(api, /approvePythonPlan\(runId, editedSteps = null, approveConsequential = false\)/);
+  assert.match(api, /approvePythonPlan\(runId, editedSteps = null, approveConsequential = true\)/);
 });
 
 test("the combined preview has a renderer for every supported action family", () => {
@@ -137,31 +136,7 @@ test("the combined preview has a renderer for every supported action family", ()
     assert.equal(preview.includes(renderer), true);
   }
   assert.equal(preview.includes("SchemaArgumentsEditor"), true);
-  assert.equal(preview.includes("PromptApprovalEditor"), true);
-  assert.equal(preview.includes("!richEmail && !richTicket && !richPresentation && !richDocument"), true);
-  assert.equal(preview.includes("Canva presentation preview"), true);
-  assert.equal(preview.includes("Exact app values"), false);
   assert.equal(preview.includes("reviewSteps.map"), true);
-});
-
-test("live tool takeover is an additive dark launch with the standard preview fallback", () => {
-  const preview = readFileSync(
-    new URL("../src/components/aura/PreviewView.jsx", import.meta.url),
-    "utf8",
-  );
-  const liveTool = readFileSync(
-    new URL("../src/components/aura/LiveToolReview.jsx", import.meta.url),
-    "utf8",
-  );
-
-  assert.equal(preview.includes('VITE_LIVE_TOOL_REVIEW_ENABLED === "true"'), true);
-  assert.equal(preview.includes('get("liveToolReview") === "1"'), true);
-  assert.equal(preview.includes("<LiveToolReview"), true);
-  assert.equal(preview.includes("<EditablePresentation"), true);
-  assert.equal(preview.includes("<EditableEmail"), true);
-  assert.equal(liveTool.includes("The standard preview still works"), true);
-  assert.equal(liveTool.includes("closeLiveReviewSession"), true);
-  assert.equal(liveTool.includes("isAuthenticationScreen"), true);
 });
 
 test("the first prompt submission opens the language plan without a confirmation gate", () => {
