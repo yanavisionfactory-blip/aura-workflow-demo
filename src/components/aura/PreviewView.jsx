@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { motion } from "framer-motion";
 import { Eye, Mail, Database, ShieldAlert, ArrowLeft, Play, List, FileDown, FileText, Pencil, ListChecks, Check, ChevronDown, Presentation, Plus, Trash2, Paperclip } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { downloadEmailEml, safeName } from "@/lib/auraDownload";
-import { fallbackReviewContract, mergeLegacyPreviewIntoArguments, setArgumentAtPath, validateReviewArguments } from "@/lib/approvalReview.mjs";
+import { fallbackReviewContract, mergeLegacyPreviewIntoArguments, validateReviewArguments } from "@/lib/approvalReview.mjs";
 
 function EditableEmail({ preview, onPreviewChange, editing, artifacts = [] }) {
   return (
@@ -204,139 +204,7 @@ function EditableDocument({ preview, onPreviewChange, editing }) {
   );
 }
 
-const serializedValue = (value) => JSON.stringify(value ?? null, null, 2);
-
-function JsonArgumentField({ field, value, editing, onChange, onValidityChange }) {
-  const serialized = serializedValue(value);
-  const [draft, setDraft] = useState(serialized);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    setDraft(serialized);
-    setError("");
-    onValidityChange(true);
-  }, [field.key, serialized]);
-
-  if (!editing || field.editable === false) {
-    return (
-      <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-white/5 bg-black/10 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
-        {serialized}
-      </pre>
-    );
-  }
-
-  return (
-    <div>
-      <textarea
-        value={draft}
-        rows={Math.min(12, Math.max(4, draft.split("\n").length))}
-        onChange={(event) => {
-          const nextDraft = event.target.value;
-          setDraft(nextDraft);
-          try {
-            const parsed = JSON.parse(nextDraft);
-            setError("");
-            onValidityChange(true);
-            onChange(parsed);
-          } catch {
-            setError("Keep this as valid structured data before approving.");
-            onValidityChange(false);
-          }
-        }}
-        className={`w-full resize-y rounded-lg border bg-black/10 px-3 py-2 font-mono text-[11px] leading-relaxed outline-none ${error ? "border-rose-400/50" : "border-white/10 focus:border-primary"}`}
-      />
-      {error && <p className="mt-1 text-[10px] text-rose-300">{error}</p>}
-    </div>
-  );
-}
-
-function SchemaArgumentsEditor({ contract, args, editing, onArgumentsChange, onFieldValidity, excludeKeys = [] }) {
-  const excluded = new Set(excludeKeys);
-  const fields = (contract.fields || []).filter((field) => (
-    !excluded.has(field.key)
-    && (editing || field.required || Object.hasOwn(args || {}, field.key))
-  ));
-  if (!fields.length) return null;
-
-  return (
-    <div className="rounded-xl border border-white/8 bg-card/40 overflow-hidden">
-      <div className="flex items-center gap-2 border-b border-white/6 bg-card/30 px-4 py-2.5">
-        <Database className="h-3.5 w-3.5 text-accent" />
-        <span className="text-xs font-medium">Exact app values</span>
-        <span className="ml-auto text-[10px] text-muted-foreground/50">{fields.length} {fields.length === 1 ? "field" : "fields"}</span>
-      </div>
-      <div className="space-y-3 p-4">
-        {fields.map((field) => {
-          const value = args?.[field.key];
-          const editable = editing && field.editable !== false;
-          return (
-            <label key={field.key} className="block">
-              <span className="mb-1.5 flex items-center gap-1 text-[11px] text-muted-foreground">
-                {field.label || field.key}
-                {field.required && <span className="text-amber-300">required</span>}
-              </span>
-              {field.control === "json" ? (
-                <JsonArgumentField
-                  field={field}
-                  value={value}
-                  editing={editable}
-                  onValidityChange={(valid) => onFieldValidity(field.key, valid)}
-                  onChange={(next) => onArgumentsChange(setArgumentAtPath(args, field.path || [field.key], next))}
-                />
-              ) : field.control === "checkbox" ? (
-                <div className="flex items-center gap-2 rounded-lg border border-white/5 px-3 py-2 text-xs">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(value)}
-                    disabled={!editable}
-                    onChange={(event) => onArgumentsChange(setArgumentAtPath(args, field.path || [field.key], event.target.checked))}
-                    className="accent-primary"
-                  />
-                  <span>{value ? "Enabled" : "Disabled"}</span>
-                </div>
-              ) : field.control === "select" ? (
-                <select
-                  value={value ?? ""}
-                  disabled={!editable}
-                  onChange={(event) => onArgumentsChange(setArgumentAtPath(args, field.path || [field.key], event.target.value))}
-                  className="w-full rounded-lg border border-white/10 bg-card px-3 py-2 text-xs outline-none focus:border-primary disabled:opacity-70"
-                >
-                  {(field.options || []).map((option) => <option key={String(option)} value={option}>{String(option)}</option>)}
-                </select>
-              ) : field.control === "textarea" ? (
-                <textarea
-                  value={value ?? ""}
-                  readOnly={!editable}
-                  rows={5}
-                  onChange={(event) => onArgumentsChange(setArgumentAtPath(args, field.path || [field.key], event.target.value))}
-                  className={`w-full resize-y rounded-lg border bg-transparent px-3 py-2 text-xs leading-relaxed outline-none ${editable ? "border-white/10 focus:border-primary" : "border-white/5 text-muted-foreground"}`}
-                />
-              ) : (
-                <input
-                  type={field.control === "number" ? "number" : field.format === "email" ? "email" : "text"}
-                  value={value ?? ""}
-                  readOnly={!editable}
-                  min={field.minimum}
-                  max={field.maximum}
-                  onChange={(event) => {
-                    const next = field.control === "number" && event.target.value !== ""
-                      ? Number(event.target.value)
-                      : event.target.value;
-                    onArgumentsChange(setArgumentAtPath(args, field.path || [field.key], next));
-                  }}
-                  className={`w-full rounded-lg border bg-transparent px-3 py-2 text-xs outline-none ${editable ? "border-white/10 focus:border-primary" : "border-white/5 text-muted-foreground"}`}
-                />
-              )}
-              {field.description && <span className="mt-1 block text-[10px] leading-relaxed text-muted-foreground/55">{field.description}</span>}
-            </label>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function EditablePresentation({ args, contract, editing, onArgumentsChange, onFieldValidity }) {
+function EditablePresentation({ args, contract, editing, onArgumentsChange }) {
   const phases = Array.isArray(args.phases) ? args.phases : [];
   const phaseLimit = contract.fields?.find((field) => field.key === "phases")?.max_items || 4;
   const updatePhase = (index, patch) => {
@@ -408,8 +276,6 @@ function EditablePresentation({ args, contract, editing, onArgumentsChange, onFi
           </div>
         </div>
       )}
-
-      <SchemaArgumentsEditor contract={contract} args={args} editing={editing} onArgumentsChange={onArgumentsChange} onFieldValidity={onFieldValidity} excludeKeys={["title", "subtitle", "phases"]} />
     </div>
   );
 }
@@ -485,7 +351,7 @@ const previewForStep = (step) => {
   return null;
 };
 
-function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
+function EditableStepCard({ step, number, index, onUpdate }) {
   const p = previewForStep(step) || {};
   const isModify = step.riskLevel === "modify";
   const args = step.resolvedArguments || step.arguments || {};
@@ -498,6 +364,7 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
   const richTicket = contract.operation === "jira.issue.create";
   const richPresentation = contract.operation === "canva.presentation.create";
   const richDocument = contract.kind === "document";
+  const hasRichPreview = richEmail || richTicket || richPresentation || richDocument;
   const [editing, setEditing] = useState(() => richEmail || richPresentation || richDocument);
   const updateArguments = (nextArguments) => onUpdate(index, {
     arguments: nextArguments,
@@ -511,8 +378,6 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
       resolvedArguments: mergeLegacyPreviewIntoArguments(step, nextPreview),
     });
   };
-  const fieldValidity = (fieldKey, valid) => onFieldValidity(`${index}:${fieldKey}`, valid);
-
   if (!isModify) return null;
 
   // Modify step (sends / changes data): the focus of review — expanded & editable.
@@ -528,12 +393,14 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
             <span className="flex items-center gap-1 text-[10px] text-amber-400">
               <ShieldAlert className="w-2.5 h-2.5" /> needs your review
             </span>
-            <button
-              onClick={() => setEditing((e) => !e)}
-              className={`ml-auto flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] transition-colors ${editing ? "border-primary/30 bg-primary/10 text-primary" : "border-white/10 text-muted-foreground hover:text-primary"}`}
-            >
-              <Pencil className="w-2.5 h-2.5" /> {editing ? "Editing" : "Edit in AURA"}
-            </button>
+            {hasRichPreview && (
+              <button
+                onClick={() => setEditing((e) => !e)}
+                className={`ml-auto flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] transition-colors ${editing ? "border-primary/30 bg-primary/10 text-primary" : "border-white/10 text-muted-foreground hover:text-primary"}`}
+              >
+                <Pencil className="w-2.5 h-2.5" /> {editing ? "Editing" : "Edit in AURA"}
+              </button>
+            )}
           </div>
           <p className="py-0.5 text-sm font-medium">{step.action || contract.title}</p>
           {step.riskNote && <p className="text-[11px] text-amber-300/70 mt-1">{step.riskNote}</p>}
@@ -551,23 +418,9 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
                 contract={contract}
                 editing={editing}
                 onArgumentsChange={updateArguments}
-                onFieldValidity={fieldValidity}
               />
             )}
-            {!richPresentation && !richDocument && (
-              <SchemaArgumentsEditor
-                contract={contract}
-                args={args}
-                editing={editing}
-                onArgumentsChange={updateArguments}
-                onFieldValidity={fieldValidity}
-                excludeKeys={richEmail
-                  ? ["to", "subject", "body", "attachments"]
-                  : richTicket
-                    ? ["project_key", "projectKey", "project", "summary", "description", "assignee_id", "assignee"]
-                    : []}
-              />
-            )}
+            {!hasRichPreview && <FallbackPreview step={step} />}
           </>
         ) : p.type === "email" ? <EditableEmail preview={p} onPreviewChange={updatePreview} editing={editing} />
           : p.type === "jira" ? <EditableJiraTask preview={p} onPreviewChange={updatePreview} editing={editing} />
@@ -584,16 +437,9 @@ export default function PreviewView({ preview, steps, onApprove, onBack, error =
   const initial = steps && steps.length ? steps : preview?.steps || [];
   const [editSteps, setEditSteps] = useState(() => JSON.parse(JSON.stringify(initial)));
   const [showBackground, setShowBackground] = useState(false);
-  const [invalidFields, setInvalidFields] = useState(() => new Set());
   if (!editSteps.length) return null;
 
   const update = (i, patch) => setEditSteps((prev) => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
-  const updateFieldValidity = (key, valid) => setInvalidFields((previous) => {
-    const next = new Set(previous);
-    if (valid) next.delete(key);
-    else next.add(key);
-    return next;
-  });
   const reviewSteps = editSteps
     .map((step, index) => ({ step, index }))
     .filter(({ step }) => step.riskLevel === "modify");
@@ -608,7 +454,7 @@ export default function PreviewView({ preview, steps, onApprove, onBack, error =
         .map((error) => ({ ...error, stepIndex: index }))
       : []
   ));
-  const approvalBlocked = invalidFields.size > 0 || contractErrors.length > 0;
+  const approvalBlocked = contractErrors.length > 0;
   const reviewSummary = sourceTools.length
     ? `AURA will use ${sourceTools.join(" and ")} to prepare ${reviewSteps.length} reviewed ${destinationTools.join(" / ")} ${reviewSteps.length === 1 ? "change" : "changes"}.`
     : `${reviewSteps.length} ${reviewSteps.length === 1 ? "change is" : "changes are"} ready for your review.`;
@@ -670,13 +516,13 @@ export default function PreviewView({ preview, steps, onApprove, onBack, error =
       {/* Editable steps */}
       <div className="space-y-3 mb-5 mt-4">
         {reviewSteps.map(({ step, index }, reviewIndex) => (
-          <EditableStepCard key={index} step={step} number={reviewIndex + 1} index={index} onUpdate={update} onFieldValidity={updateFieldValidity} />
+          <EditableStepCard key={index} step={step} number={reviewIndex + 1} index={index} onUpdate={update} />
         ))}
       </div>
 
       {contractErrors.length > 0 && (
         <div className="mb-4 rounded-xl border border-rose-400/20 bg-rose-400/5 px-4 py-3 text-[11px] text-rose-200">
-          Complete the highlighted approval values before running. {contractErrors[0].message}
+          AURA has not finished preparing this action. {contractErrors[0].message}
         </div>
       )}
 
