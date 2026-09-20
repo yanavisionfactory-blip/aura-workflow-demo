@@ -70,7 +70,23 @@ KNOWN.update({
     "jira.issues.search": ({**envelope("issues"), "properties": {"issues": {"type": "array", "items": {"type": "object", "required": ["id"], "properties": {"id": TEXT, "key": TEXT, "fields": OBJECT}}}, "isLast": {"type": "boolean"}, "nextPageToken": TEXT}}, ["issue_state"]),
     "weather.forecast": ({
         "type": "object",
-        "required": ["location", "date", "summary"],
+        "required": [
+            "location",
+            "date",
+            "summary",
+            "temperature_high",
+            "temperature_low",
+            "precipitation_probability",
+            "wind_speed",
+            "weather_code",
+            "forecasts",
+            "forecast_days",
+            "max_precipitation_probability",
+            "max_wind_speed",
+            "updated_at",
+            "source",
+            "source_url",
+        ],
         "properties": {
             "location": TEXT,
             "date": TEXT,
@@ -468,7 +484,17 @@ def compile_contracts(plan, manifests: dict) -> dict:
             continue  # Existing capability authorization rejects absent operations.
         enriched = enrich_operation(module)
         contract = enriched["reliability"]
-        missing = set(step.required_evidence) - set(contract["provides"])
+        # A planner may express required evidence either as the connector's
+        # semantic tag (for example ``forecast``) or as a top-level field from
+        # the operation's typed output contract.  A field is evidence only when
+        # the schema guarantees it via ``required``; optional or invented fields
+        # must still fail compilation.  This deterministic equivalence avoids a
+        # redundant model repair without weakening the contract boundary.
+        guaranteed_output_fields = set(
+            (contract.get("output_schema") or {}).get("required", [])
+        )
+        guaranteed_evidence = set(contract["provides"]) | guaranteed_output_fields
+        missing = set(step.required_evidence) - guaranteed_evidence
         if missing:
             failures.append(f"{step.key}: {step.operation} cannot supply {sorted(missing)}")
         for path in referenced_paths({"arguments": step.arguments, "outputs": step.output_variables}):

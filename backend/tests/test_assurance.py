@@ -186,7 +186,26 @@ async def test_probe_yields_only_its_own_checkpoint_and_resumes_without_replay(
 
     async def provider(*args, **kwargs):
         calls.append("read")
-        return {"location": "Berlin", "date": "2026-09-09", "summary": "Public fixture forecast"}
+        day = {
+            "location": "Berlin",
+            "date": "2026-09-09",
+            "summary": "Public fixture forecast",
+            "temperature_high": 20,
+            "temperature_low": 11,
+            "precipitation_probability": 15,
+            "wind_speed": 12,
+            "weather_code": 1,
+        }
+        return {
+            **day,
+            "forecasts": [day],
+            "forecast_days": 1,
+            "max_precipitation_probability": 15,
+            "max_wind_speed": 12,
+            "updated_at": "2026-09-09T08:00:00Z",
+            "source": "Fixture Weather",
+            "source_url": "https://example.com/weather",
+        }
 
     async def critic(*args):
         return CriticDecision(action="accept")
@@ -273,7 +292,26 @@ async def test_postgres_canary_recovers_at_its_private_deadline_and_preserves_gu
 
     async def provider(*args, **kwargs):
         calls.append("read")
-        return {"location": "Berlin", "date": "2026-09-09", "summary": "Fixture forecast"}
+        day = {
+            "location": "Berlin",
+            "date": "2026-09-09",
+            "summary": "Fixture forecast",
+            "temperature_high": 20,
+            "temperature_low": 11,
+            "precipitation_probability": 15,
+            "wind_speed": 12,
+            "weather_code": 1,
+        }
+        return {
+            **day,
+            "forecasts": [day],
+            "forecast_days": 1,
+            "max_precipitation_probability": 15,
+            "max_wind_speed": 12,
+            "updated_at": "2026-09-09T08:00:00Z",
+            "source": "Fixture Weather",
+            "source_url": "https://example.com/weather",
+        }
 
     async def critic(*args):
         return CriticDecision(action="accept")

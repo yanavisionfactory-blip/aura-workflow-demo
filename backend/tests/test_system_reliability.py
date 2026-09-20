@@ -117,6 +117,53 @@ def test_metadata_cannot_satisfy_a_body_content_requirement():
     assert compile_contracts(plan, {"notion": native_manifest("notion")})["page"]["provides"] == ["page_body"]
 
 
+def test_guaranteed_output_fields_compile_as_evidence_without_model_repair():
+    weather_step = PlanStep(
+        key="weather",
+        agent="reader",
+        tool_slug="aura",
+        operation="weather.forecast",
+        arguments={"location": "Kyoto", "days": 3, "units": "metric"},
+        reason="Read the current public forecast",
+        expected_output="Three-day forecast",
+        required_evidence=[
+            "forecasts",
+            "location",
+            "precipitation_probability",
+            "summary",
+            "temperature_high",
+            "temperature_low",
+        ],
+    )
+    plan = WorkflowPlan(
+        name="Kyoto weather",
+        interpretation="Compare Kyoto weather and rain risk",
+        steps=[weather_step],
+    )
+
+    compiled = compile_contracts(plan, {"aura": native_manifest("aura")})
+
+    assert compiled["weather"]["provides"] == ["forecast"]
+
+
+def test_optional_output_field_is_not_accepted_as_guaranteed_evidence():
+    plan = WorkflowPlan(
+        name="Read",
+        interpretation="Read a page",
+        steps=[
+            step(
+                "page",
+                "notion.page.get",
+                arguments={"page_id": "p"},
+                required_evidence=["an_optional_provider_field"],
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match="cannot supply"):
+        compile_contracts(plan, {"notion": native_manifest("notion")})
+
+
 def test_invalid_output_reference_rejected_but_metadata_alias_compiles():
     plan = WorkflowPlan(name="Read", interpretation="Read page", steps=[
         step("search", "notion.search"),
