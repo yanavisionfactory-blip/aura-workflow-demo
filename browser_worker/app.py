@@ -8,26 +8,36 @@ addresses so pages cannot pivot into Railway or other private infrastructure.
 from __future__ import annotations
 
 import asyncio
+import base64
 import ipaddress
 import json
 import math
 import os
 import re
+import secrets
 import socket
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from statistics import mean
+from typing import Literal
 from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from playwright.async_api import Page, Route, async_playwright
 from pydantic import BaseModel, Field, HttpUrl
 
-
 WORKER_TOKEN = os.environ.get("WORKER_TOKEN", "")
 MAX_PAGE_TEXT = 60_000
 browser_slots = asyncio.Semaphore(int(os.environ.get("BROWSER_CONCURRENCY", "2")))
+interactive_browser_slots = asyncio.Semaphore(
+    int(os.environ.get("INTERACTIVE_BROWSER_CONCURRENCY", "1"))
+)
+INTERACTIVE_VIEWPORT = {"width": 1280, "height": 800}
+INTERACTIVE_SESSION_TTL_SECONDS = int(
+    os.environ.get("INTERACTIVE_SESSION_TTL_SECONDS", "600")
+)
 
 app = FastAPI(title="AURA Browser Worker", version="1.0")
 
@@ -60,6 +70,35 @@ class TikTokScreenRequest(BaseModel):
     min_trimmed_mean_views: int = Field(default=15_000, ge=1)
     min_original_audio_ratio: float = Field(default=0.3, ge=0, le=1)
     recency_days: int = Field(default=5, ge=1, le=30)
+
+
+class InteractiveSessionCreate(BaseModel):
+    target_url: HttpUrl
+    provider: Literal["canva", "gmail"]
+
+
+class InteractiveSessionInput(BaseModel):
+    type: Literal["click", "double_click", "move", "scroll", "text", "key"]
+    x: float | None = Field(default=None, ge=0, le=INTERACTIVE_VIEWPORT["width"])
+    y: float | None = Field(default=None, ge=0, le=INTERACTIVE_VIEWPORT["height"])
+    delta_x: float = Field(default=0, ge=-10_000, le=10_000)
+    delta_y: float = Field(default=0, ge=-10_000, le=10_000)
+    text: str | None = Field(default=None, max_length=4_000)
+    key: str | None = Field(default=None, max_length=80)
+
+
+@dataclass
+class InteractiveSession:
+    playwright: object
+    browser: object
+    context: object
+    page: Page
+    provider: str
+    last_activity: datetime
+
+
+interactive_sessions: dict[str, InteractiveSession] = {}
+interactive_sessions_lock = asyncio.Lock()
 
 
 def require_worker_token(authorization: str | None = Header(default=None)) -> None:
@@ -131,6 +170,204 @@ async def open_public_page(context, url: str, *, settle_ms: int = 1_000) -> Page
     except Exception:
         await page.close()
         raise
+
+
+def _interactive_session_expired(session: InteractiveSession) -> bool:
+    return (
+        datetime.now(timezone.utc) - session.last_activity
+    ).total_seconds() > INTERACTIVE_SESSION_TTL_SECONDS
+
+
+async def _close_interactive_session(session_id: str) -> bool:
+    async with interactive_sessions_lock:
+        session = interactive_sessions.pop(session_id, None)
+    if session is None:
+        return False
+    try:
+        await session.context.close()
+    finally:
+        try:
+            await session.browser.close()
+        finally:
+            try:
+                await session.playwright.stop()
+            finally:
+                interactive_browser_slots.release()
+    return True
+
+
+async def _cleanup_interactive_sessions() -> None:
+    async with interactive_sessions_lock:
+        expired_ids = [
+            session_id
+            for session_id, session in interactive_sessions.items()
+            if _interactive_session_expired(session)
+        ]
+    for session_id in expired_ids:
+        await _close_interactive_session(session_id)
+
+
+async def _interactive_session(
+    session_id: str,
+    *,
+    touch: bool = False,
+) -> InteractiveSession:
+    await _cleanup_interactive_sessions()
+    async with interactive_sessions_lock:
+        session = interactive_sessions.get(session_id)
+        if session is None:
+            raise HTTPException(404, "Browser session not found or expired")
+        if touch:
+            session.last_activity = datetime.now(timezone.utc)
+        return session
+
+
+async def _create_interactive_session(
+    target_url: str,
+    provider: str,
+) -> tuple[str, InteractiveSession]:
+    target = await public_https_url(target_url)
+    await _cleanup_interactive_sessions()
+    try:
+        await asyncio.wait_for(interactive_browser_slots.acquire(), timeout=10)
+    except TimeoutError as exc:
+        raise HTTPException(429, "Every private browser session is currently in use") from exc
+
+    playwright = await async_playwright().start()
+    browser = None
+    context = None
+    try:
+        browser = await playwright.chromium.launch(
+            headless=True,
+            args=["--disable-dev-shm-usage", "--no-sandbox"],
+        )
+        context = await browser.new_context(
+            viewport=INTERACTIVE_VIEWPORT,
+            user_agent=(
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/128.0 Safari/537.36 AURA-LiveReview/1.0"
+            ),
+        )
+        page = await context.new_page()
+        await page.route("**/*", _guard_route)
+        await page.goto(target, wait_until="domcontentloaded", timeout=30_000)
+        session = InteractiveSession(
+            playwright=playwright,
+            browser=browser,
+            context=context,
+            page=page,
+            provider=provider,
+            last_activity=datetime.now(timezone.utc),
+        )
+        session_id = secrets.token_urlsafe(24)
+        async with interactive_sessions_lock:
+            interactive_sessions[session_id] = session
+        return session_id, session
+    except Exception:
+        if context is not None:
+            await context.close()
+        if browser is not None:
+            await browser.close()
+        await playwright.stop()
+        interactive_browser_slots.release()
+        raise
+
+
+def _current_interactive_page(session: InteractiveSession) -> Page:
+    pages = [page for page in session.context.pages if not page.is_closed()]
+    if pages:
+        session.page = pages[-1]
+    return session.page
+
+
+async def _interactive_frame(session: InteractiveSession) -> dict:
+    page = _current_interactive_page(session)
+    image = await page.screenshot(type="jpeg", quality=68, animations="disabled")
+    return {
+        "image_base64": base64.b64encode(image).decode("ascii"),
+        "mime_type": "image/jpeg",
+        "url": page.url,
+        "title": await page.title(),
+        **INTERACTIVE_VIEWPORT,
+    }
+
+
+async def _apply_interactive_input(
+    session: InteractiveSession,
+    payload: InteractiveSessionInput,
+) -> None:
+    page = _current_interactive_page(session)
+    if payload.type in {"click", "double_click", "move"}:
+        if payload.x is None or payload.y is None:
+            raise HTTPException(422, "Pointer input requires x and y coordinates")
+        if payload.type in {"click", "double_click"}:
+            await _ensure_interactive_action_is_safe(
+                page,
+                session.provider,
+                payload.x,
+                payload.y,
+            )
+        if payload.type == "click":
+            await page.mouse.click(payload.x, payload.y)
+        elif payload.type == "double_click":
+            await page.mouse.dblclick(payload.x, payload.y)
+        else:
+            await page.mouse.move(payload.x, payload.y)
+    elif payload.type == "scroll":
+        await page.mouse.wheel(payload.delta_x, payload.delta_y)
+    elif payload.type == "text":
+        if payload.text is None:
+            raise HTTPException(422, "Text input requires text")
+        await page.keyboard.insert_text(payload.text)
+    elif payload.type == "key":
+        if not payload.key:
+            raise HTTPException(422, "Key input requires a key")
+        if payload.key in {"Enter", "Space", "Control+Enter", "Meta+Enter"}:
+            await _ensure_interactive_action_is_safe(page, session.provider)
+        await page.keyboard.press(payload.key)
+    session.last_activity = datetime.now(timezone.utc)
+
+
+async def _interactive_action_label(
+    page: Page,
+    x: float | None = None,
+    y: float | None = None,
+) -> str:
+    return await page.evaluate(
+        """({ x, y }) => {
+          const origin = x == null || y == null
+            ? document.activeElement
+            : document.elementFromPoint(x, y);
+          if (!origin) return '';
+          const control = origin.closest?.('button, [role="button"], a, [aria-label]') || origin;
+          return [
+            control.innerText,
+            control.textContent,
+            control.getAttribute?.('aria-label'),
+            control.getAttribute?.('title'),
+            control.getAttribute?.('data-tooltip'),
+          ].filter(Boolean).join(' ').replace(/\\s+/g, ' ').trim().slice(0, 500);
+        }""",
+        {"x": x, "y": y},
+    )
+
+
+async def _ensure_interactive_action_is_safe(
+    page: Page,
+    provider: str,
+    x: float | None = None,
+    y: float | None = None,
+) -> None:
+    label = (await _interactive_action_label(page, x, y)).casefold()
+    blocked = {
+        "gmail": ("send", "schedule send", "discard draft"),
+        "canva": ("publish", "share", "download", "delete design", "move to trash"),
+    }.get(provider, ())
+    if any(term in label for term in blocked):
+        raise HTTPException(
+            409,
+            "That final external action stays blocked until the AURA approval is confirmed",
+        )
 
 
 @asynccontextmanager
@@ -569,6 +806,54 @@ async def _submit_form_page(
 @app.get("/health")
 async def health() -> dict:
     return {"ok": True, "configured": bool(WORKER_TOKEN)}
+
+
+@app.on_event("shutdown")
+async def close_interactive_sessions() -> None:
+    async with interactive_sessions_lock:
+        session_ids = list(interactive_sessions)
+    for session_id in session_ids:
+        await _close_interactive_session(session_id)
+
+
+@app.post("/v1/interactive-sessions", dependencies=[Depends(require_worker_token)])
+async def create_interactive_session(payload: InteractiveSessionCreate) -> dict:
+    session_id, session = await _create_interactive_session(
+        str(payload.target_url),
+        payload.provider,
+    )
+    return {"session_id": session_id, **await _interactive_frame(session)}
+
+
+@app.get(
+    "/v1/interactive-sessions/{session_id}/frame",
+    dependencies=[Depends(require_worker_token)],
+)
+async def interactive_session_frame(session_id: str) -> dict:
+    return await _interactive_frame(await _interactive_session(session_id))
+
+
+@app.post(
+    "/v1/interactive-sessions/{session_id}/input",
+    dependencies=[Depends(require_worker_token)],
+)
+async def interactive_session_input(
+    session_id: str,
+    payload: InteractiveSessionInput,
+) -> dict:
+    session = await _interactive_session(session_id, touch=True)
+    await _apply_interactive_input(session, payload)
+    return {"ok": True, "url": _current_interactive_page(session).url}
+
+
+@app.delete(
+    "/v1/interactive-sessions/{session_id}",
+    dependencies=[Depends(require_worker_token)],
+)
+async def delete_interactive_session(session_id: str) -> dict:
+    if not await _close_interactive_session(session_id):
+        raise HTTPException(404, "Browser session not found or expired")
+    return {"ok": True}
 
 
 @app.post("/v1/discover", dependencies=[Depends(require_worker_token)])

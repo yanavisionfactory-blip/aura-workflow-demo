@@ -153,6 +153,8 @@ from .schemas import (
     ConnectorMarketplaceRequest,
     ConnectorPackageSubmit,
     InterfaceAnalyzeRequest,
+    LiveReviewSessionCreate,
+    LiveReviewSessionInput,
     MemorySearch,
     PlanApproval,
     PlanStep,
@@ -209,6 +211,11 @@ from .workflow_memory import select_memory_inputs
 logger = logging.getLogger(__name__)
 settings = get_settings()
 app = FastAPI(title="AURA Control Plane", version="0.1.0")
+LIVE_REVIEW_TARGETS = {
+    "canva": "https://www.canva.com/",
+    "gmail": "https://mail.google.com/mail/u/0/#drafts",
+}
+live_review_session_owners: dict[str, tuple[str, str]] = {}
 frontend_url = settings.frontend_url.rstrip("/") + "/"
 frontend_parts = urlsplit(frontend_url)
 frontend_origin = f"{frontend_parts.scheme}://{frontend_parts.netloc}"
@@ -327,6 +334,128 @@ async def tenant_session(
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok", "service": "aura-control-plane"}
+
+
+async def _live_review_worker_request(
+    method: str,
+    path: str,
+    payload: dict | None = None,
+) -> dict:
+    if not settings.live_tool_review_enabled:
+        raise HTTPException(404, "Live tool review is not enabled")
+    if not settings.browser_connector_url or not settings.browser_connector_token:
+        raise HTTPException(503, "Live tool review is not configured")
+    try:
+        async with httpx.AsyncClient(timeout=35) as client:
+            response = await client.request(
+                method,
+                f"{settings.browser_connector_url.rstrip('/')}/{path.lstrip('/')}",
+                headers={"Authorization": f"Bearer {settings.browser_connector_token}"},
+                json=payload,
+            )
+    except (httpx.TimeoutException, httpx.TransportError) as exc:
+        raise HTTPException(503, "The private browser is temporarily unavailable") from exc
+    try:
+        data = response.json()
+    except ValueError:
+        data = {}
+    if response.status_code >= 400:
+        message = data.get("detail") if isinstance(data, dict) else None
+        if response.status_code == 404:
+            raise HTTPException(404, "Live browser session expired")
+        if response.status_code == 429:
+            raise HTTPException(429, "Every private browser session is currently in use")
+        if response.status_code == 409:
+            raise HTTPException(409, message or "That browser action requires approval")
+        raise HTTPException(502, message or "The private browser rejected the request")
+    if not isinstance(data, dict):
+        raise HTTPException(502, "The private browser returned an invalid response")
+    return data
+
+
+def _owned_live_review_session(session_id: str, context: TenantContext) -> None:
+    owner = live_review_session_owners.get(session_id)
+    if owner != (context.workspace_id, context.subject):
+        # Do not disclose whether another workspace owns this opaque session.
+        raise HTTPException(404, "Live browser session not found")
+
+
+@app.post("/v1/live-review/sessions")
+async def create_live_review_session(
+    payload: LiveReviewSessionCreate,
+    context: TenantContext = Depends(tenant_context),
+    _session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    data = await _live_review_worker_request(
+        "POST",
+        "/v1/interactive-sessions",
+        {
+            "target_url": LIVE_REVIEW_TARGETS[payload.provider],
+            "provider": payload.provider,
+        },
+    )
+    session_id = str(data.get("session_id") or "")
+    if not session_id:
+        raise HTTPException(502, "The private browser did not create a session")
+    live_review_session_owners[session_id] = (context.workspace_id, context.subject)
+    return {**data, "provider": payload.provider}
+
+
+@app.get("/v1/live-review/sessions/{session_id}/frame")
+async def live_review_session_frame(
+    session_id: str,
+    context: TenantContext = Depends(tenant_context),
+    _session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    _owned_live_review_session(session_id, context)
+    try:
+        return await _live_review_worker_request(
+            "GET",
+            f"/v1/interactive-sessions/{session_id}/frame",
+        )
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            live_review_session_owners.pop(session_id, None)
+        raise
+
+
+@app.post("/v1/live-review/sessions/{session_id}/input")
+async def live_review_session_input(
+    session_id: str,
+    payload: LiveReviewSessionInput,
+    context: TenantContext = Depends(tenant_context),
+    _session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    _owned_live_review_session(session_id, context)
+    try:
+        return await _live_review_worker_request(
+            "POST",
+            f"/v1/interactive-sessions/{session_id}/input",
+            payload.model_dump(exclude_none=True),
+        )
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            live_review_session_owners.pop(session_id, None)
+        raise
+
+
+@app.delete("/v1/live-review/sessions/{session_id}")
+async def delete_live_review_session(
+    session_id: str,
+    context: TenantContext = Depends(tenant_context),
+    _session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    _owned_live_review_session(session_id, context)
+    live_review_session_owners.pop(session_id, None)
+    try:
+        return await _live_review_worker_request(
+            "DELETE",
+            f"/v1/interactive-sessions/{session_id}",
+        )
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            return {"ok": True, "expired": True}
+        raise
 
 
 def production_configuration_checks() -> dict[str, bool]:
