@@ -105,6 +105,29 @@ def test_email_review_marks_a_fingerprinted_pdf_ready():
     }]
 
 
+def test_email_review_shows_the_grouped_pdf_before_transport_is_resolved():
+    contract = build_review_contract(
+        "gmail.send",
+        {
+            "to": "owner@example.com",
+            "body": "Attached",
+            "attachments": [{
+                "filename": "Munich weather.pdf",
+                "url": "{{steps.export_presentation.job.urls[0]}}",
+            }],
+        },
+        _capability("google", "gmail.send"),
+        "Gmail",
+    )
+
+    assert contract["artifacts"] == [{
+        "kind": "attachment",
+        "name": "Munich weather.pdf",
+        "source": "Will be exported from this approved Canva presentation",
+        "verified": False,
+    }]
+
+
 def test_presentation_review_contract_keeps_structured_phases_editable():
     contract = build_review_contract(
         "canva.presentation.create",

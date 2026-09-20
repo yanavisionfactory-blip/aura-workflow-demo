@@ -385,8 +385,6 @@ export default function Demo() {
   const pythonPollGenerationRef = useRef(0);
   const languageDraftGenerationRef = useRef(0);
   const handleConfirmRef = useRef(null);
-  const startPythonExecutionRef = useRef(null);
-  const queuedPlanStartRef = useRef(null);
   const preparedActionPreviewRef = useRef(false);
   const runRequestKeyRef = useRef(null);
   const lastPlanningIntentRef = useRef("");
@@ -444,7 +442,6 @@ export default function Demo() {
     runRequestKeyRef.current = null;
     lastPlanningIntentRef.current = "";
     historySavePromiseRef.current = null;
-    queuedPlanStartRef.current = null;
     preparedActionPreviewRef.current = false;
     pendingMock.current = null;
     resolvedErrorRef.current = false;
@@ -479,7 +476,6 @@ export default function Demo() {
     else if (phase === "plan") setPhase("confirm");
     else if (phase === "preview") setPhase("plan");
     else if (phase === "executing" || phase === "error") {
-      queuedPlanStartRef.current = null;
       setPhase("plan");
     }
     else if (phase === "results") reset();
@@ -652,7 +648,6 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               const disposition = planningDisposition(run);
               if (disposition === "review") break;
               if (disposition === "connection") {
-                queuedPlanStartRef.current = null;
                 setPhase("plan");
                 pythonPlanRef.current = run.plan || null;
                 const connectionPlan = uiConnectionPlanFromRun(run, editedInterpretation);
@@ -682,19 +677,8 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               compileState: "ready",
             };
             setPlan(compiledPlan);
-            const queuedStart = queuedPlanStartRef.current;
-            if (queuedStart) {
-              queuedPlanStartRef.current = null;
-              approvedStepsRef.current = compiledPlan.steps;
-              setApprovedSteps(compiledPlan.steps);
-              setWorkflowName(queuedStart.name || compiledPlan.workflowName || "");
-              startPythonExecutionRef.current?.();
-            }
           } catch (error) {
             console.warn("Executable planning unavailable; the language plan remains visible", error);
-            const queuedStart = queuedPlanStartRef.current;
-            queuedPlanStartRef.current = null;
-            if (queuedStart) setPhase("plan");
             if (pythonRunIdRef.current) forgetActivePythonRun(pythonRunIdRef.current);
             pythonRunIdRef.current = null;
             pythonPlanRef.current = null;
@@ -985,23 +969,9 @@ Rules:
     }
     if (!hasDurablePlan(pythonRunIdRef.current, pythonPlanRef.current)) {
       if (plan?.provisional) {
-        queuedPlanStartRef.current = { name, autoApprove };
         if (plan.compileState === "blocked") {
           handleRetryPlanning();
-          return;
         }
-        setPhase("executing");
-        setStartTime(Date.now());
-        setCurrentStepIdx(0);
-        setExecSteps(steps.map((step, index) => ({
-          tool: step.tool,
-          action: step.title || step.action,
-          riskLevel: step.riskLevel,
-          status: index === 0 ? "running" : "pending",
-          liveOutput: index === 0
-            ? "→ Starting now; AURA is finishing technical preparation backstage"
-            : "",
-        })));
         return;
       }
       keepPlanInReview();
@@ -1318,8 +1288,6 @@ Rules:
       await recoverRunStatus();
     }
   };
-
-  startPythonExecutionRef.current = startPythonExecution;
 
   const runFrom = (startIdx) => {
     const template = execTemplateRef.current;
