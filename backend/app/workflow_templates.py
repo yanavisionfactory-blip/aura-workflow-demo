@@ -327,27 +327,6 @@ def weather_presentation_template(
         },
     ]
     if email_delivery_requested:
-        email_recipient = recipient
-        email_dependencies = ["export_presentation"]
-        if recipient == "me":
-            steps.insert(
-                1,
-                {
-                    "key": "recipient_identity",
-                    "agent": "Google Identity Reader",
-                    "tool_slug": gmail_slug,
-                    "operation": "google.identity.get",
-                    "arguments": {},
-                    "reason": (
-                        "Resolve the connected Gmail account's verified address "
-                        "before showing the email for approval."
-                    ),
-                    "expected_output": "Verified connected Gmail recipient address.",
-                    "required_evidence": ["account_identity"],
-                },
-            )
-            email_recipient = "{{steps.recipient_identity.email}}"
-            email_dependencies.append("recipient_identity")
         steps.extend(
             [
                 {
@@ -374,7 +353,7 @@ def weather_presentation_template(
                     "tool_slug": gmail_slug,
                     "operation": "gmail.send",
                     "arguments": {
-                        "to": email_recipient,
+                        "to": recipient,
                         "subject": f"{location} weather forecast",
                         "body": (
                             f"Attached is the requested {relative_date} weather presentation "
@@ -389,7 +368,7 @@ def weather_presentation_template(
                     "expected_output": "Verified Gmail message receipt with the PDF attached.",
                     "consequential": True,
                     "approval_group": "weather_presentation_delivery",
-                    "depends_on": email_dependencies,
+                    "depends_on": ["export_presentation"],
                     "required_evidence": ["write_receipt"],
                 },
             ]

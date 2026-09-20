@@ -174,29 +174,13 @@ def build_review_contract(
                 continue
             filename = attachment.get("filename")
             if isinstance(filename, str) and filename.strip():
-                size = attachment.get("size")
-                sha256 = attachment.get("sha256")
-                pending_export = (
-                    isinstance(attachment.get("url"), str)
-                    and "{{" in attachment["url"]
+                artifacts.append(
+                    {
+                        "kind": "attachment",
+                        "name": filename.strip(),
+                        "source": "Prepared from the approved Canva presentation",
+                    }
                 )
-                artifact = {
-                    "kind": "attachment",
-                    "name": filename.strip(),
-                    "source": (
-                        "Will be exported from this approved Canva presentation"
-                        if pending_export
-                        else "Prepared from the approved Canva presentation"
-                    ),
-                }
-                if pending_export:
-                    artifact["verified"] = False
-                if isinstance(size, int) and size >= 0:
-                    artifact["size"] = size
-                    artifact["verified"] = bool(
-                        isinstance(sha256, str) and sha256.strip()
-                    )
-                artifacts.append(artifact)
     return {
         "version": 1,
         "kind": kind,
