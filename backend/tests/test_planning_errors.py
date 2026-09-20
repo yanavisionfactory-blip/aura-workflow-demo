@@ -261,6 +261,17 @@ def test_guaranteed_weather_fields_do_not_trigger_a_second_planner_call(monkeypa
     assert calls == [[]]
 
 
+def test_explicit_aura_only_request_skips_external_connector_catalogs() -> None:
+    prompt = (
+        "Find the current official ECB exchange rates using live public data, in AURA only. "
+        "Do not send, create, update, publish, schedule, upload, or delete anything."
+    )
+
+    assert orchestrator._native_only_planning_request(prompt, []) is True
+    assert orchestrator._native_only_planning_request("Research the ECB", ["AURA Intelligence"])
+    assert orchestrator._native_only_planning_request("Research and email the result", ["gmail"]) is False
+
+
 def test_connector_contract_mismatch_is_replanned_before_reaching_user(monkeypatch) -> None:
     invalid = SimpleNamespace(
         steps=[

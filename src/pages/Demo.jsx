@@ -42,6 +42,7 @@ import {
   approvalStartFailure,
   planningConnectionRequirements,
   planningDisposition,
+  planningRecoveryGraceEligible,
   shouldStartFreshPlanningRun,
 } from "@/lib/planningFlow.mjs";
 import { hasDurablePlan, planningRequestPrompt } from "@/lib/runtimePlan.mjs";
@@ -56,6 +57,7 @@ import {
 
 const STEP_DURATION = 2.6;
 const PLANNING_WAIT_TIMEOUT_MS = 30_000;
+const PLANNING_RECOVERY_GRACE_MS = 30_000;
 const PLANNING_POLL_INTERVAL_MS = 750;
 const PLANNING_TRANSIENT_FAILURE_LIMIT = 3;
 
@@ -580,7 +582,8 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             if (planningRequestGenerationRef.current !== planningRequestGeneration) return;
             lastPlanningIntentRef.current = confirmedIntent;
             const planningPrompt = planningRequestPrompt(confirmedIntent, revisionInstruction);
-            const planningDeadline = Date.now() + PLANNING_WAIT_TIMEOUT_MS;
+            let planningDeadline = Date.now() + PLANNING_WAIT_TIMEOUT_MS;
+            let planningRecoveryGraceUsed = false;
             runRequestKeyRef.current ||= globalThis.crypto?.randomUUID?.()
               || `aura-${Date.now()}-${Math.random().toString(36).slice(2)}`;
             const resources = attachedResourcesRef.current || {};
@@ -602,9 +605,6 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             const generation = ++pythonPollGenerationRef.current;
             let run;
             for (;;) {
-              if (Date.now() >= planningDeadline) {
-                throw new Error("AURA couldn't prepare this workflow within 30 seconds.");
-              }
               run = await getPythonRunResilient(
                 created.id,
                 generation,
@@ -628,6 +628,18 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               if (disposition === "unavailable") throw new Error(
                 run.error || "The execution backend needs more setup before it can build this plan."
               );
+              if (Date.now() >= planningDeadline) {
+                if (!planningRecoveryGraceUsed && planningRecoveryGraceEligible(run)) {
+                  planningRecoveryGraceUsed = true;
+                  planningDeadline = Date.now() + PLANNING_RECOVERY_GRACE_MS;
+                } else {
+                  const timeout = new Error(
+                    "AURA is still preparing this workflow in the background."
+                  );
+                  timeout.preserveActiveRun = planningRecoveryGraceEligible(run);
+                  throw timeout;
+                }
+              }
               await new Promise((resolve) => setTimeout(resolve, PLANNING_POLL_INTERVAL_MS));
             }
             pythonPlanRef.current = run.plan;
@@ -640,10 +652,12 @@ Write ONE clear, conversational sentence restating what they want — but offer 
           } catch (error) {
             if (planningRequestGenerationRef.current !== planningRequestGeneration) return;
             console.warn("AURA could not build the authoritative workflow plan", error);
-            if (pythonRunIdRef.current) forgetActivePythonRun(pythonRunIdRef.current);
-            pythonRunIdRef.current = null;
-            pythonPlanRef.current = null;
-            runRequestKeyRef.current = null;
+            if (!error?.preserveActiveRun) {
+              if (pythonRunIdRef.current) forgetActivePythonRun(pythonRunIdRef.current);
+              pythonRunIdRef.current = null;
+              pythonPlanRef.current = null;
+              runRequestKeyRef.current = null;
+            }
             setPlan({
               workflowName: "",
               interpretation: confirmedIntent,
@@ -762,11 +776,6 @@ Rules:
   );
 
   const handleRetryPlanning = useCallback(() => {
-    const failedRunId = pythonRunIdRef.current;
-    if (failedRunId) forgetActivePythonRun(failedRunId);
-    pythonRunIdRef.current = null;
-    pythonPlanRef.current = null;
-    runRequestKeyRef.current = null;
     return handleConfirm(interpretation);
   }, [handleConfirm, interpretation]);
 

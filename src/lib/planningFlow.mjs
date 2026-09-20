@@ -88,6 +88,16 @@ export function planningDisposition(run = {}) {
   return "wait";
 }
 
+const ACTIVE_PLANNING_STATUSES = new Set(["queued", "planning", "recovering"]);
+
+export function planningRecoveryGraceEligible(run = {}) {
+  return planningDisposition(run) === "wait"
+    && (
+      run.public_status === "recovering"
+      || ACTIVE_PLANNING_STATUSES.has(run.status)
+    );
+}
+
 export function approvalStartFailure(run = {}, error = {}) {
   const stillAtReview = run.status === "awaiting_approval"
     && run.blocker?.code === "plan_approval_required"

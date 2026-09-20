@@ -14,6 +14,39 @@ def test_field_keys_match_human_and_dom_names():
     assert worker._field_key("Manager Email Address") == "manageremailaddress"
 
 
+def test_search_result_url_unwraps_redirects_and_rejects_search_navigation():
+    target = "https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/"
+    assert worker._search_result_url(
+        "https://duckduckgo.com/l/?uddg="
+        "https%3A%2F%2Fwww.ecb.europa.eu%2Fstats%2Fpolicy_and_exchange_rates%2F"
+        "euro_reference_exchange_rates%2F"
+    ) == target
+    assert worker._search_result_url(
+        "/l/?uddg=https%3A%2F%2Fwww.ecb.europa.eu%2Fstats%2Fpolicy_and_exchange_rates%2F"
+        "euro_reference_exchange_rates%2F"
+    ) == target
+    assert worker._search_result_url("https://duckduckgo.com/settings") is None
+    assert worker._search_result_url("http://example.com/result") is None
+
+
+@pytest.mark.asyncio
+async def test_search_falls_back_to_lite_when_html_has_no_results(monkeypatch):
+    result = {
+        "title": "Euro foreign exchange reference rates",
+        "url": "https://www.ecb.europa.eu/stats/eurofxref/",
+        "snippet": "",
+    }
+    search_page = AsyncMock(side_effect=[[], [result]])
+    monkeypatch.setattr(worker, "_search_page", search_page)
+
+    response = await worker.search(worker.SearchRequest(query="ECB EUR USD GBP", limit=5))
+
+    assert response == {"query": "ECB EUR USD GBP", "results": [result]}
+    assert search_page.await_count == 2
+    assert "html.duckduckgo.com" in search_page.await_args_list[0].args[0]
+    assert "lite.duckduckgo.com" in search_page.await_args_list[1].args[0]
+
+
 @pytest.mark.asyncio
 async def test_connector_navigation_cannot_leave_its_origin(monkeypatch):
     async def allow(url):

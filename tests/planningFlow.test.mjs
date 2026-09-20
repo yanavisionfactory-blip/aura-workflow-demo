@@ -7,6 +7,7 @@ import {
   planningConnectionRequirements,
   planningConnectionsEnabled,
   planningDisposition,
+  planningRecoveryGraceEligible,
   promptConnectionRequirements,
   shouldStartFreshPlanningRun,
 } from "../src/lib/planningFlow.mjs";
@@ -83,6 +84,20 @@ test("unfinished durable planning remains in background wait state", () => {
   }
 });
 
+test("a confirmed active backend recovery receives one bounded planning grace", () => {
+  assert.equal(planningRecoveryGraceEligible({ status: "planning" }), true);
+  assert.equal(planningRecoveryGraceEligible({ status: "recovering" }), true);
+  assert.equal(planningRecoveryGraceEligible({
+    status: "blocked",
+    public_status: "recovering",
+  }), true);
+  assert.equal(planningRecoveryGraceEligible({ status: "failed" }), false);
+  assert.equal(planningRecoveryGraceEligible({
+    status: "awaiting_approval",
+    plan: { steps: [{ operation: "web.search" }] },
+  }), false);
+});
+
 test("the UI publishes one complete durable plan without provisional step flicker", () => {
   const source = readFileSync(
     new URL("../src/pages/Demo.jsx", import.meta.url),
@@ -105,6 +120,9 @@ test("the UI publishes one complete durable plan without provisional step flicke
   assert.equal(planViewSource.includes("validating exact actions backstage"), false);
   assert.equal(planViewSource.includes("validatingExecution || missingTools.length"), false);
   assert.equal(source.includes("PLANNING_WAIT_TIMEOUT_MS = 30_000"), true);
+  assert.equal(source.includes("PLANNING_RECOVERY_GRACE_MS = 30_000"), true);
+  assert.equal(source.includes("planningRecoveryGraceEligible(run)"), true);
+  assert.equal(source.includes("timeout.preserveActiveRun"), true);
   assert.equal(source.includes('.replace(/^i\\s+will\\s+/i, "")'), true);
   assert.equal(planViewSource.includes('|| plan.compileState === "blocked"'), false);
   assert.equal(source.includes("handleRetryPlanning();"), true);

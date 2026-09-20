@@ -179,6 +179,25 @@ def _planning_prompt_with_documents(prompt: str, inputs: dict | None) -> str:
     return f"{prompt}\n\nUser-attached workflow documents:\n" + "\n\n".join(sections)
 
 
+def _native_only_planning_request(prompt: str, requested_tools: list[str]) -> bool:
+    """Honor an explicit AURA-only request without searching external catalogs."""
+    normalized_tools = {
+        re.sub(r"[^a-z0-9]+", " ", str(value).casefold()).strip()
+        for value in requested_tools
+        if value
+    }
+    aura_names = {"aura", "aura intelligence"}
+    if normalized_tools and normalized_tools <= aura_names:
+        return True
+    normalized_prompt = re.sub(r"\s+", " ", prompt.casefold())
+    return bool(
+        re.search(
+            r"\b(?:in|use) aura(?: intelligence)? only\b|\bonly use aura(?: intelligence)?\b",
+            normalized_prompt,
+        )
+    )
+
+
 def refresh_native_connection_contract(tool: ToolConnection) -> list[str]:
     """Keep persisted native allow-lists aligned with the deployed connector.
 
@@ -1084,9 +1103,17 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             )
         ).all()
         manifests_by_tool = {manifest.tool_id: manifest for manifest in manifests}
+        requested_tools = [
+            str(value)
+            for value in (run.inputs or {}).get("requested_tools", [])
+            if value
+        ]
+        native_only = _native_only_planning_request(run.prompt, requested_tools)
         from .connection_permissions import refresh_granted_readbacks
 
         for tool in tools:
+            if native_only and tool.slug != "aura":
+                continue
             refresh_native_connection_contract(tool)
             refresh_granted_readbacks(tool)
             await refresh_browser_connection_contract(tool, manifests_by_tool.get(tool.id))
@@ -1102,19 +1129,23 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 "connected": True,
             }
             for tool in tools
-            if tool.id in manifests_by_tool
+            if tool.id in manifests_by_tool and (not native_only or tool.slug == "aura")
         ]
         connected_slugs = {item["slug"] for item in connected_inventory}
-        from .connector_engineer import dynamic_planning_catalog
+        if native_only:
+            dynamic_inventory, dynamic_manifests = [], {}
+            broker_inventory, broker_manifests = [], {}
+        else:
+            from .connector_engineer import dynamic_planning_catalog
 
-        dynamic_inventory, dynamic_manifests = await dynamic_planning_catalog(
-            session, connected_slugs
-        )
-        from .pipedream_connect import planning_catalog as pipedream_planning_catalog
+            dynamic_inventory, dynamic_manifests = await dynamic_planning_catalog(
+                session, connected_slugs
+            )
+            from .pipedream_connect import planning_catalog as pipedream_planning_catalog
 
-        broker_inventory, broker_manifests = await pipedream_planning_catalog(
-            session, connected_slugs
-        )
+            broker_inventory, broker_manifests = await pipedream_planning_catalog(
+                session, connected_slugs
+            )
         inventory_by_slug = {item["slug"]: item for item in planning_catalog(connected_slugs)}
         inventory_by_slug.update({item["slug"]: item for item in dynamic_inventory})
         inventory_by_slug.update({item["slug"]: item for item in broker_inventory})
@@ -1128,11 +1159,6 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             for manifest in manifests
             if manifest.tool_id == tool.id
         })
-        requested_tools = [
-            str(value)
-            for value in (run.inputs or {}).get("requested_tools", [])
-            if value
-        ]
         requirement_inventory = await connection_requirement_inventory(
             session, run.prompt, inventory, requested_tools
         )
