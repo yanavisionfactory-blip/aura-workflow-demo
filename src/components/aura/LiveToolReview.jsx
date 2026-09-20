@@ -29,6 +29,20 @@ const imageSource = (frame) => (
     : ""
 );
 
+const isAuthenticationScreen = (provider, frame) => {
+  const url = String(frame?.url || "").toLowerCase();
+  const title = String(frame?.title || "").toLowerCase();
+  if (provider === "gmail") {
+    return url.includes("accounts.google.com") || title.includes("sign in");
+  }
+  if (provider === "canva") {
+    return url.includes("/login")
+      || url.includes("/signup")
+      || (title.includes("visual suite") && !url.includes("/design/"));
+  }
+  return false;
+};
+
 export default function LiveToolReview({ provider, label }) {
   const [sessionId, setSessionId] = useState("");
   const [frame, setFrame] = useState(null);
@@ -86,6 +100,11 @@ export default function LiveToolReview({ provider, label }) {
     setError("");
     try {
       const created = await createLiveReviewSession(provider);
+      if (isAuthenticationScreen(provider, created)) {
+        await closeLiveReviewSession(created.session_id).catch(() => {});
+        setError(`AURA could not open an authenticated ${label} editor. The prepared AURA preview is shown instead.`);
+        return;
+      }
       sessionRef.current = created.session_id;
       setSessionId(created.session_id);
       setFrame(created);
@@ -151,7 +170,7 @@ export default function LiveToolReview({ provider, label }) {
             <div>
               <p className="text-xs font-medium">Try the live {label} workspace</p>
               <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-                A private cloud browser opens the real tool. You can click and type without limiting yourself to AURA fields. The normal approval preview remains available below.
+                A private cloud browser opens only when AURA can establish an authenticated tool session. The normal approval preview remains available below.
               </p>
               <p className="mt-1 text-[10px] leading-relaxed text-amber-200/70">
                 Experimental: live-tool edits are not yet substituted into the approved connector payload.

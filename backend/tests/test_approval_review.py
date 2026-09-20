@@ -79,6 +79,32 @@ def test_email_review_contract_replaces_attachment_transport_with_receipt():
     ) == {"to": "me", "body": "Attached"}
 
 
+def test_email_review_marks_a_fingerprinted_pdf_ready():
+    contract = build_review_contract(
+        "gmail.send",
+        {
+            "to": "owner@example.com",
+            "body": "Attached",
+            "attachments": [{
+                "filename": "Munich weather.pdf",
+                "url": "https://export-download.canva.com/private",
+                "sha256": "a" * 64,
+                "size": 24576,
+            }],
+        },
+        _capability("google", "gmail.send"),
+        "Gmail",
+    )
+
+    assert contract["artifacts"] == [{
+        "kind": "attachment",
+        "name": "Munich weather.pdf",
+        "source": "Prepared from the approved Canva presentation",
+        "size": 24576,
+        "verified": True,
+    }]
+
+
 def test_presentation_review_contract_keeps_structured_phases_editable():
     contract = build_review_contract(
         "canva.presentation.create",

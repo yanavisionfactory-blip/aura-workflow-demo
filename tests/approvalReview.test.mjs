@@ -147,6 +147,32 @@ test("rich structured previews cannot approve incomplete nested values", () => {
   assert.deepEqual(validateReviewArguments(contract, { phases: [{ period: "Q1", title: "Launch", items: ["Ship"] }] }), []);
 });
 
+test("approval is blocked while any displayed value is still a workflow reference", () => {
+  const contract = {
+    fields: [{
+      key: "phases",
+      path: ["phases"],
+      type: "array",
+      required: true,
+      item_schema: {
+        type: "object",
+        required: ["title", "items"],
+        properties: {
+          title: { type: "string", minLength: 1 },
+          items: { type: "array", items: { type: "string", minLength: 1 } },
+        },
+      },
+    }],
+  };
+
+  const errors = validateReviewArguments(contract, {
+    phases: [{ title: "Forecast", items: ["{{steps.weather.summary}}"] }],
+  });
+
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /still resolving/i);
+});
+
 test("the connected Gmail account alias is accepted by the review contract", () => {
   const contract = {
     fields: [{

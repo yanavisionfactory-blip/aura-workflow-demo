@@ -52,7 +52,6 @@ import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
 import {
   editedArgumentsForStep,
   plannedApprovalStep,
-  requiresActionPreview,
   resolvedApprovalStep,
 } from "@/lib/approvalReview.mjs";
 
@@ -182,7 +181,7 @@ const uiPlanStepFromRun = (step) => {
     ],
     riskLevel: step.consequential ? "modify" : "read",
     riskNote: step.consequential
-      ? "You'll review this exact action with every other external change before the workflow runs."
+      ? "AURA prepares its dependencies first, then pauses on the exact resolved action."
       : "",
   };
   return plannedApprovalStep(planned, step, tool);
@@ -689,11 +688,6 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               approvedStepsRef.current = compiledPlan.steps;
               setApprovedSteps(compiledPlan.steps);
               setWorkflowName(queuedStart.name || compiledPlan.workflowName || "");
-              if (requiresActionPreview(compiledPlan.steps, queuedStart.autoApprove)) {
-                preparedActionPreviewRef.current = false;
-                setPhase("preview");
-                return;
-              }
               startPythonExecutionRef.current?.();
             }
           } catch (error) {
@@ -1013,12 +1007,6 @@ Rules:
       keepPlanInReview();
       return;
     }
-    if (requiresActionPreview(steps, autoApprove)) {
-      preparedActionPreviewRef.current = false;
-      setPreviewError("");
-      setPhase("preview");
-      return;
-    }
     startPythonExecution();
   }, [editRunMode, autoApprove, keepPlanInReview, handleRetryPlanning, plan]);
 
@@ -1235,7 +1223,9 @@ Rules:
           );
         }
       } else {
-        await approvePythonPlan(runId, reviewedPlan.steps);
+        // Start preparation first. Consequential steps pause only after every
+        // dependency has resolved into the exact payload shown for review.
+        await approvePythonPlan(runId, reviewedPlan.steps, autoApprove);
       }
       for (;;) {
         const run = await getPythonRunResilient(runId, generation);

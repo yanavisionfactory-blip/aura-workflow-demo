@@ -131,11 +131,13 @@ def _future_group_review_arguments(
                 if not isinstance(item, dict):
                     return None
                 filename = resolve_value(item.get("filename"), context)
-                url = item.get("url")
+                url = resolve_value(item.get("url"), context)
                 if not isinstance(filename, str) or not isinstance(url, str):
                     return None
-                # The URL remains a typed workflow reference at review time and
-                # is resolved only after the approved Canva design is exported.
+                # A dependent delivery cannot join an earlier approval group
+                # until its actual artifact exists. Showing a future transport
+                # reference as an attachment made the review look complete even
+                # though no PDF had been created yet.
                 attachments.append({**item, "filename": filename, "url": url})
             prepared[key] = attachments
     except WorkflowContextError:
