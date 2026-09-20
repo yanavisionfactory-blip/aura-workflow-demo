@@ -100,8 +100,8 @@ Create the repository Actions secret `CLERK_PUBLISHABLE_KEY`. The public Clerk p
 The cloud-browser takeover spike is a dark launch and does not replace the existing approval
 renderer. Leave it disabled for the normal release. To test it, deploy the isolated browser worker,
 configure the API with `BROWSER_CONNECTOR_URL`, `BROWSER_CONNECTOR_TOKEN`, and
-`LIVE_TOOL_REVIEW_ENABLED=true`, then set the GitHub Actions repository variable
-`LIVE_TOOL_REVIEW_ENABLED=true`. The live surface still appears only when a tester opens AURA with
+`LIVE_TOOL_REVIEW_ENABLED=true`. The production frontend build includes the experiment, but the
+live surface still appears only when a tester opens AURA with
 `?liveToolReview=1`; every ordinary session keeps the established preview. Turning either flag off
 restores the established review UI without a code rollback. Interactive sessions are memory-only,
 credential-isolated, and expire after ten minutes of inactivity. The standard schema preview and
