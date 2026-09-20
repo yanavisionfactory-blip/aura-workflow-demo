@@ -29,22 +29,73 @@ def test_search_result_url_unwraps_redirects_and_rejects_search_navigation():
     assert worker._search_result_url("http://example.com/result") is None
 
 
+def test_search_result_url_unwraps_bing_redirects():
+    assert worker._search_result_url(
+        "https://www.bing.com/ck/a?u="
+        "a1aHR0cHM6Ly93d3cuZWNiLmV1cm9wYS5ldS9zdGF0cy9ldXJvZnhyZWYv"
+    ) == "https://www.ecb.europa.eu/stats/eurofxref/"
+
+
+def test_search_html_parsers_extract_only_organic_public_results():
+    target = "https://www.ecb.europa.eu/stats/eurofxref/"
+    duckduckgo = (
+        '<a rel="nofollow" href="//duckduckgo.com/l/?uddg='
+        'https%3A%2F%2Fwww.ecb.europa.eu%2Fstats%2Feurofxref%2F" '
+        'class="result-link">Euro reference rates</a>'
+    )
+    brave = (
+        '<div class="snippet" data-type="web"><div class="result-content">'
+        f'<a href="{target}"><span>ECB reference rates</span></a>'
+        '</div></div>'
+    )
+    bing = (
+        '<li class="b_algo"><h2>'
+        f'<a href="{target}">Official ECB rates</a>'
+        '</h2></li>'
+    )
+    google = f'<a href="/url?q={target}"><h3>ECB daily rates</h3></a>'
+
+    assert worker._parse_search_html(duckduckgo, "duckduckgo", 5) == [
+        {"title": "Euro reference rates", "url": target, "snippet": ""}
+    ]
+    assert worker._parse_search_html(brave, "brave", 5) == [
+        {"title": "ECB reference rates", "url": target, "snippet": ""}
+    ]
+    assert worker._parse_search_html(bing, "bing", 5) == [
+        {"title": "Official ECB rates", "url": target, "snippet": ""}
+    ]
+    assert worker._parse_search_html(google, "google", 5) == [
+        {"title": "ECB daily rates", "url": target, "snippet": ""}
+    ]
+
+
 @pytest.mark.asyncio
-async def test_search_falls_back_to_lite_when_html_has_no_results(monkeypatch):
-    result = {
-        "title": "Euro foreign exchange reference rates",
-        "url": "https://www.ecb.europa.eu/stats/eurofxref/",
-        "snippet": "",
-    }
-    search_page = AsyncMock(side_effect=[[], [result]])
-    monkeypatch.setattr(worker, "_search_page", search_page)
+async def test_search_uses_independent_html_provider_failover(monkeypatch):
+    target = "https://www.ecb.europa.eu/stats/eurofxref/"
+    brave = (
+        '<div data-type="web"><a href="'
+        + target
+        + '">Official ECB rates</a></div>'
+    )
+    fetch = AsyncMock(side_effect=["", brave, "", ""])
+    monkeypatch.setattr(worker, "_fetch_search_html", fetch)
 
     response = await worker.search(worker.SearchRequest(query="ECB EUR USD GBP", limit=5))
 
-    assert response == {"query": "ECB EUR USD GBP", "results": [result]}
-    assert search_page.await_count == 2
-    assert "html.duckduckgo.com" in search_page.await_args_list[0].args[0]
-    assert "lite.duckduckgo.com" in search_page.await_args_list[1].args[0]
+    assert response["results"] == [
+        {"title": "Official ECB rates", "url": target, "snippet": ""}
+    ]
+    assert fetch.await_count == 4
+
+
+@pytest.mark.asyncio
+async def test_search_never_returns_an_empty_success(monkeypatch):
+    monkeypatch.setattr(worker, "_fetch_search_html", AsyncMock(return_value=""))
+
+    with pytest.raises(HTTPException) as exc:
+        await worker.search(worker.SearchRequest(query="missing", limit=5))
+
+    assert exc.value.status_code == 503
 
 
 @pytest.mark.asyncio

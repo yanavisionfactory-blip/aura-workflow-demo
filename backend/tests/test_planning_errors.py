@@ -270,6 +270,13 @@ def test_explicit_aura_only_request_skips_external_connector_catalogs() -> None:
     assert orchestrator._native_only_planning_request(prompt, []) is True
     assert orchestrator._native_only_planning_request("Research the ECB", ["AURA Intelligence"])
     assert orchestrator._native_only_planning_request("Research and email the result", ["gmail"]) is False
+    inventory = [
+        {"slug": "aura", "allowed_operations": ["web.search"]},
+        {"slug": "gmail", "allowed_operations": ["gmail.send"]},
+        {"slug": "canva", "allowed_operations": ["canva.presentation.create"]},
+    ]
+    assert orchestrator._planning_items_for_request(inventory, True) == [inventory[0]]
+    assert orchestrator._planning_items_for_request(inventory, False) == inventory
 
 
 def test_connector_contract_mismatch_is_replanned_before_reaching_user(monkeypatch) -> None:
