@@ -14,6 +14,7 @@ from app.orchestrator import (
     _friendly_execution_error,
     _has_confirmed_consequential_result,
     _has_empty_collection,
+    _normalize_successful_read_criticism,
     _provider_result_is_malformed,
     _required_read_arguments,
 )
@@ -198,6 +199,30 @@ def test_semantic_retry_does_not_replay_successful_read():
         "notion.page.get", mislabeled_semantic_retry
     ) is True
     assert _accept_successful_read_after_critic("gmail.send", semantic_retry) is False
+
+
+def test_semantic_read_retry_is_normalized_before_recovery_scheduling():
+    decision = _normalize_successful_read_criticism(
+        "web.search",
+        CriticDecision(
+            action="retry",
+            reasons=["Search results are not the final answer"],
+            contract_failures=["Numeric rates are not present in the snippets"],
+        ),
+    )
+
+    assert decision.action == "accept"
+    assert decision.contract_failures == []
+    assert "Numeric rates are not present" in " ".join(decision.reasons)
+
+
+def test_policy_rejected_read_is_not_normalized():
+    rejected = CriticDecision(
+        action="retry",
+        policy_violations=["Response exceeds approved scope"],
+    )
+
+    assert _normalize_successful_read_criticism("web.search", rejected) is rejected
 
 
 def test_builtin_connector_uses_current_manifest_over_stored_snapshot():

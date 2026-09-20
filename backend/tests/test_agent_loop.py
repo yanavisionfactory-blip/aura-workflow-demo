@@ -341,6 +341,100 @@ async def test_review_resume_after_write_does_not_replay_provider(runtime, monke
     assert reviews == 2
 
 
+async def test_semantic_read_retry_completes_without_verification_backoff(
+    runtime, monkeypatch
+):
+    plan = WorkflowPlan(
+        name="Read official rates",
+        interpretation="Read the public rate source",
+        steps=[
+            PlanStep(
+                key="search_rates",
+                agent="researcher",
+                tool_slug="test",
+                operation="records.read",
+                arguments={"title": "ECB rates"},
+                reason="Find the official source",
+                expected_output="Official source URL and rate snippet",
+                consequential=False,
+            )
+        ],
+    ).model_dump(mode="json")
+    digest = canonical_plan_hash(plan)
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        run.prompt = "Find official ECB rates"
+        run.plan = plan
+        run.execution_context = {
+            "__aura_preflight__": {
+                "version": 2,
+                "plan_hash": digest,
+                "status": "passed",
+                "completed_at": datetime.now(UTC).isoformat(),
+            }
+        }
+        version = await session.get(PlanVersion, "version")
+        version.plan = plan
+        version.plan_hash = digest
+        snapshot = await session.get(ApprovalSnapshot, "snapshot")
+        snapshot.plan_hash = digest
+        snapshot.permission_snapshot = {"test": ["records.read"]}
+        step = await session.get(RunStep, "step")
+        step.step_key = "search_rates"
+        step.agent = "researcher"
+        step.operation = "records.read"
+        step.arguments = {"title": "ECB rates"}
+        step.consequential = False
+        step.status = StepStatus.pending
+        tool = await session.get(ToolConnection, "tool")
+        tool.allowed_operations = ["records.read"]
+        manifest = await session.get(CapabilityManifest, "manifest")
+        manifest.manifest = {
+            "capabilities": [
+                {
+                    "name": "records.read",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"title": {"type": "string"}},
+                        "required": ["title"],
+                        "additionalProperties": False,
+                    },
+                    "output_schema": {"type": "object"},
+                    "permission_scope": "read",
+                    "requires_approval": False,
+                }
+            ]
+        }
+        await session.commit()
+
+    provider_calls = 0
+
+    async def execute(*args, **kwargs):
+        nonlocal provider_calls
+        provider_calls += 1
+        return {"results": [{"url": "https://www.ecb.europa.eu/stats/"}]}
+
+    async def semantic_retry(*args):
+        return CriticDecision(
+            action="retry",
+            contract_failures=["The numeric rates are not present in the search snippet"],
+        )
+
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", execute)
+    monkeypatch.setattr(orchestrator, "critique_step", semantic_retry)
+
+    await orchestrator._execute_run("run", "w")
+
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        step = await session.get(RunStep, "step")
+        assert run.status == RunStatus.completed
+        assert step.status == StepStatus.completed
+        assert step.output["critic"]["action"] == "accept"
+        assert step.output.get("verification_retry_at") is None
+    assert provider_calls == 1
+
+
 async def test_local_connector_validation_stays_before_provider_dispatch(runtime, monkeypatch):
     manifest = {
         "capabilities": [

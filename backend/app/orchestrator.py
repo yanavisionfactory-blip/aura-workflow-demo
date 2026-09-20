@@ -392,6 +392,34 @@ def _accept_successful_read_after_critic(operation: str, criticism: object) -> b
     )
 
 
+def _normalize_successful_read_criticism(
+    operation: str, criticism: CriticDecision
+) -> CriticDecision:
+    """Turn a semantic retry into an accepted read receipt before recovery scheduling.
+
+    The critic is allowed to say that a search result is not yet the final answer. That
+    is a reason for a downstream read or synthesis step, not for replaying a successful
+    provider read through the long verification backoff. Policy-scoped rejections keep
+    their original decision and still stop at the normal safety boundary.
+    """
+    if not _accept_successful_read_after_critic(operation, criticism):
+        return criticism
+    observations = list(
+        dict.fromkeys(
+            criticism.reasons
+            + criticism.contract_failures
+            + criticism.policy_violations
+        )
+    )
+    return CriticDecision(
+        action="accept",
+        reasons=[
+            "Provider-confirmed read preserved; downstream steps verify semantic completeness.",
+            *observations,
+        ],
+    )
+
+
 def _current_capability_manifest(slug: str, stored: dict | None) -> dict:
     """Prefer deployed built-in contracts over stale workspace snapshots."""
     return current_capability_manifest(slug, stored)
@@ -1909,6 +1937,9 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 criticism = await review_recorded_result(
                     session, run, step, snapshot, contract, step.output["provider_result"]
                 )
+                criticism = _normalize_successful_read_criticism(
+                    step.operation, criticism
+                )
                 step.output = {**step.output, "critic": criticism.model_dump(mode="json")}
                 await audit(
                     session,
@@ -3291,6 +3322,9 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 "consequential": step.consequential,
             }
             criticism = await review_recorded_result(session, run, step, snapshot, contract, result)
+            criticism = _normalize_successful_read_criticism(
+                step.operation, criticism
+            )
             await audit(
                 session,
                 workspace_id,
