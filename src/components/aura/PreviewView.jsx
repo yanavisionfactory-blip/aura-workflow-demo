@@ -12,6 +12,13 @@ const liveToolReviewEnabled = (
   && new URLSearchParams(window.location.search).get("liveToolReview") === "1"
 );
 
+const formatBytes = (value) => {
+  if (!Number.isFinite(value) || value < 0) return "";
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+};
+
 function EditableEmail({ preview, onPreviewChange, editing, artifacts = [] }) {
   return (
     <div className="rounded-xl border border-white/8 bg-card/40 overflow-hidden">
@@ -29,8 +36,8 @@ function EditableEmail({ preview, onPreviewChange, editing, artifacts = [] }) {
         <div className="flex gap-2 items-center text-xs">
           <span className="text-muted-foreground/50 w-16 flex-shrink-0">To</span>
           <input
-            value={String(preview.to || "").toLowerCase() === "me" ? "" : preview.to || ""}
-            placeholder={String(preview.to || "").toLowerCase() === "me" ? "Your connected Gmail address" : "Recipient email"}
+            value={preview.to || ""}
+            placeholder="Recipient email"
             onChange={(e) => onPreviewChange({ to: e.target.value })}
             readOnly={!editing}
             className={`flex-1 bg-transparent border-b outline-none py-1 ${editing ? "border-white/10 focus:border-primary" : "border-transparent"}`}
@@ -61,9 +68,14 @@ function EditableEmail({ preview, onPreviewChange, editing, artifacts = [] }) {
                 <Paperclip className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
                 <div className="min-w-0">
                   <p className="truncate text-xs font-medium">{artifact.name}</p>
-                  <p className="text-[10px] text-muted-foreground/60">{artifact.source || "Prepared by AURA"}</p>
+                  <p className="text-[10px] text-muted-foreground/60">
+                    {artifact.source || "Prepared by AURA"}
+                    {artifact.size != null ? ` · ${formatBytes(artifact.size)}` : ""}
+                  </p>
                 </div>
-                <span className="ml-auto text-[10px] text-emerald-300/80">Attached after approval</span>
+                <span className={`ml-auto text-[10px] ${artifact.verified ? "text-emerald-300/80" : "text-amber-200/80"}`}>
+                  {artifact.verified ? "Verified PDF ready" : "Preparing attachment"}
+                </span>
               </div>
             ))}
           </div>
@@ -345,6 +357,7 @@ function SchemaArgumentsEditor({ contract, args, editing, onArgumentsChange, onF
 
 function EditablePresentation({ args, contract, editing, onArgumentsChange, onFieldValidity }) {
   const phases = Array.isArray(args.phases) ? args.phases : [];
+  const slideLayout = args.layout === "slides";
   const phaseLimit = contract.fields?.find((field) => field.key === "phases")?.max_items || 4;
   const updatePhase = (index, patch) => {
     const next = phases.map((phase, phaseIndex) => phaseIndex === index ? { ...phase, ...patch } : phase);
@@ -356,10 +369,12 @@ function EditablePresentation({ args, contract, editing, onArgumentsChange, onFi
       <div className="overflow-hidden rounded-xl border border-white/8 bg-[#101c2c] shadow-inner">
         <div className="flex items-center gap-2 border-b border-white/8 px-4 py-2.5">
           <Presentation className="h-3.5 w-3.5 text-cyan-300" />
-          <span className="text-xs font-medium">Live presentation preview</span>
-          <span className="ml-auto text-[10px] text-muted-foreground">1 slide</span>
+          <span className="text-xs font-medium">Presentation content preview</span>
+          <span className="ml-auto text-[10px] text-muted-foreground">
+            {slideLayout ? `${phases.length} ${phases.length === 1 ? "slide" : "slides"}` : "1 slide"}
+          </span>
         </div>
-        <div className="aspect-video p-5 sm:p-7">
+        <div className={slideLayout ? "space-y-4 p-4 sm:p-5" : "aspect-video p-5 sm:p-7"}>
           {editing ? (
             <input
               aria-label="Presentation title"
@@ -378,9 +393,22 @@ function EditablePresentation({ args, contract, editing, onArgumentsChange, onFi
               className="mt-1 w-full border-b border-white/10 bg-transparent pb-1 text-[10px] text-slate-300 outline-none focus:border-cyan-300 sm:text-xs"
             />
           ) : <p className="mt-1 min-h-5 text-[10px] text-slate-300 sm:text-xs">{args.subtitle || ""}</p>}
-          <div className="mt-6 grid gap-3" style={{ gridTemplateColumns: `repeat(${Math.max(1, phases.length)}, minmax(0, 1fr))` }}>
+          <div
+            className={slideLayout ? "mt-4 space-y-3" : "mt-6 grid gap-3"}
+            style={slideLayout ? undefined : { gridTemplateColumns: `repeat(${Math.max(1, phases.length)}, minmax(0, 1fr))` }}
+          >
             {(phases.length ? phases : [{ period: "", title: "Add a phase", items: [] }]).map((phase, index) => (
-              <div key={index} className="min-w-0">
+              <div
+                key={index}
+                className={slideLayout
+                  ? "relative aspect-video min-w-0 rounded-lg border border-white/8 bg-[#0b1625] p-5 shadow-sm sm:p-7"
+                  : "min-w-0"}
+              >
+                {slideLayout && (
+                  <p className="mb-4 text-[9px] font-semibold text-slate-400 sm:text-[11px]">
+                    {args.title || "Untitled presentation"}
+                  </p>
+                )}
                 {editing ? (
                   <>
                     <input aria-label={`Phase ${index + 1} period`} value={phase.period || ""} onChange={(event) => updatePhase(index, { period: event.target.value })} placeholder="Date" className="w-full border-b border-white/10 bg-transparent text-[9px] font-semibold uppercase tracking-wide text-emerald-300 outline-none focus:border-emerald-300" />
@@ -392,9 +420,15 @@ function EditablePresentation({ args, contract, editing, onArgumentsChange, onFi
                     <p className="text-[9px] font-semibold uppercase tracking-wide text-emerald-300">{phase.period}</p>
                     <p className="mt-1 truncate text-[10px] font-semibold text-white sm:text-xs">{phase.title}</p>
                     <div className="mt-2 space-y-1">
-                      {(phase.items || []).slice(0, 5).map((item, itemIndex) => <p key={itemIndex} className="truncate text-[8px] text-slate-300 sm:text-[10px]">• {item}</p>)}
+                      {(phase.items || []).slice(0, 5).map((item, itemIndex) => <p key={itemIndex} className={`${slideLayout ? "" : "truncate"} text-[8px] text-slate-300 sm:text-[10px]`}>• {item}</p>)}
                     </div>
                   </>
+                )}
+                {slideLayout && (
+                  <div className="absolute inset-x-5 bottom-4 flex items-end gap-3 text-[8px] text-slate-500 sm:inset-x-7 sm:text-[9px]">
+                    <span className="min-w-0 flex-1 truncate">{args.subtitle || ""}</span>
+                    <span className="font-semibold text-cyan-300">{index + 1} / {phases.length}</span>
+                  </div>
                 )}
               </div>
             ))}
@@ -613,8 +647,7 @@ export default function PreviewView({ preview, steps, onApprove, onBack, error =
     .filter(({ step }) => step.riskLevel === "modify");
   const backgroundSteps = editSteps
     .map((step, index) => ({ step, index }))
-    .filter(({ step }) => step.riskLevel !== "modify");
-  const sourceTools = [...new Set(editSteps.filter((step) => step.riskLevel !== "modify").map((step) => step.tool))];
+    .filter(({ step }) => step.riskLevel !== "modify" && !step.approvalPending);
   const destinationTools = [...new Set(reviewSteps.map(({ step }) => step.tool))];
   const contractErrors = reviewSteps.flatMap(({ step, index }) => (
     step.reviewContract
@@ -623,9 +656,7 @@ export default function PreviewView({ preview, steps, onApprove, onBack, error =
       : []
   ));
   const approvalBlocked = invalidFields.size > 0 || contractErrors.length > 0;
-  const reviewSummary = sourceTools.length
-    ? `AURA will use ${sourceTools.join(" and ")} to prepare ${reviewSteps.length} reviewed ${destinationTools.join(" / ")} ${reviewSteps.length === 1 ? "change" : "changes"}.`
-    : `${reviewSteps.length} ${reviewSteps.length === 1 ? "change is" : "changes are"} ready for your review.`;
+  const reviewSummary = `${reviewSteps.length} resolved ${destinationTools.join(" / ")} ${reviewSteps.length === 1 ? "change is" : "changes are"} ready for your review.`;
 
   return (
     <motion.div
@@ -641,8 +672,8 @@ export default function PreviewView({ preview, steps, onApprove, onBack, error =
           <Eye className="w-5 h-5 text-accent" />
         </div>
         <div>
-          <h2 className="text-lg font-semibold">Review before running</h2>
-          <p className="text-xs text-muted-foreground">Check what AURA is about to create or change. You can edit anything available before approving.</p>
+          <h2 className="text-lg font-semibold">Review before AURA continues</h2>
+          <p className="text-xs text-muted-foreground">Check the resolved content AURA is about to create or send. You can edit available fields before approving.</p>
         </div>
       </div>
 
@@ -717,7 +748,7 @@ export default function PreviewView({ preview, steps, onApprove, onBack, error =
             className="bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white border-0 gap-1.5"
           >
             <Play className="w-3.5 h-3.5" />
-            {approvalBlocked ? "Complete required values" : "Approve & run"}
+            {approvalBlocked ? "Waiting for resolved values" : "Approve & continue"}
           </Button>
         </motion.div>
       </div>

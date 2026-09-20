@@ -86,8 +86,8 @@ def test_authorization_error_is_replaced_with_connection_guidance():
     ) == "This app connection needs your attention before AURA can continue."
 
 
-def test_plan_approval_runs_smoothly_by_default_and_keeps_staged_review_opt_in():
-    assert PlanApproval(approved=True).approve_consequential is True
+def test_plan_approval_prepares_exact_payloads_before_consequential_review():
+    assert PlanApproval(approved=True).approve_consequential is False
     assert PlanApproval(approved=True).allow_autonomous_read_repairs is True
     assert (
         PlanApproval(approved=True, approve_consequential=False).approve_consequential
@@ -123,7 +123,7 @@ def test_pdf_export_inherits_reviewed_presentation_approval_only_when_structural
         }
     )
     assert is_governed_derivative_step(unsafe_plan, unbounded) is False
-    assert "Step 3 must be marked consequential" in deterministic_plan_fixes(
+    assert "Step 4 must be marked consequential" in deterministic_plan_fixes(
         unsafe_plan, inventory, set()
     )
 

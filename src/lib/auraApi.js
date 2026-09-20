@@ -613,7 +613,7 @@ export async function getResumablePythonRun() {
   return latest || null;
 }
 
-export async function approvePythonPlan(runId, editedSteps = null, approveConsequential = true) {
+export async function approvePythonPlan(runId, editedSteps = null, approveConsequential = false) {
   await ensureWorkspace();
   return request(`/v1/runs/${runId}/approve-plan`, { method: "POST", body: JSON.stringify({ approved: true, edited_steps: editedSteps, approve_consequential: approveConsequential }) });
 }

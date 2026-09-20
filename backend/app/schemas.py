@@ -743,7 +743,7 @@ class PlanApproval(BaseModel):
     # a reviewed plan can run without a second, surprise approval interruption.
     # Callers that explicitly want the richer staged editor can still opt out and
     # receive the prepared action preview before the provider write.
-    approve_consequential: bool = True
+    approve_consequential: bool = False
     # The approval snapshot already grants operation-level read permissions.  This
     # flag lets AURA repair a failed read inside that exact permission envelope;
     # writes, new tools, new operations and new literal resource targets still need

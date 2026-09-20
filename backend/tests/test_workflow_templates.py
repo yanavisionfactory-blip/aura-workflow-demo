@@ -118,7 +118,11 @@ def weather_inventory():
             "connected": True,
             "allowed_operations": ["canva.presentation.create", "canva.export.create"],
         },
-        {"slug": "google", "connected": True, "allowed_operations": ["gmail.send"]},
+        {
+            "slug": "google",
+            "connected": True,
+            "allowed_operations": ["google.identity.get", "gmail.send"],
+        },
     ]
 
 
@@ -231,23 +235,24 @@ def test_weather_presentation_template_preserves_explicit_gmail_delivery():
     assert plan is not None
     assert [step.operation for step in plan.steps] == [
         "weather.forecast",
+        "google.identity.get",
         "canva.presentation.create",
         "canva.export.create",
         "gmail.send",
     ]
-    assert plan.steps[2].arguments == {
+    assert plan.steps[3].arguments == {
         "design_id": "{{steps.create_presentation.job.id}}",
         "format": "pdf",
     }
-    assert plan.steps[3].arguments["to"] == "me"
-    assert plan.steps[3].arguments["attachments"] == [{
+    assert plan.steps[4].arguments["to"] == "{{steps.recipient_identity.email}}"
+    assert plan.steps[4].arguments["attachments"] == [{
         "filename": "Munich weather.pdf",
         "url": "{{steps.export_presentation.job.urls[0]}}",
     }]
-    assert plan.steps[3].depends_on == ["export_presentation"]
-    assert plan.steps[1].approval_group == "weather_presentation_delivery"
-    assert plan.steps[2].consequential is False
-    assert plan.steps[3].approval_group == "weather_presentation_delivery"
+    assert plan.steps[4].depends_on == ["export_presentation", "recipient_identity"]
+    assert plan.steps[2].approval_group == "weather_presentation_delivery"
+    assert plan.steps[3].consequential is False
+    assert plan.steps[4].approval_group == "weather_presentation_delivery"
     assert "email it with Gmail" in plan.interpretation
     assert plan.result_contract.primary_step_key == "email_presentation"
     assert plan.result_contract.artifact_step_key == "create_presentation"
@@ -338,12 +343,13 @@ def test_compiled_weather_presentation_keeps_requested_email_delivery():
 
     assert [step.operation for step in plan.steps] == [
         "weather.forecast",
+        "google.identity.get",
         "canva.presentation.create",
         "canva.export.create",
         "gmail.send",
     ]
     assert plan.planning_artifacts["compiled_contracts"]
-    assert plan.steps[2].consequential is False
+    assert plan.steps[3].consequential is False
 
 
 def test_exact_munich_three_day_request_compiles_immediately_and_cleanly():
@@ -374,11 +380,12 @@ def test_exact_munich_three_day_request_compiles_immediately_and_cleanly():
     )
     assert [step.operation for step in plan.steps] == [
         "weather.forecast",
+        "google.identity.get",
         "canva.presentation.create",
         "canva.export.create",
         "gmail.send",
     ]
-    weather, presentation, _, email = plan.steps
+    weather, identity, presentation, _, email = plan.steps
     assert weather.arguments == {
         "location": "Munich",
         "date": "today",
@@ -390,7 +397,8 @@ def test_exact_munich_three_day_request_compiles_immediately_and_cleanly():
     assert len(presentation.arguments["phases"]) == 3
     assert "updated_at" in presentation.arguments["subtitle"]
     assert "source" in presentation.arguments["subtitle"]
-    assert email.arguments["to"] == "me"
+    assert identity.arguments == {}
+    assert email.arguments["to"] == "{{steps.recipient_identity.email}}"
     assert email.arguments["attachments"][0]["filename"] == "Munich weather.pdf"
 
 
@@ -422,7 +430,29 @@ def test_future_gmail_review_keeps_transport_reference_server_side():
         {"steps": {"weather": {"summary": "Clear"}}},
     )
 
-    assert prepared == arguments
+    assert prepared is None
+    assert orchestrator._future_group_review_arguments(
+        "gmail.send",
+        {
+            **arguments,
+            "to": "{{steps.recipient_identity.email}}",
+        },
+        {
+            "steps": {
+                "recipient_identity": {"email": "owner@example.com"},
+                "export_presentation": {
+                    "job": {"urls": ["https://export-download.canva.com/ready.pdf"]}
+                },
+            }
+        },
+    ) == {
+        **arguments,
+        "to": "owner@example.com",
+        "attachments": [{
+            "filename": "Munich weather.pdf",
+            "url": "https://export-download.canva.com/ready.pdf",
+        }],
+    }
     assert orchestrator._future_group_review_arguments(
         "gmail.send",
         {**arguments, "subject": "{{steps.missing.subject}}"},

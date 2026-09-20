@@ -188,6 +188,10 @@ const validateSchemaValue = (value, schema, path, errors, required = false) => {
     return;
   }
   if (value === "" && !(schema.minLength > 0)) return;
+  if (typeof value === "string" && /\{\{[^}]+\}\}/.test(value)) {
+    errors.push({ path, message: "AURA is still resolving this value from completed preparation steps." });
+    return;
+  }
   const type = schema.type;
   if (type === "string") {
     if (typeof value !== "string") errors.push({ path, message: "Enter text." });
