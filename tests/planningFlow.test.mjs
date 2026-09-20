@@ -83,7 +83,7 @@ test("unfinished durable planning remains in background wait state", () => {
   }
 });
 
-test("the UI renders a language plan while durable compilation is still running", () => {
+test("the UI publishes one complete durable plan without provisional step flicker", () => {
   const source = readFileSync(
     new URL("../src/pages/Demo.jsx", import.meta.url),
     "utf8",
@@ -93,18 +93,20 @@ test("the UI renders a language plan while durable compilation is still running"
     "utf8",
   );
 
-  assert.equal(source.includes("instantLanguagePlan(confirmedIntent"), true);
-  assert.equal(source.includes("languageDraftPrompt(confirmedIntent"), true);
-  assert.equal(source.includes("Executable planning unavailable; the language plan remains visible"), true);
+  assert.equal(source.includes("instantLanguagePlan(confirmedIntent"), false);
+  assert.equal(source.includes("languageDraftPrompt(confirmedIntent"), false);
+  assert.equal(source.includes("queuedPlanStartRef"), false);
+  assert.equal(source.includes("Starting now; AURA is finishing technical preparation backstage"), false);
+  assert.equal(source.includes("setPlan(null)"), true);
+  assert.equal(source.includes("planningRequestGenerationRef.current !== planningRequestGeneration"), true);
+  assert.equal(source.includes("AURA is preparing the complete plan…"), true);
+  assert.equal(source.includes("It will appear once, ready to review."), true);
+  assert.equal(source.includes("AURA could not build the authoritative workflow plan"), true);
   assert.equal(planViewSource.includes("validating exact actions backstage"), false);
   assert.equal(planViewSource.includes("validatingExecution || missingTools.length"), false);
-  assert.equal(source.includes("queuedPlanStartRef.current = { name, autoApprove }"), true);
-  assert.equal(source.includes("requiresActionPreview(compiledPlan.steps, queuedStart.autoApprove)"), true);
   assert.equal(source.includes("PLANNING_WAIT_TIMEOUT_MS = 30_000"), true);
   assert.equal(source.includes('.replace(/^i\\s+will\\s+/i, "")'), true);
-  assert.equal(source.includes("iWill: firstPersonStepCopy(step.iWill || step.reason)"), true);
   assert.equal(planViewSource.includes('|| plan.compileState === "blocked"'), false);
-  assert.equal(source.includes('if (plan.compileState === "blocked") {'), true);
   assert.equal(source.includes("handleRetryPlanning();"), true);
 });
 

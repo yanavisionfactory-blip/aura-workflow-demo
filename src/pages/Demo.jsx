@@ -42,12 +42,10 @@ import {
   approvalStartFailure,
   planningConnectionRequirements,
   planningDisposition,
-  promptConnectionRequirements,
   shouldStartFreshPlanningRun,
 } from "@/lib/planningFlow.mjs";
 import { hasDurablePlan, planningRequestPrompt } from "@/lib/runtimePlan.mjs";
 import { weatherStepTitle } from "@/lib/planPresentation.mjs";
-import { instantLanguagePlan, languageDraftPrompt } from "@/lib/languagePlan.mjs";
 import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
 import {
   editedArgumentsForStep,
@@ -384,10 +382,8 @@ export default function Demo() {
   const pythonRunIdRef = useRef(null);
   const pythonPlanRef = useRef(null);
   const pythonPollGenerationRef = useRef(0);
-  const languageDraftGenerationRef = useRef(0);
+  const planningRequestGenerationRef = useRef(0);
   const handleConfirmRef = useRef(null);
-  const startPythonExecutionRef = useRef(null);
-  const queuedPlanStartRef = useRef(null);
   const preparedActionPreviewRef = useRef(false);
   const runRequestKeyRef = useRef(null);
   const lastPlanningIntentRef = useRef("");
@@ -441,11 +437,10 @@ export default function Demo() {
   const reset = useCallback(() => {
     clearTimeouts();
     pythonPollGenerationRef.current += 1;
-    languageDraftGenerationRef.current += 1;
+    planningRequestGenerationRef.current += 1;
     runRequestKeyRef.current = null;
     lastPlanningIntentRef.current = "";
     historySavePromiseRef.current = null;
-    queuedPlanStartRef.current = null;
     preparedActionPreviewRef.current = false;
     pendingMock.current = null;
     resolvedErrorRef.current = false;
@@ -480,7 +475,6 @@ export default function Demo() {
     else if (phase === "plan") setPhase("confirm");
     else if (phase === "preview") setPhase("plan");
     else if (phase === "executing" || phase === "error") {
-      queuedPlanStartRef.current = null;
       setPhase("plan");
     }
     else if (phase === "results") reset();
@@ -556,52 +550,13 @@ Write ONE clear, conversational sentence restating what they want — but offer 
       setInterpretation(editedInterpretation);
       if (!allowLegacyPlanner) {
         const confirmedIntent = editedInterpretation.trim() || originalPromptRef.current;
-        const explicitRequirements = promptConnectionRequirements(
-          confirmedIntent,
-          CATALOG.map((tool) => ({ ...tool, slug: tool.provider })),
-          getAllConnections(),
-        );
-        const immediatePlan = {
-          ...instantLanguagePlan(confirmedIntent, CATALOG, userSelectedToolsRef.current),
-          connectionRequirements: explicitRequirements,
-        };
-        const languageDraftGeneration = ++languageDraftGenerationRef.current;
-
-        // The readable plan is independent from connector readiness. Show a
-        // useful language draft now; refine and compile it in parallel.
-        setPlan(immediatePlan);
-        setPlanLoading(false);
+        const planningRequestGeneration = ++planningRequestGenerationRef.current;
+        // Publish exactly one authoritative plan. Keeping the loading state
+        // mounted until durable compilation finishes prevents the UI from
+        // showing provisional steps and replacing them moments later.
+        setPlan(null);
+        setPlanLoading(true);
         setPhase("plan");
-
-        aura.integrations.Core
-          .InvokeLLM({
-            prompt: languageDraftPrompt(confirmedIntent, userSelectedToolsRef.current),
-            response_json_schema: PLAN_SCHEMA,
-          })
-          .then((draft) => {
-            if (
-              languageDraftGenerationRef.current !== languageDraftGeneration
-              || !Array.isArray(draft?.steps)
-              || draft.steps.length === 0
-            ) return;
-            setPlan((current) => current?.provisional ? {
-              ...draft,
-              steps: draft.steps.map((step) => ({
-                ...step,
-                iWill: firstPersonStepCopy(step.iWill || step.reason),
-              })),
-              interpretation: draft.interpretation || confirmedIntent,
-              estimatedTime: "Plan ready — validating executable details backstage",
-              connectionRequirements: current.connectionRequirements || explicitRequirements,
-              provisional: true,
-              compileState: current.compileState || "validating",
-              compileError: current.compileError,
-            } : current);
-          })
-          .catch(() => {
-            // The immediate language draft is already visible. Exact execution
-            // compilation remains authoritative and continues independently.
-          });
 
         return (async () => {
           try {
@@ -622,6 +577,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
                 forgetActivePythonRun(previousRunId);
               }
             }
+            if (planningRequestGenerationRef.current !== planningRequestGeneration) return;
             lastPlanningIntentRef.current = confirmedIntent;
             const planningPrompt = planningRequestPrompt(confirmedIntent, revisionInstruction);
             const planningDeadline = Date.now() + PLANNING_WAIT_TIMEOUT_MS;
@@ -637,6 +593,11 @@ Write ONE clear, conversational sentence restating what they want — but offer 
                 size,
               })),
             });
+            if (planningRequestGenerationRef.current !== planningRequestGeneration) {
+              await cancelPythonRun(created.id).catch(() => {});
+              forgetActivePythonRun(created.id);
+              return;
+            }
             pythonRunIdRef.current = created.id;
             const generation = ++pythonPollGenerationRef.current;
             let run;
@@ -650,23 +611,16 @@ Write ONE clear, conversational sentence restating what they want — but offer 
                 PLANNING_TRANSIENT_FAILURE_LIMIT,
               );
               if (!run) return;
+              if (planningRequestGenerationRef.current !== planningRequestGeneration) return;
               const disposition = planningDisposition(run);
               if (disposition === "review") break;
               if (disposition === "connection") {
-                queuedPlanStartRef.current = null;
                 setPhase("plan");
                 pythonPlanRef.current = run.plan || null;
                 const connectionPlan = uiConnectionPlanFromRun(run, editedInterpretation);
-                setPlan((current) => connectionPlan.steps.length ? {
+                setPlan({
                   ...connectionPlan,
                   provisional: false,
-                  compileState: "waiting_for_connection",
-                } : {
-                  ...(current || immediatePlan),
-                  ...connectionPlan,
-                  workflowName: connectionPlan.workflowName || current?.workflowName || immediatePlan.workflowName,
-                  steps: current?.steps?.length ? current.steps : immediatePlan.steps,
-                  provisional: true,
                   compileState: "waiting_for_connection",
                 });
                 return;
@@ -683,40 +637,27 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               compileState: "ready",
             };
             setPlan(compiledPlan);
-            const queuedStart = queuedPlanStartRef.current;
-            if (queuedStart) {
-              queuedPlanStartRef.current = null;
-              approvedStepsRef.current = compiledPlan.steps;
-              setApprovedSteps(compiledPlan.steps);
-              setWorkflowName(queuedStart.name || compiledPlan.workflowName || "");
-              if (requiresActionPreview(compiledPlan.steps, queuedStart.autoApprove)) {
-                preparedActionPreviewRef.current = false;
-                setPhase("preview");
-                return;
-              }
-              startPythonExecutionRef.current?.();
-            }
           } catch (error) {
-            console.warn("Executable planning unavailable; the language plan remains visible", error);
-            const queuedStart = queuedPlanStartRef.current;
-            queuedPlanStartRef.current = null;
-            if (queuedStart) setPhase("plan");
+            if (planningRequestGenerationRef.current !== planningRequestGeneration) return;
+            console.warn("AURA could not build the authoritative workflow plan", error);
             if (pythonRunIdRef.current) forgetActivePythonRun(pythonRunIdRef.current);
             pythonRunIdRef.current = null;
             pythonPlanRef.current = null;
             runRequestKeyRef.current = null;
-            setPlan((current) => ({
-              ...(current || immediatePlan),
-              estimatedTime: error?.message?.includes("within 30 seconds")
-                ? "Plan ready — preparation timed out"
-                : "Plan ready — one execution detail needs repair",
-              connectionRequirements: explicitRequirements,
-              provisional: true,
+            setPlan({
+              workflowName: "",
+              interpretation: confirmedIntent,
+              estimatedTime: "Planning stopped safely",
+              steps: [],
+              error: error?.message || "AURA couldn't prepare this workflow quickly enough.",
+              provisional: false,
               compileState: "blocked",
-              compileError: error?.message || "AURA couldn't prepare this workflow quickly enough.",
-            }));
+              compileError: "",
+            });
           } finally {
-            setPlanLoading(false);
+            if (planningRequestGenerationRef.current === planningRequestGeneration) {
+              setPlanLoading(false);
+            }
           }
         })();
       }
@@ -834,6 +775,7 @@ Rules:
     const connections = Array.isArray(recoveries) ? recoveries : [];
     const connectionIds = [...new Set(connections.map((item) => item?.connectionId).filter(Boolean))];
     if (!runId || connectionIds.length === 0) return handleRetryPlanning();
+    setPlanLoading(true);
     setPlan((current) => current ? {
       ...current,
       provisional: true,
@@ -990,26 +932,6 @@ Rules:
       return;
     }
     if (!hasDurablePlan(pythonRunIdRef.current, pythonPlanRef.current)) {
-      if (plan?.provisional) {
-        queuedPlanStartRef.current = { name, autoApprove };
-        if (plan.compileState === "blocked") {
-          handleRetryPlanning();
-          return;
-        }
-        setPhase("executing");
-        setStartTime(Date.now());
-        setCurrentStepIdx(0);
-        setExecSteps(steps.map((step, index) => ({
-          tool: step.tool,
-          action: step.title || step.action,
-          riskLevel: step.riskLevel,
-          status: index === 0 ? "running" : "pending",
-          liveOutput: index === 0
-            ? "→ Starting now; AURA is finishing technical preparation backstage"
-            : "",
-        })));
-        return;
-      }
       keepPlanInReview();
       return;
     }
@@ -1020,7 +942,7 @@ Rules:
       return;
     }
     startPythonExecution();
-  }, [editRunMode, autoApprove, keepPlanInReview, handleRetryPlanning, plan]);
+  }, [editRunMode, autoApprove, keepPlanInReview]);
 
   const handlePreviewApprove = useCallback((editedSteps) => {
     setPreviewError("");
@@ -1328,8 +1250,6 @@ Rules:
       await recoverRunStatus();
     }
   };
-
-  startPythonExecutionRef.current = startPythonExecution;
 
   const runFrom = (startIdx) => {
     const template = execTemplateRef.current;
@@ -1682,7 +1602,10 @@ Generate a results summary in plain, human-friendly language (not technical).
                 {planLoading ? (
                   <div className="flex flex-col items-center gap-4">
                     <ThinkingAnimation />
-                    <p className="text-sm text-muted-foreground">AURA is building your plan…</p>
+                    <div className="text-center">
+                      <p className="text-sm text-muted-foreground">AURA is preparing the complete plan…</p>
+                      <p className="mt-1 text-xs text-muted-foreground/70">It will appear once, ready to review.</p>
+                    </div>
                   </div>
                 ) : plan ? (
                   <PlanView
