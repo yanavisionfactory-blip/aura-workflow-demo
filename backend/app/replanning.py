@@ -348,6 +348,32 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
                     },
                 )
             )
+            approved_step = run.plan["steps"][step.position]
+            if not consequential_repair and (
+                (proposal.tool_slug, proposal.operation)
+                == (approved_step["tool_slug"], approved_step["operation"])
+                and proposal.arguments == approved_step.get("arguments", {})
+            ):
+                # A repair that selects the same provider, operation and
+                # arguments cannot change the outcome. Retrying it used to
+                # reset the read-attempt cycle and could leave the UI in
+                # "resolving" indefinitely.
+                session.add(
+                    AuditEvent(
+                        workspace_id=workspace_id,
+                        run_id=run_id,
+                        actor="repair-planner",
+                        event_type="run.replan_no_change",
+                        payload={
+                            "step_id": step.id,
+                            "attempt": count + 1,
+                            "tool_slug": proposal.tool_slug,
+                            "operation": proposal.operation,
+                        },
+                    )
+                )
+                await session.commit()
+                return False
             plan = derive_repaired_plan(
                 run.plan,
                 step.position,

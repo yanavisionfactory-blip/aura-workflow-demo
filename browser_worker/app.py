@@ -8,6 +8,7 @@ addresses so pages cannot pivot into Railway or other private infrastructure.
 from __future__ import annotations
 
 import asyncio
+import base64
 import ipaddress
 import json
 import math
@@ -17,16 +18,20 @@ import socket
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
+from html.parser import HTMLParser
 from statistics import mean
+from typing import ClassVar
+from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from playwright.async_api import Page, Route, async_playwright
 from pydantic import BaseModel, Field, HttpUrl
 
-
 WORKER_TOKEN = os.environ.get("WORKER_TOKEN", "")
 MAX_PAGE_TEXT = 60_000
+MAX_SEARCH_HTML_BYTES = 750_000
 browser_slots = asyncio.Semaphore(int(os.environ.get("BROWSER_CONCURRENCY", "2")))
 
 app = FastAPI(title="AURA Browser Worker", version="1.0")
@@ -748,7 +753,7 @@ async def execute(payload: ExecuteRequest) -> dict:
 
 
 def _search_result_url(href: str) -> str | None:
-    """Return the public target behind a DuckDuckGo result redirect."""
+    """Return the public target behind a supported search-result redirect."""
     parsed = urlparse(href)
     redirected = parse_qs(parsed.query).get("uddg", [])
     if redirected and (
@@ -756,11 +761,181 @@ def _search_result_url(href: str) -> str | None:
     ):
         href = redirected[0]
         parsed = urlparse(href)
+    if (
+        (not parsed.hostname and parsed.path == "/url")
+        or (parsed.hostname and parsed.hostname.endswith("google.com") and parsed.path == "/url")
+    ):
+        target = parse_qs(parsed.query).get("q", [""])[0]
+        if target:
+            href = target
+            parsed = urlparse(href)
+    if parsed.hostname and parsed.hostname.endswith("bing.com"):
+        encoded = parse_qs(parsed.query).get("u", [""])[0]
+        if encoded.startswith("a1"):
+            try:
+                raw = encoded[2:]
+                raw += "=" * (-len(raw) % 4)
+                href = base64.urlsafe_b64decode(raw).decode("utf-8")
+                parsed = urlparse(href)
+            except (ValueError, UnicodeDecodeError):
+                return None
     if parsed.scheme != "https" or not parsed.hostname:
         return None
-    if parsed.hostname.endswith("duckduckgo.com"):
+    if any(
+        parsed.hostname == host or parsed.hostname.endswith(f".{host}")
+        for host in ("duckduckgo.com", "bing.com", "brave.com", "google.com")
+    ):
         return None
     return href
+
+
+class _SafeSearchRedirects(HTTPRedirectHandler):
+    """Follow only HTTPS redirects that stay on the fixed search-provider hosts."""
+
+    _ALLOWED_HOSTS: ClassVar[frozenset[str]] = frozenset({
+        "duckduckgo.com",
+        "html.duckduckgo.com",
+        "lite.duckduckgo.com",
+        "search.brave.com",
+        "www.bing.com",
+        "google.com",
+        "www.google.com",
+    })
+
+    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+        parsed = urlparse(new_url)
+        if parsed.scheme != "https" or parsed.hostname not in self._ALLOWED_HOSTS:
+            return None
+        return super().redirect_request(
+            request, file_pointer, code, message, headers, new_url
+        )
+
+
+def _fetch_search_html_sync(search_url: str) -> str:
+    request = Request(
+        search_url,
+        headers={
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "en-US,en;q=0.8",
+            "User-Agent": (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/128.0 Safari/537.36"
+            ),
+        },
+    )
+    with build_opener(_SafeSearchRedirects()).open(request, timeout=10) as response:
+        if getattr(response, "status", 200) != 200:
+            return ""
+        body = response.read(MAX_SEARCH_HTML_BYTES + 1)[:MAX_SEARCH_HTML_BYTES]
+        charset = response.headers.get_content_charset() or "utf-8"
+    return body.decode(charset, "replace")
+
+
+async def _fetch_search_html(search_url: str) -> str:
+    # Every destination is constructed internally, but retain the public-network
+    # check so search can never become an SSRF path if providers are changed later.
+    await public_https_url(search_url)
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_fetch_search_html_sync, search_url),
+            timeout=12,
+        )
+    except (HTTPError, URLError, TimeoutError, UnicodeError):
+        return ""
+
+
+class _SearchHTMLParser(HTMLParser):
+    """Extract only organic result anchors from supported public search layouts."""
+
+    _VOID_TAGS: ClassVar[frozenset[str]] = frozenset({
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
+    })
+
+    def __init__(self, provider: str, limit: int):
+        super().__init__(convert_charrefs=True)
+        self.provider = provider
+        self.limit = limit
+        self.results: list[dict] = []
+        self._seen: set[str] = set()
+        self._section_depth = 0
+        self._heading_depth = 0
+        self._anchor: dict | None = None
+
+    @staticmethod
+    def _classes(attributes: dict[str, str]) -> set[str]:
+        return set(attributes.get("class", "").split())
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = {key: value or "" for key, value in attrs}
+        classes = self._classes(attributes)
+        is_void = tag in self._VOID_TAGS
+
+        if self._section_depth and not is_void:
+            self._section_depth += 1
+        elif (
+            self.provider == "brave"
+            and tag == "div"
+            and attributes.get("data-type") == "web"
+        ) or (self.provider == "bing" and tag == "li" and "b_algo" in classes):
+            self._section_depth = 1
+
+        if self._heading_depth and not is_void:
+            self._heading_depth += 1
+        elif self.provider == "bing" and self._section_depth and tag == "h2":
+            self._heading_depth = 1
+
+        candidate = bool(
+            tag == "a"
+            and attributes.get("href")
+            and (
+                (self.provider == "duckduckgo" and "result-link" in classes)
+                or (self.provider == "brave" and self._section_depth)
+                or (self.provider == "bing" and self._heading_depth)
+                or (
+                    self.provider == "google"
+                    and _search_result_url(attributes.get("href", "")) is not None
+                )
+            )
+        )
+        if candidate and self._anchor is None and len(self.results) < self.limit:
+            self._anchor = {"href": attributes["href"], "text": []}
+
+    def handle_data(self, data: str) -> None:
+        if self._anchor is not None:
+            self._anchor["text"].append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a" and self._anchor is not None:
+            href = _search_result_url(str(self._anchor["href"]))
+            title = " ".join("".join(self._anchor["text"]).split())[:300]
+            if href and title and href not in self._seen:
+                self.results.append({"title": title, "url": href, "snippet": ""})
+                self._seen.add(href)
+            self._anchor = None
+        if self._heading_depth:
+            self._heading_depth -= 1
+        if self._section_depth:
+            self._section_depth -= 1
+
+
+def _parse_search_html(html: str, provider: str, limit: int) -> list[dict]:
+    parser = _SearchHTMLParser(provider, limit)
+    parser.feed(html)
+    parser.close()
+    return parser.results[:limit]
 
 
 async def _search_page(search_url: str, limit: int) -> list[dict]:
@@ -818,15 +993,23 @@ async def _search_page(search_url: str, limit: int) -> list[dict]:
 @app.post("/v1/search", dependencies=[Depends(require_worker_token)])
 async def search(payload: SearchRequest) -> dict:
     encoded = quote_plus(payload.query)
-    search_urls = (
-        f"https://html.duckduckgo.com/html/?q={encoded}",
-        f"https://lite.duckduckgo.com/lite/?q={encoded}",
+    # Direct, bounded HTML retrieval is faster and less likely to receive a
+    # headless-browser challenge. Providers are independent so an outage or
+    # markup change at one engine does not stop a workflow.
+    search_sources = (
+        ("duckduckgo", f"https://lite.duckduckgo.com/lite/?q={encoded}"),
+        ("brave", f"https://search.brave.com/search?q={encoded}&source=web"),
+        ("google", f"https://www.google.com/search?q={encoded}&num={payload.limit}&hl=en"),
+        ("bing", f"https://www.bing.com/search?q={encoded}&count={payload.limit}"),
     )
-    for search_url in search_urls:
-        results = await _search_page(search_url, payload.limit)
+    pages = await asyncio.gather(
+        *(_fetch_search_html(search_url) for _, search_url in search_sources)
+    )
+    for (provider, _), html in zip(search_sources, pages, strict=True):
+        results = _parse_search_html(html, provider, payload.limit)
         if results:
             return {"query": payload.query, "results": results}
-    return {"query": payload.query, "results": []}
+    raise HTTPException(503, "Public search providers returned no usable results")
 
 
 @app.post("/v1/tiktok/screen", dependencies=[Depends(require_worker_token)])

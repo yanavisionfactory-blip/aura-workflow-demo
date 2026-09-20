@@ -198,6 +198,13 @@ def _native_only_planning_request(prompt: str, requested_tools: list[str]) -> bo
     )
 
 
+def _planning_items_for_request(items: list[dict], native_only: bool) -> list[dict]:
+    """Keep an explicit AURA-only plan out of every external connector path."""
+    if not native_only:
+        return items
+    return [item for item in items if str(item.get("slug") or "") == "aura"]
+
+
 def refresh_native_connection_contract(tool: ToolConnection) -> list[str]:
     """Keep persisted native allow-lists aligned with the deployed connector.
 
@@ -1146,7 +1153,10 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             broker_inventory, broker_manifests = await pipedream_planning_catalog(
                 session, connected_slugs
             )
-        inventory_by_slug = {item["slug"]: item for item in planning_catalog(connected_slugs)}
+        native_inventory = _planning_items_for_request(
+            planning_catalog(connected_slugs), native_only
+        )
+        inventory_by_slug = {item["slug"]: item for item in native_inventory}
         inventory_by_slug.update({item["slug"]: item for item in dynamic_inventory})
         inventory_by_slug.update({item["slug"]: item for item in broker_inventory})
         inventory_by_slug.update({item["slug"]: item for item in connected_inventory})
@@ -1157,10 +1167,14 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             tool.slug: manifest.manifest
             for tool in tools
             for manifest in manifests
-            if manifest.tool_id == tool.id
+            if manifest.tool_id == tool.id and (not native_only or tool.slug == "aura")
         })
-        requirement_inventory = await connection_requirement_inventory(
-            session, run.prompt, inventory, requested_tools
+        requirement_inventory = (
+            inventory
+            if native_only
+            else await connection_requirement_inventory(
+                session, run.prompt, inventory, requested_tools
+            )
         )
         await session.commit()
 
