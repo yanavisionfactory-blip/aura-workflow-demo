@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Eye, Mail, Database, ShieldAlert, ArrowLeft, Play, List, FileDown, FileText, Pencil, ListChecks, Check, ChevronDown, Presentation, Plus, Trash2, Paperclip } from "lucide-react";
+import { Eye, Mail, Database, ShieldAlert, ArrowLeft, Play, List, FileDown, FileText, Pencil, ListChecks, Check, ChevronDown, Presentation, Plus, Trash2, Paperclip, Sparkles, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { aura } from "@/api/auraClient";
 import LiveToolReview from "@/components/aura/LiveToolReview";
 import { downloadEmailEml, safeName } from "@/lib/auraDownload";
 import { fallbackReviewContract, mergeLegacyPreviewIntoArguments, setArgumentAtPath, validateReviewArguments } from "@/lib/approvalReview.mjs";
@@ -18,6 +19,96 @@ const formatBytes = (value) => {
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 };
+
+const schemaForValue = (value) => {
+  if (Array.isArray(value)) {
+    return { type: "array", items: value.length ? schemaForValue(value[0]) : { type: "string" } };
+  }
+  if (value && typeof value === "object") {
+    const keys = Object.keys(value);
+    return {
+      type: "object",
+      properties: Object.fromEntries(keys.map((key) => [key, schemaForValue(value[key])])),
+      required: keys,
+    };
+  }
+  if (typeof value === "boolean") return { type: "boolean" };
+  if (typeof value === "number") return { type: Number.isInteger(value) ? "integer" : "number" };
+  return { type: "string" };
+};
+
+function PromptApprovalEditor({ step, args, onArgumentsChange }) {
+  const [instruction, setInstruction] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async () => {
+    const request = instruction.trim();
+    if (!request || submitting) return;
+    setSubmitting(true);
+    setError("");
+    try {
+      const response = await aura.integrations.Core.InvokeLLM({
+        prompt: `Revise the prepared ${step.tool || "app"} action using the user's instruction.
+
+Operation: ${step.operation || step.action}
+Current user-facing values:
+${JSON.stringify(args, null, 2)}
+
+User instruction: ${request}
+
+Return the complete revised arguments. Preserve every value the user did not ask to change. Do not add credentials, URLs, IDs, operations, or technical settings.`,
+        response_json_schema: {
+          type: "object",
+          properties: { arguments: schemaForValue(args) },
+          required: ["arguments"],
+        },
+      });
+      if (!response?.arguments || typeof response.arguments !== "object") {
+        throw new Error("AURA did not return an editable revision.");
+      }
+      onArgumentsChange({ ...args, ...response.arguments });
+      setInstruction("");
+    } catch (revisionError) {
+      setError(revisionError?.message || "AURA couldn't apply that change.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-primary/20 bg-primary/[0.04] p-3">
+      <div className="mb-2 flex items-center gap-2">
+        <Sparkles className="h-3.5 w-3.5 text-primary" />
+        <span className="text-xs font-medium text-primary/90">Tell AURA what to change</span>
+      </div>
+      <div className="flex gap-2">
+        <textarea
+          value={instruction}
+          onChange={(event) => setInstruction(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              submit();
+            }
+          }}
+          rows={2}
+          placeholder="For example: make slide 2 clearer, use a warmer tone, or shorten the email."
+          className="min-w-0 flex-1 resize-none rounded-lg border border-white/10 bg-card/70 px-3 py-2 text-xs leading-relaxed outline-none placeholder:text-muted-foreground/45 focus:border-primary/40"
+        />
+        <button
+          type="button"
+          onClick={submit}
+          disabled={!instruction.trim() || submitting}
+          className="self-stretch rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground disabled:opacity-50"
+        >
+          {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Apply"}
+        </button>
+      </div>
+      {error && <p className="mt-2 text-[11px] text-rose-300">{error}</p>}
+    </div>
+  );
+}
 
 function EditableEmail({ preview, onPreviewChange, editing, artifacts = [] }) {
   return (
@@ -74,7 +165,7 @@ function EditableEmail({ preview, onPreviewChange, editing, artifacts = [] }) {
                   </p>
                 </div>
                 <span className={`ml-auto text-[10px] ${artifact.verified ? "text-emerald-300/80" : "text-amber-200/80"}`}>
-                  {artifact.verified ? "Verified PDF ready" : "Preparing attachment"}
+                  {artifact.verified ? "Verified PDF ready" : "PDF will be attached"}
                 </span>
               </div>
             ))}
@@ -281,7 +372,7 @@ function SchemaArgumentsEditor({ contract, args, editing, onArgumentsChange, onF
     <div className="rounded-xl border border-white/8 bg-card/40 overflow-hidden">
       <div className="flex items-center gap-2 border-b border-white/6 bg-card/30 px-4 py-2.5">
         <Database className="h-3.5 w-3.5 text-accent" />
-        <span className="text-xs font-medium">Exact app values</span>
+        <span className="text-xs font-medium">Action details</span>
         <span className="ml-auto text-[10px] text-muted-foreground/50">{fields.length} {fields.length === 1 ? "field" : "fields"}</span>
       </div>
       <div className="space-y-3 p-4">
@@ -355,102 +446,113 @@ function SchemaArgumentsEditor({ contract, args, editing, onArgumentsChange, onF
   );
 }
 
-function EditablePresentation({ args, contract, editing, onArgumentsChange, onFieldValidity }) {
+function EditablePresentation({ args, contract, editing, onArgumentsChange }) {
   const phases = Array.isArray(args.phases) ? args.phases : [];
-  const slideLayout = args.layout === "slides";
   const phaseLimit = contract.fields?.find((field) => field.key === "phases")?.max_items || 4;
+  const [selectedSlide, setSelectedSlide] = useState(0);
+  useEffect(() => {
+    setSelectedSlide((current) => Math.max(0, Math.min(current, Math.max(0, phases.length - 1))));
+  }, [phases.length]);
   const updatePhase = (index, patch) => {
     const next = phases.map((phase, phaseIndex) => phaseIndex === index ? { ...phase, ...patch } : phase);
     onArgumentsChange({ ...args, phases: next });
   };
+  const active = phases[selectedSlide] || { period: "", title: "Add a slide", items: [] };
 
   return (
     <div className="space-y-3">
-      <div className="overflow-hidden rounded-xl border border-white/8 bg-[#101c2c] shadow-inner">
-        <div className="flex items-center gap-2 border-b border-white/8 px-4 py-2.5">
+      <div className="overflow-hidden rounded-xl border border-white/8 bg-[#11131a] shadow-inner">
+        <div className="flex flex-wrap items-center gap-2 border-b border-white/8 bg-[#171923] px-4 py-2.5">
           <Presentation className="h-3.5 w-3.5 text-cyan-300" />
-          <span className="text-xs font-medium">Presentation content preview</span>
-          <span className="ml-auto text-[10px] text-muted-foreground">
-            {slideLayout ? `${phases.length} ${phases.length === 1 ? "slide" : "slides"}` : "1 slide"}
+          <span className="text-xs font-medium">Canva presentation preview</span>
+          <span className="ml-auto rounded-full border border-white/8 px-2 py-1 text-[10px] text-muted-foreground">
+            {phases.length} {phases.length === 1 ? "slide" : "slides"} · editable here
           </span>
         </div>
-        <div className={slideLayout ? "space-y-4 p-4 sm:p-5" : "aspect-video p-5 sm:p-7"}>
-          {editing ? (
+        <div className="border-b border-white/8 bg-[#1d202b] px-3 py-2">
+          <div className="grid gap-2 sm:grid-cols-2">
             <input
               aria-label="Presentation title"
               value={args.title || ""}
               onChange={(event) => onArgumentsChange({ ...args, title: event.target.value })}
+              readOnly={!editing}
               placeholder="Presentation title"
-              className="w-full border-b border-white/15 bg-transparent pb-1 text-lg font-semibold text-white outline-none focus:border-cyan-300 sm:text-2xl"
+              className="rounded-md border border-white/8 bg-black/15 px-3 py-1.5 text-xs font-medium text-white outline-none focus:border-violet-300"
             />
-          ) : <p className="text-lg font-semibold text-white sm:text-2xl">{args.title || "Untitled presentation"}</p>}
-          {editing ? (
             <input
               aria-label="Presentation subtitle"
               value={args.subtitle || ""}
               onChange={(event) => onArgumentsChange({ ...args, subtitle: event.target.value })}
+              readOnly={!editing}
               placeholder="Subtitle"
-              className="mt-1 w-full border-b border-white/10 bg-transparent pb-1 text-[10px] text-slate-300 outline-none focus:border-cyan-300 sm:text-xs"
+              className="rounded-md border border-white/8 bg-black/15 px-3 py-1.5 text-xs text-slate-300 outline-none focus:border-violet-300"
             />
-          ) : <p className="mt-1 min-h-5 text-[10px] text-slate-300 sm:text-xs">{args.subtitle || ""}</p>}
-          <div
-            className={slideLayout ? "mt-4 space-y-3" : "mt-6 grid gap-3"}
-            style={slideLayout ? undefined : { gridTemplateColumns: `repeat(${Math.max(1, phases.length)}, minmax(0, 1fr))` }}
-          >
-            {(phases.length ? phases : [{ period: "", title: "Add a phase", items: [] }]).map((phase, index) => (
-              <div
+          </div>
+        </div>
+        <div className="grid min-h-[25rem] grid-cols-[6.5rem_minmax(0,1fr)] bg-[#20222c]">
+          <div className="space-y-2 overflow-y-auto border-r border-white/8 bg-[#171923] p-2">
+            {phases.map((phase, index) => (
+              <button
+                type="button"
                 key={index}
-                className={slideLayout
-                  ? "relative aspect-video min-w-0 rounded-lg border border-white/8 bg-[#0b1625] p-5 shadow-sm sm:p-7"
-                  : "min-w-0"}
+                onClick={() => setSelectedSlide(index)}
+                className={`w-full rounded-lg border p-1.5 text-left transition-colors ${selectedSlide === index ? "border-violet-400/70 bg-violet-400/10" : "border-white/8 bg-black/10 hover:border-white/20"}`}
               >
-                {slideLayout && (
-                  <p className="mb-4 text-[9px] font-semibold text-slate-400 sm:text-[11px]">
-                    {args.title || "Untitled presentation"}
-                  </p>
-                )}
-                {editing ? (
-                  <>
-                    <input aria-label={`Phase ${index + 1} period`} value={phase.period || ""} onChange={(event) => updatePhase(index, { period: event.target.value })} placeholder="Date" className="w-full border-b border-white/10 bg-transparent text-[9px] font-semibold uppercase tracking-wide text-emerald-300 outline-none focus:border-emerald-300" />
-                    <input aria-label={`Phase ${index + 1} title`} value={phase.title || ""} onChange={(event) => updatePhase(index, { title: event.target.value })} placeholder="Slide section" className="mt-1 w-full border-b border-white/10 bg-transparent text-[10px] font-semibold text-white outline-none focus:border-cyan-300 sm:text-xs" />
-                    <textarea aria-label={`Phase ${index + 1} items`} value={(phase.items || []).join("\n")} onChange={(event) => updatePhase(index, { items: event.target.value.split("\n").map((item) => item.trim()).filter(Boolean) })} rows={3} placeholder="One point per line" className="mt-2 w-full resize-none border-b border-white/10 bg-transparent text-[8px] leading-relaxed text-slate-300 outline-none focus:border-cyan-300 sm:text-[10px]" />
-                  </>
-                ) : (
-                  <>
-                    <p className="text-[9px] font-semibold uppercase tracking-wide text-emerald-300">{phase.period}</p>
-                    <p className="mt-1 truncate text-[10px] font-semibold text-white sm:text-xs">{phase.title}</p>
-                    <div className="mt-2 space-y-1">
-                      {(phase.items || []).slice(0, 5).map((item, itemIndex) => <p key={itemIndex} className={`${slideLayout ? "" : "truncate"} text-[8px] text-slate-300 sm:text-[10px]`}>• {item}</p>)}
-                    </div>
-                  </>
-                )}
-                {slideLayout && (
-                  <div className="absolute inset-x-5 bottom-4 flex items-end gap-3 text-[8px] text-slate-500 sm:inset-x-7 sm:text-[9px]">
-                    <span className="min-w-0 flex-1 truncate">{args.subtitle || ""}</span>
-                    <span className="font-semibold text-cyan-300">{index + 1} / {phases.length}</span>
-                  </div>
-                )}
-              </div>
+                <span className="block text-[9px] text-muted-foreground">{index + 1}</span>
+                <span className="mt-1 block line-clamp-2 text-[9px] font-medium leading-tight text-white">{phase.title || "Untitled slide"}</span>
+              </button>
             ))}
+            {editing && phases.length < phaseLimit && (
+              <button
+                type="button"
+                onClick={() => {
+                  onArgumentsChange({ ...args, phases: [...phases, { period: "", title: "", items: [""] }] });
+                  setSelectedSlide(phases.length);
+                }}
+                className="flex w-full items-center justify-center gap-1 rounded-lg border border-dashed border-white/15 px-2 py-3 text-[9px] text-muted-foreground hover:border-violet-300/50 hover:text-violet-200"
+              >
+                <Plus className="h-3 w-3" /> Add slide
+              </button>
+            )}
+          </div>
+          <div className="flex items-center justify-center p-4 sm:p-6">
+            <div className="relative aspect-video w-full max-w-2xl overflow-hidden rounded-md bg-[#0b1625] p-6 shadow-2xl sm:p-9">
+              <p className="mb-5 text-[9px] font-semibold text-slate-400 sm:text-[11px]">{args.title || "Untitled presentation"}</p>
+              {editing ? (
+                <>
+                  <input aria-label={`Slide ${selectedSlide + 1} period`} value={active.period || ""} onChange={(event) => updatePhase(selectedSlide, { period: event.target.value })} placeholder="Date or section" className="w-full border-b border-white/10 bg-transparent text-[9px] font-semibold uppercase tracking-wide text-emerald-300 outline-none focus:border-emerald-300" />
+                  <input aria-label={`Slide ${selectedSlide + 1} title`} value={active.title || ""} onChange={(event) => updatePhase(selectedSlide, { title: event.target.value })} placeholder="Slide title" className="mt-2 w-full border-b border-white/10 bg-transparent text-lg font-semibold text-white outline-none focus:border-cyan-300 sm:text-2xl" />
+                  <textarea aria-label={`Slide ${selectedSlide + 1} items`} value={(active.items || []).join("\n")} onChange={(event) => updatePhase(selectedSlide, { items: event.target.value.split("\n").map((item) => item.trim()).filter(Boolean) })} rows={5} placeholder="One point per line" className="mt-4 w-full resize-none border-b border-white/10 bg-transparent text-xs leading-relaxed text-slate-300 outline-none focus:border-cyan-300" />
+                </>
+              ) : (
+                <>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-300">{active.period}</p>
+                  <p className="mt-2 text-lg font-semibold text-white sm:text-2xl">{active.title}</p>
+                  <div className="mt-4 space-y-2">
+                    {(active.items || []).slice(0, 7).map((item, itemIndex) => <p key={itemIndex} className="text-xs text-slate-300">• {item}</p>)}
+                  </div>
+                </>
+              )}
+              <div className="absolute inset-x-6 bottom-5 flex items-end gap-3 text-[9px] text-slate-500 sm:inset-x-9">
+                <span className="min-w-0 flex-1 truncate">{args.subtitle || ""}</span>
+                <span className="font-semibold text-cyan-300">{selectedSlide + 1} / {Math.max(1, phases.length)}</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
-      {editing && (
-        <div className="flex items-center justify-between rounded-xl border border-white/8 bg-card/40 px-4 py-3">
-          <p className="text-[11px] text-muted-foreground">Edit the text directly in the slide preview above.</p>
-          <div className="flex items-center gap-2">
-            {phases.length > 1 && (
-              <button type="button" onClick={() => onArgumentsChange({ ...args, phases: phases.slice(0, -1) })} className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-rose-300"><Trash2 className="h-3 w-3" /> Remove section</button>
-            )}
-            {phases.length < phaseLimit && (
-              <button type="button" onClick={() => onArgumentsChange({ ...args, phases: [...phases, { period: "", title: "", items: [""] }] })} className="flex items-center gap-1.5 text-[11px] text-primary hover:text-primary/80"><Plus className="h-3 w-3" /> Add section</button>
-            )}
-          </div>
+      {editing && phases.length > 1 && (
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => onArgumentsChange({ ...args, phases: phases.filter((_, index) => index !== selectedSlide) })}
+            className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-rose-300"
+          >
+            <Trash2 className="h-3 w-3" /> Remove this slide
+          </button>
         </div>
       )}
-
-      <SchemaArgumentsEditor contract={contract} args={args} editing={editing} onArgumentsChange={onArgumentsChange} onFieldValidity={onFieldValidity} excludeKeys={["title", "subtitle", "phases"]} />
     </div>
   );
 }
@@ -541,10 +643,35 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
   const richDocument = contract.kind === "document";
   const liveProvider = richPresentation ? "canva" : richEmail ? "gmail" : null;
   const [editing, setEditing] = useState(() => richEmail || richPresentation || richDocument);
-  const updateArguments = (nextArguments) => onUpdate(index, {
-    arguments: nextArguments,
-    resolvedArguments: nextArguments,
-  });
+  const updateArguments = (nextArguments) => {
+    const patch = {
+      arguments: nextArguments,
+      resolvedArguments: nextArguments,
+    };
+    if (richEmail) {
+      patch.preview = {
+        ...p,
+        to: nextArguments.to || "",
+        subject: nextArguments.subject || "",
+        body: nextArguments.body || "",
+      };
+    } else if (richTicket) {
+      patch.preview = {
+        ...p,
+        project: nextArguments.project_key || nextArguments.projectKey || nextArguments.project || "",
+        summary: nextArguments.summary || "",
+        description: nextArguments.description || "",
+        assignee: nextArguments.assignee_id || nextArguments.assignee || "",
+      };
+    } else if (richDocument) {
+      patch.preview = {
+        ...p,
+        docTitle: nextArguments.title || nextArguments.name || nextArguments.summary || "",
+        docBody: nextArguments.body ?? nextArguments.content ?? nextArguments.description ?? "",
+      };
+    }
+    onUpdate(index, patch);
+  };
   const updatePreview = (patch) => {
     const nextPreview = { ...p, ...patch };
     onUpdate(index, {
@@ -599,21 +726,23 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
                 contract={contract}
                 editing={editing}
                 onArgumentsChange={updateArguments}
-                onFieldValidity={fieldValidity}
               />
             )}
-            {!richPresentation && !richDocument && (
+            {!richEmail && !richTicket && !richPresentation && !richDocument && (
               <SchemaArgumentsEditor
                 contract={contract}
                 args={args}
                 editing={editing}
                 onArgumentsChange={updateArguments}
                 onFieldValidity={fieldValidity}
-                excludeKeys={richEmail
-                  ? ["to", "subject", "body", "attachments"]
-                  : richTicket
-                    ? ["project_key", "projectKey", "project", "summary", "description", "assignee_id", "assignee"]
-                    : []}
+                excludeKeys={[]}
+              />
+            )}
+            {(richEmail || richTicket || richPresentation || richDocument) && (
+              <PromptApprovalEditor
+                step={step}
+                args={args}
+                onArgumentsChange={updateArguments}
               />
             )}
           </>

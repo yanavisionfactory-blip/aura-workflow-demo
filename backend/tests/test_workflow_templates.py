@@ -430,7 +430,7 @@ def test_future_gmail_review_keeps_transport_reference_server_side():
         {"steps": {"weather": {"summary": "Clear"}}},
     )
 
-    assert prepared is None
+    assert prepared == arguments
     assert orchestrator._future_group_review_arguments(
         "gmail.send",
         {
@@ -450,7 +450,7 @@ def test_future_gmail_review_keeps_transport_reference_server_side():
         "to": "owner@example.com",
         "attachments": [{
             "filename": "Munich weather.pdf",
-            "url": "https://export-download.canva.com/ready.pdf",
+            "url": "{{steps.export_presentation.job.urls[0]}}",
         }],
     }
     assert orchestrator._future_group_review_arguments(

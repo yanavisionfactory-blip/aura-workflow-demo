@@ -131,13 +131,13 @@ def _future_group_review_arguments(
                 if not isinstance(item, dict):
                     return None
                 filename = resolve_value(item.get("filename"), context)
-                url = resolve_value(item.get("url"), context)
+                url = item.get("url")
                 if not isinstance(filename, str) or not isinstance(url, str):
                     return None
-                # A dependent delivery cannot join an earlier approval group
-                # until its actual artifact exists. Showing a future transport
-                # reference as an attachment made the review look complete even
-                # though no PDF had been created yet.
+                # The user reviews the logical attachment (its filename and the
+                # approved upstream presentation) with the rest of the grouped
+                # actions. The private download URL is a transport value and is
+                # resolved only after the approved export has completed.
                 attachments.append({**item, "filename": filename, "url": url})
             prepared[key] = attachments
     except WorkflowContextError:

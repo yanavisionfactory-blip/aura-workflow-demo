@@ -96,15 +96,15 @@ test("the UI renders a language plan while durable compilation is still running"
   assert.equal(source.includes("instantLanguagePlan(confirmedIntent"), true);
   assert.equal(source.includes("languageDraftPrompt(confirmedIntent"), true);
   assert.equal(source.includes("Executable planning unavailable; the language plan remains visible"), true);
-  assert.equal(planViewSource.includes("validating exact actions backstage"), false);
-  assert.equal(planViewSource.includes("validatingExecution || missingTools.length"), false);
-  assert.equal(source.includes("queuedPlanStartRef.current = { name, autoApprove }"), true);
-  assert.equal(source.includes("requiresActionPreview(compiledPlan.steps, queuedStart.autoApprove)"), false);
-  assert.equal(source.includes("startPythonExecutionRef.current?.()"), true);
+  assert.equal(planViewSource.includes("exactPlanPending"), true);
+  assert.equal(planViewSource.includes("Preparing exact plan…"), true);
+  assert.equal(planViewSource.includes("No new workflow steps will be added"), true);
+  assert.equal(source.includes("queuedPlanStartRef.current"), false);
+  assert.equal(source.includes("startPythonExecutionRef.current?.()"), false);
   assert.equal(source.includes("PLANNING_WAIT_TIMEOUT_MS = 30_000"), true);
   assert.equal(source.includes('.replace(/^i\\s+will\\s+/i, "")'), true);
   assert.equal(source.includes("iWill: firstPersonStepCopy(step.iWill || step.reason)"), true);
-  assert.equal(planViewSource.includes('|| plan.compileState === "blocked"'), false);
+  assert.equal(planViewSource.includes('plan.compileState === "validating"'), true);
   assert.equal(source.includes('if (plan.compileState === "blocked") {'), true);
   assert.equal(source.includes("handleRetryPlanning();"), true);
 });
@@ -137,6 +137,10 @@ test("the combined preview has a renderer for every supported action family", ()
     assert.equal(preview.includes(renderer), true);
   }
   assert.equal(preview.includes("SchemaArgumentsEditor"), true);
+  assert.equal(preview.includes("PromptApprovalEditor"), true);
+  assert.equal(preview.includes("!richEmail && !richTicket && !richPresentation && !richDocument"), true);
+  assert.equal(preview.includes("Canva presentation preview"), true);
+  assert.equal(preview.includes("Exact app values"), false);
   assert.equal(preview.includes("reviewSteps.map"), true);
 });
 
