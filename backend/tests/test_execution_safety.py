@@ -296,6 +296,29 @@ def test_weather_read_receipt_is_verified_without_write_readback_recovery(monkey
         "location": "Berlin, Germany",
         "date": "2026-09-13",
         "summary": "Clear, high 21°C, low 12°C",
+        "temperature_high": 21,
+        "temperature_low": 12,
+        "precipitation_probability": 5,
+        "wind_speed": 9,
+        "weather_code": 0,
+        "forecasts": [
+            {
+                "location": "Berlin, Germany",
+                "date": "2026-09-13",
+                "summary": "Clear, high 21°C, low 12°C",
+                "temperature_high": 21,
+                "temperature_low": 12,
+                "precipitation_probability": 5,
+                "wind_speed": 9,
+                "weather_code": 0,
+            }
+        ],
+        "forecast_days": 1,
+        "max_precipitation_probability": 5,
+        "max_wind_speed": 9,
+        "updated_at": "2026-09-13T08:00:00Z",
+        "source": "Fixture Weather",
+        "source_url": "https://example.com/weather",
     }
     decision = asyncio.run(
         orchestrator.review_recorded_result(

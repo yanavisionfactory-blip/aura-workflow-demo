@@ -221,6 +221,46 @@ def test_requirement_inventory_discovers_exact_connectable_app(monkeypatch) -> N
     assert [item["slug"] for item in inventory] == ["slack", "linear"]
 
 
+def test_guaranteed_weather_fields_do_not_trigger_a_second_planner_call(monkeypatch) -> None:
+    calls = []
+    weather_step = SimpleNamespace(
+        key="get_kyoto_weather",
+        tool_slug="aura",
+        operation="weather.forecast",
+        arguments={"location": "Kyoto", "days": 3, "units": "metric"},
+        reduced_scope_arguments=None,
+        required_evidence=[
+            "forecasts",
+            "location",
+            "precipitation_probability",
+            "summary",
+            "temperature_high",
+            "temperature_low",
+        ],
+        output_variables={},
+        depends_on=[],
+    )
+    plan = SimpleNamespace(steps=[weather_step], planning_artifacts={})
+
+    async def fake_create_plan(*_args, **kwargs):
+        calls.append(kwargs.get("planner_repair_requirements"))
+        return plan
+
+    monkeypatch.setattr(orchestrator, "create_plan", fake_create_plan)
+
+    result = asyncio.run(
+        orchestrator._create_compiled_plan(
+            "Check Kyoto weather and compare the three-day forecast",
+            [{"slug": "aura", "allowed_operations": ["weather.forecast"]}],
+            set(),
+            {"aura": native_manifest("aura")},
+        )
+    )
+
+    assert result is plan
+    assert calls == [[]]
+
+
 def test_connector_contract_mismatch_is_replanned_before_reaching_user(monkeypatch) -> None:
     invalid = SimpleNamespace(
         steps=[
