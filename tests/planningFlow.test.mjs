@@ -140,6 +140,14 @@ test("the combined preview has rich renderers without technical argument control
   assert.equal(preview.includes("SchemaArgumentsEditor"), false);
   assert.equal(preview.includes("JsonArgumentField"), false);
   assert.equal(preview.includes("Exact app values"), false);
+  assert.equal(preview.includes("PromptApprovalEditor"), true);
+  assert.equal(preview.includes("Tell AURA what to change in"), true);
+  assert.equal(preview.includes("Apply with AURA"), true);
+  assert.equal(preview.includes("Or edit directly in the preview above."), true);
+  assert.equal(preview.includes("Canva presentation preview"), true);
+  assert.equal(preview.includes("selectedSlide"), true);
+  assert.equal(preview.includes('text-muted-foreground\">1 slide'), false);
+  assert.equal(preview.includes("LiveToolReview"), false);
   assert.equal(preview.includes("reviewSteps.map"), true);
 });
 
