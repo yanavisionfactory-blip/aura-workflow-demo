@@ -275,6 +275,96 @@ async def test_completed_provider_work_retries_only_final_review(runtime, monkey
         assert state["review_recoveries"] == 1
 
 
+async def test_rejected_recorded_read_is_reexecuted_instead_of_re_reviewed(
+    runtime, monkeypatch
+):
+    monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        transition_run(
+            run,
+            RunStatus.waiting_for_action,
+            reason="provider_result_review_rejected",
+            actor="test",
+            dispatch=None,
+        )
+        step = await session.get(RunStep, "step")
+        step.operation = "web.search"
+        step.consequential = False
+        step.status = StepStatus.failed
+        step.error = "Provider result was recorded but did not pass review."
+        step.output = {
+            "provider_result": {"query": "official ECB rates", "results": []},
+            "critic": {"action": "retry", "reasons": ["Search returned no evidence"]},
+        }
+        session.add(
+            StepAttempt(
+                workspace_id="w",
+                run_id="run",
+                step_id="step",
+                attempt_number=1,
+                status="succeeded",
+                tool_slug="test",
+                operation="web.search",
+            )
+        )
+        session.add(
+            AuditEvent(
+                workspace_id="w",
+                run_id="run",
+                actor="tool-output-critic",
+                event_type="step.criticized",
+                payload={"step_id": "step", "decision": {"action": "retry"}},
+            )
+        )
+        await session.commit()
+
+    assert await autonomously_recover_run("run", "w") == "scheduled"
+
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        step = await session.get(RunStep, "step")
+        state = run.execution_context["__aura_autonomy__"]
+        assert run.status == RunStatus.recovering
+        assert step.status == StepStatus.pending
+        assert step.output == {}
+        assert state["last_action"] == "retry_step"
+        assert state["last_reason_code"] == "recorded_read_failed_review"
+        assert state["attempt_offsets"]["step"] == 1
+
+
+async def test_rejected_recorded_write_is_never_reexecuted(runtime, monkeypatch):
+    monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        transition_run(
+            run,
+            RunStatus.waiting_for_action,
+            reason="provider_result_review_rejected",
+            actor="test",
+            dispatch=None,
+        )
+        step = await session.get(RunStep, "step")
+        step.operation = "records.create"
+        step.consequential = True
+        step.status = StepStatus.failed
+        step.output = {
+            "provider_result": {"id": "saved-write-receipt"},
+            "critic": {"action": "retry", "reasons": ["Review incomplete"]},
+        }
+        await session.commit()
+
+    assert await autonomously_recover_run("run", "w") == "scheduled"
+
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        step = await session.get(RunStep, "step")
+        state = run.execution_context["__aura_autonomy__"]
+        assert step.output["provider_result"] == {"id": "saved-write-receipt"}
+        assert state["last_action"] == "retry_recorded_review"
+        assert "step" not in state["attempt_offsets"]
+
+
 async def test_repaired_platform_schema_retries_before_any_write(runtime, monkeypatch):
     monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
     async with runtime() as session:

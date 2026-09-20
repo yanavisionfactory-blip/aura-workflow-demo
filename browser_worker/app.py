@@ -747,27 +747,43 @@ async def execute(payload: ExecuteRequest) -> dict:
         return await _submit_form_page(page, fields, submit_text)
 
 
-@app.post("/v1/search", dependencies=[Depends(require_worker_token)])
-async def search(payload: SearchRequest) -> dict:
-    search_url = "https://html.duckduckgo.com/html/?q=" + quote_plus(payload.query)
+def _search_result_url(href: str) -> str | None:
+    """Return the public target behind a DuckDuckGo result redirect."""
+    parsed = urlparse(href)
+    redirected = parse_qs(parsed.query).get("uddg", [])
+    if redirected and (
+        not parsed.hostname or parsed.hostname.endswith("duckduckgo.com")
+    ):
+        href = redirected[0]
+        parsed = urlparse(href)
+    if parsed.scheme != "https" or not parsed.hostname:
+        return None
+    if parsed.hostname.endswith("duckduckgo.com"):
+        return None
+    return href
+
+
+async def _search_page(search_url: str, limit: int) -> list[dict]:
+    """Extract results from both DuckDuckGo HTML and Lite layouts."""
     async with rendered_page(search_url) as page:
-        nodes = page.locator(".result")
         results: list[dict] = []
-        for index in range(min(await nodes.count(), payload.limit)):
+        seen: set[str] = set()
+        nodes = page.locator(".result")
+        for index in range(await nodes.count()):
             node = nodes.nth(index)
             link = node.locator(".result__a").first
             if await link.count() == 0:
                 continue
-            href = await link.get_attribute("href") or ""
-            parsed = urlparse(href)
-            if parsed.hostname and parsed.hostname.endswith("duckduckgo.com"):
-                href = parse_qs(parsed.query).get("uddg", [href])[0]
-            if not href.startswith("https://"):
+            href = _search_result_url(await link.get_attribute("href") or "")
+            if not href or href in seen:
+                continue
+            title = (await link.inner_text()).strip()
+            if not title:
                 continue
             snippet = node.locator(".result__snippet").first
             results.append(
                 {
-                    "title": (await link.inner_text()).strip(),
+                    "title": title,
                     "url": href,
                     "snippet": (
                         (await snippet.inner_text()).strip()
@@ -776,7 +792,41 @@ async def search(payload: SearchRequest) -> dict:
                     ),
                 }
             )
-        return {"query": payload.query, "results": results}
+            seen.add(href)
+            if len(results) >= limit:
+                return results
+
+        # DuckDuckGo Lite does not use the .result container. Keep this
+        # fallback deliberately limited to result-link/redirect anchors so
+        # navigation and privacy links never become workflow evidence.
+        links = page.locator("a.result-link, a[href*='uddg=']")
+        for index in range(await links.count()):
+            link = links.nth(index)
+            href = _search_result_url(await link.get_attribute("href") or "")
+            if not href or href in seen:
+                continue
+            title = (await link.inner_text()).strip()
+            if not title:
+                continue
+            results.append({"title": title, "url": href, "snippet": ""})
+            seen.add(href)
+            if len(results) >= limit:
+                break
+        return results
+
+
+@app.post("/v1/search", dependencies=[Depends(require_worker_token)])
+async def search(payload: SearchRequest) -> dict:
+    encoded = quote_plus(payload.query)
+    search_urls = (
+        f"https://html.duckduckgo.com/html/?q={encoded}",
+        f"https://lite.duckduckgo.com/lite/?q={encoded}",
+    )
+    for search_url in search_urls:
+        results = await _search_page(search_url, payload.limit)
+        if results:
+            return {"query": payload.query, "results": results}
+    return {"query": payload.query, "results": []}
 
 
 @app.post("/v1/tiktok/screen", dependencies=[Depends(require_worker_token)])
