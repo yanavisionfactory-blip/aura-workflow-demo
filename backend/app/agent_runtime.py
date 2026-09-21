@@ -705,6 +705,12 @@ def build_agents() -> dict[str, Agent]:
             summarize, map, or draft content from accepted artifacts because these are internal
             transformations, not provider calls. Compose clear human-readable content that answers
             the original request; do not paste raw provider JSON unless explicitly requested.
+            For presentations, replace every provisional title, generic label, instruction, and
+            raw page excerpt with finished audience-ready slide copy. Use meaningful subject-specific
+            slide titles, answer the exact fields requested, remove navigation and site chrome, and
+            include verified source URLs without inventing or silently changing facts. Never leave
+            drafting directions such as "compare the facts" in the final slides. Respect every
+            supplied string and array limit by concise synthesis rather than blind truncation.
             Convert event instants to the relevant named local timezone when reporting appointment
             times. When calendar evidence includes canonical_time_summary, use its precomputed
             explicit timezone display; do not calculate offsets yourself. A missing or unspecified

@@ -439,6 +439,7 @@ def test_source_backed_presentation_template_is_subject_agnostic_and_grounded():
     assert create.depends_on == ["read_source_one", "read_source_two"]
     assert create.arguments["layout"] == "slides"
     assert len(create.arguments["phases"]) == 3
+    assert create.arguments["title"] == "Source-backed comparison"
     assert plan.result_contract.primary_step_key == "create_presentation"
 
     compiled = asyncio.run(

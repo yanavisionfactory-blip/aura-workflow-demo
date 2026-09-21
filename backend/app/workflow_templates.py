@@ -203,7 +203,10 @@ def source_backed_presentation_template(
         subject_match.group(1).strip(" ,") if subject_match else "Source-backed comparison"
     )
     subject = re.sub(r"\s+", " ", subject)
-    title = (subject[:39].rstrip() + " comparison")[:50]
+    # This is only a provisional label. The approval resolver composes the final
+    # audience-facing title after source reads complete. Keep the seed grammatical
+    # even when the requested comparison clause is longer than the provider limit.
+    title = subject if len(subject) <= 50 else "Source-backed comparison"
     query = " ".join(prompt.split())[:1800]
     plan = WorkflowPlan.model_validate(
         {
