@@ -24,6 +24,7 @@ from .model_inputs import (
 from .policy import operation_scope
 from .request_contract import (
     attach_request_graph_proof,
+    derive_request_constraints,
     derive_request_requirements,
     missing_runtime_requirement_evidence,
     persisted_request_contract_fixes,
@@ -71,6 +72,33 @@ class PlanningBundle(BaseModel):
 
 
 PLANNER_ATTEMPT_TIMEOUT_SECONDS = 12
+PLANNING_GLOBAL_TIMEOUT_SECONDS = 45
+
+
+async def _within_planning_budget(awaitable, deadline: float):
+    """Run one planning phase inside the single end-to-end planning deadline."""
+    remaining = deadline - perf_counter()
+    if remaining <= 0:
+        close = getattr(awaitable, "close", None)
+        if close:
+            close()
+        raise TimeoutError("Global planning budget exhausted")
+    async with asyncio.timeout(remaining):
+        return await awaitable
+
+
+def _permanent_planning_error(exc: Exception) -> bool:
+    lowered = str(exc).casefold()
+    return any(
+        marker in lowered
+        for marker in (
+            "insufficient_quota",
+            "credit_balance_exhausted",
+            "no credits remaining",
+            "invalid_api_key",
+            "authentication_error",
+        )
+    )
 
 
 def _intent_words(value: str) -> str:
@@ -206,6 +234,11 @@ def build_agents() -> dict[str, Agent]:
             requested outcome. The plan must contain real graph evidence for
             every requirement. Preserve each requested provider, destination,
             format, and action; do not merge away a coordinated requirement.
+            request_constraints contains exclusions and prohibitions. Obey them,
+            but never turn an excluded tool or provider into a required graph step.
+            Tables, briefs, calculations, comparisons, reports, and summaries that
+            have no requested external destination are final-response synthesis,
+            not provider actions. Ground them in the result_contract and source steps.
             Prefer one listed batch operation over invented per-record loop variables. When the
             user designates an approval or policy form, its creator-specific approved/rejected
             receipt is the authoritative gate for the non-public policies that form evaluates;
@@ -257,9 +290,15 @@ def build_agents() -> dict[str, Agent]:
             dependency_mode all_settled. For public weather, use AURA weather.forecast. For Gmail
             requests addressed to the user's own inbox, set `to` to the literal `me`. Never invent
             an input placeholder that is not present in available_input_names.
-            Cover every item in request_contract with one or more non-optional
-            graph steps. Composed requirements such as exporting a file to a
-            destination need a dependency path from the producer to the destination.
+            Cover every external-action item in request_contract with one or more
+            non-optional graph steps. Ground internal synthesis requirements in the
+            relevant source steps and the result contract instead of adding fake tool
+            calls. Composed requirements such as exporting a file to a destination
+            need a dependency path from the producer to the destination.
+            Obey request_constraints without creating graph steps for exclusions.
+            Chat-native tables, briefs, calculations, comparisons, reports, and
+            summaries are synthesized from accepted source receipts; do not invent
+            a provider create step for them.
             Resolve named provider resources through an available read-only search, find, or list step before an
             operation that requires an opaque ID. Reference the discovery step's output and declare
             the dependency; never ask the user to supply an ID for a resource they already named.
@@ -534,6 +573,7 @@ async def _run_staged_planner(
         for key in (
             "user_request",
             "request_contract",
+            "request_constraints",
             "temporal_context",
             "available_input_names",
             "planner_repair_requirements",
@@ -552,6 +592,7 @@ async def _run_staged_planner(
             {
                 "objective": objective.model_dump(mode="json"),
                 "request_contract": payload.get("request_contract", []),
+                "request_constraints": payload.get("request_constraints", []),
                 "executable_tool_inventory": routing_inventory,
                 "available_input_names": payload.get("available_input_names", []),
                 "temporal_context": payload.get("temporal_context", {}),
@@ -572,6 +613,7 @@ async def _run_staged_planner(
             {
                 "objective": objective.model_dump(mode="json"),
                 "request_contract": payload.get("request_contract", []),
+                "request_constraints": payload.get("request_constraints", []),
                 "toolset_proposal": toolset.model_dump(mode="json"),
                 "executable_tool_inventory": _builder_inventory(
                     payload["executable_tool_inventory"], selected_slugs
@@ -760,16 +802,50 @@ def deterministic_plan_fixes(
         for operation in operations:
             operation_tools.setdefault(operation, []).append(tool_slug)
 
-    # A planner occasionally returns the exact allow-listed operation while
-    # omitting (or misspelling) its connector slug. Resolve that mechanical
-    # omission locally when the execution inventory makes the mapping
-    # unambiguous. Never guess between multiple capable connectors.
+    # Models sometimes put an operation identifier in tool_slug (``web.search``)
+    # and its short verb in operation (``search``). Resolve exact, unique catalog
+    # aliases locally instead of spending another model round trip. Never guess
+    # between multiple capable connectors or between multiple matching operations.
     for step in plan.steps:
-        if step.tool_slug in allowed:
+        original_slug = step.tool_slug
+        original_operation = step.operation
+        if original_slug in allowed:
+            if original_operation in allowed[original_slug]:
+                continue
+            operation_candidates = [
+                operation
+                for operation in allowed[original_slug]
+                if operation.rsplit(".", 1)[-1] == original_operation
+            ]
+            if len(operation_candidates) == 1:
+                step.operation = operation_candidates[0]
             continue
-        candidates = operation_tools.get(step.operation, [])
+
+        candidate_operations = {
+            value
+            for value in (
+                original_slug if original_slug in operation_tools else None,
+                original_operation if original_operation in operation_tools else None,
+                (
+                    f"{original_slug}.{original_operation}"
+                    if f"{original_slug}.{original_operation}" in operation_tools
+                    else None
+                ),
+            )
+            if value
+        }
+        candidates = {
+            (tool_slug, operation)
+            for operation in candidate_operations
+            for tool_slug in operation_tools[operation]
+            if original_operation in {
+                operation,
+                operation.rsplit(".", 1)[-1],
+            }
+            or original_slug == operation
+        }
         if len(candidates) == 1:
-            step.tool_slug = candidates[0]
+            step.tool_slug, step.operation = next(iter(candidates))
 
     write_markers = ("send", "create", "update", "delete", "post", "schedule", "purchase", "append", "destroy", "purge", "revoke")
     fixes: list[str] = []
@@ -1287,12 +1363,17 @@ async def create_plan(
     planner_repair_requirements: list[str] | None = None,
 ) -> WorkflowPlan:
     started_at = perf_counter()
+    deadline = started_at + PLANNING_GLOBAL_TIMEOUT_SECONDS
     agents = build_agents()
     request_payload = {
         "user_request": prompt,
         "request_contract": [
             requirement.model_dump(mode="json")
             for requirement in derive_request_requirements(prompt, tool_inventory)
+        ],
+        "request_constraints": [
+            constraint.model_dump(mode="json")
+            for constraint in derive_request_constraints(prompt, tool_inventory)
         ],
         "temporal_context": planning_temporal_context(),
         "executable_tool_inventory": tool_inventory,
@@ -1302,24 +1383,33 @@ async def create_plan(
     model_started_at = perf_counter()
     recovery_mode = "combined"
     try:
-        bundle = await _run_planner(agents["planner"], request_payload, max_turns=8)
-    except ModelInputTooLarge:
+        bundle = await _within_planning_budget(
+            _run_planner(agents["planner"], request_payload, max_turns=8),
+            deadline,
+        )
+    except Exception as planner_error:
+        if _permanent_planning_error(planner_error):
+            raise RuntimeError("Planner is not available") from planner_error
         try:
-            bundle = await _run_staged_planner(agents, request_payload, max_turns=8)
-            recovery_mode = "staged_input_limit"
+            bundle = await _within_planning_budget(
+                _run_staged_planner(agents, request_payload, max_turns=8),
+                deadline,
+            )
+            recovery_mode = (
+                "staged_input_limit"
+                if isinstance(planner_error, ModelInputTooLarge)
+                else "staged_structured_recovery"
+            )
         except Exception as staged_error:
             raise RuntimeError(
-                "Planner compact recovery exhausted after an input-limit failure"
+                "Planner recovery exhausted inside the global planning budget"
             ) from staged_error
-    except Exception as planner_error:
-        # _run_planner already made the one allowed structured-output repair.
-        # Starting three more model calls here caused the 112-second failure
-        # path. Common workflows are handled by audited templates before this
-        # function; everything else returns to the durable supervisor promptly.
-        raise RuntimeError("Planner structured-output repair exhausted") from planner_error
     if _has_only_missing_capabilities(bundle):
-        bundle = await _recover_catalog_tool_selection(
-            agents, request_payload, bundle, max_turns=8
+        bundle = await _within_planning_budget(
+            _recover_catalog_tool_selection(
+                agents, request_payload, bundle, max_turns=8
+            ),
+            deadline,
         )
         recovery_mode = "staged_capability_repair"
     model_ms = round((perf_counter() - model_started_at) * 1000)
@@ -1345,10 +1435,15 @@ async def create_plan(
         }
         repair_started_at = perf_counter()
         try:
-            bundle = await _run_planner(agents["planner"], repaired_payload, max_turns=8)
+            bundle = await _within_planning_budget(
+                _run_staged_planner(agents, repaired_payload, max_turns=8),
+                deadline,
+            )
         except Exception as repair_error:
-            raise RuntimeError("Planner deterministic repair exhausted") from repair_error
-        recovery_mode = "combined_repair"
+            raise RuntimeError(
+                "Staged planner repair exhausted inside the global planning budget"
+            ) from repair_error
+        recovery_mode = "staged_authorization_repair"
         repair_ms += round((perf_counter() - repair_started_at) * 1000)
         objective = bundle.objective
         toolset = bundle.toolset
@@ -1545,10 +1640,23 @@ def _deterministic_deliverable(accepted_artifacts: list[dict]) -> tuple[str, str
     return summary, details
 
 
-async def synthesize_result(prompt: str, accepted_artifacts: list[dict],
-                            prepared_evidence: object | None = None) -> UnifiedDeliverable:
+async def synthesize_result(
+    prompt: str,
+    accepted_artifacts: list[dict],
+    prepared_evidence: object | None = None,
+    required_fixes: list[str] | None = None,
+) -> UnifiedDeliverable:
     payload = {"original_request": prompt, "accepted_artifacts":
                accepted_artifacts if prepared_evidence is None else prepared_evidence}
+    if required_fixes:
+        payload["validation_repair"] = {
+            "required_fixes": required_fixes,
+            "instruction": (
+                "Repair every listed issue using only the accepted evidence. Return a complete "
+                "replacement deliverable. If the evidence cannot support a fix, keep "
+                "validation_passed false and identify the exact missing evidence."
+            ),
+        }
     for attempt in range(3):
         try:
             payload = await _prepare_action_evidence(payload, "accepted_artifacts")

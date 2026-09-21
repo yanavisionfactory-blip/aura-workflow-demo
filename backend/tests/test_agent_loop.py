@@ -780,13 +780,17 @@ async def test_verifier_checks_delivered_answer_and_preserves_receipts(runtime, 
 
 
 async def test_synthesis_outage_cannot_complete_or_index_run(runtime, monkeypatch):
+    synthesis_calls = 0
+
     async def execute(*args, **kwargs):
         return {"id": "record-1"}
 
     async def accept(*args):
         return CriticDecision(action="accept")
 
-    async def unavailable(*args):
+    async def unavailable(*args, **kwargs):
+        nonlocal synthesis_calls
+        synthesis_calls += 1
         return UnifiedDeliverable(
             summary="Receipt saved",
             deliverable="Partial extract",
@@ -806,9 +810,53 @@ async def test_synthesis_outage_cannot_complete_or_index_run(runtime, monkeypatc
         run = await session.get(WorkflowRun, "run")
         assert run.status == RunStatus.waiting_for_action
         assert run.result["verification"]["status"] == "unverified"
+        assert run.execution_context["final_review_repair_attempted"] is True
         assert not (
             await session.scalars(select(DispatchIntent).where(DispatchIntent.kind == "memory"))
         ).all()
+    assert synthesis_calls == 2
+
+
+async def test_synthesis_validation_failure_is_repaired_immediately(runtime, monkeypatch):
+    synthesis_calls = 0
+
+    async def execute(*args, **kwargs):
+        return {"id": "record-1", "value": "GBP 0.86"}
+
+    async def accept(*args):
+        return CriticDecision(action="accept")
+
+    async def repair(*args, **kwargs):
+        nonlocal synthesis_calls
+        synthesis_calls += 1
+        if synthesis_calls == 1:
+            assert kwargs.get("required_fixes") is None
+            return UnifiedDeliverable(
+                summary="Receipt saved",
+                deliverable="Partial extract",
+                validation_passed=False,
+                required_fixes=["Include the GBP value"],
+            )
+        assert kwargs["required_fixes"] == ["Include the GBP value"]
+        return UnifiedDeliverable(
+            summary="Rate found",
+            deliverable="GBP 0.86",
+            validation_passed=True,
+        )
+
+    async def verify(*args):
+        return OutcomeVerification(status="verified", evidence_step_ids=["step"])
+
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", execute)
+    monkeypatch.setattr(orchestrator, "critique_step", accept)
+    monkeypatch.setattr(orchestrator, "synthesize_result", repair)
+    monkeypatch.setattr(orchestrator, "verify_outcome", verify)
+    await orchestrator._execute_run("run", "w")
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        assert run.status == RunStatus.completed
+        assert run.result["unified_deliverable"]["deliverable"] == "GBP 0.86"
+    assert synthesis_calls == 2
 
 
 async def test_recovery_api_does_not_allow_unknown_write_fallback(runtime):

@@ -351,6 +351,8 @@ async def _safe_options(
     settings = get_settings()
     delay = _delay(recovery_counter(state.get("rounds")) + 1)
     if steps and all(step.status in {StepStatus.completed, StepStatus.skipped} for step in steps):
+        if (run.execution_context or {}).get("final_review_repair_attempted"):
+            return []
         if (
             recovery_counter(state.get("review_recoveries"))
             < settings.max_autonomous_review_recoveries

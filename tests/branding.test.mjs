@@ -7,7 +7,7 @@ test("the browser tab uses AURA branding without a third-party asset", () => {
   const favicon = readFileSync(new URL("../public/favicon.svg", import.meta.url), "utf8");
 
   assert.match(html, /<title>AURA — Autonomous Workflow Assistant<\/title>/);
-  assert.match(html, /href="\/favicon\.svg"/);
+  assert.match(html, /href="\.\/favicon\.svg\?v=3"/);
   assert.equal(html.includes("base44.com/logo"), false);
   assert.match(favicon, /<svg/);
 });

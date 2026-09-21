@@ -50,9 +50,17 @@ class RequirementEvidence(BaseModel):
     proof_kind: Literal["graph", "synthesis"] = "graph"
 
 
+class ExclusionConstraint(BaseModel):
+    key: str = Field(pattern=r"^constraint_[1-9][0-9]*$")
+    statement: str = Field(min_length=1, max_length=1000)
+    forbidden_provider_slugs: list[str] = Field(default_factory=list)
+    forbidden_operations: list[str] = Field(default_factory=list)
+
+
 class RequestGraphProof(BaseModel):
-    version: int = 1
+    version: int = 2
     requirements: list[AtomicRequirement] = Field(default_factory=list)
+    constraints: list[ExclusionConstraint] = Field(default_factory=list)
     evidence: list[RequirementEvidence] = Field(default_factory=list)
     fixes: list[str] = Field(default_factory=list)
 
@@ -184,6 +192,40 @@ _EXPLICIT_CONSTRAINT_TERMS = {
     "only",
     "without",
 }
+_INTERNAL_DELIVERABLE_TERMS = {
+    "analysis",
+    "answer",
+    "brief",
+    "briefing",
+    "calculation",
+    "comparison",
+    "digest",
+    "explanation",
+    "list",
+    "recommendation",
+    "report",
+    "summary",
+    "table",
+    "timeline",
+}
+_EXTERNAL_ARTIFACT_FORMATS = {
+    "doc",
+    "docx",
+    "jpeg",
+    "jpg",
+    "pdf",
+    "png",
+    "ppt",
+    "pptx",
+    "svg",
+    "xls",
+    "xlsx",
+    "zip",
+}
+_EXCLUSION_RE = re.compile(
+    r"\b(?:do\s+not|don't|never|avoid|exclude|without)\b",
+    re.IGNORECASE,
+)
 
 
 def _normalized_text(value: object) -> str:
@@ -196,6 +238,20 @@ def _find_action(statement: str) -> RequirementAction:
         return "outcome"
     phrase = match.group(1).casefold()
     return next(action for value, action in _ACTION_PHRASES if value == phrase)
+
+
+def _is_exclusion(statement: str) -> bool:
+    """Recognize prohibitions before interpreting their nouns as destinations."""
+    return bool(_EXCLUSION_RE.search(statement))
+
+
+def _positive_requirement_statement(statement: str) -> str | None:
+    """Keep work before an inline exclusion while dropping pure prohibitions."""
+    match = _EXCLUSION_RE.search(statement)
+    if not match:
+        return statement
+    positive = statement[: match.start()].strip(" ,")
+    return positive or None
 
 
 def _split_request(prompt: str) -> list[str]:
@@ -260,6 +316,84 @@ def _inventory_provider_aliases(item: dict) -> set[str]:
     }
 
 
+def _explicit_provider_aliases(item: dict) -> set[str]:
+    """Return provider names without operation namespaces such as ``weather``.
+
+    Operation namespaces are useful for positive capability routing, but treating
+    them as provider identities made "do not use weather" require the entire AURA
+    connector.  Exclusions keep providers and operations distinct.
+    """
+    values = {
+        str(item.get("slug") or ""),
+        str(item.get("name") or ""),
+        str(item.get("canonical_provider") or ""),
+    }
+    aliases = {_normalized_text(value) for value in values if value}
+    return {
+        alias
+        for alias in aliases
+        if alias and alias not in _GENERIC_PROVIDER_ALIASES and len(alias) >= 3
+    }
+
+
+def _internal_synthesis_action(
+    statement: str,
+    action: RequirementAction,
+    provider_slugs: list[str],
+    format_hints: list[str],
+    provider_can_create: bool,
+) -> RequirementAction:
+    """Classify chat-native deliverables as synthesis, not fictional provider calls."""
+    if (
+        action != "create"
+        or (provider_slugs and provider_can_create)
+        or set(format_hints).intersection(_EXTERNAL_ARTIFACT_FORMATS)
+    ):
+        return action
+    words = set(_WORD_RE.findall(statement.casefold()))
+    return "synthesize" if words.intersection(_INTERNAL_DELIVERABLE_TERMS) else action
+
+
+def derive_request_constraints(
+    prompt: str, inventory: list[dict]
+) -> list[ExclusionConstraint]:
+    constraints: list[ExclusionConstraint] = []
+    for statement in _split_request(prompt):
+        exclusion = _EXCLUSION_RE.search(statement)
+        if not exclusion:
+            continue
+        exclusion_scope = statement[exclusion.start():]
+        exclusion_scope = re.split(
+            r"\b(?:but|however|instead)\b",
+            exclusion_scope,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0]
+        normalized = f" {_normalized_text(exclusion_scope)} "
+        forbidden_provider_slugs: list[str] = []
+        forbidden_operations: list[str] = []
+        for item in inventory:
+            slug = str(item.get("slug") or "")
+            if slug and any(
+                f" {alias} " in normalized for alias in _explicit_provider_aliases(item)
+            ):
+                forbidden_provider_slugs.append(slug)
+            for operation in item.get("allowed_operations") or []:
+                operation_text = _normalized_text(operation)
+                namespace = operation_text.split(" ", 1)[0]
+                if namespace and f" {namespace} " in normalized:
+                    forbidden_operations.append(str(operation))
+        constraints.append(
+            ExclusionConstraint(
+                key=f"constraint_{len(constraints) + 1}",
+                statement=statement,
+                forbidden_provider_slugs=list(dict.fromkeys(forbidden_provider_slugs)),
+                forbidden_operations=list(dict.fromkeys(forbidden_operations)),
+            )
+        )
+    return constraints
+
+
 def _content_terms(statement: str, provider_aliases: set[str]) -> list[str]:
     action_words = {
         token
@@ -290,7 +424,10 @@ def derive_request_requirements(
         for item in inventory
     ]
     requirements: list[AtomicRequirement] = []
-    for index, statement in enumerate(_split_request(prompt), start=1):
+    for raw_statement in _split_request(prompt):
+        statement = _positive_requirement_statement(raw_statement)
+        if not statement:
+            continue
         normalized = f" {_normalized_text(statement)} "
         provider_slugs: list[str] = []
         matched_aliases: set[str] = set()
@@ -301,15 +438,40 @@ def derive_request_requirements(
             if slug and matching:
                 provider_slugs.append(slug)
                 matched_aliases.update(matching)
+        format_hints = list(
+            dict.fromkeys(match.casefold() for match in _FORMAT_RE.findall(statement))
+        )
+        provider_slugs = list(dict.fromkeys(provider_slugs))
+        provider_can_create = any(
+            any(
+                marker in str(operation).casefold()
+                for marker in (
+                    "append",
+                    "create",
+                    "generate",
+                    "post",
+                    "publish",
+                    "upload",
+                    "upsert",
+                )
+            )
+            for item in inventory
+            if str(item.get("slug") or "") in provider_slugs
+            for operation in item.get("allowed_operations") or []
+        )
         requirements.append(
             AtomicRequirement(
-                key=f"requirement_{index}",
+                key=f"requirement_{len(requirements) + 1}",
                 statement=statement,
-                action=_find_action(statement),
-                provider_slugs=list(dict.fromkeys(provider_slugs)),
-                format_hints=list(
-                    dict.fromkeys(match.casefold() for match in _FORMAT_RE.findall(statement))
+                action=_internal_synthesis_action(
+                    statement,
+                    _find_action(statement),
+                    provider_slugs,
+                    format_hints,
+                    provider_can_create,
                 ),
+                provider_slugs=provider_slugs,
+                format_hints=format_hints,
                 content_terms=_content_terms(statement, matched_aliases),
                 constraint_terms=list(
                     dict.fromkeys(
@@ -416,6 +578,7 @@ def prove_request_graph(
     prompt: str, plan: WorkflowPlan, inventory: list[dict]
 ) -> RequestGraphProof:
     requirements = derive_request_requirements(prompt, inventory)
+    constraints = derive_request_constraints(prompt, inventory)
     inventory_by_slug = {str(item.get("slug") or ""): item for item in inventory}
     documents = {
         step.key: _operation_document(step, inventory_by_slug) for step in plan.steps
@@ -423,6 +586,19 @@ def prove_request_graph(
     reachable = _result_reachable_steps(plan)
     evidence: list[RequirementEvidence] = []
     fixes: list[str] = []
+
+    for constraint in constraints:
+        violating_steps = [
+            step.key
+            for step in plan.steps
+            if step.tool_slug in constraint.forbidden_provider_slugs
+            or step.operation in constraint.forbidden_operations
+        ]
+        if violating_steps:
+            fixes.append(
+                f"{constraint.key} violates an explicit exclusion in steps "
+                f"{', '.join(violating_steps)}: {constraint.statement}"
+            )
 
     for requirement in requirements:
         action_steps = [
@@ -447,34 +623,10 @@ def prove_request_graph(
             if set(requirement.content_terms).intersection(documents[step.key].split())
         ]
 
-        provider_can_create = any(
-            any(
-                marker in str(operation).casefold()
-                for marker in (
-                    "create",
-                    "generate",
-                    "append",
-                    "post",
-                    "publish",
-                    "upload",
-                    "upsert",
-                )
-            )
-            for slug in requirement.provider_slugs
-            for operation in inventory_by_slug.get(slug, {}).get("allowed_operations") or []
-        )
-        synthesized_artifact = (
-            requirement.action == "create"
-            and bool(
-                set(requirement.content_terms).intersection(
-                    {"analysis", "brief", "digest", "report", "summary"}
-                )
-            )
-            and not provider_can_create
-        )
         if (
-            requirement.action == "synthesize" and not requirement.provider_slugs
-        ) or synthesized_artifact:
+            requirement.action in {"synthesize", "outcome"}
+            and not requirement.provider_slugs
+        ):
             source_steps = provider_steps or semantic_steps or [
                 step for step in plan.steps if step.key in reachable and not step.optional
             ]
@@ -605,6 +757,7 @@ def prove_request_graph(
 
     return RequestGraphProof(
         requirements=requirements,
+        constraints=constraints,
         evidence=evidence,
         fixes=list(dict.fromkeys(fixes)),
     )
@@ -638,6 +791,26 @@ def persisted_request_contract_fixes(plan: WorkflowPlan) -> list[str]:
     known = {step.key: step for step in plan.steps}
     reachable = _result_reachable_steps(plan)
     fixes: list[str] = []
+    for constraint in contract.get("constraints") or []:
+        if not isinstance(constraint, dict):
+            continue
+        forbidden_providers = {
+            str(value) for value in constraint.get("forbidden_provider_slugs") or []
+        }
+        forbidden_operations = {
+            str(value) for value in constraint.get("forbidden_operations") or []
+        }
+        violating = [
+            step.key
+            for step in plan.steps
+            if step.tool_slug in forbidden_providers
+            or step.operation in forbidden_operations
+        ]
+        if violating:
+            fixes.append(
+                "Persisted request exclusion is violated by steps: "
+                + ", ".join(violating)
+            )
     for key in sorted(requirements):
         proof = evidence.get(key)
         if not proof:

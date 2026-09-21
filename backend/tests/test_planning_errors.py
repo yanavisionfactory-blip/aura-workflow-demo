@@ -220,6 +220,10 @@ def test_provider_candidates_ignore_instruction_words() -> None:
     assert _capitalized_provider_candidates(
         "Read my open Linear issues and prepare the summary for Slack."
     ) == ["Linear", "Slack"]
+    assert _capitalized_provider_candidates(
+        "Find three official NASA sources. Extract the launch dates. "
+        "Do not use weather tools."
+    ) == []
 
 
 def test_requirement_inventory_discovers_exact_connectable_app(monkeypatch) -> None:
