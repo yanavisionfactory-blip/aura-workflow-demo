@@ -1067,6 +1067,14 @@ async def _search_page(search_url: str, limit: int) -> list[dict]:
         return results
 
 
+async def _rendered_search_fallback(search_url: str, limit: int) -> list[dict]:
+    """Use the isolated browser only after every direct HTML provider fails."""
+    try:
+        return await asyncio.wait_for(_search_page(search_url, limit), timeout=15)
+    except Exception:  # noqa: BLE001 - provider/render failures become a clean 503
+        return []
+
+
 @app.post("/v1/search", dependencies=[Depends(require_worker_token)])
 async def search(payload: SearchRequest) -> dict:
     encoded = quote_plus(payload.query)
@@ -1087,6 +1095,13 @@ async def search(payload: SearchRequest) -> dict:
         for (provider, _), html in zip(search_sources, pages, strict=True)
     ]
     results = _rank_search_results(payload.query, batches, payload.limit)
+    if results:
+        return {"query": payload.query, "results": results}
+    # Search engines frequently return bot challenges or alternate markup to
+    # plain HTTP clients. Reuse the existing SSRF-guarded, route-isolated
+    # renderer as one bounded last resort before reporting provider outage.
+    rendered = await _rendered_search_fallback(search_sources[0][1], payload.limit)
+    results = _rank_search_results(payload.query, [rendered], payload.limit)
     if results:
         return {"query": payload.query, "results": results}
     raise HTTPException(503, "Public search providers returned no usable results")
