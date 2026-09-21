@@ -755,11 +755,13 @@ async def _create_compiled_plan(
     from .workflow_templates import (
         creator_outreach_template,
         notion_to_jira_template,
+        source_backed_presentation_template,
         weather_presentation_template,
     )
 
     audited_plan = (
         creator_outreach_template(prompt, inventory)
+        or source_backed_presentation_template(prompt, inventory)
         or weather_presentation_template(prompt, inventory)
         or notion_to_jira_template(prompt, inventory)
     )
@@ -1417,11 +1419,13 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             from .workflow_templates import (
                 creator_outreach_template,
                 notion_to_jira_template,
+                source_backed_presentation_template,
                 weather_presentation_template,
             )
 
             immediate_template = (
                 creator_outreach_template(run.prompt, inventory)
+                or source_backed_presentation_template(run.prompt, inventory)
                 or weather_presentation_template(run.prompt, inventory)
                 or notion_to_jira_template(run.prompt, inventory)
             )
