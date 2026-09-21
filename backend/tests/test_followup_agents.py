@@ -277,6 +277,57 @@ async def test_automatic_replanning_rejects_an_identical_read_repair(runtime, mo
         assert event.payload["step_id"] == "step"
 
 
+def test_final_evidence_no_change_repair_sharpens_search_query() -> None:
+    approved = {
+        "tool_slug": "aura",
+        "operation": "web.search",
+        "arguments": {"query": "site:nasa.gov Voyager launch dates"},
+    }
+    proposal = StepRepair(
+        tool_slug="aura",
+        operation="web.search",
+        arguments={"query": "site:nasa.gov Voyager launch dates"},
+        reason="Try the same search",
+    )
+
+    repaired = replanning._final_evidence_query_repair(
+        proposal,
+        approved,
+        (
+            "[final_evidence_incomplete] Provide exact launch dates for Voyager 1 "
+            "and Voyager 2; provide both primary destinations"
+        ),
+    )
+
+    assert repaired is not None
+    assert repaired.tool_slug == "aura"
+    assert repaired.operation == "web.search"
+    assert repaired.arguments["query"].startswith(approved["arguments"]["query"])
+    assert "exact launch dates" in repaired.arguments["query"]
+    assert repaired.arguments != approved["arguments"]
+
+
+def test_non_final_identical_repair_has_no_deterministic_fallback() -> None:
+    approved = {
+        "tool_slug": "aura",
+        "operation": "web.search",
+        "arguments": {"query": "Voyager"},
+    }
+    proposal = StepRepair(
+        tool_slug="aura",
+        operation="web.search",
+        arguments={"query": "Voyager"},
+        reason="Try the same search",
+    )
+
+    assert (
+        replanning._final_evidence_query_repair(
+            proposal, approved, "[provider_unavailable] timeout"
+        )
+        is None
+    )
+
+
 async def test_delegated_read_repair_auto_applies_inside_permission_envelope(runtime, monkeypatch):
     monkeypatch.setattr(replanning, "SessionLocal", runtime)
     original = notion_plan()
