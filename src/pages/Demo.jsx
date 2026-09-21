@@ -56,8 +56,12 @@ import {
 } from "@/lib/approvalReview.mjs";
 
 const STEP_DURATION = 2.6;
-const PLANNING_WAIT_TIMEOUT_MS = 25_000;
-const PLANNING_RECOVERY_GRACE_MS = 5_000;
+// The backend owns a 45-second end-to-end model budget after capability
+// discovery. Keep the durable UI poll alive long enough to receive that
+// terminal state instead of presenting a false failure while a valid plan is
+// being committed by the worker.
+const PLANNING_WAIT_TIMEOUT_MS = 55_000;
+const PLANNING_RECOVERY_GRACE_MS = 10_000;
 const PLANNING_POLL_INTERVAL_MS = 750;
 const PLANNING_TRANSIENT_FAILURE_LIMIT = 3;
 
