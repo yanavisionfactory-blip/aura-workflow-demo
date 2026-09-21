@@ -41,6 +41,24 @@ def test_production_checks_require_legacy_tokens_off(monkeypatch: pytest.MonkeyP
     assert production_configuration_checks()["legacy_tokens_disabled"] is False
 
 
+def test_recovery_code_repair_is_a_readiness_gate_only_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app import main
+
+    monkeypatch.setattr(main.settings, "recovery_code_repair_enabled", False)
+    assert "recovery_code_repair" not in main.production_configuration_checks()
+    monkeypatch.setattr(main.settings, "recovery_code_repair_enabled", True)
+    monkeypatch.setattr(main.settings, "recovery_github_repository", "")
+    monkeypatch.setattr(main.settings, "recovery_github_token", "")
+    monkeypatch.setattr(main.settings, "recovery_pipeline_callback_secret", "")
+    assert main.production_configuration_checks()["recovery_code_repair"] is False
+    monkeypatch.setattr(main.settings, "recovery_github_repository", "yanavisionfactory-blip/aura-workflow-demo")
+    monkeypatch.setattr(main.settings, "recovery_github_token", "github-token")
+    monkeypatch.setattr(main.settings, "recovery_pipeline_callback_secret", "x" * 32)
+    assert main.production_configuration_checks()["recovery_code_repair"] is True
+
+
 @pytest.mark.asyncio
 async def test_workspace_record_cannot_be_read_from_another_workspace() -> None:
     record = WorkspaceRecord(
