@@ -186,13 +186,22 @@ def test_google_workspace_connection_satisfies_named_gmail_family() -> None:
 
 
 def test_disconnected_google_apps_collapse_into_one_clear_account_request() -> None:
-    inventory = [{
-        "slug": "google",
-        "name": "Google Workspace",
-        "canonical_provider": "google",
-        "connected": False,
-        "allowed_operations": ["gmail.send", "drive.files.search"],
-    }]
+    inventory = [
+        {
+            "slug": "google",
+            "name": "Google Workspace",
+            "canonical_provider": "google",
+            "connected": False,
+            "allowed_operations": ["gmail.send", "drive.files.search"],
+        },
+        {
+            "slug": "google-drive",
+            "name": "Google Drive",
+            "canonical_provider": "google-drive",
+            "connected": False,
+            "allowed_operations": ["drive.files.search"],
+        },
+    ]
     prompt = "Save the PDF in Google Drive and send it through Gmail"
 
     assert explicit_disconnected_capabilities(prompt, inventory) == ["google"]
