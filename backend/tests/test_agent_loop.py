@@ -17,6 +17,7 @@ from app.agent_telemetry import calls, record_agent_call
 from app.db import Base
 from app.models import (
     ApprovalSnapshot,
+    AuditEvent,
     CapabilityManifest,
     DispatchIntent,
     PlanVersion,
@@ -857,6 +858,59 @@ async def test_synthesis_validation_failure_is_repaired_immediately(runtime, mon
         assert run.status == RunStatus.completed
         assert run.result["unified_deliverable"]["deliverable"] == "GBP 0.86"
     assert synthesis_calls == 2
+
+
+async def test_final_verifier_can_stage_a_bounded_read_repair(runtime) -> None:
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        step = await session.get(RunStep, "step")
+        step.status = StepStatus.completed
+        step.consequential = False
+        step.operation = "records.read"
+        step.output = {
+            "provider_result": {"value": "incomplete"},
+            "critic": {"action": "accept"},
+        }
+        plan = dict(run.plan)
+        plan["steps"] = [
+            {
+                **plan["steps"][0],
+                "operation": "records.read",
+                "consequential": False,
+                "optional": True,
+                "reason": "Read the requested source evidence",
+            }
+        ]
+        run.plan = plan
+
+        staged = await orchestrator._stage_final_evidence_read_repair(
+            session,
+            run,
+            [step],
+            plan["steps"],
+            OutcomeVerification(
+                status="unverified",
+                required_fixes=["Find an explicit destination in the source evidence"],
+            ),
+            "w",
+        )
+        await session.commit()
+
+        assert staged is True
+        assert step.status == StepStatus.failed
+        assert step.output["provider_result"] == {"value": "incomplete"}
+        assert run.status == RunStatus.waiting_for_action
+        assert run.execution_context["final_evidence_read_repair_count"] == 1
+        assert run.execution_context["final_evidence_repair_step_id"] == step.id
+        event = await session.scalar(
+            select(AuditEvent).where(
+                AuditEvent.run_id == run.id,
+                AuditEvent.event_type == "step.criticized",
+            )
+        )
+        assert event.payload["internal_error"].startswith(
+            "[final_evidence_incomplete]"
+        )
 
 
 async def test_recovery_api_does_not_allow_unknown_write_fallback(runtime):

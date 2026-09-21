@@ -301,6 +301,31 @@ async def test_completed_provider_work_does_not_loop_after_bounded_synthesis_rep
     assert await autonomously_recover_run("run", "w") == "not_applicable"
 
 
+async def test_final_evidence_incident_is_reserved_for_read_replanner(runtime, monkeypatch):
+    monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        transition_run(
+            run,
+            RunStatus.waiting_for_action,
+            reason="final_evidence_read_repair_requested",
+            actor="test",
+            dispatch=None,
+        )
+        step = await session.get(RunStep, "step")
+        step.operation = "web.search"
+        step.consequential = False
+        step.status = StepStatus.failed
+        step.output = {"provider_result": {"results": []}}
+        run.execution_context = {
+            **(run.execution_context or {}),
+            "final_evidence_repair_step_id": step.id,
+        }
+        await session.commit()
+
+    assert await autonomously_recover_run("run", "w") == "not_applicable"
+
+
 async def test_rejected_recorded_read_is_reexecuted_instead_of_re_reviewed(
     runtime, monkeypatch
 ):

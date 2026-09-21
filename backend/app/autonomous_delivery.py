@@ -375,6 +375,11 @@ async def _safe_options(
         )
     if not step:
         return []
+    if (run.execution_context or {}).get("final_evidence_repair_step_id") == step.id:
+        # The final verifier supplied new evidence requirements. The bounded
+        # repair planner must change this read; replaying its old arguments
+        # would only reproduce the same insufficient receipt.
+        return []
     per_step = recovery_counter(state["step_recoveries"].get(step.id))
     recorded = isinstance(step.output, dict) and "provider_result" in step.output
     if recorded:

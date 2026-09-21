@@ -79,6 +79,7 @@ from .request_contract import attach_request_graph_proof
 from .result_presentation import resolve_result_presentation
 from .run_supervisor import (
     recover_planning_failure,
+    recovery_counter,
     transition_run,
 )
 from .schemas import CriticDecision, OutcomeVerification
@@ -109,6 +110,109 @@ _TEXT_DOCUMENT_TYPES = {
     "application/ld+json",
     "application/xml",
 }
+
+
+def _final_evidence_repair_candidate(steps, plan_steps, required_fixes: list[str]):
+    """Choose one completed read whose query can safely gather stronger evidence."""
+    fix_words = set(re.findall(r"[a-z0-9]+", " ".join(required_fixes).casefold()))
+    candidates = []
+    for step, planned in zip(steps, plan_steps, strict=True):
+        if (
+            step.status != StepStatus.completed
+            or step.consequential
+            or operation_scope(step.operation) != "read"
+        ):
+            continue
+        description = " ".join(
+            str(planned.get(key) or "")
+            for key in ("key", "reason", "expected_output")
+        ).casefold()
+        overlap = len(fix_words.intersection(re.findall(r"[a-z0-9]+", description)))
+        candidates.append(
+            (
+                bool(planned.get("optional")),
+                step.operation.endswith("search"),
+                overlap,
+                step.position,
+                step,
+            )
+        )
+    return max(candidates, default=(None, None, None, None, None))[-1]
+
+
+async def _stage_final_evidence_read_repair(
+    session,
+    run,
+    steps,
+    plan_steps,
+    verification: OutcomeVerification,
+    workspace_id: str,
+) -> bool:
+    """Turn final-verifier findings into one bounded, read-only repair incident."""
+    if verification.status != "unverified" or not verification.required_fixes:
+        return False
+    context = deepcopy(run.execution_context or {})
+    repair_count = recovery_counter(context.get("final_evidence_read_repair_count"))
+    if repair_count >= get_settings().max_autonomous_read_repairs:
+        return False
+    candidate = _final_evidence_repair_candidate(
+        steps, plan_steps, verification.required_fixes
+    )
+    if candidate is None:
+        return False
+
+    internal_error = (
+        "[final_evidence_incomplete] " + "; ".join(verification.required_fixes)
+    )
+    context.update(
+        final_evidence_read_repair_count=repair_count + 1,
+        final_evidence_repair_step_id=candidate.id,
+        final_evidence_required_fixes=list(verification.required_fixes),
+    )
+    run.execution_context = context
+    candidate.status = StepStatus.failed
+    candidate.error = "AURA is gathering stronger source evidence for final verification."
+    await audit(
+        session,
+        workspace_id,
+        "step.criticized",
+        {
+            "step_id": candidate.id,
+            "internal_error": internal_error,
+            "decision": CriticDecision(
+                action="retry",
+                reasons=list(verification.required_fixes),
+            ).model_dump(mode="json"),
+            "source": "final_outcome_verifier",
+        },
+        run.id,
+        actor="outcome-verifier",
+    )
+    await audit(
+        session,
+        workspace_id,
+        "run.final_evidence_read_repair_requested",
+        {
+            "step_id": candidate.id,
+            "attempt": repair_count + 1,
+            "required_fixes": verification.required_fixes,
+        },
+        run.id,
+        actor="senior-orchestrator",
+    )
+    transition_run(
+        run,
+        RunStatus.waiting_for_action,
+        reason="final_evidence_read_repair_requested",
+        actor="senior-orchestrator",
+        phase="verification",
+        supervisor_status="recovering",
+        error=candidate.error,
+        result=run.result,
+        dispatch=None,
+        metadata={"step_id": candidate.id, "attempt": repair_count + 1},
+    )
+    return True
 
 
 def _future_group_review_arguments(
@@ -3829,6 +3933,16 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 verification.reasons,
                 verification.required_fixes,
             )
+            if await _stage_final_evidence_read_repair(
+                session,
+                run,
+                steps,
+                plan_steps,
+                verification,
+                workspace_id,
+            ):
+                await session.commit()
+                return
             transition_run(
                 run,
                 RunStatus.waiting_for_action,
