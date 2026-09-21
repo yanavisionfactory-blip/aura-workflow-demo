@@ -84,3 +84,62 @@ def test_materializer_passes_the_operation_contract_to_the_model(monkeypatch):
         {"tool_slug": "canva", "operation": "canva.presentation.create"}, {"steps": {}}))
     assert result["title"] == "Roadmap"
     assert "subtitle" not in result
+
+
+def test_presentation_sources_must_be_separate_complete_accepted_urls():
+    context = {
+        "steps": {
+            "one": {"url": "https://example.com/source-one"},
+            "two": {"url": "https://example.com/source-two"},
+        }
+    }
+    good = {
+        "phases": [
+            {
+                "items": [
+                    "A concise grounded fact",
+                    "Source: https://example.com/source-one",
+                ]
+            },
+            {"items": ["Source: https://example.com/source-two"]},
+        ]
+    }
+
+    agent_runtime._validate_presentation_sources(
+        "Create a deck with source links", good, context
+    )
+
+    combined = copy.deepcopy(good)
+    combined["phases"][0]["items"][1] = (
+        "A fact. Source: https://example.com/source-one"
+    )
+    with pytest.raises(ValueError, match="separate"):
+        agent_runtime._validate_presentation_sources(
+            "Create a deck with source links", combined, context
+        )
+
+    truncated = copy.deepcopy(good)
+    truncated["phases"][0]["items"][1] = "Source: https://example.com/source-o"
+    with pytest.raises(ValueError, match="complete URL"):
+        agent_runtime._validate_presentation_sources(
+            "Create a deck with source links", truncated, context
+        )
+
+
+def test_presentation_plural_sources_require_two_distinct_receipt_urls():
+    arguments = {
+        "phases": [
+            {"items": ["Source: https://example.com/source-one"]},
+        ]
+    }
+    context = {
+        "steps": {
+            "one": {"url": "https://example.com/source-one"},
+            "two": {"url": "https://example.com/source-two"},
+        }
+    }
+
+    with pytest.raises(ValueError, match="at least 2 distinct"):
+        agent_runtime._validate_presentation_sources(
+            "Create a deck with sources", arguments, context
+        )
