@@ -1,8 +1,8 @@
 import pytest
 from pydantic import ValidationError
 
-from app.result_presentation import resolve_result_presentation
-from app.schemas import PlanStep, WorkflowPlan
+from app.result_presentation import merge_synthesis_metrics, resolve_result_presentation
+from app.schemas import PlanStep, UnifiedDeliverable, WorkflowPlan
 
 
 def step(key: str, operation: str = "records.read", *, optional: bool = False) -> PlanStep:
@@ -159,3 +159,37 @@ def test_optional_primary_falls_back_to_completed_contract_step():
 
     assert presentation["primary_step_key"] == "screen_records"
     assert presentation["supporting_step_keys"] == []
+
+
+def test_verified_synthesis_adds_semantic_kpis_after_contract_metrics():
+    presentation = {
+        "version": 1,
+        "metrics": [{"value": "16", "label": "Days between launches"}],
+    }
+    synthesis = UnifiedDeliverable(
+        summary="Compared both launches",
+        deliverable="Voyager 1 and Voyager 2 launched 16 days apart.",
+        key_metrics=[
+            {"value": "16 days", "label": "Launch gap"},
+            {"value": "1977", "label": "Launch year"},
+        ],
+    )
+
+    merged = merge_synthesis_metrics(presentation, synthesis)
+
+    assert merged["metrics"] == [
+        {"value": "16", "label": "Days between launches"},
+        {"value": "16 days", "label": "Launch gap", "source": "verified_synthesis"},
+        {"value": "1977", "label": "Launch year", "source": "verified_synthesis"},
+    ]
+
+
+def test_unverified_synthesis_cannot_add_dashboard_kpis():
+    synthesis = UnifiedDeliverable(
+        summary="Unverified",
+        deliverable="Unknown",
+        key_metrics=[{"value": "99%", "label": "Confidence"}],
+        validation_passed=False,
+    )
+
+    assert merge_synthesis_metrics({"metrics": []}, synthesis)["metrics"] == []

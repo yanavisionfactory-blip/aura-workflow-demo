@@ -6,7 +6,7 @@ import math
 import re
 from typing import Any
 
-from .schemas import ResultMetricSource, WorkflowPlan
+from .schemas import ResultMetricSource, UnifiedDeliverable, WorkflowPlan
 
 _SENSITIVE_PATH_PARTS = {
     "access_token",
@@ -161,3 +161,38 @@ def resolve_result_presentation(
         ],
         "metrics": metrics,
     }
+
+
+def merge_synthesis_metrics(
+    presentation: dict[str, Any], synthesis: UnifiedDeliverable | None
+) -> dict[str, Any]:
+    """Add grounded semantic KPIs without replacing contract-derived values."""
+
+    merged = dict(presentation)
+    existing = [
+        metric
+        for metric in merged.get("metrics", [])
+        if isinstance(metric, dict) and metric.get("value") and metric.get("label")
+    ]
+    if synthesis is None or not synthesis.validation_passed:
+        merged["metrics"] = existing[:3]
+        return merged
+
+    seen = {
+        (str(metric["value"]).casefold(), str(metric["label"]).casefold())
+        for metric in existing
+    }
+    for metric in synthesis.key_metrics:
+        candidate = {
+            "value": metric.value,
+            "label": metric.label,
+            "source": "verified_synthesis",
+        }
+        identity = (metric.value.casefold(), metric.label.casefold())
+        if identity not in seen:
+            existing.append(candidate)
+            seen.add(identity)
+        if len(existing) >= 3:
+            break
+    merged["metrics"] = existing[:3]
+    return merged

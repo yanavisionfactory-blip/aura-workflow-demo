@@ -77,7 +77,7 @@ from .providers import (
 )
 from .replanning import maybe_replan_run
 from .request_contract import attach_request_graph_proof
-from .result_presentation import resolve_result_presentation
+from .result_presentation import merge_synthesis_metrics, resolve_result_presentation
 from .run_supervisor import (
     recover_planning_failure,
     recovery_counter,
@@ -3932,6 +3932,8 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 run.id,
             )
         verification_data = verification.model_dump(mode="json")
+        if verification.status == "verified":
+            result_presentation = merge_synthesis_metrics(result_presentation, synthesis)
         await audit(
             session,
             workspace_id,
