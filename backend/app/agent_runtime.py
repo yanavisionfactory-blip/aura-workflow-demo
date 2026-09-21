@@ -22,6 +22,12 @@ from .model_inputs import (
     semantic_evidence,
 )
 from .policy import operation_scope
+from .request_contract import (
+    attach_request_graph_proof,
+    derive_request_requirements,
+    missing_runtime_requirement_evidence,
+    persisted_request_contract_fixes,
+)
 from .schemas import (
     AutonomousRecoveryDecision,
     AutonomousRecoveryOption,
@@ -196,6 +202,10 @@ def build_agents() -> dict[str, Agent]:
             Summarize only retrieved blocks and disclose unread nested or paginated content.
             Report missing capabilities only when no catalog
             connector can perform the job. Never claim execution occurred.
+            request_contract is an application-derived list of every explicit
+            requested outcome. The plan must contain real graph evidence for
+            every requirement. Preserve each requested provider, destination,
+            format, and action; do not merge away a coordinated requirement.
             Prefer one listed batch operation over invented per-record loop variables. When the
             user designates an approval or policy form, its creator-specific approved/rejected
             receipt is the authoritative gate for the non-public policies that form evaluates;
@@ -246,8 +256,11 @@ def build_agents() -> dict[str, Agent]:
             A join after alternative branches uses
             dependency_mode all_settled. For public weather, use AURA weather.forecast. For Gmail
             requests addressed to the user's own inbox, set `to` to the literal `me`. Never invent
-            an input placeholder that is not present in available_input_names. Resolve named
-            provider resources through an available read-only search, find, or list step before an
+            an input placeholder that is not present in available_input_names.
+            Cover every item in request_contract with one or more non-optional
+            graph steps. Composed requirements such as exporting a file to a
+            destination need a dependency path from the producer to the destination.
+            Resolve named provider resources through an available read-only search, find, or list step before an
             operation that requires an opaque ID. Reference the discovery step's output and declare
             the dependency; never ask the user to supply an ID for a resource they already named.
             Resolve relative
@@ -520,6 +533,7 @@ async def _run_staged_planner(
         key: payload[key]
         for key in (
             "user_request",
+            "request_contract",
             "temporal_context",
             "available_input_names",
             "planner_repair_requirements",
@@ -537,6 +551,7 @@ async def _run_staged_planner(
             agents["router"],
             {
                 "objective": objective.model_dump(mode="json"),
+                "request_contract": payload.get("request_contract", []),
                 "executable_tool_inventory": routing_inventory,
                 "available_input_names": payload.get("available_input_names", []),
                 "temporal_context": payload.get("temporal_context", {}),
@@ -556,6 +571,7 @@ async def _run_staged_planner(
             agents["builder"],
             {
                 "objective": objective.model_dump(mode="json"),
+                "request_contract": payload.get("request_contract", []),
                 "toolset_proposal": toolset.model_dump(mode="json"),
                 "executable_tool_inventory": _builder_inventory(
                     payload["executable_tool_inventory"], selected_slugs
@@ -852,7 +868,9 @@ def deterministic_plan_fixes(
                     + ", ".join(missing_inputs)
                 )
     if user_request:
-        fixes.extend(requested_deliverable_fixes(user_request, plan))
+        fixes.extend(attach_request_graph_proof(user_request, plan, tool_inventory))
+    else:
+        fixes.extend(persisted_request_contract_fixes(plan))
     return list(dict.fromkeys(fixes))
 
 
@@ -1272,6 +1290,10 @@ async def create_plan(
     agents = build_agents()
     request_payload = {
         "user_request": prompt,
+        "request_contract": [
+            requirement.model_dump(mode="json")
+            for requirement in derive_request_requirements(prompt, tool_inventory)
+        ],
         "temporal_context": planning_temporal_context(),
         "executable_tool_inventory": tool_inventory,
         "available_input_names": sorted(available_input_names or set()),
@@ -1359,6 +1381,7 @@ async def create_plan(
         risk_score=0.8 if destructive else 0.4 if writes else 0.1,
         permission_scope="destructive" if destructive else "write" if writes else "read",
     )
+    request_contract = plan.planning_artifacts.get("request_contract")
     plan.planning_artifacts = {
         "objective_spec": objective.model_dump(mode="json"),
         "toolset_proposal": toolset.model_dump(mode="json"),
@@ -1394,6 +1417,8 @@ async def create_plan(
             "total": round((perf_counter() - started_at) * 1000),
         },
     }
+    if request_contract:
+        plan.planning_artifacts["request_contract"] = request_contract
     return plan
 
 
@@ -1427,6 +1452,16 @@ async def verify_outcome(prompt: str, plan: dict, artifacts: list[dict],
         item.get("critic", {}).get("action") != "accept" for item in artifacts
     ):
         return OutcomeVerification(status="unverified", reasons=["Accepted evidence is missing"])
+    missing_requirements = missing_runtime_requirement_evidence(plan, artifacts)
+    if missing_requirements:
+        return OutcomeVerification(
+            status="unverified",
+            reasons=["Accepted evidence does not cover every approved requirement"],
+            required_fixes=[
+                "Complete preserved requirement evidence for: "
+                + ", ".join(missing_requirements)
+            ],
+        )
     payload = {"original_request": prompt, "approved_plan": plan,
                "accepted_artifacts": artifacts if prepared_evidence is None else prepared_evidence,
                "accepted_evidence_index": [{"step_id": item["step_id"], "operation": item.get("operation"),
