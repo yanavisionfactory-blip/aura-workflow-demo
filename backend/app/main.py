@@ -330,7 +330,7 @@ async def health() -> dict:
 
 
 def production_configuration_checks() -> dict[str, bool]:
-    return {
+    checks = {
         "clerk": settings.clerk_enabled and bool(settings.clerk_issuer),
         "authorized_parties": bool(settings.clerk_parties),
         "openai": bool(settings.openai_api_key),
@@ -338,6 +338,9 @@ def production_configuration_checks() -> dict[str, bool]:
         "credential_encryption": bool(settings.credential_encryption_key),
         "oauth_callback_registry": not oauth_registry_errors(settings),
     }
+    if settings.recovery_code_repair_enabled:
+        checks["recovery_code_repair"] = settings.recovery_code_repair_configured
+    return checks
 
 
 @app.get("/ready")
@@ -370,6 +373,10 @@ async def readiness() -> dict:
             and len(settings.connector_release_signing_key) >= 32
         ),
     }
+    recovery_code_repair_details = {
+        "enabled": settings.recovery_code_repair_enabled,
+        "configured": settings.recovery_code_repair_configured,
+    }
     if settings.recovery_scheduler_enabled:
         now = datetime.now(UTC)
         started_at = datetime.fromisoformat(scheduler_observation["started_at"])
@@ -396,6 +403,7 @@ async def readiness() -> dict:
                 "checks": checks,
                 "recovery_scheduler": scheduler_details,
                 "connector_engineer": connector_engineer_details,
+                "recovery_code_repair": recovery_code_repair_details,
             },
         )
     return {
@@ -403,6 +411,7 @@ async def readiness() -> dict:
         "checks": checks,
         "recovery_scheduler": scheduler_details,
         "connector_engineer": connector_engineer_details,
+        "recovery_code_repair": recovery_code_repair_details,
     }
 
 
