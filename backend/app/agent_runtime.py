@@ -80,7 +80,7 @@ _PUBLIC_SOURCE_REQUEST_RE = re.compile(
 
 
 PLANNER_ATTEMPT_TIMEOUT_SECONDS = 12
-PLANNING_GLOBAL_TIMEOUT_SECONDS = 45
+PLANNING_GLOBAL_TIMEOUT_SECONDS = 35
 
 
 async def _within_planning_budget(awaitable, deadline: float):
@@ -361,6 +361,7 @@ def _inventory_aliases(item: dict) -> set[str]:
         str(item.get("slug") or ""),
         str(item.get("name") or ""),
         str(item.get("canonical_provider") or ""),
+        *(str(value) for value in item.get("aliases") or []),
     }
     aliases.update(
         str(operation).split(".", 1)[0]
@@ -431,6 +432,17 @@ def intent_bounded_tool_inventory(
             index
             for index, item in enumerate(inventory)
             if "weather.forecast" in (item.get("allowed_operations") or [])
+        )
+
+    # A requested destination must not hide the evidence tools needed to build
+    # a grounded deliverable. Select by capability rather than by an app name so
+    # this works for every current and future public-research connector.
+    if _PUBLIC_SOURCE_REQUEST_RE.search(prompt):
+        selected.update(
+            index
+            for index, item in enumerate(inventory)
+            if set(item.get("allowed_operations") or [])
+            & {"web.search", "web.page.read", "browser.page.read"}
         )
 
     return [item for index, item in enumerate(inventory) if index in selected] or inventory
@@ -863,19 +875,19 @@ async def _run_staged_planner(
         ),
         "response_recovery": payload.get("response_recovery"),
     }
+    async def stage(agent: Agent, stage_payload: dict):
+        async with asyncio.timeout(PLANNER_ATTEMPT_TIMEOUT_SECONDS):
+            return await _run(agent, stage_payload, max_turns=max_turns)
+
     objective_raw, toolset_raw = await asyncio.gather(
-        _run(agents["intent"], intent_payload, max_turns=max_turns),
-        _run(
-            agents["router"],
-            router_payload,
-            max_turns=max_turns,
-        ),
+        stage(agents["intent"], intent_payload),
+        stage(agents["router"], router_payload),
     )
     objective = ObjectiveSpec.model_validate(objective_raw)
     toolset = ToolsetProposal.model_validate(toolset_raw)
     selected_slugs = {selection.slug for selection in toolset.tools}
     plan = WorkflowPlan.model_validate(
-        await _run(
+        await stage(
             agents["builder"],
             {
                 "objective": objective.model_dump(mode="json"),
@@ -894,7 +906,6 @@ async def _run_staged_planner(
                 ),
                 "response_recovery": payload.get("response_recovery"),
             },
-            max_turns=max_turns,
         )
     )
     return PlanningBundle(objective=objective, toolset=toolset, plan=plan)
@@ -905,15 +916,27 @@ def _has_only_missing_capabilities(bundle: PlanningBundle) -> bool:
 
 
 def _prefer_staged_planner(prompt: str, tool_inventory: list[dict]) -> bool:
-    """Use the specialist team first for source-backed external artifacts."""
+    """Use the specialist team first for every genuinely multi-tool objective."""
     requirements = derive_request_requirements(prompt, tool_inventory)
-    return bool(_PUBLIC_SOURCE_REQUEST_RE.search(prompt)) and any(
+    providers = {
+        provider
+        for requirement in requirements
+        for provider in requirement.provider_slugs
+    }
+    external_actions = [
+        requirement
+        for requirement in requirements
+        if requirement.action
+        in {"create", "export", "store", "publish", "send", "update", "delete", "schedule"}
+    ]
+    source_backed_artifact = bool(_PUBLIC_SOURCE_REQUEST_RE.search(prompt)) and any(
         requirement.action == "read" for requirement in requirements
     ) and any(
         requirement.action
         in {"create", "export", "store", "publish", "send", "update"}
         for requirement in requirements
     )
+    return source_backed_artifact or len(providers) >= 2 or len(external_actions) >= 2
 
 
 def requested_deliverable_fixes(prompt: str, plan: WorkflowPlan) -> list[str]:
@@ -1077,9 +1100,37 @@ def deterministic_plan_fixes(
         item["slug"]: set(item.get("allowed_operations") or []) for item in tool_inventory
     }
     operation_tools: dict[str, list[str]] = {}
+    alias_tools: dict[str, set[str]] = {}
+
+    def normalized_alias(value: object) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold()).strip()
+
     for tool_slug, operations in allowed.items():
         for operation in operations:
             operation_tools.setdefault(operation, []).append(tool_slug)
+    for item in tool_inventory:
+        tool_slug = str(item.get("slug") or "")
+        for alias in {
+            tool_slug,
+            str(item.get("name") or ""),
+            str(item.get("canonical_provider") or ""),
+            *(str(value) for value in item.get("aliases") or []),
+        }:
+            normalized = normalized_alias(alias)
+            if normalized:
+                alias_tools.setdefault(normalized, set()).add(tool_slug)
+
+    def matching_operations(tool_slug: str, supplied: str) -> list[str]:
+        supplied_alias = normalized_alias(supplied)
+        if not supplied_alias:
+            return []
+        return [
+            operation
+            for operation in allowed.get(tool_slug, set())
+            if supplied == operation
+            or supplied_alias == normalized_alias(operation)
+            or supplied_alias == normalized_alias(operation.rsplit(".", 1)[-1])
+        ]
 
     # Models sometimes put an operation identifier in tool_slug (``web.search``)
     # and its short verb in operation (``search``). Resolve exact, unique catalog
@@ -1088,14 +1139,17 @@ def deterministic_plan_fixes(
     for step in plan.steps:
         original_slug = step.tool_slug
         original_operation = step.operation
-        if original_slug in allowed:
-            if original_operation in allowed[original_slug]:
+        resolved_slug = original_slug
+        if resolved_slug not in allowed:
+            alias_candidates = alias_tools.get(normalized_alias(original_slug), set())
+            if len(alias_candidates) == 1:
+                resolved_slug = next(iter(alias_candidates))
+                step.tool_slug = resolved_slug
+
+        if resolved_slug in allowed:
+            if original_operation in allowed[resolved_slug]:
                 continue
-            operation_candidates = [
-                operation
-                for operation in allowed[original_slug]
-                if operation.rsplit(".", 1)[-1] == original_operation
-            ]
+            operation_candidates = matching_operations(resolved_slug, original_operation)
             if len(operation_candidates) == 1:
                 step.operation = operation_candidates[0]
             continue

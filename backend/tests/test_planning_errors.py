@@ -231,6 +231,8 @@ def test_provider_candidates_ignore_instruction_words() -> None:
 
 
 def test_requirement_inventory_discovers_exact_connectable_app(monkeypatch) -> None:
+    queued = []
+
     class _PipedreamClient:
         configured = True
 
@@ -249,6 +251,10 @@ def test_requirement_inventory_discovers_exact_connectable_app(monkeypatch) -> N
     monkeypatch.setattr(
         "app.pipedream_connect.pipedream_client", lambda: _PipedreamClient()
     )
+    monkeypatch.setattr(
+        "app.connector_engineer.queue_pipedream_certification",
+        lambda app: queued.append(app["name_slug"]) or True,
+    )
 
     inventory = asyncio.run(
         connection_requirement_inventory(
@@ -259,6 +265,7 @@ def test_requirement_inventory_discovers_exact_connectable_app(monkeypatch) -> N
     )
 
     assert [item["slug"] for item in inventory] == ["slack", "linear"]
+    assert queued == ["linear"]
 
 
 def test_guaranteed_weather_fields_do_not_trigger_a_second_planner_call(monkeypatch) -> None:

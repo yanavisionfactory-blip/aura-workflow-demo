@@ -1304,7 +1304,9 @@ async def test_stale_execution_delivery_leaves_paused_and_terminal_runs_untouche
         assert (await session.get(WorkflowRun, "run")).status == state
 
 
-async def test_unattended_execution_requires_operation_certification(runtime, monkeypatch):
+async def test_unattended_approved_write_runs_once_without_live_certification(
+    runtime, monkeypatch
+):
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
         run.execution_context = {
@@ -1313,8 +1315,210 @@ async def test_unattended_execution_requires_operation_certification(runtime, mo
         }
         await session.commit()
 
+    calls = 0
+
+    async def execute(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return {"id": "record-1"}
+
+    async def accept(*args, **kwargs):
+        return CriticDecision(action="accept")
+
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", execute)
+    monkeypatch.setattr(orchestrator, "critique_step", accept)
+    await orchestrator._execute_run("run", "w")
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        assert run.status == RunStatus.completed
+        assert calls == 1
+        governed = await session.scalar(
+            select(AuditEvent).where(
+                AuditEvent.run_id == run.id,
+                AuditEvent.event_type == "step.unattended_governed_execution",
+            )
+        )
+        assert governed is not None
+        assert governed.payload["mode"] == "approved_once_no_replay"
+
+
+async def test_unattended_multi_tool_marketplace_flow_completes_once(
+    runtime, monkeypatch
+):
+    operations = [
+        ("alpha", "alpha.records.read", False),
+        ("beta", "beta.briefs.create", True),
+        ("gamma", "gamma.messages.send", True),
+    ]
+    workflow = WorkflowPlan(
+        name="Unfamiliar marketplace workflow",
+        interpretation="Read records, create a brief, and send it",
+        steps=[
+            PlanStep(
+                key=f"step_{index}",
+                agent="marketplace-operator",
+                tool_slug=slug,
+                operation=operation,
+                arguments={},
+                reason=f"Complete {operation}",
+                expected_output=f"{operation} receipt",
+                consequential=consequential,
+                depends_on=[] if index == 1 else [f"step_{index - 1}"],
+            )
+            for index, (slug, operation, consequential) in enumerate(
+                operations, start=1
+            )
+        ],
+    ).model_dump(mode="json")
+    digest = canonical_plan_hash(workflow)
+
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        run.plan = workflow
+        run.execution_context = {
+            "execution_mode": "unattended",
+            "__aura_preflight__": {
+                "version": 2,
+                "plan_hash": digest,
+                "status": "passed",
+                "completed_at": datetime.now(UTC).isoformat(),
+            },
+        }
+        version = await session.get(PlanVersion, "version")
+        version.plan = workflow
+        version.plan_hash = digest
+        snapshot = await session.get(ApprovalSnapshot, "snapshot")
+        snapshot.plan_hash = digest
+        snapshot.permission_snapshot = {
+            slug: [operation] for slug, operation, _ in operations
+        }
+
+        existing_step = await session.get(RunStep, "step")
+        existing_tool = await session.get(ToolConnection, "tool")
+        existing_manifest = await session.get(CapabilityManifest, "manifest")
+        for index, (slug, operation, consequential) in enumerate(
+            operations, start=1
+        ):
+            capability = {
+                "name": operation,
+                "input_schema": {"type": "object"},
+                "output_schema": {"type": "object"},
+                "permission_scope": "write" if consequential else "read",
+                "requires_approval": consequential,
+            }
+            if index == 1:
+                existing_step.position = 0
+                existing_step.step_key = "step_1"
+                existing_step.agent = "marketplace-operator"
+                existing_step.tool_slug = slug
+                existing_step.operation = operation
+                existing_step.arguments = {}
+                existing_step.consequential = consequential
+                existing_step.idempotency_key = "marketplace-step-1"
+                existing_step.depends_on = []
+                existing_tool.slug = slug
+                existing_tool.display_name = slug.title()
+                existing_tool.allowed_operations = [operation]
+                existing_manifest.manifest = {
+                    "provider_type": "pipedream",
+                    "capabilities": [capability],
+                }
+                continue
+            session.add(
+                ToolConnection(
+                    id=f"tool-{slug}",
+                    workspace_id="w",
+                    slug=slug,
+                    display_name=slug.title(),
+                    kind=ToolKind.mcp,
+                    allowed_operations=[operation],
+                    config={},
+                )
+            )
+            session.add(
+                CapabilityManifest(
+                    id=f"manifest-{slug}",
+                    workspace_id="w",
+                    tool_id=f"tool-{slug}",
+                    status="verified",
+                    manifest={
+                        "provider_type": "pipedream",
+                        "capabilities": [capability],
+                    },
+                    provider_type="mcp",
+                )
+            )
+            session.add(
+                RunStep(
+                    id=f"run-step-{slug}",
+                    run_id="run",
+                    position=index - 1,
+                    step_key=f"step_{index}",
+                    agent="marketplace-operator",
+                    tool_slug=slug,
+                    operation=operation,
+                    arguments={},
+                    status=StepStatus.pending,
+                    consequential=consequential,
+                    idempotency_key=f"marketplace-step-{index}",
+                    depends_on=[f"step_{index - 1}"],
+                )
+            )
+        await session.commit()
+
+    calls = []
+
+    async def execute(_self, operation, _arguments):
+        calls.append(operation)
+        return {"id": f"receipt-{len(calls)}"}
+
+    async def accept(*_args, **_kwargs):
+        return CriticDecision(action="accept")
+
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", execute)
+    monkeypatch.setattr(orchestrator, "critique_step", accept)
+
+    await orchestrator._execute_run("run", "w")
+    await orchestrator._execute_run("run", "w")
+
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        governed = list(
+            await session.scalars(
+                select(AuditEvent).where(
+                    AuditEvent.run_id == run.id,
+                    AuditEvent.event_type == "step.unattended_governed_execution",
+                )
+            )
+        )
+        assert run.status == RunStatus.completed, (run.error, run.result)
+        assert calls == [operation for _, operation, _ in operations]
+        assert len(governed) == 3
+
+
+async def test_unattended_destructive_operation_still_requires_certification(
+    runtime, monkeypatch
+):
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        run.execution_context = {
+            **(run.execution_context or {}),
+            "execution_mode": "unattended",
+        }
+        manifest = await session.get(CapabilityManifest, "manifest")
+        manifest.manifest = {
+            **manifest.manifest,
+            "capabilities": [
+                {
+                    **manifest.manifest["capabilities"][0],
+                    "permission_scope": "destructive",
+                }
+            ],
+        }
+        await session.commit()
+
     async def forbidden(*args, **kwargs):
-        pytest.fail("Uncertified unattended operation executed")
+        pytest.fail("Uncertified destructive operation executed")
 
     monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", forbidden)
     await orchestrator._execute_run("run", "w")

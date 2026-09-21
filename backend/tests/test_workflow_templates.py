@@ -299,7 +299,13 @@ def test_weather_presentation_template_is_narrow_and_capability_complete():
     ) is None
 
 
-def test_compiled_weather_presentation_bypasses_model_planning():
+def test_compiled_weather_presentation_uses_audited_fallback_after_agent_exhaustion(
+    monkeypatch,
+):
+    async def planner_unavailable(*_args, **_kwargs):
+        raise RuntimeError("planner unavailable")
+
+    monkeypatch.setattr(orchestrator, "create_plan", planner_unavailable)
     plan = asyncio.run(
         orchestrator._create_compiled_plan(
             "Please make a presentation on Canva about the weather in Munich tomorrow",
@@ -319,9 +325,16 @@ def test_compiled_weather_presentation_bypasses_model_planning():
         "canva.presentation.create",
     ]
     assert plan.planning_artifacts["compiled_contracts"]
+    assert plan.planning_artifacts["planner_recovery_mode"] == (
+        "audited_adapter_after_agent_exhaustion"
+    )
 
 
-def test_compiled_weather_presentation_keeps_requested_email_delivery():
+def test_weather_fallback_keeps_requested_email_delivery(monkeypatch):
+    async def planner_unavailable(*_args, **_kwargs):
+        raise RuntimeError("planner unavailable")
+
+    monkeypatch.setattr(orchestrator, "create_plan", planner_unavailable)
     plan = asyncio.run(
         orchestrator._create_compiled_plan(
             "Check tomorrow's weather in Munich, create a presentation in Canva, "
@@ -347,7 +360,11 @@ def test_compiled_weather_presentation_keeps_requested_email_delivery():
     assert plan.steps[2].consequential is False
 
 
-def test_exact_munich_three_day_request_compiles_immediately_and_cleanly():
+def test_exact_munich_three_day_request_has_clean_audited_fallback(monkeypatch):
+    async def planner_unavailable(*_args, **_kwargs):
+        raise RuntimeError("planner unavailable")
+
+    monkeypatch.setattr(orchestrator, "create_plan", planner_unavailable)
     prompt = (
         "Check the current weather in Munich and the three-day forecast in Celsius. "
         "Then create a polished three-slide presentation summarizing today’s conditions, "
@@ -371,7 +388,7 @@ def test_exact_munich_three_day_request_compiles_immediately_and_cleanly():
     )
 
     assert plan.planning_artifacts["planner_recovery_mode"] == (
-        "audited_weather_presentation_template"
+        "audited_adapter_after_agent_exhaustion"
     )
     assert [step.operation for step in plan.steps] == [
         "weather.forecast",
@@ -406,7 +423,13 @@ def test_canva_export_is_governed_without_a_second_human_approval():
     assert export["requires_approval"] is False
 
 
-def test_source_backed_presentation_template_is_subject_agnostic_and_grounded():
+def test_source_backed_presentation_template_is_subject_agnostic_and_grounded(
+    monkeypatch,
+):
+    async def planner_unavailable(*_args, **_kwargs):
+        raise RuntimeError("planner unavailable")
+
+    monkeypatch.setattr(orchestrator, "create_plan", planner_unavailable)
     prompt = (
         "Using official NASA sources, create a concise 3-slide Canva presentation "
         "comparing Voyager 1 and Voyager 2 launch dates and primary destinations. "
@@ -456,7 +479,7 @@ def test_source_backed_presentation_template_is_subject_agnostic_and_grounded():
     )
 
     assert compiled.planning_artifacts["planner_recovery_mode"] == (
-        "audited_source_backed_presentation"
+        "audited_adapter_after_agent_exhaustion"
     )
     assert compiled.planning_artifacts["request_contract"]["fixes"] == []
 

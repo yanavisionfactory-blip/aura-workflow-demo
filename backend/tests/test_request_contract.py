@@ -17,6 +17,13 @@ from app.schemas import PlanStep, ResultContract, WorkflowPlan
 _HOLDOUTS = json.loads(
     (Path(__file__).parent / "fixtures" / "novel_workflow_holdouts.json").read_text()
 )
+_MARKETPLACE_HOLDOUTS = json.loads(
+    (
+        Path(__file__).parent
+        / "fixtures"
+        / "marketplace_multi_tool_holdouts.json"
+    ).read_text()
+)
 
 
 def _inventory() -> list[dict]:
@@ -99,6 +106,38 @@ def _future_app_plan(*, include_notification: bool = True) -> WorkflowPlan:
         interpretation="Transcribe, store, and notify",
         steps=steps,
     )
+
+
+@pytest.mark.parametrize(
+    "case",
+    _MARKETPLACE_HOLDOUTS,
+    ids=lambda case: case["name"],
+)
+def test_unfamiliar_multi_tool_marketplace_graphs_are_proven_generically(case) -> None:
+    steps = [
+        PlanStep(
+            agent="marketplace-operator",
+            arguments={},
+            **item,
+        )
+        for item in case["steps"]
+    ]
+    workflow = WorkflowPlan(
+        name=case["name"],
+        interpretation=case["prompt"],
+        steps=steps,
+        result_contract=ResultContract(
+            primary_step_key=steps[-1].key,
+            supporting_step_keys=[step.key for step in steps[:-1]],
+        ),
+    )
+
+    assert attach_request_graph_proof(
+        case["prompt"], workflow, case["inventory"]
+    ) == []
+    proof = workflow.planning_artifacts["request_contract"]
+    assert len(proof["evidence"]) == len(proof["requirements"])
+    assert all(item["step_keys"] for item in proof["evidence"])
 
 
 def test_prompt_contract_splits_shared_verb_requirements() -> None:

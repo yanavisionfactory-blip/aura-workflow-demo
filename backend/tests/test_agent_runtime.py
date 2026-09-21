@@ -75,6 +75,34 @@ def test_clear_weather_presentation_intent_excludes_unrequested_gmail() -> None:
     assert {item["slug"] for item in bounded} == {"aura", "canva"}
 
 
+def test_source_backed_destination_keeps_generic_research_capabilities() -> None:
+    inventory = [
+        {
+            "slug": "aura",
+            "name": "AURA Intelligence",
+            "allowed_operations": ["web.search", "web.page.read"],
+        },
+        {
+            "slug": "canva",
+            "name": "Canva",
+            "allowed_operations": ["canva.presentation.create"],
+        },
+        {
+            "slug": "google",
+            "name": "Google Workspace",
+            "allowed_operations": ["gmail.send"],
+        },
+    ]
+
+    bounded = intent_bounded_tool_inventory(
+        "Using official NASA sources, create a Canva presentation with source links.",
+        inventory,
+        ["Canva"],
+    )
+
+    assert {item["slug"] for item in bounded} == {"aura", "canva"}
+
+
 def test_explicit_linear_provider_does_not_expand_generic_issue_to_jira() -> None:
     inventory = [
         {"slug": "linear", "name": "Linear", "allowed_operations": ["linear.list-issues"]},
@@ -93,6 +121,67 @@ def test_open_ended_intent_preserves_the_full_inventory() -> None:
     ]
 
     assert intent_bounded_tool_inventory("Help me automate this", inventory) == inventory
+
+
+def test_marketplace_aliases_normalize_to_exact_connector_operations() -> None:
+    inventory = [
+        {
+            "slug": "linear-issues",
+            "name": "Linear",
+            "canonical_provider": "linear",
+            "aliases": ["Linear Issues"],
+            "allowed_operations": [
+                "linear.create_issue",
+                "linear.list_issues",
+            ],
+        }
+    ]
+    workflow = plan(
+        PlanStep(
+            key="create_issue",
+            agent="operator",
+            tool_slug="Linear Issues",
+            operation="create issue",
+            reason="Create the requested Linear issue",
+            expected_output="Linear issue receipt",
+            consequential=True,
+        )
+    )
+
+    assert deterministic_plan_fixes(workflow, inventory, set()) == []
+    assert workflow.steps[0].tool_slug == "linear-issues"
+    assert workflow.steps[0].operation == "linear.create_issue"
+
+
+def test_ambiguous_marketplace_alias_is_never_guessed() -> None:
+    inventory = [
+        {
+            "slug": "linear-one",
+            "name": "Linear",
+            "allowed_operations": ["linear.create_issue"],
+        },
+        {
+            "slug": "linear-two",
+            "name": "Linear",
+            "allowed_operations": ["linear.create_issue"],
+        },
+    ]
+    workflow = plan(
+        PlanStep(
+            key="create_issue",
+            agent="operator",
+            tool_slug="Linear",
+            operation="create issue",
+            reason="Create the requested issue",
+            expected_output="Issue receipt",
+            consequential=True,
+        )
+    )
+
+    fixes = deterministic_plan_fixes(workflow, inventory, set())
+
+    assert workflow.steps[0].tool_slug == "Linear"
+    assert any("unavailable tool" in fix for fix in fixes)
 
 
 def test_explicit_multi_app_deliverables_cannot_silently_disappear() -> None:
@@ -1549,6 +1638,111 @@ def test_source_backed_artifact_uses_staged_team_before_combined_planner(
         "web.page.read",
         "web.page.read",
         "web.page.read",
+    ]
+
+
+def test_unfamiliar_multi_tool_workflow_uses_staged_team_first(monkeypatch) -> None:
+    calls = []
+    prompt = (
+        "Read records from AlphaDesk, create a brief in BetaDocs, "
+        "and send it through GammaMail."
+    )
+    inventory = [
+        {
+            "slug": "alpha-desk",
+            "name": "AlphaDesk",
+            "allowed_operations": ["records.read"],
+            "connected": True,
+        },
+        {
+            "slug": "beta-docs",
+            "name": "BetaDocs",
+            "allowed_operations": ["briefs.create"],
+            "connected": True,
+        },
+        {
+            "slug": "gamma-mail",
+            "name": "GammaMail",
+            "allowed_operations": ["messages.send"],
+            "connected": True,
+        },
+    ]
+
+    async def staged(*_args, **_kwargs):
+        calls.append("staged")
+        return agent_runtime.PlanningBundle(
+            objective={"goal": prompt},
+            toolset={
+                "tools": [
+                    {
+                        "slug": item["slug"],
+                        "role": "workflow",
+                        "rationale": "Satisfy the requested provider action",
+                    }
+                    for item in inventory
+                ]
+            },
+            plan={
+                "name": "Unfamiliar marketplace flow",
+                "interpretation": prompt,
+                "steps": [
+                    {
+                        "key": "read_records",
+                        "agent": "researcher",
+                        "tool_slug": "alpha-desk",
+                        "operation": "records.read",
+                        "reason": "Read records from AlphaDesk",
+                        "expected_output": "Records",
+                    },
+                    {
+                        "key": "create_brief",
+                        "agent": "writer",
+                        "tool_slug": "beta-docs",
+                        "operation": "briefs.create",
+                        "reason": "Create the requested brief in BetaDocs",
+                        "expected_output": "Brief receipt",
+                        "depends_on": ["read_records"],
+                        "consequential": True,
+                    },
+                    {
+                        "key": "send_brief",
+                        "agent": "sender",
+                        "tool_slug": "gamma-mail",
+                        "operation": "messages.send",
+                        "reason": "Send the brief through GammaMail",
+                        "expected_output": "Delivery receipt",
+                        "depends_on": ["create_brief"],
+                        "consequential": True,
+                    },
+                ],
+            },
+        )
+
+    async def combined(*_args, **_kwargs):
+        calls.append("combined")
+        raise AssertionError("The combined planner should not run first")
+
+    monkeypatch.setattr(
+        agent_runtime,
+        "build_agents",
+        lambda: {
+            "planner": object(),
+            "intent": object(),
+            "router": object(),
+            "builder": object(),
+        },
+    )
+    monkeypatch.setattr(agent_runtime, "_run_staged_planner", staged)
+    monkeypatch.setattr(agent_runtime, "_run_planner", combined)
+
+    result = asyncio.run(create_plan(prompt, inventory))
+
+    assert calls == ["staged"]
+    assert result.planning_artifacts["planner_recovery_mode"] == "staged_primary"
+    assert [step.tool_slug for step in result.steps] == [
+        "alpha-desk",
+        "beta-docs",
+        "gamma-mail",
     ]
 
 

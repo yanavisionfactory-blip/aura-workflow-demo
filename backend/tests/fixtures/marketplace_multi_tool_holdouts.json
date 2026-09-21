@@ -1,0 +1,218 @@
+[
+  {
+    "name": "voice_archive_notification",
+    "prompt": "Read the launch recording with Voice Lens, store the transcript in Nebula Vault, and send a notification through PulseChat.",
+    "inventory": [
+      {
+        "slug": "voice-lens",
+        "name": "Voice Lens",
+        "canonical_provider": "voice-lens",
+        "aliases": ["VoiceLens"],
+        "allowed_operations": ["audio.read"]
+      },
+      {
+        "slug": "nebula-vault",
+        "name": "Nebula Vault",
+        "canonical_provider": "nebula-vault",
+        "allowed_operations": ["objects.store"]
+      },
+      {
+        "slug": "pulsechat",
+        "name": "PulseChat",
+        "canonical_provider": "pulse-chat",
+        "allowed_operations": ["messages.send"]
+      }
+    ],
+    "steps": [
+      {
+        "key": "read_recording",
+        "tool_slug": "voice-lens",
+        "operation": "audio.read",
+        "reason": "Read the launch recording with Voice Lens",
+        "expected_output": "Launch recording transcript"
+      },
+      {
+        "key": "store_transcript",
+        "tool_slug": "nebula-vault",
+        "operation": "objects.store",
+        "reason": "Store the transcript in Nebula Vault",
+        "expected_output": "Stored transcript receipt",
+        "depends_on": ["read_recording"],
+        "consequential": true
+      },
+      {
+        "key": "send_notification",
+        "tool_slug": "pulsechat",
+        "operation": "messages.send",
+        "reason": "Send the requested notification through PulseChat",
+        "expected_output": "Notification receipt",
+        "depends_on": ["store_transcript"],
+        "consequential": true
+      }
+    ]
+  },
+  {
+    "name": "crm_brief_pdf_archive",
+    "prompt": "Find the quarterly account in Orbit CRM, create a brief in PaperForge, export the brief as a PDF with PaperForge, and store the PDF in ArchiveX.",
+    "inventory": [
+      {
+        "slug": "orbit-crm",
+        "name": "Orbit CRM",
+        "canonical_provider": "orbit",
+        "allowed_operations": ["accounts.search"]
+      },
+      {
+        "slug": "paper-forge",
+        "name": "PaperForge",
+        "canonical_provider": "paper-forge",
+        "aliases": ["Paper Forge"],
+        "allowed_operations": ["documents.create", "documents.export"]
+      },
+      {
+        "slug": "archive-x",
+        "name": "ArchiveX",
+        "canonical_provider": "archive-x",
+        "allowed_operations": ["objects.store"]
+      }
+    ],
+    "steps": [
+      {
+        "key": "find_account",
+        "tool_slug": "orbit-crm",
+        "operation": "accounts.search",
+        "reason": "Find the quarterly account in Orbit CRM",
+        "expected_output": "Quarterly account data"
+      },
+      {
+        "key": "create_brief",
+        "tool_slug": "paper-forge",
+        "operation": "documents.create",
+        "reason": "Create the requested quarterly account brief in PaperForge",
+        "expected_output": "Editable brief",
+        "depends_on": ["find_account"],
+        "consequential": true
+      },
+      {
+        "key": "export_pdf",
+        "tool_slug": "paper-forge",
+        "operation": "documents.export",
+        "reason": "Export the PaperForge brief as a PDF",
+        "expected_output": "PDF export",
+        "depends_on": ["create_brief"],
+        "consequential": true
+      },
+      {
+        "key": "store_pdf",
+        "tool_slug": "archive-x",
+        "operation": "objects.store",
+        "reason": "Store the PDF in ArchiveX",
+        "expected_output": "Archived PDF receipt",
+        "depends_on": ["export_pdf"],
+        "consequential": true
+      }
+    ]
+  },
+  {
+    "name": "incident_task_review",
+    "prompt": "Read open incidents from SignalDesk, update matching tasks in LinearFlow, and schedule a review in Chronos.",
+    "inventory": [
+      {
+        "slug": "signal-desk",
+        "name": "SignalDesk",
+        "canonical_provider": "signal-desk",
+        "allowed_operations": ["incidents.read"]
+      },
+      {
+        "slug": "linear-flow",
+        "name": "LinearFlow",
+        "canonical_provider": "linear-flow",
+        "aliases": ["Linear Flow"],
+        "allowed_operations": ["tasks.update"]
+      },
+      {
+        "slug": "chronos",
+        "name": "Chronos",
+        "canonical_provider": "chronos",
+        "allowed_operations": ["reviews.schedule"]
+      }
+    ],
+    "steps": [
+      {
+        "key": "read_incidents",
+        "tool_slug": "signal-desk",
+        "operation": "incidents.read",
+        "reason": "Read open incidents from SignalDesk",
+        "expected_output": "Open incidents"
+      },
+      {
+        "key": "update_tasks",
+        "tool_slug": "linear-flow",
+        "operation": "tasks.update",
+        "reason": "Update matching tasks in LinearFlow",
+        "expected_output": "Updated task receipts",
+        "depends_on": ["read_incidents"],
+        "consequential": true
+      },
+      {
+        "key": "schedule_review",
+        "tool_slug": "chronos",
+        "operation": "reviews.schedule",
+        "reason": "Schedule the incident review in Chronos",
+        "expected_output": "Scheduled review receipt",
+        "depends_on": ["update_tasks"],
+        "consequential": true
+      }
+    ]
+  },
+  {
+    "name": "metrics_summary_delivery",
+    "prompt": "Read monthly revenue from MetricWave, calculate the exact variance, create a summary in LedgerLight, and send it through RelayMail.",
+    "inventory": [
+      {
+        "slug": "metric-wave",
+        "name": "MetricWave",
+        "canonical_provider": "metric-wave",
+        "allowed_operations": ["revenue.read"]
+      },
+      {
+        "slug": "ledger-light",
+        "name": "LedgerLight",
+        "canonical_provider": "ledger-light",
+        "allowed_operations": ["summaries.create"]
+      },
+      {
+        "slug": "relay-mail",
+        "name": "RelayMail",
+        "canonical_provider": "relay-mail",
+        "allowed_operations": ["messages.send"]
+      }
+    ],
+    "steps": [
+      {
+        "key": "read_revenue",
+        "tool_slug": "metric-wave",
+        "operation": "revenue.read",
+        "reason": "Read monthly revenue from MetricWave",
+        "expected_output": "Monthly revenue values"
+      },
+      {
+        "key": "create_summary",
+        "tool_slug": "ledger-light",
+        "operation": "summaries.create",
+        "reason": "Calculate the exact variance and create the summary in LedgerLight",
+        "expected_output": "Exact variance summary",
+        "depends_on": ["read_revenue"],
+        "consequential": true
+      },
+      {
+        "key": "send_summary",
+        "tool_slug": "relay-mail",
+        "operation": "messages.send",
+        "reason": "Send the exact variance summary through RelayMail",
+        "expected_output": "Delivery receipt",
+        "depends_on": ["create_summary"],
+        "consequential": true
+      }
+    ]
+  }
+]
