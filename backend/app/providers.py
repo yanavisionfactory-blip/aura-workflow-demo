@@ -45,6 +45,7 @@ PROVIDERS = {
             "https://www.googleapis.com/auth/gmail.readonly",
             "https://www.googleapis.com/auth/gmail.send",
             "https://www.googleapis.com/auth/drive.readonly",
+            "https://www.googleapis.com/auth/drive.file",
             "https://www.googleapis.com/auth/calendar",
             "https://www.googleapis.com/auth/spreadsheets",
         ),
@@ -522,6 +523,7 @@ class ProviderExecutor:
             )
         handlers = {
             "gmail.list": self._gmail_list,
+            "gmail.threads.read": self._gmail_threads_read,
             "gmail.send": self._gmail_send,
             "gmail.get": self._gmail_get,
             "google.identity.get": self._google_identity_get,
@@ -529,6 +531,8 @@ class ProviderExecutor:
             "calendar.create": self._calendar_create,
             "calendar.get": self._calendar_get,
             "drive.files.search": self._drive_files_search,
+            "drive.files.create": self._drive_files_create,
+            "drive.files.get": self._drive_files_get,
             "drive.spreadsheet.resolve": self._drive_spreadsheet_resolve,
             "sheets.read": self._sheets_read,
             "sheets.append": self._sheets_append,
@@ -922,6 +926,83 @@ class ProviderExecutor:
         params = {"maxResults": min(int(a.get("limit", 10)), 50), "q": a.get("query", "")}
         return await self._request("GET", "https://gmail.googleapis.com/gmail/v1/users/me/messages", params=params)
 
+    async def _gmail_threads_read(self, a: dict) -> dict:
+        def decode_body(payload: dict) -> str:
+            if payload.get("mimeType") == "text/plain":
+                encoded = str((payload.get("body") or {}).get("data") or "")
+                if encoded:
+                    try:
+                        return base64.urlsafe_b64decode(
+                            encoded + "=" * (-len(encoded) % 4)
+                        ).decode("utf-8", errors="replace")
+                    except (ValueError, UnicodeError):
+                        return ""
+            for part in payload.get("parts") or []:
+                body = decode_body(part)
+                if body:
+                    return body
+            return ""
+
+        def readable_thread(thread: dict) -> dict:
+            messages = []
+            for message in thread.get("messages") or []:
+                payload = message.get("payload") or {}
+                headers = {
+                    str(item.get("name") or "").casefold(): item.get("value")
+                    for item in payload.get("headers") or []
+                }
+                messages.append(
+                    {
+                        "id": message.get("id"),
+                        "threadId": message.get("threadId"),
+                        "labelIds": message.get("labelIds") or [],
+                        "internalDate": message.get("internalDate"),
+                        "from": headers.get("from"),
+                        "to": headers.get("to"),
+                        "subject": headers.get("subject"),
+                        "date": headers.get("date"),
+                        "snippet": message.get("snippet"),
+                        "body": decode_body(payload),
+                    }
+                )
+            return {
+                "id": thread.get("id"),
+                "historyId": thread.get("historyId"),
+                "messages": messages,
+            }
+
+        limit = min(int(a.get("limit", 10)), 20)
+        listing = await self._request(
+            "GET",
+            "https://gmail.googleapis.com/gmail/v1/users/me/threads",
+            params={"maxResults": limit, "q": a.get("query", "")},
+        )
+        thread_ids = [
+            str(item.get("id") or "")
+            for item in listing.get("threads", [])[:limit]
+            if item.get("id")
+        ]
+        threads = await asyncio.gather(
+            *(
+                self._request(
+                    "GET",
+                    "https://gmail.googleapis.com/gmail/v1/users/me/threads/"
+                    + quote(thread_id, safe=""),
+                    params={"format": "full"},
+                )
+                for thread_id in thread_ids
+            )
+        )
+        return {
+            "threads": [readable_thread(thread) for thread in threads],
+            "resultSizeEstimate": int(listing.get("resultSizeEstimate") or len(threads)),
+            **(
+                {"nextPageToken": listing["nextPageToken"]}
+                if listing.get("nextPageToken")
+                else {}
+            ),
+        }
+
     async def _gmail_send(self, a: dict) -> dict:
         recipient = str(a.get("to") or "").strip()
         if not recipient or recipient.lower() in {"me", "myself", "self"}:
@@ -1217,6 +1298,58 @@ class ProviderExecutor:
                     "nextPageToken,files(id,name,mimeType,createdTime,modifiedTime,"
                     "parents,driveId,owners(displayName,emailAddress,me),webViewLink)"
                 ),
+            },
+        )
+
+    async def _drive_files_create(self, a: dict) -> dict:
+        """Upload one reviewed Canva PDF to the connected user's Drive."""
+        name = str(a.get("name") or "").strip()
+        source_url = str(a.get("source_url") or "").strip()
+        if not name or not source_url:
+            raise ValueError("drive.files.create requires name and source_url")
+        if not name.casefold().endswith(".pdf"):
+            name += ".pdf"
+        from .file_delivery import download_pdf, fingerprint
+
+        data = await download_pdf(source_url)
+        metadata: dict[str, Any] = {"name": name}
+        if a.get("folder_id"):
+            metadata["parents"] = [str(a["folder_id"])]
+        headers = {
+            key: value
+            for key, value in self._headers().items()
+            if key.casefold() != "content-type"
+        }
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+            response = await client.post(
+                "https://www.googleapis.com/upload/drive/v3/files",
+                headers=headers,
+                params={
+                    "uploadType": "multipart",
+                    "fields": "id,name,mimeType,parents,webViewLink,md5Checksum,size",
+                },
+                files={
+                    "metadata": (
+                        None,
+                        json.dumps(metadata),
+                        "application/json; charset=UTF-8",
+                    ),
+                    "file": (name, data, "application/pdf"),
+                },
+            )
+            response.raise_for_status()
+            result = response.json()
+        return {**result, **fingerprint(data), "source_url": source_url}
+
+    async def _drive_files_get(self, a: dict) -> dict:
+        file_id = str(a.get("file_id") or "").strip()
+        if not file_id:
+            raise ValueError("drive.files.get requires file_id")
+        return await self._request(
+            "GET",
+            "https://www.googleapis.com/drive/v3/files/" + quote(file_id, safe=""),
+            params={
+                "fields": "id,name,mimeType,parents,webViewLink,md5Checksum,size,trashed"
             },
         )
 

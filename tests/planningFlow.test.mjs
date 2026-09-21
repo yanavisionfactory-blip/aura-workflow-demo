@@ -125,6 +125,14 @@ test("the UI publishes one complete durable plan without provisional step flicke
   assert.equal(source.includes("timeout.preserveActiveRun"), true);
   assert.equal(source.includes('.replace(/^i\\s+will\\s+/i, "")'), true);
   assert.equal(planViewSource.includes('|| plan.compileState === "blocked"'), false);
+  assert.ok(
+    planViewSource.indexOf("{/* Steps */}")
+      < planViewSource.indexOf('<PlanConnectionAlert', planViewSource.indexOf("{/* Steps */}")),
+  );
+  assert.equal(
+    planViewSource.includes('plan.compileState === "waiting_for_connection"'),
+    true,
+  );
   assert.equal(source.includes("handleRetryPlanning();"), true);
 });
 
@@ -145,6 +153,9 @@ test("consequential plans execute safe reads before showing one prepared approva
   assert.equal(source.includes("Never build an approval editor from raw {{steps...}} values."), true);
   assert.equal(source.includes("approvePythonPlan(runId, reviewedPlan.steps, autoApprove)"), true);
   assert.equal(source.includes('setPhase("preview")'), true);
+  assert.equal(source.includes('run.blocker?.code !== "external_submission_approval_required"'), true);
+  assert.equal(source.includes("readyApprovals.length === 0"), true);
+  assert.equal(source.includes("hasUnresolvedWorkflowReference(step.approval_preview?.arguments)"), true);
   assert.equal(source.includes("startPythonExecution(editedSteps, prepared)"), true);
   assert.match(api, /approvePythonPlan\(runId, editedSteps = null, approveConsequential = true\)/);
 });

@@ -14,6 +14,7 @@ from app.orchestrator import (
     explicit_disconnected_capabilities,
     planning_error_message,
 )
+from app.run_supervisor import planning_failure_category
 
 
 class _ScalarRows:
@@ -84,6 +85,12 @@ def test_unknown_internal_error_is_never_exposed() -> None:
 
     assert message == "AURA couldn't build the plan right now. Please try again."
     assert "provider trace" not in message
+
+
+def test_global_planning_budget_exhaustion_routes_to_repair_engineer() -> None:
+    assert planning_failure_category(
+        RuntimeError("Planner recovery exhausted inside the global planning budget")
+    ) == "budget_exhausted"
 
 
 def test_explicit_disconnected_capabilities_matches_named_provider_only() -> None:

@@ -326,6 +326,27 @@ def refresh_native_connection_contract(tool: ToolConnection) -> list[str]:
         operations = native_operations(tool.slug)
     except NativeConnectorError:
         return list(tool.allowed_operations or [])
+    # Adding a write operation to application code must not silently broaden an
+    # older OAuth grant.  Existing Google accounts receive new read operations,
+    # while Drive upload remains unavailable until a consent flow issued after
+    # that scope was added has explicitly recorded the operation.
+    if tool.slug == "google" and "drive.files.create" not in set(
+        tool.allowed_operations or []
+    ):
+        scopes: set[str] = set()
+        if getattr(tool, "encrypted_credentials", None):
+            try:
+                credentials = CredentialVault().decrypt(tool.encrypted_credentials)
+                scopes = set(str(credentials.get("scope") or "").split())
+            except RuntimeError:
+                scopes = set()
+        if not scopes.intersection(
+            {
+                "https://www.googleapis.com/auth/drive.file",
+                "https://www.googleapis.com/auth/drive",
+            }
+        ):
+            operations = [item for item in operations if item != "drive.files.create"]
     tool.allowed_operations = operations
     return operations
 
@@ -822,7 +843,14 @@ async def _create_compiled_plan(
                 plan, manifests_by_slug
             )
             return plan
-        except (NativeConnectorError, RuntimeError, TimeoutError, ValueError) as exc:
+        except (RuntimeError, TimeoutError):
+            # Model/provider exhaustion cannot be repaired by starting the whole
+            # planner again against an already consumed global deadline.
+            fallback = audited_fallback()
+            if fallback is not None:
+                return fallback
+            raise
+        except (NativeConnectorError, ValueError) as exc:
             if attempt == 1:
                 fallback = audited_fallback()
                 if fallback is not None:
@@ -1023,6 +1051,28 @@ def complete_connection_requirements(
     explicit = explicit_disconnected_capabilities(prompt, inventory)
     planned = actionable_connection_capabilities(planner_reported, inventory)
     return list(dict.fromkeys([*explicit, *planned]))
+
+
+def missing_plan_operation_permissions(
+    plan, connected_inventory: list[dict]
+) -> dict[str, list[str]]:
+    """Return account families whose current grant cannot execute the graph."""
+    connected = {
+        str(item.get("slug") or ""): set(item.get("allowed_operations") or [])
+        for item in connected_inventory
+        if item.get("connected", True)
+    }
+    missing: dict[str, list[str]] = {}
+    for step in plan.steps:
+        if step.operation in connected.get(step.tool_slug, set()):
+            continue
+        family = _connection_family({"slug": step.tool_slug})
+        if family:
+            missing.setdefault(family, []).append(step.operation)
+    return {
+        family: list(dict.fromkeys(operations))
+        for family, operations in missing.items()
+    }
 
 
 def _connection_reason(capability: str, prompt: str) -> str:
@@ -1408,7 +1458,21 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
         inventory_by_slug = {item["slug"]: item for item in native_inventory}
         inventory_by_slug.update({item["slug"]: item for item in dynamic_inventory})
         inventory_by_slug.update({item["slug"]: item for item in broker_inventory})
-        inventory_by_slug.update({item["slug"]: item for item in connected_inventory})
+        for item in connected_inventory:
+            catalog_item = inventory_by_slug.get(item["slug"], {})
+            inventory_by_slug[item["slug"]] = {
+                **catalog_item,
+                **item,
+                # Planning sees the complete released connector contract while
+                # execution authorization remains bound to the current grant.
+                "allowed_operations": list(
+                    catalog_item.get("allowed_operations")
+                    or item.get("allowed_operations")
+                    or []
+                ),
+                "connected_operations": list(item.get("allowed_operations") or []),
+                "connected": True,
+            }
         inventory = list(inventory_by_slug.values())
         manifests_by_slug = dict(dynamic_manifests)
         manifests_by_slug.update(broker_manifests)
@@ -1522,10 +1586,24 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                     manifests_by_slug,
                     requested_tools,
                 )
-            missing = complete_connection_requirements(
-                run.prompt,
-                list(plan.planning_artifacts.get("connection_requirements", [])),
-                requirement_inventory,
+            missing_permissions = missing_plan_operation_permissions(
+                plan, connected_inventory
+            )
+            missing = list(
+                dict.fromkeys(
+                    [
+                        *complete_connection_requirements(
+                            run.prompt,
+                            list(
+                                plan.planning_artifacts.get(
+                                    "connection_requirements", []
+                                )
+                            ),
+                            requirement_inventory,
+                        ),
+                        *missing_permissions,
+                    ]
+                )
             )
             if missing:
                 from .connection_recovery import reuse_managed_connection
@@ -1548,9 +1626,8 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                             capability=capability,
                             provider_hint=capability,
                             reason=f"Connect {capability} so AURA can finish the saved plan",
-                            required_permissions=_required_permissions(
-                                capability, requirement_inventory
-                            ),
+                            required_permissions=missing_permissions.get(capability)
+                            or _required_permissions(capability, requirement_inventory),
                         )
                     )
                 blocker = {
