@@ -11,6 +11,7 @@ from jsonschema import Draft202012Validator
 from sqlalchemy import select
 
 from .agent_runtime import (
+    PLANNING_GLOBAL_TIMEOUT_SECONDS,
     ConnectionRequiredError,
     create_plan,
     critique_step,
@@ -685,6 +686,27 @@ def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict]) -> None:
         planned_step.arguments = normalize_planned_module_arguments(
             manifest, planned_step.operation, planned_step.arguments
         )
+        if capability and planned_step.required_evidence:
+            # required_evidence is an executable connector contract, not a
+            # user-facing label. Models occasionally put prose such as
+            # "Official NASA result URL" here even though the connector
+            # advertises canonical guarantees such as public_search_results.
+            # Preserve valid tags/required fields and deterministically map
+            # descriptive labels to the operation's real evidence contract.
+            from .operation_contracts import enrich_operation
+
+            contract = enrich_operation(capability)["reliability"]
+            guaranteed_fields = set(
+                (contract.get("output_schema") or {}).get("required", [])
+            )
+            guaranteed = set(contract.get("provides", [])) | guaranteed_fields
+            requested = set(planned_step.required_evidence)
+            if requested - guaranteed:
+                canonical = requested & guaranteed
+                canonical.update(contract.get("provides", []))
+                if not canonical:
+                    canonical.update(guaranteed_fields)
+                planned_step.required_evidence = sorted(canonical)
         if planned_step.reduced_scope_arguments is None:
             planned_step.reduced_scope_arguments = _required_read_arguments(
                 manifest, planned_step.operation, planned_step.arguments
@@ -699,6 +721,7 @@ async def _create_compiled_plan(
     requested_tool_names: list[str] | tuple[str, ...] | set[str] = (),
 ):
     """Build a schema-valid plan, repairing internal connector mismatches silently."""
+    planning_deadline = time.perf_counter() + PLANNING_GLOBAL_TIMEOUT_SECONDS
     manifests_by_slug = {
         item["slug"]: _current_capability_manifest(
             item["slug"], manifests_by_slug.get(item["slug"])
@@ -765,6 +788,7 @@ async def _create_compiled_plan(
             inventory,
             available_input_names,
             planner_repair_requirements=list(repair_requirements),
+            planning_deadline=planning_deadline,
         )
         try:
             requested = prompt.casefold()

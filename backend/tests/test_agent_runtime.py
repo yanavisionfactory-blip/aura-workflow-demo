@@ -1376,6 +1376,43 @@ def test_create_plan_enforces_one_global_time_budget(monkeypatch) -> None:
     assert perf_counter() - started < 0.5
 
 
+def test_create_plan_respects_an_outer_expired_deadline(monkeypatch) -> None:
+    calls = []
+
+    async def forbidden(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("The planner must not start after the outer deadline")
+
+    monkeypatch.setattr(
+        agent_runtime,
+        "build_agents",
+        lambda: {
+            "planner": object(),
+            "intent": object(),
+            "router": object(),
+            "builder": object(),
+        },
+    )
+    monkeypatch.setattr(agent_runtime, "_run", forbidden)
+
+    with pytest.raises(RuntimeError, match="global planning budget"):
+        asyncio.run(
+            create_plan(
+                "Read CRM records",
+                [
+                    {
+                        "slug": "crm",
+                        "allowed_operations": ["records.read"],
+                        "connected": True,
+                    }
+                ],
+                planning_deadline=perf_counter() - 1,
+            )
+        )
+
+    assert calls == []
+
+
 def test_create_plan_repairs_false_missing_capability_from_catalog(monkeypatch) -> None:
     planner = object()
     intent = object()

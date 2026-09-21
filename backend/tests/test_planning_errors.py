@@ -301,6 +301,53 @@ def test_guaranteed_weather_fields_do_not_trigger_a_second_planner_call(monkeypa
     assert calls == [[]]
 
 
+def test_descriptive_evidence_labels_normalize_to_connector_guarantees(monkeypatch) -> None:
+    calls = []
+    steps = [
+        SimpleNamespace(
+            key="search_voyager",
+            tool_slug="aura",
+            operation="web.search",
+            arguments={"query": "site:nasa.gov Voyager launch date"},
+            reduced_scope_arguments=None,
+            required_evidence=["Official NASA result URL for Voyager 1"],
+            output_variables={},
+            depends_on=[],
+        ),
+        SimpleNamespace(
+            key="read_voyager",
+            tool_slug="aura",
+            operation="web.page.read",
+            arguments={"url": "{{steps.search_voyager.results.0.url}}"},
+            reduced_scope_arguments=None,
+            required_evidence=["Voyager 1 official NASA page text"],
+            output_variables={},
+            depends_on=["search_voyager"],
+        ),
+    ]
+    plan = SimpleNamespace(steps=steps, planning_artifacts={})
+
+    async def fake_create_plan(*_args, **kwargs):
+        calls.append(kwargs.get("planner_repair_requirements"))
+        return plan
+
+    monkeypatch.setattr(orchestrator, "create_plan", fake_create_plan)
+
+    result = asyncio.run(
+        orchestrator._create_compiled_plan(
+            "Use official NASA sources for Voyager 1",
+            [{"slug": "aura", "allowed_operations": ["web.search", "web.page.read"]}],
+            set(),
+            {"aura": native_manifest("aura")},
+        )
+    )
+
+    assert result is plan
+    assert calls == [[]]
+    assert steps[0].required_evidence == ["public_search_results"]
+    assert steps[1].required_evidence == ["public_page_content"]
+
+
 def test_explicit_aura_only_request_skips_external_connector_catalogs() -> None:
     prompt = (
         "Find the current official ECB exchange rates using live public data, in AURA only. "
@@ -371,9 +418,11 @@ def test_connector_contract_mismatch_is_replanned_before_reaching_user(monkeypat
 
 def test_connector_contract_validation_is_repaired_only_once(monkeypatch) -> None:
     calls = []
+    deadlines = []
 
     async def fake_create_plan(*_args, **kwargs):
         calls.append(kwargs.get("planner_repair_requirements"))
+        deadlines.append(kwargs.get("planning_deadline"))
         step = SimpleNamespace(
             key="weather",
             tool_slug="aura",
@@ -401,6 +450,7 @@ def test_connector_contract_validation_is_repaired_only_once(monkeypatch) -> Non
     assert len(calls) == 2
     assert calls[0] == []
     assert "unknown inputs" in calls[1][0]
+    assert deadlines[0] is not None and deadlines[0] == deadlines[1]
 
 
 def test_planner_inventory_preserves_operation_semantics(monkeypatch) -> None:

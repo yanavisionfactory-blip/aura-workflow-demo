@@ -1364,9 +1364,10 @@ async def create_plan(
     tool_inventory: list[dict],
     available_input_names: set[str] | None = None,
     planner_repair_requirements: list[str] | None = None,
+    planning_deadline: float | None = None,
 ) -> WorkflowPlan:
     started_at = perf_counter()
-    deadline = started_at + PLANNING_GLOBAL_TIMEOUT_SECONDS
+    deadline = planning_deadline or (started_at + PLANNING_GLOBAL_TIMEOUT_SECONDS)
     agents = build_agents()
     request_payload = {
         "user_request": prompt,
