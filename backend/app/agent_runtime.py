@@ -711,6 +711,8 @@ def build_agents() -> dict[str, Agent]:
             include verified source URLs without inventing or silently changing facts. Never leave
             drafting directions such as "compare the facts" in the final slides. Respect every
             supplied string and array limit by concise synthesis rather than blind truncation.
+            Put each citation in its own presentation item formatted `Source: <full accepted URL>`;
+            never combine a source URL with a fact bullet or shorten a URL to meet a text limit.
             Convert event instants to the relevant named local timezone when reporting appointment
             times. When calendar evidence includes canonical_time_summary, use its precomputed
             explicit timezone display; do not calculate offsets yourself. A missing or unspecified
@@ -2075,6 +2077,8 @@ async def materialize_action_arguments(
             resolved = MaterializedActionArguments.model_validate(raw).arguments
             if referenced_paths(resolved):
                 raise ValueError("Approval arguments still contain workflow references")
+            if operation == "canva.presentation.create":
+                _validate_presentation_sources(prompt, resolved, execution_context)
             if capability:
                 resolved = normalize_planned_module_arguments(
                     manifest, operation, resolved
@@ -2095,6 +2099,72 @@ async def materialize_action_arguments(
                 )
                 payload["argument_validation_error"] = str(exc)[:2000]
     raise RuntimeError("Approval argument recovery exhausted") from last_error
+
+
+_PUBLIC_URL = re.compile(r"https?://[^\s<>]+", re.IGNORECASE)
+
+
+def _accepted_evidence_urls(value: object) -> set[str]:
+    urls: set[str] = set()
+
+    def visit(item: object) -> None:
+        if isinstance(item, dict):
+            for nested in item.values():
+                visit(nested)
+        elif isinstance(item, list):
+            for nested in item:
+                visit(nested)
+        elif isinstance(item, str):
+            urls.update(match.rstrip(".,;)") for match in _PUBLIC_URL.findall(item))
+
+    visit(value)
+    return urls
+
+
+def _validate_presentation_sources(
+    prompt: str,
+    arguments: dict,
+    execution_context: dict,
+) -> None:
+    """Keep requested presentation citations complete and receipt-bound."""
+    if not re.search(
+        r"\b(?:source(?:s|\s+links?)?|citation(?:s)?|references?)\b",
+        prompt,
+        re.IGNORECASE,
+    ):
+        return
+
+    accepted_urls = _accepted_evidence_urls(execution_context.get("steps", {}))
+    if not accepted_urls:
+        raise ValueError("Presentation citations require accepted source URLs")
+
+    cited_urls: list[str] = []
+    for phase in arguments.get("phases", []):
+        for item in phase.get("items", []):
+            urls = _PUBLIC_URL.findall(item) if isinstance(item, str) else []
+            if not urls:
+                continue
+            if not item.strip().casefold().startswith("source:"):
+                raise ValueError(
+                    "Put every presentation citation in a separate `Source: <full accepted URL>` item"
+                )
+            for url in urls:
+                normalized = url.rstrip(".,;)")
+                if normalized not in accepted_urls:
+                    raise ValueError(
+                        "Presentation citations must use a complete URL from accepted source evidence"
+                    )
+                cited_urls.append(normalized)
+
+    required_count = 2 if re.search(
+        r"\b(?:sources|source\s+links|citations|references)\b",
+        prompt,
+        re.IGNORECASE,
+    ) else 1
+    if len(set(cited_urls)) < required_count:
+        raise ValueError(
+            f"Presentation requires at least {required_count} distinct accepted source URL(s)"
+        )
 
 
 class EvidenceDigest(BaseModel):
