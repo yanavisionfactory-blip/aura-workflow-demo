@@ -23,13 +23,13 @@ def test_closed_contract_enforces_nested_layout_limits_and_optional_fields():
     assert "subtitle" not in parsed["arguments"]
     assert "layout" not in parsed["arguments"]
     assert PRESENTATION_SCHEMA == original
-    args["phases"][0]["items"] = ["x" * 91]
+    args["phases"][0]["items"] = ["x" * 161]
     assert not Draft202012Validator(schema).is_valid({"arguments": args})
     args["title"] = "x" * 51
     with pytest.raises(ModelBehaviorError) as error:
         output.validate_json(json.dumps({"arguments": args}))
     assert "maxLength=50" in str(error.value)
-    assert "maxLength=90" in str(error.value)
+    assert "maxLength=160" in str(error.value)
     assert "x" * 51 not in str(error.value)
 
 

@@ -80,7 +80,7 @@ def test_nested_bounded_text_from_source_page_requires_composition() -> None:
                         "title": {"type": "string", "maxLength": 40},
                         "items": {
                             "type": "array",
-                            "items": {"type": "string", "maxLength": 90},
+                            "items": {"type": "string", "maxLength": 160},
                         },
                     },
                 },
