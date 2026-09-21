@@ -682,9 +682,27 @@ class ClaimEvidence(BaseModel):
     claim: str
 
 
+class ResultKpi(BaseModel):
+    """One compact, evidence-backed outcome value for the results dashboard."""
+
+    value: str = Field(min_length=1, max_length=120)
+    label: str = Field(min_length=1, max_length=80)
+
+    @field_validator("value", "label", mode="before")
+    @classmethod
+    def normalize_result_kpi(cls, value: Any) -> str:
+        if not isinstance(value, (str, int, float)) or isinstance(value, bool):
+            raise TypeError("Result KPI values and labels must be displayable text")
+        rendered = " ".join(str(value).split())
+        if not rendered:
+            raise ValueError("Result KPI values and labels cannot be empty")
+        return rendered
+
+
 class UnifiedDeliverable(BaseModel):
     summary: str
     deliverable: str
+    key_metrics: list[ResultKpi] = Field(default_factory=list, max_length=3)
     traceability: list[ClaimEvidence] = Field(default_factory=list)
     validation_passed: bool = True
     required_fixes: list[str] = Field(default_factory=list)
