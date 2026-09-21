@@ -2,6 +2,8 @@ import asyncio
 from datetime import UTC
 from types import SimpleNamespace
 
+import pytest
+
 from app import agent_runtime
 from app.agent_runtime import (
     autonomous_resource_resolution_context,
@@ -12,6 +14,7 @@ from app.agent_runtime import (
     materialize_action_arguments,
     normalize_plan_graph,
     prepare_execution_directive,
+    requested_deliverable_fixes,
     supervise_execution,
     supervise_plan,
     synthesize_result,
@@ -89,6 +92,44 @@ def test_open_ended_intent_preserves_the_full_inventory() -> None:
     ]
 
     assert intent_bounded_tool_inventory("Help me automate this", inventory) == inventory
+
+
+def test_explicit_multi_app_deliverables_cannot_silently_disappear() -> None:
+    request = (
+        "Check tomorrow's weather in Berlin and the latest ECB exchange rates. "
+        "Create a Canva report, export it as a PDF to Google Drive, publish the "
+        "report in Notion, create a Jira issue, and email it through Gmail."
+    )
+    incomplete = plan(
+        PlanStep(
+            key="weather",
+            agent="research",
+            tool_slug="aura",
+            operation="weather.forecast",
+            reason="Read weather",
+            expected_output="Forecast",
+        ),
+        PlanStep(
+            key="canva",
+            agent="design",
+            tool_slug="canva",
+            operation="canva.presentation.create",
+            reason="Create report",
+            expected_output="Canva report",
+            consequential=True,
+        ),
+    )
+
+    fixes = requested_deliverable_fixes(request, incomplete)
+
+    assert fixes == [
+        "Add the requested Notion read or publishing step.",
+        "Add the requested Jira issue or task step.",
+        "Add the requested Gmail delivery step.",
+        "Add the requested Google Drive step; do not replace it with a different destination.",
+        "Add a verified source read for the requested ECB exchange rates.",
+        "Add the explicitly requested PDF export step.",
+    ]
 
 
 def test_senior_orchestrator_assigns_every_incomplete_step(monkeypatch) -> None:
@@ -1170,7 +1211,7 @@ def test_combined_planner_retries_schema_validation_failure(monkeypatch) -> None
     assert result.steps[0].operation == "records.read"
 
 
-def test_create_plan_falls_back_to_staged_agents_after_combined_recovery(monkeypatch) -> None:
+def test_create_plan_stops_after_one_combined_structured_output_repair(monkeypatch) -> None:
     planner = object()
     intent = object()
     router = object()
@@ -1231,28 +1272,26 @@ def test_create_plan_falls_back_to_staged_agents_after_combined_recovery(monkeyp
     monkeypatch.setattr(agent_runtime, "_run", fake_run)
     monkeypatch.setattr(agent_runtime.asyncio, "sleep", no_sleep)
 
-    result = asyncio.run(
-        create_plan(
-            "Turn action items from my research notes into Jira tasks",
-            [
-                {
-                    "slug": "notion",
-                    "allowed_operations": ["notion.search"],
-                    "connected": True,
-                },
-                {
-                    "slug": "jira",
-                    "allowed_operations": ["jira.issue.create"],
-                    "connected": False,
-                },
-            ],
+    with pytest.raises(RuntimeError, match="structured-output repair exhausted"):
+        asyncio.run(
+            create_plan(
+                "Turn action items from my research notes into Jira tasks",
+                [
+                    {
+                        "slug": "notion",
+                        "allowed_operations": ["notion.search"],
+                        "connected": True,
+                    },
+                    {
+                        "slug": "jira",
+                        "allowed_operations": ["jira.issue.create"],
+                        "connected": False,
+                    },
+                ],
+            )
         )
-    )
 
-    assert calls.count(planner) == 3
-    assert calls[-3:] == [intent, router, builder]
-    assert result.planning_artifacts["planner_recovery_mode"] == "staged"
-    assert result.planning_artifacts["connection_requirements"] == ["jira"]
+    assert calls == [planner, planner]
 
 
 def test_create_plan_repairs_false_missing_capability_from_catalog(monkeypatch) -> None:

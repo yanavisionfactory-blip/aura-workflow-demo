@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     agent_managed_execution_enabled: bool = True
     autonomous_delivery_enabled: bool = True
     max_autonomous_recovery_rounds: int = Field(default=8, ge=1, le=20)
-    max_planning_recovery_rounds: int = Field(default=8, ge=1, le=20)
+    max_planning_recovery_rounds: int = Field(default=1, ge=1, le=20)
     recovery_engineer_enabled: bool = True
     max_recovery_engineer_attempts: int = Field(default=3, ge=1, le=10)
     connection_probe_ttl_seconds: int = Field(default=60, ge=0, le=900)

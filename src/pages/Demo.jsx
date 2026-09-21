@@ -56,8 +56,8 @@ import {
 } from "@/lib/approvalReview.mjs";
 
 const STEP_DURATION = 2.6;
-const PLANNING_WAIT_TIMEOUT_MS = 30_000;
-const PLANNING_RECOVERY_GRACE_MS = 30_000;
+const PLANNING_WAIT_TIMEOUT_MS = 25_000;
+const PLANNING_RECOVERY_GRACE_MS = 5_000;
 const PLANNING_POLL_INTERVAL_MS = 750;
 const PLANNING_TRANSIENT_FAILURE_LIMIT = 3;
 
@@ -386,6 +386,7 @@ export default function Demo() {
   const pythonPollGenerationRef = useRef(0);
   const planningRequestGenerationRef = useRef(0);
   const handleConfirmRef = useRef(null);
+  const startPythonExecutionRef = useRef(null);
   const preparedActionPreviewRef = useRef(false);
   const runRequestKeyRef = useRef(null);
   const lastPlanningIntentRef = useRef("");
@@ -947,10 +948,11 @@ Rules:
     if (requiresActionPreview(steps, autoApprove)) {
       preparedActionPreviewRef.current = false;
       setPreviewError("");
-      setPhase("preview");
-      return;
     }
-    startPythonExecution();
+    // Approve only the immutable plan here. The backend runs safe reads first
+    // and pauses before the first write with concrete, provider-validated
+    // arguments. Never build an approval editor from raw {{steps...}} values.
+    startPythonExecutionRef.current?.();
   }, [editRunMode, autoApprove, keepPlanInReview]);
 
   const handlePreviewApprove = useCallback((editedSteps) => {
@@ -1166,7 +1168,10 @@ Rules:
           );
         }
       } else {
-        await approvePythonPlan(runId, reviewedPlan.steps);
+        // Plan approval is separate from action approval. Unless the user has
+        // explicitly enabled auto-approval, execution pauses with a concrete
+        // prepared preview before the first consequential provider call.
+        await approvePythonPlan(runId, reviewedPlan.steps, autoApprove);
       }
       for (;;) {
         const run = await getPythonRunResilient(runId, generation);
@@ -1259,6 +1264,8 @@ Rules:
       await recoverRunStatus();
     }
   };
+
+  startPythonExecutionRef.current = startPythonExecution;
 
   const runFrom = (startIdx) => {
     const template = execTemplateRef.current;

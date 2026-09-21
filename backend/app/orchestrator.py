@@ -19,6 +19,7 @@ from .agent_runtime import (
     materialize_action_arguments,
     prepare_execution_directive,
     prepare_final_review,
+    requested_deliverable_fixes,
     supervise_execution,
     synthesize_result,
     verify_outcome,
@@ -635,7 +636,7 @@ async def _create_compiled_plan(
         or weather_presentation_template(prompt, inventory)
         or notion_to_jira_template(prompt, inventory)
     )
-    if audited_plan is not None:
+    if audited_plan is not None and not requested_deliverable_fixes(prompt, audited_plan):
         _normalize_planned_steps(audited_plan, manifests_by_slug)
         from .operation_contracts import compile_contracts
 
@@ -643,6 +644,10 @@ async def _create_compiled_plan(
             audited_plan, manifests_by_slug
         )
         return audited_plan
+    if audited_plan is not None:
+        logger.info(
+            "Audited template skipped because it did not cover every requested deliverable"
+        )
     inventory = intent_bounded_tool_inventory(prompt, inventory, requested_tool_names)
     repair_requirements: list[str] = []
     # Connector-contract validation receives one model repair. Safe generated
@@ -779,16 +784,28 @@ def explicit_disconnected_capabilities(prompt: str, inventory: list[dict]) -> li
             continue
         slug = str(item.get("slug") or "").strip().casefold()
         name = str(item.get("name") or "").strip().casefold()
+        capability_families = _connection_capability_families(item)
         aliases = {
             re.sub(r"[^a-z0-9]+", " ", value).strip()
             for value in {
                 slug,
                 name,
                 family,
+                *(
+                    value
+                    for value in capability_families
+                    if family != "google"
+                    or value not in {"drive", "calendar", "sheets"}
+                ),
                 *_PROMPT_CAPABILITY_ALIASES.get(slug, set()),
             }
             if value
         }
+        aliases.update(
+            f"google {value}"
+            for value in capability_families
+            if value in {"drive", "calendar", "sheets"}
+        )
         if any(alias and f" {alias} " in text for alias in aliases):
             missing.append(family)
             seen_families.add(family)
@@ -817,6 +834,10 @@ def actionable_connection_capabilities(
         if name:
             aliases[re.sub(r"[^a-z0-9]+", "-", name).strip("-")] = family
         aliases[family] = family
+        for capability_family in _connection_capability_families(item):
+            aliases[capability_family] = family
+            if capability_family in {"drive", "calendar", "sheets"}:
+                aliases[f"google-{capability_family}"] = family
 
     actionable: list[str] = []
     for value in requested:
@@ -838,6 +859,24 @@ def complete_connection_requirements(
     explicit = explicit_disconnected_capabilities(prompt, inventory)
     planned = actionable_connection_capabilities(planner_reported, inventory)
     return list(dict.fromkeys([*explicit, *planned]))
+
+
+def _connection_reason(capability: str, prompt: str) -> str:
+    if capability != "google":
+        return f"Connect {capability} so AURA can continue"
+    text = " " + re.sub(r"[^a-z0-9]+", " ", prompt.casefold()).strip() + " "
+    apps = [
+        label
+        for marker, label in (
+            ("gmail", "Gmail"),
+            ("google drive", "Drive"),
+            ("google calendar", "Calendar"),
+            ("google sheets", "Sheets"),
+        )
+        if f" {marker} " in text
+    ]
+    requested = " and ".join(apps) if apps else "Google Workspace"
+    return f"Connect your Google account once for the requested {requested} access"
 
 
 def _required_permissions(capability: str, inventory: list[dict]) -> list[str]:
@@ -1205,6 +1244,91 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             )
         )
         await session.commit()
+
+        # Authentication is the one recovery step an agent cannot perform for
+        # the user. Detect explicitly named disconnected apps before spending a
+        # model call, and collapse shared account families (for example Gmail
+        # and Drive under Google Workspace) into one consent request.
+        immediate_missing = explicit_disconnected_capabilities(
+            run.prompt, requirement_inventory
+        )
+        audited_connection_plan_available = False
+        if immediate_missing:
+            from .workflow_templates import (
+                creator_outreach_template,
+                notion_to_jira_template,
+                weather_presentation_template,
+            )
+
+            immediate_template = (
+                creator_outreach_template(run.prompt, inventory)
+                or weather_presentation_template(run.prompt, inventory)
+                or notion_to_jira_template(run.prompt, inventory)
+            )
+            audited_connection_plan_available = bool(
+                immediate_template
+                and not requested_deliverable_fixes(run.prompt, immediate_template)
+            )
+        if immediate_missing and not audited_connection_plan_available:
+            from .connection_recovery import reuse_managed_connection
+            from .semantic_memory import source_owner
+
+            owner = await source_owner(session, workspace_id, run.id)
+            for slug in list(immediate_missing):
+                if await reuse_managed_connection(
+                    session, managed_connector_client(), slug, workspace_id, owner
+                ):
+                    immediate_missing.remove(slug)
+        if immediate_missing and not audited_connection_plan_available:
+            for capability in immediate_missing:
+                session.add(
+                    ConnectionRequirement(
+                        workspace_id=workspace_id,
+                        run_id=run.id,
+                        capability=capability,
+                        provider_hint=capability,
+                        reason=_connection_reason(capability, run.prompt),
+                        required_permissions=_required_permissions(
+                            capability, requirement_inventory
+                        ),
+                    )
+                )
+            blocker = {
+                "kind": "human_action",
+                "code": "connection_required",
+                "message": "Connect the requested apps to continue",
+                "action": "connect_account",
+                "missing_capabilities": immediate_missing,
+                "retryable": False,
+            }
+            transition_run(
+                run,
+                RunStatus.waiting_for_action,
+                reason="planning_connection_required_before_model",
+                actor="connection-supervisor",
+                phase="connection",
+                supervisor_status="human_action_required",
+                error=blocker["message"],
+                result={
+                    "status": "waiting_for_connection",
+                    "missing_capabilities": immediate_missing,
+                },
+                blocker=blocker,
+                dispatch=None,
+            )
+            await audit(
+                session,
+                workspace_id,
+                "run.connection_required",
+                {
+                    "missing_capabilities": immediate_missing,
+                    "source": "preplanning_explicit_provider_gate",
+                },
+                run.id,
+                actor="connection-supervisor",
+            )
+            await session.commit()
+            return
 
         try:
             from .plan_reuse import reuse_saved_plan

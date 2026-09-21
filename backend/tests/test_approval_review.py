@@ -94,6 +94,21 @@ def test_presentation_review_contract_keeps_structured_phases_editable():
     assert ["phases"] in contract["editable_paths"]
 
 
+def test_public_preview_fails_closed_when_arguments_still_have_references():
+    public = public_review_preview({
+        "status": "ready",
+        "operation": "canva.presentation.create",
+        "arguments": {
+            "title": "Berlin weather",
+            "phases": [{"items": ["{{steps.weather.summary}}"]}],
+        },
+        "review_contract": {"kind": "presentation", "fields": []},
+    })
+
+    assert public == {"status": "preparing"}
+    assert "{{steps" not in str(public)
+
+
 def test_unknown_consequential_action_still_gets_a_complete_generic_editor():
     capability = {
         "description": "Create an approved custom object.",

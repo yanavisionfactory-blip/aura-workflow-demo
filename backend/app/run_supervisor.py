@@ -372,6 +372,11 @@ async def recover_planning_failure(
     attempts = state.get("attempts") if isinstance(state.get("attempts"), dict) else {}
     attempt = recovery_counter(attempts.get("planning")) + 1
     category = planning_failure_category(exc)
+    # Planning already owns one schema-directed repair inside the request. A
+    # malformed plan gets one durable re-dispatch; other transient planning
+    # failures get at most two. Environment configuration may tighten these
+    # ceilings but cannot restore the former unbounded-feeling retry chain.
+    effective_max_attempts = min(max_attempts, 1 if category == "malformed_plan" else 2)
     fingerprint = _failure_fingerprint(category, exc)
     action = _planning_action(category, attempt)
     history = recovery_list(state.get("failure_history"))[-19:]
@@ -403,7 +408,7 @@ async def recover_planning_failure(
     }
 
     now = datetime.now(UTC)
-    if attempt <= max_attempts:
+    if attempt <= effective_max_attempts:
         delay = min(
             max_delay_seconds,
             max(base_delay_seconds, base_delay_seconds * (2 ** max(0, attempt - 1))),
@@ -518,6 +523,32 @@ def is_unavoidable_human_blocker(blocker: dict | None) -> bool:
 def public_run_projection(run: WorkflowRun, blocker: dict | None) -> dict:
     """Return the only run state technical users should need to understand."""
     state = supervisor_state(run)
+    planning_terminal = (
+        run.status == RunStatus.blocked
+        and state.get("phase") == "planning"
+        and state.get("status") == "operator_attention"
+    )
+    if planning_terminal:
+        return {
+            "public_status": "blocked",
+            "public_error": (
+                "AURA could not prepare a complete workflow in time. "
+                "No app actions were run."
+            ),
+            "public_blocker": None,
+            "supervisor": {
+                "owner": "run_supervisor",
+                "phase": "planning",
+                "status": "stopped_safely",
+                "attempt": recovery_counter(
+                    (state.get("attempts") or {}).get("planning")
+                    if isinstance(state.get("attempts"), dict)
+                    else None
+                ),
+                "completed_work_preserved": True,
+                "browser_independent": True,
+            },
+        }
     internal_recovery = state.get("status") in {
         "recovering",
         "operator_attention",
