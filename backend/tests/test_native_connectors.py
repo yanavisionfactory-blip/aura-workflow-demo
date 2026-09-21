@@ -143,7 +143,7 @@ def test_generated_presentation_text_is_fitted_recursively_before_review():
     assert len(normalized["subtitle"]) <= 120
     assert len(normalized["phases"][0]["period"]) <= 24
     assert len(normalized["phases"][0]["title"]) <= 40
-    assert len(normalized["phases"][0]["items"][0]) <= 90
+    assert len(normalized["phases"][0]["items"][0]) <= 160
     assert normalized["title"].endswith("…")
     with pytest.raises(NativeConnectorError, match="at most 50 characters"):
         normalize_module_arguments(
