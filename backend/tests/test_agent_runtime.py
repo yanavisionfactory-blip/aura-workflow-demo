@@ -1404,6 +1404,75 @@ def test_deterministic_public_research_fallback_is_subject_agnostic() -> None:
     assert deterministic_plan_fixes(bundle.plan, inventory, set(), prompt) == []
 
 
+def test_source_backed_external_artifact_gets_capability_driven_research_reads() -> None:
+    prompt = (
+        "Using official NASA sources, create a 3-slide Canva presentation comparing "
+        "Voyager launch dates and destinations. Include source links."
+    )
+    inventory = [
+        {
+            "slug": "aura",
+            "allowed_operations": ["web.search", "web.page.read"],
+            "connected": True,
+        },
+        {
+            "slug": "canva",
+            "allowed_operations": [
+                "canva.designs.list",
+                "canva.presentation.create",
+            ],
+            "connected": True,
+            "operation_contracts": [
+                {
+                    "name": "canva.designs.list",
+                    "capability_tags": ["design_metadata"],
+                }
+            ],
+        },
+    ]
+    proposed = WorkflowPlan(
+        name="Voyager deck",
+        interpretation=prompt,
+        steps=[
+            PlanStep(
+                key="search_canva",
+                agent="designer",
+                tool_slug="canva",
+                operation="canva.designs.list",
+                reason="Find matching Canva designs",
+                expected_output="Canva design metadata",
+            ),
+            PlanStep(
+                key="create_deck",
+                agent="designer",
+                tool_slug="canva",
+                operation="canva.presentation.create",
+                reason="Create the sourced Voyager presentation",
+                expected_output="Canva presentation receipt",
+                consequential=True,
+                depends_on=["search_canva"],
+            ),
+        ],
+    )
+
+    repaired, changed = agent_runtime._ground_public_source_artifact_plan(
+        prompt, proposed, inventory
+    )
+
+    assert changed is True
+    assert [step.operation for step in repaired.steps[:4]] == [
+        "web.search",
+        "web.page.read",
+        "web.page.read",
+        "web.page.read",
+    ]
+    create = next(step for step in repaired.steps if step.key == "create_deck")
+    assert {"read_public_source_1", "read_public_source_2"}.issubset(
+        create.depends_on
+    )
+    assert deterministic_plan_fixes(repaired, inventory, set(), prompt) == []
+
+
 def test_create_plan_falls_back_when_all_planner_json_is_invalid(monkeypatch) -> None:
     async def invalid(*_args, **_kwargs):
         raise RuntimeError("Invalid JSON when parsing model output")
