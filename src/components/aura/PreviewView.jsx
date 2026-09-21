@@ -628,6 +628,28 @@ export default function PreviewView({ preview, steps, onApprove, onBack, error =
         .map((error) => ({ ...error, stepIndex: index }))
       : []
   ));
+  if (!reviewSteps.length) {
+    return (
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        className="w-full max-w-2xl mx-auto rounded-xl border border-sky-400/15 bg-card/40 p-5"
+      >
+        <div className="flex items-center gap-3">
+          <Loader2 className="h-5 w-5 animate-spin text-sky-300" />
+          <div>
+            <h2 className="text-base font-semibold">Preparing the exact changes</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              AURA will open approval only after every value is resolved and ready to review.
+            </p>
+          </div>
+        </div>
+        <Button variant="ghost" size="sm" onClick={onBack} className="mt-4 text-muted-foreground hover:text-foreground">
+          <ArrowLeft className="w-3.5 h-3.5 mr-1.5" /> Back to plan
+        </Button>
+      </motion.div>
+    );
+  }
   const approvalBlocked = contractErrors.length > 0;
   const reviewSummary = sourceTools.length
     ? `AURA will use ${sourceTools.join(" and ")} to prepare ${reviewSteps.length} reviewed ${destinationTools.join(" / ")} ${reviewSteps.length === 1 ? "change" : "changes"}.`

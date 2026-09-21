@@ -12,6 +12,7 @@ READBACK_OPERATIONS = {
     "jira.issue.update": "jira.issue.get",
     "notion.page.create": "notion.page.get",
     "notion.page.update": "notion.page.get",
+    "drive.files.create": "drive.files.get",
 }
 
 from .extended_outcomes import EXTRA_READBACK
@@ -69,6 +70,21 @@ def build_outcome_check(
             str(resource_id or ""),
             expected,
             "calendar",
+        )
+    if operation == "drive.files.create":
+        expected = {
+            "name": receipt.get("name") or arguments.get("name"),
+            "mimeType": "application/pdf",
+            "trashed": False,
+        }
+        if receipt.get("md5Checksum"):
+            expected["md5Checksum"] = receipt["md5Checksum"]
+        return OutcomeCheck(
+            read,
+            {"file_id": str(resource_id or "")},
+            str(resource_id or ""),
+            expected,
+            "drive_file",
         )
     if operation.startswith("jira."):
         from .providers import ProviderExecutor

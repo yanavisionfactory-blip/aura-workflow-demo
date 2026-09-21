@@ -2435,11 +2435,17 @@ def _requirement_accepts_tool(requirement: ConnectionRequirement, tool: ToolConn
     capability_family = (
         canonical_provider_slug(capability.split(".", 1)[0]).casefold() if capability else ""
     )
-    return bool(
+    provider_matches = bool(
         (canonical_hint and canonical_hint in providers)
         or (capability_family and capability_family in providers)
         or capability in allowed
     )
+    required = {
+        str(item).casefold()
+        for item in (requirement.required_permissions or [])
+        if str(item or "").strip()
+    }
+    return provider_matches and required.issubset(allowed)
 
 
 def _resume_after_connections(run: WorkflowRun, actor: str) -> None:

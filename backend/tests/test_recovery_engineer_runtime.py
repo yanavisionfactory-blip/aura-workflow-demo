@@ -111,6 +111,34 @@ async def test_repeatable_defect_waits_for_one_isolated_dispatch(database):
         assert run.execution_context["__aura_supervisor__"]["attempts"]["code"] == 1
 
 
+async def test_repeated_planning_budget_exhaustion_enters_isolated_repair(database):
+    async with database() as session:
+        session.add(Workspace(id="workspace", name="Recovery runtime"))
+        session.add(
+            WorkflowRun(
+                id="run",
+                workspace_id="workspace",
+                prompt="Build an unfamiliar multi-app workflow",
+                plan_approved=False,
+                status=RunStatus.blocked,
+                execution_context={
+                    "__aura_supervisor__": {
+                        "version": 2,
+                        "owner": "run_supervisor",
+                        "phase": "planning",
+                        "status": "operator_attention",
+                        "attempts": {"planning": 3},
+                        "failure_history": [],
+                        "last_failure_category": "budget_exhausted",
+                    }
+                },
+            )
+        )
+        await session.commit()
+
+    assert await recover_with_engineer("run", "workspace") == "awaiting_sandbox"
+
+
 async def test_persistent_external_outage_is_quarantined_without_user_retry(database):
     await _create_run(database, category="provider_unavailable", attempts=3)
 

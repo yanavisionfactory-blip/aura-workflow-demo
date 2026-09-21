@@ -310,6 +310,15 @@ def planning_failure_category(exc: BaseException) -> str:
         return "operator_quota"
     if status == 429 or "rate limit" in detail or "error code: 429" in detail:
         return "rate_limited"
+    if any(
+        marker in detail
+        for marker in (
+            "global planning budget",
+            "planning budget exhausted",
+            "recovery budget exhausted",
+        )
+    ):
+        return "budget_exhausted"
     if any(marker in detail for marker in ("timeout", "timed out", "deadline")):
         return "timeout"
     if any(

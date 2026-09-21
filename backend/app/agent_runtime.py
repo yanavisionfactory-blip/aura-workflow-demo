@@ -911,6 +911,49 @@ async def _run_staged_planner(
     return PlanningBundle(objective=objective, toolset=toolset, plan=plan)
 
 
+async def _run_builder_repair(
+    agents: dict[str, Agent], payload: dict, bundle: PlanningBundle, max_turns: int = 8
+) -> PlanningBundle:
+    """Repair only the rejected graph while preserving understood intent and routing.
+
+    Re-running intent extraction and tool routing after a deterministic graph check
+    failed made a small schema correction cost three more model calls.  It also gave
+    the replacement plan an opportunity to silently drop already understood outcomes.
+    Keep the accepted objective and tool selection immutable and ask only the builder
+    to repair the graph.
+    """
+    selected_slugs = {selection.slug for selection in bundle.toolset.tools}
+    builder_payload = {
+        "objective": bundle.objective.model_dump(mode="json"),
+        "request_contract": payload.get("request_contract", []),
+        "request_constraints": payload.get("request_constraints", []),
+        "toolset_proposal": bundle.toolset.model_dump(mode="json"),
+        "rejected_plan": bundle.plan.model_dump(mode="json"),
+        "executable_tool_inventory": _builder_inventory(
+            payload["executable_tool_inventory"], selected_slugs
+        ),
+        "available_input_names": payload.get("available_input_names", []),
+        "temporal_context": payload.get("temporal_context", {}),
+        "required_fixes": payload.get("required_fixes", []),
+        "planner_repair_requirements": payload.get("planner_repair_requirements", []),
+        "autonomous_resource_resolution": payload.get(
+            "autonomous_resource_resolution", {}
+        ),
+        "response_recovery": (
+            "Repair only the rejected workflow graph. Preserve every requested outcome, "
+            "the objective, and the selected providers. Return one complete WorkflowPlan."
+        ),
+    }
+    if "builder" not in agents:
+        # Compatibility for minimal embedded runtimes: the combined planner can
+        # still repair the graph without restarting intent and routing agents.
+        return await _run_planner(agents["planner"], payload, max_turns=max_turns)
+    async with asyncio.timeout(PLANNER_ATTEMPT_TIMEOUT_SECONDS):
+        raw = await _run(agents["builder"], builder_payload, max_turns=max_turns)
+    plan = WorkflowPlan.model_validate(raw)
+    return PlanningBundle(objective=bundle.objective, toolset=bundle.toolset, plan=plan)
+
+
 def _has_only_missing_capabilities(bundle: PlanningBundle) -> bool:
     return bool(bundle.toolset.missing_capabilities and not bundle.toolset.tools)
 
@@ -1716,55 +1759,34 @@ async def create_plan(
     }
     model_started_at = perf_counter()
     recovery_mode = "combined"
-    if _prefer_staged_planner(prompt, tool_inventory):
+    # One combined structured call is the fast path for every workflow.  The
+    # specialist team remains the bounded recovery path; starting multi-tool
+    # requests with three model calls made the common case unnecessarily slow.
+    try:
+        bundle = await _within_planning_budget(
+            _run_planner(agents["planner"], request_payload, max_turns=8),
+            deadline,
+        )
+    except Exception as planner_error:
+        if _permanent_planning_error(planner_error):
+            raise RuntimeError("Planner is not available") from planner_error
         try:
             bundle = await _within_planning_budget(
                 _run_staged_planner(agents, request_payload, max_turns=8),
                 deadline,
             )
-            recovery_mode = "staged_primary"
-        except Exception as staged_error:
-            if _permanent_planning_error(staged_error):
-                raise RuntimeError("Planner is not available") from staged_error
-            try:
-                bundle = await _within_planning_budget(
-                    _run_planner(agents["planner"], request_payload, max_turns=8),
-                    deadline,
-                )
-                recovery_mode = "combined_after_staged"
-            except Exception as planner_error:
-                bundle = _deterministic_public_research_bundle(prompt, tool_inventory)
-                if bundle is None:
-                    raise RuntimeError(
-                        "Planner recovery exhausted inside the global planning budget"
-                    ) from planner_error
-                recovery_mode = "deterministic_public_research"
-    else:
-        try:
-            bundle = await _within_planning_budget(
-                _run_planner(agents["planner"], request_payload, max_turns=8),
-                deadline,
+            recovery_mode = (
+                "staged_input_limit"
+                if isinstance(planner_error, ModelInputTooLarge)
+                else "staged_structured_recovery"
             )
-        except Exception as planner_error:
-            if _permanent_planning_error(planner_error):
-                raise RuntimeError("Planner is not available") from planner_error
-            try:
-                bundle = await _within_planning_budget(
-                    _run_staged_planner(agents, request_payload, max_turns=8),
-                    deadline,
-                )
-                recovery_mode = (
-                    "staged_input_limit"
-                    if isinstance(planner_error, ModelInputTooLarge)
-                    else "staged_structured_recovery"
-                )
-            except Exception as staged_error:
-                bundle = _deterministic_public_research_bundle(prompt, tool_inventory)
-                if bundle is None:
-                    raise RuntimeError(
-                        "Planner recovery exhausted inside the global planning budget"
-                    ) from staged_error
-                recovery_mode = "deterministic_public_research"
+        except Exception as staged_error:
+            bundle = _deterministic_public_research_bundle(prompt, tool_inventory)
+            if bundle is None:
+                raise RuntimeError(
+                    "Planner recovery exhausted inside the global planning budget"
+                ) from staged_error
+            recovery_mode = "deterministic_public_research"
     if _has_only_missing_capabilities(bundle):
         bundle = await _within_planning_budget(
             _recover_catalog_tool_selection(
@@ -1802,7 +1824,7 @@ async def create_plan(
         repair_started_at = perf_counter()
         try:
             bundle = await _within_planning_budget(
-                _run_staged_planner(agents, repaired_payload, max_turns=8),
+                _run_builder_repair(agents, repaired_payload, bundle, max_turns=8),
                 deadline,
             )
         except Exception as repair_error:
@@ -1813,7 +1835,7 @@ async def create_plan(
                 ) from repair_error
             recovery_mode = "deterministic_public_research"
         else:
-            recovery_mode = "staged_authorization_repair"
+            recovery_mode = "targeted_graph_repair"
         repair_ms += round((perf_counter() - repair_started_at) * 1000)
         objective = bundle.objective
         toolset = bundle.toolset

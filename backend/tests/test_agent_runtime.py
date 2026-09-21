@@ -1562,7 +1562,7 @@ def test_source_backed_external_artifact_gets_capability_driven_research_reads()
     assert deterministic_plan_fixes(repaired, inventory, set(), prompt) == []
 
 
-def test_source_backed_artifact_uses_staged_team_before_combined_planner(
+def test_source_backed_artifact_uses_staged_team_after_fast_combined_failure(
     monkeypatch,
 ) -> None:
     calls = []
@@ -1615,7 +1615,7 @@ def test_source_backed_artifact_uses_staged_team_before_combined_planner(
 
     async def combined(*_args, **_kwargs):
         calls.append("combined")
-        raise AssertionError("The combined planner should not run first")
+        raise RuntimeError("combined structured output failed")
 
     monkeypatch.setattr(
         agent_runtime,
@@ -1632,7 +1632,7 @@ def test_source_backed_artifact_uses_staged_team_before_combined_planner(
 
     result = asyncio.run(create_plan(prompt, inventory))
 
-    assert calls == ["staged"]
+    assert calls == ["combined", "staged"]
     assert [step.operation for step in result.steps[:4]] == [
         "web.search",
         "web.page.read",
@@ -1641,7 +1641,7 @@ def test_source_backed_artifact_uses_staged_team_before_combined_planner(
     ]
 
 
-def test_unfamiliar_multi_tool_workflow_uses_staged_team_first(monkeypatch) -> None:
+def test_unfamiliar_multi_tool_workflow_uses_staged_team_after_fast_path(monkeypatch) -> None:
     calls = []
     prompt = (
         "Read records from AlphaDesk, create a brief in BetaDocs, "
@@ -1720,7 +1720,7 @@ def test_unfamiliar_multi_tool_workflow_uses_staged_team_first(monkeypatch) -> N
 
     async def combined(*_args, **_kwargs):
         calls.append("combined")
-        raise AssertionError("The combined planner should not run first")
+        raise RuntimeError("combined structured output failed")
 
     monkeypatch.setattr(
         agent_runtime,
@@ -1737,8 +1737,8 @@ def test_unfamiliar_multi_tool_workflow_uses_staged_team_first(monkeypatch) -> N
 
     result = asyncio.run(create_plan(prompt, inventory))
 
-    assert calls == ["staged"]
-    assert result.planning_artifacts["planner_recovery_mode"] == "staged_primary"
+    assert calls == ["combined", "staged"]
+    assert result.planning_artifacts["planner_recovery_mode"] == "staged_structured_recovery"
     assert [step.tool_slug for step in result.steps] == [
         "alpha-desk",
         "beta-docs",

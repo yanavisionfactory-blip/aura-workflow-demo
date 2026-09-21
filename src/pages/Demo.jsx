@@ -50,6 +50,7 @@ import { weatherStepTitle } from "@/lib/planPresentation.mjs";
 import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
 import {
   editedArgumentsForStep,
+  hasUnresolvedWorkflowReference,
   plannedApprovalStep,
   requiresActionPreview,
   resolvedApprovalStep,
@@ -1221,6 +1222,28 @@ Rules:
           return;
         }
         if (run.status === "awaiting_approval") {
+          if (run.blocker?.code === "plan_approval_required") {
+            pythonPlanRef.current = run.plan || pythonPlanRef.current;
+            const reviewPlan = uiPlanFromRun(run);
+            approvedStepsRef.current = reviewPlan.steps;
+            setApprovedSteps(reviewPlan.steps);
+            setPlan({ ...reviewPlan, provisional: false, compileState: "ready" });
+            setPhase("plan");
+            return;
+          }
+          const readyApprovals = (run.steps || []).filter((step) => (
+            step.consequential
+            && step.approval_status === "pending"
+            && step.approval_preview?.status === "ready"
+            && !hasUnresolvedWorkflowReference(step.approval_preview?.arguments)
+          ));
+          if (
+            run.blocker?.code !== "external_submission_approval_required"
+            || readyApprovals.length === 0
+          ) {
+            await new Promise((resolve) => setTimeout(resolve, 900));
+            continue;
+          }
           const preparedSteps = approvedStepsRef.current.map((step, index) =>
             resolvedApprovalStep(step, run.steps?.[index], planToolName(run.steps?.[index] || step))
           );
@@ -1245,7 +1268,14 @@ Rules:
       console.error("Python workflow execution failed", error);
       if (prepared && [409, 422].includes(error?.status)) {
         const latest = await getPythonRun(runId).catch(() => null);
-        if (latest?.status === "awaiting_approval") {
+        const hasReadyApproval = latest?.blocker?.code === "external_submission_approval_required"
+          && (latest.steps || []).some((step) => (
+            step.consequential
+            && step.approval_status === "pending"
+            && step.approval_preview?.status === "ready"
+            && !hasUnresolvedWorkflowReference(step.approval_preview?.arguments)
+          ));
+        if (latest?.status === "awaiting_approval" && hasReadyApproval) {
           const refreshed = approvedStepsRef.current.map((step, index) =>
             resolvedApprovalStep(step, latest.steps?.[index], planToolName(latest.steps?.[index] || step))
           );

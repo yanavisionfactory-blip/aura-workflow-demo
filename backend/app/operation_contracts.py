@@ -30,9 +30,54 @@ KNOWN = {
         "id": TEXT, "threadId": TEXT, "payload": OBJECT,
         "labelIds": {"type": "array", "items": TEXT}}}, ["message_content"]),
     "gmail.send": ({"type": "object", "required": ["id"], "properties": {"id": TEXT}}, ["write_receipt"]),
+    "gmail.threads.read": ({
+        "type": "object",
+        "required": ["threads", "resultSizeEstimate"],
+        "properties": {
+            "threads": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["id", "messages"],
+                    "properties": {
+                        "id": TEXT,
+                        "messages": {"type": "array", "items": OBJECT},
+                    },
+                },
+            },
+            "resultSizeEstimate": {"type": "integer"},
+            "nextPageToken": TEXT,
+        },
+    }, ["message_content"]),
     "calendar.get": ({"type": "object", "required": ["id"], "properties": {
         "id": TEXT, "summary": TEXT, "start": OBJECT, "end": OBJECT, "status": TEXT}}, ["event_state"]),
     "calendar.create": ({"type": "object", "required": ["id"], "properties": {"id": TEXT}}, ["write_receipt"]),
+    "drive.files.create": ({
+        "type": "object",
+        "required": ["id", "name", "mimeType", "webViewLink", "sha256", "size"],
+        "properties": {
+            "id": TEXT,
+            "name": TEXT,
+            "mimeType": TEXT,
+            "webViewLink": TEXT,
+            "md5Checksum": TEXT,
+            "sha256": TEXT,
+            "size": {"type": ["string", "integer"]},
+        },
+    }, ["write_receipt", "resource_metadata"]),
+    "drive.files.get": ({
+        "type": "object",
+        "required": ["id", "name", "mimeType"],
+        "properties": {
+            "id": TEXT,
+            "name": TEXT,
+            "mimeType": TEXT,
+            "webViewLink": TEXT,
+            "md5Checksum": TEXT,
+            "size": {"type": ["string", "integer"]},
+            "trashed": {"type": "boolean"},
+        },
+    }, ["resource_metadata"]),
     "jira.issue.get": ({"type": "object", "required": ["id", "key", "fields"],
         "properties": {"id": TEXT, "key": TEXT, "fields": OBJECT}}, ["issue_state"]),
     "jira.issue.create": ({"type": "object", "required": ["id", "key"],

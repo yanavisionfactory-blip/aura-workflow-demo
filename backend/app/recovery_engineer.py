@@ -57,6 +57,7 @@ CODE_REPAIR_AFTER_BUDGET = frozenset(
         "invalid_arguments",
         "capability_drift",
         "verification_incomplete",
+        "budget_exhausted",
     }
 )
 
