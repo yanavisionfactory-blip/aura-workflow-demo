@@ -752,47 +752,55 @@ async def _create_compiled_plan(
         }
         for item in inventory
     ]
-    from .workflow_templates import (
-        creator_outreach_template,
-        notion_to_jira_template,
-        source_backed_presentation_template,
-        weather_presentation_template,
-    )
+    fallback_inventory = inventory
+    def audited_fallback():
+        """Preserve proven legacy adapters only after the general planner fails.
 
-    audited_plan = (
-        creator_outreach_template(prompt, inventory)
-        or source_backed_presentation_template(prompt, inventory)
-        or weather_presentation_template(prompt, inventory)
-        or notion_to_jira_template(prompt, inventory)
-    )
-    if audited_plan is not None and not attach_request_graph_proof(
-        prompt, audited_plan, inventory
-    ):
-        _normalize_planned_steps(audited_plan, manifests_by_slug)
+        These adapters are recovery assets, not routing logic. New and unfamiliar
+        workflows always reach the staged agent team and the generic request-graph
+        proof before any provider-specific implementation is considered.
+        """
+        from .workflow_templates import (
+            creator_outreach_template,
+            notion_to_jira_template,
+            source_backed_presentation_template,
+            weather_presentation_template,
+        )
+
+        candidate = (
+            creator_outreach_template(prompt, fallback_inventory)
+            or source_backed_presentation_template(prompt, fallback_inventory)
+            or weather_presentation_template(prompt, fallback_inventory)
+            or notion_to_jira_template(prompt, fallback_inventory)
+        )
+        if candidate is None or attach_request_graph_proof(
+            prompt, candidate, fallback_inventory
+        ):
+            return None
+        _normalize_planned_steps(candidate, manifests_by_slug)
         from .operation_contracts import compile_contracts
 
-        audited_plan.planning_artifacts["compiled_contracts"] = compile_contracts(
-            audited_plan, manifests_by_slug
+        candidate.planning_artifacts["compiled_contracts"] = compile_contracts(
+            candidate, manifests_by_slug
         )
-        return audited_plan
-    if audited_plan is not None:
-        logger.info(
-            "Audited template skipped because it did not cover every requested deliverable"
+        candidate.planning_artifacts["planner_recovery_mode"] = (
+            "audited_adapter_after_agent_exhaustion"
         )
+        return candidate
     inventory = intent_bounded_tool_inventory(prompt, inventory, requested_tool_names)
     repair_requirements: list[str] = []
     # Connector-contract validation receives one model repair. Safe generated
     # prose is normalized deterministically before this boundary, so repeating
     # the same repair cannot improve a persistent schema mismatch.
     for attempt in range(2):
-        plan = await create_plan(
-            prompt,
-            inventory,
-            available_input_names,
-            planner_repair_requirements=list(repair_requirements),
-            planning_deadline=planning_deadline,
-        )
         try:
+            plan = await create_plan(
+                prompt,
+                inventory,
+                available_input_names,
+                planner_repair_requirements=list(repair_requirements),
+                planning_deadline=planning_deadline,
+            )
             requested = prompt.casefold()
             if ("roadmap" in requested or "timeline" in requested) and any(
                 s.operation == "canva.design.create" for s in plan.steps
@@ -814,8 +822,11 @@ async def _create_compiled_plan(
                 plan, manifests_by_slug
             )
             return plan
-        except (NativeConnectorError, ValueError) as exc:
+        except (NativeConnectorError, RuntimeError, TimeoutError, ValueError) as exc:
             if attempt == 1:
+                fallback = audited_fallback()
+                if fallback is not None:
+                    return fallback
                 raise
             repair_requirements.append(str(exc))
             logger.warning(
@@ -1114,6 +1125,7 @@ def _catalog_entry_inventory(item: dict, connected_families: set[str]) -> dict:
         "slug": provider,
         "name": str(item.get("display_name") or item.get("name") or provider),
         "canonical_provider": canonical,
+        "aliases": [str(value) for value in item.get("aliases") or [] if value],
         "connected": family in connected_families,
         "allowed_operations": list(item.get("capabilities") or []),
     }
@@ -1187,6 +1199,14 @@ async def connection_requirement_inventory(
                     }
                     if candidate_family not in aliases:
                         continue
+                    # Start compiling the exact action contract as soon as the
+                    # planner discovers an unfamiliar marketplace app. This
+                    # overlaps certification with the unavoidable OAuth step,
+                    # instead of making the user connect and then wait for a
+                    # second backstage preparation cycle.
+                    from .connector_engineer import queue_pipedream_certification
+
+                    queue_pipedream_certification(app)
                     catalog_item = _catalog_entry_inventory(entry, connected_families)
                     family = _connection_family(catalog_item)
                     if family and family not in known_families:
@@ -1414,28 +1434,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
         immediate_missing = explicit_disconnected_capabilities(
             run.prompt, requirement_inventory
         )
-        audited_connection_plan_available = False
         if immediate_missing:
-            from .workflow_templates import (
-                creator_outreach_template,
-                notion_to_jira_template,
-                source_backed_presentation_template,
-                weather_presentation_template,
-            )
-
-            immediate_template = (
-                creator_outreach_template(run.prompt, inventory)
-                or source_backed_presentation_template(run.prompt, inventory)
-                or weather_presentation_template(run.prompt, inventory)
-                or notion_to_jira_template(run.prompt, inventory)
-            )
-            audited_connection_plan_available = bool(
-                immediate_template
-                and not attach_request_graph_proof(
-                    run.prompt, immediate_template, requirement_inventory
-                )
-            )
-        if immediate_missing and not audited_connection_plan_available:
             from .connection_recovery import reuse_managed_connection
             from .semantic_memory import source_owner
 
@@ -1445,8 +1444,23 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                     session, managed_connector_client(), slug, workspace_id, owner
                 ):
                     immediate_missing.remove(slug)
-        if immediate_missing and not audited_connection_plan_available:
-            for capability in immediate_missing:
+
+        # A disconnected connector with a released capability contract is still
+        # fully plannable. Build and persist the complete graph first, then ask
+        # for its one unavoidable human action (authentication). Only an app that
+        # has no certified operations yet must stop before model planning.
+        plannable_families = {
+            _connection_family(item)
+            for item in inventory
+            if item.get("allowed_operations") and _connection_family(item)
+        }
+        unplannable_missing = [
+            capability
+            for capability in immediate_missing
+            if capability not in plannable_families
+        ]
+        if unplannable_missing:
+            for capability in unplannable_missing:
                 session.add(
                     ConnectionRequirement(
                         workspace_id=workspace_id,
@@ -1464,7 +1478,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 "code": "connection_required",
                 "message": "Connect the requested apps to continue",
                 "action": "connect_account",
-                "missing_capabilities": immediate_missing,
+                "missing_capabilities": unplannable_missing,
                 "retryable": False,
             }
             transition_run(
@@ -1477,7 +1491,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 error=blocker["message"],
                 result={
                     "status": "waiting_for_connection",
-                    "missing_capabilities": immediate_missing,
+                    "missing_capabilities": unplannable_missing,
                 },
                 blocker=blocker,
                 dispatch=None,
@@ -1487,8 +1501,8 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 workspace_id,
                 "run.connection_required",
                 {
-                    "missing_capabilities": immediate_missing,
-                    "source": "preplanning_explicit_provider_gate",
+                    "missing_capabilities": unplannable_missing,
+                    "source": "preplanning_uncertified_provider_gate",
                 },
                 run.id,
                 actor="connection-supervisor",
@@ -2840,8 +2854,23 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             if (run.execution_context or {}).get("execution_mode") == "unattended":
                 from .assurance import operation_readiness
 
-                readiness = await operation_readiness(session, workspace_id, tool, step.operation)
-                if not readiness["execution_ready"]:
+                assurance_manifest = await session.scalar(
+                    select(CapabilityManifest).where(
+                        CapabilityManifest.tool_id == tool.id,
+                        CapabilityManifest.status == "verified",
+                    )
+                )
+                readiness = await operation_readiness(
+                    session,
+                    workspace_id,
+                    tool,
+                    step.operation,
+                    assurance_manifest.manifest if assurance_manifest else None,
+                )
+                if not (
+                    readiness["execution_ready"]
+                    or readiness.get("governed_execution_ready")
+                ):
                     transition_run(
                         run,
                         RunStatus.blocked,
@@ -2856,6 +2885,20 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     )
                     await session.commit()
                     return
+                if not readiness["execution_ready"]:
+                    await audit(
+                        session,
+                        workspace_id,
+                        "step.unattended_governed_execution",
+                        {
+                            "step_id": step.id,
+                            "operation": step.operation,
+                            "mode": readiness.get("governed_mode"),
+                            "advisories": readiness.get("reasons", []),
+                        },
+                        run.id,
+                        actor="assurance-controller",
+                    )
             trust = await _trust_state(session, workspace_id, tool)
             if trust.incident_active:
                 transition_run(

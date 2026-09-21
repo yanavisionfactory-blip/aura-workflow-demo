@@ -320,6 +320,7 @@ def _inventory_provider_aliases(item: dict) -> set[str]:
         str(item.get("slug") or ""),
         str(item.get("name") or ""),
         str(item.get("canonical_provider") or ""),
+        *(str(value) for value in item.get("aliases") or []),
         *(
             str(operation).split(".", 1)[0]
             for operation in item.get("allowed_operations") or []
@@ -344,6 +345,7 @@ def _explicit_provider_aliases(item: dict) -> set[str]:
         str(item.get("slug") or ""),
         str(item.get("name") or ""),
         str(item.get("canonical_provider") or ""),
+        *(str(value) for value in item.get("aliases") or []),
     }
     aliases = {_normalized_text(value) for value in values if value}
     return {

@@ -119,8 +119,8 @@ test("the UI publishes one complete durable plan without provisional step flicke
   assert.equal(source.includes("AURA could not build the authoritative workflow plan"), true);
   assert.equal(planViewSource.includes("validating exact actions backstage"), false);
   assert.equal(planViewSource.includes("validatingExecution || missingTools.length"), false);
-  assert.equal(source.includes("PLANNING_WAIT_TIMEOUT_MS = 55_000"), true);
-  assert.equal(source.includes("PLANNING_RECOVERY_GRACE_MS = 10_000"), true);
+  assert.equal(source.includes("PLANNING_WAIT_TIMEOUT_MS = 45_000"), true);
+  assert.equal(source.includes("PLANNING_RECOVERY_GRACE_MS = 5_000"), true);
   assert.equal(source.includes("planningRecoveryGraceEligible(run)"), true);
   assert.equal(source.includes("timeout.preserveActiveRun"), true);
   assert.equal(source.includes('.replace(/^i\\s+will\\s+/i, "")'), true);

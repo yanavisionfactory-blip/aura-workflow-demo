@@ -1380,6 +1380,19 @@ async def dynamic_planning_catalog(
             {
                 "slug": release.provider_slug,
                 "name": release.display_name,
+                "canonical_provider": str(
+                    (manifest.get("identity") or {}).get("provider")
+                    or release.provider_slug
+                ),
+                "aliases": list(
+                    dict.fromkeys(
+                        [
+                            release.provider_slug,
+                            release.display_name,
+                            str((manifest.get("identity") or {}).get("provider") or ""),
+                        ]
+                    )
+                ),
                 "kind": "oauth",
                 "allowed_operations": operations,
                 "connected": release.provider_slug in connected_slugs,

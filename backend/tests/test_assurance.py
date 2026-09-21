@@ -150,6 +150,8 @@ async def test_readiness_changes_with_permission_revocation_and_expiry(database)
         await session.commit()
         status = await operation_readiness(session, "w", tool, "notion.page.update")
         assert status["execution_ready"] is False
+        assert status["governed_execution_ready"] is True
+        assert status["governed_mode"] == "approved_once_no_replay"
         cert = OperationCertification(
             workspace_id="w",
             tool_id=tool.id,
@@ -166,9 +168,51 @@ async def test_readiness_changes_with_permission_revocation_and_expiry(database)
         ]
         tool.allowed_operations = []
         await session.commit()
-        assert not (await operation_readiness(session, "w", tool, "notion.page.update"))[
-            "execution_ready"
-        ]
+        revoked = await operation_readiness(session, "w", tool, "notion.page.update")
+        assert revoked["execution_ready"] is False
+        assert revoked["governed_execution_ready"] is False
+
+
+async def test_governed_unattended_mode_never_admits_destructive_operation(database):
+    from app.models import ToolConnection, ToolKind
+
+    operation = "future.records.delete"
+    manifest = {
+        "provider_type": "pipedream",
+        "capabilities": [
+            {
+                "name": operation,
+                "input_schema": {"type": "object"},
+                "output_schema": {"type": "object"},
+                "permission_scope": "destructive",
+                "requires_approval": True,
+            }
+        ],
+    }
+    async with database() as session:
+        tool = ToolConnection(
+            id="future-tool",
+            workspace_id="w",
+            slug="future",
+            display_name="Future",
+            kind=ToolKind.oauth,
+            allowed_operations=[operation],
+            config={"connection_id": "dedicated"},
+        )
+        session.add(tool)
+        await session.commit()
+
+        readiness = await operation_readiness(
+            session,
+            "w",
+            tool,
+            operation,
+            manifest,
+        )
+
+    assert readiness["execution_ready"] is False
+    assert readiness["governed_execution_ready"] is False
+    assert "Current live certification is missing or expired" in readiness["reasons"]
 
 
 async def test_probe_yields_only_its_own_checkpoint_and_resumes_without_replay(
