@@ -281,7 +281,19 @@ def test_source_backed_canva_creation_requires_grounded_upstream_reads() -> None
         {
             "slug": "canva",
             "name": "Canva",
-            "allowed_operations": ["canva.presentation.create"],
+            "allowed_operations": ["canva.designs.list", "canva.presentation.create"],
+            "operation_contracts": [
+                {
+                    "name": "canva.designs.list",
+                    "description": "Find Canva designs.",
+                    "capability_tags": ["design_metadata"],
+                },
+                {
+                    "name": "canva.presentation.create",
+                    "description": "Create a populated Canva presentation.",
+                    "capability_tags": ["write_receipt"],
+                },
+            ],
         },
     ]
     prompt = (
@@ -294,10 +306,17 @@ def test_source_backed_canva_creation_requires_grounded_upstream_reads() -> None
         interpretation="Create a sourced comparison in Canva",
         steps=[
             _step(
+                "search_canva",
+                "canva",
+                "canva.designs.list",
+                "Find Canva designs even though this cannot retrieve NASA sources",
+            ),
+            _step(
                 "create_deck",
                 "canva",
                 "canva.presentation.create",
                 "Create a Canva comparison with NASA source-link placeholders",
+                depends_on=["search_canva"],
                 consequential=True,
             )
         ],
@@ -340,6 +359,19 @@ def test_source_backed_canva_creation_requires_grounded_upstream_reads() -> None
             supporting_step_keys=["search_sources", "read_source"],
         ),
     )
+
+    inventory[0]["operation_contracts"] = [
+        {
+            "name": "web.search",
+            "description": "Search public sources.",
+            "capability_tags": ["public_search_results"],
+        },
+        {
+            "name": "web.page.read",
+            "description": "Read a public source page.",
+            "capability_tags": ["public_page_content"],
+        },
+    ]
 
     assert prove_request_graph(prompt, complete, inventory).fixes == []
 
