@@ -10,7 +10,7 @@ PHASE_SCHEMA = {"type": "object", "additionalProperties": False,
         "period": {"type": "string", "minLength": 1, "maxLength": 24},
         "title": {"type": "string", "minLength": 1, "maxLength": 40},
         "items": {"type": "array", "minItems": 1, "maxItems": 5,
-                  "items": {"type": "string", "minLength": 1, "maxLength": 90}}}}
+                  "items": {"type": "string", "minLength": 1, "maxLength": 160}}}}
 PRESENTATION_SCHEMA = {"type": "object", "additionalProperties": False,
     "required": ["title", "phases"], "properties": {
         "title": {"type": "string", "minLength": 1, "maxLength": 50},
@@ -53,7 +53,7 @@ def render_timeline(arguments: dict) -> bytes:
             for item_index, item in enumerate(phase['items']):
                 label(
                     slide, 1.0, 3.15 + item_index * .92, 13.8, .8,
-                    f"•  {item}", 18, 'DCE6F1'
+                    f"•  {item}", 14 if len(item) > 90 else 18, 'DCE6F1'
                 )
             label(slide, .75, 8.25, 13.2, .3, arguments.get('subtitle', ''), 10, '8295AA')
             label(slide, 14.2, 8.25, 1.0, .3, f"{index + 1} / {len(phases)}", 10, accent, True)
