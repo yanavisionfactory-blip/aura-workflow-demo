@@ -342,6 +342,118 @@ async def test_review_resume_after_write_does_not_replay_provider(runtime, monke
     assert reviews == 2
 
 
+async def test_optional_recorded_result_cannot_block_required_write(runtime, monkeypatch):
+    plan = WorkflowPlan(
+        name="Create from two required sources",
+        interpretation="Use required evidence and create the requested record",
+        steps=[
+            PlanStep(
+                key="optional_enrichment",
+                agent="researcher",
+                tool_slug="test",
+                operation="records.read",
+                reason="Read one additional source when available",
+                expected_output="Additional source evidence",
+                optional=True,
+            ),
+            PlanStep(
+                key="write",
+                agent="writer",
+                tool_slug="test",
+                operation="records.create",
+                arguments={"title": "Example"},
+                reason="Create requested record",
+                expected_output="Record id",
+                consequential=True,
+            ),
+        ],
+    ).model_dump(mode="json")
+    digest = canonical_plan_hash(plan)
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        run.plan = plan
+        run.execution_context = {
+            "__aura_preflight__": {
+                "version": 2,
+                "plan_hash": digest,
+                "status": "passed",
+                "completed_at": datetime.now(UTC).isoformat(),
+            }
+        }
+        version = await session.get(PlanVersion, "version")
+        version.plan = plan
+        version.plan_hash = digest
+        snapshot = await session.get(ApprovalSnapshot, "snapshot")
+        snapshot.plan_hash = digest
+        snapshot.permission_snapshot = {"test": ["records.read", "records.create"]}
+        write = await session.get(RunStep, "step")
+        write.position = 1
+        session.add(
+            RunStep(
+                id="optional-step",
+                run_id="run",
+                position=0,
+                step_key="optional_enrichment",
+                agent="researcher",
+                tool_slug="test",
+                operation="records.read",
+                arguments={},
+                status=StepStatus.running,
+                consequential=False,
+                idempotency_key="optional-read",
+                output={
+                    "provider_result": {"url": "https://example.com/additional"},
+                    "critic": {"action": "escalate"},
+                    "outcome_check": {"status": "pending"},
+                },
+            )
+        )
+        await session.commit()
+
+    provider_calls = 0
+
+    async def execute(*args, **kwargs):
+        nonlocal provider_calls
+        provider_calls += 1
+        return {"id": "record-1"}
+
+    async def accept(*args):
+        return CriticDecision(action="accept")
+
+    async def reject_optional(*args):
+        if any(getattr(arg, "id", None) == "optional-step" for arg in args):
+            return CriticDecision(
+                action="escalate", reasons=["Optional source unavailable"]
+            )
+        return CriticDecision(action="accept")
+
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", execute)
+    monkeypatch.setattr(orchestrator, "critique_step", accept)
+    monkeypatch.setattr(orchestrator, "review_recorded_result", reject_optional)
+
+    await orchestrator._execute_run("run", "w")
+
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        optional = await session.get(RunStep, "optional-step")
+        assert run.status == RunStatus.completed
+        assert optional.status == StepStatus.skipped
+        assert optional.output["provider_result"] == {
+            "url": "https://example.com/additional"
+        }
+        assert optional.output["optional_skip_reason"] == (
+            "recorded_result_review_incomplete"
+        )
+        deferred = await session.scalar(
+            select(AuditEvent).where(
+                AuditEvent.run_id == run.id,
+                AuditEvent.event_type == "step.verification_deferred",
+            )
+        )
+        assert deferred is None
+    assert provider_calls == 1
+
+
 async def test_semantic_read_retry_completes_without_verification_backoff(
     runtime, monkeypatch
 ):
