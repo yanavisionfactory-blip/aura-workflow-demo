@@ -5,6 +5,7 @@ from app.native_connectors import native_manifest
 from app.workflow_templates import (
     creator_outreach_template,
     notion_to_jira_template,
+    source_backed_presentation_template,
     weather_presentation_template,
 )
 
@@ -403,6 +404,60 @@ def test_canva_export_is_governed_without_a_second_human_approval():
 
     assert export["permission_scope"] == "write"
     assert export["requires_approval"] is False
+
+
+def test_source_backed_presentation_template_is_subject_agnostic_and_grounded():
+    prompt = (
+        "Using official NASA sources, create a concise 3-slide Canva presentation "
+        "comparing Voyager 1 and Voyager 2 launch dates and primary destinations. "
+        "Include source links. Do not email or publish it."
+    )
+    tools = [
+        {
+            "slug": "aura",
+            "connected": True,
+            "allowed_operations": ["web.search", "web.page.read"],
+        },
+        {
+            "slug": "canva",
+            "connected": True,
+            "allowed_operations": ["canva.presentation.create"],
+        },
+    ]
+
+    plan = source_backed_presentation_template(prompt, tools)
+
+    assert plan is not None
+    assert [step.operation for step in plan.steps] == [
+        "web.search",
+        "web.page.read",
+        "web.page.read",
+        "web.page.read",
+        "canva.presentation.create",
+    ]
+    create = plan.steps[-1]
+    assert create.depends_on == ["read_source_one", "read_source_two"]
+    assert create.arguments["layout"] == "slides"
+    assert len(create.arguments["phases"]) == 3
+    assert plan.result_contract.primary_step_key == "create_presentation"
+
+    compiled = asyncio.run(
+        orchestrator._create_compiled_plan(
+            prompt,
+            tools,
+            set(),
+            {
+                "aura": native_manifest("aura"),
+                "canva": native_manifest("canva"),
+            },
+            ["Canva"],
+        )
+    )
+
+    assert compiled.planning_artifacts["planner_recovery_mode"] == (
+        "audited_source_backed_presentation"
+    )
+    assert compiled.planning_artifacts["request_contract"]["fixes"] == []
 
 
 def test_future_gmail_review_keeps_transport_reference_server_side():
