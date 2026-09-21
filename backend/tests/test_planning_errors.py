@@ -224,6 +224,10 @@ def test_provider_candidates_ignore_instruction_words() -> None:
         "Find three official NASA sources. Extract the launch dates. "
         "Do not use weather tools."
     ) == []
+    assert _capitalized_provider_candidates(
+        "Using official NASA sources, find Voyager 1 and Voyager 2. "
+        "Calculate the exact number of days between the launches."
+    ) == []
 
 
 def test_requirement_inventory_discovers_exact_connectable_app(monkeypatch) -> None:

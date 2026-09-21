@@ -917,6 +917,7 @@ _PROVIDER_CANDIDATE_STOP_WORDS = {
     "add",
     "analyze",
     "build",
+    "calculate",
     "compare",
     "connect",
     "create",
@@ -947,6 +948,7 @@ _PROVIDER_CANDIDATE_STOP_WORDS = {
     "update",
     "upload",
     "use",
+    "using",
     "write",
 }
 
@@ -966,7 +968,7 @@ def _capitalized_provider_candidates(prompt: str) -> list[str]:
             if match.group(0).strip().rstrip("._+-").casefold()
             not in _PROVIDER_CANDIDATE_STOP_WORDS
             and not re.match(
-                r"\s+(?:data|page|pages|site|source|sources|website)\b",
+                r"\s+(?:\d|data|page|pages|site|source|sources|website)\b",
                 prompt[match.end() :],
                 flags=re.IGNORECASE,
             )
