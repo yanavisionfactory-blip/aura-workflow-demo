@@ -2239,6 +2239,27 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     run.id,
                 )
                 if criticism.action != "accept":
+                    if plan_steps[step.position].get("optional", False):
+                        step.status = StepStatus.skipped
+                        step.error = None
+                        step.output = {
+                            **step.output,
+                            "optional_skip_reason": "recorded_result_review_incomplete",
+                        }
+                        await audit(
+                            session,
+                            workspace_id,
+                            "step.optional_enrichment_skipped",
+                            {
+                                "step_id": step.id,
+                                "reason": "recorded_result_review_incomplete",
+                                "provider_receipt_preserved": True,
+                            },
+                            run.id,
+                            actor="outcome-checker",
+                        )
+                        await session.commit()
+                        continue
                     from .verification_recovery import defer_verification
 
                     if await defer_verification(session, run, step):
