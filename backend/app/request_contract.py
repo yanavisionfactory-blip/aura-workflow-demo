@@ -230,7 +230,19 @@ _SOURCE_EVIDENCE_RE = re.compile(
     r"\b(?:source(?:s|\s+links?)?|citation(?:s)?|references?|research)\b",
     re.IGNORECASE,
 )
+_PUBLIC_SOURCE_RE = re.compile(
+    r"\b(?:official|public|source\s+links?|citation(?:s)?|references?)\b",
+    re.IGNORECASE,
+)
 _SOURCE_CONSUMING_ACTIONS = {"create", "export", "store", "publish", "send", "update"}
+_PUBLIC_SOURCE_TAGS = {"public_page_content", "public_search_results"}
+_NON_CONTENT_TAGS = {
+    "account_identity",
+    "design_metadata",
+    "project_metadata",
+    "resource_metadata",
+    "write_receipt",
+}
 
 
 def _normalized_text(value: object) -> str:
@@ -518,9 +530,9 @@ def derive_request_requirements(
     return requirements
 
 
-def _operation_document(step: PlanStep, inventory_by_slug: dict[str, dict]) -> str:
+def _operation_contract(step: PlanStep, inventory_by_slug: dict[str, dict]) -> dict:
     item = inventory_by_slug.get(step.tool_slug, {})
-    contract = next(
+    return next(
         (
             value
             for value in item.get("operation_contracts") or []
@@ -528,6 +540,11 @@ def _operation_document(step: PlanStep, inventory_by_slug: dict[str, dict]) -> s
         ),
         {},
     )
+
+
+def _operation_document(step: PlanStep, inventory_by_slug: dict[str, dict]) -> str:
+    item = inventory_by_slug.get(step.tool_slug, {})
+    contract = _operation_contract(step, inventory_by_slug)
     return _normalized_text(
         " ".join(
             [
@@ -541,6 +558,45 @@ def _operation_document(step: PlanStep, inventory_by_slug: dict[str, dict]) -> s
                 str(contract.get("description") or ""),
                 " ".join(str(value) for value in contract.get("capability_tags") or []),
             ]
+        )
+    )
+
+
+def _source_evidence_capable(
+    step: PlanStep,
+    inventory_by_slug: dict[str, dict],
+    *,
+    public_required: bool,
+) -> bool:
+    """Reject metadata/list calls that cannot ground requested source content."""
+    if operation_scope(step.operation) != "read":
+        return False
+    contract = _operation_contract(step, inventory_by_slug)
+    tags = {
+        str(value).casefold()
+        for value in contract.get("capability_tags") or []
+        if value
+    }
+    if public_required:
+        return bool(tags.intersection(_PUBLIC_SOURCE_TAGS)) or (
+            not tags
+            and step.operation
+            in {"browser.page.read", "web.page.read", "web.search"}
+        )
+    if tags:
+        return bool(tags - _NON_CONTENT_TAGS) and not all(
+            tag.endswith("_metadata") or tag in _NON_CONTENT_TAGS for tag in tags
+        )
+    document = _operation_document(step, inventory_by_slug)
+    return any(
+        marker in document
+        for marker in (
+            " page body ",
+            " page blocks ",
+            " content ",
+            " records ",
+            " source text ",
+            " public page ",
         )
     )
 
@@ -639,6 +695,18 @@ def prove_request_graph(
             for step in plan.steps
             if _action_compatible(requirement.action, step, documents[step.key])
         ]
+        if requirement.action == "read" and _SOURCE_EVIDENCE_RE.search(
+            requirement.statement
+        ):
+            action_steps = [
+                step
+                for step in action_steps
+                if _source_evidence_capable(
+                    step,
+                    inventory_by_slug,
+                    public_required=bool(_PUBLIC_SOURCE_RE.search(requirement.statement)),
+                )
+            ]
         provider_steps = [
             step for step in plan.steps if step.tool_slug in requirement.provider_slugs
         ]
