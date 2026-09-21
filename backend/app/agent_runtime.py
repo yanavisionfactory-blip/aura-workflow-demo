@@ -39,10 +39,12 @@ from .schemas import (
     ObjectiveSpec,
     OutcomeVerification,
     PlanEvaluation,
+    PlanStep,
     PlanSupervisionDecision,
     RecoveryDiagnosis,
     StepDelegation,
     StepRepair,
+    ToolSelection,
     ToolsetProposal,
     UnifiedDeliverable,
     WorkflowPlan,
@@ -85,6 +87,127 @@ async def _within_planning_budget(awaitable, deadline: float):
         raise TimeoutError("Global planning budget exhausted")
     async with asyncio.timeout(remaining):
         return await awaitable
+
+
+def _deterministic_public_research_bundle(
+    prompt: str,
+    tool_inventory: list[dict],
+) -> PlanningBundle | None:
+    """Build a safe read-only research graph when every planner response is unusable.
+
+    This is capability-driven rather than subject-driven: it applies only when
+    the request contract contains reads/internal synthesis and the inventory
+    exposes public search plus page reading. It cannot create, send, update, or
+    otherwise approximate an external write.
+    """
+    requirements = derive_request_requirements(prompt, tool_inventory)
+    if not requirements or any(
+        requirement.action not in {"read", "synthesize", "outcome"}
+        for requirement in requirements
+    ):
+        return None
+    search_tool = next(
+        (
+            item
+            for item in tool_inventory
+            if "web.search" in (item.get("allowed_operations") or [])
+        ),
+        None,
+    )
+    page_tool = next(
+        (
+            item
+            for item in tool_inventory
+            if "web.page.read" in (item.get("allowed_operations") or [])
+        ),
+        None,
+    )
+    if not search_tool or not page_tool:
+        return None
+
+    source_statements = [
+        requirement.statement
+        for requirement in requirements
+        if requirement.action in {"read", "outcome"}
+    ]
+    query = ". ".join(source_statements).strip() or prompt.strip()
+    query = query[:1800]
+    steps = [
+        PlanStep(
+            key="search_public_sources",
+            agent="public_research",
+            tool_slug=str(search_tool["slug"]),
+            operation="web.search",
+            arguments={"query": query, "limit": 8},
+            reason=f"Find current public source evidence for: {query}",
+            expected_output="Relevant public source URLs, titles, and snippets",
+            required_evidence=["public_search_results"],
+        )
+    ]
+    for index in range(3):
+        steps.append(
+            PlanStep(
+                key=f"read_public_source_{index + 1}",
+                agent="public_research",
+                tool_slug=str(page_tool["slug"]),
+                operation="web.page.read",
+                arguments={
+                    "url": f"{{{{steps.search_public_sources.results.{index}.url}}}}"
+                },
+                reason=f"Read source {index + 1} for the requested facts: {query}",
+                expected_output=(
+                    "Public page text, title, URL, and links supporting the requested outcome"
+                ),
+                optional=True,
+                depends_on=["search_public_sources"],
+                required_evidence=["public_page_content"],
+            )
+        )
+    objective = ObjectiveSpec(
+        goal=prompt,
+        deliverables=[requirement.statement for requirement in requirements],
+        constraints=[
+            constraint.statement
+            for constraint in derive_request_constraints(prompt, tool_inventory)
+        ],
+        assumptions=[
+            (
+                "Internal tables, calculations, comparisons, briefs, and summaries are "
+                "synthesized from accepted source artifacts without an extra provider step."
+            )
+        ],
+    )
+    selected_slugs = list(
+        dict.fromkeys([str(search_tool["slug"]), str(page_tool["slug"])])
+    )
+    return PlanningBundle(
+        objective=objective,
+        toolset=ToolsetProposal(
+            tools=[
+                ToolSelection(
+                    slug=slug,
+                    role="public_research",
+                    rationale="Provides approved read-only public source evidence",
+                    required_permissions=[
+                        operation
+                        for operation in ("web.search", "web.page.read")
+                        if operation
+                        in next(
+                            item.get("allowed_operations", [])
+                            for item in tool_inventory
+                            if str(item["slug"]) == slug
+                        )
+                    ],
+                )
+                for slug in selected_slugs
+            ]
+        ),
+        plan=WorkflowPlan(
+            name="Public research and synthesis",
+            interpretation=prompt,
+            steps=steps,
+        ),
+    )
 
 
 def _permanent_planning_error(exc: Exception) -> bool:
@@ -1405,9 +1528,12 @@ async def create_plan(
                 else "staged_structured_recovery"
             )
         except Exception as staged_error:
-            raise RuntimeError(
-                "Planner recovery exhausted inside the global planning budget"
-            ) from staged_error
+            bundle = _deterministic_public_research_bundle(prompt, tool_inventory)
+            if bundle is None:
+                raise RuntimeError(
+                    "Planner recovery exhausted inside the global planning budget"
+                ) from staged_error
+            recovery_mode = "deterministic_public_research"
     if _has_only_missing_capabilities(bundle):
         bundle = await _within_planning_budget(
             _recover_catalog_tool_selection(
@@ -1444,10 +1570,14 @@ async def create_plan(
                 deadline,
             )
         except Exception as repair_error:
-            raise RuntimeError(
-                "Staged planner repair exhausted inside the global planning budget"
-            ) from repair_error
-        recovery_mode = "staged_authorization_repair"
+            bundle = _deterministic_public_research_bundle(prompt, tool_inventory)
+            if bundle is None:
+                raise RuntimeError(
+                    "Staged planner repair exhausted inside the global planning budget"
+                ) from repair_error
+            recovery_mode = "deterministic_public_research"
+        else:
+            recovery_mode = "staged_authorization_repair"
         repair_ms += round((perf_counter() - repair_started_at) * 1000)
         objective = bundle.objective
         toolset = bundle.toolset
