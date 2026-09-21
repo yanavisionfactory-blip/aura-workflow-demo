@@ -1,4 +1,4 @@
-name: Deploy AURA backend
+name: Validate AURA backend release
 
 on:
   push:
@@ -34,35 +34,7 @@ jobs:
           python -m compileall -q app
           pytest -q
 
-  deploy:
-    name: Deploy and verify Railway production
-    needs: validate
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    environment: recovery-production
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install Railway CLI
-        run: npm install --global @railway/cli
-      - name: Deploy current main
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-          PROD_PROJECT: ${{ secrets.RAILWAY_PROJECT_ID }}
-          PROD_SERVICE: ${{ secrets.RAILWAY_PRODUCTION_SERVICE_ID }}
-          PROD_ENVIRONMENT: ${{ secrets.RAILWAY_PRODUCTION_ENVIRONMENT_ID }}
-        run: >-
-          railway up ./backend --ci
-          --project "$PROD_PROJECT"
-          --service "$PROD_SERVICE"
-          --environment "$PROD_ENVIRONMENT"
-          --message "AURA main ${GITHUB_SHA}"
-      - name: Verify production readiness
-        env:
-          PROD_URL: ${{ secrets.RAILWAY_PRODUCTION_URL }}
-        run: >-
-          python backend/app/code_repair_sandbox.py health
-          --url "$PROD_URL"
-          --timeout 300
+  # Railway's installed GitHub integration owns production deployment and
+  # publishes one commit status per service. Keeping a second CLI deployment
+  # here required duplicate secrets and produced false-red releases even after
+  # the exact commit was already healthy in production.
