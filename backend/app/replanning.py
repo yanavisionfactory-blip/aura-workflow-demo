@@ -449,6 +449,7 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
                 run_id, step.position, step.operation, step.arguments
             )
             step.status, step.error, step.output = StepStatus.pending, None, {}
+            step.started_at, step.completed_at = None, None
             context.setdefault("steps", {}).pop(step.step_key, None)
             for name in step.output_variables:
                 context.setdefault("vars", {}).pop(name, None)
@@ -534,6 +535,7 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
                 run_id, step.position, step.operation, step.arguments
             )
             step.status, step.error, step.output = StepStatus.pending, None, {}
+            step.started_at, step.completed_at = None, None
             context.setdefault("steps", {}).pop(step.step_key, None)
             for name in step.output_variables:
                 context.setdefault("vars", {}).pop(name, None)
@@ -617,6 +619,7 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
             run_id, step.position, step.operation, step.arguments
         )
         step.status, step.error, step.output = StepStatus.pending, None, {}
+        step.started_at, step.completed_at = None, None
         context.setdefault("steps", {}).pop(step.step_key, None)
         for name in step.output_variables:
             context.setdefault("vars", {}).pop(name, None)
