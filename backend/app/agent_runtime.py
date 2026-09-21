@@ -73,6 +73,12 @@ class PlanningBundle(BaseModel):
     plan: WorkflowPlan
 
 
+_PUBLIC_SOURCE_REQUEST_RE = re.compile(
+    r"\b(?:official|public|source\s+links?|citation(?:s)?|references?)\b",
+    re.IGNORECASE,
+)
+
+
 PLANNER_ATTEMPT_TIMEOUT_SECONDS = 12
 PLANNING_GLOBAL_TIMEOUT_SECONDS = 45
 
@@ -208,6 +214,128 @@ def _deterministic_public_research_bundle(
             steps=steps,
         ),
     )
+
+
+def _ground_public_source_artifact_plan(
+    prompt: str,
+    plan: WorkflowPlan,
+    tool_inventory: list[dict],
+) -> tuple[WorkflowPlan, bool]:
+    """Prepend public evidence reads when a generated artifact omitted them.
+
+    The request contract still proves the completed graph. This repair only uses
+    capability names from the active inventory and never invents another write.
+    """
+    requirements = derive_request_requirements(prompt, tool_inventory)
+    needs_external_artifact = any(
+        requirement.action
+        in {"create", "export", "store", "publish", "send", "update"}
+        for requirement in requirements
+    )
+    if (
+        not needs_external_artifact
+        or not _PUBLIC_SOURCE_REQUEST_RE.search(prompt)
+        or len(plan.steps) > 16
+    ):
+        return plan, False
+
+    search_tool = next(
+        (
+            item
+            for item in tool_inventory
+            if "web.search" in (item.get("allowed_operations") or [])
+        ),
+        None,
+    )
+    page_tool = next(
+        (
+            item
+            for item in tool_inventory
+            if "web.page.read" in (item.get("allowed_operations") or [])
+        ),
+        None,
+    )
+    if not search_tool or not page_tool:
+        return plan, False
+
+    existing_operations = {step.operation for step in plan.steps}
+    if {"web.search", "web.page.read"}.issubset(existing_operations):
+        return plan, False
+
+    known_keys = {step.key for step in plan.steps}
+
+    def unique_key(preferred: str) -> str:
+        if preferred not in known_keys:
+            known_keys.add(preferred)
+            return preferred
+        for suffix in range(2, 100):
+            candidate = f"{preferred}_{suffix}"
+            if candidate not in known_keys:
+                known_keys.add(candidate)
+                return candidate
+        raise ValueError("Could not allocate a source-grounding step key")
+
+    query = " ".join(prompt.split())[:1800]
+    search_key = unique_key("search_public_sources")
+    grounding_steps = [
+        PlanStep(
+            key=search_key,
+            agent="public_research",
+            tool_slug=str(search_tool["slug"]),
+            operation="web.search",
+            arguments={"query": query, "limit": 8},
+            reason=f"Find official public source evidence for: {query}",
+            expected_output="Relevant public source URLs, titles, and snippets",
+            required_evidence=["public_search_results"],
+        )
+    ]
+    required_read_keys: list[str] = []
+    for index in range(3):
+        read_key = unique_key(f"read_public_source_{index + 1}")
+        grounding_steps.append(
+            PlanStep(
+                key=read_key,
+                agent="public_research",
+                tool_slug=str(page_tool["slug"]),
+                operation="web.page.read",
+                arguments={
+                    "url": f"{{{{steps.{search_key}.results.{index}.url}}}}"
+                },
+                reason=f"Read official source {index + 1} for the requested facts: {query}",
+                expected_output=(
+                    "Public page text, title, URL, and links for the requested artifact"
+                ),
+                optional=index == 2,
+                depends_on=[search_key],
+                required_evidence=["public_page_content"],
+            )
+        )
+        if index < 2:
+            required_read_keys.append(read_key)
+
+    plan_data = plan.model_dump(mode="python")
+    existing_steps = []
+    for step in plan.steps:
+        step_data = step.model_dump(mode="python")
+        if operation_scope(step.operation) != "read":
+            step_data["depends_on"] = list(
+                dict.fromkeys([*step.depends_on, *required_read_keys])
+            )
+        existing_steps.append(step_data)
+    plan_data["steps"] = [
+        step.model_dump(mode="python") for step in grounding_steps
+    ] + existing_steps
+    contract = plan_data.get("result_contract") or {}
+    contract["supporting_step_keys"] = list(
+        dict.fromkeys(
+            [
+                *(step.key for step in grounding_steps),
+                *(contract.get("supporting_step_keys") or []),
+            ]
+        )
+    )
+    plan_data["result_contract"] = contract
+    return WorkflowPlan.model_validate(plan_data), True
 
 
 def _permanent_planning_error(exc: Exception) -> bool:
@@ -1554,6 +1682,11 @@ async def create_plan(
     if toolset.missing_capabilities and not toolset.tools:
         raise ConnectionRequiredError(toolset.missing_capabilities)
     plan = normalize_plan_graph(bundle.plan)
+    plan, source_grounding_added = _ground_public_source_artifact_plan(
+        prompt, plan, tool_inventory
+    )
+    if source_grounding_added:
+        recovery_mode = "deterministic_source_grounding"
     deterministic_fixes = deterministic_plan_fixes(
         plan, tool_inventory, available_input_names, prompt
     )
@@ -1586,6 +1719,11 @@ async def create_plan(
         objective = bundle.objective
         toolset = bundle.toolset
         plan = normalize_plan_graph(bundle.plan)
+        plan, source_grounding_added = _ground_public_source_artifact_plan(
+            prompt, plan, tool_inventory
+        )
+        if source_grounding_added:
+            recovery_mode = "deterministic_source_grounding"
         deterministic_fixes = deterministic_plan_fixes(
             plan, tool_inventory, available_input_names, prompt
         )
