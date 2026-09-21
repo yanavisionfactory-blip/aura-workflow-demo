@@ -271,6 +271,79 @@ def test_explicit_exclusion_rejects_a_forbidden_operation() -> None:
     assert any("explicit exclusion" in fix for fix in proof.fixes)
 
 
+def test_source_backed_canva_creation_requires_grounded_upstream_reads() -> None:
+    inventory = [
+        {
+            "slug": "aura",
+            "name": "AURA Intelligence",
+            "allowed_operations": ["web.search", "web.page.read"],
+        },
+        {
+            "slug": "canva",
+            "name": "Canva",
+            "allowed_operations": ["canva.presentation.create"],
+        },
+    ]
+    prompt = (
+        "Using official NASA sources, create a concise 3-slide Canva presentation "
+        "comparing Voyager 1 and Voyager 2 launch dates and primary destinations. "
+        "Include source links."
+    )
+    incomplete = WorkflowPlan(
+        name="Voyager comparison",
+        interpretation="Create a sourced comparison in Canva",
+        steps=[
+            _step(
+                "create_deck",
+                "canva",
+                "canva.presentation.create",
+                "Create a Canva comparison with NASA source-link placeholders",
+                consequential=True,
+            )
+        ],
+    )
+
+    incomplete_proof = prove_request_graph(prompt, incomplete, inventory)
+
+    assert incomplete_proof.requirements[0].action == "read"
+    assert "create" in [item.action for item in incomplete_proof.requirements]
+    assert any("no compatible read action" in fix for fix in incomplete_proof.fixes)
+
+    complete = WorkflowPlan(
+        name="Voyager comparison",
+        interpretation="Research NASA and create a sourced comparison in Canva",
+        steps=[
+            _step(
+                "search_sources",
+                "aura",
+                "web.search",
+                "Find official NASA Voyager launch and destination sources",
+            ),
+            _step(
+                "read_source",
+                "aura",
+                "web.page.read",
+                "Read NASA Voyager launch dates, destinations, and source links",
+                depends_on=["search_sources"],
+            ),
+            _step(
+                "create_deck",
+                "canva",
+                "canva.presentation.create",
+                "Create the sourced Canva Voyager comparison presentation",
+                depends_on=["read_source"],
+                consequential=True,
+            ),
+        ],
+        result_contract=ResultContract(
+            primary_step_key="create_deck",
+            supporting_step_keys=["search_sources", "read_source"],
+        ),
+    )
+
+    assert prove_request_graph(prompt, complete, inventory).fixes == []
+
+
 def test_future_connectors_receive_provider_agnostic_graph_proof() -> None:
     prompt = (
         "Transcribe the launch recording, store the transcript in Nebula Vault, "

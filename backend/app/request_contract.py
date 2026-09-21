@@ -226,6 +226,11 @@ _EXCLUSION_RE = re.compile(
     r"\b(?:do\s+not|don't|never|avoid|exclude|without)\b",
     re.IGNORECASE,
 )
+_SOURCE_EVIDENCE_RE = re.compile(
+    r"\b(?:source(?:s|\s+links?)?|citation(?:s)?|references?|research)\b",
+    re.IGNORECASE,
+)
+_SOURCE_CONSUMING_ACTIONS = {"create", "export", "store", "publish", "send", "update"}
 
 
 def _normalized_text(value: object) -> str:
@@ -482,6 +487,34 @@ def derive_request_requirements(
                 ),
             )
         )
+    needs_source_grounding = bool(_SOURCE_EVIDENCE_RE.search(prompt)) and any(
+        requirement.action in _SOURCE_CONSUMING_ACTIONS for requirement in requirements
+    )
+    if needs_source_grounding and not any(
+        requirement.action == "read" for requirement in requirements
+    ):
+        all_aliases = {
+            alias
+            for _, aliases in inventory_aliases
+            for alias in aliases
+            if f" {alias} " in f" {_normalized_text(prompt)} "
+        }
+        requirements.insert(
+            0,
+            AtomicRequirement(
+                key="requirement_1",
+                statement=(
+                    "Gather the requested source evidence before creating the deliverable: "
+                    + " ".join(prompt.split())
+                )[:1000],
+                action="read",
+                content_terms=_content_terms(prompt, all_aliases),
+            ),
+        )
+        requirements = [
+            requirement.model_copy(update={"key": f"requirement_{index}"})
+            for index, requirement in enumerate(requirements, start=1)
+        ]
     return requirements
 
 
@@ -754,6 +787,46 @@ def prove_request_graph(
                     step_keys=proof_steps,
                 )
             )
+
+    if bool(_SOURCE_EVIDENCE_RE.search(prompt)):
+        evidence_by_requirement = {
+            item.requirement_key: item.step_keys for item in evidence
+        }
+        source_steps = list(
+            dict.fromkeys(
+                step_key
+                for requirement in requirements
+                if requirement.action == "read"
+                for step_key in evidence_by_requirement.get(requirement.key, [])
+            )
+        )
+        consuming_steps = list(
+            dict.fromkeys(
+                step_key
+                for requirement in requirements
+                if requirement.action in _SOURCE_CONSUMING_ACTIONS
+                for step_key in evidence_by_requirement.get(requirement.key, [])
+            )
+        )
+        if consuming_steps and not source_steps:
+            fixes.append(
+                "Requested source-backed deliverable has no verified read step for its evidence"
+            )
+        elif source_steps:
+            disconnected_consumers = [
+                consumer
+                for consumer in consuming_steps
+                if not any(
+                    consumer == source
+                    or _depends_transitively(plan, consumer, source)
+                    for source in source_steps
+                )
+            ]
+            if disconnected_consumers:
+                fixes.append(
+                    "Source-backed provider actions do not depend on the evidence reads: "
+                    + ", ".join(disconnected_consumers)
+                )
 
     return RequestGraphProof(
         requirements=requirements,
