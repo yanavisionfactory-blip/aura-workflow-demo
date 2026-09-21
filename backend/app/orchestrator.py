@@ -19,7 +19,6 @@ from .agent_runtime import (
     materialize_action_arguments,
     prepare_execution_directive,
     prepare_final_review,
-    requested_deliverable_fixes,
     supervise_execution,
     synthesize_result,
     verify_outcome,
@@ -76,6 +75,7 @@ from .providers import (
     verify_oauth_credentials,
 )
 from .replanning import maybe_replan_run
+from .request_contract import attach_request_graph_proof
 from .result_presentation import resolve_result_presentation
 from .run_supervisor import (
     recover_planning_failure,
@@ -636,7 +636,9 @@ async def _create_compiled_plan(
         or weather_presentation_template(prompt, inventory)
         or notion_to_jira_template(prompt, inventory)
     )
-    if audited_plan is not None and not requested_deliverable_fixes(prompt, audited_plan):
+    if audited_plan is not None and not attach_request_graph_proof(
+        prompt, audited_plan, inventory
+    ):
         _normalize_planned_steps(audited_plan, manifests_by_slug)
         from .operation_contracts import compile_contracts
 
@@ -1288,7 +1290,9 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             )
             audited_connection_plan_available = bool(
                 immediate_template
-                and not requested_deliverable_fixes(run.prompt, immediate_template)
+                and not attach_request_graph_proof(
+                    run.prompt, immediate_template, requirement_inventory
+                )
             )
         if immediate_missing and not audited_connection_plan_available:
             from .connection_recovery import reuse_managed_connection
