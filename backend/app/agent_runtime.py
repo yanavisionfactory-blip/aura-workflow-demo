@@ -840,30 +840,31 @@ async def _run_staged_planner(
         )
         if key in payload
     }
-    objective = ObjectiveSpec.model_validate(
-        await _run(agents["intent"], intent_payload, max_turns=max_turns)
-    )
     routing_inventory = _routing_inventory(payload["executable_tool_inventory"])
-    toolset = ToolsetProposal.model_validate(
-        await _run(
+    router_payload = {
+        "user_request": payload.get("user_request", ""),
+        "request_contract": payload.get("request_contract", []),
+        "request_constraints": payload.get("request_constraints", []),
+        "executable_tool_inventory": routing_inventory,
+        "available_input_names": payload.get("available_input_names", []),
+        "temporal_context": payload.get("temporal_context", {}),
+        "required_fixes": payload.get("required_fixes", []),
+        "planner_repair_requirements": payload.get("planner_repair_requirements", []),
+        "autonomous_resource_resolution": payload.get(
+            "autonomous_resource_resolution", {}
+        ),
+        "response_recovery": payload.get("response_recovery"),
+    }
+    objective_raw, toolset_raw = await asyncio.gather(
+        _run(agents["intent"], intent_payload, max_turns=max_turns),
+        _run(
             agents["router"],
-            {
-                "objective": objective.model_dump(mode="json"),
-                "request_contract": payload.get("request_contract", []),
-                "request_constraints": payload.get("request_constraints", []),
-                "executable_tool_inventory": routing_inventory,
-                "available_input_names": payload.get("available_input_names", []),
-                "temporal_context": payload.get("temporal_context", {}),
-                "required_fixes": payload.get("required_fixes", []),
-                "planner_repair_requirements": payload.get("planner_repair_requirements", []),
-                "autonomous_resource_resolution": payload.get(
-                    "autonomous_resource_resolution", {}
-                ),
-                "response_recovery": payload.get("response_recovery"),
-            },
+            router_payload,
             max_turns=max_turns,
-        )
+        ),
     )
+    objective = ObjectiveSpec.model_validate(objective_raw)
+    toolset = ToolsetProposal.model_validate(toolset_raw)
     selected_slugs = {selection.slug for selection in toolset.tools}
     plan = WorkflowPlan.model_validate(
         await _run(
@@ -893,6 +894,18 @@ async def _run_staged_planner(
 
 def _has_only_missing_capabilities(bundle: PlanningBundle) -> bool:
     return bool(bundle.toolset.missing_capabilities and not bundle.toolset.tools)
+
+
+def _prefer_staged_planner(prompt: str, tool_inventory: list[dict]) -> bool:
+    """Use the specialist team first for source-backed external artifacts."""
+    requirements = derive_request_requirements(prompt, tool_inventory)
+    return bool(_PUBLIC_SOURCE_REQUEST_RE.search(prompt)) and any(
+        requirement.action == "read" for requirement in requirements
+    ) and any(
+        requirement.action
+        in {"create", "export", "store", "publish", "send", "update"}
+        for requirement in requirements
+    )
 
 
 def requested_deliverable_fixes(prompt: str, plan: WorkflowPlan) -> list[str]:
@@ -1641,31 +1654,55 @@ async def create_plan(
     }
     model_started_at = perf_counter()
     recovery_mode = "combined"
-    try:
-        bundle = await _within_planning_budget(
-            _run_planner(agents["planner"], request_payload, max_turns=8),
-            deadline,
-        )
-    except Exception as planner_error:
-        if _permanent_planning_error(planner_error):
-            raise RuntimeError("Planner is not available") from planner_error
+    if _prefer_staged_planner(prompt, tool_inventory):
         try:
             bundle = await _within_planning_budget(
                 _run_staged_planner(agents, request_payload, max_turns=8),
                 deadline,
             )
-            recovery_mode = (
-                "staged_input_limit"
-                if isinstance(planner_error, ModelInputTooLarge)
-                else "staged_structured_recovery"
-            )
+            recovery_mode = "staged_primary"
         except Exception as staged_error:
-            bundle = _deterministic_public_research_bundle(prompt, tool_inventory)
-            if bundle is None:
-                raise RuntimeError(
-                    "Planner recovery exhausted inside the global planning budget"
-                ) from staged_error
-            recovery_mode = "deterministic_public_research"
+            if _permanent_planning_error(staged_error):
+                raise RuntimeError("Planner is not available") from staged_error
+            try:
+                bundle = await _within_planning_budget(
+                    _run_planner(agents["planner"], request_payload, max_turns=8),
+                    deadline,
+                )
+                recovery_mode = "combined_after_staged"
+            except Exception as planner_error:
+                bundle = _deterministic_public_research_bundle(prompt, tool_inventory)
+                if bundle is None:
+                    raise RuntimeError(
+                        "Planner recovery exhausted inside the global planning budget"
+                    ) from planner_error
+                recovery_mode = "deterministic_public_research"
+    else:
+        try:
+            bundle = await _within_planning_budget(
+                _run_planner(agents["planner"], request_payload, max_turns=8),
+                deadline,
+            )
+        except Exception as planner_error:
+            if _permanent_planning_error(planner_error):
+                raise RuntimeError("Planner is not available") from planner_error
+            try:
+                bundle = await _within_planning_budget(
+                    _run_staged_planner(agents, request_payload, max_turns=8),
+                    deadline,
+                )
+                recovery_mode = (
+                    "staged_input_limit"
+                    if isinstance(planner_error, ModelInputTooLarge)
+                    else "staged_structured_recovery"
+                )
+            except Exception as staged_error:
+                bundle = _deterministic_public_research_bundle(prompt, tool_inventory)
+                if bundle is None:
+                    raise RuntimeError(
+                        "Planner recovery exhausted inside the global planning budget"
+                    ) from staged_error
+                recovery_mode = "deterministic_public_research"
     if _has_only_missing_capabilities(bundle):
         bundle = await _within_planning_budget(
             _recover_catalog_tool_selection(

@@ -1473,6 +1473,85 @@ def test_source_backed_external_artifact_gets_capability_driven_research_reads()
     assert deterministic_plan_fixes(repaired, inventory, set(), prompt) == []
 
 
+def test_source_backed_artifact_uses_staged_team_before_combined_planner(
+    monkeypatch,
+) -> None:
+    calls = []
+    prompt = (
+        "Using official NASA sources, create a Canva presentation comparing "
+        "Voyager launch dates. Include source links."
+    )
+    inventory = [
+        {
+            "slug": "aura",
+            "allowed_operations": ["web.search", "web.page.read"],
+            "connected": True,
+        },
+        {
+            "slug": "canva",
+            "allowed_operations": ["canva.presentation.create"],
+            "connected": True,
+        },
+    ]
+
+    async def staged(*_args, **_kwargs):
+        calls.append("staged")
+        return agent_runtime.PlanningBundle(
+            objective={"goal": prompt},
+            toolset={
+                "tools": [
+                    {
+                        "slug": "canva",
+                        "role": "artifact",
+                        "rationale": "Create the requested presentation",
+                    }
+                ]
+            },
+            plan={
+                "name": "Voyager presentation",
+                "interpretation": prompt,
+                "steps": [
+                    {
+                        "key": "create_deck",
+                        "agent": "designer",
+                        "tool_slug": "canva",
+                        "operation": "canva.presentation.create",
+                        "reason": "Create the sourced Voyager presentation",
+                        "expected_output": "Canva presentation receipt",
+                        "consequential": True,
+                    }
+                ],
+            },
+        )
+
+    async def combined(*_args, **_kwargs):
+        calls.append("combined")
+        raise AssertionError("The combined planner should not run first")
+
+    monkeypatch.setattr(
+        agent_runtime,
+        "build_agents",
+        lambda: {
+            "planner": object(),
+            "intent": object(),
+            "router": object(),
+            "builder": object(),
+        },
+    )
+    monkeypatch.setattr(agent_runtime, "_run_staged_planner", staged)
+    monkeypatch.setattr(agent_runtime, "_run_planner", combined)
+
+    result = asyncio.run(create_plan(prompt, inventory))
+
+    assert calls == ["staged"]
+    assert [step.operation for step in result.steps[:4]] == [
+        "web.search",
+        "web.page.read",
+        "web.page.read",
+        "web.page.read",
+    ]
+
+
 def test_create_plan_falls_back_when_all_planner_json_is_invalid(monkeypatch) -> None:
     async def invalid(*_args, **_kwargs):
         raise RuntimeError("Invalid JSON when parsing model output")
