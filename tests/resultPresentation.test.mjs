@@ -5,6 +5,8 @@ import { readFileSync } from "node:fs";
 import {
   meaningfulMetrics,
   primaryResultFromOutputs,
+  resultArtifacts,
+  resultKpis,
   selectPrimaryOutcome,
   supportingReceipts,
 } from "../src/lib/resultPresentation.mjs";
@@ -14,6 +16,24 @@ test("process counters do not masquerade as meaningful result metrics", () => {
     { value: "4", label: "steps completed" },
     { value: "18°C", label: "afternoon temperature" },
   ]), [{ value: "18°C", label: "afternoon temperature" }]);
+});
+
+test("result KPIs always lead with outcome metrics and add honest run evidence", () => {
+  const activity = [
+    { status: "completed", tool: "AURA Intelligence", output: { operation: "web.search" } },
+    { status: "completed", tool: "AURA Intelligence", output: { operation: "web.page.read" } },
+  ];
+  const artifacts = [{ kind: "source" }, { kind: "source" }];
+  assert.deepEqual(resultKpis(
+    [{ value: "16 days", label: "Launch gap" }],
+    activity,
+    artifacts,
+    "completed",
+  ), [
+    { value: "16 days", label: "Launch gap" },
+    { value: "2", label: "Sources reviewed", operational: true },
+    { value: "Verified", label: "Outcome status", operational: true },
+  ]);
 });
 
 test("email delivery becomes primary while preserving the attached Canva result", () => {
@@ -165,6 +185,49 @@ test("supporting receipts omit the final delivery tool and retain creation recei
   assert.equal(receipts[1].linkLabel, "View in Canva");
 });
 
+test("tool artifacts expose Canva work and exact research sources", () => {
+  const artifacts = resultArtifacts([
+    {
+      stepKey: "search",
+      tool: "AURA Intelligence",
+      status: "completed",
+      action: "Search NASA",
+      output: {
+        operation: "web.search",
+        provider_result: {
+          results: [{ title: "Voyager mission", url: "https://science.nasa.gov/mission/voyager" }],
+        },
+      },
+    },
+    {
+      stepKey: "read",
+      tool: "AURA Intelligence",
+      status: "completed",
+      action: "Read Voyager source",
+      output: {
+        operation: "web.page.read",
+        provider_result: { title: "Voyager mission", url: "https://science.nasa.gov/mission/voyager" },
+      },
+    },
+    {
+      stepKey: "deck",
+      tool: "Canva",
+      status: "completed",
+      action: "Create comparison deck",
+      output: {
+        operation: "canva.presentation.create",
+        provider_result: { job: { result: { designs: [{ id: "design-123" }] } } },
+      },
+    },
+  ]);
+
+  assert.equal(artifacts.length, 2);
+  assert.deepEqual(artifacts.map((artifact) => artifact.provider), ["Web research", "Canva"]);
+  assert.equal(artifacts[0].link, "https://science.nasa.gov/mission/voyager");
+  assert.equal(artifacts[1].link, "https://www.canva.com/design/design-123/edit");
+  assert.equal(artifacts[1].linkLabel, "Open in Canva");
+});
+
 test("compiled supporting step selection hides transport-only receipts", () => {
   const receipts = supportingReceipts({}, [
     { stepKey: "weather", tool: "AURA", action: "Read weather", status: "completed" },
@@ -192,17 +255,18 @@ test("an explicit empty supporting contract does not recreate fallback receipts"
 test("the results UI uses supporting app receipts without duplicate run details", () => {
   const source = readFileSync(new URL("../src/components/aura/ResultsView.jsx", import.meta.url), "utf8");
   assert.equal(source.includes("Your result"), true);
-  assert.equal(source.includes(">Preview</p>"), true);
+  assert.equal(source.includes("Result snapshot"), true);
+  assert.equal(source.includes("Key outcomes"), true);
   assert.equal(source.includes("Sent email"), true);
   assert.equal(source.includes("View presentation"), true);
-  assert.equal(source.includes("Attached and delivered"), true);
-  assert.equal(source.includes("Also completed"), true);
+  assert.equal(source.includes("Results in your tools"), true);
+  assert.equal(source.includes("Tool actions completed"), true);
+  assert.equal(source.includes("Also completed"), false);
   assert.equal(source.includes("View run details"), false);
   assert.equal(source.includes("Workflow activity"), false);
   assert.equal(source.includes("Output receipts"), false);
-  assert.equal(source.includes("View in ${receipt.tool}"), true);
+  assert.equal(source.includes("artifact.linkLabel"), true);
   assert.equal(source.match(/Suggested next/g)?.length, 1);
-  assert.equal(source.includes("Tools used"), false);
   assert.equal(source.includes("What happened"), false);
   assert.equal(source.includes("Still tracking"), false);
 });
