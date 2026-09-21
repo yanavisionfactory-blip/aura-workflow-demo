@@ -922,7 +922,9 @@ _PROVIDER_CANDIDATE_STOP_WORDS = {
     "create",
     "delete",
     "download",
+    "do",
     "draft",
+    "extract",
     "find",
     "format",
     "get",
@@ -951,7 +953,7 @@ _PROVIDER_CANDIDATE_STOP_WORDS = {
 
 def _capitalized_provider_candidates(prompt: str) -> list[str]:
     """Extract bounded app-name candidates without treating arbitrary prose as apps."""
-    candidates = re.findall(
+    matches = re.finditer(
         r"(?<![A-Za-z0-9])"
         r"[A-Z][A-Za-z0-9._+-]*"
         r"(?:[\s&]+[A-Z][A-Za-z0-9._+-]*){0,2}",
@@ -959,10 +961,15 @@ def _capitalized_provider_candidates(prompt: str) -> list[str]:
     )
     return list(
         dict.fromkeys(
-            candidate.strip().rstrip("._+-")
-            for candidate in candidates
-            if candidate.strip().rstrip("._+-").casefold()
+            match.group(0).strip().rstrip("._+-")
+            for match in matches
+            if match.group(0).strip().rstrip("._+-").casefold()
             not in _PROVIDER_CANDIDATE_STOP_WORDS
+            and not re.match(
+                r"\s+(?:data|page|pages|site|source|sources|website)\b",
+                prompt[match.end() :],
+                flags=re.IGNORECASE,
+            )
         )
     )[:8]
 
@@ -3736,6 +3743,30 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             }
             await session.commit()
             synthesis = await synthesize_result(run.prompt, outputs, prepared_evidence)
+            if not synthesis.validation_passed:
+                initial_fixes = list(synthesis.required_fixes)
+                synthesis = await synthesize_result(
+                    run.prompt,
+                    outputs,
+                    prepared_evidence,
+                    required_fixes=initial_fixes,
+                )
+                run.execution_context = {
+                    **(run.execution_context or {}),
+                    "final_review_repair_attempted": True,
+                }
+                await audit(
+                    session,
+                    workspace_id,
+                    "run.synthesis_repair_attempted",
+                    {
+                        "initial_required_fixes": initial_fixes,
+                        "validation_passed": synthesis.validation_passed,
+                        "remaining_required_fixes": synthesis.required_fixes,
+                    },
+                    run.id,
+                    actor="unified-response-synthesizer",
+                )
             if not synthesis.validation_passed:
                 verification = OutcomeVerification(
                     status="unverified",

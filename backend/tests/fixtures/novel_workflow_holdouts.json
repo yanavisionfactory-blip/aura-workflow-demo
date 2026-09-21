@@ -1,0 +1,32 @@
+[
+  {
+    "name": "astronomy_comparison",
+    "prompt": "Find the next two total solar eclipses using official astronomy sources. Extract each date and maximum duration, calculate the exact difference, and produce a concise comparison table with source links. Do not use weather tools.",
+    "actions": ["read", "synthesize", "synthesize", "synthesize"],
+    "forbidden_operations": ["weather.forecast"]
+  },
+  {
+    "name": "population_brief",
+    "prompt": "Find official population estimates for Kenya and Ghana, calculate the percentage difference, and produce a comparison brief with citations.",
+    "actions": ["read", "synthesize", "synthesize"],
+    "forbidden_operations": []
+  },
+  {
+    "name": "standards_summary",
+    "prompt": "Read two public RFC pages, compare their publication dates, and write a concise markdown summary.",
+    "actions": ["read", "synthesize", "synthesize"],
+    "forbidden_operations": []
+  },
+  {
+    "name": "space_launch_timeline",
+    "prompt": "Find upcoming launch dates from official ESA and JAXA sources, then make a timeline summary. Avoid calendar tools.",
+    "actions": ["read", "synthesize"],
+    "forbidden_operations": ["calendar.events.list"]
+  },
+  {
+    "name": "release_notes_report",
+    "prompt": "Read the latest Python and Rust release notes, extract breaking changes, and generate a report without sending email.",
+    "actions": ["read", "synthesize", "synthesize"],
+    "forbidden_operations": []
+  }
+]

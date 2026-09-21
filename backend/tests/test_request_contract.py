@@ -1,14 +1,22 @@
+import json
+from pathlib import Path
+
 import pytest
 
 from app import agent_runtime
 from app.request_contract import (
     attach_request_graph_proof,
+    derive_request_constraints,
     derive_request_requirements,
     missing_runtime_requirement_evidence,
     persisted_request_contract_fixes,
     prove_request_graph,
 )
 from app.schemas import PlanStep, ResultContract, WorkflowPlan
+
+_HOLDOUTS = json.loads(
+    (Path(__file__).parent / "fixtures" / "novel_workflow_holdouts.json").read_text()
+)
 
 
 def _inventory() -> list[dict]:
@@ -102,6 +110,165 @@ def test_prompt_contract_splits_shared_verb_requirements() -> None:
     assert [requirement.action for requirement in requirements] == ["read", "read"]
     assert "weather" in requirements[0].statement.casefold()
     assert "ecb" in requirements[1].statement.casefold()
+
+
+@pytest.mark.parametrize("case", _HOLDOUTS, ids=lambda case: case["name"])
+def test_unfamiliar_holdouts_preserve_semantics_without_special_cases(case) -> None:
+    inventory = [
+        {
+            "slug": "aura",
+            "name": "AURA Intelligence",
+            "allowed_operations": [
+                "web.search",
+                "web.page.read",
+                "weather.forecast",
+            ],
+        },
+        {
+            "slug": "google",
+            "name": "Google Workspace",
+            "allowed_operations": ["calendar.events.list", "gmail.send"],
+        },
+    ]
+
+    requirements = derive_request_requirements(case["prompt"], inventory)
+    constraints = derive_request_constraints(case["prompt"], inventory)
+
+    assert [item.action for item in requirements] == case["actions"]
+    assert not any(_is_exclusion_text(item.statement) for item in requirements)
+    assert sorted(
+        operation
+        for constraint in constraints
+        for operation in constraint.forbidden_operations
+    ) == sorted(case["forbidden_operations"])
+
+
+def _is_exclusion_text(value: str) -> bool:
+    lowered = value.casefold()
+    return any(marker in lowered for marker in ("do not", "never", "avoid", "without"))
+
+
+def test_exclusions_are_not_promoted_to_required_provider_steps() -> None:
+    inventory = [
+        {
+            "slug": "aura",
+            "name": "AURA Intelligence",
+            "allowed_operations": [
+                "web.search",
+                "web.page.read",
+                "weather.forecast",
+            ],
+        }
+    ]
+    prompt = (
+        "Find two official astronomy sources and produce a comparison table. "
+        "Do not use weather tools."
+    )
+
+    requirements = derive_request_requirements(prompt, inventory)
+    constraints = derive_request_constraints(prompt, inventory)
+
+    assert [item.action for item in requirements] == ["read", "synthesize"]
+    assert all("Do not" not in item.statement for item in requirements)
+    assert len(constraints) == 1
+    assert constraints[0].forbidden_provider_slugs == []
+    assert constraints[0].forbidden_operations == ["weather.forecast"]
+
+
+def test_inline_exclusion_does_not_forbid_the_positive_provider() -> None:
+    inventory = [
+        {
+            "slug": "google",
+            "name": "Google",
+            "allowed_operations": ["gmail.send", "drive.files.create"],
+        }
+    ]
+
+    constraints = derive_request_constraints(
+        "Send the brief through Gmail without saving it to Drive.", inventory
+    )
+
+    assert constraints[0].forbidden_operations == ["drive.files.create"]
+
+
+def test_chat_native_table_is_synthesis_grounded_in_read_steps() -> None:
+    inventory = [
+        {
+            "slug": "aura",
+            "name": "AURA Intelligence",
+            "allowed_operations": ["web.search", "web.page.read", "weather.forecast"],
+        }
+    ]
+    prompt = (
+        "Find the next two total solar eclipses using official astronomy sources. "
+        "Extract their dates and durations, calculate the exact difference, and produce "
+        "a concise comparison table with source links. Do not use weather tools."
+    )
+    plan = WorkflowPlan(
+        name="Eclipse comparison",
+        interpretation="Research and compare the next eclipses",
+        steps=[
+            _step(
+                "search",
+                "aura",
+                "web.search",
+                "Find official astronomy sources for the next two total solar eclipses",
+            ),
+            _step(
+                "read",
+                "aura",
+                "web.page.read",
+                "Read exact eclipse dates and maximum totality durations",
+                depends_on=["search"],
+                arguments={"url": "{{steps.search.results.0.url}}"},
+            ),
+        ],
+        result_contract=ResultContract(
+            primary_step_key="read",
+            supporting_step_keys=["search"],
+        ),
+    )
+
+    proof = prove_request_graph(prompt, plan, inventory)
+
+    assert proof.fixes == []
+    assert [item.action for item in proof.requirements] == [
+        "read",
+        "synthesize",
+        "synthesize",
+        "synthesize",
+    ]
+    assert proof.constraints[0].forbidden_operations == ["weather.forecast"]
+
+
+def test_explicit_exclusion_rejects_a_forbidden_operation() -> None:
+    inventory = [
+        {
+            "slug": "aura",
+            "name": "AURA Intelligence",
+            "allowed_operations": ["web.search", "weather.forecast"],
+        }
+    ]
+    plan = WorkflowPlan(
+        name="Wrong tool",
+        interpretation="Use a forbidden tool",
+        steps=[
+            _step(
+                "weather",
+                "aura",
+                "weather.forecast",
+                "Use weather for astronomy research",
+            )
+        ],
+    )
+
+    proof = prove_request_graph(
+        "Find an astronomy source. Do not use weather tools.",
+        plan,
+        inventory,
+    )
+
+    assert any("explicit exclusion" in fix for fix in proof.fixes)
 
 
 def test_future_connectors_receive_provider_agnostic_graph_proof() -> None:

@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC
+from time import perf_counter
 from types import SimpleNamespace
 
 import pytest
@@ -582,6 +583,13 @@ def test_create_plan_repairs_named_resource_ids_with_discovery(monkeypatch) -> N
     monkeypatch.setattr(agent_runtime, "build_agents", lambda: {"planner": object()})
     monkeypatch.setattr(agent_runtime, "_run", fake_run)
 
+    async def fake_staged(_agents, payload, max_turns=8):
+        return agent_runtime.PlanningBundle.model_validate(
+            await fake_run(object(), payload, max_turns=max_turns)
+        )
+
+    monkeypatch.setattr(agent_runtime, "_run_staged_planner", fake_staged)
+
     result = asyncio.run(create_plan("Read Creator Outreach", inventory, set()))
 
     assert len(calls) == 2
@@ -659,6 +667,42 @@ def test_deterministic_validator_replaces_unavailable_tool_for_unique_operation(
 
     assert deterministic_plan_fixes(workflow, inventory) == []
     assert workflow.steps[0].tool_slug == "google"
+
+
+def test_deterministic_validator_normalizes_operation_used_as_tool_slug() -> None:
+    workflow = plan(
+        PlanStep(
+            key="search",
+            agent="research",
+            tool_slug="web.search",
+            operation="search",
+            arguments={"query": "official eclipse source"},
+            reason="Find an official astronomy source",
+            expected_output="Source URLs and snippets",
+        ),
+        PlanStep(
+            key="read",
+            agent="research",
+            tool_slug="web.page.read",
+            operation="read",
+            arguments={"url": "{{steps.search.results.0.url}}"},
+            reason="Read exact eclipse dates and durations",
+            expected_output="Official page text",
+            depends_on=["search"],
+        ),
+    )
+    inventory = [
+        {
+            "slug": "aura",
+            "allowed_operations": ["web.search", "web.page.read"],
+        }
+    ]
+
+    assert deterministic_plan_fixes(workflow, inventory) == []
+    assert [(step.tool_slug, step.operation) for step in workflow.steps] == [
+        ("aura", "web.search"),
+        ("aura", "web.page.read"),
+    ]
 
 
 def test_deterministic_validator_does_not_guess_ambiguous_tool() -> None:
@@ -1211,7 +1255,7 @@ def test_combined_planner_retries_schema_validation_failure(monkeypatch) -> None
     assert result.steps[0].operation == "records.read"
 
 
-def test_create_plan_stops_after_one_combined_structured_output_repair(monkeypatch) -> None:
+def test_create_plan_restores_staged_agents_after_combined_repair_fails(monkeypatch) -> None:
     planner = object()
     intent = object()
     router = object()
@@ -1272,26 +1316,64 @@ def test_create_plan_stops_after_one_combined_structured_output_repair(monkeypat
     monkeypatch.setattr(agent_runtime, "_run", fake_run)
     monkeypatch.setattr(agent_runtime.asyncio, "sleep", no_sleep)
 
-    with pytest.raises(RuntimeError, match="structured-output repair exhausted"):
+    result = asyncio.run(
+        create_plan(
+            "Turn action items from my research notes into Jira tasks",
+            [
+                {
+                    "slug": "notion",
+                    "allowed_operations": ["notion.search"],
+                    "connected": True,
+                },
+                {
+                    "slug": "jira",
+                    "allowed_operations": ["jira.issue.create"],
+                    "connected": False,
+                },
+            ],
+            available_input_names={"project_key"},
+        )
+    )
+
+    assert calls == [planner, planner, intent, router, builder]
+    assert result.planning_artifacts["planner_recovery_mode"] == (
+        "staged_structured_recovery"
+    )
+
+
+def test_create_plan_enforces_one_global_time_budget(monkeypatch) -> None:
+    async def slow_run(*args, **kwargs):
+        await asyncio.sleep(1)
+
+    monkeypatch.setattr(
+        agent_runtime,
+        "build_agents",
+        lambda: {
+            "planner": object(),
+            "intent": object(),
+            "router": object(),
+            "builder": object(),
+        },
+    )
+    monkeypatch.setattr(agent_runtime, "_run", slow_run)
+    monkeypatch.setattr(agent_runtime, "PLANNING_GLOBAL_TIMEOUT_SECONDS", 0.01)
+    started = perf_counter()
+
+    with pytest.raises(RuntimeError, match="global planning budget"):
         asyncio.run(
             create_plan(
-                "Turn action items from my research notes into Jira tasks",
+                "Read CRM records",
                 [
                     {
-                        "slug": "notion",
-                        "allowed_operations": ["notion.search"],
+                        "slug": "crm",
+                        "allowed_operations": ["records.read"],
                         "connected": True,
-                    },
-                    {
-                        "slug": "jira",
-                        "allowed_operations": ["jira.issue.create"],
-                        "connected": False,
-                    },
+                    }
                 ],
             )
         )
 
-    assert calls == [planner, planner]
+    assert perf_counter() - started < 0.5
 
 
 def test_create_plan_repairs_false_missing_capability_from_catalog(monkeypatch) -> None:

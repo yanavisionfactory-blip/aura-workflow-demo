@@ -275,6 +275,32 @@ async def test_completed_provider_work_retries_only_final_review(runtime, monkey
         assert state["review_recoveries"] == 1
 
 
+async def test_completed_provider_work_does_not_loop_after_bounded_synthesis_repair(
+    runtime, monkeypatch
+):
+    monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        transition_run(
+            run,
+            RunStatus.waiting_for_action,
+            reason="final_outcome_not_verified",
+            actor="test",
+            dispatch=None,
+        )
+        run.result = {"verification": {"status": "unverified"}}
+        run.execution_context = {
+            **(run.execution_context or {}),
+            "final_review_repair_attempted": True,
+        }
+        step = await session.get(RunStep, "step")
+        step.status = StepStatus.completed
+        step.output = {"provider_result": {"id": "saved"}}
+        await session.commit()
+
+    assert await autonomously_recover_run("run", "w") == "not_applicable"
+
+
 async def test_rejected_recorded_read_is_reexecuted_instead_of_re_reviewed(
     runtime, monkeypatch
 ):
