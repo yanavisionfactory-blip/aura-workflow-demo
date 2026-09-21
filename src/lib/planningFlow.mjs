@@ -63,6 +63,33 @@ export function planningConnectionsEnabled(compileState = "") {
   return compileState !== "validating";
 }
 
+export function publicPlanningFailure(error = {}) {
+  const status = Number(error?.status || 0);
+  const message = String(error?.message || "").toLowerCase();
+
+  if (status === 401 || status === 403) {
+    return "Your AURA session needs a quick refresh. Sign in again, then retry.";
+  }
+  if (
+    !status
+    && (
+      message.includes("failed to fetch")
+      || message.includes("networkerror")
+      || message.includes("network request failed")
+      || error?.name === "AbortError"
+    )
+  ) {
+    return "AURA is reconnecting to the planning service. Nothing ran; retry in a moment.";
+  }
+  if (status === 429) {
+    return "AURA is briefly busy. Nothing ran; retry in a moment.";
+  }
+  if (status >= 500 || message.includes("timed out") || message.includes("timeout")) {
+    return "AURA hit a temporary service interruption. Nothing ran; retry in a moment.";
+  }
+  return "AURA couldn't prepare this workflow yet. Nothing ran; retry in a moment.";
+}
+
 // Planning is only a proposal stage. A runtime blocker must remain an inline,
 // retryable planning error; it must never manufacture an executable fallback.
 export function planningDisposition(run = {}) {

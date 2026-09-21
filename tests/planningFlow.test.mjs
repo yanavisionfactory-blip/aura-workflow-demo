@@ -9,8 +9,38 @@ import {
   planningDisposition,
   planningRecoveryGraceEligible,
   promptConnectionRequirements,
+  publicPlanningFailure,
   shouldStartFreshPlanningRun,
 } from "../src/lib/planningFlow.mjs";
+
+test("planner failures never expose transport or backend error details", () => {
+  assert.equal(
+    publicPlanningFailure(new TypeError("Failed to fetch")),
+    "AURA is reconnecting to the planning service. Nothing ran; retry in a moment.",
+  );
+  assert.equal(
+    publicPlanningFailure({ status: 503, message: '{"detail":"database exploded"}' }),
+    "AURA hit a temporary service interruption. Nothing ran; retry in a moment.",
+  );
+  assert.equal(
+    publicPlanningFailure({ status: 422, message: "Traceback: secret internals" }),
+    "AURA couldn't prepare this workflow yet. Nothing ran; retry in a moment.",
+  );
+});
+
+test("workspace bootstrap preserves the durable workspace during transient failures", () => {
+  const source = readFileSync(
+    new URL("../src/lib/AuthContext.jsx", import.meta.url),
+    "utf8",
+  );
+  const openWorkspaceStart = source.indexOf("async function openWorkspace()");
+  const openWorkspaceEnd = source.indexOf("openWorkspace().finally", openWorkspaceStart);
+  const openWorkspaceSource = source.slice(openWorkspaceStart, openWorkspaceEnd);
+
+  assert.ok(openWorkspaceStart >= 0 && openWorkspaceEnd > openWorkspaceStart);
+  assert.equal(openWorkspaceSource.includes("clearWorkspace()"), false);
+  assert.equal(source.includes("const RECOVERY_DELAYS_MS = [0, 350, 900, 2500]"), true);
+});
 
 test("a rejected Start request stays on the reviewable plan", () => {
   assert.deepEqual(

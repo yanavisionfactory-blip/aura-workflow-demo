@@ -43,6 +43,7 @@ import {
   planningConnectionRequirements,
   planningDisposition,
   planningRecoveryGraceEligible,
+  publicPlanningFailure,
   shouldStartFreshPlanningRun,
 } from "@/lib/planningFlow.mjs";
 import { hasDurablePlan, planningRequestPrompt } from "@/lib/runtimePlan.mjs";
@@ -669,7 +670,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               interpretation: confirmedIntent,
               estimatedTime: "Planning stopped safely",
               steps: [],
-              error: error?.message || "AURA couldn't prepare this workflow quickly enough.",
+              error: publicPlanningFailure(error),
               provisional: false,
               compileState: "blocked",
               compileError: "",
