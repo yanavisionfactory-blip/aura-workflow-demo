@@ -16,6 +16,8 @@ const TITLE_STOP_WORDS = new Set([
 ]);
 
 const PROVIDER_ALIASES = {
+  aura: "AURA Intelligence",
+  web: "Web research",
   sheets: "Google Sheets",
   "google sheets": "Google Sheets",
   drive: "Google Drive",
@@ -62,6 +64,7 @@ const displayProvider = (value = "") => {
 
 const providerForOutput = (output = {}) => {
   const operation = String(output.operation || "").toLowerCase();
+  if (operation.startsWith("web.")) return "Web research";
   if (operation.startsWith("gmail.")) return "Gmail";
   if (operation.startsWith("sheets.")) return "Google Sheets";
   if (operation.startsWith("drive.")) return "Google Drive";
@@ -69,11 +72,89 @@ const providerForOutput = (output = {}) => {
   return displayProvider(output.tool || operation.split(".")[0]);
 };
 
+const operationTitle = (operation = "", provider = "") => {
+  const labels = {
+    "web.search": "Search results",
+    "web.page.read": "Source page",
+    "canva.presentation.create": "Canva presentation",
+    "canva.design.create": "Canva design",
+    "canva.export.create": "Canva export",
+    "notion.page.create": "Notion page",
+    "notion.page.update": "Notion page",
+    "jira.issue.create": "Jira issue",
+    "gmail.send": "Sent email",
+    "sheets.spreadsheet.create": "Google Sheet",
+    "drive.files.create": "Google Drive file",
+  };
+  if (labels[operation]) return labels[operation];
+  const action = String(operation).split(".").slice(1).join(" ").replace(/[._-]+/g, " ").trim();
+  return action ? `${provider || "Tool"} · ${action}` : `${provider || "Tool"} result`;
+};
+
+const resultUrlFromOutput = (output = {}) => {
+  const result = output.provider_result || {};
+  const operation = String(output.operation || "").toLowerCase();
+  const direct = [
+    result.result_url,
+    result.web_url,
+    result.html_url,
+    result.htmlLink,
+    result.webViewLink,
+    result.permalink,
+    result.browser_url,
+    result.edit_url,
+  ].map(safeHttpsUrl).find(Boolean);
+  if (direct) return direct;
+  if (operation === "web.page.read" || operation.startsWith("notion.")) {
+    const source = safeHttpsUrl(result.url);
+    if (source) return source;
+  }
+  if (operation.startsWith("canva.")) {
+    const designId = canvaDesignId(result);
+    if (designId) return `https://www.canva.com/design/${encodeURIComponent(designId)}/edit`;
+  }
+  return null;
+};
+
+const previewImageFromResult = (result = {}) => {
+  const design = (result.job?.result?.designs || result.result?.designs || result.designs || [])[0] || {};
+  return [
+    result.thumbnail_url,
+    result.preview_url,
+    result.thumbnail?.url,
+    design.thumbnail_url,
+    design.thumbnail?.url,
+  ].map(safeHttpsUrl).find(Boolean) || null;
+};
+
 export function meaningfulMetrics(metrics = []) {
   return metrics.filter((metric) => {
     const label = String(metric?.label || "").trim().toLowerCase();
     return metric?.value != null && label && !/^steps? completed$/.test(label);
   });
+}
+
+export function resultKpis(metrics = [], activity = [], artifacts = [], status = "completed") {
+  const kpis = meaningfulMetrics(metrics).slice(0, 3);
+  const identities = new Set(kpis.map((metric) => String(metric.label).toLowerCase()));
+  const add = (value, label) => {
+    if (kpis.length >= 3 || identities.has(label.toLowerCase())) return;
+    kpis.push({ value, label, operational: true });
+    identities.add(label.toLowerCase());
+  };
+
+  const sources = artifacts.filter((artifact) => artifact.kind === "source");
+  const completed = activity.filter((step) => step.status === "completed");
+  const tools = new Set(
+    completed.map((step) => providerForOutput(step.output || { tool: step.tool })).filter(Boolean)
+  );
+
+  if (sources.length) add(String(sources.length), sources.length === 1 ? "Source reviewed" : "Sources reviewed");
+  add(status === "failed" || status === "needs_attention" ? "Review" : "Verified", "Outcome status");
+  if (tools.size) add(String(tools.size), tools.size === 1 ? "Tool used" : "Tools used");
+  if (completed.length) add(String(completed.length), completed.length === 1 ? "Action completed" : "Actions completed");
+  if (!kpis.length) add(status === "failed" || status === "needs_attention" ? "Review" : "Complete", "Workflow status");
+  return kpis.slice(0, 3);
 }
 
 export function providerForOutcome(outcome = {}) {
@@ -155,6 +236,69 @@ export function supportingReceipts(results = {}, activity = [], primary = null, 
       link: safeHttpsUrl(outcome.link),
       linkLabel: outcome.linkLabel || null,
     }));
+}
+
+export function resultArtifacts(activity = [], primary = null) {
+  const primaryLink = safeHttpsUrl(primary?.link);
+  const artifacts = [];
+  const seenLinks = new Set();
+
+  const add = (artifact) => {
+    const link = safeHttpsUrl(artifact.link);
+    if (link && seenLinks.has(link)) return;
+    if (link) seenLinks.add(link);
+    artifacts.push({ ...artifact, link });
+  };
+
+  for (const step of [...activity].reverse()) {
+    if (step.status !== "completed" || !step.output) continue;
+    const output = step.output;
+    const result = output.provider_result || {};
+    const operation = String(output.operation || "").toLowerCase();
+    const provider = providerForOutput({ ...output, tool: step.tool || output.tool });
+
+    if (operation === "web.search" && Array.isArray(result.results)) {
+      for (const item of result.results.slice(0, 5)) {
+        const link = safeHttpsUrl(item?.url);
+        if (!link) continue;
+        add({
+          key: `${step.stepKey || step.key || operation}:${link}`,
+          kind: "source",
+          provider: "Web research",
+          title: cleanReceiptText(item.title) || "Public source",
+          detail: cleanReceiptText(item.snippet),
+          link,
+          linkLabel: "View source",
+          operation,
+        });
+      }
+      continue;
+    }
+
+    const link = resultUrlFromOutput(output);
+    const isSource = operation === "web.page.read";
+    const isExternalArtifact = Boolean(link)
+      || /\.(create|update|append|send|post|export|publish)/.test(operation);
+    if (!isSource && !isExternalArtifact) continue;
+    const title = cleanReceiptText(result.title)
+      || cleanReceiptText(step.liveOutput)
+      || cleanReceiptText(step.action)
+      || operationTitle(operation, provider);
+    add({
+      key: `${step.stepKey || step.key || operation}:${link || title}`,
+      kind: isSource ? "source" : "artifact",
+      provider,
+      title,
+      detail: isSource ? cleanReceiptText(result.description || "Verified source used in the result") : operationTitle(operation, provider),
+      link,
+      linkLabel: isSource ? "View source" : `Open in ${provider}`,
+      previewImage: previewImageFromResult(result),
+      operation,
+      isPrimary: Boolean(link && primaryLink === link),
+    });
+  }
+
+  return artifacts.reverse();
 }
 
 const canvaDesignId = (result = {}) => {
@@ -266,9 +410,9 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
   }
 
   const linked = explicitPrimary || completed
-    .filter((output) => safeHttpsUrl(output.provider_result?.result_url))
+    .filter((output) => resultUrlFromOutput(output))
     .sort((left, right) => outputScore(right, context.title) - outputScore(left, context.title))[0];
-  const link = safeHttpsUrl(linked?.provider_result?.result_url);
+  const link = linked ? resultUrlFromOutput(linked) : null;
   const provider = linked ? providerForOutput(linked) : "";
   return {
     title: context.title || "Workflow result",
