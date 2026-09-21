@@ -123,6 +123,9 @@ async def test_search_rejects_unrelated_nonempty_provider_results(monkeypatch):
         "_fetch_search_html",
         AsyncMock(side_effect=["", unrelated, "", ""]),
     )
+    monkeypatch.setattr(
+        worker, "_rendered_search_fallback", AsyncMock(return_value=[])
+    )
 
     with pytest.raises(HTTPException) as exc:
         await worker.search(
@@ -160,11 +163,46 @@ def test_search_ranking_honors_site_scope():
 @pytest.mark.asyncio
 async def test_search_never_returns_an_empty_success(monkeypatch):
     monkeypatch.setattr(worker, "_fetch_search_html", AsyncMock(return_value=""))
+    monkeypatch.setattr(
+        worker, "_rendered_search_fallback", AsyncMock(return_value=[])
+    )
 
     with pytest.raises(HTTPException) as exc:
         await worker.search(worker.SearchRequest(query="missing", limit=5))
 
     assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_search_uses_rendered_fallback_after_all_html_providers_fail(monkeypatch):
+    target = "https://science.nasa.gov/mission/voyager/voyager-2/"
+    monkeypatch.setattr(worker, "_fetch_search_html", AsyncMock(return_value=""))
+    rendered = AsyncMock(
+        return_value=[
+            {
+                "title": "Voyager 2 - NASA Science",
+                "url": target,
+                "snippet": "Voyager 2 launched in 1977 to explore the outer planets.",
+            }
+        ]
+    )
+    monkeypatch.setattr(worker, "_rendered_search_fallback", rendered)
+
+    response = await worker.search(
+        worker.SearchRequest(
+            query="site:nasa.gov Voyager 2 launch outer planets",
+            limit=5,
+        )
+    )
+
+    assert response["results"] == [
+        {
+            "title": "Voyager 2 - NASA Science",
+            "url": target,
+            "snippet": "Voyager 2 launched in 1977 to explore the outer planets.",
+        }
+    ]
+    rendered.assert_awaited_once()
 
 
 @pytest.mark.asyncio
