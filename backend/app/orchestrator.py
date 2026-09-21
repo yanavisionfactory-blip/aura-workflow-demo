@@ -727,6 +727,17 @@ _PROMPT_CAPABILITY_ALIASES = {
     "meta-ads": {"meta ads", "facebook ads", "meta advertising"},
 }
 
+_GOOGLE_ACCOUNT_FAMILIES = {
+    "google",
+    "gmail",
+    "drive",
+    "google-drive",
+    "calendar",
+    "google-calendar",
+    "sheets",
+    "google-sheets",
+}
+
 
 def _connection_family(item: dict) -> str:
     value = str(
@@ -736,7 +747,16 @@ def _connection_family(item: dict) -> str:
         or ""
     ).strip().casefold()
     normalized = re.sub(r"[^a-z0-9]+", "-", value).strip("-")
-    return re.sub(r"-mcp$", "", normalized)
+    normalized = re.sub(r"-mcp$", "", normalized)
+    return "google" if normalized in _GOOGLE_ACCOUNT_FAMILIES else normalized
+
+
+def _operation_capability_aliases(item: dict) -> set[str]:
+    return {
+        re.sub(r"[^a-z0-9]+", "-", str(operation).split(".", 1)[0].casefold()).strip("-")
+        for operation in item.get("allowed_operations") or []
+        if operation
+    }
 
 
 def _connection_capability_families(item: dict) -> set[str]:
@@ -745,12 +765,11 @@ def _connection_capability_families(item: dict) -> set[str]:
     Some providers intentionally expose several user-facing apps through one
     verified account. Google Workspace, for example, is stored as ``google``
     while its allow-list contains ``gmail.*``, ``calendar.*``, ``drive.*`` and
-    ``sheets.*`` operations. Treating only the storage slug as connected made a
-    healthy Google account look disconnected when a plan named Gmail directly.
+    ``sheets.*`` operations. All of those routes belong to the same account
+    consent family even when a dynamic catalog lists them separately.
     """
     families = {_connection_family(item)}
-    for operation in item.get("allowed_operations") or []:
-        namespace = str(operation or "").split(".", 1)[0]
+    for namespace in _operation_capability_aliases(item):
         family = _connection_family({"canonical_provider": namespace})
         if family:
             families.add(family)
@@ -784,7 +803,7 @@ def explicit_disconnected_capabilities(prompt: str, inventory: list[dict]) -> li
             continue
         slug = str(item.get("slug") or "").strip().casefold()
         name = str(item.get("name") or "").strip().casefold()
-        capability_families = _connection_capability_families(item)
+        operation_aliases = _operation_capability_aliases(item)
         aliases = {
             re.sub(r"[^a-z0-9]+", " ", value).strip()
             for value in {
@@ -793,7 +812,7 @@ def explicit_disconnected_capabilities(prompt: str, inventory: list[dict]) -> li
                 family,
                 *(
                     value
-                    for value in capability_families
+                    for value in operation_aliases
                     if family != "google"
                     or value not in {"drive", "calendar", "sheets"}
                 ),
@@ -803,7 +822,7 @@ def explicit_disconnected_capabilities(prompt: str, inventory: list[dict]) -> li
         }
         aliases.update(
             f"google {value}"
-            for value in capability_families
+            for value in operation_aliases
             if value in {"drive", "calendar", "sheets"}
         )
         if any(alias and f" {alias} " in text for alias in aliases):
@@ -834,7 +853,9 @@ def actionable_connection_capabilities(
         if name:
             aliases[re.sub(r"[^a-z0-9]+", "-", name).strip("-")] = family
         aliases[family] = family
-        for capability_family in _connection_capability_families(item):
+        for capability_family in (
+            _connection_capability_families(item) | _operation_capability_aliases(item)
+        ):
             aliases[capability_family] = family
             if capability_family in {"drive", "calendar", "sheets"}:
                 aliases[f"google-{capability_family}"] = family
