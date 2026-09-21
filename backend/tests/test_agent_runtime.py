@@ -1376,6 +1376,71 @@ def test_create_plan_enforces_one_global_time_budget(monkeypatch) -> None:
     assert perf_counter() - started < 0.5
 
 
+def test_deterministic_public_research_fallback_is_subject_agnostic() -> None:
+    prompt = (
+        "Using official sources, find the launch dates and primary destinations of two "
+        "spacecraft. Calculate the exact days between launches and produce a comparison "
+        "table with source links. Do not use weather tools."
+    )
+    inventory = [
+        {
+            "slug": "aura",
+            "allowed_operations": ["web.search", "web.page.read", "weather.forecast"],
+            "connected": True,
+        }
+    ]
+
+    bundle = agent_runtime._deterministic_public_research_bundle(prompt, inventory)
+
+    assert bundle is not None
+    assert [step.operation for step in bundle.plan.steps] == [
+        "web.search",
+        "web.page.read",
+        "web.page.read",
+        "web.page.read",
+    ]
+    assert all(not step.consequential for step in bundle.plan.steps)
+    assert all(step.operation != "weather.forecast" for step in bundle.plan.steps)
+    assert deterministic_plan_fixes(bundle.plan, inventory, set(), prompt) == []
+
+
+def test_create_plan_falls_back_when_all_planner_json_is_invalid(monkeypatch) -> None:
+    async def invalid(*_args, **_kwargs):
+        raise RuntimeError("Invalid JSON when parsing model output")
+
+    monkeypatch.setattr(
+        agent_runtime,
+        "build_agents",
+        lambda: {
+            "planner": object(),
+            "intent": object(),
+            "router": object(),
+            "builder": object(),
+        },
+    )
+    monkeypatch.setattr(agent_runtime, "_run", invalid)
+    prompt = "Find current public evidence and produce a concise comparison table."
+    inventory = [
+        {
+            "slug": "aura",
+            "allowed_operations": ["web.search", "web.page.read"],
+            "connected": True,
+        }
+    ]
+
+    result = asyncio.run(create_plan(prompt, inventory))
+
+    assert result.planning_artifacts["planner_recovery_mode"] == (
+        "deterministic_public_research"
+    )
+    assert [step.operation for step in result.steps] == [
+        "web.search",
+        "web.page.read",
+        "web.page.read",
+        "web.page.read",
+    ]
+
+
 def test_create_plan_respects_an_outer_expired_deadline(monkeypatch) -> None:
     calls = []
 
