@@ -119,8 +119,8 @@ test("the UI publishes one complete durable plan without provisional step flicke
   assert.equal(source.includes("AURA could not build the authoritative workflow plan"), true);
   assert.equal(planViewSource.includes("validating exact actions backstage"), false);
   assert.equal(planViewSource.includes("validatingExecution || missingTools.length"), false);
-  assert.equal(source.includes("PLANNING_WAIT_TIMEOUT_MS = 30_000"), true);
-  assert.equal(source.includes("PLANNING_RECOVERY_GRACE_MS = 30_000"), true);
+  assert.equal(source.includes("PLANNING_WAIT_TIMEOUT_MS = 25_000"), true);
+  assert.equal(source.includes("PLANNING_RECOVERY_GRACE_MS = 5_000"), true);
   assert.equal(source.includes("planningRecoveryGraceEligible(run)"), true);
   assert.equal(source.includes("timeout.preserveActiveRun"), true);
   assert.equal(source.includes('.replace(/^i\\s+will\\s+/i, "")'), true);
@@ -128,7 +128,7 @@ test("the UI publishes one complete durable plan without provisional step flicke
   assert.equal(source.includes("handleRetryPlanning();"), true);
 });
 
-test("consequential plans use one preview followed by one combined approval", () => {
+test("consequential plans execute safe reads before showing one prepared approval", () => {
   const source = readFileSync(
     new URL("../src/pages/Demo.jsx", import.meta.url),
     "utf8",
@@ -141,6 +141,9 @@ test("consequential plans use one preview followed by one combined approval", ()
   assert.equal(source.includes("VITE_STAGED_ACTION_REVIEW_ENABLED"), false);
   assert.equal(source.includes("startPythonPreparation"), false);
   assert.equal(source.includes("requiresActionPreview(steps, autoApprove)"), true);
+  assert.equal(source.includes("startPythonExecutionRef.current?.();"), true);
+  assert.equal(source.includes("Never build an approval editor from raw {{steps...}} values."), true);
+  assert.equal(source.includes("approvePythonPlan(runId, reviewedPlan.steps, autoApprove)"), true);
   assert.equal(source.includes('setPhase("preview")'), true);
   assert.equal(source.includes("startPythonExecution(editedSteps, prepared)"), true);
   assert.match(api, /approvePythonPlan\(runId, editedSteps = null, approveConsequential = true\)/);

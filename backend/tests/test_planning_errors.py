@@ -7,6 +7,7 @@ from app import orchestrator
 from app.native_connectors import NativeConnectorError, native_manifest
 from app.orchestrator import (
     _capitalized_provider_candidates,
+    _connection_reason,
     actionable_connection_capabilities,
     complete_connection_requirements,
     connection_requirement_inventory,
@@ -182,6 +183,28 @@ def test_google_workspace_connection_satisfies_named_gmail_family() -> None:
 
     assert explicit_disconnected_capabilities("Send the result with Gmail", inventory) == []
     assert actionable_connection_capabilities(["Gmail"], inventory) == []
+
+
+def test_disconnected_google_apps_collapse_into_one_clear_account_request() -> None:
+    inventory = [{
+        "slug": "google",
+        "name": "Google Workspace",
+        "canonical_provider": "google",
+        "connected": False,
+        "allowed_operations": ["gmail.send", "drive.files.search"],
+    }]
+    prompt = "Save the PDF in Google Drive and send it through Gmail"
+
+    assert explicit_disconnected_capabilities(prompt, inventory) == ["google"]
+    assert complete_connection_requirements(prompt, ["gmail", "drive"], inventory) == [
+        "google"
+    ]
+    assert _connection_reason("google", prompt) == (
+        "Connect your Google account once for the requested Gmail and Drive access"
+    )
+    assert explicit_disconnected_capabilities(
+        "Build a plan to drive growth", inventory
+    ) == []
 
 
 def test_provider_candidates_ignore_instruction_words() -> None:

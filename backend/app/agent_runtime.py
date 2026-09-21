@@ -64,6 +64,9 @@ class PlanningBundle(BaseModel):
     plan: WorkflowPlan
 
 
+PLANNER_ATTEMPT_TIMEOUT_SECONDS = 12
+
+
 def _intent_words(value: str) -> str:
     return " " + re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip() + " "
 
@@ -435,11 +438,22 @@ async def _run(agent: Agent, payload: dict, max_turns: int = 8):
 
 
 async def _run_planner(agent: Agent, payload: dict, max_turns: int = 8) -> PlanningBundle:
-    """Recover from transient model and structured-output failures before they reach the UI."""
+    """Repair one malformed structured response, then stop deterministically.
+
+    Planning used to fan out from three combined attempts into three staged
+    model calls and later supervisor retries. A single malformed response could
+    therefore keep the product waiting for well over a minute. Keep this
+    boundary deliberately small: accept a valid object (or JSON string), make
+    one schema-directed repair attempt, and hand control back to the durable
+    supervisor.
+    """
     attempt_payload = payload
-    for attempt in range(3):
+    for attempt in range(2):
         try:
-            raw = await _run(agent, attempt_payload, max_turns=max_turns)
+            async with asyncio.timeout(PLANNER_ATTEMPT_TIMEOUT_SECONDS):
+                raw = await _run(agent, attempt_payload, max_turns=max_turns)
+            if isinstance(raw, str):
+                return PlanningBundle.model_validate_json(raw)
             return PlanningBundle.model_validate(raw)
         except Exception as exc:
             lowered = str(exc).lower()
@@ -453,19 +467,18 @@ async def _run_planner(agent: Agent, payload: dict, max_turns: int = 8) -> Plann
                     "authentication_error",
                 )
             )
-            if permanent or is_input_limit(exc) or attempt == 2:
+            if permanent or is_input_limit(exc) or attempt == 1:
                 raise
-            await asyncio.sleep(attempt + 1)
             attempt_payload = {
                 **payload,
                 "response_recovery": (
-                    f"Recovery attempt {attempt + 2} of 3. The previous response could not be "
+                    "Final structured-output repair. The previous response could not be "
                     "used. Return only one complete JSON object matching PlanningBundle. Do not "
                     "use Markdown fences, commentary, or partial output."
                 ),
             }
 
-    raise RuntimeError("Planner recovery exhausted")
+    raise RuntimeError("Planner structured-output repair exhausted")
 
 
 def _routing_inventory(inventory: list[dict]) -> list[dict]:
@@ -566,6 +579,110 @@ def _has_only_missing_capabilities(bundle: PlanningBundle) -> bool:
     return bool(bundle.toolset.missing_capabilities and not bundle.toolset.tools)
 
 
+def requested_deliverable_fixes(prompt: str, plan: WorkflowPlan) -> list[str]:
+    """Reject plans that silently omit an explicitly requested app outcome.
+
+    This is intentionally conservative and provider-oriented. It does not try
+    to understand every possible natural-language goal; it protects explicit
+    app names and the concrete deliverables that previously disappeared during
+    plan generation or revision.
+    """
+    text = " " + re.sub(r"[^a-z0-9]+", " ", prompt.casefold()).strip() + " "
+    operations = {step.operation.casefold() for step in plan.steps}
+    tools = {step.tool_slug.casefold() for step in plan.steps}
+
+    def mentions(*values: str) -> bool:
+        return any(f" {value} " in text for value in values)
+
+    def has_operation(*values: str) -> bool:
+        return any(
+            operation == value or operation.startswith(value)
+            for operation in operations
+            for value in values
+        )
+
+    def action_near_app(app: str, *actions: str) -> bool:
+        action_pattern = "|".join(re.escape(action) for action in actions)
+        return bool(
+            re.search(rf"(?:{action_pattern}).{{0,50}}\b{re.escape(app)}\b", text)
+            or re.search(rf"\b{re.escape(app)}\b.{{0,50}}(?:{action_pattern})", text)
+        )
+
+    notion_write_requested = action_near_app("notion", "publish", "create", "write", "add")
+    jira_create_requested = action_near_app("jira", "create", "open", "file", "add")
+    canva_create_requested = action_near_app("canva", "create", "make", "generate", "build")
+    drive_destination_requested = action_near_app(
+        "google drive", "save", "store", "upload", "export"
+    )
+    drive_destination_present = any(
+        "drive" in operation
+        and any(marker in operation for marker in ("upload", "create", "copy", "save", "write"))
+        for operation in operations
+    )
+
+    requirements: list[tuple[bool, bool, str]] = [
+        (
+            mentions("canva"),
+            (
+                has_operation("canva.presentation.create", "canva.design.create")
+                if canva_create_requested
+                else "canva" in tools or has_operation("canva.")
+            ),
+            "Add the requested Canva creation or export step.",
+        ),
+        (
+            mentions("notion"),
+            (
+                has_operation("notion.page.create", "notion.page.update", "notion.blocks.children.append")
+                if notion_write_requested
+                else "notion" in tools or has_operation("notion.")
+            ),
+            "Add the requested Notion read or publishing step.",
+        ),
+        (
+            mentions("jira"),
+            (
+                has_operation("jira.issue.create", "jira.issues.create")
+                if jira_create_requested
+                else "jira" in tools or has_operation("jira.")
+            ),
+            "Add the requested Jira issue or task step.",
+        ),
+        (
+            mentions("gmail"),
+            has_operation("gmail.send"),
+            "Add the requested Gmail delivery step.",
+        ),
+        (
+            mentions("google drive"),
+            drive_destination_present if drive_destination_requested else has_operation("drive."),
+            "Add the requested Google Drive step; do not replace it with a different destination.",
+        ),
+        (
+            mentions("forecast")
+            or (
+                mentions("weather")
+                and mentions(
+                    "check", "get", "retrieve", "today", "tomorrow", "latest", "current"
+                )
+            ),
+            has_operation("weather.forecast"),
+            "Add the requested weather or forecast read step.",
+        ),
+        (
+            mentions("ecb", "exchange rate", "exchange rates"),
+            has_operation("web.search", "web.page", "currency.", "ecb."),
+            "Add a verified source read for the requested ECB exchange rates.",
+        ),
+        (
+            mentions("pdf") and mentions("export", "download", "attachment", "attach"),
+            has_operation("canva.export.create", "pdf.", "document.export"),
+            "Add the explicitly requested PDF export step.",
+        ),
+    ]
+    return [message for requested, satisfied, message in requirements if requested and not satisfied]
+
+
 async def _recover_catalog_tool_selection(
     agents: dict[str, Agent],
     request_payload: dict,
@@ -616,6 +733,7 @@ def deterministic_plan_fixes(
     plan: WorkflowPlan,
     tool_inventory: list[dict],
     available_input_names: set[str] | None = None,
+    user_request: str = "",
 ) -> list[str]:
     """Enforce executable capabilities independently of the model-based evaluator."""
     allowed = {
@@ -733,7 +851,9 @@ def deterministic_plan_fixes(
                     f"Step {index} references inputs the user did not provide: "
                     + ", ".join(missing_inputs)
                 )
-    return fixes
+    if user_request:
+        fixes.extend(requested_deliverable_fixes(user_request, plan))
+    return list(dict.fromkeys(fixes))
 
 
 def is_governed_derivative_step(plan: WorkflowPlan, step) -> bool:
@@ -1169,14 +1289,12 @@ async def create_plan(
             raise RuntimeError(
                 "Planner compact recovery exhausted after an input-limit failure"
             ) from staged_error
-    except Exception:  # noqa: BLE001 - provider/SDK failures all use the staged route
-        try:
-            bundle = await _run_staged_planner(agents, request_payload, max_turns=8)
-            recovery_mode = "staged"
-        except Exception as staged_error:
-            raise RuntimeError(
-                "Planner recovery exhausted across combined and staged routes"
-            ) from staged_error
+    except Exception as planner_error:
+        # _run_planner already made the one allowed structured-output repair.
+        # Starting three more model calls here caused the 112-second failure
+        # path. Common workflows are handled by audited templates before this
+        # function; everything else returns to the durable supervisor promptly.
+        raise RuntimeError("Planner structured-output repair exhausted") from planner_error
     if _has_only_missing_capabilities(bundle):
         bundle = await _recover_catalog_tool_selection(
             agents, request_payload, bundle, max_turns=8
@@ -1191,7 +1309,7 @@ async def create_plan(
         raise ConnectionRequiredError(toolset.missing_capabilities)
     plan = normalize_plan_graph(bundle.plan)
     deterministic_fixes = deterministic_plan_fixes(
-        plan, tool_inventory, available_input_names
+        plan, tool_inventory, available_input_names, prompt
     )
     repair_ms = 0
     if deterministic_fixes:
@@ -1206,46 +1324,15 @@ async def create_plan(
         repair_started_at = perf_counter()
         try:
             bundle = await _run_planner(agents["planner"], repaired_payload, max_turns=8)
-        except Exception as repair_error:  # noqa: BLE001 - bounded staged recovery
-            bundle = await _run_staged_planner(agents, repaired_payload, max_turns=8)
-            recovery_mode = (
-                "staged_input_limit_repair"
-                if is_input_limit(repair_error)
-                else "staged_repair"
-            )
+        except Exception as repair_error:
+            raise RuntimeError("Planner deterministic repair exhausted") from repair_error
+        recovery_mode = "combined_repair"
         repair_ms += round((perf_counter() - repair_started_at) * 1000)
         objective = bundle.objective
         toolset = bundle.toolset
         plan = normalize_plan_graph(bundle.plan)
         deterministic_fixes = deterministic_plan_fixes(
-            plan, tool_inventory, available_input_names
-        )
-    if deterministic_fixes:
-        # A repeated invented ID is a planning defect, not a user blocker. Give the
-        # smaller staged agents one final bounded recovery with machine-readable
-        # discovery choices before surfacing a failure.
-        repaired_payload = {
-            **request_payload,
-            "rejected_bundle": bundle.model_dump(),
-            "required_fixes": deterministic_fixes,
-            "autonomous_resource_resolution": autonomous_resource_resolution_context(
-                plan, tool_inventory, available_input_names
-            ),
-            "response_recovery": (
-                "The previous repair repeated unavailable inputs.* references. Remove them. "
-                "Resolve named resources with an eligible read-only discovery operation and "
-                "reference that step's returned ID. Never ask the user for a provider ID."
-            ),
-        }
-        repair_started_at = perf_counter()
-        bundle = await _run_staged_planner(agents, repaired_payload, max_turns=8)
-        recovery_mode = "staged_authorization_repair"
-        repair_ms += round((perf_counter() - repair_started_at) * 1000)
-        objective = bundle.objective
-        toolset = bundle.toolset
-        plan = normalize_plan_graph(bundle.plan)
-        deterministic_fixes = deterministic_plan_fixes(
-            plan, tool_inventory, available_input_names
+            plan, tool_inventory, available_input_names, prompt
         )
     if deterministic_fixes:
         raise ValueError("Plan failed preflight authorization: " + "; ".join(deterministic_fixes))

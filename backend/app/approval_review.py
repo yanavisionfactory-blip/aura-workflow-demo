@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .workflow_context import referenced_paths
+
 _LONG_TEXT_KEYS = {
     "body",
     "children",
@@ -197,6 +199,13 @@ def public_review_preview(preview: dict | None) -> dict | None:
     """Remove provider transport secrets from the browser review contract."""
     if not isinstance(preview, dict):
         return preview
+    if preview.get("status") == "ready" and referenced_paths(
+        preview.get("arguments") or {}
+    ):
+        # A ready approval is a promise that every value is concrete. Fail
+        # closed at the public boundary even if an older worker or persisted
+        # record violated that invariant.
+        return {"status": "preparing"}
     public = dict(preview)
     if preview.get("operation") != "gmail.send":
         return public
