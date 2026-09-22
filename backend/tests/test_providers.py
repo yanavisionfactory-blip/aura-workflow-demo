@@ -237,7 +237,6 @@ def test_google_connection_requests_sheet_write_scope():
     scopes = PROVIDERS["google"].scopes
 
     assert "https://www.googleapis.com/auth/drive.readonly" in scopes
-    assert "https://www.googleapis.com/auth/drive.file" in scopes
     assert "https://www.googleapis.com/auth/spreadsheets" in scopes
     assert "https://www.googleapis.com/auth/spreadsheets.readonly" not in scopes
 
@@ -265,76 +264,6 @@ def test_drive_file_search_uses_an_escaped_exact_name(monkeypatch):
         },
     )
 
-
-def test_gmail_threads_read_fetches_bounded_message_content(monkeypatch):
-    executor = ProviderExecutor({"access_token": "token"})
-    request = AsyncMock(
-        side_effect=[
-            {"threads": [{"id": "thread-1"}, {"id": "thread-2"}]},
-            {"id": "thread-1", "messages": [{"id": "message-1"}]},
-            {"id": "thread-2", "messages": [{"id": "message-2"}]},
-        ]
-    )
-    monkeypatch.setattr(executor, "_request", request)
-
-    result = asyncio.run(
-        executor._gmail_threads_read({"query": "newer_than:7d", "limit": 2})
-    )
-
-    assert [item["id"] for item in result["threads"]] == ["thread-1", "thread-2"]
-    assert result["resultSizeEstimate"] == 2
-    assert request.await_args_list[0].kwargs["params"] == {
-        "maxResults": 2,
-        "q": "newer_than:7d",
-    }
-
-
-def test_drive_file_create_uploads_reviewed_canva_pdf(monkeypatch):
-    from app import file_delivery
-
-    pdf = b"%PDF-1.7\nAURA"
-    monkeypatch.setattr(file_delivery, "download_pdf", AsyncMock(return_value=pdf))
-    observed = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        observed["request"] = request
-        return httpx.Response(
-            200,
-            json={
-                "id": "file-1",
-                "name": "Weekly brief.pdf",
-                "mimeType": "application/pdf",
-                "webViewLink": "https://drive.google.com/file/d/file-1/view",
-                "md5Checksum": "provider-md5",
-                "size": str(len(pdf)),
-            },
-        )
-
-    real_client = httpx.AsyncClient
-    monkeypatch.setattr(
-        providers.httpx,
-        "AsyncClient",
-        lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs),
-    )
-    executor = ProviderExecutor({"access_token": "token"})
-
-    result = asyncio.run(
-        executor._drive_files_create(
-            {
-                "name": "Weekly brief",
-                "source_url": "https://export.canva.com/weekly.pdf",
-            }
-        )
-    )
-
-    assert result["id"] == "file-1"
-    assert result["name"] == "Weekly brief.pdf"
-    assert result["size"] == len(pdf)
-    assert len(result["sha256"]) == 64
-    assert observed["request"].url.params["uploadType"] == "multipart"
-    assert observed["request"].headers["authorization"] == "Bearer token"
-    assert b"Weekly brief.pdf" in observed["request"].content
-    assert pdf in observed["request"].content
 
 def test_spreadsheet_resolver_never_guesses_between_duplicate_names(monkeypatch):
     executor = ProviderExecutor({"access_token": "token"})

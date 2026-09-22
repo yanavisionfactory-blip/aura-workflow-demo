@@ -30,54 +30,9 @@ KNOWN = {
         "id": TEXT, "threadId": TEXT, "payload": OBJECT,
         "labelIds": {"type": "array", "items": TEXT}}}, ["message_content"]),
     "gmail.send": ({"type": "object", "required": ["id"], "properties": {"id": TEXT}}, ["write_receipt"]),
-    "gmail.threads.read": ({
-        "type": "object",
-        "required": ["threads", "resultSizeEstimate"],
-        "properties": {
-            "threads": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "required": ["id", "messages"],
-                    "properties": {
-                        "id": TEXT,
-                        "messages": {"type": "array", "items": OBJECT},
-                    },
-                },
-            },
-            "resultSizeEstimate": {"type": "integer"},
-            "nextPageToken": TEXT,
-        },
-    }, ["message_content"]),
     "calendar.get": ({"type": "object", "required": ["id"], "properties": {
         "id": TEXT, "summary": TEXT, "start": OBJECT, "end": OBJECT, "status": TEXT}}, ["event_state"]),
     "calendar.create": ({"type": "object", "required": ["id"], "properties": {"id": TEXT}}, ["write_receipt"]),
-    "drive.files.create": ({
-        "type": "object",
-        "required": ["id", "name", "mimeType", "webViewLink", "sha256", "size"],
-        "properties": {
-            "id": TEXT,
-            "name": TEXT,
-            "mimeType": TEXT,
-            "webViewLink": TEXT,
-            "md5Checksum": TEXT,
-            "sha256": TEXT,
-            "size": {"type": ["string", "integer"]},
-        },
-    }, ["write_receipt", "resource_metadata"]),
-    "drive.files.get": ({
-        "type": "object",
-        "required": ["id", "name", "mimeType"],
-        "properties": {
-            "id": TEXT,
-            "name": TEXT,
-            "mimeType": TEXT,
-            "webViewLink": TEXT,
-            "md5Checksum": TEXT,
-            "size": {"type": ["string", "integer"]},
-            "trashed": {"type": "boolean"},
-        },
-    }, ["resource_metadata"]),
     "jira.issue.get": ({"type": "object", "required": ["id", "key", "fields"],
         "properties": {"id": TEXT, "key": TEXT, "fields": OBJECT}}, ["issue_state"]),
     "jira.issue.create": ({"type": "object", "required": ["id", "key"],
@@ -115,23 +70,7 @@ KNOWN.update({
     "jira.issues.search": ({**envelope("issues"), "properties": {"issues": {"type": "array", "items": {"type": "object", "required": ["id"], "properties": {"id": TEXT, "key": TEXT, "fields": OBJECT}}}, "isLast": {"type": "boolean"}, "nextPageToken": TEXT}}, ["issue_state"]),
     "weather.forecast": ({
         "type": "object",
-        "required": [
-            "location",
-            "date",
-            "summary",
-            "temperature_high",
-            "temperature_low",
-            "precipitation_probability",
-            "wind_speed",
-            "weather_code",
-            "forecasts",
-            "forecast_days",
-            "max_precipitation_probability",
-            "max_wind_speed",
-            "updated_at",
-            "source",
-            "source_url",
-        ],
+        "required": ["location", "date", "summary"],
         "properties": {
             "location": TEXT,
             "date": TEXT,
@@ -529,17 +468,7 @@ def compile_contracts(plan, manifests: dict) -> dict:
             continue  # Existing capability authorization rejects absent operations.
         enriched = enrich_operation(module)
         contract = enriched["reliability"]
-        # A planner may express required evidence either as the connector's
-        # semantic tag (for example ``forecast``) or as a top-level field from
-        # the operation's typed output contract.  A field is evidence only when
-        # the schema guarantees it via ``required``; optional or invented fields
-        # must still fail compilation.  This deterministic equivalence avoids a
-        # redundant model repair without weakening the contract boundary.
-        guaranteed_output_fields = set(
-            (contract.get("output_schema") or {}).get("required", [])
-        )
-        guaranteed_evidence = set(contract["provides"]) | guaranteed_output_fields
-        missing = set(step.required_evidence) - guaranteed_evidence
+        missing = set(step.required_evidence) - set(contract["provides"])
         if missing:
             failures.append(f"{step.key}: {step.operation} cannot supply {sorted(missing)}")
         for path in referenced_paths({"arguments": step.arguments, "outputs": step.output_variables}):

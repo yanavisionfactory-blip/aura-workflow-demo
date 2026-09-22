@@ -223,18 +223,9 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                 "search",
                 "Read the connected Google account identity, including its verified email.",
             ),
-            _module("gmail.list", "search", "Find Gmail message IDs. Use gmail.threads.read when the workflow needs actual recent email or thread content.", properties={
+            _module("gmail.list", "search", "Find Gmail messages.", properties={
                 "query": _TEXT, "limit": {**_POSITIVE_INTEGER, "maximum": 50}
             }),
-            _module(
-                "gmail.threads.read",
-                "search",
-                "Find and read a bounded set of Gmail threads, including message content.",
-                properties={
-                    "query": _TEXT,
-                    "limit": {**_POSITIVE_INTEGER, "maximum": 20},
-                },
-            ),
             _module("gmail.send", "action", "Send an approved email.", required=("to", "body"), properties={
                 "to": {
                     "type": "string",
@@ -264,24 +255,6 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                     "query": _TEXT,
                     "page_size": {**_POSITIVE_INTEGER, "maximum": 100},
                 },
-            ),
-            _module(
-                "drive.files.create",
-                "action",
-                "Save an approved Canva PDF export as a file in Google Drive.",
-                required=("name", "source_url"),
-                properties={
-                    "name": _TEXT,
-                    "source_url": {"type": "string", "format": "uri"},
-                    "folder_id": _TEXT,
-                },
-            ),
-            _module(
-                "drive.files.get",
-                "search",
-                "Read exact Google Drive file metadata for outcome verification.",
-                required=("file_id",),
-                properties={"file_id": _TEXT},
             ),
             _module(
                 "drive.spreadsheet.resolve",

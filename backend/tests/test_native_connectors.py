@@ -14,10 +14,7 @@ from app.native_connectors import (
     public_catalog,
     validate_module_arguments,
 )
-from app.orchestrator import (
-    missing_plan_operation_permissions,
-    refresh_native_connection_contract,
-)
+from app.orchestrator import refresh_native_connection_contract
 
 
 def test_resolved_structured_result_is_coerced_to_connector_text() -> None:
@@ -92,11 +89,6 @@ def test_google_catalog_can_resolve_and_update_named_spreadsheets():
     assert capabilities["google.identity.get"]["permission_scope"] == "read"
     assert capabilities["drive.files.search"]["permission_scope"] == "read"
     assert capabilities["drive.files.search"]["requires_approval"] is False
-    assert capabilities["drive.files.create"]["permission_scope"] == "write"
-    assert capabilities["drive.files.create"]["requires_approval"] is True
-    assert "drive.files.get" in capabilities["drive.files.create"]["reliability"][
-        "readback_operations"
-    ]
     assert capabilities["drive.spreadsheet.resolve"]["permission_scope"] == "read"
     assert capabilities["drive.spreadsheet.resolve"]["requires_approval"] is False
     assert capabilities["sheets.append"]["permission_scope"] == "write"
@@ -112,40 +104,12 @@ def test_planning_refreshes_stale_native_capabilities_without_touching_custom_to
 
     refreshed = refresh_native_connection_contract(google)
 
-    assert refreshed == [
-        operation
-        for operation in native_operations("google")
-        if operation != "drive.files.create"
-    ]
-    assert google.allowed_operations == refreshed
+    assert refreshed == native_operations("google")
+    assert google.allowed_operations == native_operations("google")
     assert "drive.files.search" in google.allowed_operations
-    assert "drive.files.get" in google.allowed_operations
-    assert "drive.files.create" not in google.allowed_operations
     assert "sheets.append" in google.allowed_operations
     assert refresh_native_connection_contract(custom) == ["submit"]
     assert custom.allowed_operations == ["submit"]
-
-
-def test_plan_requests_scope_upgrade_for_a_new_operation_on_connected_account():
-    plan = SimpleNamespace(
-        steps=[
-            SimpleNamespace(tool_slug="google", operation="gmail.threads.read"),
-            SimpleNamespace(tool_slug="google", operation="drive.files.create"),
-        ]
-    )
-
-    missing = missing_plan_operation_permissions(
-        plan,
-        [
-            {
-                "slug": "google",
-                "connected": True,
-                "allowed_operations": ["gmail.threads.read", "drive.files.get"],
-            }
-        ],
-    )
-
-    assert missing == {"google": ["drive.files.create"]}
 
 
 def test_module_arguments_normalize_common_model_variants_before_approval():
@@ -179,7 +143,7 @@ def test_generated_presentation_text_is_fitted_recursively_before_review():
     assert len(normalized["subtitle"]) <= 120
     assert len(normalized["phases"][0]["period"]) <= 24
     assert len(normalized["phases"][0]["title"]) <= 40
-    assert len(normalized["phases"][0]["items"][0]) <= 160
+    assert len(normalized["phases"][0]["items"][0]) <= 90
     assert normalized["title"].endswith("…")
     with pytest.raises(NativeConnectorError, match="at most 50 characters"):
         normalize_module_arguments(

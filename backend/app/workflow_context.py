@@ -282,40 +282,11 @@ def evaluate_condition(condition: StepCondition | dict, context: dict[str, Any])
 
 
 def requires_content_composition(arguments: dict, input_schema: dict, context: dict) -> bool:
-    """Evidence destined for bounded text needs composition, not interpolation.
-
-    Connector schemas frequently nest user-visible text inside arrays of objects
-    (for example presentation slides).  Checking top-level strings alone allowed a
-    complete source page to be interpolated into a short slide bullet and then
-    silently truncated.  Walk the argument and schema trees together so the
-    approval resolver sees those cases before a user is shown the payload.
-    """
-
-    def needs_composition(value: object, schema: dict) -> bool:
-        schema_type = schema.get("type")
-        if (schema_type == "object" or "properties" in schema) and isinstance(value, dict):
-            properties = schema.get("properties", {})
-            return any(
-                needs_composition(nested, properties.get(name, {}))
-                for name, nested in value.items()
-            )
-        if schema_type == "array" and isinstance(value, list):
-            item_schema = schema.get("items", {})
-            return any(needs_composition(item, item_schema) for item in value)
-        if schema_type != "string":
-            return False
-
-        maximum = schema.get("maxLength")
+    """Structured evidence used as text needs composition, not JSON interpolation."""
+    for name, value in arguments.items():
+        if input_schema.get("properties", {}).get(name, {}).get("type") != "string":
+            continue
         for path in referenced_paths(value):
-            resolved = resolve_value("{{" + path + "}}", context)
-            if isinstance(resolved, (dict, list)):
+            if isinstance(resolve_value("{{" + path + "}}", context), (dict, list)):
                 return True
-            if (
-                isinstance(resolved, str)
-                and isinstance(maximum, int)
-                and len(resolved) > maximum
-            ):
-                return True
-        return False
-
-    return needs_composition(arguments, input_schema)
+    return False

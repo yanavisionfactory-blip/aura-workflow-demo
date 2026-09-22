@@ -11,7 +11,6 @@ from jsonschema import Draft202012Validator
 from sqlalchemy import select
 
 from .agent_runtime import (
-    PLANNING_GLOBAL_TIMEOUT_SECONDS,
     ConnectionRequiredError,
     create_plan,
     critique_step,
@@ -76,11 +75,9 @@ from .providers import (
     verify_oauth_credentials,
 )
 from .replanning import maybe_replan_run
-from .request_contract import attach_request_graph_proof
-from .result_presentation import merge_synthesis_metrics, resolve_result_presentation
+from .result_presentation import resolve_result_presentation
 from .run_supervisor import (
     recover_planning_failure,
-    recovery_counter,
     transition_run,
 )
 from .schemas import CriticDecision, OutcomeVerification
@@ -111,109 +108,6 @@ _TEXT_DOCUMENT_TYPES = {
     "application/ld+json",
     "application/xml",
 }
-
-
-def _final_evidence_repair_candidate(steps, plan_steps, required_fixes: list[str]):
-    """Choose one completed read whose query can safely gather stronger evidence."""
-    fix_words = set(re.findall(r"[a-z0-9]+", " ".join(required_fixes).casefold()))
-    candidates = []
-    for step, planned in zip(steps, plan_steps, strict=True):
-        if (
-            step.status != StepStatus.completed
-            or step.consequential
-            or operation_scope(step.operation) != "read"
-        ):
-            continue
-        description = " ".join(
-            str(planned.get(key) or "")
-            for key in ("key", "reason", "expected_output")
-        ).casefold()
-        overlap = len(fix_words.intersection(re.findall(r"[a-z0-9]+", description)))
-        candidates.append(
-            (
-                bool(planned.get("optional")),
-                step.operation.endswith("search"),
-                overlap,
-                step.position,
-                step,
-            )
-        )
-    return max(candidates, default=(None, None, None, None, None))[-1]
-
-
-async def _stage_final_evidence_read_repair(
-    session,
-    run,
-    steps,
-    plan_steps,
-    verification: OutcomeVerification,
-    workspace_id: str,
-) -> bool:
-    """Turn final-verifier findings into one bounded, read-only repair incident."""
-    if verification.status != "unverified" or not verification.required_fixes:
-        return False
-    context = deepcopy(run.execution_context or {})
-    repair_count = recovery_counter(context.get("final_evidence_read_repair_count"))
-    if repair_count >= get_settings().max_autonomous_read_repairs:
-        return False
-    candidate = _final_evidence_repair_candidate(
-        steps, plan_steps, verification.required_fixes
-    )
-    if candidate is None:
-        return False
-
-    internal_error = (
-        "[final_evidence_incomplete] " + "; ".join(verification.required_fixes)
-    )
-    context.update(
-        final_evidence_read_repair_count=repair_count + 1,
-        final_evidence_repair_step_id=candidate.id,
-        final_evidence_required_fixes=list(verification.required_fixes),
-    )
-    run.execution_context = context
-    candidate.status = StepStatus.failed
-    candidate.error = "AURA is gathering stronger source evidence for final verification."
-    await audit(
-        session,
-        workspace_id,
-        "step.criticized",
-        {
-            "step_id": candidate.id,
-            "internal_error": internal_error,
-            "decision": CriticDecision(
-                action="retry",
-                reasons=list(verification.required_fixes),
-            ).model_dump(mode="json"),
-            "source": "final_outcome_verifier",
-        },
-        run.id,
-        actor="outcome-verifier",
-    )
-    await audit(
-        session,
-        workspace_id,
-        "run.final_evidence_read_repair_requested",
-        {
-            "step_id": candidate.id,
-            "attempt": repair_count + 1,
-            "required_fixes": verification.required_fixes,
-        },
-        run.id,
-        actor="senior-orchestrator",
-    )
-    transition_run(
-        run,
-        RunStatus.waiting_for_action,
-        reason="final_evidence_read_repair_requested",
-        actor="senior-orchestrator",
-        phase="verification",
-        supervisor_status="recovering",
-        error=candidate.error,
-        result=run.result,
-        dispatch=None,
-        metadata={"step_id": candidate.id, "attempt": repair_count + 1},
-    )
-    return True
 
 
 def _future_group_review_arguments(
@@ -285,32 +179,6 @@ def _planning_prompt_with_documents(prompt: str, inputs: dict | None) -> str:
     return f"{prompt}\n\nUser-attached workflow documents:\n" + "\n\n".join(sections)
 
 
-def _native_only_planning_request(prompt: str, requested_tools: list[str]) -> bool:
-    """Honor an explicit AURA-only request without searching external catalogs."""
-    normalized_tools = {
-        re.sub(r"[^a-z0-9]+", " ", str(value).casefold()).strip()
-        for value in requested_tools
-        if value
-    }
-    aura_names = {"aura", "aura intelligence"}
-    if normalized_tools and normalized_tools <= aura_names:
-        return True
-    normalized_prompt = re.sub(r"\s+", " ", prompt.casefold())
-    return bool(
-        re.search(
-            r"\b(?:in|use) aura(?: intelligence)? only\b|\bonly use aura(?: intelligence)?\b",
-            normalized_prompt,
-        )
-    )
-
-
-def _planning_items_for_request(items: list[dict], native_only: bool) -> list[dict]:
-    """Keep an explicit AURA-only plan out of every external connector path."""
-    if not native_only:
-        return items
-    return [item for item in items if str(item.get("slug") or "") == "aura"]
-
-
 def refresh_native_connection_contract(tool: ToolConnection) -> list[str]:
     """Keep persisted native allow-lists aligned with the deployed connector.
 
@@ -326,27 +194,6 @@ def refresh_native_connection_contract(tool: ToolConnection) -> list[str]:
         operations = native_operations(tool.slug)
     except NativeConnectorError:
         return list(tool.allowed_operations or [])
-    # Adding a write operation to application code must not silently broaden an
-    # older OAuth grant.  Existing Google accounts receive new read operations,
-    # while Drive upload remains unavailable until a consent flow issued after
-    # that scope was added has explicitly recorded the operation.
-    if tool.slug == "google" and "drive.files.create" not in set(
-        tool.allowed_operations or []
-    ):
-        scopes: set[str] = set()
-        if getattr(tool, "encrypted_credentials", None):
-            try:
-                credentials = CredentialVault().decrypt(tool.encrypted_credentials)
-                scopes = set(str(credentials.get("scope") or "").split())
-            except RuntimeError:
-                scopes = set()
-        if not scopes.intersection(
-            {
-                "https://www.googleapis.com/auth/drive.file",
-                "https://www.googleapis.com/auth/drive",
-            }
-        ):
-            operations = [item for item in operations if item != "drive.files.create"]
     tool.allowed_operations = operations
     return operations
 
@@ -519,34 +366,6 @@ def _accept_successful_read_after_critic(operation: str, criticism: object) -> b
     )
 
 
-def _normalize_successful_read_criticism(
-    operation: str, criticism: CriticDecision
-) -> CriticDecision:
-    """Turn a semantic retry into an accepted read receipt before recovery scheduling.
-
-    The critic is allowed to say that a search result is not yet the final answer. That
-    is a reason for a downstream read or synthesis step, not for replaying a successful
-    provider read through the long verification backoff. Policy-scoped rejections keep
-    their original decision and still stop at the normal safety boundary.
-    """
-    if not _accept_successful_read_after_critic(operation, criticism):
-        return criticism
-    observations = list(
-        dict.fromkeys(
-            criticism.reasons
-            + criticism.contract_failures
-            + criticism.policy_violations
-        )
-    )
-    return CriticDecision(
-        action="accept",
-        reasons=[
-            "Provider-confirmed read preserved; downstream steps verify semantic completeness.",
-            *observations,
-        ],
-    )
-
-
 def _current_capability_manifest(slug: str, stored: dict | None) -> dict:
     """Prefer deployed built-in contracts over stale workspace snapshots."""
     return current_capability_manifest(slug, stored)
@@ -707,27 +526,6 @@ def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict]) -> None:
         planned_step.arguments = normalize_planned_module_arguments(
             manifest, planned_step.operation, planned_step.arguments
         )
-        if capability and planned_step.required_evidence:
-            # required_evidence is an executable connector contract, not a
-            # user-facing label. Models occasionally put prose such as
-            # "Official NASA result URL" here even though the connector
-            # advertises canonical guarantees such as public_search_results.
-            # Preserve valid tags/required fields and deterministically map
-            # descriptive labels to the operation's real evidence contract.
-            from .operation_contracts import enrich_operation
-
-            contract = enrich_operation(capability)["reliability"]
-            guaranteed_fields = set(
-                (contract.get("output_schema") or {}).get("required", [])
-            )
-            guaranteed = set(contract.get("provides", [])) | guaranteed_fields
-            requested = set(planned_step.required_evidence)
-            if requested - guaranteed:
-                canonical = requested & guaranteed
-                canonical.update(contract.get("provides", []))
-                if not canonical:
-                    canonical.update(guaranteed_fields)
-                planned_step.required_evidence = sorted(canonical)
         if planned_step.reduced_scope_arguments is None:
             planned_step.reduced_scope_arguments = _required_read_arguments(
                 manifest, planned_step.operation, planned_step.arguments
@@ -742,7 +540,6 @@ async def _create_compiled_plan(
     requested_tool_names: list[str] | tuple[str, ...] | set[str] = (),
 ):
     """Build a schema-valid plan, repairing internal connector mismatches silently."""
-    planning_deadline = time.perf_counter() + PLANNING_GLOBAL_TIMEOUT_SECONDS
     manifests_by_slug = {
         item["slug"]: _current_capability_manifest(
             item["slug"], manifests_by_slug.get(item["slug"])
@@ -773,55 +570,38 @@ async def _create_compiled_plan(
         }
         for item in inventory
     ]
-    fallback_inventory = inventory
-    def audited_fallback():
-        """Preserve proven legacy adapters only after the general planner fails.
+    from .workflow_templates import (
+        creator_outreach_template,
+        notion_to_jira_template,
+        weather_presentation_template,
+    )
 
-        These adapters are recovery assets, not routing logic. New and unfamiliar
-        workflows always reach the staged agent team and the generic request-graph
-        proof before any provider-specific implementation is considered.
-        """
-        from .workflow_templates import (
-            creator_outreach_template,
-            notion_to_jira_template,
-            source_backed_presentation_template,
-            weather_presentation_template,
-        )
-
-        candidate = (
-            creator_outreach_template(prompt, fallback_inventory)
-            or source_backed_presentation_template(prompt, fallback_inventory)
-            or weather_presentation_template(prompt, fallback_inventory)
-            or notion_to_jira_template(prompt, fallback_inventory)
-        )
-        if candidate is None or attach_request_graph_proof(
-            prompt, candidate, fallback_inventory
-        ):
-            return None
-        _normalize_planned_steps(candidate, manifests_by_slug)
+    audited_plan = (
+        creator_outreach_template(prompt, inventory)
+        or weather_presentation_template(prompt, inventory)
+        or notion_to_jira_template(prompt, inventory)
+    )
+    if audited_plan is not None:
+        _normalize_planned_steps(audited_plan, manifests_by_slug)
         from .operation_contracts import compile_contracts
 
-        candidate.planning_artifacts["compiled_contracts"] = compile_contracts(
-            candidate, manifests_by_slug
+        audited_plan.planning_artifacts["compiled_contracts"] = compile_contracts(
+            audited_plan, manifests_by_slug
         )
-        candidate.planning_artifacts["planner_recovery_mode"] = (
-            "audited_adapter_after_agent_exhaustion"
-        )
-        return candidate
+        return audited_plan
     inventory = intent_bounded_tool_inventory(prompt, inventory, requested_tool_names)
     repair_requirements: list[str] = []
     # Connector-contract validation receives one model repair. Safe generated
     # prose is normalized deterministically before this boundary, so repeating
     # the same repair cannot improve a persistent schema mismatch.
     for attempt in range(2):
+        plan = await create_plan(
+            prompt,
+            inventory,
+            available_input_names,
+            planner_repair_requirements=list(repair_requirements),
+        )
         try:
-            plan = await create_plan(
-                prompt,
-                inventory,
-                available_input_names,
-                planner_repair_requirements=list(repair_requirements),
-                planning_deadline=planning_deadline,
-            )
             requested = prompt.casefold()
             if ("roadmap" in requested or "timeline" in requested) and any(
                 s.operation == "canva.design.create" for s in plan.steps
@@ -843,18 +623,8 @@ async def _create_compiled_plan(
                 plan, manifests_by_slug
             )
             return plan
-        except (RuntimeError, TimeoutError):
-            # Model/provider exhaustion cannot be repaired by starting the whole
-            # planner again against an already consumed global deadline.
-            fallback = audited_fallback()
-            if fallback is not None:
-                return fallback
-            raise
         except (NativeConnectorError, ValueError) as exc:
             if attempt == 1:
-                fallback = audited_fallback()
-                if fallback is not None:
-                    return fallback
                 raise
             repair_requirements.append(str(exc))
             logger.warning(
@@ -898,17 +668,6 @@ _PROMPT_CAPABILITY_ALIASES = {
     "meta-ads": {"meta ads", "facebook ads", "meta advertising"},
 }
 
-_GOOGLE_ACCOUNT_FAMILIES = {
-    "google",
-    "gmail",
-    "drive",
-    "google-drive",
-    "calendar",
-    "google-calendar",
-    "sheets",
-    "google-sheets",
-}
-
 
 def _connection_family(item: dict) -> str:
     value = str(
@@ -918,16 +677,7 @@ def _connection_family(item: dict) -> str:
         or ""
     ).strip().casefold()
     normalized = re.sub(r"[^a-z0-9]+", "-", value).strip("-")
-    normalized = re.sub(r"-mcp$", "", normalized)
-    return "google" if normalized in _GOOGLE_ACCOUNT_FAMILIES else normalized
-
-
-def _operation_capability_aliases(item: dict) -> set[str]:
-    return {
-        re.sub(r"[^a-z0-9]+", "-", str(operation).split(".", 1)[0].casefold()).strip("-")
-        for operation in item.get("allowed_operations") or []
-        if operation
-    }
+    return re.sub(r"-mcp$", "", normalized)
 
 
 def _connection_capability_families(item: dict) -> set[str]:
@@ -936,11 +686,12 @@ def _connection_capability_families(item: dict) -> set[str]:
     Some providers intentionally expose several user-facing apps through one
     verified account. Google Workspace, for example, is stored as ``google``
     while its allow-list contains ``gmail.*``, ``calendar.*``, ``drive.*`` and
-    ``sheets.*`` operations. All of those routes belong to the same account
-    consent family even when a dynamic catalog lists them separately.
+    ``sheets.*`` operations. Treating only the storage slug as connected made a
+    healthy Google account look disconnected when a plan named Gmail directly.
     """
     families = {_connection_family(item)}
-    for namespace in _operation_capability_aliases(item):
+    for operation in item.get("allowed_operations") or []:
+        namespace = str(operation or "").split(".", 1)[0]
         family = _connection_family({"canonical_provider": namespace})
         if family:
             families.add(family)
@@ -974,28 +725,16 @@ def explicit_disconnected_capabilities(prompt: str, inventory: list[dict]) -> li
             continue
         slug = str(item.get("slug") or "").strip().casefold()
         name = str(item.get("name") or "").strip().casefold()
-        operation_aliases = _operation_capability_aliases(item)
         aliases = {
             re.sub(r"[^a-z0-9]+", " ", value).strip()
             for value in {
                 slug,
                 name,
                 family,
-                *(
-                    value
-                    for value in operation_aliases
-                    if family != "google"
-                    or value not in {"drive", "calendar", "sheets"}
-                ),
                 *_PROMPT_CAPABILITY_ALIASES.get(slug, set()),
             }
             if value
         }
-        aliases.update(
-            f"google {value}"
-            for value in operation_aliases
-            if value in {"drive", "calendar", "sheets"}
-        )
         if any(alias and f" {alias} " in text for alias in aliases):
             missing.append(family)
             seen_families.add(family)
@@ -1024,12 +763,6 @@ def actionable_connection_capabilities(
         if name:
             aliases[re.sub(r"[^a-z0-9]+", "-", name).strip("-")] = family
         aliases[family] = family
-        for capability_family in (
-            _connection_capability_families(item) | _operation_capability_aliases(item)
-        ):
-            aliases[capability_family] = family
-            if capability_family in {"drive", "calendar", "sheets"}:
-                aliases[f"google-{capability_family}"] = family
 
     actionable: list[str] = []
     for value in requested:
@@ -1053,46 +786,6 @@ def complete_connection_requirements(
     return list(dict.fromkeys([*explicit, *planned]))
 
 
-def missing_plan_operation_permissions(
-    plan, connected_inventory: list[dict]
-) -> dict[str, list[str]]:
-    """Return account families whose current grant cannot execute the graph."""
-    connected = {
-        str(item.get("slug") or ""): set(item.get("allowed_operations") or [])
-        for item in connected_inventory
-        if item.get("connected", True)
-    }
-    missing: dict[str, list[str]] = {}
-    for step in plan.steps:
-        if step.operation in connected.get(step.tool_slug, set()):
-            continue
-        family = _connection_family({"slug": step.tool_slug})
-        if family:
-            missing.setdefault(family, []).append(step.operation)
-    return {
-        family: list(dict.fromkeys(operations))
-        for family, operations in missing.items()
-    }
-
-
-def _connection_reason(capability: str, prompt: str) -> str:
-    if capability != "google":
-        return f"Connect {capability} so AURA can continue"
-    text = " " + re.sub(r"[^a-z0-9]+", " ", prompt.casefold()).strip() + " "
-    apps = [
-        label
-        for marker, label in (
-            ("gmail", "Gmail"),
-            ("google drive", "Drive"),
-            ("google calendar", "Calendar"),
-            ("google sheets", "Sheets"),
-        )
-        if f" {marker} " in text
-    ]
-    requested = " and ".join(apps) if apps else "Google Workspace"
-    return f"Connect your Google account once for the requested {requested} access"
-
-
 def _required_permissions(capability: str, inventory: list[dict]) -> list[str]:
     return next(
         (
@@ -1108,15 +801,12 @@ _PROVIDER_CANDIDATE_STOP_WORDS = {
     "add",
     "analyze",
     "build",
-    "calculate",
     "compare",
     "connect",
     "create",
     "delete",
     "download",
-    "do",
     "draft",
-    "extract",
     "find",
     "format",
     "get",
@@ -1139,14 +829,13 @@ _PROVIDER_CANDIDATE_STOP_WORDS = {
     "update",
     "upload",
     "use",
-    "using",
     "write",
 }
 
 
 def _capitalized_provider_candidates(prompt: str) -> list[str]:
     """Extract bounded app-name candidates without treating arbitrary prose as apps."""
-    matches = re.finditer(
+    candidates = re.findall(
         r"(?<![A-Za-z0-9])"
         r"[A-Z][A-Za-z0-9._+-]*"
         r"(?:[\s&]+[A-Z][A-Za-z0-9._+-]*){0,2}",
@@ -1154,15 +843,10 @@ def _capitalized_provider_candidates(prompt: str) -> list[str]:
     )
     return list(
         dict.fromkeys(
-            match.group(0).strip().rstrip("._+-")
-            for match in matches
-            if match.group(0).strip().rstrip("._+-").casefold()
+            candidate.strip().rstrip("._+-")
+            for candidate in candidates
+            if candidate.strip().rstrip("._+-").casefold()
             not in _PROVIDER_CANDIDATE_STOP_WORDS
-            and not re.match(
-                r"\s+(?:\d|data|page|pages|site|source|sources|website)\b",
-                prompt[match.end() :],
-                flags=re.IGNORECASE,
-            )
         )
     )[:8]
 
@@ -1175,7 +859,6 @@ def _catalog_entry_inventory(item: dict, connected_families: set[str]) -> dict:
         "slug": provider,
         "name": str(item.get("display_name") or item.get("name") or provider),
         "canonical_provider": canonical,
-        "aliases": [str(value) for value in item.get("aliases") or [] if value],
         "connected": family in connected_families,
         "allowed_operations": list(item.get("capabilities") or []),
     }
@@ -1249,14 +932,6 @@ async def connection_requirement_inventory(
                     }
                     if candidate_family not in aliases:
                         continue
-                    # Start compiling the exact action contract as soon as the
-                    # planner discovers an unfamiliar marketplace app. This
-                    # overlaps certification with the unavoidable OAuth step,
-                    # instead of making the user connect and then wait for a
-                    # second backstage preparation cycle.
-                    from .connector_engineer import queue_pipedream_certification
-
-                    queue_pipedream_certification(app)
                     catalog_item = _catalog_entry_inventory(entry, connected_families)
                     family = _connection_family(catalog_item)
                     if family and family not in known_families:
@@ -1409,17 +1084,9 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             )
         ).all()
         manifests_by_tool = {manifest.tool_id: manifest for manifest in manifests}
-        requested_tools = [
-            str(value)
-            for value in (run.inputs or {}).get("requested_tools", [])
-            if value
-        ]
-        native_only = _native_only_planning_request(run.prompt, requested_tools)
         from .connection_permissions import refresh_granted_readbacks
 
         for tool in tools:
-            if native_only and tool.slug != "aura":
-                continue
             refresh_native_connection_contract(tool)
             refresh_granted_readbacks(tool)
             await refresh_browser_connection_contract(tool, manifests_by_tool.get(tool.id))
@@ -1435,44 +1102,23 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 "connected": True,
             }
             for tool in tools
-            if tool.id in manifests_by_tool and (not native_only or tool.slug == "aura")
+            if tool.id in manifests_by_tool
         ]
         connected_slugs = {item["slug"] for item in connected_inventory}
-        if native_only:
-            dynamic_inventory, dynamic_manifests = [], {}
-            broker_inventory, broker_manifests = [], {}
-        else:
-            from .connector_engineer import dynamic_planning_catalog
+        from .connector_engineer import dynamic_planning_catalog
 
-            dynamic_inventory, dynamic_manifests = await dynamic_planning_catalog(
-                session, connected_slugs
-            )
-            from .pipedream_connect import planning_catalog as pipedream_planning_catalog
-
-            broker_inventory, broker_manifests = await pipedream_planning_catalog(
-                session, connected_slugs
-            )
-        native_inventory = _planning_items_for_request(
-            planning_catalog(connected_slugs), native_only
+        dynamic_inventory, dynamic_manifests = await dynamic_planning_catalog(
+            session, connected_slugs
         )
-        inventory_by_slug = {item["slug"]: item for item in native_inventory}
+        from .pipedream_connect import planning_catalog as pipedream_planning_catalog
+
+        broker_inventory, broker_manifests = await pipedream_planning_catalog(
+            session, connected_slugs
+        )
+        inventory_by_slug = {item["slug"]: item for item in planning_catalog(connected_slugs)}
         inventory_by_slug.update({item["slug"]: item for item in dynamic_inventory})
         inventory_by_slug.update({item["slug"]: item for item in broker_inventory})
-        for item in connected_inventory:
-            catalog_item = inventory_by_slug.get(item["slug"], {})
-            inventory_by_slug[item["slug"]] = {
-                **catalog_item,
-                **item,
-                # Planning sees the complete released connector contract while
-                # execution authorization remains bound to the current grant.
-                "allowed_operations": list(
-                    catalog_item.get("allowed_operations")
-                    or item.get("allowed_operations")
-                    or []
-                ),
-                "connected_operations": list(item.get("allowed_operations") or []),
-                "connected": True,
-            }
+        inventory_by_slug.update({item["slug"]: item for item in connected_inventory})
         inventory = list(inventory_by_slug.values())
         manifests_by_slug = dict(dynamic_manifests)
         manifests_by_slug.update(broker_manifests)
@@ -1480,99 +1126,17 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             tool.slug: manifest.manifest
             for tool in tools
             for manifest in manifests
-            if manifest.tool_id == tool.id and (not native_only or tool.slug == "aura")
+            if manifest.tool_id == tool.id
         })
-        requirement_inventory = (
-            inventory
-            if native_only
-            else await connection_requirement_inventory(
-                session, run.prompt, inventory, requested_tools
-            )
+        requested_tools = [
+            str(value)
+            for value in (run.inputs or {}).get("requested_tools", [])
+            if value
+        ]
+        requirement_inventory = await connection_requirement_inventory(
+            session, run.prompt, inventory, requested_tools
         )
         await session.commit()
-
-        # Authentication is the one recovery step an agent cannot perform for
-        # the user. Detect explicitly named disconnected apps before spending a
-        # model call, and collapse shared account families (for example Gmail
-        # and Drive under Google Workspace) into one consent request.
-        immediate_missing = explicit_disconnected_capabilities(
-            run.prompt, requirement_inventory
-        )
-        if immediate_missing:
-            from .connection_recovery import reuse_managed_connection
-            from .semantic_memory import source_owner
-
-            owner = await source_owner(session, workspace_id, run.id)
-            for slug in list(immediate_missing):
-                if await reuse_managed_connection(
-                    session, managed_connector_client(), slug, workspace_id, owner
-                ):
-                    immediate_missing.remove(slug)
-
-        # A disconnected connector with a released capability contract is still
-        # fully plannable. Build and persist the complete graph first, then ask
-        # for its one unavoidable human action (authentication). Only an app that
-        # has no certified operations yet must stop before model planning.
-        plannable_families = {
-            _connection_family(item)
-            for item in inventory
-            if item.get("allowed_operations") and _connection_family(item)
-        }
-        unplannable_missing = [
-            capability
-            for capability in immediate_missing
-            if capability not in plannable_families
-        ]
-        if unplannable_missing:
-            for capability in unplannable_missing:
-                session.add(
-                    ConnectionRequirement(
-                        workspace_id=workspace_id,
-                        run_id=run.id,
-                        capability=capability,
-                        provider_hint=capability,
-                        reason=_connection_reason(capability, run.prompt),
-                        required_permissions=_required_permissions(
-                            capability, requirement_inventory
-                        ),
-                    )
-                )
-            blocker = {
-                "kind": "human_action",
-                "code": "connection_required",
-                "message": "Connect the requested apps to continue",
-                "action": "connect_account",
-                "missing_capabilities": unplannable_missing,
-                "retryable": False,
-            }
-            transition_run(
-                run,
-                RunStatus.waiting_for_action,
-                reason="planning_connection_required_before_model",
-                actor="connection-supervisor",
-                phase="connection",
-                supervisor_status="human_action_required",
-                error=blocker["message"],
-                result={
-                    "status": "waiting_for_connection",
-                    "missing_capabilities": unplannable_missing,
-                },
-                blocker=blocker,
-                dispatch=None,
-            )
-            await audit(
-                session,
-                workspace_id,
-                "run.connection_required",
-                {
-                    "missing_capabilities": unplannable_missing,
-                    "source": "preplanning_uncertified_provider_gate",
-                },
-                run.id,
-                actor="connection-supervisor",
-            )
-            await session.commit()
-            return
 
         try:
             from .plan_reuse import reuse_saved_plan
@@ -1586,24 +1150,10 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                     manifests_by_slug,
                     requested_tools,
                 )
-            missing_permissions = missing_plan_operation_permissions(
-                plan, connected_inventory
-            )
-            missing = list(
-                dict.fromkeys(
-                    [
-                        *complete_connection_requirements(
-                            run.prompt,
-                            list(
-                                plan.planning_artifacts.get(
-                                    "connection_requirements", []
-                                )
-                            ),
-                            requirement_inventory,
-                        ),
-                        *missing_permissions,
-                    ]
-                )
+            missing = complete_connection_requirements(
+                run.prompt,
+                list(plan.planning_artifacts.get("connection_requirements", [])),
+                requirement_inventory,
             )
             if missing:
                 from .connection_recovery import reuse_managed_connection
@@ -1626,8 +1176,9 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                             capability=capability,
                             provider_hint=capability,
                             reason=f"Connect {capability} so AURA can finish the saved plan",
-                            required_permissions=missing_permissions.get(capability)
-                            or _required_permissions(capability, requirement_inventory),
+                            required_permissions=_required_permissions(
+                                capability, requirement_inventory
+                            ),
                         )
                     )
                 blocker = {
@@ -2318,9 +1869,6 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 criticism = await review_recorded_result(
                     session, run, step, snapshot, contract, step.output["provider_result"]
                 )
-                criticism = _normalize_successful_read_criticism(
-                    step.operation, criticism
-                )
                 step.output = {**step.output, "critic": criticism.model_dump(mode="json")}
                 await audit(
                     session,
@@ -2330,27 +1878,6 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     run.id,
                 )
                 if criticism.action != "accept":
-                    if plan_steps[step.position].get("optional", False):
-                        step.status = StepStatus.skipped
-                        step.error = None
-                        step.output = {
-                            **step.output,
-                            "optional_skip_reason": "recorded_result_review_incomplete",
-                        }
-                        await audit(
-                            session,
-                            workspace_id,
-                            "step.optional_enrichment_skipped",
-                            {
-                                "step_id": step.id,
-                                "reason": "recorded_result_review_incomplete",
-                                "provider_receipt_preserved": True,
-                            },
-                            run.id,
-                            actor="outcome-checker",
-                        )
-                        await session.commit()
-                        continue
                     from .verification_recovery import defer_verification
 
                     if await defer_verification(session, run, step):
@@ -2931,23 +2458,8 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             if (run.execution_context or {}).get("execution_mode") == "unattended":
                 from .assurance import operation_readiness
 
-                assurance_manifest = await session.scalar(
-                    select(CapabilityManifest).where(
-                        CapabilityManifest.tool_id == tool.id,
-                        CapabilityManifest.status == "verified",
-                    )
-                )
-                readiness = await operation_readiness(
-                    session,
-                    workspace_id,
-                    tool,
-                    step.operation,
-                    assurance_manifest.manifest if assurance_manifest else None,
-                )
-                if not (
-                    readiness["execution_ready"]
-                    or readiness.get("governed_execution_ready")
-                ):
+                readiness = await operation_readiness(session, workspace_id, tool, step.operation)
+                if not readiness["execution_ready"]:
                     transition_run(
                         run,
                         RunStatus.blocked,
@@ -2962,20 +2474,6 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     )
                     await session.commit()
                     return
-                if not readiness["execution_ready"]:
-                    await audit(
-                        session,
-                        workspace_id,
-                        "step.unattended_governed_execution",
-                        {
-                            "step_id": step.id,
-                            "operation": step.operation,
-                            "mode": readiness.get("governed_mode"),
-                            "advisories": readiness.get("reasons", []),
-                        },
-                        run.id,
-                        actor="assurance-controller",
-                    )
             trust = await _trust_state(session, workspace_id, tool)
             if trust.incident_active:
                 transition_run(
@@ -3753,9 +3251,6 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 "consequential": step.consequential,
             }
             criticism = await review_recorded_result(session, run, step, snapshot, contract, result)
-            criticism = _normalize_successful_read_criticism(
-                step.operation, criticism
-            )
             await audit(
                 session,
                 workspace_id,
@@ -4019,30 +3514,6 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             await session.commit()
             synthesis = await synthesize_result(run.prompt, outputs, prepared_evidence)
             if not synthesis.validation_passed:
-                initial_fixes = list(synthesis.required_fixes)
-                synthesis = await synthesize_result(
-                    run.prompt,
-                    outputs,
-                    prepared_evidence,
-                    required_fixes=initial_fixes,
-                )
-                run.execution_context = {
-                    **(run.execution_context or {}),
-                    "final_review_repair_attempted": True,
-                }
-                await audit(
-                    session,
-                    workspace_id,
-                    "run.synthesis_repair_attempted",
-                    {
-                        "initial_required_fixes": initial_fixes,
-                        "validation_passed": synthesis.validation_passed,
-                        "remaining_required_fixes": synthesis.required_fixes,
-                    },
-                    run.id,
-                    actor="unified-response-synthesizer",
-                )
-            if not synthesis.validation_passed:
                 verification = OutcomeVerification(
                     status="unverified",
                     reasons=["Final response did not pass validation"],
@@ -4077,8 +3548,6 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 run.id,
             )
         verification_data = verification.model_dump(mode="json")
-        if verification.status == "verified":
-            result_presentation = merge_synthesis_metrics(result_presentation, synthesis)
         await audit(
             session,
             workspace_id,
@@ -4104,16 +3573,6 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 verification.reasons,
                 verification.required_fixes,
             )
-            if await _stage_final_evidence_read_repair(
-                session,
-                run,
-                steps,
-                plan_steps,
-                verification,
-                workspace_id,
-            ):
-                await session.commit()
-                return
             transition_run(
                 run,
                 RunStatus.waiting_for_action,

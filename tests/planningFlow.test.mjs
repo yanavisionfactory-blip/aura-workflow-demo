@@ -7,40 +7,9 @@ import {
   planningConnectionRequirements,
   planningConnectionsEnabled,
   planningDisposition,
-  planningRecoveryGraceEligible,
   promptConnectionRequirements,
-  publicPlanningFailure,
   shouldStartFreshPlanningRun,
 } from "../src/lib/planningFlow.mjs";
-
-test("planner failures never expose transport or backend error details", () => {
-  assert.equal(
-    publicPlanningFailure(new TypeError("Failed to fetch")),
-    "AURA is reconnecting to the planning service. Nothing ran; retry in a moment.",
-  );
-  assert.equal(
-    publicPlanningFailure({ status: 503, message: '{"detail":"database exploded"}' }),
-    "AURA hit a temporary service interruption. Nothing ran; retry in a moment.",
-  );
-  assert.equal(
-    publicPlanningFailure({ status: 422, message: "Traceback: secret internals" }),
-    "AURA couldn't prepare this workflow yet. Nothing ran; retry in a moment.",
-  );
-});
-
-test("workspace bootstrap preserves the durable workspace during transient failures", () => {
-  const source = readFileSync(
-    new URL("../src/lib/AuthContext.jsx", import.meta.url),
-    "utf8",
-  );
-  const openWorkspaceStart = source.indexOf("async function openWorkspace()");
-  const openWorkspaceEnd = source.indexOf("openWorkspace().finally", openWorkspaceStart);
-  const openWorkspaceSource = source.slice(openWorkspaceStart, openWorkspaceEnd);
-
-  assert.ok(openWorkspaceStart >= 0 && openWorkspaceEnd > openWorkspaceStart);
-  assert.equal(openWorkspaceSource.includes("clearWorkspace()"), false);
-  assert.equal(source.includes("const RECOVERY_DELAYS_MS = [0, 350, 900, 2500]"), true);
-});
 
 test("a rejected Start request stays on the reviewable plan", () => {
   assert.deepEqual(
@@ -114,21 +83,7 @@ test("unfinished durable planning remains in background wait state", () => {
   }
 });
 
-test("a confirmed active backend recovery receives one bounded planning grace", () => {
-  assert.equal(planningRecoveryGraceEligible({ status: "planning" }), true);
-  assert.equal(planningRecoveryGraceEligible({ status: "recovering" }), true);
-  assert.equal(planningRecoveryGraceEligible({
-    status: "blocked",
-    public_status: "recovering",
-  }), true);
-  assert.equal(planningRecoveryGraceEligible({ status: "failed" }), false);
-  assert.equal(planningRecoveryGraceEligible({
-    status: "awaiting_approval",
-    plan: { steps: [{ operation: "web.search" }] },
-  }), false);
-});
-
-test("the UI publishes one complete durable plan without provisional step flicker", () => {
+test("the UI renders a language plan while durable compilation is still running", () => {
   const source = readFileSync(
     new URL("../src/pages/Demo.jsx", import.meta.url),
     "utf8",
@@ -138,35 +93,22 @@ test("the UI publishes one complete durable plan without provisional step flicke
     "utf8",
   );
 
-  assert.equal(source.includes("instantLanguagePlan(confirmedIntent"), false);
-  assert.equal(source.includes("languageDraftPrompt(confirmedIntent"), false);
-  assert.equal(source.includes("queuedPlanStartRef"), false);
-  assert.equal(source.includes("Starting now; AURA is finishing technical preparation backstage"), false);
-  assert.equal(source.includes("setPlan(null)"), true);
-  assert.equal(source.includes("planningRequestGenerationRef.current !== planningRequestGeneration"), true);
-  assert.equal(source.includes("AURA is preparing the complete plan…"), true);
-  assert.equal(source.includes("It will appear once, ready to review."), true);
-  assert.equal(source.includes("AURA could not build the authoritative workflow plan"), true);
+  assert.equal(source.includes("instantLanguagePlan(confirmedIntent"), true);
+  assert.equal(source.includes("languageDraftPrompt(confirmedIntent"), true);
+  assert.equal(source.includes("Executable planning unavailable; the language plan remains visible"), true);
   assert.equal(planViewSource.includes("validating exact actions backstage"), false);
   assert.equal(planViewSource.includes("validatingExecution || missingTools.length"), false);
-  assert.equal(source.includes("PLANNING_WAIT_TIMEOUT_MS = 45_000"), true);
-  assert.equal(source.includes("PLANNING_RECOVERY_GRACE_MS = 5_000"), true);
-  assert.equal(source.includes("planningRecoveryGraceEligible(run)"), true);
-  assert.equal(source.includes("timeout.preserveActiveRun"), true);
+  assert.equal(source.includes("queuedPlanStartRef.current = { name, autoApprove }"), true);
+  assert.equal(source.includes("requiresActionPreview(compiledPlan.steps, queuedStart.autoApprove)"), true);
+  assert.equal(source.includes("PLANNING_WAIT_TIMEOUT_MS = 30_000"), true);
   assert.equal(source.includes('.replace(/^i\\s+will\\s+/i, "")'), true);
+  assert.equal(source.includes("iWill: firstPersonStepCopy(step.iWill || step.reason)"), true);
   assert.equal(planViewSource.includes('|| plan.compileState === "blocked"'), false);
-  assert.ok(
-    planViewSource.indexOf("{/* Steps */}")
-      < planViewSource.indexOf('<PlanConnectionAlert', planViewSource.indexOf("{/* Steps */}")),
-  );
-  assert.equal(
-    planViewSource.includes('plan.compileState === "waiting_for_connection"'),
-    true,
-  );
+  assert.equal(source.includes('if (plan.compileState === "blocked") {'), true);
   assert.equal(source.includes("handleRetryPlanning();"), true);
 });
 
-test("consequential plans execute safe reads before showing one prepared approval", () => {
+test("consequential plans use one preview followed by one combined approval", () => {
   const source = readFileSync(
     new URL("../src/pages/Demo.jsx", import.meta.url),
     "utf8",
@@ -179,18 +121,12 @@ test("consequential plans execute safe reads before showing one prepared approva
   assert.equal(source.includes("VITE_STAGED_ACTION_REVIEW_ENABLED"), false);
   assert.equal(source.includes("startPythonPreparation"), false);
   assert.equal(source.includes("requiresActionPreview(steps, autoApprove)"), true);
-  assert.equal(source.includes("startPythonExecutionRef.current?.();"), true);
-  assert.equal(source.includes("Never build an approval editor from raw {{steps...}} values."), true);
-  assert.equal(source.includes("approvePythonPlan(runId, reviewedPlan.steps, autoApprove)"), true);
   assert.equal(source.includes('setPhase("preview")'), true);
-  assert.equal(source.includes('run.blocker?.code !== "external_submission_approval_required"'), true);
-  assert.equal(source.includes("readyApprovals.length === 0"), true);
-  assert.equal(source.includes("hasUnresolvedWorkflowReference(step.approval_preview?.arguments)"), true);
   assert.equal(source.includes("startPythonExecution(editedSteps, prepared)"), true);
   assert.match(api, /approvePythonPlan\(runId, editedSteps = null, approveConsequential = true\)/);
 });
 
-test("the combined preview has rich renderers without technical argument controls", () => {
+test("the combined preview has a renderer for every supported action family", () => {
   const preview = readFileSync(
     new URL("../src/components/aura/PreviewView.jsx", import.meta.url),
     "utf8",
@@ -199,17 +135,7 @@ test("the combined preview has rich renderers without technical argument control
   for (const renderer of ["richEmail", "richTicket", "richPresentation", "richDocument"]) {
     assert.equal(preview.includes(renderer), true);
   }
-  assert.equal(preview.includes("SchemaArgumentsEditor"), false);
-  assert.equal(preview.includes("JsonArgumentField"), false);
-  assert.equal(preview.includes("Exact app values"), false);
-  assert.equal(preview.includes("PromptApprovalEditor"), true);
-  assert.equal(preview.includes("Tell AURA what to change in"), true);
-  assert.equal(preview.includes("Apply with AURA"), true);
-  assert.equal(preview.includes("Or edit directly in the preview above."), true);
-  assert.equal(preview.includes("Canva presentation preview"), true);
-  assert.equal(preview.includes("selectedSlide"), true);
-  assert.equal(preview.includes('text-muted-foreground\">1 slide'), false);
-  assert.equal(preview.includes("LiveToolReview"), false);
+  assert.equal(preview.includes("SchemaArgumentsEditor"), true);
   assert.equal(preview.includes("reviewSteps.map"), true);
 });
 

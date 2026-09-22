@@ -359,7 +359,7 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         </p>
       </motion.div>
 
-      {plan.compileState === "blocked" && !plan.error && (
+      {plan.compileState === "blocked" && (
         <div className="mb-4 rounded-xl border border-amber-400/25 bg-amber-400/5 p-3 text-sm text-amber-100">
           <div className="flex items-center gap-2 font-medium">
             <AlertTriangle className="h-4 w-4 text-amber-400" />
@@ -405,7 +405,16 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         </div>
       )}
 
-      {connectionOnly && backstageOnly.length > 0 && (
+      <PlanConnectionAlert
+        tools={planTools.filter((tool) => catalogEntryFor(tool.name))}
+        connections={effectiveConnections}
+        connectingTool={connectingTool}
+        errors={connectionErrors}
+        onConnectAll={handleConnectAll}
+        connectionEnabled={connectionsCanOpen}
+      />
+
+      {backstageOnly.length > 0 && (
         <div className="mb-4 rounded-xl border border-amber-400/20 bg-amber-400/5 p-4 text-sm text-amber-100">
           <p className="font-medium">AURA-managed connection required</p>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
@@ -417,10 +426,10 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
       )}
 
       {connectionOnly && (
-        <div className="mb-4 rounded-xl border border-white/8 bg-card/50 p-4 text-sm text-muted-foreground">
+        <div className="rounded-xl border border-white/8 bg-card/50 p-4 text-sm text-muted-foreground">
           {backstageOnly.length
             ? "AURA has preserved this task without exposing connector internals. Retry planning after the managed connector is available."
-            : "AURA has saved your request. Connect the requested provider below so it can finish the plan."}
+            : "AURA has not executed anything. Connect the requested provider above, or retry planning after updating your connections."}
           {onRetryPlan && (
             <button
               type="button"
@@ -431,17 +440,6 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
             </button>
           )}
         </div>
-      )}
-
-      {connectionOnly && plan.compileState === "waiting_for_connection" && (
-        <PlanConnectionAlert
-          tools={planTools.filter((tool) => catalogEntryFor(tool.name))}
-          connections={effectiveConnections}
-          connectingTool={connectingTool}
-          errors={connectionErrors}
-          onConnectAll={handleConnectAll}
-          connectionEnabled={connectionsCanOpen}
-        />
       )}
 
       {!connectionOnly && !planningFailure && <>
@@ -565,29 +563,6 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
           )}
         </AnimatePresence>
       </div>
-
-      {!connectionOnly && backstageOnly.length > 0 && (
-        <div className="mt-5 rounded-xl border border-amber-400/20 bg-amber-400/5 p-4 text-sm text-amber-100">
-          <p className="font-medium">AURA-managed connection required</p>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            {backstageOnly.map((tool) => tool.name).join(", ")} is not yet available through AURA's
-            verified one-click connection path. The plan is preserved and nothing has been executed.
-          </p>
-        </div>
-      )}
-
-      {plan.compileState === "waiting_for_connection" && (
-        <div className="mt-5">
-          <PlanConnectionAlert
-            tools={planTools.filter((tool) => catalogEntryFor(tool.name))}
-            connections={effectiveConnections}
-            connectingTool={connectingTool}
-            errors={connectionErrors}
-            onConnectAll={handleConnectAll}
-            connectionEnabled={connectionsCanOpen}
-          />
-        </div>
-      )}
 
       {/* Bottom approval bar */}
       <motion.div

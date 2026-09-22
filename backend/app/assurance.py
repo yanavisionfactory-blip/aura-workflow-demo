@@ -55,12 +55,7 @@ async def operation_readiness(session, workspace_id, tool, operation, stored=Non
     manifest = current_capability_manifest(tool.slug, stored)
     module = next((item for item in manifest.get("capabilities", []) if item.get("name") == operation), None)
     if not module:
-        return {
-            "execution_ready": False,
-            "governed_execution_ready": False,
-            "status": "unsupported",
-            "reasons": ["Operation has no declared contract"],
-        }
+        return {"execution_ready": False, "status": "unsupported", "reasons": ["Operation has no declared contract"]}
     module = enrich_operation(module)
     contract = module["reliability"]
     reasons = []
@@ -80,28 +75,7 @@ async def operation_readiness(session, workspace_id, tool, operation, stored=Non
     ).order_by(OperationCertification.created_at.desc()).limit(1))
     if not certification:
         reasons.append("Current live certification is missing or expired")
-    # A previously approved unattended workflow may execute a verified,
-    # allow-listed read or non-destructive write exactly once even when a fresh
-    # live conformance attestation is unavailable. The normal receipt,
-    # idempotency, policy, read-back, and no-replay boundaries still apply. This
-    # is the marketplace-wide path: unknown destructive operations remain
-    # certification-gated, while a lost write response still pauses for
-    # reconciliation instead of being repeated.
-    advisory_reasons = {
-        "Current live certification is missing or expired",
-        "Output contract remains provisional",
-        "Deterministic write verification is unavailable",
-    }
-    governed_blockers = [reason for reason in reasons if reason not in advisory_reasons]
-    permission_scope = module.get("permission_scope", "write")
-    governed_execution_ready = bool(
-        not governed_blockers
-        and permission_scope in {"read", "write"}
-        and (permission_scope == "read" or module.get("requires_approval") is True)
-    )
     return {"operation": operation, "contract_hash": contract["hash"], "execution_ready": not reasons,
-        "governed_execution_ready": governed_execution_ready,
-        "governed_mode": "approved_once_no_replay" if governed_execution_ready and reasons else None,
         "status": "certified" if not reasons else "provisional" if contract["output_validation"] != "typed" else "unverified",
         "reasons": reasons, "provides": contract["provides"], "retry": contract["retry"],
         "readback_operation": contract.get("readback_operation"), "pagination": contract.get("pagination"),
