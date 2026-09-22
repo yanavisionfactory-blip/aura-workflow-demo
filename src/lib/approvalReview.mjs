@@ -40,15 +40,6 @@ const reviewTitle = (kind, operation, toolName) => {
   }[kind];
 };
 
-export const hasUnresolvedWorkflowReference = (value) => {
-  if (typeof value === "string") return /\{\{\s*(?:steps|vars|inputs)\./i.test(value);
-  if (Array.isArray(value)) return value.some(hasUnresolvedWorkflowReference);
-  if (value && typeof value === "object") {
-    return Object.values(value).some(hasUnresolvedWorkflowReference);
-  }
-  return false;
-};
-
 export const fallbackReviewContract = (operation, args = {}, toolName = "App") => {
   const kind = reviewKindForOperation(operation);
   return {
@@ -133,11 +124,7 @@ export const resolvedApprovalStep = (planned, runtime, toolName = "App") => {
     }
     return planned;
   }
-  if (
-    runtime.approval_status !== "pending"
-    || runtime.approval_preview?.status !== "ready"
-    || hasUnresolvedWorkflowReference(runtime.approval_preview?.arguments)
-  ) {
+  if (runtime.approval_status !== "pending" || runtime.approval_preview?.status !== "ready") {
     return { ...planned, riskLevel: "read", preview: undefined, approvalPending: true };
   }
   const args = runtime.approval_preview.arguments || {};

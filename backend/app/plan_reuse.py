@@ -30,12 +30,7 @@ async def reuse_saved_plan(session, run, inventory, manifests):
             continue
         try:
             plan = normalize_plan_graph(WorkflowPlan.model_validate(deepcopy(previous.plan)))
-            if deterministic_plan_fixes(
-                plan,
-                inventory,
-                set((run.inputs or {}).keys()),
-                run.prompt,
-            ):
+            if deterministic_plan_fixes(plan, inventory, set((run.inputs or {}).keys())):
                 continue
             current = {step.tool_slug: current_capability_manifest(step.tool_slug, manifests.get(step.tool_slug)) for step in plan.steps}
             for step in plan.steps:

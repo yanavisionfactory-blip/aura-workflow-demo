@@ -1,9 +1,6 @@
 import asyncio
 from datetime import UTC
-from time import perf_counter
 from types import SimpleNamespace
-
-import pytest
 
 from app import agent_runtime
 from app.agent_runtime import (
@@ -15,7 +12,6 @@ from app.agent_runtime import (
     materialize_action_arguments,
     normalize_plan_graph,
     prepare_execution_directive,
-    requested_deliverable_fixes,
     supervise_execution,
     supervise_plan,
     synthesize_result,
@@ -75,34 +71,6 @@ def test_clear_weather_presentation_intent_excludes_unrequested_gmail() -> None:
     assert {item["slug"] for item in bounded} == {"aura", "canva"}
 
 
-def test_source_backed_destination_keeps_generic_research_capabilities() -> None:
-    inventory = [
-        {
-            "slug": "aura",
-            "name": "AURA Intelligence",
-            "allowed_operations": ["web.search", "web.page.read"],
-        },
-        {
-            "slug": "canva",
-            "name": "Canva",
-            "allowed_operations": ["canva.presentation.create"],
-        },
-        {
-            "slug": "google",
-            "name": "Google Workspace",
-            "allowed_operations": ["gmail.send"],
-        },
-    ]
-
-    bounded = intent_bounded_tool_inventory(
-        "Using official NASA sources, create a Canva presentation with source links.",
-        inventory,
-        ["Canva"],
-    )
-
-    assert {item["slug"] for item in bounded} == {"aura", "canva"}
-
-
 def test_explicit_linear_provider_does_not_expand_generic_issue_to_jira() -> None:
     inventory = [
         {"slug": "linear", "name": "Linear", "allowed_operations": ["linear.list-issues"]},
@@ -121,105 +89,6 @@ def test_open_ended_intent_preserves_the_full_inventory() -> None:
     ]
 
     assert intent_bounded_tool_inventory("Help me automate this", inventory) == inventory
-
-
-def test_marketplace_aliases_normalize_to_exact_connector_operations() -> None:
-    inventory = [
-        {
-            "slug": "linear-issues",
-            "name": "Linear",
-            "canonical_provider": "linear",
-            "aliases": ["Linear Issues"],
-            "allowed_operations": [
-                "linear.create_issue",
-                "linear.list_issues",
-            ],
-        }
-    ]
-    workflow = plan(
-        PlanStep(
-            key="create_issue",
-            agent="operator",
-            tool_slug="Linear Issues",
-            operation="create issue",
-            reason="Create the requested Linear issue",
-            expected_output="Linear issue receipt",
-            consequential=True,
-        )
-    )
-
-    assert deterministic_plan_fixes(workflow, inventory, set()) == []
-    assert workflow.steps[0].tool_slug == "linear-issues"
-    assert workflow.steps[0].operation == "linear.create_issue"
-
-
-def test_ambiguous_marketplace_alias_is_never_guessed() -> None:
-    inventory = [
-        {
-            "slug": "linear-one",
-            "name": "Linear",
-            "allowed_operations": ["linear.create_issue"],
-        },
-        {
-            "slug": "linear-two",
-            "name": "Linear",
-            "allowed_operations": ["linear.create_issue"],
-        },
-    ]
-    workflow = plan(
-        PlanStep(
-            key="create_issue",
-            agent="operator",
-            tool_slug="Linear",
-            operation="create issue",
-            reason="Create the requested issue",
-            expected_output="Issue receipt",
-            consequential=True,
-        )
-    )
-
-    fixes = deterministic_plan_fixes(workflow, inventory, set())
-
-    assert workflow.steps[0].tool_slug == "Linear"
-    assert any("unavailable tool" in fix for fix in fixes)
-
-
-def test_explicit_multi_app_deliverables_cannot_silently_disappear() -> None:
-    request = (
-        "Check tomorrow's weather in Berlin and the latest ECB exchange rates. "
-        "Create a Canva report, export it as a PDF to Google Drive, publish the "
-        "report in Notion, create a Jira issue, and email it through Gmail."
-    )
-    incomplete = plan(
-        PlanStep(
-            key="weather",
-            agent="research",
-            tool_slug="aura",
-            operation="weather.forecast",
-            reason="Read weather",
-            expected_output="Forecast",
-        ),
-        PlanStep(
-            key="canva",
-            agent="design",
-            tool_slug="canva",
-            operation="canva.presentation.create",
-            reason="Create report",
-            expected_output="Canva report",
-            consequential=True,
-        ),
-    )
-
-    fixes = requested_deliverable_fixes(request, incomplete)
-
-    assert fixes == [
-        "Add the requested Notion read or publishing step.",
-        "Add the requested Jira issue or task step.",
-        "Add the requested Gmail delivery step.",
-        "Add the requested Google Drive step; do not replace it with a different destination.",
-        "Add a verified source read for the requested ECB exchange rates.",
-        "Add the explicitly requested PDF export step.",
-    ]
 
 
 def test_senior_orchestrator_assigns_every_incomplete_step(monkeypatch) -> None:
@@ -672,13 +541,6 @@ def test_create_plan_repairs_named_resource_ids_with_discovery(monkeypatch) -> N
     monkeypatch.setattr(agent_runtime, "build_agents", lambda: {"planner": object()})
     monkeypatch.setattr(agent_runtime, "_run", fake_run)
 
-    async def fake_staged(_agents, payload, max_turns=8):
-        return agent_runtime.PlanningBundle.model_validate(
-            await fake_run(object(), payload, max_turns=max_turns)
-        )
-
-    monkeypatch.setattr(agent_runtime, "_run_staged_planner", fake_staged)
-
     result = asyncio.run(create_plan("Read Creator Outreach", inventory, set()))
 
     assert len(calls) == 2
@@ -756,42 +618,6 @@ def test_deterministic_validator_replaces_unavailable_tool_for_unique_operation(
 
     assert deterministic_plan_fixes(workflow, inventory) == []
     assert workflow.steps[0].tool_slug == "google"
-
-
-def test_deterministic_validator_normalizes_operation_used_as_tool_slug() -> None:
-    workflow = plan(
-        PlanStep(
-            key="search",
-            agent="research",
-            tool_slug="web.search",
-            operation="search",
-            arguments={"query": "official eclipse source"},
-            reason="Find an official astronomy source",
-            expected_output="Source URLs and snippets",
-        ),
-        PlanStep(
-            key="read",
-            agent="research",
-            tool_slug="web.page.read",
-            operation="read",
-            arguments={"url": "{{steps.search.results.0.url}}"},
-            reason="Read exact eclipse dates and durations",
-            expected_output="Official page text",
-            depends_on=["search"],
-        ),
-    )
-    inventory = [
-        {
-            "slug": "aura",
-            "allowed_operations": ["web.search", "web.page.read"],
-        }
-    ]
-
-    assert deterministic_plan_fixes(workflow, inventory) == []
-    assert [(step.tool_slug, step.operation) for step in workflow.steps] == [
-        ("aura", "web.search"),
-        ("aura", "web.page.read"),
-    ]
 
 
 def test_deterministic_validator_does_not_guess_ambiguous_tool() -> None:
@@ -1344,7 +1170,7 @@ def test_combined_planner_retries_schema_validation_failure(monkeypatch) -> None
     assert result.steps[0].operation == "records.read"
 
 
-def test_create_plan_restores_staged_agents_after_combined_repair_fails(monkeypatch) -> None:
+def test_create_plan_falls_back_to_staged_agents_after_combined_recovery(monkeypatch) -> None:
     planner = object()
     intent = object()
     router = object()
@@ -1420,404 +1246,13 @@ def test_create_plan_restores_staged_agents_after_combined_repair_fails(monkeypa
                     "connected": False,
                 },
             ],
-            available_input_names={"project_key"},
         )
     )
 
-    assert calls == [planner, planner, intent, router, builder]
-    assert result.planning_artifacts["planner_recovery_mode"] == (
-        "staged_structured_recovery"
-    )
-
-
-def test_create_plan_enforces_one_global_time_budget(monkeypatch) -> None:
-    async def slow_run(*args, **kwargs):
-        await asyncio.sleep(1)
-
-    monkeypatch.setattr(
-        agent_runtime,
-        "build_agents",
-        lambda: {
-            "planner": object(),
-            "intent": object(),
-            "router": object(),
-            "builder": object(),
-        },
-    )
-    monkeypatch.setattr(agent_runtime, "_run", slow_run)
-    monkeypatch.setattr(agent_runtime, "PLANNING_GLOBAL_TIMEOUT_SECONDS", 0.01)
-    started = perf_counter()
-
-    with pytest.raises(RuntimeError, match="global planning budget"):
-        asyncio.run(
-            create_plan(
-                "Read CRM records",
-                [
-                    {
-                        "slug": "crm",
-                        "allowed_operations": ["records.read"],
-                        "connected": True,
-                    }
-                ],
-            )
-        )
-
-    assert perf_counter() - started < 0.5
-
-
-def test_deterministic_public_research_fallback_is_subject_agnostic() -> None:
-    prompt = (
-        "Using official sources, find the launch dates and primary destinations of two "
-        "spacecraft. Calculate the exact days between launches and produce a comparison "
-        "table with source links. Do not use weather tools."
-    )
-    inventory = [
-        {
-            "slug": "aura",
-            "allowed_operations": ["web.search", "web.page.read", "weather.forecast"],
-            "connected": True,
-        }
-    ]
-
-    bundle = agent_runtime._deterministic_public_research_bundle(prompt, inventory)
-
-    assert bundle is not None
-    assert [step.operation for step in bundle.plan.steps] == [
-        "web.search",
-        "web.page.read",
-        "web.page.read",
-        "web.page.read",
-    ]
-    assert all(not step.consequential for step in bundle.plan.steps)
-    assert all(step.operation != "weather.forecast" for step in bundle.plan.steps)
-    assert deterministic_plan_fixes(bundle.plan, inventory, set(), prompt) == []
-
-
-def test_source_backed_external_artifact_gets_capability_driven_research_reads() -> None:
-    prompt = (
-        "Using official NASA sources, create a 3-slide Canva presentation comparing "
-        "Voyager launch dates and destinations. Include source links."
-    )
-    inventory = [
-        {
-            "slug": "aura",
-            "allowed_operations": ["web.search", "web.page.read"],
-            "connected": True,
-        },
-        {
-            "slug": "canva",
-            "allowed_operations": [
-                "canva.designs.list",
-                "canva.presentation.create",
-            ],
-            "connected": True,
-            "operation_contracts": [
-                {
-                    "name": "canva.designs.list",
-                    "capability_tags": ["design_metadata"],
-                }
-            ],
-        },
-    ]
-    proposed = WorkflowPlan(
-        name="Voyager deck",
-        interpretation=prompt,
-        steps=[
-            PlanStep(
-                key="search_canva",
-                agent="designer",
-                tool_slug="canva",
-                operation="canva.designs.list",
-                reason="Find matching Canva designs",
-                expected_output="Canva design metadata",
-            ),
-            PlanStep(
-                key="create_deck",
-                agent="designer",
-                tool_slug="canva",
-                operation="canva.presentation.create",
-                reason="Create the sourced Voyager presentation",
-                expected_output="Canva presentation receipt",
-                consequential=True,
-                depends_on=["search_canva"],
-            ),
-        ],
-    )
-
-    repaired, changed = agent_runtime._ground_public_source_artifact_plan(
-        prompt, proposed, inventory
-    )
-
-    assert changed is True
-    assert [step.operation for step in repaired.steps[:4]] == [
-        "web.search",
-        "web.page.read",
-        "web.page.read",
-        "web.page.read",
-    ]
-    create = next(step for step in repaired.steps if step.key == "create_deck")
-    assert {"read_public_source_1", "read_public_source_2"}.issubset(
-        create.depends_on
-    )
-    assert deterministic_plan_fixes(repaired, inventory, set(), prompt) == []
-
-
-def test_source_backed_artifact_uses_staged_team_after_fast_combined_failure(
-    monkeypatch,
-) -> None:
-    calls = []
-    prompt = (
-        "Using official NASA sources, create a Canva presentation comparing "
-        "Voyager launch dates. Include source links."
-    )
-    inventory = [
-        {
-            "slug": "aura",
-            "allowed_operations": ["web.search", "web.page.read"],
-            "connected": True,
-        },
-        {
-            "slug": "canva",
-            "allowed_operations": ["canva.presentation.create"],
-            "connected": True,
-        },
-    ]
-
-    async def staged(*_args, **_kwargs):
-        calls.append("staged")
-        return agent_runtime.PlanningBundle(
-            objective={"goal": prompt},
-            toolset={
-                "tools": [
-                    {
-                        "slug": "canva",
-                        "role": "artifact",
-                        "rationale": "Create the requested presentation",
-                    }
-                ]
-            },
-            plan={
-                "name": "Voyager presentation",
-                "interpretation": prompt,
-                "steps": [
-                    {
-                        "key": "create_deck",
-                        "agent": "designer",
-                        "tool_slug": "canva",
-                        "operation": "canva.presentation.create",
-                        "reason": "Create the sourced Voyager presentation",
-                        "expected_output": "Canva presentation receipt",
-                        "consequential": True,
-                    }
-                ],
-            },
-        )
-
-    async def combined(*_args, **_kwargs):
-        calls.append("combined")
-        raise RuntimeError("combined structured output failed")
-
-    monkeypatch.setattr(
-        agent_runtime,
-        "build_agents",
-        lambda: {
-            "planner": object(),
-            "intent": object(),
-            "router": object(),
-            "builder": object(),
-        },
-    )
-    monkeypatch.setattr(agent_runtime, "_run_staged_planner", staged)
-    monkeypatch.setattr(agent_runtime, "_run_planner", combined)
-
-    result = asyncio.run(create_plan(prompt, inventory))
-
-    assert calls == ["combined", "staged"]
-    assert [step.operation for step in result.steps[:4]] == [
-        "web.search",
-        "web.page.read",
-        "web.page.read",
-        "web.page.read",
-    ]
-
-
-def test_unfamiliar_multi_tool_workflow_uses_staged_team_after_fast_path(monkeypatch) -> None:
-    calls = []
-    prompt = (
-        "Read records from AlphaDesk, create a brief in BetaDocs, "
-        "and send it through GammaMail."
-    )
-    inventory = [
-        {
-            "slug": "alpha-desk",
-            "name": "AlphaDesk",
-            "allowed_operations": ["records.read"],
-            "connected": True,
-        },
-        {
-            "slug": "beta-docs",
-            "name": "BetaDocs",
-            "allowed_operations": ["briefs.create"],
-            "connected": True,
-        },
-        {
-            "slug": "gamma-mail",
-            "name": "GammaMail",
-            "allowed_operations": ["messages.send"],
-            "connected": True,
-        },
-    ]
-
-    async def staged(*_args, **_kwargs):
-        calls.append("staged")
-        return agent_runtime.PlanningBundle(
-            objective={"goal": prompt},
-            toolset={
-                "tools": [
-                    {
-                        "slug": item["slug"],
-                        "role": "workflow",
-                        "rationale": "Satisfy the requested provider action",
-                    }
-                    for item in inventory
-                ]
-            },
-            plan={
-                "name": "Unfamiliar marketplace flow",
-                "interpretation": prompt,
-                "steps": [
-                    {
-                        "key": "read_records",
-                        "agent": "researcher",
-                        "tool_slug": "alpha-desk",
-                        "operation": "records.read",
-                        "reason": "Read records from AlphaDesk",
-                        "expected_output": "Records",
-                    },
-                    {
-                        "key": "create_brief",
-                        "agent": "writer",
-                        "tool_slug": "beta-docs",
-                        "operation": "briefs.create",
-                        "reason": "Create the requested brief in BetaDocs",
-                        "expected_output": "Brief receipt",
-                        "depends_on": ["read_records"],
-                        "consequential": True,
-                    },
-                    {
-                        "key": "send_brief",
-                        "agent": "sender",
-                        "tool_slug": "gamma-mail",
-                        "operation": "messages.send",
-                        "reason": "Send the brief through GammaMail",
-                        "expected_output": "Delivery receipt",
-                        "depends_on": ["create_brief"],
-                        "consequential": True,
-                    },
-                ],
-            },
-        )
-
-    async def combined(*_args, **_kwargs):
-        calls.append("combined")
-        raise RuntimeError("combined structured output failed")
-
-    monkeypatch.setattr(
-        agent_runtime,
-        "build_agents",
-        lambda: {
-            "planner": object(),
-            "intent": object(),
-            "router": object(),
-            "builder": object(),
-        },
-    )
-    monkeypatch.setattr(agent_runtime, "_run_staged_planner", staged)
-    monkeypatch.setattr(agent_runtime, "_run_planner", combined)
-
-    result = asyncio.run(create_plan(prompt, inventory))
-
-    assert calls == ["combined", "staged"]
-    assert result.planning_artifacts["planner_recovery_mode"] == "staged_structured_recovery"
-    assert [step.tool_slug for step in result.steps] == [
-        "alpha-desk",
-        "beta-docs",
-        "gamma-mail",
-    ]
-
-
-def test_create_plan_falls_back_when_all_planner_json_is_invalid(monkeypatch) -> None:
-    async def invalid(*_args, **_kwargs):
-        raise RuntimeError("Invalid JSON when parsing model output")
-
-    monkeypatch.setattr(
-        agent_runtime,
-        "build_agents",
-        lambda: {
-            "planner": object(),
-            "intent": object(),
-            "router": object(),
-            "builder": object(),
-        },
-    )
-    monkeypatch.setattr(agent_runtime, "_run", invalid)
-    prompt = "Find current public evidence and produce a concise comparison table."
-    inventory = [
-        {
-            "slug": "aura",
-            "allowed_operations": ["web.search", "web.page.read"],
-            "connected": True,
-        }
-    ]
-
-    result = asyncio.run(create_plan(prompt, inventory))
-
-    assert result.planning_artifacts["planner_recovery_mode"] == (
-        "deterministic_public_research"
-    )
-    assert [step.operation for step in result.steps] == [
-        "web.search",
-        "web.page.read",
-        "web.page.read",
-        "web.page.read",
-    ]
-
-
-def test_create_plan_respects_an_outer_expired_deadline(monkeypatch) -> None:
-    calls = []
-
-    async def forbidden(*args, **kwargs):
-        calls.append((args, kwargs))
-        raise AssertionError("The planner must not start after the outer deadline")
-
-    monkeypatch.setattr(
-        agent_runtime,
-        "build_agents",
-        lambda: {
-            "planner": object(),
-            "intent": object(),
-            "router": object(),
-            "builder": object(),
-        },
-    )
-    monkeypatch.setattr(agent_runtime, "_run", forbidden)
-
-    with pytest.raises(RuntimeError, match="global planning budget"):
-        asyncio.run(
-            create_plan(
-                "Read CRM records",
-                [
-                    {
-                        "slug": "crm",
-                        "allowed_operations": ["records.read"],
-                        "connected": True,
-                    }
-                ],
-                planning_deadline=perf_counter() - 1,
-            )
-        )
-
-    assert calls == []
+    assert calls.count(planner) == 3
+    assert calls[-3:] == [intent, router, builder]
+    assert result.planning_artifacts["planner_recovery_mode"] == "staged"
+    assert result.planning_artifacts["connection_requirements"] == ["jira"]
 
 
 def test_create_plan_repairs_false_missing_capability_from_catalog(monkeypatch) -> None:

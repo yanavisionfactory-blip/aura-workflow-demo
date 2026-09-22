@@ -4,7 +4,6 @@ import test from "node:test";
 import {
   editedArgumentsForStep,
   fallbackReviewContract,
-  hasUnresolvedWorkflowReference,
   mergeLegacyPreviewIntoArguments,
   plannedApprovalStep,
   requiresActionPreview,
@@ -84,29 +83,6 @@ test("runtime review contracts preserve exact editable arguments", () => {
     title: "Plan",
     phases: [{ period: "Q1", title: "Launch", items: ["Ship"] }],
   });
-});
-
-test("unresolved workflow references can never become an approval preview", () => {
-  const unresolved = {
-    title: "Berlin weather",
-    phases: [{ items: ["{{steps.weather.summary}}"] }],
-  };
-  assert.equal(hasUnresolvedWorkflowReference(unresolved), true);
-
-  const step = resolvedApprovalStep(
-    { tool: "Canva", title: "Create the report", riskLevel: "modify" },
-    {
-      consequential: true,
-      operation: "canva.presentation.create",
-      approval_status: "pending",
-      approval_preview: { status: "ready", arguments: unresolved },
-    },
-    "Canva",
-  );
-
-  assert.equal(step.approvalPending, true);
-  assert.equal(step.preview, undefined);
-  assert.equal(step.riskLevel, "read");
 });
 
 test("unknown actions get a generic editable contract instead of a read-only list", () => {

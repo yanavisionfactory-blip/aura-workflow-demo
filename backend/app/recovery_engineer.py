@@ -57,7 +57,6 @@ CODE_REPAIR_AFTER_BUDGET = frozenset(
         "invalid_arguments",
         "capability_drift",
         "verification_incomplete",
-        "budget_exhausted",
     }
 )
 
@@ -658,27 +657,11 @@ def _record_code_attempt(
 async def dispatch_isolated_code_repair(incident: RecoveryIncident) -> bool:
     """Dispatch only content-free incident metadata to an isolated GitHub runner."""
     settings = get_settings()
-    if not settings.recovery_code_repair_enabled:
-        incident.status = "awaiting_sandbox"
-        incident.sandbox_result = {
-            "configured": False,
-            "reason_code": "isolated_sandbox_disabled",
-        }
-        return False
-    if not settings.recovery_code_repair_configured:
+    if not settings.recovery_github_repository or not settings.recovery_github_token:
         incident.status = "awaiting_sandbox"
         incident.sandbox_result = {
             "configured": False,
             "reason_code": "isolated_sandbox_not_configured",
-        }
-        return False
-    if not re.fullmatch(
-        r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", settings.recovery_github_repository
-    ):
-        incident.status = "awaiting_sandbox"
-        incident.sandbox_result = {
-            "configured": False,
-            "reason_code": "isolated_sandbox_repository_invalid",
         }
         return False
     url = f"https://api.github.com/repos/{settings.recovery_github_repository}/dispatches"

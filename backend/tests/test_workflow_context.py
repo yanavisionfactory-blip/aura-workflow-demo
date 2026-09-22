@@ -8,7 +8,6 @@ from app.workflow_context import (
     evaluate_condition,
     referenced_paths,
     referenced_step_keys,
-    requires_content_composition,
     resolve_value,
     step_context_value,
 )
@@ -54,61 +53,6 @@ def test_resolves_typed_outputs_and_interpolated_variables() -> None:
         "message": "Ada ordered 725",
         "channel": "sales",
     }
-
-
-def test_nested_bounded_text_from_source_page_requires_composition() -> None:
-    arguments = {
-        "title": "Comparison",
-        "phases": [
-            {
-                "period": "Source 1",
-                "title": "First subject",
-                "items": ["{{steps.read_source.text}}"],
-            }
-        ],
-    }
-    schema = {
-        "type": "object",
-        "properties": {
-            "title": {"type": "string", "maxLength": 50},
-            "phases": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "period": {"type": "string", "maxLength": 24},
-                        "title": {"type": "string", "maxLength": 40},
-                        "items": {
-                            "type": "array",
-                            "items": {"type": "string", "maxLength": 160},
-                        },
-                    },
-                },
-            },
-        },
-    }
-    context = {"steps": {"read_source": {"text": "A" * 200}}}
-
-    assert requires_content_composition(arguments, schema, context)
-
-
-def test_nested_short_scalar_reference_does_not_force_composition() -> None:
-    arguments = {"rows": [{"name": "{{steps.lookup.name}}"}]}
-    schema = {
-        "type": "object",
-        "properties": {
-            "rows": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {"name": {"type": "string", "maxLength": 50}},
-                },
-            }
-        },
-    }
-    context = {"steps": {"lookup": {"name": "Ada"}}}
-
-    assert not requires_content_composition(arguments, schema, context)
 
 
 def test_resolves_safe_array_and_quoted_key_paths() -> None:

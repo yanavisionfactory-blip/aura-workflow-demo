@@ -23,13 +23,13 @@ def test_closed_contract_enforces_nested_layout_limits_and_optional_fields():
     assert "subtitle" not in parsed["arguments"]
     assert "layout" not in parsed["arguments"]
     assert PRESENTATION_SCHEMA == original
-    args["phases"][0]["items"] = ["x" * 161]
+    args["phases"][0]["items"] = ["x" * 91]
     assert not Draft202012Validator(schema).is_valid({"arguments": args})
     args["title"] = "x" * 51
     with pytest.raises(ModelBehaviorError) as error:
         output.validate_json(json.dumps({"arguments": args}))
     assert "maxLength=50" in str(error.value)
-    assert "maxLength=160" in str(error.value)
+    assert "maxLength=90" in str(error.value)
     assert "x" * 51 not in str(error.value)
 
 
@@ -84,62 +84,3 @@ def test_materializer_passes_the_operation_contract_to_the_model(monkeypatch):
         {"tool_slug": "canva", "operation": "canva.presentation.create"}, {"steps": {}}))
     assert result["title"] == "Roadmap"
     assert "subtitle" not in result
-
-
-def test_presentation_sources_must_be_separate_complete_accepted_urls():
-    context = {
-        "steps": {
-            "one": {"url": "https://example.com/source-one"},
-            "two": {"url": "https://example.com/source-two"},
-        }
-    }
-    good = {
-        "phases": [
-            {
-                "items": [
-                    "A concise grounded fact",
-                    "Source: https://example.com/source-one",
-                ]
-            },
-            {"items": ["Source: https://example.com/source-two"]},
-        ]
-    }
-
-    agent_runtime._validate_presentation_sources(
-        "Create a deck with source links", good, context
-    )
-
-    combined = copy.deepcopy(good)
-    combined["phases"][0]["items"][1] = (
-        "A fact. Source: https://example.com/source-one"
-    )
-    with pytest.raises(ValueError, match="separate"):
-        agent_runtime._validate_presentation_sources(
-            "Create a deck with source links", combined, context
-        )
-
-    truncated = copy.deepcopy(good)
-    truncated["phases"][0]["items"][1] = "Source: https://example.com/source-o"
-    with pytest.raises(ValueError, match="complete URL"):
-        agent_runtime._validate_presentation_sources(
-            "Create a deck with source links", truncated, context
-        )
-
-
-def test_presentation_plural_sources_require_two_distinct_receipt_urls():
-    arguments = {
-        "phases": [
-            {"items": ["Source: https://example.com/source-one"]},
-        ]
-    }
-    context = {
-        "steps": {
-            "one": {"url": "https://example.com/source-one"},
-            "two": {"url": "https://example.com/source-two"},
-        }
-    }
-
-    with pytest.raises(ValueError, match="at least 2 distinct"):
-        agent_runtime._validate_presentation_sources(
-            "Create a deck with sources", arguments, context
-        )

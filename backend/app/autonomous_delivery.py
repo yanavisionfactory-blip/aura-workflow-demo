@@ -351,8 +351,6 @@ async def _safe_options(
     settings = get_settings()
     delay = _delay(recovery_counter(state.get("rounds")) + 1)
     if steps and all(step.status in {StepStatus.completed, StepStatus.skipped} for step in steps):
-        if (run.execution_context or {}).get("final_review_repair_attempted"):
-            return []
         if (
             recovery_counter(state.get("review_recoveries"))
             < settings.max_autonomous_review_recoveries
@@ -375,33 +373,11 @@ async def _safe_options(
         )
     if not step:
         return []
-    if (run.execution_context or {}).get("final_evidence_repair_step_id") == step.id:
-        # The final verifier supplied new evidence requirements. The bounded
-        # repair planner must change this read; replaying its old arguments
-        # would only reproduce the same insufficient receipt.
-        return []
     per_step = recovery_counter(state["step_recoveries"].get(step.id))
     recorded = isinstance(step.output, dict) and "provider_result" in step.output
     if recorded:
         if per_step >= settings.max_autonomous_step_recoveries:
             return []
-        # A rejected read receipt is safe to obtain again. Re-reviewing the
-        # identical provider payload cannot repair missing/empty evidence and
-        # previously consumed the whole recovery budget without making
-        # progress. Writes keep the existing receipt-only path so an uncertain
-        # external effect can never be repeated.
-        consequential = step.consequential or operation_scope(step.operation) != "read"
-        outcome_status = recovery_mapping(step.output.get("outcome_check")).get("status")
-        if not consequential and outcome_status != "pending":
-            return [
-                AutonomousRecoveryOption(
-                    key="retry_rejected_read",
-                    action="retry_step",
-                    step_id=step.id,
-                    reason_code="recorded_read_failed_review",
-                    delay_seconds=delay,
-                )
-            ]
         return [
             AutonomousRecoveryOption(
                 key="retry_recorded_review",
@@ -838,12 +814,6 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
                     **state["attempt_offsets"],
                     step.id: attempt_count,
                 }
-                if selected.reason_code == "recorded_read_failed_review":
-                    # StepAttempt and audit rows retain the prior observation.
-                    # Remove it from the executable checkpoint so the next
-                    # delivery performs a fresh safe read instead of resuming
-                    # the same failed review.
-                    step.output = {}
             step.status = StepStatus.pending
             if step.approval_id and selected.action not in {
                 "retry_recorded_review",

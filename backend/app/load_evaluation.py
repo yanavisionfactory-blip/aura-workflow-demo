@@ -72,29 +72,6 @@ async def evaluate(url, *, samples=30, concurrencies=(1, 2, 4, 8), provider_dela
     settings = get_settings()
     reports = []
     pages = {}
-
-    def weather_result(summary="Deterministic forecast"):
-        day = {
-            "location": "Fixture",
-            "date": "2026-01-01",
-            "summary": summary,
-            "temperature_high": 20,
-            "temperature_low": 11,
-            "precipitation_probability": 15,
-            "wind_speed": 12,
-            "weather_code": 1,
-        }
-        return {
-            **day,
-            "forecasts": [day],
-            "forecast_days": 1,
-            "max_precipitation_probability": 15,
-            "max_wind_speed": 12,
-            "updated_at": "2026-01-01T08:00:00Z",
-            "source": "Fixture Weather",
-            "source_url": "https://example.com/weather",
-        }
-
     async def provider(self, operation, arguments):
         if operation == "notion.page.create":
             await asyncio.sleep(provider_delay)
@@ -107,7 +84,7 @@ async def evaluate(url, *, samples=30, concurrencies=(1, 2, 4, 8), provider_dela
         if operation != "weather.forecast":
             raise ValueError("Load fixture forbids external provider operations")
         await asyncio.sleep(provider_delay)
-        return weather_result()
+        return {"location": "Fixture", "date": "2026-01-01", "summary": "Deterministic forecast"}
     async def critic(*args):
         await asyncio.sleep(model_delay)
         return CriticDecision(action="accept")
@@ -220,10 +197,7 @@ async def evaluate(url, *, samples=30, concurrencies=(1, 2, 4, 8), provider_dela
                                 session.add(step); await session.flush()
                                 if workload == "receipt_resume" and i == 0:
                                     # Provider receipt survived an interrupted delivery; review was not completed.
-                                    step.output = {
-                                        "provider_result": weather_result("Saved forecast"),
-                                        "resolved_arguments": spec.arguments,
-                                    }
+                                    step.output = {"provider_result": {"location": "Fixture", "date": "2026-01-01", "summary": "Saved forecast"}, "resolved_arguments": spec.arguments}
                                     session.add(StepAttempt(workspace_id=workspace, run_id=rid, step_id=step.id, attempt_number=1,
                                         status="succeeded", tool_slug="aura", operation="weather.forecast"))
                             await session.commit()

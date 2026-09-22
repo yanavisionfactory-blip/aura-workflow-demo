@@ -10,6 +10,7 @@ import {
   FileDown,
   FileText,
   MailCheck,
+  Paperclip,
   Plus,
   Presentation,
   RefreshCw,
@@ -20,9 +21,8 @@ import AccessRequestModal from "./AccessRequestModal";
 import BreakdownTable from "./BreakdownTable";
 import ScheduleModal from "./ScheduleModal";
 import CreatorApprovalList from "./CreatorApprovalList";
-import ResultContent from "./ResultContent";
 import { buildSummaryText } from "@/lib/auraSummary";
-import { resultArtifacts, resultKpis, selectPrimaryOutcome } from "@/lib/resultPresentation.mjs";
+import { meaningfulMetrics, selectPrimaryOutcome, supportingReceipts } from "@/lib/resultPresentation.mjs";
 
 export default function ResultsView({
   results,
@@ -42,25 +42,16 @@ export default function ResultsView({
   const [showSchedule, setShowSchedule] = useState(false);
 
   const primaryResult = useMemo(() => selectPrimaryOutcome(results), [results]);
-  const artifacts = useMemo(
-    () => resultArtifacts(activity || [], primaryResult),
-    [activity, primaryResult]
+  const metrics = useMemo(() => meaningfulMetrics(results.metrics || []), [results.metrics]);
+  const receipts = useMemo(
+    () => supportingReceipts(
+      results,
+      activity || [],
+      primaryResult,
+      results.resultPresentation
+    ),
+    [activity, primaryResult, results]
   );
-  const metrics = useMemo(
-    () => resultKpis(results.metrics || [], activity || [], artifacts, results.status),
-    [activity, artifacts, results.metrics, results.status]
-  );
-  const toolsUsed = useMemo(() => {
-    const grouped = new Map();
-    for (const step of (activity || []).filter((item) => item.status === "completed")) {
-      const tool = step.tool || "AURA";
-      const current = grouped.get(tool) || { key: tool, tool, count: 0, actions: [] };
-      current.count += 1;
-      current.actions.push(step.action || "Completed tool action");
-      grouped.set(tool, current);
-    }
-    return [...grouped.values()];
-  }, [activity]);
   const creatorsOutcome = (results.outcomes || []).find((outcome) =>
     outcome.type === "creators" && outcome.items?.length > 0
   );
@@ -100,12 +91,12 @@ export default function ResultsView({
   };
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="w-full max-w-5xl mx-auto">
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="w-full max-w-3xl mx-auto">
       <motion.div
         initial={{ opacity: 0, scale: 0.96 }}
         animate={{ opacity: 1, scale: 1 }}
         transition={{ type: "spring", stiffness: 200, damping: 20 }}
-        className="mb-5 flex flex-col items-center text-center"
+        className="text-center mb-6"
       >
         <div className={`inline-flex p-3 rounded-2xl border mb-4 ${isFailure ? "bg-amber-400/10 border-amber-400/20" : "bg-emerald-400/10 border-emerald-400/20 glow-success"}`}>
           {isFailure
@@ -116,29 +107,21 @@ export default function ResultsView({
         <p className="text-sm text-muted-foreground max-w-xl mx-auto">{results.summary}</p>
       </motion.div>
 
-      <motion.section
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1 }}
-        className="mb-5"
-      >
-        <div className="mb-2.5 flex items-end justify-between gap-3">
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">Result snapshot</p>
-            <h3 className="mt-1 text-sm font-medium">Key outcomes</h3>
-          </div>
-          <span className="text-[10px] text-muted-foreground/65">Verified from this run</span>
-        </div>
-        <div className={`grid gap-3 ${metrics.length > 1 ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-1"}`}>
+      {metrics.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6"
+        >
           {metrics.map((metric, index) => (
-            <div key={`${metric.label}:${index}`} className="relative overflow-hidden rounded-2xl border border-primary/15 bg-gradient-to-br from-primary/[0.09] via-card/55 to-card/35 px-4 py-4">
-              <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/50 to-transparent" />
-              <div className="truncate text-2xl font-bold tracking-tight text-foreground">{metric.value}</div>
-              <div className="mt-1 text-xs text-muted-foreground">{metric.label}</div>
+            <div key={index} className="rounded-xl border border-white/[0.06] bg-card/40 p-4 text-center">
+              <div className="text-2xl font-bold text-primary">{metric.value}</div>
+              <div className="text-xs text-muted-foreground mt-1">{metric.label}</div>
             </div>
           ))}
-        </div>
-      </motion.section>
+        </motion.div>
+      )}
 
       <motion.section
         initial={{ opacity: 0, y: 10 }}
@@ -178,10 +161,10 @@ export default function ResultsView({
                 </div>
               ) : (
                 <>
-                  <p className="mt-4 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">Result</p>
-                  <div className="mt-2 rounded-xl border border-white/[0.07] bg-[#090f1e]/45 p-4">
-                    <ResultContent content={primaryResult.detail || results.summary} />
-                  </div>
+                  <p className="mt-4 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">Preview</p>
+                  <p className="mt-1.5 whitespace-pre-line text-sm leading-relaxed text-muted-foreground">
+                    {primaryResult.detail || results.summary}
+                  </p>
                 </>
               )}
             </div>
@@ -242,6 +225,21 @@ export default function ResultsView({
             <div className="overflow-hidden rounded-xl border border-white/[0.06] bg-[#090f1e]/55">
               <BreakdownTable breakdown={results.breakdown} />
             </div>
+          ) : primaryResult.artifact ? (
+            <div className="flex flex-col gap-3 border-t border-white/[0.06] pt-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                  <Paperclip className="h-4 w-4" />
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium">{primaryResult.artifact.title}</p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    {primaryResult.attachments?.[0]?.filename || `Created in ${primaryResult.artifact.provider}`}
+                  </p>
+                </div>
+              </div>
+              <span className="shrink-0 text-[11px] font-medium text-emerald-400">Attached and delivered</span>
+            </div>
           ) : primaryResult.items?.length > 0 ? (
             <div className="grid gap-2 border-t border-white/[0.06] pt-4 sm:grid-cols-2">
               {primaryResult.items.slice(0, 4).map((item, index) => (
@@ -255,70 +253,36 @@ export default function ResultsView({
         </div>
       </motion.section>
 
-      {(artifacts.length > 0 || toolsUsed.length > 0) && (
+      {receipts.length > 0 && (
         <motion.section
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.24 }}
-          className="mb-5 rounded-2xl border border-white/[0.07] bg-card/30 p-5"
+          className="mb-5"
         >
-          <div className="mb-4">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">Connected results</p>
-            <h3 className="mt-1 text-sm font-medium">Results in your tools</h3>
-            <p className="mt-1 text-[11px] text-muted-foreground">Open created work in the provider, or inspect the exact sources used for this result.</p>
-          </div>
-          {artifacts.length > 0 && (
-            <div className="grid gap-3 sm:grid-cols-2">
-              {artifacts.map((artifact) => (
-                <div key={artifact.key} className="overflow-hidden rounded-xl border border-white/[0.07] bg-[#090f1e]/45">
-                  {artifact.previewImage && (
-                    <img src={artifact.previewImage} alt="" className="h-32 w-full border-b border-white/[0.06] object-cover" />
-                  )}
-                  <div className="flex min-h-[7rem] flex-col p-3.5">
-                    <div className="flex items-start gap-2.5">
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-400/10">
-                        <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{artifact.provider}</p>
-                          {artifact.isPrimary && <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-medium text-primary">Primary</span>}
-                        </div>
-                        <p className="mt-1 line-clamp-2 text-sm font-medium leading-snug">{artifact.title}</p>
-                        {artifact.detail && <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted-foreground">{artifact.detail}</p>}
-                      </div>
-                    </div>
-                    {artifact.link ? (
-                      <a
-                        href={artifact.link}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="mt-3 inline-flex w-fit items-center gap-1.5 text-xs font-medium text-primary hover:underline"
-                      >
-                        {artifact.linkLabel}
-                        <ExternalLink className="h-3 w-3" />
-                      </a>
-                    ) : (
-                      <span className="mt-3 text-[11px] font-medium text-emerald-400">Completed in {artifact.provider}</span>
-                    )}
-                  </div>
+          <h3 className="mb-3 text-sm font-medium">Also completed</h3>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {receipts.map((receipt) => (
+              <div key={receipt.key} className="flex items-center gap-2.5 rounded-xl border border-white/[0.06] bg-card/30 px-3.5 py-3">
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] font-medium text-muted-foreground">{receipt.tool}</p>
+                  <p className="mt-0.5 text-sm leading-snug">{receipt.title}</p>
                 </div>
-              ))}
-            </div>
-          )}
-          {toolsUsed.length > 0 && (
-            <div className={`${artifacts.length ? "mt-4 border-t border-white/[0.06] pt-4" : ""}`}>
-              <p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">Tool actions completed</p>
-              <div className="flex flex-wrap gap-2">
-                {toolsUsed.map((item) => (
-                  <span key={item.key} className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.035] px-2.5 py-1.5 text-[11px] text-foreground/75" title={item.actions.join(" · ")}>
-                    <Check className="h-3 w-3 text-emerald-400" />
-                    {item.tool}{item.count > 1 ? ` · ${item.count} actions` : ""}
-                  </span>
-                ))}
+                {receipt.link && (
+                  <a
+                    href={receipt.link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-primary"
+                  >
+                    {receipt.linkLabel || `View in ${receipt.tool}`}
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                )}
               </div>
-            </div>
-          )}
+            ))}
+          </div>
         </motion.section>
       )}
 

@@ -11,7 +11,7 @@ import {
 } from "@/lib/auraApi";
 
 const AuthContext = createContext(null);
-const RECOVERY_DELAYS_MS = [0, 350, 900, 2500];
+const RECOVERY_DELAYS_MS = [0, 350, 900];
 
 function wait(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -51,6 +51,7 @@ export const AuthProvider = ({ children }) => {
     async function openWorkspace() {
       setIsLoadingWorkspace(true);
       setWorkspaceError(null);
+      clearWorkspace();
 
       let lastError = null;
       for (const delay of RECOVERY_DELAYS_MS) {
@@ -65,6 +66,7 @@ export const AuthProvider = ({ children }) => {
           return;
         } catch (error) {
           lastError = error;
+          clearWorkspace();
         }
       }
 

@@ -102,53 +102,6 @@ def _grounded_identity_value(value: object, evidence: object) -> bool:
     )
 
 
-def _final_evidence_query_repair(
-    proposal: StepRepair,
-    approved_step: dict,
-    failure_error: str,
-) -> StepRepair | None:
-    """Deterministically sharpen an unchanged search after final verification.
-
-    The model remains responsible for understanding the requested outcome. This
-    fallback only carries its verifier's explicit evidence requirements into an
-    already-approved, read-only search query so an identical proposal cannot
-    strand the run or start an unproductive retry loop.
-    """
-    if not failure_error.startswith("[final_evidence_incomplete]"):
-        return None
-    if (proposal.tool_slug, proposal.operation) != (
-        approved_step.get("tool_slug"),
-        approved_step.get("operation"),
-    ):
-        return None
-    arguments = deepcopy(proposal.arguments)
-    query_key = next(
-        (
-            key
-            for key in ("query", "q", "search", "search_term", "keywords")
-            if isinstance(arguments.get(key), str) and arguments[key].strip()
-        ),
-        None,
-    )
-    if query_key is None:
-        return None
-    requirements = failure_error.removeprefix("[final_evidence_incomplete]").strip()
-    if not requirements:
-        return None
-    current = arguments[query_key].strip()
-    refined = f"{current}. Find source evidence that explicitly provides: {requirements}"
-    arguments[query_key] = refined[:2000]
-    return StepRepair(
-        tool_slug=proposal.tool_slug,
-        operation=proposal.operation,
-        arguments=arguments,
-        reason=(
-            "Refine the approved read query with the final verifier's explicit "
-            "evidence requirements."
-        ),
-    )
-
-
 def delegated_read_repair_allowed(
     run: WorkflowRun,
     snapshot: ApprovalSnapshot | None,
@@ -395,38 +348,6 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
                     },
                 )
             )
-            approved_step = run.plan["steps"][step.position]
-            if not consequential_repair and (
-                (proposal.tool_slug, proposal.operation)
-                == (approved_step["tool_slug"], approved_step["operation"])
-                and proposal.arguments == approved_step.get("arguments", {})
-            ):
-                deterministic = _final_evidence_query_repair(
-                    proposal, approved_step, failure_error
-                )
-                if deterministic is not None:
-                    proposal = deterministic
-                else:
-                    # A repair that selects the same provider, operation and
-                    # arguments cannot change the outcome. Retrying it used to
-                    # reset the read-attempt cycle and could leave the UI in
-                    # "resolving" indefinitely.
-                    session.add(
-                        AuditEvent(
-                            workspace_id=workspace_id,
-                            run_id=run_id,
-                            actor="repair-planner",
-                            event_type="run.replan_no_change",
-                            payload={
-                                "step_id": step.id,
-                                "attempt": count + 1,
-                                "tool_slug": proposal.tool_slug,
-                                "operation": proposal.operation,
-                            },
-                        )
-                    )
-                    await session.commit()
-                    return False
             plan = derive_repaired_plan(
                 run.plan,
                 step.position,
@@ -502,7 +423,6 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
                 run_id, step.position, step.operation, step.arguments
             )
             step.status, step.error, step.output = StepStatus.pending, None, {}
-            step.started_at, step.completed_at = None, None
             context.setdefault("steps", {}).pop(step.step_key, None)
             for name in step.output_variables:
                 context.setdefault("vars", {}).pop(name, None)
@@ -588,7 +508,6 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
                 run_id, step.position, step.operation, step.arguments
             )
             step.status, step.error, step.output = StepStatus.pending, None, {}
-            step.started_at, step.completed_at = None, None
             context.setdefault("steps", {}).pop(step.step_key, None)
             for name in step.output_variables:
                 context.setdefault("vars", {}).pop(name, None)
@@ -672,7 +591,6 @@ async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
             run_id, step.position, step.operation, step.arguments
         )
         step.status, step.error, step.output = StepStatus.pending, None, {}
-        step.started_at, step.completed_at = None, None
         context.setdefault("steps", {}).pop(step.step_key, None)
         for name in step.output_variables:
             context.setdefault("vars", {}).pop(name, None)

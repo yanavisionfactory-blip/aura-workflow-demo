@@ -330,7 +330,7 @@ async def health() -> dict:
 
 
 def production_configuration_checks() -> dict[str, bool]:
-    checks = {
+    return {
         "clerk": settings.clerk_enabled and bool(settings.clerk_issuer),
         "authorized_parties": bool(settings.clerk_parties),
         "openai": bool(settings.openai_api_key),
@@ -338,9 +338,6 @@ def production_configuration_checks() -> dict[str, bool]:
         "credential_encryption": bool(settings.credential_encryption_key),
         "oauth_callback_registry": not oauth_registry_errors(settings),
     }
-    if settings.recovery_code_repair_enabled:
-        checks["recovery_code_repair"] = settings.recovery_code_repair_configured
-    return checks
 
 
 @app.get("/ready")
@@ -373,10 +370,6 @@ async def readiness() -> dict:
             and len(settings.connector_release_signing_key) >= 32
         ),
     }
-    recovery_code_repair_details = {
-        "enabled": settings.recovery_code_repair_enabled,
-        "configured": settings.recovery_code_repair_configured,
-    }
     if settings.recovery_scheduler_enabled:
         now = datetime.now(UTC)
         started_at = datetime.fromisoformat(scheduler_observation["started_at"])
@@ -403,7 +396,6 @@ async def readiness() -> dict:
                 "checks": checks,
                 "recovery_scheduler": scheduler_details,
                 "connector_engineer": connector_engineer_details,
-                "recovery_code_repair": recovery_code_repair_details,
             },
         )
     return {
@@ -411,7 +403,6 @@ async def readiness() -> dict:
         "checks": checks,
         "recovery_scheduler": scheduler_details,
         "connector_engineer": connector_engineer_details,
-        "recovery_code_repair": recovery_code_repair_details,
     }
 
 
@@ -2444,17 +2435,11 @@ def _requirement_accepts_tool(requirement: ConnectionRequirement, tool: ToolConn
     capability_family = (
         canonical_provider_slug(capability.split(".", 1)[0]).casefold() if capability else ""
     )
-    provider_matches = bool(
+    return bool(
         (canonical_hint and canonical_hint in providers)
         or (capability_family and capability_family in providers)
         or capability in allowed
     )
-    required = {
-        str(item).casefold()
-        for item in (requirement.required_permissions or [])
-        if str(item or "").strip()
-    }
-    return provider_matches and required.issubset(allowed)
 
 
 def _resume_after_connections(run: WorkflowRun, actor: str) -> None:
@@ -5565,17 +5550,6 @@ async def approve_plan(
             raise HTTPException(422, "Edited plan must contain the same number of reviewed steps")
         plan_data["steps"] = [step.model_dump(mode="json") for step in payload.edited_steps]
     plan = WorkflowPlan.model_validate(plan_data)
-    submitted_plan_json = plan.model_dump(mode="json")
-    for stored, planned in zip(steps, plan.steps, strict=True):
-        if stored.output.get("provider_result") is not None and (
-            planned.model_dump(mode="json")
-            != PlanStep.model_validate(run.plan["steps"][stored.position]).model_dump(
-                mode="json"
-            )
-        ):
-            raise HTTPException(
-                409, "A revised plan cannot change a step with a recorded provider result"
-            )
     tools = (
         await session.scalars(
             select(ToolConnection).where(
@@ -5591,22 +5565,7 @@ async def approve_plan(
     inventory = [
         {"slug": tool.slug, "allowed_operations": tool.allowed_operations} for tool in tools
     ]
-    # Do not retrofit a new semantic contract onto a legacy in-flight run after
-    # it already has provider receipts. New and unstarted plans always receive
-    # the proof below; completed work remains governed by its original approved
-    # snapshot so migration cannot invalidate or replay it.
-    contract_prompt = run.prompt
-    if (
-        not plan.planning_artifacts.get("request_contract")
-        and any(step.output.get("provider_result") is not None for step in steps)
-    ):
-        contract_prompt = ""
-    fixes = deterministic_plan_fixes(
-        plan,
-        inventory,
-        set((run.inputs or {}).keys()),
-        contract_prompt,
-    )
+    fixes = deterministic_plan_fixes(plan, inventory, set((run.inputs or {}).keys()))
     fixes.extend(verification_permission_fixes(plan, inventory))
     if fixes:
         raise HTTPException(422, {"message": "Plan failed authorization", "fixes": fixes})
@@ -5621,7 +5580,7 @@ async def approve_plan(
     ).all()
     manifests_by_tool_id = {manifest.tool_id: manifest.manifest for manifest in manifests}
     tools_by_slug = {tool.slug: tool for tool in tools}
-    original_plan_json = submitted_plan_json
+    original_plan_json = plan.model_dump(mode="json")
     argument_fixes: list[str] = []
     for index, planned_step in enumerate(plan.steps, start=1):
         tool = tools_by_slug.get(planned_step.tool_slug)
@@ -5652,6 +5611,14 @@ async def approve_plan(
         raise HTTPException(
             422, {"message": "AURA is still preparing this workflow", "fixes": argument_fixes}
         )
+    for stored, planned in zip(steps, plan.steps, strict=True):
+        if stored.output.get("provider_result") is not None and (
+            planned.model_dump(mode="json")
+            != PlanStep.model_validate(run.plan["steps"][stored.position]).model_dump(mode="json")
+        ):
+            raise HTTPException(
+                409, "A revised plan cannot change a step with a recorded provider result"
+            )
     normalized_arguments = plan.model_dump(mode="json") != original_plan_json
 
     latest_version = await session.scalar(

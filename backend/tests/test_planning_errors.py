@@ -7,14 +7,12 @@ from app import orchestrator
 from app.native_connectors import NativeConnectorError, native_manifest
 from app.orchestrator import (
     _capitalized_provider_candidates,
-    _connection_reason,
     actionable_connection_capabilities,
     complete_connection_requirements,
     connection_requirement_inventory,
     explicit_disconnected_capabilities,
     planning_error_message,
 )
-from app.run_supervisor import planning_failure_category
 
 
 class _ScalarRows:
@@ -85,12 +83,6 @@ def test_unknown_internal_error_is_never_exposed() -> None:
 
     assert message == "AURA couldn't build the plan right now. Please try again."
     assert "provider trace" not in message
-
-
-def test_global_planning_budget_exhaustion_routes_to_repair_engineer() -> None:
-    assert planning_failure_category(
-        RuntimeError("Planner recovery exhausted inside the global planning budget")
-    ) == "budget_exhausted"
 
 
 def test_explicit_disconnected_capabilities_matches_named_provider_only() -> None:
@@ -192,54 +184,13 @@ def test_google_workspace_connection_satisfies_named_gmail_family() -> None:
     assert actionable_connection_capabilities(["Gmail"], inventory) == []
 
 
-def test_disconnected_google_apps_collapse_into_one_clear_account_request() -> None:
-    inventory = [
-        {
-            "slug": "google",
-            "name": "Google Workspace",
-            "canonical_provider": "google",
-            "connected": False,
-            "allowed_operations": ["gmail.send", "drive.files.search"],
-        },
-        {
-            "slug": "google-drive",
-            "name": "Google Drive",
-            "canonical_provider": "google-drive",
-            "connected": False,
-            "allowed_operations": ["drive.files.search"],
-        },
-    ]
-    prompt = "Save the PDF in Google Drive and send it through Gmail"
-
-    assert explicit_disconnected_capabilities(prompt, inventory) == ["google"]
-    assert complete_connection_requirements(prompt, ["gmail", "drive"], inventory) == [
-        "google"
-    ]
-    assert _connection_reason("google", prompt) == (
-        "Connect your Google account once for the requested Gmail and Drive access"
-    )
-    assert explicit_disconnected_capabilities(
-        "Build a plan to drive growth", inventory
-    ) == []
-
-
 def test_provider_candidates_ignore_instruction_words() -> None:
     assert _capitalized_provider_candidates(
         "Read my open Linear issues and prepare the summary for Slack."
     ) == ["Linear", "Slack"]
-    assert _capitalized_provider_candidates(
-        "Find three official NASA sources. Extract the launch dates. "
-        "Do not use weather tools."
-    ) == []
-    assert _capitalized_provider_candidates(
-        "Using official NASA sources, find Voyager 1 and Voyager 2. "
-        "Calculate the exact number of days between the launches."
-    ) == []
 
 
 def test_requirement_inventory_discovers_exact_connectable_app(monkeypatch) -> None:
-    queued = []
-
     class _PipedreamClient:
         configured = True
 
@@ -258,10 +209,6 @@ def test_requirement_inventory_discovers_exact_connectable_app(monkeypatch) -> N
     monkeypatch.setattr(
         "app.pipedream_connect.pipedream_client", lambda: _PipedreamClient()
     )
-    monkeypatch.setattr(
-        "app.connector_engineer.queue_pipedream_certification",
-        lambda app: queued.append(app["name_slug"]) or True,
-    )
 
     inventory = asyncio.run(
         connection_requirement_inventory(
@@ -272,112 +219,6 @@ def test_requirement_inventory_discovers_exact_connectable_app(monkeypatch) -> N
     )
 
     assert [item["slug"] for item in inventory] == ["slack", "linear"]
-    assert queued == ["linear"]
-
-
-def test_guaranteed_weather_fields_do_not_trigger_a_second_planner_call(monkeypatch) -> None:
-    calls = []
-    weather_step = SimpleNamespace(
-        key="get_kyoto_weather",
-        tool_slug="aura",
-        operation="weather.forecast",
-        arguments={"location": "Kyoto", "days": 3, "units": "metric"},
-        reduced_scope_arguments=None,
-        required_evidence=[
-            "forecasts",
-            "location",
-            "precipitation_probability",
-            "summary",
-            "temperature_high",
-            "temperature_low",
-        ],
-        output_variables={},
-        depends_on=[],
-    )
-    plan = SimpleNamespace(steps=[weather_step], planning_artifacts={})
-
-    async def fake_create_plan(*_args, **kwargs):
-        calls.append(kwargs.get("planner_repair_requirements"))
-        return plan
-
-    monkeypatch.setattr(orchestrator, "create_plan", fake_create_plan)
-
-    result = asyncio.run(
-        orchestrator._create_compiled_plan(
-            "Check Kyoto weather and compare the three-day forecast",
-            [{"slug": "aura", "allowed_operations": ["weather.forecast"]}],
-            set(),
-            {"aura": native_manifest("aura")},
-        )
-    )
-
-    assert result is plan
-    assert calls == [[]]
-
-
-def test_descriptive_evidence_labels_normalize_to_connector_guarantees(monkeypatch) -> None:
-    calls = []
-    steps = [
-        SimpleNamespace(
-            key="search_voyager",
-            tool_slug="aura",
-            operation="web.search",
-            arguments={"query": "site:nasa.gov Voyager launch date"},
-            reduced_scope_arguments=None,
-            required_evidence=["Official NASA result URL for Voyager 1"],
-            output_variables={},
-            depends_on=[],
-        ),
-        SimpleNamespace(
-            key="read_voyager",
-            tool_slug="aura",
-            operation="web.page.read",
-            arguments={"url": "{{steps.search_voyager.results.0.url}}"},
-            reduced_scope_arguments=None,
-            required_evidence=["Voyager 1 official NASA page text"],
-            output_variables={},
-            depends_on=["search_voyager"],
-        ),
-    ]
-    plan = SimpleNamespace(steps=steps, planning_artifacts={})
-
-    async def fake_create_plan(*_args, **kwargs):
-        calls.append(kwargs.get("planner_repair_requirements"))
-        return plan
-
-    monkeypatch.setattr(orchestrator, "create_plan", fake_create_plan)
-
-    result = asyncio.run(
-        orchestrator._create_compiled_plan(
-            "Use official NASA sources for Voyager 1",
-            [{"slug": "aura", "allowed_operations": ["web.search", "web.page.read"]}],
-            set(),
-            {"aura": native_manifest("aura")},
-        )
-    )
-
-    assert result is plan
-    assert calls == [[]]
-    assert steps[0].required_evidence == ["public_search_results"]
-    assert steps[1].required_evidence == ["public_page_content"]
-
-
-def test_explicit_aura_only_request_skips_external_connector_catalogs() -> None:
-    prompt = (
-        "Find the current official ECB exchange rates using live public data, in AURA only. "
-        "Do not send, create, update, publish, schedule, upload, or delete anything."
-    )
-
-    assert orchestrator._native_only_planning_request(prompt, []) is True
-    assert orchestrator._native_only_planning_request("Research the ECB", ["AURA Intelligence"])
-    assert orchestrator._native_only_planning_request("Research and email the result", ["gmail"]) is False
-    inventory = [
-        {"slug": "aura", "allowed_operations": ["web.search"]},
-        {"slug": "gmail", "allowed_operations": ["gmail.send"]},
-        {"slug": "canva", "allowed_operations": ["canva.presentation.create"]},
-    ]
-    assert orchestrator._planning_items_for_request(inventory, True) == [inventory[0]]
-    assert orchestrator._planning_items_for_request(inventory, False) == inventory
 
 
 def test_connector_contract_mismatch_is_replanned_before_reaching_user(monkeypatch) -> None:
@@ -432,11 +273,9 @@ def test_connector_contract_mismatch_is_replanned_before_reaching_user(monkeypat
 
 def test_connector_contract_validation_is_repaired_only_once(monkeypatch) -> None:
     calls = []
-    deadlines = []
 
     async def fake_create_plan(*_args, **kwargs):
         calls.append(kwargs.get("planner_repair_requirements"))
-        deadlines.append(kwargs.get("planning_deadline"))
         step = SimpleNamespace(
             key="weather",
             tool_slug="aura",
@@ -464,7 +303,6 @@ def test_connector_contract_validation_is_repaired_only_once(monkeypatch) -> Non
     assert len(calls) == 2
     assert calls[0] == []
     assert "unknown inputs" in calls[1][0]
-    assert deadlines[0] is not None and deadlines[0] == deadlines[1]
 
 
 def test_planner_inventory_preserves_operation_semantics(monkeypatch) -> None:

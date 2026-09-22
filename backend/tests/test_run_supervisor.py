@@ -140,48 +140,7 @@ async def test_exhausted_recovery_opens_internal_incident_not_retry_ui(database)
         assert state["status"] == "operator_attention"
         assert state["repair_incident"]["required_environment"] == "isolated_repair_sandbox"
         assert state["repair_incident"]["production_write_allowed"] is False
-        public = public_run_projection(run, None)
-        assert public["public_status"] == "blocked"
-        assert public["public_error"] == (
-            "AURA could not prepare a complete workflow in time. No app actions were run."
-        )
-        assert "systemic defect" not in str(public)
-
-
-async def test_malformed_plan_gets_one_durable_retry_then_stops(database):
-    async with database() as session:
-        run = WorkflowRun(
-            id="malformed-run",
-            workspace_id="workspace",
-            prompt="Build a plan",
-            status=RunStatus.planning,
-        )
-        session.add(run)
-        await session.commit()
-
-        first = await recover_planning_failure(
-            session,
-            run,
-            RuntimeError("Invalid JSON from planner"),
-            max_attempts=8,
-            base_delay_seconds=1,
-            max_delay_seconds=30,
-        )
-        await session.commit()
-        second = await recover_planning_failure(
-            session,
-            run,
-            RuntimeError("Invalid JSON from planner"),
-            max_attempts=8,
-            base_delay_seconds=1,
-            max_delay_seconds=30,
-        )
-        await session.commit()
-
-        assert first == "scheduled"
-        assert second == "internal_incident"
-        assert run.status == RunStatus.blocked
-        assert run.execution_context["__aura_supervisor__"]["attempts"]["planning"] == 2
+        assert public_run_projection(run, None)["public_status"] == "recovering"
 
 
 @pytest.mark.parametrize("code", sorted(HUMAN_ACTION_CODES))

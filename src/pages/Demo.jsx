@@ -42,28 +42,22 @@ import {
   approvalStartFailure,
   planningConnectionRequirements,
   planningDisposition,
-  planningRecoveryGraceEligible,
-  publicPlanningFailure,
+  promptConnectionRequirements,
   shouldStartFreshPlanningRun,
 } from "@/lib/planningFlow.mjs";
 import { hasDurablePlan, planningRequestPrompt } from "@/lib/runtimePlan.mjs";
 import { weatherStepTitle } from "@/lib/planPresentation.mjs";
+import { instantLanguagePlan, languageDraftPrompt } from "@/lib/languagePlan.mjs";
 import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
 import {
   editedArgumentsForStep,
-  hasUnresolvedWorkflowReference,
   plannedApprovalStep,
   requiresActionPreview,
   resolvedApprovalStep,
 } from "@/lib/approvalReview.mjs";
 
 const STEP_DURATION = 2.6;
-// The backend owns a 35-second end-to-end model budget after capability
-// discovery. Keep the durable UI poll alive long enough to receive that
-// terminal state instead of presenting a false failure while a valid plan is
-// being committed by the worker.
-const PLANNING_WAIT_TIMEOUT_MS = 45_000;
-const PLANNING_RECOVERY_GRACE_MS = 5_000;
+const PLANNING_WAIT_TIMEOUT_MS = 30_000;
 const PLANNING_POLL_INTERVAL_MS = 750;
 const PLANNING_TRANSIENT_FAILURE_LIMIT = 3;
 
@@ -390,9 +384,10 @@ export default function Demo() {
   const pythonRunIdRef = useRef(null);
   const pythonPlanRef = useRef(null);
   const pythonPollGenerationRef = useRef(0);
-  const planningRequestGenerationRef = useRef(0);
+  const languageDraftGenerationRef = useRef(0);
   const handleConfirmRef = useRef(null);
   const startPythonExecutionRef = useRef(null);
+  const queuedPlanStartRef = useRef(null);
   const preparedActionPreviewRef = useRef(false);
   const runRequestKeyRef = useRef(null);
   const lastPlanningIntentRef = useRef("");
@@ -446,10 +441,11 @@ export default function Demo() {
   const reset = useCallback(() => {
     clearTimeouts();
     pythonPollGenerationRef.current += 1;
-    planningRequestGenerationRef.current += 1;
+    languageDraftGenerationRef.current += 1;
     runRequestKeyRef.current = null;
     lastPlanningIntentRef.current = "";
     historySavePromiseRef.current = null;
+    queuedPlanStartRef.current = null;
     preparedActionPreviewRef.current = false;
     pendingMock.current = null;
     resolvedErrorRef.current = false;
@@ -484,6 +480,7 @@ export default function Demo() {
     else if (phase === "plan") setPhase("confirm");
     else if (phase === "preview") setPhase("plan");
     else if (phase === "executing" || phase === "error") {
+      queuedPlanStartRef.current = null;
       setPhase("plan");
     }
     else if (phase === "results") reset();
@@ -559,13 +556,52 @@ Write ONE clear, conversational sentence restating what they want — but offer 
       setInterpretation(editedInterpretation);
       if (!allowLegacyPlanner) {
         const confirmedIntent = editedInterpretation.trim() || originalPromptRef.current;
-        const planningRequestGeneration = ++planningRequestGenerationRef.current;
-        // Publish exactly one authoritative plan. Keeping the loading state
-        // mounted until durable compilation finishes prevents the UI from
-        // showing provisional steps and replacing them moments later.
-        setPlan(null);
-        setPlanLoading(true);
+        const explicitRequirements = promptConnectionRequirements(
+          confirmedIntent,
+          CATALOG.map((tool) => ({ ...tool, slug: tool.provider })),
+          getAllConnections(),
+        );
+        const immediatePlan = {
+          ...instantLanguagePlan(confirmedIntent, CATALOG, userSelectedToolsRef.current),
+          connectionRequirements: explicitRequirements,
+        };
+        const languageDraftGeneration = ++languageDraftGenerationRef.current;
+
+        // The readable plan is independent from connector readiness. Show a
+        // useful language draft now; refine and compile it in parallel.
+        setPlan(immediatePlan);
+        setPlanLoading(false);
         setPhase("plan");
+
+        aura.integrations.Core
+          .InvokeLLM({
+            prompt: languageDraftPrompt(confirmedIntent, userSelectedToolsRef.current),
+            response_json_schema: PLAN_SCHEMA,
+          })
+          .then((draft) => {
+            if (
+              languageDraftGenerationRef.current !== languageDraftGeneration
+              || !Array.isArray(draft?.steps)
+              || draft.steps.length === 0
+            ) return;
+            setPlan((current) => current?.provisional ? {
+              ...draft,
+              steps: draft.steps.map((step) => ({
+                ...step,
+                iWill: firstPersonStepCopy(step.iWill || step.reason),
+              })),
+              interpretation: draft.interpretation || confirmedIntent,
+              estimatedTime: "Plan ready — validating executable details backstage",
+              connectionRequirements: current.connectionRequirements || explicitRequirements,
+              provisional: true,
+              compileState: current.compileState || "validating",
+              compileError: current.compileError,
+            } : current);
+          })
+          .catch(() => {
+            // The immediate language draft is already visible. Exact execution
+            // compilation remains authoritative and continues independently.
+          });
 
         return (async () => {
           try {
@@ -586,11 +622,9 @@ Write ONE clear, conversational sentence restating what they want — but offer 
                 forgetActivePythonRun(previousRunId);
               }
             }
-            if (planningRequestGenerationRef.current !== planningRequestGeneration) return;
             lastPlanningIntentRef.current = confirmedIntent;
             const planningPrompt = planningRequestPrompt(confirmedIntent, revisionInstruction);
-            let planningDeadline = Date.now() + PLANNING_WAIT_TIMEOUT_MS;
-            let planningRecoveryGraceUsed = false;
+            const planningDeadline = Date.now() + PLANNING_WAIT_TIMEOUT_MS;
             runRequestKeyRef.current ||= globalThis.crypto?.randomUUID?.()
               || `aura-${Date.now()}-${Math.random().toString(36).slice(2)}`;
             const resources = attachedResourcesRef.current || {};
@@ -603,31 +637,36 @@ Write ONE clear, conversational sentence restating what they want — but offer 
                 size,
               })),
             });
-            if (planningRequestGenerationRef.current !== planningRequestGeneration) {
-              await cancelPythonRun(created.id).catch(() => {});
-              forgetActivePythonRun(created.id);
-              return;
-            }
             pythonRunIdRef.current = created.id;
             const generation = ++pythonPollGenerationRef.current;
             let run;
             for (;;) {
+              if (Date.now() >= planningDeadline) {
+                throw new Error("AURA couldn't prepare this workflow within 30 seconds.");
+              }
               run = await getPythonRunResilient(
                 created.id,
                 generation,
                 PLANNING_TRANSIENT_FAILURE_LIMIT,
               );
               if (!run) return;
-              if (planningRequestGenerationRef.current !== planningRequestGeneration) return;
               const disposition = planningDisposition(run);
               if (disposition === "review") break;
               if (disposition === "connection") {
+                queuedPlanStartRef.current = null;
                 setPhase("plan");
                 pythonPlanRef.current = run.plan || null;
                 const connectionPlan = uiConnectionPlanFromRun(run, editedInterpretation);
-                setPlan({
+                setPlan((current) => connectionPlan.steps.length ? {
                   ...connectionPlan,
                   provisional: false,
+                  compileState: "waiting_for_connection",
+                } : {
+                  ...(current || immediatePlan),
+                  ...connectionPlan,
+                  workflowName: connectionPlan.workflowName || current?.workflowName || immediatePlan.workflowName,
+                  steps: current?.steps?.length ? current.steps : immediatePlan.steps,
+                  provisional: true,
                   compileState: "waiting_for_connection",
                 });
                 return;
@@ -635,18 +674,6 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               if (disposition === "unavailable") throw new Error(
                 run.error || "The execution backend needs more setup before it can build this plan."
               );
-              if (Date.now() >= planningDeadline) {
-                if (!planningRecoveryGraceUsed && planningRecoveryGraceEligible(run)) {
-                  planningRecoveryGraceUsed = true;
-                  planningDeadline = Date.now() + PLANNING_RECOVERY_GRACE_MS;
-                } else {
-                  const timeout = new Error(
-                    "AURA is still preparing this workflow in the background."
-                  );
-                  timeout.preserveActiveRun = planningRecoveryGraceEligible(run);
-                  throw timeout;
-                }
-              }
               await new Promise((resolve) => setTimeout(resolve, PLANNING_POLL_INTERVAL_MS));
             }
             pythonPlanRef.current = run.plan;
@@ -656,29 +683,40 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               compileState: "ready",
             };
             setPlan(compiledPlan);
+            const queuedStart = queuedPlanStartRef.current;
+            if (queuedStart) {
+              queuedPlanStartRef.current = null;
+              approvedStepsRef.current = compiledPlan.steps;
+              setApprovedSteps(compiledPlan.steps);
+              setWorkflowName(queuedStart.name || compiledPlan.workflowName || "");
+              if (requiresActionPreview(compiledPlan.steps, queuedStart.autoApprove)) {
+                preparedActionPreviewRef.current = false;
+                setPhase("preview");
+                return;
+              }
+              startPythonExecutionRef.current?.();
+            }
           } catch (error) {
-            if (planningRequestGenerationRef.current !== planningRequestGeneration) return;
-            console.warn("AURA could not build the authoritative workflow plan", error);
-            if (!error?.preserveActiveRun) {
-              if (pythonRunIdRef.current) forgetActivePythonRun(pythonRunIdRef.current);
-              pythonRunIdRef.current = null;
-              pythonPlanRef.current = null;
-              runRequestKeyRef.current = null;
-            }
-            setPlan({
-              workflowName: "",
-              interpretation: confirmedIntent,
-              estimatedTime: "Planning stopped safely",
-              steps: [],
-              error: publicPlanningFailure(error),
-              provisional: false,
+            console.warn("Executable planning unavailable; the language plan remains visible", error);
+            const queuedStart = queuedPlanStartRef.current;
+            queuedPlanStartRef.current = null;
+            if (queuedStart) setPhase("plan");
+            if (pythonRunIdRef.current) forgetActivePythonRun(pythonRunIdRef.current);
+            pythonRunIdRef.current = null;
+            pythonPlanRef.current = null;
+            runRequestKeyRef.current = null;
+            setPlan((current) => ({
+              ...(current || immediatePlan),
+              estimatedTime: error?.message?.includes("within 30 seconds")
+                ? "Plan ready — preparation timed out"
+                : "Plan ready — one execution detail needs repair",
+              connectionRequirements: explicitRequirements,
+              provisional: true,
               compileState: "blocked",
-              compileError: "",
-            });
+              compileError: error?.message || "AURA couldn't prepare this workflow quickly enough.",
+            }));
           } finally {
-            if (planningRequestGenerationRef.current === planningRequestGeneration) {
-              setPlanLoading(false);
-            }
+            setPlanLoading(false);
           }
         })();
       }
@@ -783,6 +821,11 @@ Rules:
   );
 
   const handleRetryPlanning = useCallback(() => {
+    const failedRunId = pythonRunIdRef.current;
+    if (failedRunId) forgetActivePythonRun(failedRunId);
+    pythonRunIdRef.current = null;
+    pythonPlanRef.current = null;
+    runRequestKeyRef.current = null;
     return handleConfirm(interpretation);
   }, [handleConfirm, interpretation]);
 
@@ -791,7 +834,6 @@ Rules:
     const connections = Array.isArray(recoveries) ? recoveries : [];
     const connectionIds = [...new Set(connections.map((item) => item?.connectionId).filter(Boolean))];
     if (!runId || connectionIds.length === 0) return handleRetryPlanning();
-    setPlanLoading(true);
     setPlan((current) => current ? {
       ...current,
       provisional: true,
@@ -948,18 +990,37 @@ Rules:
       return;
     }
     if (!hasDurablePlan(pythonRunIdRef.current, pythonPlanRef.current)) {
+      if (plan?.provisional) {
+        queuedPlanStartRef.current = { name, autoApprove };
+        if (plan.compileState === "blocked") {
+          handleRetryPlanning();
+          return;
+        }
+        setPhase("executing");
+        setStartTime(Date.now());
+        setCurrentStepIdx(0);
+        setExecSteps(steps.map((step, index) => ({
+          tool: step.tool,
+          action: step.title || step.action,
+          riskLevel: step.riskLevel,
+          status: index === 0 ? "running" : "pending",
+          liveOutput: index === 0
+            ? "→ Starting now; AURA is finishing technical preparation backstage"
+            : "",
+        })));
+        return;
+      }
       keepPlanInReview();
       return;
     }
     if (requiresActionPreview(steps, autoApprove)) {
       preparedActionPreviewRef.current = false;
       setPreviewError("");
+      setPhase("preview");
+      return;
     }
-    // Approve only the immutable plan here. The backend runs safe reads first
-    // and pauses before the first write with concrete, provider-validated
-    // arguments. Never build an approval editor from raw {{steps...}} values.
-    startPythonExecutionRef.current?.();
-  }, [editRunMode, autoApprove, keepPlanInReview]);
+    startPythonExecution();
+  }, [editRunMode, autoApprove, keepPlanInReview, handleRetryPlanning, plan]);
 
   const handlePreviewApprove = useCallback((editedSteps) => {
     setPreviewError("");
@@ -1174,10 +1235,7 @@ Rules:
           );
         }
       } else {
-        // Plan approval is separate from action approval. Unless the user has
-        // explicitly enabled auto-approval, execution pauses with a concrete
-        // prepared preview before the first consequential provider call.
-        await approvePythonPlan(runId, reviewedPlan.steps, autoApprove);
+        await approvePythonPlan(runId, reviewedPlan.steps);
       }
       for (;;) {
         const run = await getPythonRunResilient(runId, generation);
@@ -1223,28 +1281,6 @@ Rules:
           return;
         }
         if (run.status === "awaiting_approval") {
-          if (run.blocker?.code === "plan_approval_required") {
-            pythonPlanRef.current = run.plan || pythonPlanRef.current;
-            const reviewPlan = uiPlanFromRun(run);
-            approvedStepsRef.current = reviewPlan.steps;
-            setApprovedSteps(reviewPlan.steps);
-            setPlan({ ...reviewPlan, provisional: false, compileState: "ready" });
-            setPhase("plan");
-            return;
-          }
-          const readyApprovals = (run.steps || []).filter((step) => (
-            step.consequential
-            && step.approval_status === "pending"
-            && step.approval_preview?.status === "ready"
-            && !hasUnresolvedWorkflowReference(step.approval_preview?.arguments)
-          ));
-          if (
-            run.blocker?.code !== "external_submission_approval_required"
-            || readyApprovals.length === 0
-          ) {
-            await new Promise((resolve) => setTimeout(resolve, 900));
-            continue;
-          }
           const preparedSteps = approvedStepsRef.current.map((step, index) =>
             resolvedApprovalStep(step, run.steps?.[index], planToolName(run.steps?.[index] || step))
           );
@@ -1269,14 +1305,7 @@ Rules:
       console.error("Python workflow execution failed", error);
       if (prepared && [409, 422].includes(error?.status)) {
         const latest = await getPythonRun(runId).catch(() => null);
-        const hasReadyApproval = latest?.blocker?.code === "external_submission_approval_required"
-          && (latest.steps || []).some((step) => (
-            step.consequential
-            && step.approval_status === "pending"
-            && step.approval_preview?.status === "ready"
-            && !hasUnresolvedWorkflowReference(step.approval_preview?.arguments)
-          ));
-        if (latest?.status === "awaiting_approval" && hasReadyApproval) {
+        if (latest?.status === "awaiting_approval") {
           const refreshed = approvedStepsRef.current.map((step, index) =>
             resolvedApprovalStep(step, latest.steps?.[index], planToolName(latest.steps?.[index] || step))
           );
@@ -1653,10 +1682,7 @@ Generate a results summary in plain, human-friendly language (not technical).
                 {planLoading ? (
                   <div className="flex flex-col items-center gap-4">
                     <ThinkingAnimation />
-                    <div className="text-center">
-                      <p className="text-sm text-muted-foreground">AURA is preparing the complete plan…</p>
-                      <p className="mt-1 text-xs text-muted-foreground/70">It will appear once, ready to review.</p>
-                    </div>
+                    <p className="text-sm text-muted-foreground">AURA is building your plan…</p>
                   </div>
                 ) : plan ? (
                   <PlanView
