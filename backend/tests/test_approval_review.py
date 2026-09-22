@@ -31,6 +31,22 @@ def test_email_review_contract_is_editable_and_schema_driven():
     assert body["required"] is True
 
 
+def test_google_doc_review_displays_full_editable_content():
+    contract = build_review_contract(
+        "docs.create",
+        {"title": "Brief", "body": "Complete approved document body."},
+        _capability("google", "docs.create"),
+        "Google Docs",
+    )
+
+    assert contract["kind"] == "document"
+    assert ["title"] in contract["editable_paths"]
+    assert ["body"] in contract["editable_paths"]
+    body = next(field for field in contract["fields"] if field["key"] == "body")
+    assert body["control"] == "textarea"
+    assert body["required"] is True
+
+
 def test_email_review_contract_replaces_attachment_transport_with_receipt():
     contract = build_review_contract(
         "gmail.send",

@@ -143,6 +143,8 @@ const friendlyStepTitle = (step) => {
   if (operation === "gmail.send") return "Send the email";
   if (operation.startsWith("gmail.")) return "Review email context";
   if (operation.startsWith("calendar.")) return operation.includes("create") ? "Schedule the event" : "Check the calendar";
+  if (operation === "docs.create") return "Create the Google Doc";
+  if (operation === "docs.get") return "Read the Google Doc";
   if (operation.startsWith("sheets.")) return operation.includes("update") || operation.includes("append") ? "Update the spreadsheet" : "Read the spreadsheet";
   if (operation.startsWith("hubspot.")) return reason.includes("update") ? "Update HubSpot records" : "Find HubSpot records";
   if (operation === "notion.search") return "Find the Notion notes";

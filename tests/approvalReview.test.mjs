@@ -18,6 +18,7 @@ test("every planned consequential action gets the appropriate review renderer", 
     ["canva.presentation.create", { title: "Forecast", phases: [] }, "presentation"],
     ["jira.issue.create", { project_key: "AURA", summary: "Review" }, "ticket"],
     ["report.document.create", { title: "Brief", body: "Complete brief" }, "document"],
+    ["docs.create", { title: "Google Doc", body: "Complete brief" }, "document"],
     ["custom.object.create", { name: "Object" }, "action"],
   ];
 
@@ -53,6 +54,15 @@ test("document review includes its complete editable title and body", () => {
   assert.equal(contract.kind, "document");
   assert.equal(step.preview.docTitle, "Launch brief");
   assert.equal(step.preview.docBody, "Full document content");
+
+  const googleDoc = plannedApprovalStep(
+    { tool: "Google Docs", riskLevel: "modify" },
+    { consequential: true, operation: "docs.create", arguments: { title: "Brief", body: "Whole text" } },
+    "Google Docs",
+  );
+  assert.equal(googleDoc.preview.type, "document");
+  assert.equal(googleDoc.preview.docTitle, "Brief");
+  assert.equal(googleDoc.preview.docBody, "Whole text");
 });
 
 test("one combined preview is required only for consequential plans", () => {
