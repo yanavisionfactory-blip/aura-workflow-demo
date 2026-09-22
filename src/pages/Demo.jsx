@@ -65,6 +65,7 @@ const planToolName = (step) => {
   if (step.tool_slug === "google") {
     if (step.operation.startsWith("gmail.")) return "Gmail";
     if (step.operation.startsWith("calendar.")) return "Google Calendar";
+    if (step.operation.startsWith("docs.")) return "Google Docs";
     if (step.operation.startsWith("sheets.")) return "Google Sheets";
     return "Google Drive";
   }

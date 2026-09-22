@@ -45,6 +45,7 @@ PROVIDERS = {
             "https://www.googleapis.com/auth/gmail.readonly",
             "https://www.googleapis.com/auth/gmail.send",
             "https://www.googleapis.com/auth/drive.readonly",
+            "https://www.googleapis.com/auth/drive.file",
             "https://www.googleapis.com/auth/calendar",
             "https://www.googleapis.com/auth/spreadsheets",
         ),
@@ -528,6 +529,8 @@ class ProviderExecutor:
             "calendar.list": self._calendar_list,
             "calendar.create": self._calendar_create,
             "calendar.get": self._calendar_get,
+            "docs.create": self._docs_create,
+            "docs.get": self._docs_get,
             "drive.files.search": self._drive_files_search,
             "drive.spreadsheet.resolve": self._drive_spreadsheet_resolve,
             "sheets.read": self._sheets_read,
@@ -651,6 +654,13 @@ class ProviderExecutor:
                 url = (
                     "https://docs.google.com/spreadsheets/d/"
                     f"{quote(str(spreadsheet_id), safe='')}/edit"
+                )
+        elif not url and operation.startswith("docs."):
+            document_id = result.get("id") or arguments.get("document_id")
+            if document_id:
+                url = (
+                    "https://docs.google.com/document/d/"
+                    f"{quote(str(document_id), safe='')}/edit"
                 )
         elif not url and operation == "slack.post":
             channel = result.get("channel") or arguments.get("channel")
@@ -986,6 +996,69 @@ class ProviderExecutor:
     async def _calendar_get(self, a: dict) -> dict:
         return await self._request("GET", "https://www.googleapis.com/calendar/v3/calendars/primary/events/"
                                    + quote(a["event_id"], safe=""))
+
+    async def _docs_create(self, a: dict) -> dict:
+        """Import the approved text in one write, avoiding a blank intermediate Doc."""
+        import secrets
+
+        title = str(a["title"]).strip()
+        body = str(a["body"])
+        if not title or not body.strip():
+            raise ValueError("docs.create requires a title and nonempty body")
+        boundary = f"aura-{secrets.token_hex(16)}"
+        metadata = json.dumps(
+            {"name": title, "mimeType": "application/vnd.google-apps.document"},
+            ensure_ascii=False,
+        ).encode("utf-8")
+        content = (
+            f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n".encode()
+            + metadata
+            + f"\r\n--{boundary}\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n".encode()
+            + body.encode("utf-8")
+            + f"\r\n--{boundary}--\r\n".encode()
+        )
+        return await self._request(
+            "POST",
+            "https://www.googleapis.com/upload/drive/v3/files",
+            params={"uploadType": "multipart", "fields": "id,name,mimeType,webViewLink"},
+            headers={"Content-Type": f"multipart/related; boundary={boundary}"},
+            content=content,
+        )
+
+    async def _docs_get(self, a: dict) -> dict:
+        result = await self._request(
+            "GET",
+            "https://docs.googleapis.com/v1/documents/"
+            + quote(a["document_id"], safe=""),
+            params={"includeTabsContent": "true"},
+        )
+
+        def text_from_body(body: dict) -> str:
+            return "".join(
+                element.get("textRun", {}).get("content", "")
+                for item in body.get("content", [])
+                for element in item.get("paragraph", {}).get("elements", [])
+            )
+
+        def tab_bodies(tabs: list[dict]) -> list[str]:
+            return [
+                text_from_body(tab.get("documentTab", {}).get("body", {}))
+                for tab in tabs
+                if tab.get("documentTab")
+            ] + [
+                content
+                for tab in tabs
+                for content in tab_bodies(tab.get("childTabs") or [])
+            ]
+
+        contents = tab_bodies(result.get("tabs") or [])
+        if not contents:
+            contents = [text_from_body(result.get("body", {}))]
+        return {
+            "id": result.get("documentId"),
+            "title": result.get("title"),
+            "body": "\n".join(contents).rstrip("\n"),
+        }
 
     async def _weather_forecast(self, a: dict) -> dict:
         location = str(a.get("location") or "").strip()

@@ -16,6 +16,13 @@ test("HubSpot always routes to backend-owned OAuth", () => {
   });
 });
 
+test("Google Docs shares managed Google OAuth with the other Workspace apps", () => {
+  assert.deepEqual(userConnectionRoute("Google Docs"), {
+    kind: "managed_oauth",
+    provider: "google",
+  });
+});
+
 test("normal users never fall through to API, MCP, or interface setup", () => {
   for (const tool of ["Salesforce", "Meta Ads", "Creator Approvals", "Internal CRM"]) {
     assert.equal(isManagedOAuthTool(tool), false);

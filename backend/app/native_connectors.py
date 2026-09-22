@@ -214,7 +214,7 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         "catalog_version": 1,
         "provider_type": "oauth",
         "name": "Google Workspace",
-        "description": "Composable Gmail, Calendar, Drive, and Sheets modules.",
+        "description": "Composable Gmail, Docs, Calendar, Drive, and Sheets modules.",
         "base_url": "provider-managed",
         "identity": {"provider": "google"},
         "modules": [
@@ -246,6 +246,10 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                 "start": {"type": "object"}, "end": {"type": "object"},
             }),
             _module("calendar.get", "search", "Read a specific primary-calendar event.", required=("event_id",), properties={"event_id": _TEXT}),
+            _module("docs.create", "action", "Create an approved Google Doc containing the complete supplied text in one upload.", required=("title", "body"), properties={
+                "title": _TEXT, "body": _TEXT,
+            }),
+            _module("docs.get", "search", "Read the title and full text of a specific Google Doc created with this connection.", required=("document_id",), properties={"document_id": _TEXT}),
             _module(
                 "drive.files.search",
                 "search",

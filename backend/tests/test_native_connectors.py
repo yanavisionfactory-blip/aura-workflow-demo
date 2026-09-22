@@ -91,6 +91,10 @@ def test_google_catalog_can_resolve_and_update_named_spreadsheets():
     assert capabilities["drive.files.search"]["requires_approval"] is False
     assert capabilities["drive.spreadsheet.resolve"]["permission_scope"] == "read"
     assert capabilities["drive.spreadsheet.resolve"]["requires_approval"] is False
+    assert capabilities["docs.create"]["permission_scope"] == "write"
+    assert capabilities["docs.create"]["requires_approval"] is True
+    assert capabilities["docs.get"]["permission_scope"] == "read"
+    assert "docs.get" in capabilities["docs.create"]["reliability"]["readback_operations"]
     assert capabilities["sheets.append"]["permission_scope"] == "write"
     assert capabilities["sheets.append"]["requires_approval"] is True
     assert "sheets.read" in capabilities["sheets.append"]["reliability"][

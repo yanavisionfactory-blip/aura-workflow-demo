@@ -24,6 +24,7 @@ const TOOL_ICONS = {
   Salesforce: Users,
   Slack: MessageSquare,
   "Google Sheets": Table,
+  "Google Docs": FileText,
   "Google Calendar": Calendar,
   Notion: FileText,
   Jira: CheckSquare,

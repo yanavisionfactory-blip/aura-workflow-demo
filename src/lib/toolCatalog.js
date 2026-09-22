@@ -6,6 +6,7 @@ const ICONS = {
   google: "✨",
   gmail: "📧",
   "google-drive": "🗂️",
+  "google-docs": "📄",
   "google-calendar": "📅",
   "google-sheets": "📊",
   airtable: "🗃️",
@@ -33,6 +34,7 @@ const canonicalName = (value) => String(value || "")
 const NATIVE_FALLBACK = [
   { name: "Gmail", provider: "google", icon: ICONS.gmail, desc: "Read and send email" },
   { name: "Google Drive", provider: "google", icon: ICONS["google-drive"], desc: "Access files and folders" },
+  { name: "Google Docs", provider: "google", icon: ICONS["google-docs"], desc: "Create and read documents" },
   { name: "Google Calendar", provider: "google", icon: ICONS["google-calendar"], desc: "Read and create events" },
   { name: "Google Sheets", provider: "google", icon: ICONS["google-sheets"], desc: "Read and write spreadsheets" },
   { name: "Airtable", provider: "airtable", icon: ICONS.airtable, desc: "Read and write records" },
