@@ -44,8 +44,49 @@ env:
   FAILURE_FINGERPRINT: ${{ github.event.client_payload.fingerprint || inputs.fingerprint }}
 
 jobs:
+  preflight:
+    name: Verify isolated recovery configuration
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require complete secrets and an isolated canary target
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_PROJECT: ${{ secrets.RAILWAY_PROJECT_ID }}
+          CANARY_SERVICE: ${{ secrets.RAILWAY_CANARY_SERVICE_ID }}
+          CANARY_ENVIRONMENT: ${{ secrets.RAILWAY_CANARY_ENVIRONMENT_ID }}
+          CANARY_URL: ${{ secrets.RAILWAY_CANARY_URL }}
+          PROD_SERVICE: ${{ secrets.RAILWAY_PRODUCTION_SERVICE_ID }}
+          PROD_ENVIRONMENT: ${{ secrets.RAILWAY_PRODUCTION_ENVIRONMENT_ID }}
+          PROD_URL: ${{ secrets.RAILWAY_PRODUCTION_URL }}
+          CALLBACK_SECRET: ${{ secrets.RECOVERY_PIPELINE_CALLBACK_SECRET }}
+        shell: bash
+        run: |
+          set -o errexit -o nounset -o pipefail
+          for name in OPENAI_API_KEY RAILWAY_TOKEN RAILWAY_PROJECT \
+            CANARY_SERVICE CANARY_ENVIRONMENT CANARY_URL \
+            PROD_SERVICE PROD_ENVIRONMENT PROD_URL CALLBACK_SECRET; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Required recovery secret is missing: ${name}"
+              exit 1
+            fi
+          done
+          if [ "${#CALLBACK_SECRET}" -lt 32 ]; then
+            echo "::error::RECOVERY_PIPELINE_CALLBACK_SECRET must be at least 32 characters"
+            exit 1
+          fi
+          case "$CANARY_URL" in https://*) ;; *) echo "::error::Canary URL must use HTTPS"; exit 1;; esac
+          case "$PROD_URL" in https://*) ;; *) echo "::error::Production URL must use HTTPS"; exit 1;; esac
+          if [ "$CANARY_SERVICE" = "$PROD_SERVICE" ] \
+            && [ "$CANARY_ENVIRONMENT" = "$PROD_ENVIRONMENT" ]; then
+            echo "::error::Canary and production resolve to the same Railway target"
+            exit 1
+          fi
+
   repair:
     name: Diagnose, repair, and test in isolation
+    needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 40
     outputs:
@@ -257,7 +298,7 @@ jobs:
   report:
     name: Sign and record terminal pipeline result
     if: always()
-    needs: [repair, canary, promote]
+    needs: [preflight, repair, canary, promote]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -271,10 +312,13 @@ jobs:
           REPAIR_RESULT: ${{ needs.repair.result }}
           CANARY_RESULT: ${{ needs.canary.result }}
           PROMOTE_RESULT: ${{ needs.promote.result }}
+          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
           RELEASE_STATUS: ${{ needs.promote.outputs.status }}
         shell: bash
         run: |
-          if [ "$REPAIR_RESULT" != "success" ]; then
+          if [ "$PREFLIGHT_RESULT" != "success" ]; then
+            STATUS="failed"
+          elif [ "$REPAIR_RESULT" != "success" ]; then
             STATUS="failed"
           elif [ "$RELEASE_STATUS" = "promoted" ]; then
             STATUS="promoted"

@@ -32,6 +32,8 @@ async def database(monkeypatch):
         lambda: SimpleNamespace(
             recovery_engineer_enabled=True,
             max_recovery_engineer_attempts=3,
+            recovery_code_repair_enabled=True,
+            recovery_code_repair_configured=False,
             recovery_github_repository="",
             recovery_github_token="",
         ),
@@ -173,6 +175,33 @@ async def test_failed_isolated_repairs_have_a_durable_budget(database):
             "reason_code": "isolated_code_repair_budget_exhausted",
             "attempts": 3,
         }
+
+
+async def test_code_repair_dispatch_is_explicitly_disabled_before_activation(
+    database, monkeypatch
+):
+    from app import recovery_engineer
+
+    monkeypatch.setattr(
+        recovery_engineer,
+        "get_settings",
+        lambda: SimpleNamespace(
+            recovery_code_repair_enabled=False,
+            recovery_code_repair_configured=False,
+            recovery_github_repository="",
+            recovery_github_token="",
+        ),
+    )
+    incident = RecoveryIncident(
+        id="incident-disabled", workspace_id="workspace", run_id="run", phase="code",
+        category="internal_defect", fingerprint="0123456789abcdef01234567", status="queued",
+    )
+    assert await recovery_engineer.dispatch_isolated_code_repair(incident) is False
+    assert incident.status == "awaiting_sandbox"
+    assert incident.sandbox_result == {
+        "configured": False,
+        "reason_code": "isolated_sandbox_disabled",
+    }
 
 
 async def test_promoted_repair_resumes_the_saved_checkpoint(database):
