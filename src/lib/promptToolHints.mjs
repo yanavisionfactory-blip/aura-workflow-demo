@@ -12,6 +12,7 @@ const SEMANTIC_HINTS = [
   { label: "AURA Weather", keywords: ["weather", "forecast", "temperature", "rain", "precipitation"] },
   { label: "Canva", keywords: ["presentation", "presentations", "deck", "decks", "slide", "slides", "design"] },
   { label: "Gmail", keywords: ["email", "emails", "gmail", "inbox", "follow up", "follow-up"] },
+  { label: "Google Docs", keywords: ["google doc", "google docs", "document", "documents"] },
   { label: "Slack", keywords: ["slack", "channel", "notify the team", "message the team"] },
   { label: "Google Calendar", keywords: ["calendar", "schedule a meeting", "book a meeting", "invite"] },
   { label: "Google Sheets", keywords: ["sheet", "sheets", "spreadsheet", "spreadsheets", "csv"] },

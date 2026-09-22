@@ -17,7 +17,7 @@ const reviewKindForOperation = (operation = "") => {
   if (lowered.startsWith("jira.") || ["ticket", "issue"].some((word) => lowered.includes(word))) return "ticket";
   if (lowered === "slack.post" || ["message", "notify"].some((word) => lowered.includes(word))) return "message";
   if (lowered.startsWith("calendar.") || lowered.includes("event")) return "calendar";
-  if (["document", "report", "notion.page", "blocks.children"].some((word) => lowered.includes(word))) return "document";
+  if (lowered.startsWith("docs.") || ["document", "report", "notion.page", "blocks.children"].some((word) => lowered.includes(word))) return "document";
   if (["sheets.", "airtable.", "hubspot.", "contact", "company"].some((word) => lowered.includes(word))) return "records";
   if (["campaign", "tiktok", "publish", "upload"].some((word) => lowered.includes(word))) return "content";
   if (lowered.startsWith("canva.")) return "design";

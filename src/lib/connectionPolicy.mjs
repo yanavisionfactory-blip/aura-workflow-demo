@@ -4,6 +4,7 @@
 export const MANAGED_OAUTH_PROVIDER_BY_TOOL = Object.freeze({
   Gmail: "google",
   "Google Drive": "google",
+  "Google Docs": "google",
   "Google Calendar": "google",
   "Google Sheets": "google",
   Jira: "jira",

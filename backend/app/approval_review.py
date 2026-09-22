@@ -44,7 +44,9 @@ def _review_kind(operation: str) -> str:
         return "message"
     if lowered.startswith("calendar.") or "event" in lowered:
         return "calendar"
-    if any(word in lowered for word in ("document", "report", "notion.page", "blocks.children")):
+    if lowered.startswith("docs.") or any(
+        word in lowered for word in ("document", "report", "notion.page", "blocks.children")
+    ):
         return "document"
     if any(word in lowered for word in ("sheets.", "airtable.", "hubspot.", "contact", "company")):
         return "records"

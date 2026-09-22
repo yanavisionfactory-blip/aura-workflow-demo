@@ -33,6 +33,11 @@ KNOWN = {
     "calendar.get": ({"type": "object", "required": ["id"], "properties": {
         "id": TEXT, "summary": TEXT, "start": OBJECT, "end": OBJECT, "status": TEXT}}, ["event_state"]),
     "calendar.create": ({"type": "object", "required": ["id"], "properties": {"id": TEXT}}, ["write_receipt"]),
+    "docs.get": ({"type": "object", "required": ["id", "title", "body"], "properties": {
+        "id": TEXT, "title": TEXT, "body": TEXT}}, ["document_body"]),
+    "docs.create": ({"type": "object", "required": ["id", "name", "mimeType"], "properties": {
+        "id": TEXT, "name": TEXT, "mimeType": {"const": "application/vnd.google-apps.document"},
+        "webViewLink": TEXT}}, ["write_receipt"]),
     "jira.issue.get": ({"type": "object", "required": ["id", "key", "fields"],
         "properties": {"id": TEXT, "key": TEXT, "fields": OBJECT}}, ["issue_state"]),
     "jira.issue.create": ({"type": "object", "required": ["id", "key"],

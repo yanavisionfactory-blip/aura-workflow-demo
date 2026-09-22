@@ -10,6 +10,7 @@ const catalog = [
   { name: "Slack", provider: "slack", aliases: ["Slack"] },
   { name: "Jira", provider: "jira", aliases: ["Jira"] },
   { name: "Google Drive", provider: "google", canonicalProvider: "google", aliases: ["google", "Google Drive"] },
+  { name: "Google Docs", provider: "google", canonicalProvider: "google", aliases: ["google", "Google Docs"] },
   { name: "Google Calendar", provider: "google", canonicalProvider: "google", aliases: ["google", "Google Calendar"] },
   { name: "Google Sheets", provider: "google", canonicalProvider: "google", aliases: ["google", "Google Sheets"] },
 ];
@@ -36,6 +37,13 @@ test("a shared provider family does not select every sibling app", () => {
   assert.deepEqual(
     promptToolHints("Read Google Drive files and calendar, then draft emails in Gmail", catalog),
     ["Google Drive", "Google Calendar", "Gmail"],
+  );
+});
+
+test("four app request offers the four explicit apps without selecting unrelated Google apps", () => {
+  assert.deepEqual(
+    promptToolHints("Create a Google Doc and calendar event, a Canva slide, and email me in Gmail", catalog),
+    ["Google Docs", "Google Calendar", "Canva", "Gmail"],
   );
 });
 

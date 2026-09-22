@@ -11,6 +11,9 @@ from app.policy import operation_scope
 
 
 def cases():
+    yield ("docs.create", {"title": "Fixture", "body": "First line\nSecond line"},
+        {"id": "doc-1", "name": "Fixture", "mimeType": "application/vnd.google-apps.document"},
+        {"id": "doc-1", "title": "Fixture", "body": "First line\nSecond line"})
     for entity in ("contact", "company"):
         yield (f"hubspot.{entity}.update", {f"{entity}_id": "42", "properties": {"name": "Fixture"}}, {"id": "42"}, {"id": "42", "properties": {"name": "Fixture"}, "archived": False})
     yield ("airtable.create", {"base_id": "b", "table_id": "t", "records": [{"fields": {"Name": "One"}}, {"fields": {"Name": "Two"}}]},

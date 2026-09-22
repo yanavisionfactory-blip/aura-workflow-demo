@@ -2,6 +2,7 @@ const PROVIDERS = [
   "Canva",
   "Google Sheets",
   "Google Drive",
+  "Google Docs",
   "Gmail",
   "HubSpot",
   "Slack",
@@ -19,6 +20,8 @@ const PROVIDER_ALIASES = {
   sheets: "Google Sheets",
   "google sheets": "Google Sheets",
   drive: "Google Drive",
+  docs: "Google Docs",
+  "google docs": "Google Docs",
   "google drive": "Google Drive",
   google: "Google Workspace",
   gmail: "Gmail",
@@ -65,6 +68,7 @@ const providerForOutput = (output = {}) => {
   if (operation.startsWith("gmail.")) return "Gmail";
   if (operation.startsWith("sheets.")) return "Google Sheets";
   if (operation.startsWith("drive.")) return "Google Drive";
+  if (operation.startsWith("docs.")) return "Google Docs";
   if (operation.startsWith("canva.")) return "Canva";
   return displayProvider(output.tool || operation.split(".")[0]);
 };

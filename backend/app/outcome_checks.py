@@ -8,6 +8,7 @@ from typing import Any
 READBACK_OPERATIONS = {
     "gmail.send": "gmail.get",
     "calendar.create": "calendar.get",
+    "docs.create": "docs.get",
     "jira.issue.create": "jira.issue.get",
     "jira.issue.update": "jira.issue.get",
     "notion.page.create": "notion.page.get",
@@ -69,6 +70,14 @@ def build_outcome_check(
             str(resource_id or ""),
             expected,
             "calendar",
+        )
+    if operation == "docs.create":
+        return OutcomeCheck(
+            read,
+            {"document_id": str(resource_id or "")},
+            str(resource_id or ""),
+            {"title": arguments["title"].strip(), "body": arguments["body"].rstrip("\n")},
+            "docs",
         )
     if operation.startswith("jira."):
         from .providers import ProviderExecutor
