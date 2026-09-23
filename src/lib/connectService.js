@@ -152,7 +152,8 @@ export async function reconnectTool(toolName, connectionId = null) {
     }
     const result = await authorizeConnectorBroker(provider, {
       connection: tool,
-      timeoutMs: 120000,
+      // Google account selection and consent can take longer than two minutes.
+      timeoutMs: 600000,
       reservedWindow: authorizationWindow,
     });
     await hydrateConnections({ force: true });
