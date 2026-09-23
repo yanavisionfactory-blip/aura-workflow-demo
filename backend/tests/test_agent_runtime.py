@@ -82,6 +82,21 @@ def test_explicit_linear_provider_does_not_expand_generic_issue_to_jira() -> Non
     assert [item["slug"] for item in bounded] == ["linear"]
 
 
+def test_google_doc_write_uses_native_receipt_when_both_connectors_exist() -> None:
+    inventory = [
+        {"slug": "google-docs", "name": "Google Docs", "allowed_operations": ["google-docs.create-document"]},
+        {"slug": "google", "name": "Google Workspace", "allowed_operations": ["docs.create", "docs.get", "gmail.send"]},
+        {"slug": "canva", "name": "Canva", "allowed_operations": ["canva.presentation.create"]},
+    ]
+    bounded = intent_bounded_tool_inventory(
+        "Write a story in Google Docs and illustrate it in Canva", inventory,
+    )
+    assert {item["slug"] for item in bounded} == {"google", "canva"}
+    assert {item["slug"] for item in intent_bounded_tool_inventory(
+        "Read the version history in Google Docs", inventory,
+    )} == {"google-docs", "google"}
+
+
 def test_open_ended_intent_preserves_the_full_inventory() -> None:
     inventory = [
         {"slug": "alpha", "name": "Alpha", "allowed_operations": ["alpha.read"]},
