@@ -20,6 +20,10 @@ from .models import AuditEvent, DispatchIntent, RunStatus, WorkflowRun
 
 SUPERVISOR_KEY = "__aura_supervisor__"
 SUPERVISOR_VERSION = 2
+PLANNING_QUOTA_MESSAGE = (
+    "AURA's AI planning credits are exhausted. Restore credits on the OpenAI API "
+    "account configured for this workspace, then try again."
+)
 
 
 class InvalidRunTransition(ValueError):
@@ -271,6 +275,8 @@ HUMAN_ACTION_CODES = frozenset(
         "resource_not_found",
         "resource_access_denied",
         "plan_approval_required",
+        "operator_billing_required",
+        "pilot_details_required",
         "external_submission_approval_required",
         "external_effect_uncertain",
     }
@@ -363,7 +369,7 @@ async def recover_planning_failure(
 ) -> str:
     """Checkpoint and schedule the next safe planning repair.
 
-    Returns ``scheduled`` or ``internal_incident``. Both are non-user states.
+    Returns ``scheduled``, ``internal_incident`` or ``operator_action_required``.
     The incident path is intentionally bounded: a systemic quota/configuration/code
     defect must not burn money forever, and is handed to the internal repair queue.
     """
@@ -403,6 +409,36 @@ async def recover_planning_failure(
     }
 
     now = datetime.now(UTC)
+    if category == "operator_quota":
+        state.update(status="operator_action_required", next_attempt_at=None)
+        context[SUPERVISOR_KEY] = state
+        run.execution_context = context
+        transition_run(
+            run,
+            RunStatus.waiting_for_action,
+            reason="planning_api_credits_exhausted",
+            actor="run-supervisor",
+            phase="planning",
+            supervisor_status="human_action_required",
+            error=PLANNING_QUOTA_MESSAGE,
+            result={"status": "planning_unavailable", "completed_work_preserved": True},
+            blocker={
+                "kind": "human_action",
+                "code": "operator_billing_required",
+                "message": PLANNING_QUOTA_MESSAGE,
+                "action": "restore_api_credits",
+                "retryable": False,
+            },
+            dispatch=None,
+        )
+        session.add(AuditEvent(
+            workspace_id=run.workspace_id,
+            run_id=run.id,
+            actor="run-supervisor",
+            event_type="run.planning_operator_action_required",
+            payload={"phase": "planning", "category": category, "fingerprint": fingerprint},
+        ))
+        return "operator_action_required"
     if attempt <= max_attempts:
         delay = min(
             max_delay_seconds,

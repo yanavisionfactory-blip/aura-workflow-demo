@@ -67,6 +67,7 @@ from .native_connectors import (
     planning_catalog,
 )
 from .outcome_runtime import check_provider_outcome
+from .pilot_template import PILOT_PREFIX, PilotInputError, pilot_template
 from .policy import canonical_plan_hash, operation_scope, runtime_policy_check
 from .providers import (
     ProviderExecutor,
@@ -612,7 +613,8 @@ async def _create_compiled_plan(
     )
 
     audited_plan = (
-        creator_outreach_template(prompt, inventory)
+        pilot_template(prompt, inventory)
+        or creator_outreach_template(prompt, inventory)
         or weather_presentation_template(prompt, inventory)
         or notion_to_jira_template(prompt, inventory)
     )
@@ -690,10 +692,9 @@ def planning_error_message(exc: Exception) -> str:
         or "credit_balance_exhausted" in lowered
         or "no credits remaining" in lowered
     ):
-        return (
-            "AURA's AI planning credits are exhausted. Add credits to the OpenAI API "
-            "account configured in Railway, then try again."
-        )
+        from .run_supervisor import PLANNING_QUOTA_MESSAGE
+
+        return PLANNING_QUOTA_MESSAGE
     if "rate limit" in lowered or "error code: 429" in lowered:
         return "AURA's AI planning service is temporarily busy. Please try again shortly."
     if "invalid json" in lowered:
@@ -1181,8 +1182,9 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             for value in (run.inputs or {}).get("excluded_tool_families", [])
             if isinstance(value, str)
         }
-        requirement_inventory = await connection_requirement_inventory(
-            session, run.prompt, inventory, requested_tools
+        requirement_inventory = (
+            inventory if run.prompt.startswith(PILOT_PREFIX)
+            else await connection_requirement_inventory(session, run.prompt, inventory, requested_tools)
         )
         await session.commit()
 
@@ -1208,10 +1210,10 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                         if (capability_family(slug) in excluded_families
                             or capability_family(str(operation or "").split(".", 1)[0]) in excluded_families):
                             raise NativeConnectorError("The revised plan still uses an omitted app")
-            missing = complete_connection_requirements(
-                run.prompt,
-                list(plan.planning_artifacts.get("connection_requirements", [])),
-                requirement_inventory,
+            reported_missing = list(plan.planning_artifacts.get("connection_requirements", []))
+            missing = (
+                reported_missing if run.prompt.startswith(PILOT_PREFIX)
+                else complete_connection_requirements(run.prompt, reported_missing, requirement_inventory)
             )
             missing = [item for item in missing if capability_family(item) not in excluded_families]
             if missing:
@@ -1305,6 +1307,23 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                     "plan_hash": plan_hash,
                 },
                 run.id,
+            )
+            await session.commit()
+        except PilotInputError as exc:
+            transition_run(
+                run,
+                RunStatus.waiting_for_action,
+                reason="pilot_details_required",
+                actor="plan-builder",
+                phase="planning",
+                supervisor_status="human_action_required",
+                error=str(exc),
+                result={"status": "pilot_details_required"},
+                blocker={
+                    "kind": "human_action", "code": "pilot_details_required",
+                    "message": str(exc), "action": "edit_pilot_details", "retryable": False,
+                },
+                dispatch=None,
             )
             await session.commit()
         except ConnectionRequiredError as exc:
