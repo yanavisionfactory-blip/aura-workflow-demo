@@ -7,7 +7,7 @@ from time import perf_counter
 from typing import Literal
 
 from agents import Agent, AgentOutputSchema, Runner
-from pydantic import BaseModel, Field, create_model
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from .agent_telemetry import record_agent_call
 from .argument_output import ArgumentOutputSchema
@@ -65,6 +65,43 @@ class PlanningBundle(BaseModel):
     objective: ObjectiveSpec
     toolset: ToolsetProposal
     plan: WorkflowPlan
+
+
+class CompactPlanStep(BaseModel):
+    """Closed planner output; provider arguments remain JSON text until validated."""
+
+    model_config = ConfigDict(extra="forbid")
+    key: str
+    agent: str
+    tool_slug: str
+    operation: str
+    arguments_json: str
+    reason: str
+    expected_output: str
+    consequential: bool
+    depends_on: list[str]
+    required_evidence: list[str]
+
+
+class CompactWorkflowPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    interpretation: str
+    steps: list[CompactPlanStep]
+
+
+def _expand_compact_plan(compact: CompactWorkflowPlan) -> WorkflowPlan:
+    steps = []
+    for step in compact.steps:
+        arguments = json.loads(step.arguments_json)
+        if not isinstance(arguments, dict):
+            raise TypeError("Compact planner arguments must be JSON objects")
+        steps.append({**step.model_dump(exclude={"arguments_json"}), "arguments": arguments})
+    return WorkflowPlan.model_validate({
+        "name": compact.name,
+        "interpretation": compact.interpretation,
+        "steps": steps,
+    })
 
 
 def _intent_words(value: str) -> str:
@@ -282,6 +319,20 @@ def build_agents() -> dict[str, Agent]:
             operation's supplied output contract. Never present step counts, estimates, IDs, URLs,
             secrets, or invented values as metrics.""",
             AgentOutputSchema(WorkflowPlan, strict_json_schema=False),
+        ),
+        "compact_builder": _agent(
+            "Compact Plan Builder Agent",
+            """Build a finite workflow using only actual operations and tool slugs in the
+            selected connector inventory. Each step is a real provider call: never add
+            internal drafting, planning, or narration as a step. Return arguments_json
+            as a serialized JSON object matching the selected operation's input schema.
+            Ground values in the request and prior step outputs. Use {{steps.key.field}}
+            references for dependent values; never invent opaque IDs or recipients.
+            Mark writes consequential and declare dependencies and required evidence.
+            Do not send, schedule, or write unless the user requested that action.
+            The application checks every operation, argument, and dependency before
+            any review or execution.""",
+            AgentOutputSchema(CompactWorkflowPlan),
         ),
         "evaluator": _agent(
             "Static Plan Evaluator Agent",
@@ -541,10 +592,7 @@ async def _run_staged_planner(
         )
     )
     selected_slugs = {selection.slug for selection in toolset.tools}
-    plan = WorkflowPlan.model_validate(
-        await _run(
-            agents["builder"],
-            {
+    builder_payload = {
                 "objective": objective.model_dump(mode="json"),
                 "toolset_proposal": toolset.model_dump(mode="json"),
                 "executable_tool_inventory": _builder_inventory(
@@ -558,10 +606,19 @@ async def _run_staged_planner(
                     "autonomous_resource_resolution", {}
                 ),
                 "response_recovery": payload.get("response_recovery"),
-            },
-            max_turns=max_turns,
+    }
+    try:
+        plan = WorkflowPlan.model_validate(
+            await _run(agents["builder"], builder_payload, max_turns=max_turns)
         )
-    )
+    except Exception as exc:
+        if _stop_model_retry(exc) or "invalid json" not in str(exc).casefold():
+            raise
+        # Flexible Pydantic output schemas can produce malformed JSON for long
+        # operation contracts. A closed, small schema gives the model one safe
+        # recovery route without loosening provider authorization checks.
+        compact = await _run(agents["compact_builder"], builder_payload, max_turns=max_turns)
+        plan = _expand_compact_plan(CompactWorkflowPlan.model_validate(compact))
     return PlanningBundle(objective=objective, toolset=toolset, plan=plan)
 
 
