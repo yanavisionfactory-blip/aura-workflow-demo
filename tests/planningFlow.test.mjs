@@ -93,7 +93,7 @@ test("the UI renders a language plan while durable compilation is still running"
     "utf8",
   );
 
-  assert.equal(source.includes("instantLanguagePlan(confirmedIntent"), true);
+  assert.equal(source.includes("instantLanguagePlan(draftIntent"), true);
   assert.equal(source.includes("languageDraftPrompt(confirmedIntent"), true);
   assert.equal(source.includes("Executable planning unavailable; the language plan remains visible"), true);
   assert.equal(planViewSource.includes("validating exact actions backstage"), false);

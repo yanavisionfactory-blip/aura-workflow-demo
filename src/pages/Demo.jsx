@@ -5,6 +5,7 @@ import { WORKFLOW_EXAMPLES } from "@/lib/demoData";
 import { CREATOR_APPROVALS_MOCK } from "@/lib/mockWorkflows";
 import TopBar from "@/components/aura/TopBar";
 import CommandInput from "@/components/aura/CommandInput";
+import PilotBuilder from "@/components/aura/PilotBuilder";
 import ConfirmView from "@/components/aura/ConfirmView";
 import PlanView from "@/components/aura/PlanView";
 import PreviewView from "@/components/aura/PreviewView";
@@ -145,6 +146,8 @@ const friendlyStepTitle = (step) => {
   if (operation.startsWith("calendar.")) return operation.includes("create") ? "Schedule the event" : "Check the calendar";
   if (operation === "docs.create") return "Create the Google Doc";
   if (operation === "docs.get") return "Read the Google Doc";
+  if (operation === "canva.presentation.create") return "Make the Canva slide";
+  if (operation === "canva.export.create") return "Export the Canva PDF";
   if (operation.startsWith("sheets.")) return operation.includes("update") || operation.includes("append") ? "Update the spreadsheet" : "Read the spreadsheet";
   if (operation.startsWith("hubspot.")) return reason.includes("update") ? "Update HubSpot records" : "Find HubSpot records";
   if (operation === "notion.search") return "Find the Notion notes";
@@ -355,6 +358,8 @@ export default function Demo() {
   const [editFlag, setEditFlag] = useState(null);
   const [editRunMode, setEditRunMode] = useState(false);
   const [autoApprove, setAutoApprove] = useState(false);
+  const [pilotOpen, setPilotOpen] = useState(false);
+  const [pilotDraft, setPilotDraft] = useState(null);
   const editOriginalStepsRef = useRef([]);
   const attachedResourcesRef = useRef(null);
   const userSelectedToolsRef = useRef([]);
@@ -475,6 +480,8 @@ export default function Demo() {
     setWorkflowName("");
     setEditRunMode(false);
     setAutoApprove(false);
+    setPilotOpen(false);
+    setPilotDraft(null);
     editOriginalStepsRef.current = [];
     userSelectedToolsRef.current = [];
     omittedToolsRef.current = [];
@@ -517,6 +524,11 @@ export default function Demo() {
     setInterpretationLoading(false);
     handleConfirmRef.current?.(prompt);
   }, []);
+
+  const handlePilotSubmit = useCallback((prompt) => {
+    setPilotDraft(JSON.parse(prompt.slice("AURA_PILOT_V1\n".length)));
+    handleSubmit(prompt);
+  }, [handleSubmit]);
 
   const startAlternativePlan = useCallback((run, userApproach = "") => {
     if (!run) return;
@@ -562,17 +574,21 @@ Write ONE clear, conversational sentence restating what they want — but offer 
       setInterpretation(editedInterpretation);
       if (!allowLegacyPlanner) {
         const confirmedIntent = editedInterpretation.trim() || originalPromptRef.current;
+        const pilotMode = confirmedIntent.startsWith("AURA_PILOT_V1\n");
+        const pilotDescription = "Create a Google Doc; schedule a Google Calendar event; create a Canva presentation; send a Gmail message";
+        const draftIntent = pilotMode ? pilotDescription : confirmedIntent;
+        const pilotTools = ["Google Docs", "Google Calendar", "Canva", "Gmail"];
         const availableCatalog = CATALOG.filter((tool) => !omittedToolsRef.current.includes(tool.name));
         const selectedTools = userSelectedToolsRef.current.filter(
           (tool) => !omittedToolsRef.current.includes(tool)
         );
         const explicitRequirements = promptConnectionRequirements(
-          confirmedIntent,
+          draftIntent,
           availableCatalog.map((tool) => ({ ...tool, slug: tool.provider })),
           getAllConnections(),
         );
         const immediatePlan = {
-          ...instantLanguagePlan(confirmedIntent, availableCatalog, selectedTools),
+          ...instantLanguagePlan(draftIntent, availableCatalog, pilotMode ? pilotTools : selectedTools),
           connectionRequirements: explicitRequirements,
         };
         const languageDraftGeneration = ++languageDraftGenerationRef.current;
@@ -583,7 +599,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
         setPlanLoading(false);
         setPhase("plan");
 
-        if (!omittedToolsRef.current.length) aura.integrations.Core
+        if (!omittedToolsRef.current.length && !pilotMode) aura.integrations.Core
           .InvokeLLM({
             prompt: languageDraftPrompt(confirmedIntent, selectedTools),
             response_json_schema: PLAN_SCHEMA,
@@ -830,6 +846,18 @@ Rules:
     (instruction) => handleConfirm(interpretation, instruction),
     [handleConfirm, interpretation]
   );
+
+  const handlePilotRevision = useCallback(() => {
+    const previousRunId = pythonRunIdRef.current;
+    const savedFields = pilotDraft;
+    reset();
+    setPilotDraft(savedFields);
+    setPilotOpen(true);
+    if (previousRunId) {
+      void cancelPythonRun(previousRunId).catch(() => {});
+      forgetActivePythonRun(previousRunId);
+    }
+  }, [pilotDraft, reset]);
 
   const handleSkipTool = useCallback((toolName) => {
     omittedToolsRef.current = [...new Set([...omittedToolsRef.current, toolName])];
@@ -1548,6 +1576,13 @@ Generate a results summary in plain, human-friendly language (not technical).
   const handleRerun = useCallback(
     (workflow, approval) => {
       if (!workflow) return;
+      if (workflow.prompt?.startsWith("AURA_PILOT_V1\n")) {
+        const savedFields = JSON.parse(workflow.prompt.slice("AURA_PILOT_V1\n".length));
+        reset();
+        setPilotDraft(savedFields);
+        setPilotOpen(true);
+        return;
+      }
       const auto = approval === "auto";
       const confirmedIntent = workflow.interpretation || workflow.prompt;
       reset();
@@ -1684,7 +1719,20 @@ Generate a results summary in plain, human-friendly language (not technical).
           <AnimatePresence mode="wait">
             {phase === "input" && (
               <motion.div key="input" exit={{ opacity: 0, y: -20 }} transition={{ duration: 0.3 }} className="w-full">
-                <CommandInput onSubmit={handleSubmit} examples={WORKFLOW_EXAMPLES} onPickExample={handlePickExample} />
+                {pilotOpen ? (
+                  <PilotBuilder initialValues={pilotDraft} onSubmit={handlePilotSubmit}
+                    onBack={() => { setPilotOpen(false); setPilotDraft(null); }} />
+                ) : (
+                  <>
+                    <CommandInput onSubmit={handleSubmit} examples={WORKFLOW_EXAMPLES} onPickExample={handlePickExample} />
+                    <div className="mt-5 text-center">
+                      <button type="button" onClick={() => setPilotOpen(true)}
+                        className="rounded-lg border border-primary/50 px-5 py-2 text-sm font-medium text-primary hover:bg-primary/10">
+                        Set up a four-app pilot
+                      </button>
+                    </div>
+                  </>
+                )}
               </motion.div>
             )}
 
@@ -1720,13 +1768,13 @@ Generate a results summary in plain, human-friendly language (not technical).
                     plan={plan}
                     hasPreview={!!mock?.preview}
                     onApprove={handleApprove}
-                    onRevisePlan={handlePlanRevision}
-                    onRetryPlan={handleRetryPlanning}
+                    onRevisePlan={originalPrompt.startsWith("AURA_PILOT_V1\n") ? handlePilotRevision : handlePlanRevision}
+                    onRetryPlan={originalPrompt.startsWith("AURA_PILOT_V1\n") ? handlePilotRevision : handleRetryPlanning}
                     onConnectionRecovered={handlePlanningConnectionRecovered}
-                    onSkipTool={handleSkipTool}
-                    onReplaceTool={handleReplaceTool}
+                    onSkipTool={originalPrompt.startsWith("AURA_PILOT_V1\n") ? undefined : handleSkipTool}
+                    onReplaceTool={originalPrompt.startsWith("AURA_PILOT_V1\n") ? undefined : handleReplaceTool}
                     omittedTools={omittedToolsRef.current}
-                    onBack={() => setPhase("confirm")}
+                    onBack={originalPrompt.startsWith("AURA_PILOT_V1\n") ? handlePilotRevision : () => setPhase("confirm")}
                     approveLabel={editRunMode ? "Review changes" : "Start"}
                   />
                 ) : null}

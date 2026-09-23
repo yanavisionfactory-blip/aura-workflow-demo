@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from app import orchestrator
+from app.agent_runtime import _stop_model_retry
 from app.native_connectors import NativeConnectorError, native_manifest
 from app.orchestrator import (
     _capitalized_provider_candidates,
@@ -37,8 +38,12 @@ def test_exhausted_api_credits_are_explained_without_raw_provider_payload() -> N
     message = planning_error_message(error)
 
     assert "credits are exhausted" in message
-    assert "Railway" in message
+    assert "OpenAI API" in message
     assert "{'error'" not in message
+
+
+def test_exhausted_api_credits_do_not_retry_a_staged_planner() -> None:
+    assert _stop_model_retry(RuntimeError("Error code: 429 credit_balance_exhausted")) is True
 
 
 def test_wrapped_exhausted_api_credits_keep_the_operational_category() -> None:

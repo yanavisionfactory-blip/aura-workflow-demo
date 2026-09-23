@@ -107,6 +107,31 @@ async def test_planning_failure_is_retried_without_becoming_user_failure(databas
         assert public["supervisor"]["browser_independent"] is True
 
 
+async def test_exhausted_api_credits_stop_retries_and_show_operator_action(database):
+    async with database() as session:
+        run = WorkflowRun(
+            id="quota-run", workspace_id="workspace", prompt="Pilot plan", status=RunStatus.planning,
+        )
+        session.add(run)
+        await session.commit()
+
+        outcome = await recover_planning_failure(
+            session, run, RuntimeError("credit_balance_exhausted: private payload"),
+            max_attempts=3, base_delay_seconds=1, max_delay_seconds=30,
+        )
+        await session.commit()
+
+        assert outcome == "operator_action_required"
+        assert run.status == RunStatus.waiting_for_action
+        assert "OpenAI API" in run.error
+        assert "private payload" not in str(run.execution_context)
+        public = public_run_projection(run, run.execution_context["__aura_blocker__"])
+        assert public["public_status"] == "waiting_for_action"
+        assert public["public_blocker"]["code"] == "operator_billing_required"
+        intent = await session.scalar(select(DispatchIntent).where(DispatchIntent.run_id == run.id))
+        assert intent is None
+
+
 async def test_exhausted_recovery_opens_internal_incident_not_retry_ui(database):
     async with database() as session:
         run = WorkflowRun(
