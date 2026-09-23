@@ -139,12 +139,14 @@ export async function disconnectTool(toolName, connectionId = null) {
 
 export async function reconnectTool(toolName, connectionId = null) {
   if (!pythonRuntimeEnabled) throw new Error("Reauthorization requires the secure control plane.");
-  const provider = providerForTool(toolName);
-  if (!provider) throw new Error(`${toolName} is not a released one-click connector.`);
   let authorizationWindow = null;
   try {
     const tool = await getToolConnection(toolName, connectionId);
     if (!tool) throw new Error(`${toolName} is not connected.`);
+    // Existing connections remain reconnectable even when their provider is
+    // absent from the current one-click marketplace catalog.
+    const provider = tool.slug || providerForTool(toolName);
+    if (!provider) throw new Error(`${toolName} has no reconnectable provider.`);
     if (tool.connection_backend !== "pipedream") {
       authorizationWindow = reserveAuthorizationWindow(provider, true);
     }
