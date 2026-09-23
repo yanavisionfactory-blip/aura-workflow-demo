@@ -22,6 +22,19 @@ from .config import Settings, get_settings
 from .providers import PROVIDERS, verify_oauth_credentials
 
 logger = logging.getLogger(__name__)
+GOOGLE_DOC_WRITE_SCOPES = {
+    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/drive",
+}
+
+
+def _scope_set(raw: Any) -> set[str]:
+    if isinstance(raw, str):
+        return set(re.split(r"[\s,]+", raw.strip())) - {""}
+    if isinstance(raw, (list, tuple)):
+        return {scope for value in raw if isinstance(value, str)
+                for scope in re.split(r"[\s,]+", value.strip()) if scope}
+    return set()
 
 
 class ManagedConnectorError(RuntimeError):
@@ -319,6 +332,10 @@ class NangoClient:
                 if not isinstance(credentials, dict):
                     raise ConnectorConfigurationError("oauth_credentials_unavailable")
                 validate_oauth_configuration(provider, credentials)
+                if provider == "google" and not (
+                    _scope_set(credentials.get("scopes")) & GOOGLE_DOC_WRITE_SCOPES
+                ):
+                    raise ConnectorConfigurationError("google_docs_write_scope_not_configured")
                 logger.info("managed_connector_preflight_passed provider=%s", provider)
                 return resolved_id
         except ConnectorConfigurationError as exc:
@@ -518,6 +535,15 @@ class NangoClient:
                 "ok": False,
                 "reason": "missing_access_token",
                 "retryable": True,
+            }
+        granted = credentials.get("scope") or credentials.get("scopes")
+        if provider == "google" and granted and not (
+            _scope_set(granted) & GOOGLE_DOC_WRITE_SCOPES
+        ):
+            return integration_id, {
+                "ok": False,
+                "reason": "google_docs_write_permission_missing",
+                "retryable": False,
             }
         try:
             verification = await verify_oauth_credentials(provider, credentials)
