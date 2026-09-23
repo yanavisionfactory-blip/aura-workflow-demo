@@ -339,6 +339,11 @@ function SchemaArgumentsEditor({ contract, args, editing, onArgumentsChange, onF
 function EditablePresentation({ args, contract, editing, onArgumentsChange, onFieldValidity }) {
   const phases = Array.isArray(args.phases) ? args.phases : [];
   const slideCount = args.layout === "slides" ? phases.length : 1;
+  const sceneNames = {
+    rain_window: "Rain at the window",
+    paper_boat: "Paper boat",
+    lantern: "Lantern",
+  };
   const phaseLimit = contract.fields?.find((field) => field.key === "phases")?.max_items || 4;
   const updatePhase = (index, patch) => {
     const next = phases.map((phase, phaseIndex) => phaseIndex === index ? { ...phase, ...patch } : phase);
@@ -380,6 +385,10 @@ function EditablePresentation({ args, contract, editing, onArgumentsChange, onFi
                     <input aria-label={`Phase ${index + 1} period`} value={phase.period || ""} onChange={(event) => updatePhase(index, { period: event.target.value })} placeholder="Date" className="w-full border-b border-white/10 bg-transparent text-[9px] font-semibold uppercase tracking-wide text-emerald-300 outline-none focus:border-emerald-300" />
                     <input aria-label={`Phase ${index + 1} title`} value={phase.title || ""} onChange={(event) => updatePhase(index, { title: event.target.value })} placeholder="Slide section" className="mt-1 w-full border-b border-white/10 bg-transparent text-[10px] font-semibold text-white outline-none focus:border-cyan-300 sm:text-xs" />
                     <textarea aria-label={`Phase ${index + 1} items`} value={(phase.items || []).join("\n")} onChange={(event) => updatePhase(index, { items: event.target.value.split("\n").map((item) => item.trim()).filter(Boolean) })} rows={3} placeholder="One point per line" className="mt-2 w-full resize-none border-b border-white/10 bg-transparent text-[8px] leading-relaxed text-slate-300 outline-none focus:border-cyan-300 sm:text-[10px]" />
+                    {args.layout === "slides" && <select aria-label={`Phase ${index + 1} illustration`} value={phase.scene || ""} onChange={(event) => updatePhase(index, { scene: event.target.value || undefined })} className="mt-2 w-full border-b border-white/10 bg-[#101c2c] text-[10px] text-slate-300 outline-none focus:border-cyan-300">
+                      <option value="">Text only</option>
+                      {Object.entries(sceneNames).map(([scene, label]) => <option key={scene} value={scene}>{label}</option>)}
+                    </select>}
                   </>
                 ) : (
                   <>
@@ -388,6 +397,7 @@ function EditablePresentation({ args, contract, editing, onArgumentsChange, onFi
                     <div className="mt-2 space-y-1">
                       {(phase.items || []).slice(0, 5).map((item, itemIndex) => <p key={itemIndex} className="truncate text-[8px] text-slate-300 sm:text-[10px]">• {item}</p>)}
                     </div>
+                    {args.layout === "slides" && <p className="mt-2 text-[10px] text-slate-400">Illustration: {sceneNames[phase.scene] || "Text only"}</p>}
                   </>
                 )}
               </div>
@@ -543,7 +553,7 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
       <div className="pl-10 space-y-3">
         {step.reviewContract ? (
           <>
-            {richEmail && <EditableEmail preview={p} onPreviewChange={updatePreview} editing={editing} artifacts={contract.artifacts || []} />}
+            {richEmail && <EditableEmail preview={p} onPreviewChange={updatePreview} editing={editing} artifacts={contract.artifacts || (Array.isArray(args.attachments) ? args.attachments.map((attachment) => ({ name: attachment.filename || "Attachment", source: "From this workflow" })) : [])} />}
             {richTicket && <EditableJiraTask preview={p} onPreviewChange={updatePreview} editing={editing} />}
             {richDocument && <EditableDocument preview={p} onPreviewChange={updatePreview} editing={editing} />}
             {richPresentation && (
