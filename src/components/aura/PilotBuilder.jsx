@@ -27,9 +27,11 @@ export default function PilotBuilder({ onSubmit, onBack, initialValues = null })
       setError("Enter a future event within 30 days as YYYY-MM-DD HH:mm, with start and end at most four hours apart.");
       return;
     }
-    if (!fields.doc_body.trim() || bullets.length < 1 || bullets.length > 5
-        || bullets.some((item) => item.length > 90)) {
-      setError("Add document text and one to five slide bullets, each under 90 characters.");
+    if (!fields.doc_body.trim() || (!illustratedPoem && (bullets.length < 1 || bullets.length > 5
+        || bullets.some((item) => item.length > 90)))) {
+      setError(illustratedPoem
+        ? "Add the poem text before reviewing the illustrated plan."
+        : "Add document text and one to five slide bullets, each under 90 characters.");
       return;
     }
     setError("");
@@ -37,7 +39,7 @@ export default function PilotBuilder({ onSubmit, onBack, initialValues = null })
       doc_title: fields.doc_title.trim(), doc_body: fields.doc_body.trim(),
       event_title: fields.event_title.trim(), event_start: start.toISOString(),
       event_end: end.toISOString(), canva_title: fields.canva_title.trim(),
-      canva_bullets: bullets, email_to: "me", illustrated_poem: illustratedPoem,
+      canva_bullets: illustratedPoem ? [] : bullets, email_to: "me", illustrated_poem: illustratedPoem,
     }));
   };
 

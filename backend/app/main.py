@@ -6550,7 +6550,18 @@ async def generate_workspace_json(
             "Do not claim that external actions happened."
         ),
     )
-    result = await Runner.run(agent, payload.prompt + schema_instruction, max_turns=4)
+    try:
+        result = await Runner.run(agent, payload.prompt + schema_instruction, max_turns=4)
+    except Exception as exc:
+        from .orchestrator import planning_error_message
+        from .run_supervisor import PLANNING_QUOTA_MESSAGE
+
+        message = planning_error_message(exc)
+        if message == PLANNING_QUOTA_MESSAGE:
+            raise HTTPException(503, message) from exc
+        if "temporarily busy" in message:
+            raise HTTPException(429, message) from exc
+        raise HTTPException(502, "AURA intelligence could not generate a response. Please try again.") from exc
     raw = str(result.final_output).strip()
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
