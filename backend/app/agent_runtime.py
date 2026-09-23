@@ -1460,9 +1460,17 @@ async def synthesize_result(prompt: str, accepted_artifacts: list[dict],
     from .pilot_template import PILOT_PREFIX
 
     if prompt.startswith(PILOT_PREFIX) and _verified_pilot_receipts(accepted_artifacts):
+        illustrated_poem = json.loads(prompt[len(PILOT_PREFIX):]).get("illustrated_poem") is True
         return UnifiedDeliverable(
-            summary="The four-app pilot completed with provider read-back receipts.",
+            summary=("The poem, illustrated Canva PDF, Gmail delivery, and presentation event were verified."
+                     if illustrated_poem else
+                     "The four-app pilot completed with provider read-back receipts."),
             deliverable=(
+                "The poem was written in Google Docs, three illustrated Canva pages were "
+                "exported as a PDF, Gmail sent the full poem with that PDF to the connected "
+                "account, and the presentation event was created. Open the provider results "
+                "for exact links and identifiers."
+                if illustrated_poem else
                 "The Google Doc and Calendar event were created, the Canva slide was "
                 "exported as a PDF, and Gmail delivered it to the connected account. "
                 "Open the recorded provider results for exact links and identifiers."

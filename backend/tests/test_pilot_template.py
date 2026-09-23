@@ -3,13 +3,16 @@
 import asyncio
 import json
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 
 import pytest
+from pptx import Presentation
 
 from app import agent_runtime, orchestrator
 from app.connection_permissions import verification_permission_fixes
 from app.native_connectors import native_manifest
 from app.pilot_template import PILOT_OPERATIONS, PILOT_PREFIX, PilotInputError, pilot_template
+from app.presentation_content import render_timeline
 
 
 def inventory(connected=True):
@@ -77,6 +80,37 @@ def test_pilot_marks_partial_grants_for_reconnection():
     connected[0]["allowed_operations"].remove("gmail.get")
     plan = pilot_template(pilot_prompt(), connected)
     assert plan.planning_artifacts["connection_requirements"] == ["google"]
+
+
+POEM = (
+    "Morning opens the window\nThe rain turns gold\nA new day waits\nA small hope wakes\n\n"
+    "A paper boat takes the river\nIt crosses the silent street\nThe sunlight finds its way\nAnd warms the world again\n\n"
+    "Carry a lantern in the night\nHold its warmth against the wind\nShare the light with others\nAnd welcome tomorrow together"
+)
+
+
+def test_illustrated_poem_is_imported_into_canva_and_mailed_with_full_text():
+    prompt = pilot_prompt(doc_title="When Tomorrow Opens", doc_body=POEM,
+                          illustrated_poem=True)
+    plan = pilot_template(prompt, inventory())
+    presentation = plan.steps[2].arguments
+    assert [phase["scene"] for phase in presentation["phases"]] == [
+        "rain_window", "paper_boat", "lantern"]
+    deck = Presentation(BytesIO(render_timeline(presentation)))
+    assert len(deck.slides) == 3
+    for slide, phase in zip(deck.slides, presentation["phases"], strict=True):
+        assert len([shape for shape in slide.shapes if shape.shape_type == 13]) == 1
+        text = "\n".join(shape.text for shape in slide.shapes if shape.has_text_frame)
+        assert all(line in text for line in phase["items"])
+    email = plan.steps[-1].arguments
+    assert POEM in email["body"]
+    assert email["to"] == "me"
+    assert email["attachments"][0]["filename"] == "Illustrated poem.pdf"
+
+
+def test_illustrated_poem_rejects_text_without_three_complete_verses():
+    with pytest.raises(PilotInputError, match="three verses"):
+        pilot_template(pilot_prompt(illustrated_poem=True), inventory())
 
 
 def receipts():
