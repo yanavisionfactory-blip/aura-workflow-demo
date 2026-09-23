@@ -11,12 +11,41 @@ import pytest
 from pptx import Presentation
 
 from app import file_delivery
+from app.native_connectors import NativeConnectorError
+from app.orchestrator import _include_requested_story_in_email
 from app.outcome_checks import build_outcome_check, evaluate_outcome_check
 from app.presentation_content import render_timeline
 from app.providers import ProviderExecutor
+from app.schemas import PlanStep, WorkflowPlan
 
 PDF = b'%PDF-1.7\nroadmap fixture\n%%EOF'
 URL = 'https://export-download.canva.com/fixture.pdf'
+
+
+def test_requested_story_and_pdf_appear_in_the_exact_approved_email():
+    story = 'A paper boat followed the lantern across the pond.'
+    plan = WorkflowPlan(name='Story delivery', interpretation='Email story and PDF', steps=[
+        PlanStep(key='doc', agent='Docs', tool_slug='google', operation='docs.create',
+                 arguments={'title': 'Paper Boat', 'body': story}, reason='Write story',
+                 expected_output='Document'),
+        PlanStep(key='mail', agent='Mail', tool_slug='google', operation='gmail.send',
+                 arguments={'to': 'me', 'body': 'The story is attached.',
+                            'attachments': [{'filename': 'Illustrations.pdf',
+                                             'url': '{{steps.export.job.urls[0]}}'}]},
+                 reason='Send story and PDF', expected_output='Delivery', depends_on=['doc']),
+    ])
+    request = 'Write a story in Google Docs, then email the story and PDF to me.'
+
+    _include_requested_story_in_email(plan, request)
+    assert story in plan.steps[1].arguments['body']
+    assert 'The story is attached.' not in plan.steps[1].arguments['body']
+    assert plan.steps[1].arguments['attachments'][0]['filename'] == 'Illustrations.pdf'
+    _include_requested_story_in_email(plan, request)
+    assert plan.steps[1].arguments['body'].count(story) == 1
+
+    plan.steps[1].arguments['attachments'] = []
+    with pytest.raises(NativeConnectorError, match='PDF attachment'):
+        _include_requested_story_in_email(plan, request)
 
 
 def test_populated_timeline_has_one_slide_and_all_approved_text():

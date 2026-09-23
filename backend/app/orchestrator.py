@@ -540,6 +540,31 @@ def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict]) -> None:
             )
 
 
+def _include_requested_story_in_email(plan, prompt: str) -> None:
+    """Keep a requested story and PDF visible in the exact approved email."""
+    if not re.search(r"\b(?:email|send)\b[^.]{0,120}\bstory\s+and\s+(?:the\s+)?pdf\b", prompt, re.IGNORECASE):
+        return
+    doc = next((step for step in plan.steps if step.operation == "docs.create"), None)
+    mail = next((step for step in plan.steps if step.operation == "gmail.send"), None)
+    if not doc or not mail:
+        return
+    attachments = mail.arguments.get("attachments") or []
+    if not any(
+        isinstance(item, dict) and str(item.get("filename", "")).lower().endswith(".pdf")
+        for item in attachments
+    ):
+        raise NativeConnectorError("Emailing the requested story and PDF requires a PDF attachment")
+    story = doc.arguments.get("body")
+    if not isinstance(story, str) or not story.strip() or "{{" in story:
+        raise NativeConnectorError("The story must be grounded in the reviewed Google Doc before email delivery")
+    body = str(mail.arguments.get("body") or "")
+    if story.strip() not in body:
+        title = str(doc.arguments.get("title") or "the requested story")
+        mail.arguments["body"] = (
+            f"Here is {title}. The illustrated Canva PDF is attached.\n\n{story.strip()}"
+        )
+
+
 async def _create_compiled_plan(
     prompt: str,
     inventory: list[dict],
@@ -663,6 +688,7 @@ async def _create_compiled_plan(
                     "The requested file attachment must be present in gmail.send attachments, not substituted with a body link"
                 )
             _normalize_planned_steps(plan, manifests_by_slug)
+            _include_requested_story_in_email(plan, prompt)
             from .operation_contracts import compile_contracts
 
             plan.planning_artifacts["compiled_contracts"] = compile_contracts(
