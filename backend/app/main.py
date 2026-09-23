@@ -2366,7 +2366,10 @@ async def create_connector_broker_session(
             ),
             None,
         )
-        if reusable:
+        # An explicit reconnect must offer fresh consent even when the old
+        # account still passes a health check. Health alone does not prove
+        # that its OAuth grant includes the requested write permissions.
+        if reusable and not connection_id:
             verification = await client.verify_account(
                 external_user_id,
                 vendor_app,

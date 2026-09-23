@@ -772,6 +772,61 @@ async def test_broker_session_uses_released_mcp_bridge_without_registry_lookup(
     client.get_app.assert_not_awaited()
 
 
+async def test_explicit_pipedream_reconnect_offers_fresh_consent_even_if_healthy(
+    monkeypatch, database
+):
+    config = settings()
+    user_id = opaque_external_user_id("workspace-1", "user-1", config)
+    client = SimpleNamespace(
+        configured=True,
+        verify_account=AsyncMock(return_value={"ok": True}),
+        create_connect_token=AsyncMock(
+            return_value={"token": "new-consent-token", "expires_at": "soon"}
+        ),
+    )
+    pack = SimpleNamespace(
+        id="pack-1",
+        definition={"identity": {"app": "google_docs"}, "connection_strategy": "oauth"},
+    )
+    monkeypatch.setattr(main, "settings", config)
+    monkeypatch.setattr(
+        main, "managed_connector_client", lambda: SimpleNamespace(configured=True)
+    )
+    monkeypatch.setattr(main, "pipedream_client", lambda: client)
+    monkeypatch.setattr(main, "released_pipedream_pack", AsyncMock(return_value=pack))
+
+    async with database() as session:
+        session.add(Workspace(id="workspace-1", name="Reconnect test"))
+        tool = ToolConnection(
+            id="tool-docs",
+            workspace_id="workspace-1",
+            slug="google-docs",
+            display_name="Google Docs",
+            kind=ToolKind.oauth,
+            external_connection_id="apn_existing",
+            config={"managed_by": "pipedream", "external_user_id": user_id},
+            enabled=True,
+        )
+        session.add(tool)
+        await session.commit()
+
+        result = await main.create_connector_broker_session(
+            "google_docs",
+            connection_id=tool.id,
+            context=main.TenantContext("workspace-1", "user-1", "owner"),
+            session=session,
+        )
+
+        assert result["backend"] == "pipedream"
+        assert result["token"] == "new-consent-token"
+        assert result["account_id"] == "apn_existing"
+        assert result["connection_id"] == tool.id
+        assert "already_connected" not in result
+        assert tool.external_connection_id == "apn_existing"
+        client.create_connect_token.assert_awaited_once_with(user_id)
+        client.verify_account.assert_not_awaited()
+
+
 async def test_verified_connection_resumes_only_a_fully_satisfied_run(database):
     async with database() as session:
         session.add(Workspace(id="workspace-1", name="Broker test"))
