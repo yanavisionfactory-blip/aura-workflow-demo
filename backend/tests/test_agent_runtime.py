@@ -97,6 +97,23 @@ def test_google_doc_write_uses_native_receipt_when_both_connectors_exist() -> No
     )} == {"google-docs", "google"}
 
 
+def test_connected_separate_google_docs_writer_is_available_for_story() -> None:
+    inventory = [
+        {"slug": "google-docs", "name": "Google Docs", "connected": True,
+         "allowed_operations": ["google-docs.create-document", "google-docs.get-document"]},
+        {"slug": "google", "name": "Google Workspace", "connected": True,
+         "allowed_operations": ["docs.create", "docs.get", "gmail.send"]},
+        {"slug": "canva", "name": "Canva", "connected": True,
+         "allowed_operations": ["canva.presentation.create"]},
+    ]
+    bounded = intent_bounded_tool_inventory(
+        "Write a story in Google Docs and illustrate it in Canva", inventory,
+    )
+    assert {item["slug"] for item in bounded} == {"google-docs", "google", "canva"}
+    assert "docs.create" not in next(item for item in bounded if item["slug"] == "google")["allowed_operations"]
+    assert "gmail.send" in next(item for item in bounded if item["slug"] == "google")["allowed_operations"]
+
+
 def test_open_ended_intent_preserves_the_full_inventory() -> None:
     inventory = [
         {"slug": "alpha", "name": "Alpha", "allowed_operations": ["alpha.read"]},
