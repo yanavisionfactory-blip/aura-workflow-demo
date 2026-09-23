@@ -47,6 +47,13 @@ def test_requested_story_and_pdf_appear_in_the_exact_approved_email():
     with pytest.raises(NativeConnectorError, match='PDF attachment'):
         _include_requested_story_in_email(plan, request)
 
+    plan.steps[1].arguments['attachments'] = [{'filename': 'Illustrations.pdf'}]
+    plan.steps[0].arguments['body'] = (
+        '[Original short story text to be drafted from the user request before execution]'
+    )
+    with pytest.raises(NativeConnectorError, match='finished original story'):
+        _include_requested_story_in_email(plan, request)
+
 
 def test_explicit_illustration_labels_render_as_approved_canva_scenes():
     phase = {'period': 'Scene 1', 'title': 'Paper boat',
