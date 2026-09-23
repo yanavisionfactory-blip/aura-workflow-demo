@@ -42,6 +42,23 @@ class PilotFields(BaseModel):
     canva_title: str = Field(min_length=1, max_length=50)
     canva_bullets: list[str] = Field(min_length=1, max_length=5)
     email_to: Literal["me"]
+    illustrated_poem: bool = False
+
+
+def _poem_phases(body: str) -> list[dict]:
+    stanzas = [stanza.strip().splitlines() for stanza in body.strip().split("\n\n")]
+    if (len(stanzas) != 3 or any(len(lines) < 3 or len(lines) > 4 for lines in stanzas)
+            or any(not line.strip() or len(line) > 90 for lines in stanzas for line in lines)):
+        raise PilotInputError(
+            "The illustrated poem needs exactly three verses of three or four short lines each."
+        )
+    scenes = ("rain_window", "paper_boat", "lantern")
+    titles = ("First light", "A small voyage", "Carry the light")
+    return [
+        {"period": f"Verse {index + 1}", "title": titles[index],
+         "items": [line.strip() for line in lines], "scene": scenes[index]}
+        for index, lines in enumerate(stanzas)
+    ]
 
 
 def _owner(inventory: list[dict], operation: str) -> dict | None:
@@ -85,12 +102,26 @@ def pilot_template(prompt: str, inventory: list[dict]) -> WorkflowPlan | None:
             "The pilot needs the native Google and Canva connections. Connect both accounts and try again."
         )
     slug = {op: str(operations[op]["slug"]) for op in PILOT_OPERATIONS}
+    phases = (
+        _poem_phases(fields.doc_body) if fields.illustrated_poem
+        else [{"period": "Pilot", "title": "Pilot briefing", "items": fields.canva_bullets}]
+    )
+    delivery_body = (
+        f"{fields.doc_title}\n\n{fields.doc_body}\n\n"
+        "The illustrated Canva PDF is attached. The same poem was created in Google Docs, "
+        f"and its presentation is scheduled as '{fields.event_title}'."
+        if fields.illustrated_poem else (
+            f"The pilot Google Doc '{fields.doc_title}' and calendar event "
+            f"'{fields.event_title}' are ready. The Canva PDF is attached."
+        )
+    )
     steps = [
         {
             "key": "create_doc", "agent": "Google Docs Agent",
             "tool_slug": slug["docs.create"], "operation": "docs.create",
             "arguments": {"title": fields.doc_title, "body": fields.doc_body},
-            "reason": "Create the exact pilot document you supplied.",
+            "reason": "Write the complete poem in Google Docs." if fields.illustrated_poem
+            else "Create the exact pilot document you supplied.",
             "expected_output": "Verified Google Doc identity and text.",
             "consequential": True, "required_evidence": ["write_receipt"],
         },
@@ -114,11 +145,12 @@ def pilot_template(prompt: str, inventory: list[dict]) -> WorkflowPlan | None:
             "operation": "canva.presentation.create",
             "arguments": {
                 "title": fields.canva_title, "layout": "slides",
-                "phases": [{"period": "Pilot", "title": "Pilot briefing",
-                            "items": fields.canva_bullets}],
+                "phases": phases,
             },
-            "reason": "Create a populated Canva slide from the exact bullets you supplied.",
-            "expected_output": "Verified populated Canva design.",
+            "reason": "Illustrate all three verses in Canva." if fields.illustrated_poem
+            else "Create a populated Canva slide from the exact bullets you supplied.",
+            "expected_output": "Verified three-page illustrated Canva design." if fields.illustrated_poem
+            else "Verified populated Canva design.",
             "consequential": True, "depends_on": ["create_event"],
             "required_evidence": ["dispatch_receipt", "populated_presentation"],
         },
@@ -136,23 +168,26 @@ def pilot_template(prompt: str, inventory: list[dict]) -> WorkflowPlan | None:
             "key": "send_email", "agent": "Gmail Delivery Agent",
             "tool_slug": slug["gmail.send"], "operation": "gmail.send",
             "arguments": {
-                "to": "me", "subject": f"AURA pilot: {fields.doc_title}",
-                "body": (
-                    f"The pilot Google Doc '{fields.doc_title}' and calendar event "
-                    f"'{fields.event_title}' are ready. The Canva PDF is attached."
-                ),
-                "attachments": [{"filename": "AURA pilot.pdf",
+                "to": "me", "subject": f"{fields.doc_title} — poem and illustrations"
+                if fields.illustrated_poem else f"AURA pilot: {fields.doc_title}",
+                "body": delivery_body,
+                "attachments": [{"filename": "Illustrated poem.pdf" if fields.illustrated_poem
+                                 else "AURA pilot.pdf",
                                  "url": "{{steps.export_canva.job.urls[0]}}"}],
             },
-            "reason": "Email the verified Canva PDF to your connected Gmail account.",
+            "reason": "Email the poem and illustrated PDF to your connected Gmail account."
+            if fields.illustrated_poem else "Email the verified Canva PDF to your connected Gmail account.",
             "expected_output": "Verified Gmail delivery with the PDF attached.",
             "consequential": True, "depends_on": ["export_canva"],
             "required_evidence": ["write_receipt"],
         },
     ]
     plan = WorkflowPlan.model_validate({
-        "name": "AURA four-app pilot",
+        "name": "Poem and illustrations pilot" if fields.illustrated_poem else "AURA four-app pilot",
         "interpretation": (
+            "Write the poem in Google Docs, illustrate its three verses in Canva, "
+            "email the poem and PDF to your connected Gmail account, and schedule its presentation."
+            if fields.illustrated_poem else
             "Create the supplied Google Doc, calendar event, and Canva slide, "
             "then send the verified PDF to your connected Gmail account."
         ),

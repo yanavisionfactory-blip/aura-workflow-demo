@@ -10,7 +10,8 @@ PHASE_SCHEMA = {"type": "object", "additionalProperties": False,
         "period": {"type": "string", "minLength": 1, "maxLength": 24},
         "title": {"type": "string", "minLength": 1, "maxLength": 40},
         "items": {"type": "array", "minItems": 1, "maxItems": 5,
-                  "items": {"type": "string", "minLength": 1, "maxLength": 90}}}}
+                  "items": {"type": "string", "minLength": 1, "maxLength": 90}},
+        "scene": {"type": "string", "enum": ["rain_window", "paper_boat", "lantern"]}}}
 PRESENTATION_SCHEMA = {"type": "object", "additionalProperties": False,
     "required": ["title", "phases"], "properties": {
         "title": {"type": "string", "minLength": 1, "maxLength": 50},
@@ -47,13 +48,21 @@ def render_timeline(arguments: dict) -> bytes:
             slide.background.fill.solid()
             slide.background.fill.fore_color.rgb = RGBColor.from_string('101C2C')
             accent = accents[index % len(accents)]
+            illustrated = bool(phase.get("scene"))
+            if illustrated:
+                from .poem_art import render_poem_scene
+
+                slide.shapes.add_picture(BytesIO(render_poem_scene(phase["scene"])),
+                                         Inches(8.25), Inches(1.1),
+                                         width=Inches(6.85), height=Inches(6.7))
             label(slide, .75, .5, 12.5, .45, arguments['title'], 15, 'B7C7D9', True)
             label(slide, .75, 1.25, 14.4, .45, phase['period'].upper(), 15, accent, True)
             label(slide, .75, 1.85, 14.4, 1.0, phase['title'], 34, 'FFFFFF', True)
             for item_index, item in enumerate(phase['items']):
                 label(
-                    slide, 1.0, 3.15 + item_index * .92, 13.8, .8,
-                    f"•  {item}", 18, 'DCE6F1'
+                    slide, 1.0, 3.15 + item_index * .92,
+                    6.7 if illustrated else 13.8, .8,
+                    item if illustrated else f"•  {item}", 19 if illustrated else 18, 'DCE6F1'
                 )
             label(slide, .75, 8.25, 13.2, .3, arguments.get('subtitle', ''), 10, '8295AA')
             label(slide, 14.2, 8.25, 1.0, .3, f"{index + 1} / {len(phases)}", 10, accent, True)
