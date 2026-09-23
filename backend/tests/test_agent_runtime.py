@@ -1081,6 +1081,41 @@ def test_staged_planner_agents_allow_flexible_workflow_schemas() -> None:
 
     for key in ("intent", "router", "builder"):
         assert agents[key].output_type.is_strict_json_schema() is False
+    assert agents["compact_builder"].output_type.is_strict_json_schema() is True
+
+
+def test_staged_planner_recovers_invalid_builder_json_with_closed_schema(monkeypatch) -> None:
+    agents = {name: name for name in ("intent", "router", "builder", "compact_builder")}
+    seen = []
+
+    async def fake_run(agent, payload, max_turns=8):
+        seen.append(agent)
+        if agent == "intent":
+            return {"goal": "Create the requested document"}
+        if agent == "router":
+            return {"tools": [{"slug": "google-docs", "role": "writer", "rationale": "Create a document"}]}
+        if agent == "builder":
+            raise RuntimeError("Invalid JSON when parsing model output")
+        return {
+            "name": "Document", "interpretation": "Create the requested document",
+            "steps": [{
+                "key": "create_doc", "agent": "Docs Agent", "tool_slug": "google-docs",
+                "operation": "docs.create", "arguments_json": '{"title":"Story","body":"Text"}',
+                "reason": "Create the requested document", "expected_output": "Document",
+                "consequential": True, "depends_on": [], "required_evidence": ["write_receipt"],
+            }],
+        }
+
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+    result = asyncio.run(agent_runtime._run_staged_planner(agents, {
+        "user_request": "Create a document", "executable_tool_inventory": [{
+            "slug": "google-docs", "name": "Google Docs", "kind": "native",
+            "allowed_operations": ["docs.create"], "connected": True,
+        }],
+    }))
+
+    assert seen == ["intent", "router", "builder", "compact_builder"]
+    assert result.plan.steps[0].arguments == {"title": "Story", "body": "Text"}
 
 
 def test_combined_planner_retries_invalid_json_once(monkeypatch) -> None:

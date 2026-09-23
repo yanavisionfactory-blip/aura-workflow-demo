@@ -132,6 +132,29 @@ async def test_exhausted_api_credits_stop_retries_and_show_operator_action(datab
         assert intent is None
 
 
+async def test_repeated_malformed_plans_stop_before_eight_expensive_rounds(database):
+    async with database() as session:
+        run = WorkflowRun(
+            id="malformed-run", workspace_id="workspace", prompt="Create a document",
+            status=RunStatus.planning,
+            execution_context={"__aura_supervisor__": {"attempts": {"planning": 3}}},
+        )
+        session.add(run)
+        await session.commit()
+
+        outcome = await recover_planning_failure(
+            session, run, RuntimeError("Invalid JSON when parsing model output"),
+            max_attempts=8, base_delay_seconds=1, max_delay_seconds=30,
+        )
+        await session.commit()
+
+        assert outcome == "internal_incident"
+        assert run.status == RunStatus.blocked
+        assert run.execution_context["__aura_supervisor__"]["attempts"]["planning"] == 4
+        intent = await session.scalar(select(DispatchIntent).where(DispatchIntent.run_id == run.id))
+        assert intent is None
+
+
 async def test_exhausted_recovery_opens_internal_incident_not_retry_ui(database):
     async with database() as session:
         run = WorkflowRun(

@@ -378,6 +378,11 @@ async def recover_planning_failure(
     attempts = state.get("attempts") if isinstance(state.get("attempts"), dict) else {}
     attempt = recovery_counter(attempts.get("planning")) + 1
     category = planning_failure_category(exc)
+    # Each malformed-plan attempt has already tried combined and staged model
+    # routes plus local repairs. Repeating that full sequence eight times burns
+    # credits without changing the schema or connector catalog.
+    if category == "malformed_plan":
+        max_attempts = min(max_attempts, 3)
     fingerprint = _failure_fingerprint(category, exc)
     action = _planning_action(category, attempt)
     history = recovery_list(state.get("failure_history"))[-19:]
