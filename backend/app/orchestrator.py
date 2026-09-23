@@ -610,6 +610,33 @@ def _normalize_illustrated_canva_slides(plan, prompt: str) -> None:
                             ).strip())
                         ]
                         break
+        if (
+            len(phases) == 3
+            and "paper boat" in prompt.casefold()
+            and "lantern" in prompt.casefold()
+        ):
+            available = [
+                scene for scene in ("rain_window", "paper_boat", "lantern")
+                if scene not in {phase.get("scene") for phase in phases if isinstance(phase, dict)}
+            ]
+            for phase in phases:
+                if not isinstance(phase, dict) or phase.get("scene"):
+                    continue
+                title = str(phase.get("title") or "").casefold()
+                items = " ".join(str(item) for item in phase.get("items") or []).casefold()
+                hints = (
+                    ("paper_boat", "boat"), ("lantern", "lantern"),
+                    ("rain_window", "rain"), ("rain_window", "window"),
+                )
+                matching = next((scene for scene, word in hints if word in title and scene in available), None)
+                matching = matching or next(
+                    (scene for scene, word in hints if word in items and scene in available), None
+                )
+                phase["scene"] = matching or available[0]
+                available.remove(phase["scene"])
+        for phase in phases:
+            if not isinstance(phase, dict):
+                continue
             if not phase.get("scene"):
                 raise NativeConnectorError(
                     "Illustrated Canva slides require a scene field on every phase: "

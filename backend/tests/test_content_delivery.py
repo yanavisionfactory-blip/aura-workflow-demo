@@ -76,6 +76,25 @@ def test_explicit_illustration_labels_render_as_approved_canva_scenes():
         _normalize_illustrated_canva_slides(plan, prompt)
 
 
+def test_paper_boat_lantern_story_gets_three_distinct_built_in_scenes():
+    phases = [
+        {'period': 'Scene 1', 'title': 'The boat begins', 'items': ['It floats in rain.']},
+        {'period': 'Scene 2', 'title': 'The lantern shines', 'items': ['Warm light.']},
+        {'period': 'Scene 3', 'title': 'Home at last', 'items': ['Morning arrives.']},
+    ]
+    plan = WorkflowPlan(name='Illustrated story', interpretation='Create illustrations', steps=[
+        PlanStep(key='slides', agent='Canva', tool_slug='canva',
+                 operation='canva.presentation.create',
+                 arguments={'title': 'Story', 'layout': 'slides', 'phases': phases},
+                 reason='Illustrate the story', expected_output='Slides'),
+    ])
+    request = 'Create three illustrated Canva slides for a paper boat and lantern story.'
+
+    _normalize_illustrated_canva_slides(plan, request)
+    assert [phase['scene'] for phase in phases] == ['paper_boat', 'lantern', 'rain_window']
+    assert len(Presentation(BytesIO(render_timeline(plan.steps[0].arguments))).slides) == 3
+
+
 def test_populated_timeline_has_one_slide_and_all_approved_text():
     a = {'title': '90-day roadmap', 'subtitle': 'Product development', 'phases': [
         {'period': 'Days 1–30', 'title': 'Build', 'items': ['Planner and executor', 'Durable execution']},
