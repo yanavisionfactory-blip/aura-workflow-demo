@@ -185,6 +185,22 @@ def intent_bounded_tool_inventory(
             if "weather.forecast" in (item.get("allowed_operations") or [])
         )
 
+    # For a straightforward Google Doc write, the native Google account has
+    # typed create/read receipts. A similarly named marketplace action may be
+    # connected yet have no document receipt guarantee. Keep it available for
+    # other requests that need its distinct operations.
+    native_docs = any(
+        item.get("slug") == "google"
+        and {"docs.create", "docs.get"} <= set(item.get("allowed_operations") or [])
+        for item in inventory
+    )
+    if (native_docs and " google docs " in text
+            and set(text.split()).intersection({"create", "write", "draft"})):
+        selected = {
+            index for index in selected
+            if inventory[index].get("slug") != "google-docs"
+        }
+
     return [item for index, item in enumerate(inventory) if index in selected] or inventory
 
 
