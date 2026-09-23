@@ -204,7 +204,12 @@ export default function ConnectionsPill() {
         const result = await reconnectTool(name, managedConnection?.id);
         setManagedConnection({ ...result.tool, uiName: name });
       } else {
-        await testToolConnection(name, managedConnection?.id);
+        const result = await testToolConnection(name, managedConnection?.id);
+        if (result.status !== "verified" || result.verification?.ok !== true) {
+          throw new Error(result.verification?.reason === "google_docs_write_permission_missing"
+            ? "Google Docs cannot create files yet. Reconnect Google and grant Drive file creation access."
+            : `${name} needs a new authorization before AURA can use it.`);
+        }
       }
       await refreshConnections();
     } catch (cause) {

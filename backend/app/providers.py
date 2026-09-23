@@ -3,6 +3,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import re
 import time
 from dataclasses import dataclass
@@ -19,6 +20,8 @@ from .config import Settings, get_settings
 from .native_connectors import coerce_module_arguments
 from .reliability import AuthorizationRequired
 from .universal_connectors import capability_for
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -1017,13 +1020,30 @@ class ProviderExecutor:
             + body.encode("utf-8")
             + f"\r\n--{boundary}--\r\n".encode()
         )
-        return await self._request(
-            "POST",
-            "https://www.googleapis.com/upload/drive/v3/files",
-            params={"uploadType": "multipart", "fields": "id,name,mimeType,webViewLink"},
-            headers={"Content-Type": f"multipart/related; boundary={boundary}"},
-            content=content,
-        )
+        try:
+            return await self._request(
+                "POST",
+                "https://www.googleapis.com/upload/drive/v3/files",
+                params={"uploadType": "multipart", "fields": "id,name,mimeType,webViewLink"},
+                headers={"Content-Type": f"multipart/related; boundary={boundary}"},
+                content=content,
+            )
+        except httpx.HTTPStatusError as exc:
+            # Only the provider's fixed error category is logged. The response
+            # body can contain customer content and must never enter logs.
+            try:
+                error = exc.response.json().get("error") or {}
+                category = (error.get("errors") or [{}])[0].get("reason") or error.get("status")
+            except (ValueError, AttributeError, IndexError, TypeError):
+                category = None
+            safe_category = category if isinstance(category, str) and re.fullmatch(
+                r"[A-Za-z_]{3,64}", category
+            ) else "unknown"
+            logger.warning(
+                "google_docs_create_rejected status=%s reason=%s",
+                exc.response.status_code, safe_category,
+            )
+            raise
 
     async def _docs_get(self, a: dict) -> dict:
         result = await self._request(

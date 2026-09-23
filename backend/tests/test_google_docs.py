@@ -2,6 +2,7 @@
 
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from app.native_connectors import native_manifest
@@ -55,6 +56,23 @@ async def test_create_rejects_empty_content_without_an_external_write(monkeypatc
     with pytest.raises(ValueError, match="nonempty body"):
         await executor.execute("docs.create", {"title": "Empty", "body": "  "})
     request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_google_rejection_logs_only_a_fixed_reason(monkeypatch, caplog):
+    executor = ProviderExecutor({"access_token": "test-token"})
+    request = httpx.Request("POST", "https://www.googleapis.com/upload/drive/v3/files")
+    response = httpx.Response(403, request=request, json={"error": {
+        "status": "PERMISSION_DENIED", "errors": [{"reason": "insufficientPermissions"}],
+        "message": "private provider detail",
+    }})
+    monkeypatch.setattr(executor, "_request", AsyncMock(side_effect=httpx.HTTPStatusError(
+        "403 Forbidden", request=request, response=response,
+    )))
+    with pytest.raises(httpx.HTTPStatusError):
+        await executor.execute("docs.create", {"title": "Poem", "body": "Verse"})
+    assert "reason=insufficientPermissions" in caplog.text
+    assert "private provider detail" not in caplog.text
 
 
 def test_docs_require_scoped_consent_and_typed_readback():

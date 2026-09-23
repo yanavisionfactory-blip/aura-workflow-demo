@@ -15,7 +15,9 @@ from app.providers import PROVIDERS
 def integration(key="aura-jira", provider="jira", **credentials):
     return {"data": {"unique_key": key, "provider": provider, "credentials": {
         "type": "OAUTH2", "client_id": "OC-test" if provider == "canva" else "valid-id",
-        "client_secret": "valid-secret", **credentials,
+        "client_secret": "valid-secret",
+        **({"scopes": ",".join(PROVIDERS["google"].scopes)} if provider == "google" else {}),
+        **credentials,
     }}}
 
 
@@ -365,6 +367,23 @@ async def test_reconnect_has_same_preflight_and_admin_repair_is_immediate():
     await client.create_reconnect_session("jira", "connection", "workspace", "owner")
     assert [c[0] for c in client.calls] == ["GET", "GET", "POST"]
     assert client.calls[-1][1] == "/connect/sessions/reconnect"
+
+
+async def test_google_reconnect_rejects_integration_without_document_write_scope():
+    config = dynamic_settings()
+    config.nango_integration_map = '{"google":"google"}'
+    client = FakeNango([integration("google", "google", scopes="openid,email")], config=config)
+    with pytest.raises(ConnectorConfigurationError, match="google_docs_write_scope_not_configured"):
+        await client.create_reconnect_session("google", "connection", "workspace", "owner")
+    assert [call[0] for call in client.calls] == ["GET"]
+
+
+async def test_google_connection_rejects_known_token_without_document_write_scope():
+    client = FakeNango([{"credentials": {"access_token": "test", "scope": "openid email"}}])
+    client._integration_cache["google"] = "google"
+    _, verification = await client.verify_connection("google", {"connection_id": "connection"})
+    assert verification["reason"] == "google_docs_write_permission_missing"
+    assert verification["ok"] is False
 
 
 async def test_ambiguous_provider_mapping_is_not_guessed():
