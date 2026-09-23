@@ -58,3 +58,21 @@ test("reuses one verified account across action and MCP routes", () => {
     "mcp",
   );
 });
+
+test("calendar and documents can reuse the verified Google Workspace account", () => {
+  const tools = [{
+    id: "google-account", slug: "google", display_name: "Google Workspace",
+    enabled: true, status: "verified", verification: { ok: true },
+    allowed_operations: ["calendar.create", "docs.create", "gmail.send"],
+  }];
+  assert.equal(selectConnection(tools, { toolName: "Google Calendar", provider: "google-calendar" })?.id,
+    "google-account");
+  assert.equal(selectConnection(tools, { toolName: "Google Docs", provider: "google-docs" })?.id,
+    "google-account");
+});
+
+test("a Google account without calendar permission cannot satisfy Calendar", () => {
+  const tools = [{ id: "gmail-only", slug: "google", display_name: "Google Workspace",
+    allowed_operations: ["gmail.send", "docs.create"] }];
+  assert.equal(selectConnection(tools, { toolName: "Google Calendar", provider: "google" }), null);
+});

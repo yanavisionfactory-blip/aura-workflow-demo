@@ -538,6 +538,7 @@ async def _create_compiled_plan(
     available_input_names: set[str],
     manifests_by_slug: dict[str, dict],
     requested_tool_names: list[str] | tuple[str, ...] | set[str] = (),
+    excluded_tool_families: set[str] | frozenset[str] = frozenset(),
 ):
     """Build a schema-valid plan, repairing internal connector mismatches silently."""
     manifests_by_slug = {
@@ -546,6 +547,40 @@ async def _create_compiled_plan(
         )
         for item in inventory
     }
+    if excluded_tool_families:
+        from .connection_families import capability_family
+
+        def allowed(operation: str) -> bool:
+            return capability_family(operation.split(".", 1)[0]) not in excluded_tool_families
+
+        inventory = [
+            {**item, "allowed_operations": [op for op in item.get("allowed_operations", []) if allowed(op)]}
+            for item in inventory
+            if capability_family(item.get("slug")) not in excluded_tool_families
+        ]
+        included_slugs = {item["slug"] for item in inventory}
+        manifests_by_slug = {
+            slug: {**manifest, "capabilities": [
+                module for module in manifest.get("capabilities", [])
+                if allowed(module.get("name", ""))
+            ]}
+            for slug, manifest in manifests_by_slug.items()
+            if slug in included_slugs
+        }
+
+    def reject_excluded_steps(plan) -> None:
+        if not excluded_tool_families:
+            return
+        from .connection_families import capability_family
+
+        for planned_step in plan.steps:
+            for slug, operation in (
+                (planned_step.tool_slug, planned_step.operation),
+                (planned_step.fallback_tool_slug, planned_step.fallback_operation),
+            ):
+                if (capability_family(slug) in excluded_tool_families
+                    or capability_family(str(operation or "").split(".", 1)[0]) in excluded_tool_families):
+                    raise NativeConnectorError("The revised plan still uses an omitted app")
     inventory = [
         {
             **item,
@@ -582,6 +617,7 @@ async def _create_compiled_plan(
         or notion_to_jira_template(prompt, inventory)
     )
     if audited_plan is not None:
+        reject_excluded_steps(audited_plan)
         _normalize_planned_steps(audited_plan, manifests_by_slug)
         from .operation_contracts import compile_contracts
 
@@ -602,6 +638,7 @@ async def _create_compiled_plan(
             planner_repair_requirements=list(repair_requirements),
         )
         try:
+            reject_excluded_steps(plan)
             requested = prompt.casefold()
             if ("roadmap" in requested or "timeline" in requested) and any(
                 s.operation == "canva.design.create" for s in plan.steps
@@ -670,14 +707,18 @@ _PROMPT_CAPABILITY_ALIASES = {
 
 
 def _connection_family(item: dict) -> str:
+    from .connection_families import capability_family
+
+    slug_family = capability_family(item.get("slug"))
+    if slug_family in {"calendar", "docs", "drive", "sheets", "gmail"}:
+        return slug_family
     value = str(
         item.get("canonical_provider")
         or item.get("provider")
         or item.get("slug")
         or ""
     ).strip().casefold()
-    normalized = re.sub(r"[^a-z0-9]+", "-", value).strip("-")
-    return re.sub(r"-mcp$", "", normalized)
+    return capability_family(value)
 
 
 def _connection_capability_families(item: dict) -> set[str]:
@@ -854,7 +895,7 @@ def _capitalized_provider_candidates(prompt: str) -> list[str]:
 def _catalog_entry_inventory(item: dict, connected_families: set[str]) -> dict:
     provider = str(item.get("provider") or item.get("slug") or "").strip()
     canonical = str(item.get("canonical_provider") or provider).strip()
-    family = _connection_family({"canonical_provider": canonical})
+    family = _connection_family({"slug": provider, "canonical_provider": canonical})
     return {
         "slug": provider,
         "name": str(item.get("display_name") or item.get("name") or provider),
@@ -1133,6 +1174,13 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             for value in (run.inputs or {}).get("requested_tools", [])
             if value
         ]
+        from .connection_families import capability_family
+
+        excluded_families = {
+            capability_family(value)
+            for value in (run.inputs or {}).get("excluded_tool_families", [])
+            if isinstance(value, str)
+        }
         requirement_inventory = await connection_requirement_inventory(
             session, run.prompt, inventory, requested_tools
         )
@@ -1149,12 +1197,23 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                     set((run.inputs or {}).keys()),
                     manifests_by_slug,
                     requested_tools,
+                    excluded_families,
                 )
+            if excluded_families:
+                for planned_step in plan.steps:
+                    for slug, operation in (
+                        (planned_step.tool_slug, planned_step.operation),
+                        (planned_step.fallback_tool_slug, planned_step.fallback_operation),
+                    ):
+                        if (capability_family(slug) in excluded_families
+                            or capability_family(str(operation or "").split(".", 1)[0]) in excluded_families):
+                            raise NativeConnectorError("The revised plan still uses an omitted app")
             missing = complete_connection_requirements(
                 run.prompt,
                 list(plan.planning_artifacts.get("connection_requirements", [])),
                 requirement_inventory,
             )
+            missing = [item for item in missing if capability_family(item) not in excluded_families]
             if missing:
                 from .connection_recovery import reuse_managed_connection
                 from .semantic_memory import source_owner
@@ -1252,6 +1311,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             missing = complete_connection_requirements(
                 run.prompt, exc.missing_capabilities, requirement_inventory
             )
+            missing = [item for item in missing if capability_family(item) not in excluded_families]
             if not missing:
                 await audit(
                     session,
@@ -1326,6 +1386,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             missing = explicit_disconnected_capabilities(
                 run.prompt, requirement_inventory
             )
+            missing = [item for item in missing if capability_family(item) not in excluded_families]
             if missing:
                 for capability in missing:
                     session.add(

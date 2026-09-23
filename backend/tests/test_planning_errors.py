@@ -184,6 +184,53 @@ def test_google_workspace_connection_satisfies_named_gmail_family() -> None:
     assert actionable_connection_capabilities(["Gmail"], inventory) == []
 
 
+def test_google_workspace_satisfies_calendar_and_docs_marketplace_names() -> None:
+    inventory = [
+        {"slug": "google", "name": "Google Workspace", "connected": True,
+         "allowed_operations": ["calendar.create", "docs.create", "gmail.send"]},
+        {"slug": "google-calendar", "name": "Google Calendar", "connected": False},
+        {"slug": "google-docs", "name": "Google Docs", "connected": False},
+    ]
+    assert explicit_disconnected_capabilities(
+        "Create a Google Calendar event and a Google Doc", inventory
+    ) == []
+    assert actionable_connection_capabilities(["Google Calendar", "Google Docs"], inventory) == []
+
+
+def test_google_marketplace_app_keeps_its_family_even_with_shared_provider() -> None:
+    inventory = [
+        {"slug": "google", "canonical_provider": "google", "connected": True,
+         "allowed_operations": ["gmail.send", "docs.create"]},
+        {"slug": "google-calendar", "canonical_provider": "google", "name": "Google Calendar",
+         "connected": False},
+    ]
+    assert explicit_disconnected_capabilities("Create a Google Calendar event", inventory) == ["calendar"]
+
+
+def test_omitting_calendar_hides_its_operations_and_rejects_reintroduced_steps(monkeypatch) -> None:
+    seen = []
+
+    async def fake_create_plan(_prompt, inventory, *_args, **_kwargs):
+        seen.append(inventory)
+        step = SimpleNamespace(
+            tool_slug="google", operation="calendar.create", fallback_tool_slug=None,
+            fallback_operation=None,
+        )
+        return SimpleNamespace(steps=[step], planning_artifacts={})
+
+    monkeypatch.setattr(orchestrator, "create_plan", fake_create_plan)
+    with pytest.raises(NativeConnectorError, match="omitted app"):
+        asyncio.run(orchestrator._create_compiled_plan(
+            "Create a Google Calendar event", [{"slug": "google", "allowed_operations": [
+                "calendar.create", "docs.create"]}], set(), {"google": native_manifest("google")},
+            excluded_tool_families={"calendar"},
+        ))
+    assert len(seen) == 2
+    assert all(item[0]["allowed_operations"] == ["docs.create"] for item in seen)
+    assert all("calendar.create" not in [module["name"] for module in item[0]["operation_contracts"]]
+               for item in seen)
+
+
 def test_provider_candidates_ignore_instruction_words() -> None:
     assert _capitalized_provider_candidates(
         "Read my open Linear issues and prepare the summary for Slack."

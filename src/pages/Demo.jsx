@@ -358,6 +358,7 @@ export default function Demo() {
   const editOriginalStepsRef = useRef([]);
   const attachedResourcesRef = useRef(null);
   const userSelectedToolsRef = useRef([]);
+  const omittedToolsRef = useRef([]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -476,6 +477,7 @@ export default function Demo() {
     setAutoApprove(false);
     editOriginalStepsRef.current = [];
     userSelectedToolsRef.current = [];
+    omittedToolsRef.current = [];
   }, []);
 
   const handlePageBack = useCallback(() => {
@@ -497,6 +499,7 @@ export default function Demo() {
     originalPromptRef.current = prompt;
     attachedResourcesRef.current = resources;
     userSelectedToolsRef.current = (resources && resources.tools) || pinnedTools || [];
+    omittedToolsRef.current = [];
     resolvedErrorRef.current = false;
 
     if (mock) {
@@ -559,13 +562,17 @@ Write ONE clear, conversational sentence restating what they want — but offer 
       setInterpretation(editedInterpretation);
       if (!allowLegacyPlanner) {
         const confirmedIntent = editedInterpretation.trim() || originalPromptRef.current;
+        const availableCatalog = CATALOG.filter((tool) => !omittedToolsRef.current.includes(tool.name));
+        const selectedTools = userSelectedToolsRef.current.filter(
+          (tool) => !omittedToolsRef.current.includes(tool)
+        );
         const explicitRequirements = promptConnectionRequirements(
           confirmedIntent,
-          CATALOG.map((tool) => ({ ...tool, slug: tool.provider })),
+          availableCatalog.map((tool) => ({ ...tool, slug: tool.provider })),
           getAllConnections(),
         );
         const immediatePlan = {
-          ...instantLanguagePlan(confirmedIntent, CATALOG, userSelectedToolsRef.current),
+          ...instantLanguagePlan(confirmedIntent, availableCatalog, selectedTools),
           connectionRequirements: explicitRequirements,
         };
         const languageDraftGeneration = ++languageDraftGenerationRef.current;
@@ -576,9 +583,9 @@ Write ONE clear, conversational sentence restating what they want — but offer 
         setPlanLoading(false);
         setPhase("plan");
 
-        aura.integrations.Core
+        if (!omittedToolsRef.current.length) aura.integrations.Core
           .InvokeLLM({
-            prompt: languageDraftPrompt(confirmedIntent, userSelectedToolsRef.current),
+            prompt: languageDraftPrompt(confirmedIntent, selectedTools),
             response_json_schema: PLAN_SCHEMA,
           })
           .then((draft) => {
@@ -632,7 +639,8 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               || `aura-${Date.now()}-${Math.random().toString(36).slice(2)}`;
             const resources = attachedResourcesRef.current || {};
             const created = await createPythonRunResilient(planningPrompt, null, runRequestKeyRef.current, {
-              requested_tools: userSelectedToolsRef.current,
+              requested_tools: selectedTools,
+              excluded_tool_families: [...omittedToolsRef.current],
               saved_workflow_id: currentWorkflowIdRef.current,
               attached_documents: (resources.documents || []).map(({ name, file_url, size }) => ({
                 name,
@@ -822,6 +830,26 @@ Rules:
     (instruction) => handleConfirm(interpretation, instruction),
     [handleConfirm, interpretation]
   );
+
+  const handleSkipTool = useCallback((toolName) => {
+    omittedToolsRef.current = [...new Set([...omittedToolsRef.current, toolName])];
+    userSelectedToolsRef.current = userSelectedToolsRef.current.filter((tool) => tool !== toolName);
+    return handleConfirm(
+      interpretation,
+      `Omit ${toolName} and all steps or output content that depend on it. Deliver only the remaining useful outcomes. Never claim the omitted result exists; show the revised plan for approval.`,
+    );
+  }, [handleConfirm, interpretation]);
+
+  const handleReplaceTool = useCallback((toolName, replacement) => {
+    omittedToolsRef.current = [...new Set([...omittedToolsRef.current, toolName])];
+    userSelectedToolsRef.current = [...new Set([
+      ...userSelectedToolsRef.current.filter((tool) => tool !== toolName), replacement,
+    ])];
+    return handleConfirm(
+      interpretation,
+      `Replace ${toolName} with ${replacement}. Adapt the requested result to what ${replacement} can actually do, remove every dependent ${toolName} action and link, and show the revised plan for approval.`,
+    );
+  }, [handleConfirm, interpretation]);
 
   const handleRetryPlanning = useCallback(() => {
     const failedRunId = pythonRunIdRef.current;
@@ -1695,6 +1723,9 @@ Generate a results summary in plain, human-friendly language (not technical).
                     onRevisePlan={handlePlanRevision}
                     onRetryPlan={handleRetryPlanning}
                     onConnectionRecovered={handlePlanningConnectionRecovered}
+                    onSkipTool={handleSkipTool}
+                    onReplaceTool={handleReplaceTool}
+                    omittedTools={omittedToolsRef.current}
                     onBack={() => setPhase("confirm")}
                     approveLabel={editRunMode ? "Review changes" : "Start"}
                   />

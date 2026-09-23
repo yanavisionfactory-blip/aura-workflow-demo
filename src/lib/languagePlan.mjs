@@ -8,25 +8,40 @@ const lower = (value) => normalize(value).toLowerCase();
 
 const hasAny = (text, values) => values.some((value) => text.includes(value));
 
-const WRITE_WORDS = [
-  "add ", "book ", "create ", "delete ", "email ", "invite ", "post ",
-  "publish ", "schedule ", "send ", "sync ", "update ", "write ",
-];
+const TOOL_MENTIONS = {
+  "Google Docs": ["google docs", "google doc"],
+  "Google Calendar": ["google calendar", "calendar event"],
+  "Google Sheets": ["google sheets", "google sheet", "spreadsheet"],
+};
+
+const ACTION_VERBS = /\b(read|find|check|list|search|get|add|book|create|delete|email|invite|post|publish|schedule|send|sync|update|write)\b/g;
+const READ_VERBS = new Set(["read", "find", "check", "list", "search", "get"]);
+const WRITE_AFTER_TOOL = /^\s*:\s*(add|book|create|delete|email|invite|post|publish|schedule|send|sync|update|write)\b/;
+
+const writeIntentForTool = (text, tool) => {
+  const mentions = TOOL_MENTIONS[tool] || [tool.toLowerCase()];
+  for (const clause of text.split(/[;,.]/)) {
+    for (const mention of mentions) {
+      const position = clause.indexOf(mention);
+      if (position < 0) continue;
+      const verbs = [...clause.slice(0, position).matchAll(ACTION_VERBS)];
+      if (verbs.length && !READ_VERBS.has(verbs.at(-1)[0])) return verbs.at(-1)[0];
+      const after = clause.slice(position + mention.length).match(WRITE_AFTER_TOOL);
+      if (after) return after[1];
+    }
+  }
+  return null;
+};
 
 const TRANSFORM_WORDS = [
   "analyze", "compare", "draft", "extract", "prepare", "prioritize",
   "report", "summarize", "summary", "turn ",
 ];
 
-function actionForTool(prompt, tool, index, tools) {
+function actionForTool(prompt, tool) {
   const text = lower(prompt);
   const name = tool.toLowerCase();
-  const position = text.indexOf(name);
-  const context = position >= 0
-    ? text.slice(Math.max(0, position - 80), Math.min(text.length, position + name.length + 80))
-    : text;
-  const isLast = index === tools.length - 1;
-  const writes = hasAny(context, WRITE_WORDS) && (isLast || tools.length === 1);
+  const writeVerb = writeIntentForTool(text, tool);
 
   if (/weather|forecast/.test(name)) {
     return {
@@ -36,11 +51,17 @@ function actionForTool(prompt, tool, index, tools) {
       riskLevel: "read",
     };
   }
-  if (writes) {
+  if (writeVerb) {
+    const action = {
+      "Google Docs": { title: "Create the Google Doc", iWill: "prepare the complete Google Doc for creation", output: "Google Doc ready for review" },
+      "Google Calendar": { title: "Schedule the calendar event", iWill: "prepare the calendar event for creation", output: "Calendar event ready for review" },
+      Canva: { title: "Create the Canva presentation", iWill: "prepare the Canva presentation for creation", output: "Canva presentation ready for review" },
+      Gmail: { title: "Send the email", iWill: "prepare the email and its links for sending", output: "Email ready for review" },
+    }[tool];
     return {
-      title: `Update ${tool}`,
-      iWill: `prepare the requested change in ${tool}`,
-      output: `${tool} update ready for review`,
+      title: action?.title || `${writeVerb.charAt(0).toUpperCase()}${writeVerb.slice(1)} with ${tool}`,
+      iWill: action?.iWill || `prepare the requested ${tool} change for review`,
+      output: action?.output || `${tool} change ready for review`,
       riskLevel: "modify",
     };
   }
@@ -89,7 +110,7 @@ export function instantLanguagePlan(prompt = "", catalog = [], selectedTools = [
   const intent = normalize(prompt) || "Complete the requested workflow";
   const hinted = promptToolHints(intent, catalog, 8);
   const tools = [...new Set([...selectedTools, ...hinted].filter(Boolean))];
-  const steps = tools.map((tool, index) => step(tool, actionForTool(intent, tool, index, tools)));
+  const steps = tools.map((tool) => step(tool, actionForTool(intent, tool)));
   const text = lower(intent);
 
   if (hasAny(text, TRANSFORM_WORDS)) {
@@ -147,4 +168,3 @@ Return 2-6 ordered steps. Preserve every provider the user explicitly names. Add
 
 Each step needs: title, iWill, action, reason, output, flow, riskLevel, and riskNote. Use riskLevel "modify" for sending, posting, creating, deleting, scheduling, or updating; otherwise use "read". Tell the user they will review consequential changes. Keep wording concise and non-technical. Never claim that data has already been fetched or an action has already happened.`;
 }
-

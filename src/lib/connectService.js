@@ -1,5 +1,5 @@
 import { replaceConnections } from "@/lib/connectionsStore";
-import { isVerifiedConnection, selectConnection } from "@/lib/connectionSelection.mjs";
+import { isVerifiedConnection, matchingConnections, selectConnection } from "@/lib/connectionSelection.mjs";
 import {
   authorizeConnectorBroker,
   disconnectPythonConnection,
@@ -41,16 +41,17 @@ export async function connectTool(toolName, opts = {}) {
   let authorizationWindow = null;
   try {
     const existing = await getToolConnection(toolName, opts.connectionId, provider);
+    const authorizationProvider = existing?.slug || provider;
     const backend = existing?.connection_backend || requestedRoute?.connectionBackend || entry.connectionBackend;
-    if (backend !== "pipedream") authorizationWindow = reserveAuthorizationWindow(provider);
-    const result = await authorizeConnectorBroker(provider, {
+    if (backend !== "pipedream") authorizationWindow = reserveAuthorizationWindow(authorizationProvider);
+    const result = await authorizeConnectorBroker(authorizationProvider, {
       connection: existing,
       timeoutMs: 120000,
       reservedWindow: authorizationWindow,
     });
 
     if (result.redirecting) {
-      return { method: "oauth", connected: false, authorizationStarted: true, provider };
+      return { method: "oauth", connected: false, authorizationStarted: true, provider: authorizationProvider };
     }
     if (!result.tool?.id) throw new Error(`${toolName} access could not be verified.`);
     const verification = await testPythonConnection(result.tool.id);
@@ -61,7 +62,7 @@ export async function connectTool(toolName, opts = {}) {
     return {
       method: result.managed ? "managed" : "oauth",
       connected: true,
-      provider,
+      provider: authorizationProvider,
       connection: result.tool,
     };
   } catch (error) {
@@ -97,11 +98,7 @@ export async function hydrateConnections({ force = false } = {}) {
     for (const { tool, connected } of health) {
       if (!connected) continue;
       if (tool.display_name) map[tool.display_name] = true;
-      CATALOG.filter((entry) =>
-        entry.provider === tool.slug ||
-        entry.canonicalProvider === tool.canonical_provider ||
-        entry.routes?.some((route) => route.provider === tool.slug)
-      ).forEach((entry) => {
+      CATALOG.filter((entry) => matchingConnections([tool], entry.name, entry.provider).length).forEach((entry) => {
         map[entry.name] = true;
       });
     }

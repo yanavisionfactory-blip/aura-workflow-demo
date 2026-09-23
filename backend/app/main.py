@@ -2418,26 +2418,28 @@ async def create_connector_broker_session(
 
 
 def _requirement_accepts_tool(requirement: ConnectionRequirement, tool: ToolConnection) -> bool:
+    from .connection_families import capability_family
+
     providers = {
-        canonical_provider_slug(value).casefold()
+        capability_family(value)
         for value in (tool.slug, _pipedream_tool_vendor_app(tool))
         if str(value or "").strip()
     }
     capability = str(requirement.capability or "").casefold()
     provider_hint = str(requirement.provider_hint or "").casefold()
-    canonical_hint = canonical_provider_slug(provider_hint).casefold() if provider_hint else ""
+    canonical_hint = capability_family(provider_hint) if provider_hint else ""
     allowed = {str(item).casefold() for item in tool.allowed_operations or []}
     providers.update(
-        canonical_provider_slug(operation.split(".", 1)[0]).casefold()
+        capability_family(operation.split(".", 1)[0])
         for operation in allowed
         if operation
     )
-    capability_family = (
-        canonical_provider_slug(capability.split(".", 1)[0]).casefold() if capability else ""
+    requested_family = (
+        capability_family(capability.split(".", 1)[0]) if capability else ""
     )
     return bool(
         (canonical_hint and canonical_hint in providers)
-        or (capability_family and capability_family in providers)
+        or (requested_family and requested_family in providers)
         or capability in allowed
     )
 

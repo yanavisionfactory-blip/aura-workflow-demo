@@ -41,3 +41,25 @@ test("the model refinement contract explicitly ignores connection readiness", ()
   assert.match(prompt, /missing connection must never prevent the plan/i);
   assert.match(prompt, /Do not check connections/i);
 });
+
+test("a four-app creation request marks every external action for review", () => {
+  const apps = ["Google Docs", "Google Calendar", "Canva", "Gmail"];
+  const plan = instantLanguagePlan(
+    "Create a Google Doc; create a Google Calendar event; create a Canva presentation; send a Gmail message to me",
+    apps.map((name) => ({ name, provider: name === "Canva" ? "canva" : "google" })),
+    apps,
+  );
+
+  assert.deepEqual(plan.steps.map((item) => item.tool), apps);
+  assert.deepEqual(plan.steps.map((item) => item.riskLevel), ["modify", "modify", "modify", "modify"]);
+  assert.ok(plan.steps.every((item) => item.riskNote.includes("review")));
+});
+
+test("a read followed by another app's write stays a read", () => {
+  const plan = instantLanguagePlan(
+    "Read Google Calendar and create a Canva slide",
+    ["Google Calendar", "Canva"].map((name) => ({ name })),
+    ["Google Calendar", "Canva"],
+  );
+  assert.deepEqual(plan.steps.map((item) => item.riskLevel), ["read", "modify"]);
+});

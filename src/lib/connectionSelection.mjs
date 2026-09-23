@@ -1,5 +1,13 @@
 const normalized = (value) => String(value || "").trim().toLowerCase();
 
+const GOOGLE_FAMILY_OPERATION = {
+  "google calendar": "calendar.",
+  "google docs": "docs.",
+  "google drive": "drive.",
+  "google sheets": "sheets.",
+  gmail: "gmail.",
+};
+
 export function matchingConnections(tools, toolName, provider) {
   const name = normalized(toolName);
   const slug = name.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
@@ -8,7 +16,12 @@ export function matchingConnections(tools, toolName, provider) {
     const toolSlug = normalized(tool.slug);
     const canonicalProvider = normalized(tool.canonical_provider);
     const displayName = normalized(tool.display_name);
+    const googleOperation = GOOGLE_FAMILY_OPERATION[name];
+    const sharedGoogleAccount = toolSlug === "google" && googleOperation
+      && (tool.allowed_operations || []).some((operation) => operation.startsWith(googleOperation));
+    if (toolSlug === "google" && googleOperation && !sharedGoogleAccount) return false;
     return displayName === name || toolSlug === slug || canonicalProvider === slug ||
+      sharedGoogleAccount ||
       (providerSlug && (toolSlug === providerSlug || canonicalProvider === providerSlug));
   });
 }
