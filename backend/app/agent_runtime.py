@@ -229,7 +229,10 @@ def build_agents() -> dict[str, Agent]:
             purchasing is consequential. Use {{inputs.name}}, {{vars.name}}, or
             {{steps.key.field}} for reusable values. Plan only real external tool calls. Do not create
             provider steps for internal reasoning, normalization, mapping, summarization, or drafting;
-            perform those transformations between external calls. For public weather, use the listed
+            perform those transformations between external calls.
+            When asked to write a story in a document, provide the complete original story text
+            in the document body before review; never substitute a bracketed drafting note.
+            For public weather, use the listed
             AURA weather.forecast operation; it never requires a user connection. For Gmail requests
             addressed to "me" or "my Gmail", set the approved recipient to the literal value "me".
             Resolve relative dates using temporal_context, never the model training date.
@@ -296,6 +299,8 @@ def build_agents() -> dict[str, Agent]:
             dependencies explicitly. Use {{inputs.name}}, {{vars.name}}, or {{steps.key.field}} to pass
             values, and use structured conditions for branches. Include only real provider operations;
             internal reasoning, normalization, mapping, summarization, and drafting are not tool steps.
+            When writing a story in Google Docs, put the finished original story in docs.create body;
+            never leave a placeholder promising to write it later.
             A join after alternative branches uses
             dependency_mode all_settled. For public weather, use AURA weather.forecast. For Gmail
             requests addressed to the user's own inbox, set `to` to the literal `me`. Never invent
@@ -346,6 +351,8 @@ def build_agents() -> dict[str, Agent]:
             references for dependent values; never invent opaque IDs or recipients.
             Mark writes consequential and declare dependencies and required evidence.
             Do not send, schedule, or write unless the user requested that action.
+            For story creation, supply finished prose in the document body before review;
+            a placeholder or drafting instruction is not a story.
             The application checks every operation, argument, and dependency before
             any review or execution.""",
             AgentOutputSchema(CompactWorkflowPlan),

@@ -557,6 +557,16 @@ def _include_requested_story_in_email(plan, prompt: str) -> None:
     story = doc.arguments.get("body")
     if not isinstance(story, str) or not story.strip() or "{{" in story:
         raise NativeConnectorError("The story must be grounded in the reviewed Google Doc before email delivery")
+    if re.search(
+        r"\b(?:to be (?:drafted|written|filled)|placeholder|tbd|insert (?:the )?(?:story|text)|"
+        r"write (?:the )?story (?:here|later)|before execution)\b",
+        story,
+        re.IGNORECASE,
+    ) or (story.strip().startswith("[") and story.strip().endswith("]")):
+        raise NativeConnectorError(
+            "Google Docs must contain the finished original story, not a placeholder; "
+            "write its full text in docs.create body before emailing it"
+        )
     body = str(mail.arguments.get("body") or "")
     if story.strip() not in body:
         title = str(doc.arguments.get("title") or "the requested story")
