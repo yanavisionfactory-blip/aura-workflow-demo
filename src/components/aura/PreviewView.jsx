@@ -338,6 +338,7 @@ function SchemaArgumentsEditor({ contract, args, editing, onArgumentsChange, onF
 
 function EditablePresentation({ args, contract, editing, onArgumentsChange, onFieldValidity }) {
   const phases = Array.isArray(args.phases) ? args.phases : [];
+  const slideCount = args.layout === "slides" ? phases.length : 1;
   const phaseLimit = contract.fields?.find((field) => field.key === "phases")?.max_items || 4;
   const updatePhase = (index, patch) => {
     const next = phases.map((phase, phaseIndex) => phaseIndex === index ? { ...phase, ...patch } : phase);
@@ -350,7 +351,7 @@ function EditablePresentation({ args, contract, editing, onArgumentsChange, onFi
         <div className="flex items-center gap-2 border-b border-white/8 px-4 py-2.5">
           <Presentation className="h-3.5 w-3.5 text-cyan-300" />
           <span className="text-xs font-medium">Live presentation preview</span>
-          <span className="ml-auto text-[10px] text-muted-foreground">1 slide</span>
+          <span className="ml-auto text-[10px] text-muted-foreground">{slideCount} {slideCount === 1 ? "slide" : "slides"}</span>
         </div>
         <div className="aspect-video p-5 sm:p-7">
           {editing ? (
@@ -397,7 +398,7 @@ function EditablePresentation({ args, contract, editing, onArgumentsChange, onFi
 
       {editing && (
         <div className="flex items-center justify-between rounded-xl border border-white/8 bg-card/40 px-4 py-3">
-          <p className="text-[11px] text-muted-foreground">Edit the text directly in the slide preview above.</p>
+          <p className="text-[11px] text-muted-foreground">Edit the {args.layout === "slides" ? "text for each slide" : "slide text"} above.</p>
           <div className="flex items-center gap-2">
             {phases.length > 1 && (
               <button type="button" onClick={() => onArgumentsChange({ ...args, phases: phases.slice(0, -1) })} className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-rose-300"><Trash2 className="h-3 w-3" /> Remove section</button>

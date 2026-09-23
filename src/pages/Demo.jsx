@@ -59,7 +59,9 @@ import {
 } from "@/lib/approvalReview.mjs";
 
 const STEP_DURATION = 2.6;
-const PLANNING_WAIT_TIMEOUT_MS = 30_000;
+// The durable planner may need multiple bounded model calls and contract repairs.
+// Keep the readable draft visible while it finishes instead of discarding its run.
+const PLANNING_WAIT_TIMEOUT_MS = 10 * 60_000;
 const PLANNING_POLL_INTERVAL_MS = 750;
 const PLANNING_TRANSIENT_FAILURE_LIMIT = 3;
 
@@ -654,7 +656,6 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             }
             lastPlanningIntentRef.current = confirmedIntent;
             const planningPrompt = planningRequestPrompt(confirmedIntent, revisionInstruction);
-            const planningDeadline = Date.now() + PLANNING_WAIT_TIMEOUT_MS;
             runRequestKeyRef.current ||= globalThis.crypto?.randomUUID?.()
               || `aura-${Date.now()}-${Math.random().toString(36).slice(2)}`;
             const resources = attachedResourcesRef.current || {};
@@ -669,11 +670,12 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               })),
             });
             pythonRunIdRef.current = created.id;
+            const planningDeadline = Date.now() + PLANNING_WAIT_TIMEOUT_MS;
             const generation = ++pythonPollGenerationRef.current;
             let run;
             for (;;) {
               if (Date.now() >= planningDeadline) {
-                throw new Error("AURA couldn't prepare this workflow within 30 seconds.");
+                throw new Error("AURA couldn't prepare this workflow within 10 minutes.");
               }
               run = await getPythonRunResilient(
                 created.id,
@@ -738,7 +740,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             runRequestKeyRef.current = null;
             setPlan((current) => ({
               ...(current || immediatePlan),
-              estimatedTime: error?.message?.includes("within 30 seconds")
+              estimatedTime: error?.message?.includes("within 10 minutes")
                 ? "Plan ready — preparation timed out"
                 : "Plan ready — one execution detail needs repair",
               connectionRequirements: explicitRequirements,
