@@ -1071,3 +1071,16 @@ def test_google_workspace_connection_satisfies_bare_gmail_requirement():
     )
 
     assert main._requirement_accepts_tool(requirement, tool) is True
+
+
+def test_google_workspace_connection_satisfies_calendar_marketplace_requirement():
+    tool = ToolConnection(
+        id="tool-google", workspace_id="workspace-1", slug="google",
+        display_name="Google Workspace", kind=ToolKind.oauth,
+        allowed_operations=["calendar.create", "docs.create"], enabled=True,
+    )
+    requirement = ConnectionRequirement(
+        workspace_id="workspace-1", run_id="run-1", capability="google-calendar",
+        provider_hint="google-calendar", reason="Calendar is required",
+    )
+    assert main._requirement_accepts_tool(requirement, tool) is True

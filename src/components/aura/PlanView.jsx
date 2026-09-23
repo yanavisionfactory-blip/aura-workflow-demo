@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { AlertTriangle, Brain, Plus, ArrowRight, Sparkles, Loader2, Check, X, RotateCcw } from "lucide-react";
@@ -7,7 +7,9 @@ import PlanStep from "./PlanStep";
 import PlanConnectionAlert from "./PlanConnectionAlert";
 import { CATALOG, catalogEntryFor } from "@/lib/toolCatalog";
 import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
-import { connectTool, hydrateConnections } from "@/lib/connectService";
+import { connectTool, getToolConnection, hydrateConnections } from "@/lib/connectService";
+import { testPythonConnection } from "@/lib/auraApi";
+import { isVerifiedConnection } from "@/lib/connectionSelection.mjs";
 import { planningConnectionsEnabled } from "@/lib/planningFlow.mjs";
 const resolveTool = (raw) => {
   if (!raw || typeof raw !== "string") return null;
@@ -93,6 +95,9 @@ export default function PlanView({
   approveLabel = "Start",
   requiredReconnectTools = [],
   onConnectionRecovered,
+  onSkipTool,
+  onReplaceTool,
+  omittedTools = [],
   onRevisePlan,
   onRetryPlan,
 }) {
@@ -120,7 +125,7 @@ export default function PlanView({
     try {
       const res = await connectTool(name, { provider });
       if (res.connected) {
-        await hydrateConnections();
+        await hydrateConnections({ force: true });
       }
       return res;
     } catch (e) {
@@ -222,6 +227,40 @@ export default function PlanView({
   const connectionCount = needed.length || planTools.length;
   const planningFailure = steps.length === 0 && Boolean(plan.error) && !connectionOnly;
   const connectionsCanOpen = planningConnectionsEnabled(plan.compileState);
+
+  const handleRecheck = useCallback(async (targetName = "") => {
+    if (!connectionsReady || !needed.length) return;
+    setConnectingTool(targetName || "accounts");
+    try {
+      await hydrateConnections({ force: true });
+      const recovered = [];
+      for (const tool of needed.filter((item) => !targetName || item.name === targetName)) {
+        const account = await getToolConnection(tool.name, null, tool.provider);
+        if (!account?.id || !isVerifiedConnection(await testPythonConnection(account.id))) continue;
+        recovered.push({ name: tool.name, connectionId: account.id });
+      }
+      if (recovered.length) await onConnectionRecovered?.(recovered);
+      else if (targetName) setConnectionErrors((previous) => ({
+        ...previous, [targetName]: "AURA has not verified this account yet. Finish provider consent, then check again.",
+      }));
+    } catch (error) {
+      if (targetName) setConnectionErrors((previous) => ({
+        ...previous, [targetName]: error?.message || "AURA couldn't verify this connection yet.",
+      }));
+    } finally {
+      setConnectingTool(null);
+    }
+  }, [connectionsReady, needed, onConnectionRecovered]);
+
+  useEffect(() => {
+    const onFocus = () => { if (document.visibilityState === "visible") void handleRecheck(); };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, [handleRecheck]);
 
   const onDragEnd = (res) => {
     if (!res.destination || res.source.index === res.destination.index) return;
@@ -359,6 +398,13 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         </p>
       </motion.div>
 
+      {omittedTools.length > 0 && (
+        <div className="mb-4 rounded-xl border border-amber-400/25 bg-amber-400/5 p-3 text-xs text-amber-100">
+          New plan without {omittedTools.join(", ")}. Any dependent steps and links must be removed.
+          Review the revised plan before starting it.
+        </div>
+      )}
+
       {plan.compileState === "blocked" && (
         <div className="mb-4 rounded-xl border border-amber-400/25 bg-amber-400/5 p-3 text-sm text-amber-100">
           <div className="flex items-center gap-2 font-medium">
@@ -411,6 +457,10 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         connectingTool={connectingTool}
         errors={connectionErrors}
         onConnectAll={handleConnectAll}
+        onRecheck={handleRecheck}
+        onSkipTool={onSkipTool}
+        onReplaceTool={onReplaceTool}
+        replacements={CATALOG.filter((entry) => connections[entry.name]).map((entry) => entry.name)}
         connectionEnabled={connectionsCanOpen}
       />
 

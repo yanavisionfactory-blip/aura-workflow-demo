@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { motion } from "framer-motion";
 import {
   AlertTriangle,
@@ -43,9 +44,15 @@ export default function PlanConnectionAlert({
   connectingTool,
   errors = {},
   onConnectAll,
+  onRecheck,
+  onSkipTool,
+  onReplaceTool,
+  replacements = [],
   userSelectedTools = [],
   connectionEnabled = true,
 }) {
+  const [replacing, setReplacing] = useState("");
+  const [replacement, setReplacement] = useState("");
   // Only surface connect prompts for tools AURA chose on its own (the user did
   // not pin them in the command input) and that aren't connected. Tools the
   // user explicitly selected are their responsibility — they connect those in
@@ -86,7 +93,7 @@ export default function PlanConnectionAlert({
           {isConnecting
             ? `Connecting ${connectingTool}…`
             : connectionEnabled
-              ? "Connect remaining accounts"
+              ? needed.length === 1 ? `Connect ${needed[0].name}` : "Connect remaining accounts"
               : "Validating required accounts…"}
         </button>
       </div>
@@ -113,6 +120,38 @@ export default function PlanConnectionAlert({
                   <p className="text-[11px] text-muted-foreground/70 mt-0.5 leading-relaxed">{cap(t.reason)}.</p>
                 )}
                 {error && <p className="mt-1 text-[11px] leading-relaxed text-red-300">{error}</p>}
+                {!connected && connectionEnabled && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <button type="button" onClick={() => onRecheck?.(t.name)} disabled={isConnecting}
+                      className="rounded-md border border-white/15 px-2.5 py-1 text-[11px] text-foreground hover:bg-white/5 disabled:opacity-50">
+                      I've connected it — check again
+                    </button>
+                    {onSkipTool && <button type="button" onClick={() => onSkipTool(t.name)} disabled={isConnecting}
+                      className="rounded-md border border-white/15 px-2.5 py-1 text-[11px] text-foreground hover:bg-white/5 disabled:opacity-50">
+                      Run without {t.name}
+                    </button>}
+                    {onReplaceTool && replacements.length > 0 && <button type="button"
+                      onClick={() => { setReplacing(replacing === t.name ? "" : t.name); setReplacement(""); }}
+                      disabled={isConnecting} className="rounded-md border border-white/15 px-2.5 py-1 text-[11px] text-foreground hover:bg-white/5 disabled:opacity-50">
+                      Replace tool
+                    </button>}
+                    {replacing === t.name && <div className="flex items-center gap-2 w-full">
+                      <select aria-label={`Replacement for ${t.name}`} value={replacement}
+                        onChange={(event) => setReplacement(event.target.value)}
+                        className="rounded-md border border-white/15 bg-card px-2 py-1 text-xs">
+                        <option value="">Choose a connected app</option>
+                        {replacements.filter((name) => name !== t.name).map((name) => (
+                          <option key={name} value={name}>{name}</option>
+                        ))}
+                      </select>
+                      <button type="button" disabled={!replacement} onClick={() => onReplaceTool(t.name, replacement)}
+                        className="rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground disabled:opacity-50">
+                        Revise plan
+                      </button>
+                    </div>}
+                    <p className="w-full text-[11px] text-muted-foreground/70">AURA will build a new plan for your review before any external action.</p>
+                  </div>
+                )}
               </div>
             </div>
           );

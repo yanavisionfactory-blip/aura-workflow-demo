@@ -8,25 +8,40 @@ const lower = (value) => normalize(value).toLowerCase();
 
 const hasAny = (text, values) => values.some((value) => text.includes(value));
 
-const WRITE_WORDS = [
-  "add ", "book ", "create ", "delete ", "email ", "invite ", "post ",
-  "publish ", "schedule ", "send ", "sync ", "update ", "write ",
-];
+const TOOL_MENTIONS = {
+  "Google Docs": ["google docs", "google doc"],
+  "Google Calendar": ["google calendar", "calendar event"],
+  "Google Sheets": ["google sheets", "google sheet", "spreadsheet"],
+};
+
+const ACTION_VERBS = /\b(read|find|check|list|search|get|add|book|create|delete|email|invite|post|publish|schedule|send|sync|update|write)\b/g;
+const READ_VERBS = new Set(["read", "find", "check", "list", "search", "get"]);
+const WRITE_AFTER_TOOL = /^\s*:\s*(add|book|create|delete|email|invite|post|publish|schedule|send|sync|update|write)\b/;
+
+const writeIntentForTool = (text, tool) => {
+  const mentions = TOOL_MENTIONS[tool] || [tool.toLowerCase()];
+  for (const clause of text.split(/[;,.]/)) {
+    for (const mention of mentions) {
+      const position = clause.indexOf(mention);
+      if (position < 0) continue;
+      const verbs = [...clause.slice(0, position).matchAll(ACTION_VERBS)];
+      if (verbs.length && !READ_VERBS.has(verbs.at(-1)[0])) return verbs.at(-1)[0];
+      const after = clause.slice(position + mention.length).match(WRITE_AFTER_TOOL);
+      if (after) return after[1];
+    }
+  }
+  return null;
+};
 
 const TRANSFORM_WORDS = [
   "analyze", "compare", "draft", "extract", "prepare", "prioritize",
   "report", "summarize", "summary", "turn ",
 ];
 
-function actionForTool(prompt, tool, index, tools) {
+function actionForTool(prompt, tool) {
   const text = lower(prompt);
   const name = tool.toLowerCase();
-  const position = text.indexOf(name);
-  const context = position >= 0
-    ? text.slice(Math.max(0, position - 80), Math.min(text.length, position + name.length + 80))
-    : text;
-  const isLast = index === tools.length - 1;
-  const writes = hasAny(context, WRITE_WORDS) && (isLast || tools.length === 1);
+  const writeVerb = writeIntentForTool(text, tool);
 
   if (/weather|forecast/.test(name)) {
     return {
@@ -36,18 +51,32 @@ function actionForTool(prompt, tool, index, tools) {
       riskLevel: "read",
     };
   }
-  if (writes) {
+  if (writeVerb) {
+    const creation = {
+      "Google Docs": { title: "Create the Google Doc", iWill: "prepare the requested document for creation", output: "Google Doc ready for review" },
+      "Google Calendar": { title: "Schedule the calendar event", iWill: "prepare the requested event for creation", output: "Calendar event ready for review" },
+      Canva: { title: "Create the Canva design", iWill: "prepare the requested design for creation", output: "Canva design ready for review" },
+      Gmail: { title: "Send the email", iWill: "prepare the requested email for sending", output: "Email ready for review" },
+    }[tool];
+    const action = ["create", "write", "schedule", "book", "send", "email"].includes(writeVerb)
+      ? creation : null;
     return {
-      title: `Update ${tool}`,
-      iWill: `prepare the requested change in ${tool}`,
-      output: `${tool} update ready for review`,
+      title: action?.title || `${writeVerb.charAt(0).toUpperCase()}${writeVerb.slice(1)} with ${tool}`,
+      iWill: action?.iWill || `prepare the requested ${tool} change for review`,
+      output: action?.output || `${tool} change ready for review`,
       riskLevel: "modify",
     };
   }
+  const read = {
+    "Google Docs": { title: "Read the relevant document", iWill: "read the Google Doc you specify", output: "Document content for the next step" },
+    "Google Calendar": { title: "Check the calendar", iWill: "check the calendar events you specify", output: "Relevant calendar events" },
+    Canva: { title: "Review the Canva design", iWill: "read the Canva design you specify", output: "Design content for the next step" },
+    Gmail: { title: "Read the relevant email", iWill: "read the Gmail message you specify", output: "Email content for the next step" },
+  }[tool];
   return {
-    title: `Get ${tool} data`,
-    iWill: `read the information needed from ${tool}`,
-    output: `${tool} source data`,
+    title: read?.title || `Read from ${tool}`,
+    iWill: read?.iWill || `read the relevant information you specify in ${tool}`,
+    output: read?.output || `Relevant information from ${tool}`,
     riskLevel: "read",
   };
 }
@@ -59,7 +88,7 @@ function step(tool, details) {
     title: details.title,
     iWill: details.iWill,
     action: details.iWill.charAt(0).toUpperCase() + details.iWill.slice(1),
-    detail: "Exact fields and provider actions are being validated backstage.",
+    detail: "AURA will confirm the exact items and changes before starting.",
     reason: details.iWill,
     output: details.output,
     flow: [
@@ -89,7 +118,7 @@ export function instantLanguagePlan(prompt = "", catalog = [], selectedTools = [
   const intent = normalize(prompt) || "Complete the requested workflow";
   const hinted = promptToolHints(intent, catalog, 8);
   const tools = [...new Set([...selectedTools, ...hinted].filter(Boolean))];
-  const steps = tools.map((tool, index) => step(tool, actionForTool(intent, tool, index, tools)));
+  const steps = tools.map((tool) => step(tool, actionForTool(intent, tool)));
   const text = lower(intent);
 
   if (hasAny(text, TRANSFORM_WORDS)) {
@@ -147,4 +176,3 @@ Return 2-6 ordered steps. Preserve every provider the user explicitly names. Add
 
 Each step needs: title, iWill, action, reason, output, flow, riskLevel, and riskNote. Use riskLevel "modify" for sending, posting, creating, deleting, scheduling, or updating; otherwise use "read". Tell the user they will review consequential changes. Keep wording concise and non-technical. Never claim that data has already been fetched or an action has already happened.`;
 }
-
