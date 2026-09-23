@@ -206,7 +206,10 @@ export default function ConnectionsPill() {
       } else {
         const result = await testToolConnection(name, managedConnection?.id);
         if (result.status !== "verified" || result.verification?.ok !== true) {
-          throw new Error(result.verification?.reason === "google_docs_write_permission_missing"
+          const reason = result.verification?.reason;
+          throw new Error(reason === "google_docs_write_scope_not_configured"
+            ? "AURA's Google connection is missing Drive file creation access in its app setup. An administrator must correct it; reconnecting your account will not fix this."
+            : reason === "google_docs_write_permission_missing"
             ? "Google Docs cannot create files yet. Reconnect Google and grant Drive file creation access."
             : `${name} needs a new authorization before AURA can use it.`);
         }

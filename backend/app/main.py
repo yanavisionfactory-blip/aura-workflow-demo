@@ -50,6 +50,7 @@ from .db import SessionLocal, engine, session_dependency, set_tenant_context
 from .dispatch import dispatch_pending, recovery_loop
 from .identity import IdentityError, organization_claims, verify_clerk_session
 from .managed_connectors import (
+    ConnectorConfigurationError,
     ManagedConnectorError,
     external_account_reference,
     managed_connection_reference,
@@ -3545,9 +3546,19 @@ async def test_connection(
                     {"connection_id": selected_reference},
                 )
             else:
-                _, result = await managed_connector_client().verify_connection(
+                client = managed_connector_client()
+                integration_id, result = await client.verify_connection(
                     tool.slug, {"connection_id": selected_reference}
                 )
+                if result.get("ok") and tool.slug == "google":
+                    try:
+                        await client.preflight("google", integration_id)
+                    except ConnectorConfigurationError as exc:
+                        result = {
+                            "ok": False,
+                            "reason": exc.code,
+                            "retryable": False,
+                        }
         except (ManagedConnectorError, KeyError):
             result = {"ok": False, "reason": "authorization_required"}
         manifest.verification = result
