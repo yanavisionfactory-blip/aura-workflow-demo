@@ -63,3 +63,15 @@ test("a read followed by another app's write stays a read", () => {
   );
   assert.deepEqual(plan.steps.map((item) => item.riskLevel), ["read", "modify"]);
 });
+
+test("a tool-only request uses plain descriptions without inventing chosen items", () => {
+  const apps = ["Google Docs", "Google Calendar", "Canva", "Gmail"];
+  const plan = instantLanguagePlan(
+    "Smoke test using Google Docs, Google Calendar, Canva, Gmail",
+    apps.map((name) => ({ name })), apps,
+  );
+  assert.deepEqual(plan.steps.map((item) => item.title), [
+    "Read the relevant document", "Check the calendar", "Review the Canva design", "Read the relevant email",
+  ]);
+  assert.ok(plan.steps.every((item) => item.iWill.includes("you specify")));
+});

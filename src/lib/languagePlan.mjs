@@ -52,12 +52,14 @@ function actionForTool(prompt, tool) {
     };
   }
   if (writeVerb) {
-    const action = {
-      "Google Docs": { title: "Create the Google Doc", iWill: "prepare the complete Google Doc for creation", output: "Google Doc ready for review" },
-      "Google Calendar": { title: "Schedule the calendar event", iWill: "prepare the calendar event for creation", output: "Calendar event ready for review" },
-      Canva: { title: "Create the Canva presentation", iWill: "prepare the Canva presentation for creation", output: "Canva presentation ready for review" },
-      Gmail: { title: "Send the email", iWill: "prepare the email and its links for sending", output: "Email ready for review" },
+    const creation = {
+      "Google Docs": { title: "Create the Google Doc", iWill: "prepare the requested document for creation", output: "Google Doc ready for review" },
+      "Google Calendar": { title: "Schedule the calendar event", iWill: "prepare the requested event for creation", output: "Calendar event ready for review" },
+      Canva: { title: "Create the Canva design", iWill: "prepare the requested design for creation", output: "Canva design ready for review" },
+      Gmail: { title: "Send the email", iWill: "prepare the requested email for sending", output: "Email ready for review" },
     }[tool];
+    const action = ["create", "write", "schedule", "book", "send", "email"].includes(writeVerb)
+      ? creation : null;
     return {
       title: action?.title || `${writeVerb.charAt(0).toUpperCase()}${writeVerb.slice(1)} with ${tool}`,
       iWill: action?.iWill || `prepare the requested ${tool} change for review`,
@@ -65,10 +67,16 @@ function actionForTool(prompt, tool) {
       riskLevel: "modify",
     };
   }
+  const read = {
+    "Google Docs": { title: "Read the relevant document", iWill: "read the Google Doc you specify", output: "Document content for the next step" },
+    "Google Calendar": { title: "Check the calendar", iWill: "check the calendar events you specify", output: "Relevant calendar events" },
+    Canva: { title: "Review the Canva design", iWill: "read the Canva design you specify", output: "Design content for the next step" },
+    Gmail: { title: "Read the relevant email", iWill: "read the Gmail message you specify", output: "Email content for the next step" },
+  }[tool];
   return {
-    title: `Get ${tool} data`,
-    iWill: `read the information needed from ${tool}`,
-    output: `${tool} source data`,
+    title: read?.title || `Read from ${tool}`,
+    iWill: read?.iWill || `read the relevant information you specify in ${tool}`,
+    output: read?.output || `Relevant information from ${tool}`,
     riskLevel: "read",
   };
 }
@@ -80,7 +88,7 @@ function step(tool, details) {
     title: details.title,
     iWill: details.iWill,
     action: details.iWill.charAt(0).toUpperCase() + details.iWill.slice(1),
-    detail: "Exact fields and provider actions are being validated backstage.",
+    detail: "AURA will confirm the exact items and changes before starting.",
     reason: details.iWill,
     output: details.output,
     flow: [
