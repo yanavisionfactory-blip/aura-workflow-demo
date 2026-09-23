@@ -1,21 +1,14 @@
 import { useState } from "react";
+import { formatLocalTime, parseLocalTime } from "@/lib/pilotTime.mjs";
 
 const PILOT_PREFIX = "AURA_PILOT_V1\n";
-
-function localDateTime(value) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "";
-  const pad = (number) => String(number).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
 
 export default function PilotBuilder({ onSubmit, onBack, initialValues = null }) {
   const [fields, setFields] = useState(() => ({
     doc_title: initialValues?.doc_title || "", doc_body: initialValues?.doc_body || "",
     event_title: initialValues?.event_title || "",
-    event_start: localDateTime(initialValues?.event_start),
-    event_end: localDateTime(initialValues?.event_end),
+    event_start: formatLocalTime(initialValues?.event_start),
+    event_end: formatLocalTime(initialValues?.event_end),
     canva_title: initialValues?.canva_title || "",
     canva_bullets: initialValues?.canva_bullets?.join("\n") || "",
   }));
@@ -24,13 +17,13 @@ export default function PilotBuilder({ onSubmit, onBack, initialValues = null })
 
   const submit = (event) => {
     event.preventDefault();
-    const start = new Date(fields.event_start);
-    const end = new Date(fields.event_end);
+    const start = parseLocalTime(fields.event_start);
+    const end = parseLocalTime(fields.event_end);
     const bullets = fields.canva_bullets.split("\n").map((item) => item.trim()).filter(Boolean);
-    if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())
-        || start <= new Date() || end <= start || end - start > 4 * 60 * 60 * 1000
+    if (!start || !end || start <= new Date() || end <= start
+        || end - start > 4 * 60 * 60 * 1000
         || end - new Date() > 30 * 24 * 60 * 60 * 1000) {
-      setError("Choose a future event within 30 days, with a valid start and end at most four hours apart.");
+      setError("Enter a future event within 30 days as YYYY-MM-DD HH:mm, with start and end at most four hours apart.");
       return;
     }
     if (!fields.doc_body.trim() || bullets.length < 1 || bullets.length > 5
@@ -74,8 +67,8 @@ export default function PilotBuilder({ onSubmit, onBack, initialValues = null })
       </label>
       {input("event_title", "Calendar event title")}
       <div className="grid gap-3 sm:grid-cols-2">
-        {input("event_start", "Start (your local time)", "datetime-local")}
-        {input("event_end", "End (your local time)", "datetime-local")}
+        {input("event_start", "Start (your local time, YYYY-MM-DD HH:mm)", "text", 16)}
+        {input("event_end", "End (your local time, YYYY-MM-DD HH:mm)", "text", 16)}
       </div>
       {input("canva_title", "Canva slide title", "text", 50)}
       <label className="flex flex-col gap-1 text-sm text-foreground/80">
