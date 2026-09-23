@@ -461,6 +461,35 @@ def output_errors(
             for error in Draft202012Validator(schema).iter_errors(result)]
 
 
+def canonicalize_requested_evidence(operation: str, requested: list[str], provided: list[str]) -> list[str]:
+    """Translate narrow model prose to existing verified connector guarantees.
+
+    Unknown or stronger evidence remains unchanged and fails compilation. This
+    cannot add a guarantee to a connector or waive an unsupported requirement.
+    """
+    available = set(provided)
+    resolved = []
+    for tag in requested:
+        words = tag.casefold().replace("_", " ")
+        replacement = None
+        if tag in available:
+            replacement = tag
+        elif "receipt" in words:
+            if "write_receipt" in available:
+                replacement = "write_receipt"
+            elif "dispatch_receipt" in available:
+                replacement = "dispatch_receipt"
+        elif operation == "google.identity.get" and "identity" in words and "account_identity" in available:
+            replacement = "account_identity"
+        elif operation == "calendar.list" and "search results" in words and "event_state" in available:
+            replacement = "event_state"
+        resolved.append(replacement or tag)
+        if (replacement == "dispatch_receipt" and operation == "canva.presentation.create"
+                and "populated_presentation" in available):
+            resolved.append("populated_presentation")
+    return list(dict.fromkeys(resolved))
+
+
 def compile_contracts(plan, manifests: dict) -> dict:
     """Validate declared evidence and output references before approval."""
     from .workflow_context import referenced_paths

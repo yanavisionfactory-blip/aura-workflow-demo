@@ -15,8 +15,18 @@ from app import dispatch, process_runtime, scheduler_runtime, worker
 from app.db import Base
 from app.models import DispatchIntent, RunStatus, WorkflowRun, Workspace
 from app.native_connectors import NATIVE_CONNECTORS, native_manifest
-from app.operation_contracts import KNOWN, compile_contracts, enrich_operation, output_errors
-from app.orchestrator import _operation_is_consequential, _prepare_provider_arguments
+from app.operation_contracts import (
+    KNOWN,
+    canonicalize_requested_evidence,
+    compile_contracts,
+    enrich_operation,
+    output_errors,
+)
+from app.orchestrator import (
+    _normalize_planned_steps,
+    _operation_is_consequential,
+    _prepare_provider_arguments,
+)
 from app.reliability import (
     BudgetExceeded,
     CallBudget,
@@ -115,6 +125,28 @@ def test_metadata_cannot_satisfy_a_body_content_requirement():
         compile_contracts(plan, {"notion": native_manifest("notion")})
     plan.steps[0].operation = "notion.blocks.children.list"
     assert compile_contracts(plan, {"notion": native_manifest("notion")})["page"]["provides"] == ["page_body"]
+
+
+def test_receipt_prose_maps_only_to_guarantees_the_connector_provides():
+    assert canonicalize_requested_evidence(
+        "canva.presentation.create", ["Canva presentation creation receipt"],
+        ["dispatch_receipt", "populated_presentation"],
+    ) == ["dispatch_receipt", "populated_presentation"]
+    assert canonicalize_requested_evidence(
+        "calendar.list", ["calendar search results", "document_body"], ["event_state"],
+    ) == ["event_state", "document_body"]
+    plan = WorkflowPlan(name="Doc", interpretation="Create doc", steps=[PlanStep(
+        key="doc", agent="Docs", tool_slug="google", operation="docs.create",
+        arguments={"title": "Story", "body": "Text"}, reason="Create doc",
+        expected_output="Doc receipt", required_evidence=["created Google Doc receipt"],
+    )])
+    manifests = {"google": native_manifest("google")}
+    _normalize_planned_steps(plan, manifests)
+    assert plan.steps[0].required_evidence == ["write_receipt"]
+    assert compile_contracts(plan, manifests)["doc"]["provides"] == ["write_receipt"]
+    plan.steps[0].required_evidence = ["document_body"]
+    with pytest.raises(ValueError, match="cannot supply"):
+        compile_contracts(plan, manifests)
 
 
 def test_invalid_output_reference_rejected_but_metadata_alias_compiles():

@@ -524,6 +524,13 @@ def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict]) -> None:
             # Approval declarations in verified connector contracts outrank an
             # optimistic planner classification, including external agents.
             planned_step.consequential = True
+        if capability and planned_step.required_evidence:
+            from .operation_contracts import canonicalize_requested_evidence, enrich_operation
+
+            provides = enrich_operation(capability)["reliability"]["provides"]
+            planned_step.required_evidence = canonicalize_requested_evidence(
+                planned_step.operation, planned_step.required_evidence, provides
+            )
         planned_step.arguments = normalize_planned_module_arguments(
             manifest, planned_step.operation, planned_step.arguments
         )
