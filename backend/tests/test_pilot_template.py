@@ -50,6 +50,11 @@ def test_pilot_compiles_without_a_model_or_inferred_fields(monkeypatch):
         {item["slug"]: native_manifest(item["slug"]) for item in connected},
     ))
     assert [step.operation for step in plan.steps] == list(PILOT_OPERATIONS)
+    event = plan.steps[1]
+    assert event.arguments["title"] in event.reason
+    assert datetime.fromisoformat(event.arguments["start"]["dateTime"]).strftime(
+        "%a %d %b %Y, %I:%M %p UTC%z"
+    ) in event.reason
     assert plan.steps[-1].arguments["to"] == "me"
     assert all(step.consequential for step in plan.steps if step.operation != "canva.export.create")
     assert plan.planning_artifacts["planner_recovery_mode"] == "audited_four_app_pilot_v1"

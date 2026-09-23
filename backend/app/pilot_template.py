@@ -134,7 +134,11 @@ def pilot_template(prompt: str, inventory: list[dict]) -> WorkflowPlan | None:
                 "start": {"dateTime": start.isoformat()},
                 "end": {"dateTime": end.isoformat()},
             },
-            "reason": "Create the pilot event at the exact time you specified.",
+            "reason": (
+                f"Schedule '{fields.event_title}' for "
+                f"{start:%a %d %b %Y, %I:%M %p UTC%z} to "
+                f"{end:%I:%M %p UTC%z}."
+            ),
             "expected_output": "Verified calendar event and time.",
             "consequential": True, "depends_on": ["create_doc"],
             "required_evidence": ["write_receipt"],
