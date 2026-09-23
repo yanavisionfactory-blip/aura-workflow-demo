@@ -412,6 +412,56 @@ async def test_google_connection_test_checks_integration_write_scope(monkeypatch
     assert tool.enabled is False
 
 
+async def test_google_reconnect_does_not_verify_old_connection(monkeypatch):
+    from app import main
+
+    tool = SimpleNamespace(
+        id="tool-1", workspace_id="workspace-1", slug="google",
+        config={"managed_by": "nango", "connection_id": "nango-1", "integration_id": "google"},
+        external_connection_id="nango-1",
+    )
+    session = SimpleNamespace(get=AsyncMock(return_value=tool))
+    client = SimpleNamespace(
+        find_connection=AsyncMock(return_value={"connection_id": "nango-1", "errors": []}),
+        connection_revision=AsyncMock(return_value="old-revision"),
+        verify_connection=AsyncMock(),
+    )
+    monkeypatch.setattr(main, "managed_connector_client", lambda: client)
+
+    result = await main.sync_managed_connector(
+        "google", connection_id="tool-1", previous_provider_updated_at="old-revision",
+        context=main.TenantContext("workspace-1", "user-1", "owner"), session=session,
+    )
+
+    assert result == {"connected": False, "status": "waiting_for_reauthorization"}
+    client.verify_connection.assert_not_awaited()
+
+
+async def test_google_reconnect_session_carries_original_provider_revision(monkeypatch):
+    from app import main
+
+    tool = SimpleNamespace(
+        id="tool-1", workspace_id="workspace-1", slug="google",
+        config={"managed_by": "nango", "connection_id": "nango-1", "integration_id": "google"},
+        external_connection_id="nango-1",
+    )
+    session = SimpleNamespace(get=AsyncMock(return_value=tool), add=Mock(), commit=AsyncMock())
+    client = SimpleNamespace(
+        connection_revision=AsyncMock(return_value="old-revision"),
+        create_reconnect_session=AsyncMock(return_value={"connect_link": "https://connect.example"}),
+    )
+    monkeypatch.setattr(main, "managed_connector_client", lambda: client)
+
+    result = await main.create_managed_connector_session(
+        "google", connection_id="tool-1",
+        context=main.TenantContext("workspace-1", "user-1", "owner"), session=session,
+    )
+
+    assert result["mode"] == "reconnect"
+    assert result["previous_provider_updated_at"] == "old-revision"
+    client.connection_revision.assert_awaited_once_with("nango-1", "google")
+
+
 async def test_ambiguous_provider_mapping_is_not_guessed():
     client = FakeNango([{"data": [
         {"unique_key": "one", "provider": "jira"},

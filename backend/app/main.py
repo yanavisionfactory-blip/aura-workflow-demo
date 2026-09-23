@@ -1773,6 +1773,19 @@ async def create_managed_connector_session(
             reconnect_arguments = (
                 {"integration_id": release_integration_id} if release_integration_id else {}
             )
+            previous_provider_updated_at = None
+            if provider == "google":
+                integration_id = (
+                    release_integration_id
+                    or ((selected_tool.config or {}).get("integration_id") if selected_tool else None)
+                ) or await client.integration_id(provider)
+                previous_provider_updated_at = await client.connection_revision(
+                    selected_reference, integration_id
+                )
+                if not previous_provider_updated_at:
+                    raise ManagedConnectorError(
+                        "AURA cannot verify Google's renewed authorization yet", retryable=False
+                    )
             result = await client.create_reconnect_session(
                 provider,
                 selected_reference,
@@ -1786,6 +1799,8 @@ async def create_managed_connector_session(
                     "connection_id": selected_tool.id if selected_tool else None,
                     "tool_connection_id": selected_tool.id if selected_tool else None,
                     "external_connection_id": selected_reference,
+                    **({"previous_provider_updated_at": previous_provider_updated_at}
+                       if previous_provider_updated_at else {}),
                 }
             )
         else:
@@ -1882,6 +1897,7 @@ async def sync_managed_connector(
     provider: str,
     connection_id: str | None = None,
     external_connection_id: str | None = None,
+    previous_provider_updated_at: str | None = None,
     context: TenantContext = Depends(tenant_context),
     session: AsyncSession = Depends(tenant_session),
 ) -> dict:
@@ -1944,6 +1960,18 @@ async def sync_managed_connector(
             "retryable": False,
             "connection_id": tool.id if tool else None,
         }
+    if provider == "google" and previous_provider_updated_at:
+        try:
+            integration_id = release_integration_id or (
+                (tool.config or {}).get("integration_id") if tool else None
+            ) or await client.integration_id(provider)
+            revision = await client.connection_revision(
+                str(connection["connection_id"]), integration_id
+            )
+        except ManagedConnectorError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        if not revision or revision == previous_provider_updated_at:
+            return {"connected": False, "status": "waiting_for_reauthorization"}
     try:
         if release:
             integration_id = release.integration_id
