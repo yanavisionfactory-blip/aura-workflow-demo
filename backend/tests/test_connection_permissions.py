@@ -21,6 +21,21 @@ def test_legacy_google_read_grant_supports_verification_idempotently():
     assert tool.allowed_operations == ["gmail.list", "gmail.send", "gmail.get"]
 
 
+def test_google_identity_without_drive_write_cannot_advertise_docs_create():
+    tool = connection(allowed_operations=["google.identity.get", "docs.create", "docs.get", "gmail.send"])
+    refresh_granted_readbacks(tool)
+    assert tool.allowed_operations == ["google.identity.get", "docs.get", "gmail.send"]
+
+
+@pytest.mark.parametrize("scope", ["https://www.googleapis.com/auth/drive.file",
+                                     "https://www.googleapis.com/auth/drive"])
+def test_google_doc_write_grant_is_preserved(scope):
+    tool = connection(allowed_operations=["docs.create", "docs.get"],
+        encrypted_credentials=CredentialVault().encrypt({"scope": scope}))
+    refresh_granted_readbacks(tool)
+    assert tool.allowed_operations == ["docs.create", "docs.get"]
+
+
 @pytest.mark.parametrize("changes", [
     {"enabled": False}, {"slug": "custom"}, {"kind": ToolKind.api_key},
     {"base_url": "https://example.test"}, {"config": {"managed_by": "nango"}},

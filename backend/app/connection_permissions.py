@@ -1,4 +1,6 @@
-"""Keep legacy native capabilities consistent with recorded provider grants."""
+"""Keep native capabilities consistent with recorded provider grants."""
+import re
+
 from .extended_outcomes import required_reads
 from .models import ToolKind
 from .security import CredentialVault
@@ -9,18 +11,29 @@ def refresh_granted_readbacks(tool) -> None:
     # before gmail.get was implemented. Both reads use the same OAuth grant.
     # Do not infer a grant from requested scopes or change custom/managed tools.
     if (tool.slug != "google" or tool.kind != ToolKind.oauth or not tool.enabled
-            or tool.base_url or tool.config or not tool.encrypted_credentials):
-        return
-    allowed = set(tool.allowed_operations or [])
-    if "gmail.get" in allowed or not {"gmail.list", "gmail.send"} <= allowed:
+            or tool.base_url or (tool.config or {}).get("managed_by")
+            or (tool.config or {}).get("oauth_custom")
+            or not tool.encrypted_credentials):
         return
     try:
         credentials = CredentialVault().decrypt(tool.encrypted_credentials)
     except RuntimeError:
         return
-    scopes = set(str(credentials.get("scope", "")).split())
-    if scopes & {"https://www.googleapis.com/auth/gmail.readonly",
-                 "https://www.googleapis.com/auth/gmail.modify", "https://mail.google.com/"}:
+    granted = credentials.get("scope") or credentials.get("scopes") or ""
+    scopes = set(re.split(r"[\s,]+", " ".join(granted) if isinstance(granted, list)
+                          else str(granted))) - {""}
+    allowed = set(tool.allowed_operations or [])
+    if "docs.create" in allowed and not scopes & {
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/drive",
+    }:
+        # A valid Google identity token does not imply file-creation consent.
+        # This grant is needed by the atomic Docs import used at execution.
+        tool.allowed_operations = [op for op in tool.allowed_operations if op != "docs.create"]
+    if {"gmail.list", "gmail.send"} <= allowed and scopes & {
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.modify", "https://mail.google.com/",
+    } and "gmail.get" not in allowed:
         tool.allowed_operations = [*tool.allowed_operations, "gmail.get"]
 
 

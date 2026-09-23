@@ -185,23 +185,42 @@ def intent_bounded_tool_inventory(
             if "weather.forecast" in (item.get("allowed_operations") or [])
         )
 
-    # For a straightforward Google Doc write, the native Google account has
-    # typed create/read receipts. A similarly named marketplace action may be
-    # connected yet have no document receipt guarantee. Keep it available for
-    # other requests that need its distinct operations.
+    # A connected, released Google Docs connector can create the complete
+    # document body. Do not hide it merely because a legacy Google Workspace
+    # connection advertises docs.create: that grant may lack Drive write access.
+    # Keep the native route when the separate connector has no create action.
+    separate_docs_writer = any(
+        item.get("slug") == "google-docs"
+        and item.get("connected")
+        and {"google-docs.create-document", "google-docs.get-document"}
+        <= set(item.get("allowed_operations") or [])
+        for item in inventory
+    )
     native_docs = any(
         item.get("slug") == "google"
         and {"docs.create", "docs.get"} <= set(item.get("allowed_operations") or [])
         for item in inventory
     )
-    if (native_docs and " google docs " in text
-            and set(text.split()).intersection({"create", "write", "draft"})):
+    writing_doc = " google docs " in text and bool(
+        set(text.split()).intersection({"create", "write", "draft"})
+    )
+    if native_docs and not separate_docs_writer and writing_doc:
         selected = {
             index for index in selected
             if inventory[index].get("slug") != "google-docs"
         }
 
-    return [item for index, item in enumerate(inventory) if index in selected] or inventory
+    bounded = [item for index, item in enumerate(inventory) if index in selected] or inventory
+    if separate_docs_writer and writing_doc:
+        # Gmail and Calendar may still use this same Google account. Remove only
+        # the overlapping Docs operations from the planner's candidate route.
+        bounded = [
+            {**item, "allowed_operations": [operation for operation in item.get("allowed_operations") or []
+                                                if operation not in {"docs.create", "docs.get"}]}
+            if item.get("slug") == "google" else item
+            for item in bounded
+        ]
+    return bounded
 
 
 def _agent(name: str, instructions: str, output_type):
