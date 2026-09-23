@@ -40,7 +40,7 @@ class PilotFields(BaseModel):
     event_start: datetime
     event_end: datetime
     canva_title: str = Field(min_length=1, max_length=50)
-    canva_bullets: list[str] = Field(min_length=1, max_length=5)
+    canva_bullets: list[str] = Field(default_factory=list, max_length=5)
     email_to: Literal["me"]
     illustrated_poem: bool = False
 
@@ -91,7 +91,9 @@ def pilot_template(prompt: str, inventory: list[dict]) -> WorkflowPlan | None:
     if end - start > timedelta(hours=4):
         raise PilotInputError("Keep the pilot event to four hours or less.")
     if not all(value.strip() for value in (fields.doc_title, fields.doc_body,
-                                           fields.event_title, fields.canva_title)) or any(
+                                           fields.event_title, fields.canva_title)) or (
+        not fields.illustrated_poem and not fields.canva_bullets
+    ) or any(
         not bullet.strip() or len(bullet) > 90 for bullet in fields.canva_bullets
     ):
         raise PilotInputError("Provide titles, document text, and one to five Canva bullets of at most 90 characters.")

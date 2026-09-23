@@ -96,7 +96,7 @@ POEM = (
 
 def test_illustrated_poem_is_imported_into_canva_and_mailed_with_full_text():
     prompt = pilot_prompt(doc_title="When Tomorrow Opens", doc_body=POEM,
-                          illustrated_poem=True)
+                          illustrated_poem=True, canva_bullets=[])
     plan = pilot_template(prompt, inventory())
     presentation = plan.steps[2].arguments
     assert [phase["scene"] for phase in presentation["phases"]] == [
@@ -111,6 +111,11 @@ def test_illustrated_poem_is_imported_into_canva_and_mailed_with_full_text():
     assert POEM in email["body"]
     assert email["to"] == "me"
     assert email["attachments"][0]["filename"] == "Illustrated poem.pdf"
+
+
+def test_plain_pilot_still_requires_bullets():
+    with pytest.raises(PilotInputError):
+        pilot_template(pilot_prompt(canva_bullets=[]), inventory())
 
 
 def test_illustrated_poem_rejects_text_without_three_complete_verses():

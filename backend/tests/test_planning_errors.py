@@ -2,8 +2,9 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
-from app import orchestrator
+from app import main, orchestrator
 from app.agent_runtime import _stop_model_retry
 from app.native_connectors import NativeConnectorError, native_manifest
 from app.orchestrator import (
@@ -14,6 +15,7 @@ from app.orchestrator import (
     explicit_disconnected_capabilities,
     planning_error_message,
 )
+from app.schemas import AiGenerateRequest
 
 
 class _ScalarRows:
@@ -88,6 +90,22 @@ def test_unknown_internal_error_is_never_exposed() -> None:
 
     assert message == "AURA couldn't build the plan right now. Please try again."
     assert "provider trace" not in message
+
+
+@pytest.mark.asyncio
+async def test_workspace_ai_reports_exhausted_credits_without_a_server_error(monkeypatch) -> None:
+    async def exhausted(*_args, **_kwargs):
+        raise RuntimeError("Error code: 429 credit_balance_exhausted private provider payload")
+
+    monkeypatch.setattr(main, "settings", SimpleNamespace(
+        openai_api_key="configured", openai_model="test-model"
+    ))
+    monkeypatch.setattr(main.Runner, "run", exhausted)
+    with pytest.raises(HTTPException) as error:
+        await main.generate_workspace_json(AiGenerateRequest(prompt="Draft a story"), None)
+    assert error.value.status_code == 503
+    assert "credits are exhausted" in error.value.detail
+    assert "private provider payload" not in error.value.detail
 
 
 def test_explicit_disconnected_capabilities_matches_named_provider_only() -> None:
