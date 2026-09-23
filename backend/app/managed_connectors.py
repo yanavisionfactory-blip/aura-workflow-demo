@@ -512,6 +512,15 @@ class NangoClient:
                 credentials.setdefault(key, value)
         return credentials
 
+    async def connection_revision(self, connection_id: str, integration_id: str) -> str:
+        """Read Nango's connection revision without exposing its credentials."""
+        result = await self._request(
+            "GET",
+            f"/connections/{quote(connection_id, safe='')}",
+            params={"provider_config_key": integration_id},
+        )
+        return str(result.get("updated_at") or "")
+
     async def verify_connection(self, provider: str, connection: dict) -> tuple[str, dict]:
         """Prove that a managed reference yields usable provider credentials."""
         connection_id = str(connection.get("connection_id", "")).strip()

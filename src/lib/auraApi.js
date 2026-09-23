@@ -201,6 +201,7 @@ export async function syncManagedConnector(provider, connection = {}) {
   const params = new URLSearchParams();
   if (connection.connectionId) params.set("connection_id", connection.connectionId);
   if (connection.externalConnectionId) params.set("external_connection_id", connection.externalConnectionId);
+  if (connection.previousProviderUpdatedAt) params.set("previous_provider_updated_at", connection.previousProviderUpdatedAt);
   const query = params.size ? `?${params.toString()}` : "";
   return request(`/v1/managed-connectors/${provider}/sync${query}`, { method: "POST" });
 }
@@ -243,6 +244,7 @@ export async function authorizeManagedConnector(provider, timeoutMs = 120000, re
     const result = await syncManagedConnector(provider, {
       connectionId: session.tool_connection_id,
       externalConnectionId: session.external_connection_id,
+      previousProviderUpdatedAt: session.previous_provider_updated_at,
     }).catch(() => null);
     if (result?.connected) {
       const verification = await testPythonConnection(result.tool_id || result.connection_id).catch(() => null);
