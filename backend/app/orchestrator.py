@@ -565,6 +565,48 @@ def _include_requested_story_in_email(plan, prompt: str) -> None:
         )
 
 
+def _normalize_illustrated_canva_slides(plan, prompt: str) -> None:
+    """Move explicit illustration labels into the scene field that renders art."""
+    if not re.search(
+        r"\billustrat(?:ed|ions?)\b.{0,40}\bcanva\b|\bcanva\b.{0,40}\billustrat(?:ed|ions?)\b",
+        prompt,
+        re.IGNORECASE | re.DOTALL,
+    ):
+        return
+    for step in plan.steps:
+        if step.operation != "canva.presentation.create" or step.arguments.get("layout") != "slides":
+            continue
+        phases = step.arguments.get("phases") or []
+        for phase in phases:
+            if not isinstance(phase, dict):
+                continue
+            items = phase.get("items") or []
+            if not phase.get("scene") and isinstance(items, list):
+                for item in items:
+                    if not isinstance(item, str):
+                        continue
+                    match = re.search(
+                        r"\billustration\s+scene\s*:\s*(rain_window|paper_boat|lantern)\b",
+                        item,
+                        re.IGNORECASE,
+                    )
+                    if match:
+                        phase["scene"] = match.group(1).lower()
+                        phase["items"] = [
+                            cleaned for value in items
+                            if (cleaned := re.sub(
+                                r"\billustration\s+scene\s*:\s*(?:rain_window|paper_boat|lantern)\b",
+                                "", value, flags=re.IGNORECASE,
+                            ).strip())
+                        ]
+                        break
+            if not phase.get("scene"):
+                raise NativeConnectorError(
+                    "Illustrated Canva slides require a scene field on every phase: "
+                    "rain_window, paper_boat, or lantern"
+                )
+
+
 async def _create_compiled_plan(
     prompt: str,
     inventory: list[dict],
@@ -689,6 +731,7 @@ async def _create_compiled_plan(
                 )
             _normalize_planned_steps(plan, manifests_by_slug)
             _include_requested_story_in_email(plan, prompt)
+            _normalize_illustrated_canva_slides(plan, prompt)
             from .operation_contracts import compile_contracts
 
             plan.planning_artifacts["compiled_contracts"] = compile_contracts(

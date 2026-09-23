@@ -12,7 +12,7 @@ from pptx import Presentation
 
 from app import file_delivery
 from app.native_connectors import NativeConnectorError
-from app.orchestrator import _include_requested_story_in_email
+from app.orchestrator import _include_requested_story_in_email, _normalize_illustrated_canva_slides
 from app.outcome_checks import build_outcome_check, evaluate_outcome_check
 from app.presentation_content import render_timeline
 from app.providers import ProviderExecutor
@@ -46,6 +46,27 @@ def test_requested_story_and_pdf_appear_in_the_exact_approved_email():
     plan.steps[1].arguments['attachments'] = []
     with pytest.raises(NativeConnectorError, match='PDF attachment'):
         _include_requested_story_in_email(plan, request)
+
+
+def test_explicit_illustration_labels_render_as_approved_canva_scenes():
+    phase = {'period': 'Scene 1', 'title': 'Paper boat',
+             'items': ['A small boat crosses the stream.', 'Illustration scene: paper_boat']}
+    plan = WorkflowPlan(name='Illustrated story', interpretation='Create illustrations', steps=[
+        PlanStep(key='slides', agent='Canva', tool_slug='canva',
+                 operation='canva.presentation.create',
+                 arguments={'title': 'Story', 'layout': 'slides', 'phases': [phase]},
+                 reason='Illustrate the story', expected_output='Slides'),
+    ])
+    prompt = 'Create illustrated Canva slides for my story.'
+
+    _normalize_illustrated_canva_slides(plan, prompt)
+    assert phase['scene'] == 'paper_boat'
+    assert phase['items'] == ['A small boat crosses the stream.']
+    assert len(Presentation(BytesIO(render_timeline(plan.steps[0].arguments))).slides) == 1
+
+    phase.pop('scene')
+    with pytest.raises(NativeConnectorError, match='scene field'):
+        _normalize_illustrated_canva_slides(plan, prompt)
 
 
 def test_populated_timeline_has_one_slide_and_all_approved_text():
