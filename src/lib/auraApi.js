@@ -298,6 +298,12 @@ export async function authorizeOAuth(provider, timeoutMs = 120000, reservedWindo
       if (oauthSignal.current?.status === "error") {
         throw new Error(oauthSignal.current.message || "The app did not grant AURA access.");
       }
+      // A connection test can update its timestamp while the OAuth popup is
+      // open. Only the provider callback proves a fresh authorization.
+      if (preparedSession && oauthSignal.current?.status !== "success") {
+        if (popup.closed) throw new Error("The app did not grant access. AURA kept your plan unchanged.");
+        continue;
+      }
       const tools = await listPythonTools().catch(() => []);
       const connected = tools.find((tool) =>
         tool.enabled &&
