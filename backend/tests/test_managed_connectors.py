@@ -386,6 +386,32 @@ async def test_google_connection_rejects_known_token_without_document_write_scop
     assert verification["ok"] is False
 
 
+async def test_google_connection_test_checks_integration_write_scope(monkeypatch):
+    from app import main
+
+    tool = SimpleNamespace(
+        id="tool-1", workspace_id="workspace-1", slug="google",
+        config={"managed_by": "nango", "connection_id": "nango-1"},
+        external_connection_id="nango-1", enabled=True,
+    )
+    manifest = SimpleNamespace(verification={"ok": True}, status="verified", verified_at=None)
+    session = SimpleNamespace(get=AsyncMock(return_value=tool), scalar=AsyncMock(return_value=manifest), commit=AsyncMock())
+    client = SimpleNamespace(
+        verify_connection=AsyncMock(return_value=("google", {"ok": True})),
+        preflight=AsyncMock(side_effect=ConnectorConfigurationError("google_docs_write_scope_not_configured")),
+    )
+    monkeypatch.setattr(main, "managed_connector_client", lambda: client)
+
+    result = await main.test_connection(
+        "tool-1", context=main.TenantContext("workspace-1", "user-1", "owner"), session=session,
+    )
+
+    client.preflight.assert_awaited_once_with("google", "google")
+    assert result["status"] == "degraded"
+    assert result["verification"]["reason"] == "google_docs_write_scope_not_configured"
+    assert tool.enabled is False
+
+
 async def test_ambiguous_provider_mapping_is_not_guessed():
     client = FakeNango([{"data": [
         {"unique_key": "one", "provider": "jira"},
