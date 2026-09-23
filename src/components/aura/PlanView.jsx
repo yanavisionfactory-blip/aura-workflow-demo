@@ -640,7 +640,7 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
             onClick={() => onApprove(steps, name.trim())}
-            disabled={missingTools.length > 0 || steps.length === 0 || Boolean(plan.error)}
+            disabled={missingTools.length > 0 || steps.length === 0 || Boolean(plan.error) || plan.compileState === "blocked"}
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white disabled:cursor-not-allowed disabled:opacity-40"
           >
             {approveLabel} <ArrowRight className="w-4 h-4" />
