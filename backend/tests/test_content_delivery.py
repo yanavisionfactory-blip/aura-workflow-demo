@@ -11,8 +11,13 @@ import pytest
 from pptx import Presentation
 
 from app import file_delivery
-from app.native_connectors import NativeConnectorError
-from app.orchestrator import _include_requested_story_in_email, _normalize_illustrated_canva_slides
+from app.native_connectors import NativeConnectorError, native_manifest
+from app.operation_contracts import compile_contracts
+from app.orchestrator import (
+    _ensure_document_body_readback,
+    _include_requested_story_in_email,
+    _normalize_illustrated_canva_slides,
+)
 from app.outcome_checks import build_outcome_check, evaluate_outcome_check
 from app.presentation_content import render_timeline
 from app.providers import ProviderExecutor
@@ -53,6 +58,28 @@ def test_requested_story_and_pdf_appear_in_the_exact_approved_email():
     )
     with pytest.raises(NativeConnectorError, match='finished original story'):
         _include_requested_story_in_email(plan, request)
+
+
+def test_document_body_evidence_uses_verified_readback_before_delivery():
+    plan = WorkflowPlan(name='Story delivery', interpretation='Verify story', steps=[
+        PlanStep(key='doc', agent='Docs', tool_slug='google', operation='docs.create',
+                 arguments={'title': 'Story', 'body': 'A paper boat followed a lantern.'},
+                 reason='Create the story', expected_output='Doc',
+                 consequential=True, required_evidence=['document_body']),
+        PlanStep(key='mail', agent='Mail', tool_slug='google', operation='gmail.send',
+                 arguments={'to': 'me', 'subject': 'Story', 'body': 'Story'},
+                 reason='Send it', expected_output='Email', depends_on=['doc']),
+    ])
+    manifest = {'google': native_manifest('google')}
+
+    _ensure_document_body_readback(plan, manifest)
+    assert [step.operation for step in plan.steps] == ['docs.create', 'docs.get', 'gmail.send']
+    assert plan.steps[0].required_evidence == ['write_receipt']
+    assert plan.steps[1].arguments == {'document_id': '{{steps.doc.id}}'}
+    assert plan.steps[1].required_evidence == ['document_body']
+    assert plan.steps[1].key in plan.steps[2].depends_on
+    WorkflowPlan.model_validate(plan.model_dump(mode='json'))
+    assert len(compile_contracts(plan, manifest)) == 3
 
 
 def test_explicit_illustration_labels_render_as_approved_canva_scenes():

@@ -575,6 +575,44 @@ def _include_requested_story_in_email(plan, prompt: str) -> None:
         )
 
 
+def _ensure_document_body_readback(plan, manifests_by_slug: dict[str, dict]) -> None:
+    """Use a verified Docs read for body evidence that create cannot return."""
+    from .schemas import PlanStep
+
+    for doc in tuple(plan.steps):
+        if doc.operation != "docs.create" or "document_body" not in doc.required_evidence:
+            continue
+        capabilities = manifests_by_slug.get(doc.tool_slug, {}).get("capabilities", [])
+        if not any(item.get("name") == "docs.get" for item in capabilities):
+            raise NativeConnectorError("Document body evidence requires a verified docs.get readback")
+        readback = next(
+            (step for step in plan.steps if step.operation == "docs.get" and doc.key in step.depends_on),
+            None,
+        )
+        if readback is None:
+            if len(plan.steps) >= 20:
+                raise NativeConnectorError("The document readback exceeds the workflow step limit")
+            key = f"{doc.key[:100]}_readback"
+            if any(step.key == key for step in plan.steps):
+                raise NativeConnectorError("The document readback key is already in use")
+            readback = PlanStep(
+                key=key, agent="Google Docs Readback", tool_slug=doc.tool_slug,
+                operation="docs.get", arguments={"document_id": f"{{{{steps.{doc.key}.id}}}}"},
+                reason="Read back the exact created Google Doc before using its story",
+                expected_output="Verified title and full document body",
+                depends_on=[doc.key], required_evidence=["document_body"],
+            )
+            plan.steps.insert(plan.steps.index(doc) + 1, readback)
+        elif "document_body" not in readback.required_evidence:
+            readback.required_evidence.append("document_body")
+        doc.required_evidence = list(dict.fromkeys(
+            ["write_receipt", *(tag for tag in doc.required_evidence if tag != "document_body")]
+        ))
+        for step in plan.steps[plan.steps.index(readback) + 1:]:
+            if step.operation in {"canva.presentation.create", "gmail.send"} and readback.key not in step.depends_on:
+                step.depends_on.append(readback.key)
+
+
 def _normalize_illustrated_canva_slides(plan, prompt: str) -> None:
     """Move explicit illustration labels into the scene field that renders art."""
     if not re.search(
@@ -767,6 +805,7 @@ async def _create_compiled_plan(
                     "The requested file attachment must be present in gmail.send attachments, not substituted with a body link"
                 )
             _normalize_planned_steps(plan, manifests_by_slug)
+            _ensure_document_body_readback(plan, manifests_by_slug)
             _include_requested_story_in_email(plan, prompt)
             _normalize_illustrated_canva_slides(plan, prompt)
             from .operation_contracts import compile_contracts
