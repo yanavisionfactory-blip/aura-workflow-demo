@@ -39,7 +39,10 @@ cannot be reconciled.
    external outages exhaust into an internal quarantine rather than looping, spending, or
    claiming success forever.
 4. The isolated runner may propose a source repair but cannot deploy it directly. Static
-   boundaries and the full test matrix must pass before a canary exists.
+   boundaries and the full test matrix must pass before a canary exists. Its incident
+   includes validated connector and operation identifiers and audit event codes to
+   locate the failing path; prompts, arguments, provider errors, and account data
+   stay out of the repository dispatch.
 5. Canary readiness gates production. Failed production readiness automatically restores
    the exact baseline commit and proves its health. The runner sends a five-minute HMAC
    timestamped callback; a promoted incident requeues the saved run from its checkpoint.
