@@ -239,13 +239,14 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
     const attachments = Array.isArray(receipt.attachments)
       ? receipt.attachments
       : (Array.isArray(gmail.resolved_arguments?.attachments) ? gmail.resolved_arguments.attachments : []);
+    const artifactDelivered = Boolean(artifact && Array.isArray(receipt.attachments) && receipt.attachments.length > 0);
     const link = safeHttpsUrl(receipt.result_url);
     return {
       title: sentTitle(context.title),
       completionTitle: sentTitle(context.title),
       completionSummary: recipient
-        ? `Delivered through Gmail to ${recipient}${artifact ? " with the finished presentation attached." : "."}`
-        : `Delivered through Gmail${artifact ? " with the finished presentation attached." : "."}`,
+        ? `Delivered through Gmail to ${recipient}${artifactDelivered ? " with the finished presentation attached." : "."}`
+        : `Delivered through Gmail${artifactDelivered ? " with the finished presentation attached." : "."}`,
       detail: context.deliverable || context.summary || "The requested email was sent successfully.",
       provider: "Gmail",
       providerVerb: "Sent with",
@@ -257,6 +258,7 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
       body,
       attachments,
       artifact,
+      artifactDelivered,
       downloadUrl: artifact?.downloadUrl || null,
     };
   }

@@ -46,6 +46,17 @@ test("email delivery becomes primary while preserving the attached Canva result"
   assert.equal(primary.artifact.provider, "Canva");
   assert.equal(primary.artifact.link, "https://www.canva.com/design/design-123/edit");
   assert.equal(primary.artifact.linkLabel, "View presentation");
+  assert.equal(primary.artifactDelivered, true);
+  assert.match(primary.completionSummary, /presentation attached/);
+});
+
+test("a created presentation does not imply an email attachment was delivered", () => {
+  const primary = primaryResultFromOutputs([
+    { operation: "canva.presentation.create", provider_result: { designs: [{ id: "design-123" }] } },
+    { operation: "gmail.send", provider_result: { recipient: "yana@example.com" }, resolved_arguments: { attachments: [{ filename: "requested.pdf" }] } },
+  ], { title: "Story" });
+  assert.equal(primary.artifactDelivered, false);
+  assert.equal(primary.completionSummary, "Delivered through Gmail to yana@example.com.");
 });
 
 test("a Canva presentation remains primary when it is not delivered elsewhere", () => {
@@ -192,10 +203,11 @@ test("an explicit empty supporting contract does not recreate fallback receipts"
 test("the results UI uses supporting app receipts without duplicate run details", () => {
   const source = readFileSync(new URL("../src/components/aura/ResultsView.jsx", import.meta.url), "utf8");
   assert.equal(source.includes("Your result"), true);
-  assert.equal(source.includes(">Preview</p>"), true);
+  assert.equal(source.includes(">Summary</p>"), true);
   assert.equal(source.includes("Sent email"), true);
   assert.equal(source.includes("View presentation"), true);
   assert.equal(source.includes("Attached and delivered"), true);
+  assert.equal(source.includes("!isFailure && !backendRunId"), true);
   assert.equal(source.includes("Also completed"), true);
   assert.equal(source.includes("View run details"), false);
   assert.equal(source.includes("Workflow activity"), false);
