@@ -29,10 +29,15 @@ def event_time_summary(event: dict) -> dict:
             'end_time_unspecified': bool(event.get('endTimeUnspecified'))}
 
 
+def annotate_calendar_event(event: dict) -> dict:
+    """Present provider timestamps in UTC and the event's named timezone."""
+    return {**event, 'canonical_time_summary': event_time_summary(event)}
+
+
 def annotate_calendar_times(result: dict) -> dict:
     if not isinstance(result, dict) or not isinstance(result.get('items'), list):
         return result
-    return {**result, 'items': [{**event, 'canonical_time_summary': event_time_summary(event)}
+    return {**result, 'items': [annotate_calendar_event(event)
                               if isinstance(event, dict) else event for event in result['items']]}
 
 

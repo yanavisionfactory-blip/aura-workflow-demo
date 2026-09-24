@@ -997,8 +997,11 @@ class ProviderExecutor:
         return result
 
     async def _calendar_get(self, a: dict) -> dict:
-        return await self._request("GET", "https://www.googleapis.com/calendar/v3/calendars/primary/events/"
-                                   + quote(a["event_id"], safe=""))
+        from .calendar_time import annotate_calendar_event
+
+        result = await self._request("GET", "https://www.googleapis.com/calendar/v3/calendars/primary/events/"
+                                     + quote(a["event_id"], safe=""))
+        return annotate_calendar_event(result)
 
     async def _docs_create(self, a: dict) -> dict:
         """Import the approved text in one write, avoiding a blank intermediate Doc."""
@@ -1288,7 +1291,10 @@ class ProviderExecutor:
         if not a.get("start") or not a.get("end"):
             raise ValueError("calendar.create requires approved start and end")
         payload = {"summary": a.get("title", "AURA event"), "description": a.get("description", ""), "start": a["start"], "end": a["end"]}
-        return await self._request("POST", "https://www.googleapis.com/calendar/v3/calendars/primary/events", json=payload)
+        from .calendar_time import annotate_calendar_event
+
+        result = await self._request("POST", "https://www.googleapis.com/calendar/v3/calendars/primary/events", json=payload)
+        return annotate_calendar_event(result)
 
     async def _google_identity_get(self, a: dict) -> dict:
         return await self._request(
