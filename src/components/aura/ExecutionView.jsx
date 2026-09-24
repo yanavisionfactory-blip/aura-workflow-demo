@@ -4,7 +4,7 @@ import ExecutionStep from "./ExecutionStep";
 
 const STEP_DURATION = 2.6; // seconds per step (for ETA)
 
-export default function ExecutionView({ steps, currentStepIndex, isReal }) {
+export default function ExecutionView({ steps, currentStepIndex, isReal, onCancel, cancelBusy = false, cancelError = "" }) {
   const stepCount = steps.length;
   const completedCount = steps.filter((s) => s.status === "completed").length;
   const failed = steps.some((s) => s.status === "failed");
@@ -80,6 +80,15 @@ export default function ExecutionView({ steps, currentStepIndex, isReal }) {
         <div className="flex items-center justify-center gap-1.5 mt-4 text-[11px] text-muted-foreground/50">
           <Clock className="w-3 h-3" />
           Safe to leave this page — we'll notify you when it's done or if something needs you
+        </div>
+      )}
+      {isReal && onCancel && (
+        <div className="mt-4 flex flex-col items-center gap-2">
+          <button type="button" onClick={onCancel} disabled={cancelBusy}
+            className="rounded-lg border border-white/15 px-3 py-2 text-xs text-muted-foreground hover:border-rose-400/50 hover:text-rose-300 disabled:opacity-50">
+            {cancelBusy ? "Cancelling saved run…" : "Cancel saved run"}
+          </button>
+          {cancelError && <p role="alert" className="text-xs text-rose-300">{cancelError}</p>}
         </div>
       )}
     </motion.div>
