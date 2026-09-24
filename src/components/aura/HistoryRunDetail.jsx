@@ -6,7 +6,7 @@ import { aura } from "@/api/auraClient";
 import { formatDistanceToNow } from "date-fns";
 import { conjugateAction } from "@/lib/auraVerbs";
 import { announceWorkflowHistoryChanged } from "@/lib/workflowHistory.mjs";
-import { cancelPythonRun, dispatchDuePythonRun, getPythonRun, resumePythonRun } from "@/lib/auraApi";
+import { cancelPythonRun, dispatchDuePythonRun, getPythonRun, getPythonRunEvaluation, resumePythonRun } from "@/lib/auraApi";
 import RunAgainModal from "./RunAgainModal";
 
 const outcomeIcons = {
@@ -26,10 +26,33 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
   const [cancelResult, setCancelResult] = useState("");
   const [checkBusy, setCheckBusy] = useState(false);
   const [checkResult, setCheckResult] = useState("");
+  const [agentCheckBusy, setAgentCheckBusy] = useState(false);
+  const [agentCheckResult, setAgentCheckResult] = useState("");
   const [repairReady, setRepairReady] = useState(false);
   const [reviewStepId, setReviewStepId] = useState(null);
 
   const requestRerun = (mode) => setRunAgainMode(mode);
+
+  const checkAgentTeam = async () => {
+    if (!run.backend_run_id || agentCheckBusy) return;
+    setAgentCheckBusy(true);
+    setAgentCheckResult("");
+    try {
+      const report = await getPythonRunEvaluation(run.backend_run_id);
+      const team = report.agent_team;
+      if (team?.passed) {
+        setAgentCheckResult("Verified: the manager and execution agents handled each completed step, and the final result was confirmed.");
+      } else if (report.status !== "completed") {
+        setAgentCheckResult("This run has not reached a verified completion yet. Check again after it finishes.");
+      } else {
+        setAgentCheckResult("The workflow finished, but agent participation was not confirmed for every step. Some decisions may have used the safe fallback.");
+      }
+    } catch (error) {
+      setAgentCheckResult(error.message || "Could not check agent participation for this run.");
+    } finally {
+      setAgentCheckBusy(false);
+    }
+  };
 
   const cancelRun = async () => {
     if (!run.backend_run_id || cancelBusy) return;
@@ -258,6 +281,15 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
 
       {/* Actions */}
       <div className="p-4 border-t border-white/5">
+        {run.backend_run_id && (
+          <div className="mb-3 space-y-2">
+            <Button size="sm" variant="outline" className="w-full border-white/15"
+              onClick={checkAgentTeam} disabled={agentCheckBusy}>
+              {agentCheckBusy ? "Checking agent teamwork…" : "Verify agent teamwork"}
+            </Button>
+            {agentCheckResult && <p role="status" className="text-xs text-muted-foreground">{agentCheckResult}</p>}
+          </div>
+        )}
         {run.status === "running" && run.backend_run_id && (
           <div className="mb-3 space-y-2">
             <Button size="sm" variant="outline" className="w-full border-white/15"

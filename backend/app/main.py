@@ -6690,12 +6690,40 @@ async def get_run_evaluation(
             .where(
                 AuditEvent.workspace_id == context.workspace_id,
                 AuditEvent.run_id == run_id,
-                AuditEvent.event_type == "run.agent_metrics",
+                AuditEvent.event_type.in_((
+                    "run.agent_metrics",
+                    "run.execution_supervised",
+                    "step.execution_agent_decision",
+                )),
             )
             .order_by(AuditEvent.created_at)
         )
     ).all()
-    calls = [call for event in events for call in event.payload.get("calls", [])]
+    calls = [call for event in events if event.event_type == "run.agent_metrics"
+             for call in event.payload.get("calls", [])]
+    manager = [event.payload for event in events if event.event_type == "run.execution_supervised"]
+    executors = [event.payload for event in events if event.event_type == "step.execution_agent_decision"]
+    steps = (await session.scalars(select(RunStep).where(RunStep.run_id == run_id))).all()
+    completed_ids = {step.id for step in steps if step.status == StepStatus.completed}
+    outcome_verified = ((run.result or {}).get("verification") or {}).get("status") == "verified"
+    manager_confirmed = bool(manager) and all(
+        item.get("source") == "agent" and item.get("action") == "continue" for item in manager
+    )
+    executors_confirmed = bool(completed_ids) and {
+        item.get("step_id") for item in executors
+    } == completed_ids and all(
+        item.get("source") == "agent" and item.get("action") == "execute"
+        for item in executors
+    )
+    reviewed = bool(completed_ids) and all(
+        isinstance(step.output, dict) and step.output.get("critic", {}).get("action") == "accept"
+        for step in steps if step.id in completed_ids
+    )
+    team_verified = (
+        run.status == RunStatus.completed and outcome_verified and manager_confirmed
+        and executors_confirmed and reviewed
+        and all(step.status in {StepStatus.completed, StepStatus.skipped} for step in steps)
+    )
     attempts = (
         await session.scalars(
             select(StepAttempt).where(
@@ -6747,8 +6775,18 @@ async def get_run_evaluation(
         .get("last_action"),
         "run_id": run_id,
         "status": run.status.value,
-        "outcome_verified": run.result.get("verification", {}).get("status") == "verified",
-        "verification": run.result.get("verification"),
+        "outcome_verified": outcome_verified,
+        "agent_team": {
+            "passed": bool(team_verified),
+            "manager_sources": [item.get("source") for item in manager],
+            "executor_sources": {
+                step.step_key: [item.get("source") for item in executors
+                                if item.get("step_id") == step.id]
+                for step in steps if step.id in completed_ids
+            },
+            "accepted_steps": bool(reviewed),
+        },
+        "verification": (run.result or {}).get("verification"),
         "agent_calls": calls,
         "agent_call_count": len(calls),
         "agent_latency_ms": sum(call.get("latency_ms", 0) for call in calls),

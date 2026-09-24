@@ -49,6 +49,19 @@ cannot be reconciled.
 6. A run is complete only after the existing final outcome verifier accepts evidence from
    persisted provider receipts.
 
+## Verify that the agent team actually ran
+
+For a saved run, **My workflows → run → Verify agent teamwork** reads the authenticated
+`/v1/runs/{run_id}/evaluation` endpoint. `agent_team.passed` requires a completed,
+verified outcome, accepted step results, model-backed supervisor decisions, and
+model-backed execution-agent decisions for every completed step. A safe deterministic
+fallback is reported in `manager_sources` or `executor_sources`; it does not count as
+proof that the agents collaborated. The separate read-only recovery canary returns
+`agent_team` alongside its restart-recovery result, so `passed` for recovery alone
+cannot be mistaken for model-backed teamwork. This two-read canary does not certify
+Google Docs, Canva, Gmail, or Calendar. A reviewed four-app run and provider receipts
+are needed to establish that result.
+
 ## Required activation configuration
 
 The runtime is safe when the isolated pipeline is unconfigured: code incidents remain in

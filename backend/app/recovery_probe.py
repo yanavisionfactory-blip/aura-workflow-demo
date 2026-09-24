@@ -89,8 +89,15 @@ async def probe_evidence(session, probe):
     run = await session.get(WorkflowRun, probe.run_id)
     steps = (await session.scalars(select(RunStep).where(RunStep.run_id == run.id).order_by(RunStep.position))).all()
     attempts = (await session.scalars(select(StepAttempt).where(StepAttempt.workspace_id == probe.workspace_id, StepAttempt.run_id == run.id))).all()
-    recovered = await session.scalar(select(AuditEvent.id).where(AuditEvent.workspace_id == probe.workspace_id,
-        AuditEvent.run_id == run.id, AuditEvent.event_type == "run.recovered_after_restart").limit(1))
+    events = (await session.scalars(select(AuditEvent).where(
+        AuditEvent.workspace_id == probe.workspace_id,
+        AuditEvent.run_id == run.id,
+        AuditEvent.event_type.in_((
+            "run.recovered_after_restart", "run.execution_supervised",
+            "step.execution_agent_decision",
+        )),
+    ).order_by(AuditEvent.created_at))).all()
+    recovered = any(event.event_type == "run.recovered_after_restart" for event in events)
     guards = {}
     for expected, identifier in probe.guard_run_ids.items():
         guard = await session.get(WorkflowRun, identifier)
@@ -99,7 +106,34 @@ async def probe_evidence(session, probe):
     passed = (run.status == RunStatus.completed and bool(recovered) and bool(probe.yielded_at)
         and len(steps) == 2 and all(value == 1 for value in counts.values())
         and set(guards) == {"awaiting_approval", "completed"} and all(guards.values()))
+    manager = [event.payload for event in events if event.event_type == "run.execution_supervised"]
+    executors = [event.payload for event in events if event.event_type == "step.execution_agent_decision"]
+    step_ids = {step.id for step in steps}
+    approved_by_agents = (
+        len(manager) >= 2
+        and all(item.get("source") == "agent" and item.get("action") == "continue" for item in manager)
+        and len(executors) == len(steps)
+        and {item.get("step_id") for item in executors} == step_ids
+        and all(item.get("source") == "agent" and item.get("action") == "execute" for item in executors)
+    )
+    accepted = len(steps) == 2 and all(
+        isinstance(step.output, dict)
+        and step.output.get("critic", {}).get("action") == "accept"
+        and step.output.get("outcome_check", {}).get("status") == "verified"
+        for step in steps
+    )
+    verified = ((run.result or {}).get("verification") or {}).get("status") == "verified"
+    agent_team = {
+        "passed": bool(passed and approved_by_agents and accepted and verified),
+        "manager_sources": [item.get("source") for item in manager],
+        "executor_sources": {
+            step.step_key: [item.get("source") for item in executors if item.get("step_id") == step.id]
+            for step in steps
+        },
+        "accepted_steps": bool(accepted),
+        "outcome_verified": bool(verified),
+    }
     return {"probe_id": probe.id, "run_id": run.id, "status": run.status.value,
         "yielded_at": probe.yielded_at.isoformat() if probe.yielded_at else None,
         "recovery_observed": bool(recovered), "provider_attempts": counts, "guards_unchanged": guards,
-        "passed": passed, "error": run.error}
+        "passed": passed, "agent_team": agent_team, "error": run.error}

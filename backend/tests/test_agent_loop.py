@@ -877,6 +877,8 @@ async def test_evaluation_endpoint_is_tenant_scoped(runtime):
         assert exc.value.status_code == 404
         result = await get_run_evaluation("run", TenantContext("w", "alice", "owner"), session)
         assert result["outcome_verified"] is False
+        assert result["agent_team"]["passed"] is False
+        assert result["agent_team"]["manager_sources"] == []
         assert result["agent_cost_usd"] is None
 
 
