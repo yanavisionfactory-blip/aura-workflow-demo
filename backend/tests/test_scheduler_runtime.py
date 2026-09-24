@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -97,6 +98,81 @@ def test_celery_beat_dispatches_and_recovers_workflows() -> None:
     assert "aura.dispatch_due_schedules" in tasks
     assert "aura.dispatch_due_processes" in tasks
     assert "aura.recover_stale_runs" in tasks
+
+
+@pytest.mark.parametrize(
+    ("mode", "target_status"),
+    [
+        ("autonomous", RunStatus.waiting_for_action),
+        ("engineer", RunStatus.blocked),
+    ],
+)
+async def test_recovery_sweep_reaches_new_failure_behind_old_handoffs(
+    database, monkeypatch, mode, target_status
+) -> None:
+    from app import autonomous_delivery, recovery_engineer, scheduler_runtime
+
+    monkeypatch.setattr(scheduler_runtime, "SessionLocal", database)
+
+    async def workspaces():
+        return ["w"]
+
+    @asynccontextmanager
+    async def owned(*args):
+        yield True
+
+    monkeypatch.setattr(scheduler_runtime, "_workspace_ids", workspaces)
+    monkeypatch.setattr(scheduler_runtime, "execution_lock", owned)
+    old = datetime.now(UTC) - timedelta(days=2)
+    async with database() as session:
+        session.add(Workspace(id="w", name="Recovery sweep"))
+        for index in range(55):
+            session.add(
+                WorkflowRun(
+                    id=f"old-{index}",
+                    workspace_id="w",
+                    prompt="Prior handoff",
+                    status=RunStatus.waiting_for_action,
+                    plan_approved=True,
+                    updated_at=old + timedelta(seconds=index),
+                    execution_context={
+                        "__aura_autonomy__": {
+                            "version": autonomous_delivery.AUTONOMY_VERSION,
+                            "handoff_reason_code": "no_safe_recovery",
+                        },
+                        "__aura_supervisor__": {
+                            "repair_incident": {"status": "awaiting_sandbox"}
+                        },
+                    },
+                )
+            )
+        session.add(
+            WorkflowRun(
+                id="target",
+                workspace_id="w",
+                prompt="Repairable failure",
+                status=target_status,
+                plan_approved=True,
+                updated_at=datetime.now(UTC),
+            )
+        )
+        await session.commit()
+
+    called = []
+
+    async def schedule(run_id, workspace_id):
+        called.append(run_id)
+        return "scheduled"
+
+    if mode == "autonomous":
+        monkeypatch.setattr(autonomous_delivery, "autonomously_recover_run", schedule)
+        result = await scheduler_runtime.recover_waiting_runs()
+        assert result == [("target", "w", "recovery")]
+    else:
+        monkeypatch.setattr(recovery_engineer, "recover_with_engineer", schedule)
+        result = await scheduler_runtime.recover_engineer_runs()
+        assert result == [("target", "w", "scheduled")]
+    assert called == ["target"]
 
 
 @pytest.mark.parametrize(
