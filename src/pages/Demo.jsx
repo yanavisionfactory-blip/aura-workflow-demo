@@ -1813,7 +1813,9 @@ Generate a results summary in plain, human-friendly language (not technical).
                 transition={{ duration: 0.4 }}
                 className="w-full flex justify-center"
               >
-                <ExecutionView steps={execSteps} currentStepIndex={currentStepIdx} isReal={!mock} />
+                <ExecutionView steps={execSteps} currentStepIndex={currentStepIdx} isReal={!mock}
+                  onCancel={pythonRunIdRef.current ? () => cancelSavedRun({ id: pythonRunIdRef.current }) : undefined}
+                  cancelBusy={recoveryBusy} cancelError={recoveryMessage} />
               </motion.div>
             )}
 
