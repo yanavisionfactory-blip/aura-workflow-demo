@@ -68,6 +68,7 @@ from .models import (
     ConnectorInstallationVersion,
     ConnectorPackage,
     DeadLetterEntry,
+    DispatchIntent,
     ManagedConnectorRelease,
     PlanVersion,
     PolicyConfig,
@@ -6405,6 +6406,42 @@ async def cancel_run(
     )
     await session.commit()
     return {"id": run.id, "status": run.status.value, "cancellation_requested": True}
+
+
+@app.post("/v1/runs/{run_id}/dispatch-due")
+async def dispatch_due_run(
+    run_id: str,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    """Publish only this approved run's due outbox intent; never touch other runs."""
+    run = await session.get(WorkflowRun, run_id)
+    if not run or run.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Run not found")
+    if not run.plan_approved or run.cancellation_requested:
+        raise HTTPException(409, "Run cannot be dispatched")
+    from .dispatch import dispatch_pending
+
+    published = await dispatch_pending(context.workspace_id, run_id=run.id)
+    await session.refresh(run)
+    next_intent = await session.scalar(
+        select(DispatchIntent)
+        .where(
+            DispatchIntent.workspace_id == context.workspace_id,
+            DispatchIntent.run_id == run.id,
+            DispatchIntent.kind == "execute",
+            DispatchIntent.status == "pending",
+        )
+        .order_by(DispatchIntent.available_at)
+        .limit(1)
+    )
+    return {
+        "id": run.id,
+        "status": run.status.value,
+        "published": published,
+        "next_attempt_at": next_intent.available_at.isoformat() if next_intent else None,
+        "preflight_status": (run.execution_context or {}).get("__aura_preflight__", {}).get("status"),
+    }
 
 
 @app.get("/v1/dead-letters")
