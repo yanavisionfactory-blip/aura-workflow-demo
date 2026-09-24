@@ -6176,6 +6176,19 @@ async def resume_run(
         ),
         None,
     )
+    if not step and payload.action == "retry":
+        # A manager pause can occur while a provider receipt awaits read-back.
+        # Resume the saved review without sending that provider action again.
+        step = next(
+            (
+                item for item in steps
+                if item.status == StepStatus.running
+                and isinstance(item.output, dict)
+                and "provider_result" in item.output
+                and (payload.step_id is None or item.id == payload.step_id)
+            ),
+            None,
+        )
     if not step:
         preflight_blocker = (run.execution_context or {}).get("__aura_blocker__")
         if payload.action == "retry" and payload.step_id is None and preflight_blocker:

@@ -66,11 +66,12 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
       // The public run view can say "recovering" while its durable status is
       // waiting_for_action. Use the scoped dispatch response to identify a pause.
       const paused = ["waiting_for_action", "failed"].includes(result.status);
-      const failedReceipt = latest.steps?.find((step) =>
-        step.status === "failed" && step.consequential && step.output?.provider_result,
+      const recordedReceipt = latest.steps?.find((step) =>
+        ["failed", "running"].includes(step.status)
+        && step.consequential && step.output?.provider_result,
       );
       if (paused) {
-        setReviewStepId(failedReceipt?.id || null);
+        setReviewStepId(recordedReceipt?.id || null);
       }
       setRepairReady(blocked?.action === "wait_for_connector_repair" && result.preflight_status === "blocked");
       setCheckResult(blocked && result.preflight_status === "blocked"
@@ -78,7 +79,7 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
           ? `Paused before step 1: ${blocked.tool_slug || "the selected app"} needs connector repair.`
           : `Paused before step 1: ${blocked.tool_slug || "the selected app"} needs ${blocked.action === "reconnect_account" ? "reconnection" : "attention"}.`
         : paused
-          ? `Saved run paused: ${latest.error || failedReceipt?.error || "This step needs attention."}${failedReceipt ? " Its provider response is saved; a recheck will not repeat the action." : ""}`
+          ? `Saved run paused: ${latest.error || recordedReceipt?.error || "This step needs attention."}${recordedReceipt ? " Its provider response is saved; a recheck will not repeat the action." : ""}`
         : result.published
         ? "Due work dispatched for this run."
         : result.next_attempt_at
