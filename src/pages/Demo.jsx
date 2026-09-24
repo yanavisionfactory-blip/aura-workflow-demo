@@ -1145,7 +1145,12 @@ Rules:
   };
 
   const showRunRecovery = (run) => {
-    setRecoveryRun(run);
+    const preflightBlocker = run.automation_state?.status === "blocked"
+      ? run.automation_state.blocker
+      : null;
+    setRecoveryRun(preflightBlocker && !run.blocker
+      ? { ...run, blocker: preflightBlocker }
+      : run);
     setRecoveryMessage("");
     setExecSteps(mapRuntimeSteps(run));
     setPhase("error");
@@ -1173,7 +1178,17 @@ Rules:
     setRecoveryMessage("");
     try {
       const latest = await getPythonRun(pythonRunIdRef.current);
-      const options = recoveryForRun(latest);
+      const preflightBlocker = latest.automation_state?.status === "blocked"
+        ? latest.automation_state.blocker
+        : null;
+      const options = recoveryForRun(preflightBlocker && !latest.blocker
+        ? { ...latest, blocker: preflightBlocker }
+        : latest);
+      if (action === "check" && preflightBlocker) {
+        showRunRecovery(latest);
+        setRecoveryMessage("The preflight blocker is still present. No workflow step has started.");
+        return;
+      }
       if (needsRecovery(latest.public_status || latest.status)) {
         if (action === "check") {
           showRunRecovery(latest);
@@ -1353,6 +1368,10 @@ Rules:
           setApprovedSteps(preparedSteps);
           preparedActionPreviewRef.current = true;
           setPhase("preview");
+          return;
+        }
+        if (run.automation_state?.status === "blocked") {
+          showRunRecovery(run);
           return;
         }
         if (needsRecovery(run.public_status || run.status)) {

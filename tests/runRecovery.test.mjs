@@ -164,6 +164,20 @@ test("structured OAuth blockers offer the exact reconnect action", () => {
   assert.equal(result.buttonLabel, "Reconnect account");
 });
 
+test("unavailable connector reports a repair pause without an unsafe retry", () => {
+  const result = recoveryForRun(run({
+    blocker: {
+      code: "connection_unavailable",
+      action: "wait_for_connector_repair",
+      message: "Google Docs no longer has a verified connector release.",
+      tool_slug: "google-docs",
+    },
+  }));
+  assert.match(result.what, /connector.*repair/i);
+  assert.match(result.fix, /No workflow step has started/);
+  assert.equal(result.canRetry, false);
+});
+
 test("resource ambiguity stops for a human choice instead of inventing a retry", () => {
   const result = recoveryForRun(run({
     blocker: {

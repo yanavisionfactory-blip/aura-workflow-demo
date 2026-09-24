@@ -57,7 +57,12 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
     setCheckResult("");
     try {
       const result = await dispatchDuePythonRun(run.backend_run_id);
-      setCheckResult(result.published
+      const blocked = result.preflight_blocker;
+      setCheckResult(blocked && result.preflight_status === "blocked"
+        ? blocked.action === "wait_for_connector_repair"
+          ? `Paused before step 1: ${blocked.tool_slug || "the selected app"} needs connector repair.`
+          : `Paused before step 1: ${blocked.tool_slug || "the selected app"} needs ${blocked.action === "reconnect_account" ? "reconnection" : "attention"}.`
+        : result.published
         ? "Due work dispatched for this run."
         : result.next_attempt_at
           ? `Next retry: ${new Date(result.next_attempt_at).toLocaleString()}.`
