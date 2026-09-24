@@ -59,6 +59,7 @@ CODE_REPAIR_AFTER_BUDGET = frozenset(
         "verification_incomplete",
     }
 )
+REPAIR_IDENTIFIER = re.compile(r"^[a-z][a-z0-9_.-]{0,79}$")
 
 
 class RecoveryPhase(str, Enum):
@@ -665,6 +666,20 @@ async def dispatch_isolated_code_repair(incident: RecoveryIncident) -> bool:
         }
         return False
     url = f"https://api.github.com/repos/{settings.recovery_github_repository}/dispatches"
+    # The diagnostic is persisted from audit events and provider step metadata.
+    # Only machine identifiers may leave the tenant database. Never forward
+    # error text, arguments, prompts, document titles, or provider payloads.
+    diagnostic = incident.diagnostic if isinstance(incident.diagnostic, dict) else {}
+
+    def safe_identifier(value: object) -> str:
+        return value if isinstance(value, str) and REPAIR_IDENTIFIER.fullmatch(value) else "unknown"
+
+    evidence = diagnostic.get("evidence_codes")
+    evidence_codes = (
+        sorted({code for code in evidence if safe_identifier(code) != "unknown"})[:12]
+        if isinstance(evidence, list)
+        else []
+    )
     payload = {
         "event_type": "aura_recovery_incident",
         "client_payload": {
@@ -674,6 +689,9 @@ async def dispatch_isolated_code_repair(incident: RecoveryIncident) -> bool:
             "phase": incident.phase,
             "category": incident.category,
             "fingerprint": incident.fingerprint,
+            "tool_slug": safe_identifier(diagnostic.get("tool_slug")),
+            "operation": safe_identifier(diagnostic.get("operation")),
+            "evidence_codes": ",".join(evidence_codes),
         },
     }
     headers = {
