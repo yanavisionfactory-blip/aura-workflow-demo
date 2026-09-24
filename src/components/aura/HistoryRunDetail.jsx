@@ -6,6 +6,7 @@ import { aura } from "@/api/auraClient";
 import { formatDistanceToNow } from "date-fns";
 import { conjugateAction } from "@/lib/auraVerbs";
 import { announceWorkflowHistoryChanged } from "@/lib/workflowHistory.mjs";
+import { cancelPythonRun } from "@/lib/auraApi";
 import RunAgainModal from "./RunAgainModal";
 
 const outcomeIcons = {
@@ -21,8 +22,32 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(run.title || "");
   const [runAgainMode, setRunAgainMode] = useState(null); // null | "rerun" | "edit"
+  const [cancelBusy, setCancelBusy] = useState(false);
+  const [cancelResult, setCancelResult] = useState("");
 
   const requestRerun = (mode) => setRunAgainMode(mode);
+
+  const cancelRun = async () => {
+    if (!run.backend_run_id || cancelBusy) return;
+    setCancelBusy(true);
+    setCancelResult("");
+    try {
+      const result = await cancelPythonRun(run.backend_run_id);
+      setCancelResult(result.status === "cancelled"
+        ? "Saved run cancelled."
+        : result.cancellation_requested
+          ? "Cancellation requested. AURA will stop before another step."
+          : `Current run status: ${result.status}.`);
+      if (result.status === "cancelled") {
+        const updated = await aura.entities.WorkflowRun.update(run.id, { status: "cancelled" });
+        announceWorkflowHistoryChanged({ run: updated });
+      }
+    } catch (error) {
+      setCancelResult(error.message || "Could not cancel this saved run.");
+    } finally {
+      setCancelBusy(false);
+    }
+  };
 
   const handleSave = async () => {
     const n = name.trim();
@@ -158,6 +183,15 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
 
       {/* Actions */}
       <div className="p-4 border-t border-white/5">
+        {run.status === "running" && run.backend_run_id && (
+          <div className="mb-3">
+            <Button size="sm" variant="outline" className="w-full border-rose-400/25 text-rose-300"
+              onClick={cancelRun} disabled={cancelBusy || Boolean(cancelResult && !cancelResult.startsWith("Could not"))}>
+              {cancelBusy ? "Cancelling saved run…" : "Cancel saved run"}
+            </Button>
+            {cancelResult && <p role="status" className="mt-2 text-xs text-muted-foreground">{cancelResult}</p>}
+          </div>
+        )}
         {runAgainMode ? (
           <RunAgainModal
             open
