@@ -2035,6 +2035,8 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     "operation": step.operation,
                     "depends_on": step.depends_on,
                     "consequential": step.consequential,
+                    "has_recorded_receipt": isinstance(step.output, dict)
+                    and "provider_result" in step.output,
                 }
                 for step in steps
             ],

@@ -250,6 +250,25 @@ def test_staged_action_approval_is_not_a_manager_pause_reason(monkeypatch) -> No
     assert decision.action == "continue"
 
 
+def test_saved_provider_receipt_is_not_a_manager_pause_reason(monkeypatch) -> None:
+    async def fake_run(*_args, **_kwargs):
+        return ExecutionSupervision(action="pause", reason="Step still running", delegations=[])
+
+    monkeypatch.setattr(agent_runtime, "get_settings", agent_settings)
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+
+    decision, source = asyncio.run(
+        supervise_execution(
+            "Export the approved design",
+            approved_read_plan(),
+            [{"key": "read_records", "status": "running", "has_recorded_receipt": True}],
+        )
+    )
+
+    assert source == "deterministic_pause_fallback"
+    assert decision.action == "continue"
+
+
 def test_execution_agent_triggers_the_exact_approved_call(monkeypatch) -> None:
     async def fake_run(*_args, **_kwargs):
         return ExecutionDirective(

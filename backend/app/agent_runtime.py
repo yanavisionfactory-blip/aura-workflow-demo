@@ -1098,6 +1098,10 @@ async def supervise_execution(
                 for item in step_states
                 if str(item.get("status", ""))
                 not in {"pending", "awaiting_approval", "completed", "skipped"}
+                and not (
+                    item.get("status") == "running"
+                    and item.get("has_recorded_receipt") is True
+                )
             }
             if non_runnable:
                 return decision, "agent"

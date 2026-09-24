@@ -1141,6 +1141,42 @@ async def test_recovery_description_uses_durable_dispatch_evidence(
         assert recovery["phase"] == ("before_action" if expected else "after_dispatch")
 
 
+async def test_paused_recorded_write_resumes_review_without_repeating_provider(runtime, monkeypatch):
+    from app import main
+    from app.schemas import ResumeDecision
+
+    async def no_dispatch(*args, **kwargs):
+        return 0
+
+    monkeypatch.setattr(main, "dispatch_pending", no_dispatch)
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        transition_run(
+            run, RunStatus.waiting_for_action,
+            reason="test_manager_paused_recorded_receipt", actor="test", dispatch=None,
+        )
+        step = await session.get(RunStep, "step")
+        step.status = StepStatus.running
+        step.consequential = True
+        step.output = {"provider_result": {"id": "export-job-1"}}
+        session.add(StepAttempt(
+            workspace_id="w", run_id="run", step_id="step",
+            attempt_number=1, status="succeeded", provider_dispatched=True,
+            tool_slug="test", operation="records.create",
+        ))
+        await session.commit()
+
+        result = await main.resume_run(
+            "run", ResumeDecision(action="retry", step_id="step"),
+            main.TenantContext("w", "alice", "owner"), session,
+        )
+
+        assert result["status"] == "recovering"
+        assert step.status == StepStatus.pending
+        assert step.output["provider_result"]["id"] == "export-job-1"
+        assert len((await session.scalars(select(StepAttempt))).all()) == 1
+
+
 @pytest.mark.parametrize(
     "approval_status,expected",
     [("pending", StepStatus.awaiting_approval), ("approved", StepStatus.pending)],
