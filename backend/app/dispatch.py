@@ -49,7 +49,12 @@ def _safe_error_code(exc: BaseException) -> str | int | None:
     )
 
 
-async def dispatch_pending(workspace_id: str | None = None, run_id: str | None = None) -> int:
+async def dispatch_pending(
+    workspace_id: str | None = None,
+    run_id: str | None = None,
+    *,
+    schedule_delayed_execute: bool = False,
+) -> int:
     from .scheduler_runtime import _workspace_ids
     from .worker import execute_run_task, index_memory_task, plan_run_task
 
@@ -62,8 +67,17 @@ async def dispatch_pending(workspace_id: str | None = None, run_id: str | None =
             query = select(DispatchIntent).where(
                 DispatchIntent.workspace_id == tenant,
                 DispatchIntent.status == "pending",
-                DispatchIntent.available_at <= now,
             )
+            if schedule_delayed_execute and run_id:
+                # The current worker may have just persisted a future preflight
+                # retry. Hand that exact run to the broker now, without relying
+                # on the independent recovery scheduler being enabled.
+                query = query.where(
+                    (DispatchIntent.available_at <= now)
+                    | (DispatchIntent.kind == "execute")
+                )
+            else:
+                query = query.where(DispatchIntent.available_at <= now)
             if run_id:
                 query = query.where(DispatchIntent.run_id == run_id)
             intents = (
@@ -87,7 +101,18 @@ async def dispatch_pending(workspace_id: str | None = None, run_id: str | None =
                 intent.attempts += 1
                 try:
                     # Publish in a thread: broker IO must not stall the API event loop.
-                    await asyncio.to_thread(tasks[intent.kind].delay, intent.run_id, tenant)
+                    available_at = intent.available_at
+                    if available_at.tzinfo is None:
+                        available_at = available_at.replace(tzinfo=UTC)
+                    if available_at > now:
+                        delay = max(0, (available_at - now).total_seconds())
+                        await asyncio.to_thread(
+                            tasks[intent.kind].apply_async,
+                            args=[intent.run_id, tenant],
+                            countdown=delay,
+                        )
+                    else:
+                        await asyncio.to_thread(tasks[intent.kind].delay, intent.run_id, tenant)
                     intent.status = "published"
                     count += 1
                 except Exception:  # noqa: BLE001 - broker failures are retried from the durable outbox

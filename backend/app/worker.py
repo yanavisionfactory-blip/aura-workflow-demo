@@ -23,7 +23,10 @@ def _run_async(coroutine):
 async def execute_delivery(run_id, workspace_id):
     from .dispatch import dispatch_pending
     await execute_run(run_id, workspace_id)
-    await dispatch_pending(workspace_id)
+    # Preflight may checkpoint a retry several seconds in the future. Deliver
+    # this run's delayed intent to Celery immediately so it can resume without
+    # an API request or a separately enabled recovery loop.
+    await dispatch_pending(workspace_id, run_id=run_id, schedule_delayed_execute=True)
 
 
 async def plan_delivery(run_id, workspace_id):
