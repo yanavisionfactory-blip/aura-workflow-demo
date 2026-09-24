@@ -47,6 +47,7 @@ export function recoveryForRun(run = {}) {
       recovery_budget_exhausted: "AURA couldn't complete the remaining step automatically.",
       no_safe_recovery: "AURA couldn't complete the remaining step automatically.",
       governed_derivative_retry_required: "Canva is taking longer than expected to prepare the finished presentation.",
+      automatic_repair_stopped: "AURA stopped automatic repair for this run.",
     };
     const fixes = {
       connect_account: "Connect the requested account once; AURA will preserve this run and continue from the same point.",
@@ -57,6 +58,7 @@ export function recoveryForRun(run = {}) {
       review_submission: "Review the exact prepared payload. AURA will submit it only after you approve it.",
       inspect_run: "Review the provider result before deciding what should happen next; completed work and receipts are preserved.",
       retry_step: "Try only the remaining export again. The presentation is saved and AURA will not recreate it.",
+      contact_support: "Contact AURA support with the run ID. Your completed work is saved; avoid starting a duplicate workflow.",
     };
     const retryAction = blocker.action === "retry_step" && blocker.retryable === true;
     return {
@@ -82,6 +84,8 @@ export function recoveryForRun(run = {}) {
           : "Connect account",
       subtitle: blocker.action === "wait_for_connector_repair"
         ? "AURA paused before execution. The saved run is preserved."
+        : blocker.action === "contact_support"
+          ? "Automatic repair has stopped. No background retry is scheduled."
         : "This is a required human action. Everything else remains saved and unattended.",
     };
   }

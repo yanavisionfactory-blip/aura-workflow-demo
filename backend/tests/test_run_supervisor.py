@@ -219,3 +219,29 @@ def test_technical_or_budget_blockers_stay_backstage(blocker):
     assert public["public_status"] == "recovering"
     assert public["public_error"] is None
     assert public["public_blocker"] is None
+
+
+@pytest.mark.parametrize(
+    "incident_status",
+    ["awaiting_sandbox", "quarantined", "failed", "canary_failed", "rolled_back"],
+)
+def test_terminal_repair_incident_is_never_reported_as_active(incident_status):
+    run = WorkflowRun(
+        status=RunStatus.blocked,
+        prompt="fixture",
+        error="private provider error",
+        execution_context={
+            "__aura_supervisor__": {
+                "status": "operator_attention",
+                "phase": "execution",
+                "repair_incident": {"status": incident_status},
+            }
+        },
+    )
+
+    public = public_run_projection(run, None)
+
+    assert public["public_status"] == "blocked"
+    assert public["public_error"] is None
+    assert public["public_blocker"]["code"] == "automatic_repair_stopped"
+    assert public["supervisor"]["status"] == "operator_attention"
