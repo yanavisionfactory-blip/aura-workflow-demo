@@ -132,6 +132,11 @@ def intent_bounded_tool_inventory(
 ) -> list[dict]:
     """Bound clear requests to relevant tools before model-based planning."""
     text = _intent_words(prompt)
+    original = prompt.casefold()
+    wants_public_weather = bool(
+        {"weather", "forecast", "temperature", "rain"}.intersection(text.split())
+        or re.search(r"\b(?:погод\w*|прогноз\w*|температур\w*|осадк\w*)\b", original)
+    )
     requested = {_intent_words(str(value)) for value in requested_tool_names if value}
     external_matches: set[int] = set()
     for index, item in enumerate(inventory):
@@ -175,10 +180,7 @@ def intent_bounded_tool_inventory(
             if _inventory_aliases(item).intersection(provider_roots):
                 selected.add(index)
 
-    if any(
-        signal in text.split()
-        for signal in ("weather", "forecast", "temperature", "rain")
-    ):
+    if wants_public_weather:
         selected.update(
             index
             for index, item in enumerate(inventory)
@@ -203,6 +205,7 @@ def intent_bounded_tool_inventory(
     )
     writing_doc = " google docs " in text and bool(
         set(text.split()).intersection({"create", "write", "draft"})
+        or re.search(r"\b(?:созда\w*|напиши\w*|состав\w*)\b", original)
     )
     if native_docs and not separate_docs_writer and writing_doc:
         selected = {
@@ -217,6 +220,27 @@ def intent_bounded_tool_inventory(
         bounded = [
             {**item, "allowed_operations": [operation for operation in item.get("allowed_operations") or []
                                                 if operation not in {"docs.create", "docs.get"}]}
+            if item.get("slug") == "google" else item
+            for item in bounded
+        ]
+    # A request to create a weather note and email it does not require searching
+    # the user's Drive for a weather source. Keep the Google account's relevant
+    # capabilities while excluding unrelated namespaces that tempt the planner
+    # into an unverifiable lookup instead of the built-in public forecast.
+    if (
+        writing_doc
+        and (" gmail " in text or re.search(r"\b(?:письм\w*|отправ\w*)\b", original))
+        and wants_public_weather
+        and " drive " not in text
+    ):
+        bounded = [
+            {
+                **item,
+                "allowed_operations": [
+                    operation for operation in item.get("allowed_operations") or []
+                    if operation.split(".", 1)[0] in {"google", "docs", "gmail"}
+                ],
+            }
             if item.get("slug") == "google" else item
             for item in bounded
         ]

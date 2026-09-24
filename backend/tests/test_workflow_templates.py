@@ -4,9 +4,35 @@ from app import orchestrator
 from app.native_connectors import native_manifest
 from app.workflow_templates import (
     creator_outreach_template,
+    mailchimp_canva_pilot_template,
     notion_to_jira_template,
     weather_presentation_template,
 )
+
+PILOT_BRIEF = "Сделай один слайд для пилота в Canva на основе моей аудитории Mailchimp."
+
+
+def test_mailchimp_canva_brief_uses_verified_source_and_no_send():
+    inventory = [
+        {"slug": "mailchimp", "connected": True,
+         "allowed_operations": ["mailchimp.audiences.list", "mailchimp.campaign.send"]},
+        {"slug": "canva", "connected": True,
+         "allowed_operations": ["canva.presentation.create"]},
+    ]
+    plan = asyncio.run(orchestrator._create_compiled_plan(
+        PILOT_BRIEF, inventory, set(),
+        {"mailchimp": native_manifest("mailchimp"), "canva": native_manifest("canva")},
+        ["Mailchimp", "Canva"],
+    ))
+    assert [step.operation for step in plan.steps] == [
+        "mailchimp.audiences.list", "canva.presentation.create",
+    ]
+    assert plan.steps[1].depends_on == ["audiences"]
+    assert "{{steps.audiences.lists[0].name}}" in plan.steps[1].arguments["phases"][0]["items"][0]
+    assert plan.planning_artifacts["compiled_contracts"]
+    assert mailchimp_canva_pilot_template(
+        PILOT_BRIEF + " Отправь кампанию.", inventory,
+    ) is None
 
 
 def inventory():

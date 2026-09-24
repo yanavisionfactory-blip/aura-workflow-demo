@@ -757,12 +757,14 @@ async def _create_compiled_plan(
     ]
     from .workflow_templates import (
         creator_outreach_template,
+        mailchimp_canva_pilot_template,
         notion_to_jira_template,
         weather_presentation_template,
     )
 
     audited_plan = (
         pilot_template(prompt, inventory)
+        or mailchimp_canva_pilot_template(prompt, inventory)
         or creator_outreach_template(prompt, inventory)
         or weather_presentation_template(prompt, inventory)
         or notion_to_jira_template(prompt, inventory)
@@ -791,6 +793,16 @@ async def _create_compiled_plan(
         try:
             reject_excluded_steps(plan)
             requested = prompt.casefold()
+            # A public forecast has a dedicated source. Never accept a plan
+            # which substitutes a private document search for weather data.
+            if (
+                ("forecast" in requested or "прогноз" in requested)
+                and any("weather.forecast" in item.get("allowed_operations", []) for item in inventory)
+                and not any(step.operation == "weather.forecast" for step in plan.steps)
+            ):
+                raise NativeConnectorError(
+                    "Fetch the public forecast with AURA weather.forecast before creating downstream content"
+                )
             if ("roadmap" in requested or "timeline" in requested) and any(
                 s.operation == "canva.design.create" for s in plan.steps
             ):
