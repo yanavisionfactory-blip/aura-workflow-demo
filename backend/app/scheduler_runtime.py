@@ -3,7 +3,7 @@ from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import exists, or_, select
+from sqlalchemy import and_, exists, or_, select
 
 from .config import get_settings
 from .db import SessionLocal, engine, set_tenant_context
@@ -495,6 +495,35 @@ def _recovery_engineer_candidate(run: WorkflowRun) -> bool:
     )
 
 
+async def _first_eligible_run_ids(session, query, eligible, limit: int = 5) -> list[str]:
+    """Page past durable handoffs and human blockers before applying the work limit.
+
+    A SQL LIMIT before the Python eligibility check can leave new repairable
+    failures permanently hidden behind five old, ineligible runs.
+    """
+    ids: list[str] = []
+    cursor: tuple[datetime, str] | None = None
+    while len(ids) < limit:
+        page = query
+        if cursor is not None:
+            last_updated, last_id = cursor
+            page = page.where(
+                or_(
+                    WorkflowRun.updated_at > last_updated,
+                    and_(
+                        WorkflowRun.updated_at == last_updated,
+                        WorkflowRun.id > last_id,
+                    ),
+                )
+            )
+        rows = (await session.scalars(page.limit(50))).all()
+        ids.extend(run.id for run in rows if eligible(run))
+        if len(rows) < 50:
+            break
+        cursor = (rows[-1].updated_at, rows[-1].id)
+    return ids[:limit]
+
+
 async def dispatch_due_schedules(now: datetime | None = None) -> list[tuple[str, str]]:
     current = now or datetime.now(UTC)
     dispatched: list[tuple[str, str]] = []
@@ -690,25 +719,19 @@ async def recover_engineer_runs() -> list[tuple[str, str, str]]:
     for workspace_id in await _workspace_ids():
         async with SessionLocal() as session:
             await set_tenant_context(session, workspace_id)
-            candidates = (
-                await session.scalars(
-                    select(WorkflowRun)
-                    .where(
-                        WorkflowRun.workspace_id == workspace_id,
-                        WorkflowRun.cancellation_requested.is_(False),
-                        WorkflowRun.status.in_(
-                            [
-                                RunStatus.blocked,
-                                RunStatus.failed,
-                                RunStatus.waiting_for_action,
-                            ]
-                        ),
-                    )
-                    .order_by(WorkflowRun.updated_at)
-                    .limit(5)
+            candidate_ids = await _first_eligible_run_ids(
+                session,
+                select(WorkflowRun)
+                .where(
+                    WorkflowRun.workspace_id == workspace_id,
+                    WorkflowRun.cancellation_requested.is_(False),
+                    WorkflowRun.status.in_(
+                        [RunStatus.blocked, RunStatus.failed, RunStatus.waiting_for_action]
+                    ),
                 )
-            ).all()
-            candidate_ids = [run.id for run in candidates if _recovery_engineer_candidate(run)]
+                .order_by(WorkflowRun.updated_at, WorkflowRun.id),
+                _recovery_engineer_candidate,
+            )
         for run_id in candidate_ids:
             async with execution_lock(engine, workspace_id, run_id) as acquired:
                 if not acquired:
@@ -736,24 +759,20 @@ async def recover_waiting_runs() -> list[tuple[str, str, str]]:
     for workspace_id in await _workspace_ids():
         async with SessionLocal() as session:
             await set_tenant_context(session, workspace_id)
-            candidates = (
-                await session.scalars(
-                    select(WorkflowRun)
-                    .where(
-                        WorkflowRun.workspace_id == workspace_id,
-                        WorkflowRun.plan_approved.is_(True),
-                        WorkflowRun.cancellation_requested.is_(False),
-                        WorkflowRun.status.in_([RunStatus.failed, RunStatus.waiting_for_action]),
-                    )
-                    .order_by(WorkflowRun.updated_at)
-                    .limit(5)
+            candidate_ids = await _first_eligible_run_ids(
+                session,
+                select(WorkflowRun)
+                .where(
+                    WorkflowRun.workspace_id == workspace_id,
+                    WorkflowRun.plan_approved.is_(True),
+                    WorkflowRun.cancellation_requested.is_(False),
+                    WorkflowRun.status.in_([RunStatus.failed, RunStatus.waiting_for_action]),
                 )
-            ).all()
-            candidate_ids = [
-                run.id
-                for run in candidates
-                if not _autonomous_handoff_is_current(run.execution_context, AUTONOMY_VERSION)
-            ]
+                .order_by(WorkflowRun.updated_at, WorkflowRun.id),
+                lambda run: not _autonomous_handoff_is_current(
+                    run.execution_context, AUTONOMY_VERSION
+                ),
+            )
         for run_id in candidate_ids:
             async with execution_lock(engine, workspace_id, run_id) as acquired:
                 if not acquired:
