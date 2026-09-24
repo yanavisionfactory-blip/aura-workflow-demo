@@ -622,10 +622,12 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         className="mt-5 p-4 rounded-xl border border-white/6 bg-card/50"
       >
         <h3 className="text-sm font-semibold mb-1">
-          Ready to start?
+          {plan.compileState === "blocked" ? "Plan needs another try" : "Ready to start?"}
         </h3>
         <p className="text-xs text-muted-foreground leading-relaxed mb-3">
-          Aura will follow this plan and handle technical preparation during execution.
+          {plan.compileState === "blocked"
+            ? "Nothing has started. Try again to finish preparing this plan."
+            : "Aura will follow this plan and handle technical preparation during execution."}
         </p>
         <div className="mb-3">
           <input
