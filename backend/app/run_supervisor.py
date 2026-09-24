@@ -559,6 +559,34 @@ def is_unavoidable_human_blocker(blocker: dict | None) -> bool:
 def public_run_projection(run: WorkflowRun, blocker: dict | None) -> dict:
     """Return the only run state technical users should need to understand."""
     state = supervisor_state(run)
+    incident = state.get("repair_incident")
+    incident_status = incident.get("status") if isinstance(incident, dict) else None
+    if (
+        run.status in {RunStatus.failed, RunStatus.blocked}
+        and not is_unavoidable_human_blocker(blocker)
+        and incident_status
+        in {"awaiting_sandbox", "quarantined", "failed", "canary_failed", "rolled_back"}
+    ):
+        # There is no queued retry or active repair in these states. Do not
+        # present an indefinitely blocked run as though an agent is working.
+        return {
+            "public_status": "blocked",
+            "public_error": None,
+            "public_blocker": {
+                "kind": "operator_action",
+                "code": "automatic_repair_stopped",
+                "message": "AURA could not repair this run automatically. Its completed work is saved.",
+                "action": "contact_support",
+                "retryable": False,
+            },
+            "supervisor": {
+                "owner": "run_supervisor",
+                "phase": state.get("phase") or "execution",
+                "status": "operator_attention",
+                "completed_work_preserved": True,
+                "browser_independent": True,
+            },
+        }
     internal_recovery = state.get("status") in {
         "recovering",
         "operator_attention",

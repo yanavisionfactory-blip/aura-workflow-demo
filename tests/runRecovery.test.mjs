@@ -44,6 +44,24 @@ test('manual recovery appears only after AURA exhausts automatic recovery', () =
   assert.match(result.fix, /remaining step again/i);
 });
 
+test('an unavailable repair pipeline offers no false retry', () => {
+  const result = recoveryForRun(run({
+    status: 'blocked',
+    blocker: {
+      kind: 'operator_action',
+      code: 'automatic_repair_stopped',
+      action: 'contact_support',
+      retryable: false,
+      message: 'Automatic repair is unavailable.',
+    },
+  }));
+  assert.match(result.what, /stopped automatic repair/i);
+  assert.match(result.fix, /run ID/);
+  assert.match(result.subtitle, /No background retry is scheduled/i);
+  assert.equal(result.canRetry, false);
+  assert.equal(result.canSkip, false);
+});
+
 test('a proven rejected derivative offers one safe last-resort retry', () => {
   const result = recoveryForRun(run({
     blocker: {

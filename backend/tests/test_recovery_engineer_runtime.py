@@ -104,6 +104,10 @@ async def test_repeatable_defect_waits_for_one_isolated_dispatch(database):
             "configured": False,
             "reason_code": "isolated_sandbox_not_configured",
         }
+        visible = public_run_projection(run, None)
+        assert visible["public_status"] == "blocked"
+        assert visible["public_blocker"]["code"] == "automatic_repair_stopped"
+        assert visible["public_blocker"]["retryable"] is False
         assert (
             run.execution_context["__aura_supervisor__"]["repair_incident"]["status"]
             == "awaiting_sandbox"
@@ -226,9 +230,9 @@ async def test_persistent_external_outage_is_quarantined_without_user_retry(data
         assert run.status == RunStatus.blocked
         assert incident.status == "quarantined"
         assert incident.sandbox_result["reason_code"] == ("bounded_recovery_budget_exhausted")
-        assert projection["public_status"] == "recovering"
+        assert projection["public_status"] == "blocked"
+        assert projection["public_blocker"]["code"] == "automatic_repair_stopped"
         assert projection["public_error"] is None
-        assert projection["public_blocker"] is None
 
 
 async def test_failed_isolated_repairs_have_a_durable_budget(database):
