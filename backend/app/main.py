@@ -6183,6 +6183,7 @@ async def resume_run(
                 "connect_account",
                 "reconnect_account",
                 "choose_resource",
+                "wait_for_connector_repair",
             }:
                 raise HTTPException(409, "This blocker cannot be retried by the user")
             execution_context = dict(run.execution_context or {})
@@ -6206,7 +6207,7 @@ async def resume_run(
                 blocker=None,
             )
             await session.commit()
-            await dispatch_pending(wid)
+            await dispatch_pending(wid, run_id=run.id)
             return {"id": run.id, "status": run.status.value, "preflight": True}
         if (
             payload.action == "retry"

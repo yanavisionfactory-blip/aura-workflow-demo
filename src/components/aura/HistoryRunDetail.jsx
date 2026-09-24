@@ -6,7 +6,7 @@ import { aura } from "@/api/auraClient";
 import { formatDistanceToNow } from "date-fns";
 import { conjugateAction } from "@/lib/auraVerbs";
 import { announceWorkflowHistoryChanged } from "@/lib/workflowHistory.mjs";
-import { cancelPythonRun, dispatchDuePythonRun } from "@/lib/auraApi";
+import { cancelPythonRun, dispatchDuePythonRun, resumePythonRun } from "@/lib/auraApi";
 import RunAgainModal from "./RunAgainModal";
 
 const outcomeIcons = {
@@ -26,6 +26,7 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
   const [cancelResult, setCancelResult] = useState("");
   const [checkBusy, setCheckBusy] = useState(false);
   const [checkResult, setCheckResult] = useState("");
+  const [repairReady, setRepairReady] = useState(false);
 
   const requestRerun = (mode) => setRunAgainMode(mode);
 
@@ -55,9 +56,11 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
     if (!run.backend_run_id || checkBusy) return;
     setCheckBusy(true);
     setCheckResult("");
+    setRepairReady(false);
     try {
       const result = await dispatchDuePythonRun(run.backend_run_id);
       const blocked = result.preflight_blocker;
+      setRepairReady(blocked?.action === "wait_for_connector_repair" && result.preflight_status === "blocked");
       setCheckResult(blocked && result.preflight_status === "blocked"
         ? blocked.action === "wait_for_connector_repair"
           ? `Paused before step 1: ${blocked.tool_slug || "the selected app"} needs connector repair.`
@@ -69,6 +72,23 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
           : `No due work for this run. Current status: ${result.status}.`);
     } catch (error) {
       setCheckResult(error.message || "Could not check this run.");
+    } finally {
+      setCheckBusy(false);
+    }
+  };
+
+  const recheckConnector = async () => {
+    if (!run.backend_run_id || checkBusy) return;
+    setCheckBusy(true);
+    setCheckResult("");
+    try {
+      const result = await resumePythonRun(run.backend_run_id);
+      setRepairReady(false);
+      setCheckResult(result.preflight
+        ? "Rechecking the repaired connector on this saved run. Check pending work for the latest result."
+        : `Current run status: ${result.status}.`);
+    } catch (error) {
+      setCheckResult(error.message || "Could not recheck this connector.");
     } finally {
       setCheckBusy(false);
     }
@@ -215,6 +235,12 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
               {checkBusy ? "Checking this run…" : "Check pending work"}
             </Button>
             {checkResult && <p role="status" className="text-xs text-muted-foreground">{checkResult}</p>}
+            {repairReady && (
+              <Button size="sm" variant="outline" className="w-full border-amber-400/25 text-amber-200"
+                onClick={recheckConnector} disabled={checkBusy}>
+                Recheck connector on this run
+              </Button>
+            )}
             <Button size="sm" variant="outline" className="w-full border-rose-400/25 text-rose-300"
               onClick={cancelRun} disabled={cancelBusy || Boolean(cancelResult && !cancelResult.startsWith("Could not"))}>
               {cancelBusy ? "Cancelling saved run…" : "Cancel saved run"}

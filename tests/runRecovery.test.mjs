@@ -175,7 +175,8 @@ test("unavailable connector reports a repair pause without an unsafe retry", () 
   }));
   assert.match(result.what, /connector.*repair/i);
   assert.match(result.fix, /No workflow step has started/);
-  assert.equal(result.canRetry, false);
+  assert.equal(result.canRetry, true);
+  assert.equal(result.buttonLabel, "Recheck connector");
 });
 
 test("resource ambiguity stops for a human choice instead of inventing a retry", () => {

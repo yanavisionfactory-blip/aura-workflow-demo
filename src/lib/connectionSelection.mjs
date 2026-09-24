@@ -31,6 +31,14 @@ export function selectConnection(tools, { toolName, provider, connectionId } = {
   if (connectionId) {
     return matches.find((tool) => tool.id === connectionId) || null;
   }
+  // A Google Docs (or Calendar/Gmail) connection can coexist with a broad
+  // Workspace connection. Manage/Test must inspect the exact app used by the
+  // approved plan, even if the broad account is the only healthy one.
+  if (GOOGLE_FAMILY_OPERATION[normalized(toolName)]) {
+    const appSlug = normalized(toolName).replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const exact = matches.filter((tool) => normalized(tool.slug) === appSlug);
+    if (exact.length === 1) return exact[0];
+  }
   if (matches.length <= 1) return matches[0] || null;
 
   const verified = matches.filter(

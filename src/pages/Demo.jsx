@@ -645,14 +645,27 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               revisionInstruction,
             });
             if (startFresh) {
+              if (previousRunId) {
+                try {
+                  const stopped = await cancelPythonRun(previousRunId);
+                  if (stopped.status !== "cancelled") {
+                    throw new Error("The previous run is still stopping. Check its status before revising this plan.");
+                  }
+                } catch (error) {
+                  setPlan((current) => ({
+                    ...(current || immediatePlan),
+                    provisional: true,
+                    compileState: "blocked",
+                    compileError: error.message || "Could not stop the previous run. Try revising again.",
+                  }));
+                  return;
+                }
+                forgetActivePythonRun(previousRunId);
+              }
               pythonPollGenerationRef.current += 1;
               runRequestKeyRef.current = null;
               pythonRunIdRef.current = null;
               pythonPlanRef.current = null;
-              if (previousRunId) {
-                await cancelPythonRun(previousRunId).catch(() => {});
-                forgetActivePythonRun(previousRunId);
-              }
             }
             lastPlanningIntentRef.current = confirmedIntent;
             const planningPrompt = planningRequestPrompt(confirmedIntent, revisionInstruction);
@@ -853,17 +866,25 @@ Rules:
     [handleConfirm, interpretation]
   );
 
-  const handlePilotRevision = useCallback(() => {
+  const handlePilotRevision = useCallback(async () => {
     const previousRunId = pythonRunIdRef.current;
     const savedFields = pilotDraft;
+    if (previousRunId) {
+      try {
+        const stopped = await cancelPythonRun(previousRunId);
+        if (stopped.status !== "cancelled") {
+          throw new Error("The previous run is still stopping. Check its status before revising this plan.");
+        }
+      } catch (error) {
+        keepPlanStartFailureInReview(error.message || "Could not stop the previous run. Try revising again.");
+        return;
+      }
+      forgetActivePythonRun(previousRunId);
+    }
     reset();
     setPilotDraft(savedFields);
     setPilotOpen(true);
-    if (previousRunId) {
-      void cancelPythonRun(previousRunId).catch(() => {});
-      forgetActivePythonRun(previousRunId);
-    }
-  }, [pilotDraft, reset]);
+  }, [pilotDraft, reset, keepPlanStartFailureInReview]);
 
   const handleSkipTool = useCallback((toolName) => {
     omittedToolsRef.current = [...new Set([...omittedToolsRef.current, toolName])];
@@ -1189,7 +1210,8 @@ Rules:
         setRecoveryMessage("The preflight blocker is still present. No workflow step has started.");
         return;
       }
-      if (needsRecovery(latest.public_status || latest.status)) {
+      if (needsRecovery(latest.public_status || latest.status)
+        || preflightBlocker?.action === "wait_for_connector_repair") {
         if (action === "check") {
           showRunRecovery(latest);
           setRecoveryMessage("Status refreshed. Choose another safe approach or keep this workflow for later.");

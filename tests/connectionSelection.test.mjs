@@ -71,6 +71,16 @@ test("calendar and documents can reuse the verified Google Workspace account", (
     "google-account");
 });
 
+test("Google Docs Manage selects its dedicated route even when Workspace is verified", () => {
+  const tools = [
+    { id: "workspace", slug: "google", display_name: "Google Workspace",
+      enabled: true, status: "verified", allowed_operations: ["docs.create"] },
+    { id: "docs", slug: "google-docs", display_name: "Google Docs",
+      enabled: false, status: "degraded", allowed_operations: ["google-docs.create-document"] },
+  ];
+  assert.equal(selectConnection(tools, { toolName: "Google Docs", provider: "google" })?.id, "docs");
+});
+
 test("a Google account without calendar permission cannot satisfy Calendar", () => {
   const tools = [{ id: "gmail-only", slug: "google", display_name: "Google Workspace",
     allowed_operations: ["gmail.send", "docs.create"] }];

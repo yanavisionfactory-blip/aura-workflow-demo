@@ -342,12 +342,13 @@ async def test_missing_connection_is_an_explicit_human_gate(database):
     assert outcome.blocker["action"] == "connect_account"
 
 
-async def test_preflight_blocker_can_resume_after_reconnection(database, monkeypatch):
+@pytest.mark.parametrize("action", ["reconnect_account", "wait_for_connector_repair"])
+async def test_preflight_blocker_can_resume_after_reconnection(database, monkeypatch, action):
     await _fixture(database, connected=False)
     dispatched = []
 
-    async def dispatch(workspace_id):
-        dispatched.append(workspace_id)
+    async def dispatch(workspace_id, run_id=None):
+        dispatched.append((workspace_id, run_id))
 
     monkeypatch.setattr(main, "dispatch_pending", dispatch)
     async with database() as session:
@@ -363,7 +364,7 @@ async def test_preflight_blocker_can_resume_after_reconnection(database, monkeyp
         run.result = {
             "blocker": {
                 "code": "resource_access_denied",
-                "action": "reconnect_account",
+                "action": action,
             }
         }
         run.execution_context = {
@@ -379,7 +380,7 @@ async def test_preflight_blocker_can_resume_after_reconnection(database, monkeyp
         )
 
     assert response["preflight"] is True
-    assert dispatched == ["w"]
+    assert dispatched == [("w", "run")]
     async with database() as session:
         run = await session.get(WorkflowRun, "run")
         assert run.status == RunStatus.recovering

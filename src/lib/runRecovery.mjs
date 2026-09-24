@@ -31,7 +31,7 @@ export function recoveryForRun(run = {}) {
     if (blockerIndex < 0) {
       blockerIndex = steps.findIndex((step) => !["completed", "skipped"].includes(step.status));
     }
-    const connectionAction = ["connect_account", "reconnect_account"].includes(blocker.action);
+    const connectionAction = ["connect_account", "reconnect_account", "wait_for_connector_repair"].includes(blocker.action);
     const labels = {
       plan_approval_required: "The workflow plan needs your approval.",
       external_submission_approval_required: "An external submission needs your approval.",
@@ -75,6 +75,8 @@ export function recoveryForRun(run = {}) {
       canSkip: false,
       buttonLabel: retryAction
         ? "Try export again"
+        : blocker.action === "wait_for_connector_repair"
+          ? "Recheck connector"
         : blocker.action === "reconnect_account"
           ? "Reconnect account"
           : "Connect account",
