@@ -6,7 +6,7 @@ import { aura } from "@/api/auraClient";
 import { formatDistanceToNow } from "date-fns";
 import { conjugateAction } from "@/lib/auraVerbs";
 import { announceWorkflowHistoryChanged } from "@/lib/workflowHistory.mjs";
-import { cancelPythonRun, dispatchDuePythonRun, resumePythonRun } from "@/lib/auraApi";
+import { cancelPythonRun, dispatchDuePythonRun, getPythonRun, resumePythonRun } from "@/lib/auraApi";
 import RunAgainModal from "./RunAgainModal";
 
 const outcomeIcons = {
@@ -27,6 +27,7 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
   const [checkBusy, setCheckBusy] = useState(false);
   const [checkResult, setCheckResult] = useState("");
   const [repairReady, setRepairReady] = useState(false);
+  const [reviewStepId, setReviewStepId] = useState(null);
 
   const requestRerun = (mode) => setRunAgainMode(mode);
 
@@ -57,14 +58,24 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
     setCheckBusy(true);
     setCheckResult("");
     setRepairReady(false);
+    setReviewStepId(null);
     try {
       const result = await dispatchDuePythonRun(run.backend_run_id);
+      const latest = await getPythonRun(run.backend_run_id);
       const blocked = result.preflight_blocker;
+      const failedReceipt = latest.steps?.find((step) =>
+        step.status === "failed" && step.consequential && step.output?.provider_result,
+      );
+      if (["waiting_for_action", "failed"].includes(latest.status)) {
+        setReviewStepId(failedReceipt?.id || null);
+      }
       setRepairReady(blocked?.action === "wait_for_connector_repair" && result.preflight_status === "blocked");
       setCheckResult(blocked && result.preflight_status === "blocked"
         ? blocked.action === "wait_for_connector_repair"
           ? `Paused before step 1: ${blocked.tool_slug || "the selected app"} needs connector repair.`
           : `Paused before step 1: ${blocked.tool_slug || "the selected app"} needs ${blocked.action === "reconnect_account" ? "reconnection" : "attention"}.`
+        : ["waiting_for_action", "failed"].includes(latest.status)
+          ? `Saved run paused: ${latest.error || failedReceipt?.error || "This step needs attention."}${failedReceipt ? " Its provider response is saved; a recheck will not repeat the action." : ""}`
         : result.published
         ? "Due work dispatched for this run."
         : result.next_attempt_at
@@ -72,6 +83,21 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
           : `No due work for this run. Current status: ${result.status}.`);
     } catch (error) {
       setCheckResult(error.message || "Could not check this run.");
+    } finally {
+      setCheckBusy(false);
+    }
+  };
+
+  const recheckRecordedResult = async () => {
+    if (!run.backend_run_id || !reviewStepId || checkBusy) return;
+    setCheckBusy(true);
+    setCheckResult("");
+    try {
+      await resumePythonRun(run.backend_run_id, reviewStepId);
+      setReviewStepId(null);
+      setCheckResult("Rechecking the saved provider response on this run. No action was sent again.");
+    } catch (error) {
+      setCheckResult(error.message || "Could not recheck the saved response.");
     } finally {
       setCheckBusy(false);
     }
@@ -239,6 +265,12 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
               <Button size="sm" variant="outline" className="w-full border-amber-400/25 text-amber-200"
                 onClick={recheckConnector} disabled={checkBusy}>
                 Recheck connector on this run
+              </Button>
+            )}
+            {reviewStepId && (
+              <Button size="sm" variant="outline" className="w-full border-amber-400/25 text-amber-200"
+                onClick={recheckRecordedResult} disabled={checkBusy}>
+                Recheck saved provider result
               </Button>
             )}
             <Button size="sm" variant="outline" className="w-full border-rose-400/25 text-rose-300"
