@@ -49,7 +49,7 @@ def _safe_error_code(exc: BaseException) -> str | int | None:
     )
 
 
-async def dispatch_pending(workspace_id: str | None = None) -> int:
+async def dispatch_pending(workspace_id: str | None = None, run_id: str | None = None) -> int:
     from .scheduler_runtime import _workspace_ids
     from .worker import execute_run_task, index_memory_task, plan_run_task
 
@@ -59,14 +59,16 @@ async def dispatch_pending(workspace_id: str | None = None) -> int:
         async with SessionLocal() as session:
             await set_tenant_context(session, tenant)
             now = datetime.now(UTC)
+            query = select(DispatchIntent).where(
+                DispatchIntent.workspace_id == tenant,
+                DispatchIntent.status == "pending",
+                DispatchIntent.available_at <= now,
+            )
+            if run_id:
+                query = query.where(DispatchIntent.run_id == run_id)
             intents = (
                 await session.scalars(
-                    select(DispatchIntent)
-                    .where(
-                        DispatchIntent.workspace_id == tenant,
-                        DispatchIntent.status == "pending",
-                        DispatchIntent.available_at <= now,
-                    )
+                    query
                     .order_by(DispatchIntent.created_at)
                     .limit(50)
                     .with_for_update(skip_locked=True)

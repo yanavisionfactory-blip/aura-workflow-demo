@@ -6,7 +6,7 @@ import { aura } from "@/api/auraClient";
 import { formatDistanceToNow } from "date-fns";
 import { conjugateAction } from "@/lib/auraVerbs";
 import { announceWorkflowHistoryChanged } from "@/lib/workflowHistory.mjs";
-import { cancelPythonRun } from "@/lib/auraApi";
+import { cancelPythonRun, dispatchDuePythonRun } from "@/lib/auraApi";
 import RunAgainModal from "./RunAgainModal";
 
 const outcomeIcons = {
@@ -24,6 +24,8 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
   const [runAgainMode, setRunAgainMode] = useState(null); // null | "rerun" | "edit"
   const [cancelBusy, setCancelBusy] = useState(false);
   const [cancelResult, setCancelResult] = useState("");
+  const [checkBusy, setCheckBusy] = useState(false);
+  const [checkResult, setCheckResult] = useState("");
 
   const requestRerun = (mode) => setRunAgainMode(mode);
 
@@ -46,6 +48,24 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
       setCancelResult(error.message || "Could not cancel this saved run.");
     } finally {
       setCancelBusy(false);
+    }
+  };
+
+  const checkPendingWork = async () => {
+    if (!run.backend_run_id || checkBusy) return;
+    setCheckBusy(true);
+    setCheckResult("");
+    try {
+      const result = await dispatchDuePythonRun(run.backend_run_id);
+      setCheckResult(result.published
+        ? "Due work dispatched for this run."
+        : result.next_attempt_at
+          ? `Next retry: ${new Date(result.next_attempt_at).toLocaleString()}.`
+          : `No due work for this run. Current status: ${result.status}.`);
+    } catch (error) {
+      setCheckResult(error.message || "Could not check this run.");
+    } finally {
+      setCheckBusy(false);
     }
   };
 
@@ -184,7 +204,12 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
       {/* Actions */}
       <div className="p-4 border-t border-white/5">
         {run.status === "running" && run.backend_run_id && (
-          <div className="mb-3">
+          <div className="mb-3 space-y-2">
+            <Button size="sm" variant="outline" className="w-full border-white/15"
+              onClick={checkPendingWork} disabled={checkBusy}>
+              {checkBusy ? "Checking this run…" : "Check pending work"}
+            </Button>
+            {checkResult && <p role="status" className="text-xs text-muted-foreground">{checkResult}</p>}
             <Button size="sm" variant="outline" className="w-full border-rose-400/25 text-rose-300"
               onClick={cancelRun} disabled={cancelBusy || Boolean(cancelResult && !cancelResult.startsWith("Could not"))}>
               {cancelBusy ? "Cancelling saved run…" : "Cancel saved run"}

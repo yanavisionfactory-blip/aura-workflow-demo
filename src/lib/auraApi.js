@@ -654,3 +654,8 @@ export async function cancelPythonRun(runId) {
   await ensureWorkspace();
   return request(`/v1/runs/${runId}/cancel`, { method: "POST" });
 }
+
+export async function dispatchDuePythonRun(runId) {
+  await ensureWorkspace();
+  return request(`/v1/runs/${runId}/dispatch-due`, { method: "POST" });
+}

@@ -3,6 +3,7 @@ import { formatDistanceToNow } from "date-fns";
 
 const statusConfig = {
   completed: { icon: CheckCircle2, color: "text-emerald-400", bg: "bg-emerald-400/10", label: "Completed" },
+  cancelled: { icon: AlertCircle, color: "text-muted-foreground", bg: "bg-white/5", label: "Cancelled" },
   running:   { icon: Loader2,      color: "text-accent",       bg: "bg-accent/10",       label: "Running", spin: true },
   failed:    { icon: AlertCircle,  color: "text-red-400",      bg: "bg-red-400/10",      label: "Needs attention" },
 };

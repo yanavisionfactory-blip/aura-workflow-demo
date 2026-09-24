@@ -22,6 +22,7 @@ import RunAgainModal from "./RunAgainModal";
 
 const runStatusConfig = {
   completed: { color: "text-emerald-400", dot: "bg-emerald-400", label: "Completed" },
+  cancelled: { color: "text-muted-foreground", dot: "bg-muted-foreground", label: "Cancelled" },
   running:   { color: "text-accent",       dot: "bg-accent",      label: "Running" },
   failed:    { color: "text-red-400",      dot: "bg-red-400",     label: "Needs attention" },
 };
