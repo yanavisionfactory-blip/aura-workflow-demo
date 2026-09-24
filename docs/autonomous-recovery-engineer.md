@@ -51,8 +51,8 @@ cannot be reconciled.
 
 ## Verify that the agent team actually ran
 
-For a saved run, **My workflows → run → Verify agent teamwork** reads the authenticated
-`/v1/runs/{run_id}/evaluation` endpoint. `agent_team.passed` requires a completed,
+The authenticated, internal `/v1/runs/{run_id}/evaluation` endpoint reports
+`agent_team.passed` for a saved run. This requires a completed,
 verified outcome, accepted step results, model-backed supervisor decisions, and
 model-backed execution-agent decisions for every completed step. A safe deterministic
 fallback is reported in `manager_sources` or `executor_sources`; it does not count as
