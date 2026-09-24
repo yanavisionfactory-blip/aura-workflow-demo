@@ -114,6 +114,25 @@ def test_connected_separate_google_docs_writer_is_available_for_story() -> None:
     assert "gmail.send" in next(item for item in bounded if item["slug"] == "google")["allowed_operations"]
 
 
+def test_russian_forecast_note_uses_public_weather_and_excludes_drive_search() -> None:
+    inventory = [
+        {"slug": "aura", "name": "AURA Intelligence", "allowed_operations": ["weather.forecast"]},
+        {"slug": "google-docs", "name": "Google Docs", "connected": True,
+         "allowed_operations": ["google-docs.create-document", "google-docs.get-document"]},
+        {"slug": "google", "name": "Google Workspace", "connected": True,
+         "allowed_operations": ["google.identity.get", "docs.create", "docs.get",
+                                "gmail.send", "gmail.get", "drive.files.search", "calendar.list"]},
+    ]
+    bounded = intent_bounded_tool_inventory(
+        "Узнай прогноз погоды в Берлине. Создай заметку в Google Docs и "
+        "отправь одним письмом на yana.visionfactory@gmail.com", inventory,
+    )
+    assert {item["slug"] for item in bounded} == {"aura", "google-docs", "google"}
+    assert set(next(item for item in bounded if item["slug"] == "google")["allowed_operations"]) == {
+        "google.identity.get", "gmail.send", "gmail.get",
+    }
+
+
 def test_open_ended_intent_preserves_the_full_inventory() -> None:
     inventory = [
         {"slug": "alpha", "name": "Alpha", "allowed_operations": ["alpha.read"]},

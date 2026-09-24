@@ -16,6 +16,110 @@ def _owner(inventory: list[dict], operations: set[str]) -> dict | None:
     return matches[0] if len(matches) == 1 else None
 
 
+def mailchimp_canva_pilot_template(prompt: str, inventory: list[dict]) -> WorkflowPlan | None:
+    """Prepare one Canva pilot slide from a real Mailchimp audience, with no send."""
+    request = prompt.casefold()
+    if not (
+        "mailchimp" in request
+        and "canva" in request
+        and ("audience" in request or "аудитор" in request)
+        and ("slide" in request or "слайд" in request)
+        and ("pilot" in request or "пилот" in request)
+    ):
+        return None
+    # This audited shape is for a presentation only. Sending, modifying lists,
+    # selecting a named audience, or extra deliverables need a separate plan.
+    if any(word in request for word in (
+        "send", "email", "рассыл", "отправ", "figma", "фигма",
+        "specific audience", "named audience", "конкретн", "названи",
+    )):
+        return None
+    mailchimp = _owner(inventory, {"mailchimp.audiences.list"})
+    canva = _owner(inventory, {"canva.presentation.create"})
+    if not mailchimp or not canva:
+        return None
+    plan = WorkflowPlan.model_validate({
+        "name": "Mailchimp audience pilot brief",
+        "interpretation": (
+            "Read the current Mailchimp audience and create one Canva pilot slide "
+            "with its name and contact count; do not send a campaign."
+        ),
+        "steps": [
+            {
+                "key": "audiences",
+                "agent": "Mailchimp Research Agent",
+                "tool_slug": mailchimp["slug"],
+                "operation": "mailchimp.audiences.list",
+                "arguments": {"count": 10},
+                "reason": "Read the actual audience name and contact count.",
+                "expected_output": "Current Mailchimp audiences and their metadata.",
+                "required_evidence": ["audience_metadata"],
+            },
+            {
+                "key": "pilot_slide",
+                "agent": "Canva Presentation Agent",
+                "tool_slug": canva["slug"],
+                "operation": "canva.presentation.create",
+                "arguments": {
+                    "title": "Mailchimp pilot brief",
+                    "layout": "slides",
+                    "phases": [{
+                        "period": "Pilot",
+                        "title": "Audience overview",
+                        "items": [
+                            "Audience: {{steps.audiences.lists[0].name}}",
+                            "Contacts: {{steps.audiences.lists[0].stats.member_count}}",
+                            "Draft for review; no campaign has been sent.",
+                        ],
+                    }],
+                },
+                "reason": "Create the approved one-slide Canva brief from Mailchimp evidence.",
+                "expected_output": "Verified populated Canva slide and design identity.",
+                "consequential": True,
+                "depends_on": ["audiences"],
+                "required_evidence": ["dispatch_receipt", "populated_presentation"],
+            },
+        ],
+        "result_contract": {
+            "primary_step_key": "pilot_slide",
+            "completion_step_key": "pilot_slide",
+            "supporting_step_keys": ["audiences"],
+        },
+    })
+    plan.planning_artifacts = {
+        "objective_spec": {
+            "goal": "Create one Canva pilot slide from the current Mailchimp audience.",
+            "deliverables": ["One populated Canva slide"],
+            "constraints": ["Use current Mailchimp audience data", "Do not send a campaign"],
+            "success_metrics": ["Canva returns a verified design identity"],
+            "required_inputs": [],
+        },
+        "toolset_proposal": {
+            "tools": [
+                {"slug": mailchimp["slug"], "role": "read audience metadata"},
+                {"slug": canva["slug"], "role": "create a populated slide"},
+            ],
+            "missing_capabilities": [],
+        },
+        "preflight_evaluation": {
+            "passed": True,
+            "estimated_risk": "medium",
+            "risk_score": 0.3,
+            "permission_scope": "write",
+        },
+        "senior_orchestrator": {
+            "action": "approve",
+            "reason": "Audited Mailchimp-to-Canva template passed deterministic preflight.",
+            "source": "audited_template",
+        },
+        "planner_recovery_mode": "audited_mailchimp_canva_template",
+        "connection_requirements": [
+            item["slug"] for item in (mailchimp, canva) if not item.get("connected", True)
+        ],
+    }
+    return plan
+
+
 def notion_to_jira_template(
     prompt: str,
     inventory: list[dict],
