@@ -1,54 +1,57 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Eye, Mail, Database, ShieldAlert, ArrowLeft, Play, List, FileDown, FileText, Pencil, ListChecks, Check, ChevronDown, Presentation, Plus, Trash2, Paperclip } from "lucide-react";
+import { Eye, Mail, Database, ArrowLeft, Play, List, FileDown, FileText, Pencil, ListChecks, Check, ChevronDown, Plus, Trash2, Paperclip, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { aura } from "@/api/auraClient";
 import { downloadEmailEml, safeName } from "@/lib/auraDownload";
+import { applyPresentationCopy, presentationCopySchema } from "@/lib/canvaCopyEdit.mjs";
 import { fallbackReviewContract, mergeLegacyPreviewIntoArguments, setArgumentAtPath, validateReviewArguments } from "@/lib/approvalReview.mjs";
 
 function EditableEmail({ preview, onPreviewChange, editing, artifacts = [] }) {
   return (
-    <div className="rounded-xl border border-white/8 bg-card/40 overflow-hidden">
-      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-white/6 bg-card/30">
-        <Mail className="w-3.5 h-3.5 text-primary" />
-        <span className="text-xs font-medium">Email preview</span>
+    <div className="overflow-hidden">
+      <div className="flex items-center justify-between pb-3 text-xs text-muted-foreground">
+        <span>Review the email</span>
         <button
           onClick={() => downloadEmailEml(`aura-email-${safeName(preview.subject)}.eml`, preview)}
-          className="ml-auto flex items-center gap-1 text-[10px] px-2 py-1 rounded-full border border-white/10 text-muted-foreground hover:text-foreground hover:border-white/20 transition-colors"
+          className="flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:border-white/20"
         >
-          <FileDown className="w-3 h-3" /> .eml
+          <FileDown className="w-3 h-3" /> Download draft
         </button>
       </div>
-      <div className="p-4 space-y-2">
-        <div className="flex gap-2 items-center text-xs">
-          <span className="text-muted-foreground/50 w-16 flex-shrink-0">To</span>
+      <div className="space-y-3 text-sm">
+        <div className="flex gap-3 items-center">
+          <span className="w-20 flex-shrink-0 text-muted-foreground">To</span>
           <input
             value={String(preview.to || "").toLowerCase() === "me" ? "" : preview.to || ""}
             placeholder={String(preview.to || "").toLowerCase() === "me" ? "Your connected Gmail address" : "Recipient email"}
             onChange={(e) => onPreviewChange({ to: e.target.value })}
             readOnly={!editing}
-            className={`flex-1 bg-transparent border-b outline-none py-1 ${editing ? "border-white/10 focus:border-primary" : "border-transparent"}`}
+            className={`min-w-0 flex-1 bg-transparent border-b py-1 outline-none ${editing ? "border-white/10 focus:border-primary" : "border-transparent"}`}
           />
         </div>
-        <div className="flex gap-2 items-center text-xs">
-          <span className="text-muted-foreground/50 w-16 flex-shrink-0">Subject</span>
+        <div className="flex gap-3 items-center">
+          <span className="w-20 flex-shrink-0 text-muted-foreground">Subject</span>
           <input
             value={preview.subject || ""}
             onChange={(e) => onPreviewChange({ subject: e.target.value })}
             readOnly={!editing}
-            className={`flex-1 bg-transparent border-b outline-none py-1 font-medium ${editing ? "border-white/10 focus:border-primary" : "border-transparent"}`}
+            className={`min-w-0 flex-1 bg-transparent border-b py-1 font-medium outline-none ${editing ? "border-white/10 focus:border-primary" : "border-transparent"}`}
           />
         </div>
-        <div className="pt-2 mt-1 border-t border-white/5">
+        <div className="grid gap-3 pt-2 sm:grid-cols-[5rem_1fr]">
+          <span className="text-muted-foreground">Message</span>
           <textarea
             value={preview.body || ""}
             onChange={(e) => onPreviewChange({ body: e.target.value })}
             readOnly={!editing}
-            rows={6}
-            className="w-full bg-transparent outline-none text-xs font-sans text-muted-foreground leading-relaxed resize-y border-0"
+            rows={4}
+            className="w-full resize-y border-0 bg-transparent font-sans text-sm leading-relaxed text-foreground outline-none"
           />
         </div>
         {artifacts.length > 0 && (
           <div className="space-y-1.5 border-t border-white/5 pt-3">
+            <p className="text-xs text-muted-foreground">Attachments · added after approval</p>
             {artifacts.map((artifact, index) => (
               <div key={`${artifact.name}-${index}`} className="flex items-center gap-2 rounded-lg border border-white/6 bg-white/[0.02] px-3 py-2">
                 <Paperclip className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
@@ -262,8 +265,7 @@ function SchemaArgumentsEditor({ contract, args, editing, onArgumentsChange, onF
     <div className="rounded-xl border border-white/8 bg-card/40 overflow-hidden">
       <div className="flex items-center gap-2 border-b border-white/6 bg-card/30 px-4 py-2.5">
         <Database className="h-3.5 w-3.5 text-accent" />
-        <span className="text-xs font-medium">Exact app values</span>
-        <span className="ml-auto text-[10px] text-muted-foreground/50">{fields.length} {fields.length === 1 ? "field" : "fields"}</span>
+        <span className="text-xs font-medium">Additional details</span>
       </div>
       <div className="space-y-3 p-4">
         {fields.map((field) => {
@@ -338,89 +340,135 @@ function SchemaArgumentsEditor({ contract, args, editing, onArgumentsChange, onF
 
 function EditablePresentation({ args, contract, editing, onArgumentsChange, onFieldValidity }) {
   const phases = Array.isArray(args.phases) ? args.phases : [];
-  const slideCount = args.layout === "slides" ? phases.length : 1;
-  const sceneNames = {
-    rain_window: "Rain at the window",
-    paper_boat: "Paper boat",
-    lantern: "Lantern",
-  };
+  const [selectedSlide, setSelectedSlide] = useState(0);
+  const [instruction, setInstruction] = useState("");
+  const [applying, setApplying] = useState(false);
+  const [editError, setEditError] = useState("");
+  const activeIndex = Math.min(selectedSlide, Math.max(0, phases.length - 1));
+  const activeSlide = phases[activeIndex] || { period: "", title: args.title || "Untitled design", items: [] };
+  const sceneNames = { rain_window: "Rain at the window", paper_boat: "Paper boat", lantern: "Lantern" };
   const phaseLimit = contract.fields?.find((field) => field.key === "phases")?.max_items || 4;
   const updatePhase = (index, patch) => {
-    const next = phases.map((phase, phaseIndex) => phaseIndex === index ? { ...phase, ...patch } : phase);
-    onArgumentsChange({ ...args, phases: next });
+    onArgumentsChange({ ...args, phases: phases.map((phase, i) => i === index ? { ...phase, ...patch } : phase) });
+  };
+  const applyInstruction = async () => {
+    if (!instruction.trim() || applying) return;
+    setApplying(true);
+    setEditError("");
+    try {
+      const suggestion = await aura.integrations.Core.InvokeLLM({
+        prompt: "Revise only the wording of this presentation according to the user's instruction. Keep the same number and order of slides. Never invent an external action or claim Canva has been edited. Return the full title, subtitle and all slides with period, title and items as JSON.\nCurrent content: "
+          + JSON.stringify({ title: args.title || "", subtitle: args.subtitle || "", slides: phases.map(({ period, title, items }) => ({ period, title, items })) })
+          + "\nUser instruction: " + instruction.trim(),
+        response_json_schema: presentationCopySchema,
+      });
+      const revised = applyPresentationCopy(args, suggestion);
+      const errors = validateReviewArguments(contract, revised);
+      if (errors.length) throw new Error(errors[0].message);
+      onArgumentsChange(revised);
+      setInstruction("");
+    } catch (error) {
+      setEditError(error.message || "AURA could not apply that change. Please edit the slide directly.");
+    } finally {
+      setApplying(false);
+    }
   };
 
   return (
-    <div className="space-y-3">
-      <div className="overflow-hidden rounded-xl border border-white/8 bg-[#101c2c] shadow-inner">
-        <div className="flex items-center gap-2 border-b border-white/8 px-4 py-2.5">
-          <Presentation className="h-3.5 w-3.5 text-cyan-300" />
-          <span className="text-xs font-medium">Live presentation preview</span>
-          <span className="ml-auto text-[10px] text-muted-foreground">{slideCount} {slideCount === 1 ? "slide" : "slides"}</span>
-        </div>
-        <div className="aspect-video p-5 sm:p-7">
-          {editing ? (
-            <input
-              aria-label="Presentation title"
-              value={args.title || ""}
-              onChange={(event) => onArgumentsChange({ ...args, title: event.target.value })}
-              placeholder="Presentation title"
-              className="w-full border-b border-white/15 bg-transparent pb-1 text-lg font-semibold text-white outline-none focus:border-cyan-300 sm:text-2xl"
-            />
-          ) : <p className="text-lg font-semibold text-white sm:text-2xl">{args.title || "Untitled presentation"}</p>}
-          {editing ? (
-            <input
-              aria-label="Presentation subtitle"
-              value={args.subtitle || ""}
-              onChange={(event) => onArgumentsChange({ ...args, subtitle: event.target.value })}
-              placeholder="Subtitle"
-              className="mt-1 w-full border-b border-white/10 bg-transparent pb-1 text-[10px] text-slate-300 outline-none focus:border-cyan-300 sm:text-xs"
-            />
-          ) : <p className="mt-1 min-h-5 text-[10px] text-slate-300 sm:text-xs">{args.subtitle || ""}</p>}
-          <div className="mt-6 grid gap-3" style={{ gridTemplateColumns: `repeat(${Math.max(1, phases.length)}, minmax(0, 1fr))` }}>
-            {(phases.length ? phases : [{ period: "", title: "Add a phase", items: [] }]).map((phase, index) => (
-              <div key={index} className="min-w-0">
-                {editing ? (
-                  <>
-                    <input aria-label={`Phase ${index + 1} period`} value={phase.period || ""} onChange={(event) => updatePhase(index, { period: event.target.value })} placeholder="Date" className="w-full border-b border-white/10 bg-transparent text-[9px] font-semibold uppercase tracking-wide text-emerald-300 outline-none focus:border-emerald-300" />
-                    <input aria-label={`Phase ${index + 1} title`} value={phase.title || ""} onChange={(event) => updatePhase(index, { title: event.target.value })} placeholder="Slide section" className="mt-1 w-full border-b border-white/10 bg-transparent text-[10px] font-semibold text-white outline-none focus:border-cyan-300 sm:text-xs" />
-                    <textarea aria-label={`Phase ${index + 1} items`} value={(phase.items || []).join("\n")} onChange={(event) => updatePhase(index, { items: event.target.value.split("\n").map((item) => item.trim()).filter(Boolean) })} rows={3} placeholder="One point per line" className="mt-2 w-full resize-none border-b border-white/10 bg-transparent text-[8px] leading-relaxed text-slate-300 outline-none focus:border-cyan-300 sm:text-[10px]" />
-                    {args.layout === "slides" && <select aria-label={`Phase ${index + 1} illustration`} value={phase.scene || ""} onChange={(event) => updatePhase(index, { scene: event.target.value || undefined })} className="mt-2 w-full border-b border-white/10 bg-[#101c2c] text-[10px] text-slate-300 outline-none focus:border-cyan-300">
-                      <option value="">Text only</option>
-                      {Object.entries(sceneNames).map(([scene, label]) => <option key={scene} value={scene}>{label}</option>)}
-                    </select>}
-                  </>
-                ) : (
-                  <>
-                    <p className="text-[9px] font-semibold uppercase tracking-wide text-emerald-300">{phase.period}</p>
-                    <p className="mt-1 truncate text-[10px] font-semibold text-white sm:text-xs">{phase.title}</p>
-                    <div className="mt-2 space-y-1">
-                      {(phase.items || []).slice(0, 5).map((item, itemIndex) => <p key={itemIndex} className="truncate text-[8px] text-slate-300 sm:text-[10px]">• {item}</p>)}
-                    </div>
-                    {args.layout === "slides" && <p className="mt-2 text-[10px] text-slate-400">Illustration: {sceneNames[phase.scene] || "Text only"}</p>}
-                  </>
-                )}
-              </div>
+    <div>
+      <div className="flex flex-wrap items-center gap-2 border-b border-white/10 px-5 py-3">
+        <span className="rounded-xl border border-primary/40 bg-primary/10 px-3 py-2 text-xs text-primary">AURA preview</span>
+        <span className="text-xs text-muted-foreground">A preview of what will be created after approval</span>
+      </div>
+      <div className="flex min-h-[320px] bg-[#20222e] sm:min-h-[430px]">
+        {phases.length > 1 && (
+          <nav aria-label="Presentation slides" className="hidden w-44 shrink-0 flex-col gap-2 border-r border-white/10 bg-[#222431] p-3 sm:flex">
+            <span className="px-1 pb-2 text-sm font-medium">Slides</span>
+            {phases.map((phase, index) => (
+              <button key={index} type="button" onClick={() => setSelectedSlide(index)}
+                aria-current={activeIndex === index ? "true" : undefined}
+                className={activeIndex === index ? "rounded-xl border border-primary bg-primary/15 p-2 text-left text-xs" : "rounded-xl border border-white/10 bg-white/5 p-2 text-left text-xs hover:border-white/25"}>
+                <span className="block truncate text-muted-foreground">{index + 1} · {phase.period || "Slide"}</span>
+                <span className="mt-1 block truncate">{phase.title || "Untitled slide"}</span>
+              </button>
             ))}
+          </nav>
+        )}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="flex items-center justify-between gap-2 border-b border-white/10 px-4 py-3 text-xs">
+            <span className="truncate font-medium">{args.title || "Untitled presentation"}</span>
+            <span className="shrink-0 text-muted-foreground">{phases.length || 1} {phases.length === 1 ? "slide" : "slides"}</span>
           </div>
+          <div className="flex flex-1 items-center justify-center p-3 sm:p-6">
+            <div className="relative aspect-video w-full max-w-3xl overflow-hidden bg-[#f1f7ff] p-5 text-[#1e2b3d] shadow-xl sm:p-9">
+              <div aria-hidden="true" className="absolute -right-[12%] -top-[34%] h-[92%] w-[42%] rounded-full bg-[#c5def8]" />
+              <div className="relative flex h-full flex-col">
+                <span className="text-[10px] font-semibold uppercase tracking-[.18em] text-[#42638c] sm:text-xs">{activeSlide.period || "YOUR STORY"}</span>
+                <h3 className="mt-4 max-w-[80%] break-words text-xl font-semibold leading-tight text-[#172238] sm:mt-6 sm:text-3xl">{activeSlide.title || args.title || "Untitled slide"}</h3>
+                <p className="mt-2 max-w-[80%] break-words text-xs text-[#4b607a] sm:text-sm">{args.subtitle}</p>
+                <div className="mt-4 space-y-1 text-xs text-[#364d67] sm:mt-7 sm:text-sm">
+                  {(activeSlide.items || []).slice(0, 4).map((item, index) => <p key={index} className="max-w-[86%] break-words">{item}</p>)}
+                </div>
+                {activeSlide.scene && <span className="mt-auto text-[10px] text-[#647997]">Illustration: {sceneNames[activeSlide.scene] || activeSlide.scene}</span>}
+              </div>
+            </div>
+          </div>
+          {phases.length > 1 && (
+            <div className="flex gap-2 overflow-x-auto border-t border-white/10 px-3 py-3 sm:hidden">
+              {phases.map((phase, index) => (
+                <button type="button" key={index} onClick={() => setSelectedSlide(index)}
+                  className={activeIndex === index ? "shrink-0 rounded-lg bg-primary px-3 py-2 text-xs text-primary-foreground" : "shrink-0 rounded-lg bg-white/10 px-3 py-2 text-xs"}>
+                  {index + 1} · {phase.title || "Slide"}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
-
       {editing && (
-        <div className="flex items-center justify-between rounded-xl border border-white/8 bg-card/40 px-4 py-3">
-          <p className="text-[11px] text-muted-foreground">Edit the {args.layout === "slides" ? "text for each slide" : "slide text"} above.</p>
-          <div className="flex items-center gap-2">
-            {phases.length > 1 && (
-              <button type="button" onClick={() => onArgumentsChange({ ...args, phases: phases.slice(0, -1) })} className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-rose-300"><Trash2 className="h-3 w-3" /> Remove section</button>
-            )}
-            {phases.length < phaseLimit && (
-              <button type="button" onClick={() => onArgumentsChange({ ...args, phases: [...phases, { period: "", title: "", items: [""] }] })} className="flex items-center gap-1.5 text-[11px] text-primary hover:text-primary/80"><Plus className="h-3 w-3" /> Add section</button>
-            )}
+        <div className="space-y-4 border-t border-white/10 px-5 py-5">
+          <p className="text-sm font-medium">Edit this design</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="text-xs text-muted-foreground">Presentation title
+              <input aria-label="Presentation title" value={args.title || ""} onChange={(event) => onArgumentsChange({ ...args, title: event.target.value })} className="mt-1 w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-foreground outline-none focus:border-primary" />
+            </label>
+            <label className="text-xs text-muted-foreground">Subtitle
+              <input aria-label="Presentation subtitle" value={args.subtitle || ""} onChange={(event) => onArgumentsChange({ ...args, subtitle: event.target.value })} className="mt-1 w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-foreground outline-none focus:border-primary" />
+            </label>
+            {phases.length > 0 && <>
+              <label className="text-xs text-muted-foreground">Slide {activeIndex + 1} heading
+                <input aria-label={"Phase " + (activeIndex + 1) + " title"} value={activeSlide.title || ""} onChange={(event) => updatePhase(activeIndex, { title: event.target.value })} className="mt-1 w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-foreground outline-none focus:border-primary" />
+              </label>
+              <label className="text-xs text-muted-foreground">Slide {activeIndex + 1} label
+                <input aria-label={"Phase " + (activeIndex + 1) + " period"} value={activeSlide.period || ""} onChange={(event) => updatePhase(activeIndex, { period: event.target.value })} className="mt-1 w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-foreground outline-none focus:border-primary" />
+              </label>
+              <label className="text-xs text-muted-foreground sm:col-span-2">Slide {activeIndex + 1} text · one line per point
+                <textarea aria-label={"Phase " + (activeIndex + 1) + " items"} value={(activeSlide.items || []).join("\n")} rows={3} onChange={(event) => updatePhase(activeIndex, { items: event.target.value.split("\n").map((item) => item.trim()).filter(Boolean) })} className="mt-1 w-full resize-y rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-foreground outline-none focus:border-primary" />
+              </label>
+              {args.layout === "slides" && <label className="text-xs text-muted-foreground">Slide {activeIndex + 1} illustration
+                <select aria-label={"Phase " + (activeIndex + 1) + " illustration"} value={activeSlide.scene || ""} onChange={(event) => updatePhase(activeIndex, { scene: event.target.value || undefined })} className="mt-1 w-full rounded-lg border border-white/10 bg-[#20222e] px-3 py-2 text-sm text-foreground outline-none focus:border-primary">
+                  <option value="">Text only</option>
+                  {Object.entries(sceneNames).map(([scene, label]) => <option key={scene} value={scene}>{label}</option>)}
+                </select>
+              </label>}
+            </>}
+          </div>
+          <div className="flex flex-wrap gap-3">
+            {phases.length > 1 && <button type="button" onClick={() => { onArgumentsChange({ ...args, phases: phases.filter((_, index) => index !== activeIndex) }); setSelectedSlide(Math.max(0, activeIndex - 1)); }} className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-rose-300"><Trash2 className="h-3.5 w-3.5" /> Remove slide</button>}
+            {phases.length < phaseLimit && <button type="button" onClick={() => { onArgumentsChange({ ...args, phases: [...phases, { period: "", title: "", items: [""] }] }); setSelectedSlide(phases.length); }} className="inline-flex items-center gap-1 text-xs text-primary"><Plus className="h-3.5 w-3.5" /> Add slide</button>}
           </div>
         </div>
       )}
-
-      <SchemaArgumentsEditor contract={contract} args={args} editing={editing} onArgumentsChange={onArgumentsChange} onFieldValidity={onFieldValidity} excludeKeys={["title", "subtitle", "phases"]} />
+      {editing && phases.length > 0 && <div className="border-t border-white/10 px-5 py-5">
+        <label htmlFor="aura-presentation-instruction" className="flex items-center gap-2 text-sm font-medium"><Sparkles className="h-4 w-4 text-primary" /> Tell AURA what to change in the text</label>
+        <div className="mt-3 flex flex-col gap-3 sm:flex-row">
+          <textarea id="aura-presentation-instruction" value={instruction} onChange={(event) => setInstruction(event.target.value)} rows={2} placeholder="For example: Make slide 2 shorter and friendlier." className="min-w-0 flex-1 resize-y rounded-xl border border-white/10 bg-white/[0.03] p-3 text-sm outline-none focus:border-primary" />
+          <button type="button" disabled={applying || !instruction.trim()} onClick={applyInstruction} className="rounded-xl bg-primary px-5 py-3 text-sm font-medium text-primary-foreground disabled:opacity-50">{applying ? "Applying…" : "Apply with AURA"}</button>
+        </div>
+        {editError && <p role="alert" className="mt-2 text-xs text-rose-300">{editError}</p>}
+        <p className="mt-2 text-xs text-muted-foreground">Changes here update this preview. The design will be created in Canva after you approve.</p>
+      </div>}
+      <div className="px-5 pb-5"><SchemaArgumentsEditor contract={contract} args={args} editing={editing} onArgumentsChange={onArgumentsChange} onFieldValidity={onFieldValidity} excludeKeys={["title", "subtitle", "phases"]} /></div>
     </div>
   );
 }
@@ -528,29 +576,29 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
 
   // Modify step (sends / changes data): the focus of review — expanded & editable.
   return (
-    <div className="rounded-2xl border border-amber-400/20 bg-amber-400/[0.03] p-4">
-      <div className="flex items-start gap-3 mb-3">
-        <div className="flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-amber-400/10 border border-amber-400/20 text-amber-300">
+    <div className="overflow-hidden rounded-[22px] border border-white/15 bg-[#121827]">
+      <div className="flex items-start gap-3 px-5 py-5 sm:gap-4">
+        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-primary/15 text-sm text-primary">
           {number}
         </div>
+        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-400 to-violet-600 text-xs font-medium text-white">
+          {richPresentation ? "Canva" : richEmail ? <Mail className="h-5 w-5" /> : richDocument ? <FileText className="h-5 w-5" /> : (step.tool || "App").slice(0, 1)}
+        </div>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5 flex-wrap mb-1">
-            <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground/50">{step.tool}</span>
-            <span className="flex items-center gap-1 text-[10px] text-amber-400">
-              <ShieldAlert className="w-2.5 h-2.5" /> needs your review
-            </span>
-            <button
-              onClick={() => setEditing((e) => !e)}
-              className={`ml-auto flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] transition-colors ${editing ? "border-primary/30 bg-primary/10 text-primary" : "border-white/10 text-muted-foreground hover:text-primary"}`}
-            >
-              <Pencil className="w-2.5 h-2.5" /> {editing ? "Editing" : "Edit in AURA"}
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <p className="text-base font-medium text-foreground">{richPresentation ? args.title || step.action || contract.title : step.action || contract.title}</p>
+              <p className="mt-1 text-sm text-muted-foreground">{richPresentation ? `${Array.isArray(args.phases) ? args.phases.length : 1}-slide presentation` : step.tool} · needs your review</p>
+            </div>
+            <button type="button" onClick={() => setEditing((e) => !e)}
+              className="flex items-center gap-1 rounded-lg border border-white/10 px-3 py-2 text-xs text-muted-foreground hover:border-primary/50 hover:text-primary">
+              <Pencil className="h-3.5 w-3.5" /> {editing ? "Editing" : "Edit in AURA"}
             </button>
           </div>
-          <p className="py-0.5 text-sm font-medium">{step.action || contract.title}</p>
-          {step.riskNote && <p className="text-[11px] text-amber-300/70 mt-1">{step.riskNote}</p>}
+          {step.riskNote && <p className="mt-2 text-xs text-amber-200">{step.riskNote}</p>}
         </div>
       </div>
-      <div className="pl-10 space-y-3">
+      <div className={richPresentation ? "border-t border-white/10" : "border-t border-white/10 p-5"}>
         {step.reviewContract ? (
           <>
             {richEmail && <EditableEmail preview={p} onPreviewChange={updatePreview} editing={editing} artifacts={contract.artifacts || (Array.isArray(args.attachments) ? args.attachments.map((attachment) => ({ name: attachment.filename || "Attachment", source: "From this workflow" })) : [])} />}
@@ -611,8 +659,6 @@ export default function PreviewView({ preview, steps, onApprove, onBack, error =
   const backgroundSteps = editSteps
     .map((step, index) => ({ step, index }))
     .filter(({ step }) => step.riskLevel !== "modify");
-  const sourceTools = [...new Set(editSteps.filter((step) => step.riskLevel !== "modify").map((step) => step.tool))];
-  const destinationTools = [...new Set(reviewSteps.map(({ step }) => step.tool))];
   const contractErrors = reviewSteps.flatMap(({ step, index }) => (
     step.reviewContract
       ? validateReviewArguments(step.reviewContract, step.resolvedArguments || step.arguments || {})
@@ -620,32 +666,28 @@ export default function PreviewView({ preview, steps, onApprove, onBack, error =
       : []
   ));
   const approvalBlocked = invalidFields.size > 0 || contractErrors.length > 0;
-  const reviewSummary = sourceTools.length
-    ? `AURA will use ${sourceTools.join(" and ")} to prepare ${reviewSteps.length} reviewed ${destinationTools.join(" / ")} ${reviewSteps.length === 1 ? "change" : "changes"}.`
-    : `${reviewSteps.length} ${reviewSteps.length === 1 ? "change is" : "changes are"} ready for your review.`;
-
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -20 }}
       transition={{ duration: 0.4 }}
-      className="w-full max-w-2xl mx-auto"
+      className="mx-auto w-full max-w-5xl"
     >
       {/* Header */}
-      <div className="flex items-center gap-3 mb-2">
-        <div className="p-2 rounded-xl bg-accent/10 border border-accent/20">
-          <Eye className="w-5 h-5 text-accent" />
+      <div className="mb-2 flex items-center gap-4">
+        <div className="rounded-2xl bg-violet-500/15 p-3">
+          <Eye className="h-5 w-5 text-violet-300" />
         </div>
         <div>
-          <h2 className="text-lg font-semibold">Review before running</h2>
-          <p className="text-xs text-muted-foreground">Check what AURA is about to create or change. You can edit anything available before approving.</p>
+          <h2 className="text-2xl font-semibold text-foreground">Review before running</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Check what AURA is about to create or send. You can edit each action before approving.</p>
         </div>
       </div>
 
-      <div className="flex items-center gap-2 mt-5 text-xs text-muted-foreground">
-        <Check className="w-3.5 h-3.5 text-emerald-400" />
-        <span>{reviewSummary}</span>
+      <div className="mt-6 flex flex-wrap items-center gap-3 text-sm">
+        <span className="rounded-full bg-violet-500/15 px-4 py-2 text-violet-200">{reviewSteps.length} {reviewSteps.length === 1 ? "change needs" : "changes need"} approval</span>
+        <span className="text-muted-foreground">Nothing will be created or sent until you approve.</span>
       </div>
 
       {backgroundSteps.length > 0 && (
@@ -671,15 +713,8 @@ export default function PreviewView({ preview, steps, onApprove, onBack, error =
         </div>
       )}
 
-      <div className="flex items-center justify-between mt-5 mb-2">
-        <span className="flex items-center gap-1.5 text-sm font-medium text-amber-200">
-          <ShieldAlert className="w-4 h-4 text-amber-400" /> Your approval is needed
-        </span>
-        <span className="text-[11px] text-muted-foreground">{reviewSteps.length} {reviewSteps.length === 1 ? "change" : "changes"}</span>
-      </div>
-
       {/* Editable steps */}
-      <div className="space-y-3 mb-5 mt-4">
+      <div className="mb-6 mt-5 space-y-4">
         {reviewSteps.map(({ step, index }, reviewIndex) => (
           <EditableStepCard key={index} step={step} number={reviewIndex + 1} index={index} onUpdate={update} onFieldValidity={updateFieldValidity} />
         ))}
@@ -698,7 +733,7 @@ export default function PreviewView({ preview, steps, onApprove, onBack, error =
       )}
 
       {/* Footer */}
-      <div className="flex items-center justify-between pt-4 border-t border-white/6">
+      <div className="flex items-center justify-between gap-3 border-t border-white/10 pt-5">
         <Button variant="ghost" size="sm" onClick={onBack} className="text-muted-foreground hover:text-foreground">
           <ArrowLeft className="w-3.5 h-3.5 mr-1.5" />
           Back to plan
@@ -711,7 +746,7 @@ export default function PreviewView({ preview, steps, onApprove, onBack, error =
               ...step,
               preview: previewForStep(step) || step.preview,
             })))}
-            className="bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white border-0 gap-1.5"
+            className="gap-1.5 border-0 bg-gradient-to-r from-violet-500 to-violet-600 text-white hover:from-violet-600 hover:to-violet-700"
           >
             <Play className="w-3.5 h-3.5" />
             {approvalBlocked ? "Complete required values" : "Approve & run"}
