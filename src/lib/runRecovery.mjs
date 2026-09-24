@@ -38,6 +38,7 @@ export function recoveryForRun(run = {}) {
       oauth_required: "The selected app account needs to be reconnected.",
       connection_required: "This workflow needs an app connection.",
       connection_unverified: "AURA could not verify the selected app account.",
+      connection_unavailable: "AURA's connector for this app needs repair.",
       permission_required: "The selected account is missing required permission.",
       resource_ambiguous: "AURA found more than one possible resource.",
       resource_not_found: "AURA could not find the required resource.",
@@ -50,6 +51,7 @@ export function recoveryForRun(run = {}) {
     const fixes = {
       connect_account: "Connect the requested account once; AURA will preserve this run and continue from the same point.",
       reconnect_account: "Restore access to the selected account once; AURA will re-run preflight and continue from the same point.",
+      wait_for_connector_repair: "AURA needs to repair this connector before this saved run can continue. No workflow step has started.",
       choose_resource: "Choose the exact account or resource AURA should use. The saved run will then continue without repeating completed work.",
       review_plan: "Review the plan and start it when it is correct.",
       review_submission: "Review the exact prepared payload. AURA will submit it only after you approve it.",
@@ -76,7 +78,9 @@ export function recoveryForRun(run = {}) {
         : blocker.action === "reconnect_account"
           ? "Reconnect account"
           : "Connect account",
-      subtitle: "This is a required human action. Everything else remains saved and unattended.",
+      subtitle: blocker.action === "wait_for_connector_repair"
+        ? "AURA paused before execution. The saved run is preserved."
+        : "This is a required human action. Everything else remains saved and unattended.",
     };
   }
   let index = steps.findIndex((s) => s.status === "failed");

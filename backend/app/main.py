@@ -6441,6 +6441,15 @@ async def dispatch_due_run(
         "published": published,
         "next_attempt_at": next_intent.available_at.isoformat() if next_intent else None,
         "preflight_status": (run.execution_context or {}).get("__aura_preflight__", {}).get("status"),
+        "preflight_blocker": (
+            {
+                "code": blocker.get("code"),
+                "tool_slug": blocker.get("tool_slug"),
+                "action": blocker.get("action"),
+            }
+            if isinstance(blocker := (run.execution_context or {}).get("__aura_blocker__"), dict)
+            else None
+        ),
     }
 
 
