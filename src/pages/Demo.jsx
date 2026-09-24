@@ -876,7 +876,11 @@ Rules:
           throw new Error("The previous run is still stopping. Check its status before revising this plan.");
         }
       } catch (error) {
-        keepPlanStartFailureInReview(error.message || "Could not stop the previous run. Try revising again.");
+        setPlan((current) => ({
+          ...(current || { interpretation, steps: [] }),
+          startError: error.message || "Could not stop the previous run. Try revising again.",
+        }));
+        setPhase("plan");
         return;
       }
       forgetActivePythonRun(previousRunId);
@@ -884,7 +888,7 @@ Rules:
     reset();
     setPilotDraft(savedFields);
     setPilotOpen(true);
-  }, [pilotDraft, reset, keepPlanStartFailureInReview]);
+  }, [pilotDraft, reset, interpretation]);
 
   const handleSkipTool = useCallback((toolName) => {
     omittedToolsRef.current = [...new Set([...omittedToolsRef.current, toolName])];
