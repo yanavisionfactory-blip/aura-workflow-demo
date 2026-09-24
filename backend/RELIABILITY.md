@@ -73,7 +73,10 @@ buttons are not shown when the control plane has determined that repetition is u
   PostgreSQL elects one tick owner across API replicas. Celery Beat is not required
   for recovery. Each cycle publishes a liveness heartbeat and has a hard timeout
   (`SCHEDULER_TICK_TIMEOUT_SECONDS=300` by default). Scheduled business workflows still
-  use the existing schedule dispatcher.
+  use the existing schedule dispatcher. `/ready` also requests a bounded Celery
+  worker ping through Redis (cached for 15 seconds), so a live API and broker
+  cannot report ready when no execution worker answers. This checks the worker
+  control channel; completed task receipts remain the proof of actual execution.
 - `STALE_RUN_SECONDS=600`: inspect queued, planning, running and recovering runs.
   A live execution lock prevents recovery. Approval-paused and terminal runs are excluded.
 - `MAX_RESTART_RECOVERIES=3`: persist recovery count, then pause with saved evidence.

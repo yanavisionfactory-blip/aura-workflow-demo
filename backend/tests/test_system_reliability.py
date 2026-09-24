@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from time import monotonic
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -363,6 +364,7 @@ async def test_readiness_exposes_only_safe_scheduler_diagnostics(
     monkeypatch.setattr(main.redis, "from_url", lambda *args, **kwargs: StubCache())
     monkeypatch.setattr(main, "production_configuration_checks", lambda: {"config": True})
     monkeypatch.setattr(main.settings, "recovery_scheduler_enabled", True)
+    monkeypatch.setattr("app.worker_health.worker_responds", AsyncMock(return_value=True))
 
     with pytest.raises(HTTPException) as raised:
         await main.readiness()
@@ -373,6 +375,45 @@ async def test_readiness_exposes_only_safe_scheduler_diagnostics(
     assert details["last_error_code"] == "42P01"
     assert details["active_stage"] == "recovery_engineer"
     assert "private" not in str(raised.value.detail)
+
+    scheduler_state.update(consecutive_failures=0, last_error_type=None)
+    monkeypatch.setattr("app.worker_health.worker_responds", AsyncMock(return_value=False))
+    with pytest.raises(HTTPException) as missing_worker:
+        await main.readiness()
+    assert missing_worker.value.detail["checks"]["execution_worker"] is False
+    assert missing_worker.value.detail["checks"]["recovery_scheduler"] is True
+
+
+async def test_worker_readiness_checks_a_real_worker_and_caches_reply(monkeypatch):
+    from app import worker_health
+
+    calls = []
+
+    def reply(*, timeout):
+        calls.append(timeout)
+        return [{"celery@worker": {"ok": "pong"}}]
+
+    monkeypatch.setattr(worker_health.celery.control, "ping", reply)
+    monkeypatch.setattr(worker_health, "_last_check", 0.0)
+
+    assert await worker_health.worker_responds() is True
+    assert await worker_health.worker_responds() is True
+    assert calls == [1.0]
+
+
+async def test_worker_readiness_fails_closed_on_missing_or_unreachable_worker(monkeypatch):
+    from app import worker_health
+
+    monkeypatch.setattr(worker_health, "_last_check", 0.0)
+    monkeypatch.setattr(worker_health.celery.control, "ping", lambda **kwargs: [])
+    assert await worker_health.worker_responds() is False
+
+    def unavailable(**kwargs):
+        raise ConnectionError("private broker URL")
+
+    monkeypatch.setattr(worker_health.celery.control, "ping", unavailable)
+    monkeypatch.setattr(worker_health, "_last_check", 0.0)
+    assert await worker_health.worker_responds() is False
 
 
 @pytest.fixture

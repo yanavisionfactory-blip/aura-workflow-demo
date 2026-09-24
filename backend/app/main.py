@@ -359,6 +359,9 @@ async def readiness() -> dict:
     finally:
         await cache.aclose()
     from .dispatch import scheduler_observation
+    from .worker_health import worker_responds
+
+    checks["execution_worker"] = checks["redis"] and await worker_responds()
 
     scheduler_details = {
         "enabled": settings.recovery_scheduler_enabled,
