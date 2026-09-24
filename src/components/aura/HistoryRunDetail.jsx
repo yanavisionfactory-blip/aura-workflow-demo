@@ -63,10 +63,13 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
       const result = await dispatchDuePythonRun(run.backend_run_id);
       const latest = await getPythonRun(run.backend_run_id);
       const blocked = result.preflight_blocker;
+      // The public run view can say "recovering" while its durable status is
+      // waiting_for_action. Use the scoped dispatch response to identify a pause.
+      const paused = ["waiting_for_action", "failed"].includes(result.status);
       const failedReceipt = latest.steps?.find((step) =>
         step.status === "failed" && step.consequential && step.output?.provider_result,
       );
-      if (["waiting_for_action", "failed"].includes(latest.status)) {
+      if (paused) {
         setReviewStepId(failedReceipt?.id || null);
       }
       setRepairReady(blocked?.action === "wait_for_connector_repair" && result.preflight_status === "blocked");
@@ -74,7 +77,7 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
         ? blocked.action === "wait_for_connector_repair"
           ? `Paused before step 1: ${blocked.tool_slug || "the selected app"} needs connector repair.`
           : `Paused before step 1: ${blocked.tool_slug || "the selected app"} needs ${blocked.action === "reconnect_account" ? "reconnection" : "attention"}.`
-        : ["waiting_for_action", "failed"].includes(latest.status)
+        : paused
           ? `Saved run paused: ${latest.error || failedReceipt?.error || "This step needs attention."}${failedReceipt ? " Its provider response is saved; a recheck will not repeat the action." : ""}`
         : result.published
         ? "Due work dispatched for this run."
