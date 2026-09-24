@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import select
 
 from app.assurance import (
     canonical,
@@ -235,7 +236,33 @@ async def test_probe_yields_only_its_own_checkpoint_and_resumes_without_replay(
     assert len(calls) == 2
     async with database() as session:
         probe = await session.get(RecoveryProbe, probe_id)
-        assert (await probe_evidence(session, probe))["passed"]
+        evidence = await probe_evidence(session, probe)
+        assert evidence["passed"]
+        assert evidence["agent_team"]["passed"] is False
+        assert evidence["agent_team"]["outcome_verified"] is True
+        assert "deterministic_fallback" in evidence["agent_team"]["manager_sources"]
+        decisions = (await session.scalars(select(AuditEvent).where(
+            AuditEvent.run_id == run_id,
+            AuditEvent.event_type.in_(
+                ("run.execution_supervised", "step.execution_agent_decision")
+            ),
+        ))).all()
+        assert len(decisions) == 4  # Two supervisor handoffs and two exact dispatches.
+        for event in decisions:
+            event.payload = {**event.payload, "source": "agent"}
+        await session.commit()
+        assert (await probe_evidence(session, probe))["agent_team"]["passed"] is True
+        from app.main import TenantContext, get_run_evaluation
+
+        evaluated = await get_run_evaluation(run_id, TenantContext("w", "alice", "owner"), session)
+        assert evaluated["agent_team"]["passed"] is True
+        assert set(evaluated["agent_team"]["executor_sources"]) == {"read_0", "read_1"}
+        decisions[-1].payload = {**decisions[-1].payload, "source": "deterministic_fallback"}
+        await session.commit()
+        assert (await probe_evidence(session, probe))["agent_team"]["passed"] is False
+        assert (await get_run_evaluation(
+            run_id, TenantContext("w", "alice", "owner"), session
+        ))["agent_team"]["passed"] is False
 
 
 @pytest.mark.skipif(
