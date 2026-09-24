@@ -161,7 +161,7 @@ export default function ResultsView({
                 </div>
               ) : (
                 <>
-                  <p className="mt-4 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">Preview</p>
+                  <p className="mt-4 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">Summary</p>
                   <p className="mt-1.5 whitespace-pre-line text-sm leading-relaxed text-muted-foreground">
                     {primaryResult.detail || results.summary}
                   </p>
@@ -234,11 +234,11 @@ export default function ResultsView({
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium">{primaryResult.artifact.title}</p>
                   <p className="mt-0.5 text-[11px] text-muted-foreground">
-                    {primaryResult.attachments?.[0]?.filename || `Created in ${primaryResult.artifact.provider}`}
+                    {(primaryResult.artifactDelivered && primaryResult.attachments?.[0]?.filename) || `Created in ${primaryResult.artifact.provider}`}
                   </p>
                 </div>
               </div>
-              <span className="shrink-0 text-[11px] font-medium text-emerald-400">Attached and delivered</span>
+              <span className="shrink-0 text-[11px] font-medium text-emerald-400">{primaryResult.artifactDelivered ? "Attached and delivered" : "Created in Canva"}</span>
             </div>
           ) : primaryResult.items?.length > 0 ? (
             <div className="grid gap-2 border-t border-white/[0.06] pt-4 sm:grid-cols-2">
@@ -331,7 +331,7 @@ export default function ResultsView({
           >
             <RefreshCw className="h-4 w-4" /> Run again
           </motion.button>
-          {!isFailure && (
+          {!isFailure && backendRunId && (
             <motion.button
               whileHover={{ scale: 1.01 }}
               whileTap={{ scale: 0.99 }}
@@ -339,7 +339,7 @@ export default function ResultsView({
               onClick={() => setShowSchedule(true)}
               className="flex items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-primary to-accent px-3 py-2.5 text-sm font-semibold text-white shadow-lg shadow-primary/20"
             >
-              <CalendarClock className="h-4 w-4" /> Schedule
+              <CalendarClock className="h-4 w-4" /> Repeat automatically
             </motion.button>
           )}
           <motion.button
@@ -354,7 +354,7 @@ export default function ResultsView({
         </div>
       </motion.section>
 
-      {!isFailure && (
+      {!isFailure && !backendRunId && (
         <div className="flex justify-end border-t border-white/[0.06] pt-4">
           <motion.button
             whileHover={{ scale: 1.02 }}
@@ -368,7 +368,7 @@ export default function ResultsView({
         </div>
       )}
 
-      <AccessRequestModal open={showModal} onClose={() => setShowModal(false)} workflowPrompt={workflowPrompt} />
+      {!backendRunId && <AccessRequestModal open={showModal} onClose={() => setShowModal(false)} workflowPrompt={workflowPrompt} />}
       <ScheduleModal
         open={showSchedule}
         onClose={() => setShowSchedule(false)}
