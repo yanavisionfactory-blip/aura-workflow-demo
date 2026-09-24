@@ -105,7 +105,7 @@ Create the repository Actions secret `CLERK_PUBLISHABLE_KEY`. The public Clerk p
 
 ## Release checks
 
-`GET /health` confirms the process is alive. `GET /ready` additionally checks PostgreSQL, Redis, Clerk, OpenAI, credential encryption, authorized browser origins, and that legacy workspace tokens are disabled.
+`GET /health` confirms the process is alive. `GET /ready` additionally checks PostgreSQL, Redis, a responding Celery execution worker, the recovery scheduler, Clerk, OpenAI, credential encryption, authorized browser origins, and that legacy workspace tokens are disabled.
 
 Run the smoke test after each deployment:
 
