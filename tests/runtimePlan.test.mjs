@@ -1,13 +1,23 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { hasDurablePlan, planningRequestPrompt, sameExecutablePlan } from "../src/lib/runtimePlan.mjs";
+import { hasDurablePlan, planningRequestPrompt, restorablePlanningRun, sameExecutablePlan } from "../src/lib/runtimePlan.mjs";
 
 test("execution requires both a durable run id and executable backend steps", () => {
   assert.equal(hasDurablePlan("run-1", { steps: [{ operation: "sheets.read" }] }), true);
   assert.equal(hasDurablePlan(null, { steps: [{ operation: "sheets.read" }] }), false);
   assert.equal(hasDurablePlan("run-1", { steps: [] }), false);
   assert.equal(hasDurablePlan("run-1", null), false);
+});
+
+test("only an unapproved review or connection wait reopens after a page refresh", () => {
+  const waiting = { status: "waiting_for_action", plan_approved: false,
+    connection_requirements: [{ status: "missing", capability: "mailchimp.audiences.list" }] };
+  assert.equal(restorablePlanningRun(waiting), true);
+  assert.equal(restorablePlanningRun({ status: "awaiting_approval", plan: { steps: [{ key: "slide" }] } }), true);
+  assert.equal(restorablePlanningRun({ ...waiting, plan_approved: true }), false);
+  assert.equal(restorablePlanningRun({ status: "running", plan: { steps: [{ key: "slide" }] } }), false);
+  assert.equal(restorablePlanningRun({ status: "awaiting_approval", plan: { steps: [] } }), false);
 });
 
 test("a planner that ignores a requested edit cannot be presented as a revised plan", () => {
