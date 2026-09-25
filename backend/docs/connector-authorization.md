@@ -13,6 +13,17 @@ variables does not repair an existing Nango integration. Never automatically
 overwrite an existing integration's client ID or secret: that can invalidate
 refresh tokens for every connected account.
 
+Mailchimp's registered AURA app uses the native installation callback. When
+`MAILCHIMP_CLIENT_ID` and `MAILCHIMP_CLIENT_SECRET` are configured, a *new*
+Mailchimp connection starts on that native route so its signed state and
+callback agree. Existing connections keep the backend recorded with their
+account; a generic Connect action must not migrate them. If using a separate
+Nango Mailchimp app, register Nango's callback against that app's own client ID
+before offering it. The provider's callback registration and a real consent
+test still need operator verification; structural preflight alone cannot prove
+either. A foreign or invalid state at AURA's callback is rejected without a
+token exchange and returned to the app as a connection error.
+
 Use an explicit integration map when multiple integrations match a provider.
 An exact provider-named integration is preferred; otherwise there must be exactly
 one match. Explicit mappings are checked against the returned integration identity

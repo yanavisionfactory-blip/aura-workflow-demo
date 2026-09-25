@@ -277,7 +277,11 @@ export async function authorizeOAuth(provider, timeoutMs = 120000, reservedWindo
   const oauthSignal = { current: null };
   const receiveOAuthResult = (event) => {
     if (event.origin !== window.location.origin || event.data?.source !== "aura-oauth") return;
-    if (event.data.provider !== provider) return;
+    // An installation callback is shared by several apps. If it rejects an
+    // invalid state, it cannot safely identify which app started the attempt.
+    // Pass only that error to the waiting window; never accept it as success.
+    if (event.data.provider !== provider &&
+      !(event.data.provider === "installation" && event.data.status === "error")) return;
     oauthSignal.current = event.data;
   };
   window.addEventListener("message", receiveOAuthResult);

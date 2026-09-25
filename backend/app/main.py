@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode, urlsplit
 
 import httpx
+import jwt
 import redis.asyncio as redis
 from agents import Agent, Runner
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -2283,6 +2284,17 @@ async def create_connector_broker_session(
             or selected_tool.slug != provider
         ):
             raise HTTPException(404, "Connection not found")
+    else:
+        # A connection that already exists keeps its authorization backend,
+        # including when the caller omitted its ID. Switching OAuth backends
+        # while reauthorizing could replace a managed account with native
+        # credentials (or vice versa) under the same provider slug.
+        selected_tool = await session.scalar(
+            select(ToolConnection).where(
+                ToolConnection.workspace_id == context.workspace_id,
+                ToolConnection.slug == provider,
+            )
+        )
     selected_backend = (selected_tool.config or {}).get("managed_by") if selected_tool else None
     nango_release = None if provider in PROVIDERS else await released_connector(session, provider)
     if selected_tool and selected_backend not in {"nango", "pipedream"}:
@@ -2292,6 +2304,19 @@ async def create_connector_broker_session(
             session=session,
         )
         return {**result, "backend": "native", "provider": provider}
+    # Mailchimp requires an exact registered redirect URI. The Mailchimp app
+    # registered for AURA returns to AURA's installation callback, whereas a
+    # Nango session expects Nango's callback and state. Never mix the two OAuth
+    # flows when the registered AURA app is available. Existing Nango accounts
+    # stay pinned to Nango above/below and are not silently migrated.
+    if not selected_tool and provider == "mailchimp":
+        definition = PROVIDERS[provider]
+        if (
+            getattr(settings, definition.client_id_attr)
+            and getattr(settings, definition.client_secret_attr)
+        ):
+            result = await oauth_start(provider=provider, context=context)
+            return {**result, "backend": "native", "provider": provider}
     if (
         nango.configured
         and selected_backend != "pipedream"
@@ -4040,7 +4065,19 @@ async def oauth_callback(
     error_description: str | None = None,
     session: AsyncSession = Depends(session_dependency),
 ):
-    claims = decode_oauth_state(state)
+    try:
+        claims = decode_oauth_state(state)
+    except jwt.InvalidTokenError:
+        # A callback can arrive from a different OAuth broker with its own
+        # state format. Never exchange that code, and never let it become a 500.
+        logger.warning("oauth_callback_invalid_state route=%s", provider)
+        return RedirectResponse(
+            f"{frontend_url}?{urlencode({
+                'oauth_provider': provider,
+                'oauth_status': 'error',
+                'oauth_message': 'AURA could not verify this connection. Please try again from your plan.',
+            })}"
+        )
     state_provider = claims.get("provider", "")
     callback_route_provider = provider
     if error or not code:
