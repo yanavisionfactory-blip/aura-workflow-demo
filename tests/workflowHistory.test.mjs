@@ -110,10 +110,13 @@ test("execution and the My workflows panel are wired to durable history", () => 
   );
 
   assert.equal(demo.includes("const ensureSavedWorkflowRun = async"), true);
-  assert.equal(demo.match(/await ensureSavedWorkflowRun\(\)/g)?.length, 1);
+  assert.equal(demo.includes("await ensureSavedWorkflowRun()"), false);
+  assert.equal(demo.includes("void ensureSavedWorkflowRun().catch"), true);
+  assert.ok(demo.indexOf("await approvePythonPlan(runId, reviewedPlan.steps, true)")
+    < demo.indexOf("void ensureSavedWorkflowRun().catch"));
   assert.equal(demo.includes("startPythonPreparation"), false);
   assert.equal(demo.includes("createPythonRunResilient(planningPrompt, null"), true);
-  assert.equal(demo.includes("backend_run_id: pythonRunIdRef.current"), true);
+  assert.equal(demo.includes("backend_run_id: backendRunId"), true);
   assert.equal(history.includes("listPythonRuns({ limit: 100 })"), true);
   assert.equal(history.includes("run.backend_run_id === backendRun.id"), true);
   assert.equal(history.indexOf("setLoading(false)") < history.indexOf("reconcileDurableHistory(saved.workflows"), true);

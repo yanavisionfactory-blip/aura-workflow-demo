@@ -154,7 +154,7 @@ export function instantLanguagePlan(prompt = "", catalog = [], selectedTools = [
   return {
     workflowName: workflowName(intent),
     interpretation: intent,
-    estimatedTime: "Plan ready — validating executable details backstage",
+    estimatedTime: "Preparing the executable plan",
     steps,
     provisional: true,
     compileState: "validating",

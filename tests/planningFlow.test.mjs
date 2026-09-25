@@ -105,7 +105,11 @@ test("the UI renders a language plan while durable compilation is still running"
   );
 
   assert.equal(source.includes("instantLanguagePlan(draftIntent"), true);
-  assert.equal(source.includes("languageDraftPrompt(confirmedIntent"), true);
+  const preparation = source.slice(
+    source.indexOf("const immediatePlan ="),
+    source.indexOf("return (async () =>", source.indexOf("const immediatePlan =")),
+  );
+  assert.equal(preparation.includes("InvokeLLM"), false);
   assert.equal(source.includes("Executable planning unavailable; the language plan remains visible"), true);
   assert.equal(planViewSource.includes("validating exact actions backstage"), false);
   assert.equal(planViewSource.includes("validatingExecution || missingTools.length"), false);
@@ -113,7 +117,7 @@ test("the UI renders a language plan while durable compilation is still running"
   assert.equal(source.includes("hasImmediateActionPreview(compiledPlan.steps, queuedStart.autoApprove)"), true);
   assert.equal(source.includes("PLANNING_WAIT_TIMEOUT_MS"), false);
   assert.equal(source.includes('.replace(/^i\\s+will\\s+/i, "")'), true);
-  assert.equal(source.includes("iWill: firstPersonStepCopy(step.iWill || step.reason)"), true);
+  assert.equal(source.includes("firstPersonStepCopy(step.reason)"), true);
   assert.equal(planViewSource.includes('plan.compileState !== "ready"'), false);
   assert.equal(planViewSource.includes('["starting", "waiting_for_connection"].includes(plan.compileState)'), true);
   assert.equal(planViewSource.includes('!plan.provisional && missingTools.length > 0'), true);
