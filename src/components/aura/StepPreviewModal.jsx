@@ -90,18 +90,6 @@ export default function StepPreviewModal({ step, index, open, onClose }) {
                   <p className="text-sm mt-0.5">{step.action}</p>
                 </div>
 
-                {/* How it works (technical) */}
-                {step.detail && (
-                  <div>
-                    <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60">
-                      How it works
-                    </span>
-                    <p className="text-[11px] text-muted-foreground/70 mt-0.5 font-mono leading-relaxed bg-secondary/40 border border-white/5 rounded-lg px-2.5 py-2">
-                      {step.detail}
-                    </p>
-                  </div>
-                )}
-
                 {/* Why */}
                 {step.reason && (
                   <div>

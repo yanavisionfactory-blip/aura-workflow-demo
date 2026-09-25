@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { motion } from "framer-motion";
 import { Eye, Mail, Database, ArrowLeft, Play, List, FileDown, FileText, Pencil, ListChecks, Check, ChevronDown, Plus, Trash2, Paperclip, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -308,50 +308,48 @@ function EditableDocument({ preview, onPreviewChange, editing }) {
   );
 }
 
-const serializedValue = (value) => JSON.stringify(value ?? null, null, 2);
+const readableField = (key) => String(key)
+  .replace(/([a-z])([A-Z])/g, "$1 $2")
+  .replace(/[_-]+/g, " ")
+  .replace(/^./, (first) => first.toUpperCase());
 
-function JsonArgumentField({ field, value, editing, onChange, onValidityChange }) {
-  const serialized = serializedValue(value);
-  const [draft, setDraft] = useState(serialized);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    setDraft(serialized);
-    setError("");
-    onValidityChange(true);
-  }, [field.key, serialized]);
-
-  if (!editing || field.editable === false) {
-    return (
-      <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-white/5 bg-black/10 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
-        {serialized}
-      </pre>
-    );
-  }
-
-  return (
-    <div>
-      <textarea
-        value={draft}
-        rows={Math.min(12, Math.max(4, draft.split("\n").length))}
-        onChange={(event) => {
-          const nextDraft = event.target.value;
-          setDraft(nextDraft);
-          try {
-            const parsed = JSON.parse(nextDraft);
-            setError("");
-            onValidityChange(true);
-            onChange(parsed);
-          } catch {
-            setError("Keep this as valid structured data before approving.");
-            onValidityChange(false);
-          }
-        }}
-        className={`w-full resize-y rounded-lg border bg-black/10 px-3 py-2 font-mono text-[11px] leading-relaxed outline-none ${error ? "border-rose-400/50" : "border-white/10 focus:border-primary"}`}
-      />
-      {error && <p className="mt-1 text-[10px] text-rose-300">{error}</p>}
+function StructuredArgumentField({ value, editing, onChange, label, depth = 0 }) {
+  if (depth > 5) return <p className="text-xs text-muted-foreground">AURA will prepare these details.</p>;
+  if (Array.isArray(value)) return (
+    <div className="space-y-2">
+      {value.length ? value.map((item, index) => (
+        <div key={index} className="rounded-lg border border-white/10 bg-black/10 p-3">
+          <p className="mb-2 text-xs font-medium text-muted-foreground">{label} {index + 1}</p>
+          <StructuredArgumentField value={item} label={label} editing={editing} depth={depth + 1}
+            onChange={(next) => onChange(value.map((entry, position) => position === index ? next : entry))} />
+        </div>
+      )) : <p className="text-xs text-muted-foreground">AURA will fill this in from earlier steps.</p>}
     </div>
   );
+  if (value && typeof value === "object") return (
+    <div className="space-y-3 rounded-lg border border-white/10 bg-black/10 p-3">
+      {Object.entries(value).filter(([key]) => !/^(__|_meta$|metadata$)/i.test(key)).map(([key, entry]) => (
+        <label key={key} className="block space-y-1">
+          <span className="text-xs text-muted-foreground">{readableField(key)}</span>
+          <StructuredArgumentField value={entry} label={readableField(key)} editing={editing} depth={depth + 1}
+            onChange={(next) => onChange({ ...value, [key]: next })} />
+        </label>
+      ))}
+    </div>
+  );
+  if (typeof value === "boolean") return <input type="checkbox" checked={value} disabled={!editing}
+    onChange={(event) => onChange(event.target.checked)} className="block accent-primary" />;
+  if (typeof value === "number") return <input type="number" value={value} readOnly={!editing}
+    onChange={(event) => { if (event.target.value !== "") onChange(Number(event.target.value)); }}
+    className="w-full rounded-lg border border-white/10 bg-black/10 px-3 py-2 text-sm outline-none focus:border-primary" />;
+  const text = String(value ?? "");
+  const automatic = /\{\{[^}]+\}\}/.test(text);
+  return text.length > 100 && !automatic
+    ? <textarea value={text} readOnly={!editing} onChange={(event) => onChange(event.target.value)} rows={3}
+      className="w-full resize-y rounded-lg border border-white/10 bg-black/10 px-3 py-2 text-sm outline-none focus:border-primary" />
+    : <input value={automatic ? "" : text} placeholder={automatic ? "Filled automatically by AURA" : label}
+      readOnly={!editing || automatic} onChange={(event) => onChange(event.target.value)}
+      className="w-full rounded-lg border border-white/10 bg-black/10 px-3 py-2 text-sm outline-none focus:border-primary" />;
 }
 
 function SchemaArgumentsEditor({ contract, args, editing, onArgumentsChange, onFieldValidity, excludeKeys = [] }) {
@@ -372,20 +370,16 @@ function SchemaArgumentsEditor({ contract, args, editing, onArgumentsChange, onF
         {fields.map((field) => {
           const value = args?.[field.key];
           const editable = editing && field.editable !== false;
+          const FieldWrapper = field.control === "json" ? "div" : "label";
           return (
-            <label key={field.key} className="block">
+            <FieldWrapper key={field.key} className="block">
               <span className="mb-1.5 flex items-center gap-1 text-[11px] text-muted-foreground">
                 {field.label || field.key}
                 {field.required && <span className="text-amber-300">required</span>}
               </span>
               {field.control === "json" ? (
-                <JsonArgumentField
-                  field={field}
-                  value={value}
-                  editing={editable}
-                  onValidityChange={(valid) => onFieldValidity(field.key, valid)}
-                  onChange={(next) => onArgumentsChange(setArgumentAtPath(args, field.path || [field.key], next))}
-                />
+                <StructuredArgumentField value={value} label={field.label || readableField(field.key)} editing={editable}
+                  onChange={(next) => onArgumentsChange(setArgumentAtPath(args, field.path || [field.key], next))} />
               ) : field.control === "checkbox" ? (
                 <div className="flex items-center gap-2 rounded-lg border border-white/5 px-3 py-2 text-xs">
                   <input
@@ -431,7 +425,7 @@ function SchemaArgumentsEditor({ contract, args, editing, onArgumentsChange, onF
                 />
               )}
               {field.description && <span className="mt-1 block text-[10px] leading-relaxed text-muted-foreground/55">{field.description}</span>}
-            </label>
+            </FieldWrapper>
           );
         })}
       </div>
