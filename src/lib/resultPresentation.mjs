@@ -80,6 +80,85 @@ export function meaningfulMetrics(metrics = []) {
   });
 }
 
+const presentNumber = (value) => {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 0 ? number : null;
+};
+
+const completedOutputs = (activity = []) => activity
+  .filter((step) => step.status === "completed" && step.output?.provider_result)
+  .map((step) => step.output);
+
+// Use provider receipts for missing metrics. Never infer time saved or imply
+// that the size of a paginated response is the size of the whole audience.
+export function resultMetrics(metrics = [], activity = []) {
+  const supplied = meaningfulMetrics(metrics);
+  if (supplied.length) return supplied.slice(0, 3);
+  const outputs = completedOutputs(activity);
+  const canva = outputs.find((output) => output.operation === "canva.presentation.create"
+    && canvaDesignId(output.provider_result || {}));
+  const audiences = outputs.find((output) => output.operation === "mailchimp.audiences.list");
+  const email = outputs.find((output) => output.operation === "gmail.send");
+  const document = outputs.find((output) => output.operation === "docs.create");
+  const result = [];
+  if (email) result.push({ value: "1", label: "email sent" });
+  if (document) result.push({ value: "1", label: "document created" });
+  if (canva) {
+    const count = presentNumber(canva.provider_result.page_count);
+    if (count && count > 0) result.push({ value: String(count), label: count === 1 ? "slide created" : "slides created" });
+    else result.push({ value: "1", label: "Canva presentation created" });
+  }
+  const lists = audiences?.provider_result?.lists;
+  if (Array.isArray(lists) && lists.length) {
+    result.push({ value: String(lists.length), label: lists.length === 1 ? "audience used" : "audiences read" });
+    if (lists.length === 1) {
+      const contacts = presentNumber(lists[0]?.stats?.member_count);
+      if (contacts !== null) result.push({ value: contacts.toLocaleString("en-US"), label: "contacts in audience" });
+    }
+  }
+  return result.slice(0, 3);
+}
+
+const mailchimpAudienceLink = (result = {}) => {
+  const audience = Array.isArray(result.lists) ? result.lists[0] : null;
+  const webId = presentNumber(audience?.web_id);
+  const urls = [Array.isArray(audience?._links) ? audience._links.find((item) => item.rel === "self")?.href : null,
+    Array.isArray(result?._links) ? result._links.find((item) => item.rel === "self")?.href : null];
+  const dc = urls.map((value) => String(value || "").match(/^https:\/\/(us\d+)\.api\.mailchimp\.com\//i)?.[1]).find(Boolean);
+  return dc && webId !== null
+    ? `https://${dc}.admin.mailchimp.com/lists/members/?id=${webId}`
+    : "https://login.mailchimp.com/";
+};
+
+const audiencePreview = (result = {}) => {
+  const lists = result.lists;
+  if (!Array.isArray(lists) || !lists.length) return [];
+  return lists.slice(0, 5).map((audience) => ({
+    name: String(audience?.name || "Audience"),
+    contacts: presentNumber(audience?.stats?.member_count),
+  }));
+};
+
+const slideContent = (arguments_ = {}) => {
+  if (!Array.isArray(arguments_.phases) || !arguments_.phases.length || !arguments_.title) return null;
+  const isRealText = (value) => typeof value === "string" && value.trim() && !/\{\{[^}]+\}\}/.test(value);
+  if (!isRealText(arguments_.title) || (arguments_.subtitle && !isRealText(arguments_.subtitle))) return null;
+  const slides = arguments_.phases.map((phase) => ({
+    period: phase?.period,
+    title: phase?.title,
+    items: phase?.items,
+  }));
+  if (slides.some((slide) => !isRealText(slide.period) || !isRealText(slide.title)
+    || !Array.isArray(slide.items) || !slide.items.length || slide.items.some((item) => !isRealText(item)))) return null;
+  return {
+    title: arguments_.title,
+    subtitle: arguments_.subtitle || "",
+    layout: arguments_.layout === "timeline" ? "timeline" : "slides",
+    slides,
+  };
+};
+
 export function providerForOutcome(outcome = {}) {
   const labelMatch = String(outcome.linkLabel || "").match(/(?:open|view)\s+in\s+(.+)/i);
   if (labelMatch) return displayProvider(labelMatch[1]);
@@ -132,7 +211,9 @@ export function supportingReceipts(results = {}, activity = [], primary = null, 
           .find((design) => design?.id)?.id
         : null;
       const link = safeHttpsUrl(providerResult.result_url)
-        || (designId ? `https://www.canva.com/design/${encodeURIComponent(designId)}/edit` : null);
+        || (designId ? `https://www.canva.com/design/${encodeURIComponent(designId)}/edit` : null)
+        || (operation === "docs.create" ? documentUrl(providerResult) : null)
+        || (operation === "mailchimp.audiences.list" ? mailchimpAudienceLink(providerResult) : null);
       const tool = step.tool || "AURA";
       return {
         key: `${step.stepKey || step.key || tool}:${step.action || step.liveOutput || "completed"}`,
@@ -140,6 +221,7 @@ export function supportingReceipts(results = {}, activity = [], primary = null, 
         title: cleanReceiptText(step.liveOutput) || cleanReceiptText(step.action) || "Completed",
         link,
         linkLabel: link ? `View in ${tool}` : null,
+        preview: operation === "mailchimp.audiences.list" ? audiencePreview(providerResult) : [],
       };
     });
 
@@ -166,6 +248,22 @@ const canvaDesignId = (result = {}) => {
   return designs.find((design) => design?.id)?.id || null;
 };
 
+const canvaDesign = (result = {}) => {
+  const designs = result.job?.result?.designs || result.result?.designs || result.designs || [];
+  return designs.find((design) => design?.id) || null;
+};
+
+const canvaThumbnailUrl = (value) => {
+  const url = safeHttpsUrl(value);
+  if (!url) return null;
+  const host = new URL(url).hostname.toLowerCase();
+  return host === "canva.com" || host.endsWith(".canva.com") ? url : null;
+};
+
+const documentUrl = (result = {}) => safeHttpsUrl(result.webViewLink)
+  || (typeof result.id === "string" && /^[a-zA-Z0-9_-]+$/.test(result.id)
+    ? `https://docs.google.com/document/d/${encodeURIComponent(result.id)}/edit` : null);
+
 const canvaDownloadUrl = (outputs = []) => {
   for (const output of [...outputs].reverse()) {
     if (!String(output.operation || "").startsWith("canva.export.")) continue;
@@ -187,13 +285,17 @@ const canvaArtifactFromOutputs = (outputs = [], context = {}, stepKey = null) =>
     && (!stepKey || output.step_key === stepKey));
   if (!canva) return null;
   const result = canva.provider_result || {};
-  const designId = canvaDesignId(result);
+  const design = canvaDesign(result);
+  const designId = design?.id;
   const link = safeHttpsUrl(result.result_url)
+    || safeHttpsUrl(design?.urls?.edit_url)
     || (designId ? `https://www.canva.com/design/${encodeURIComponent(designId)}/edit` : null);
   return {
-    title: context.artifactTitle || context.title || "Canva presentation",
+    title: slideContent(canva.resolved_arguments)?.title || context.artifactTitle || context.title || "Canva presentation",
     provider: "Canva",
     kind: "presentation",
+    preview: designId ? slideContent(canva.resolved_arguments) : null,
+    thumbnailUrl: designId ? canvaThumbnailUrl(design?.thumbnail?.url) : null,
     link,
     linkLabel: "View presentation",
     downloadUrl: canvaDownloadUrl(outputs),
@@ -272,15 +374,23 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
   }
 
   const linked = explicitPrimary || completed
-    .filter((output) => safeHttpsUrl(output.provider_result?.result_url))
+    .filter((output) => safeHttpsUrl(output.provider_result?.result_url)
+      || (output.operation === "docs.create" && documentUrl(output.provider_result)))
     .sort((left, right) => outputScore(right, context.title) - outputScore(left, context.title))[0];
-  const link = safeHttpsUrl(linked?.provider_result?.result_url);
+  const link = safeHttpsUrl(linked?.provider_result?.result_url)
+    || (linked?.operation === "docs.create" ? documentUrl(linked.provider_result) : null);
   const provider = linked ? providerForOutput(linked) : "";
+  const docArguments = linked?.operation === "docs.create" ? linked.resolved_arguments : null;
+  const docPreview = typeof docArguments?.body === "string" && docArguments.body.trim()
+    && !/\{\{[^}]+\}\}/.test(docArguments.body)
+    ? { title: docArguments.title || context.title || "Document", body: docArguments.body }
+    : null;
   return {
-    title: context.title || "Workflow result",
+    title: docPreview?.title || context.title || "Workflow result",
     detail: context.deliverable || context.summary || "AURA completed the workflow.",
     provider,
-    kind: "result",
+    kind: docPreview ? "document" : "result",
+    preview: docPreview,
     link,
     linkLabel: link ? `Open${provider ? ` in ${provider}` : " result"}` : undefined,
     downloadUrl: null,
