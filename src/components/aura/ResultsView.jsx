@@ -1,72 +1,24 @@
 import { useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import {
-  AlertTriangle,
-  ArrowRight,
-  CalendarClock,
-  Check,
-  CheckCircle2,
-  ExternalLink,
-  FileDown,
-  FileText,
-  MailCheck,
-  Paperclip,
-  Plus,
-  Presentation,
-  RefreshCw,
-  Share2,
-  Zap,
-} from "lucide-react";
+import { Activity, AlertTriangle, ArrowRight, CalendarClock, Check, CheckCircle2, ChevronDown, ExternalLink, FileDown, Plus, RefreshCw, Share2, Zap } from "lucide-react";
 import AccessRequestModal from "./AccessRequestModal";
-import BreakdownTable from "./BreakdownTable";
 import ScheduleModal from "./ScheduleModal";
 import CreatorApprovalList from "./CreatorApprovalList";
+import ResultPreview from "./ResultPreview";
 import { buildSummaryText } from "@/lib/auraSummary";
-import { meaningfulMetrics, selectPrimaryOutcome, supportingReceipts } from "@/lib/resultPresentation.mjs";
+import { resultMetrics, selectPrimaryOutcome, supportingReceipts } from "@/lib/resultPresentation.mjs";
 
-export default function ResultsView({
-  results,
-  onNewWorkflow,
-  onStartWorkflow,
-  workflowPrompt,
-  activity,
-  prompt,
-  interpretation,
-  backendRunId,
-  historyWorkflowId,
-  scheduleTitle,
-}) {
+export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, workflowPrompt, activity, prompt, interpretation, backendRunId, historyWorkflowId, scheduleTitle }) {
   const isFailure = results.status === "failed" || results.status === "needs_attention";
   const [showModal, setShowModal] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
-
   const primaryResult = useMemo(() => selectPrimaryOutcome(results), [results]);
-  const metrics = useMemo(() => meaningfulMetrics(results.metrics || []), [results.metrics]);
-  const receipts = useMemo(
-    () => supportingReceipts(
-      results,
-      activity || [],
-      primaryResult,
-      results.resultPresentation
-    ),
-    [activity, primaryResult, results]
-  );
-  const creatorsOutcome = (results.outcomes || []).find((outcome) =>
-    outcome.type === "creators" && outcome.items?.length > 0
-  );
+  const metrics = useMemo(() => isFailure ? [] : resultMetrics(results.metrics || [], activity || []), [results.metrics, activity, isFailure]);
+  const receipts = useMemo(() => supportingReceipts(results, activity || [], primaryResult, results.resultPresentation), [activity, primaryResult, results]);
+  const creatorsOutcome = (results.outcomes || []).find((outcome) => outcome.type === "creators" && outcome.items?.length > 0);
   const nextSteps = results.nextSteps || [];
-
-  const summaryArgs = {
-    title: results.title,
-    summary: results.summary,
-    metrics,
-    outcomes: results.outcomes,
-    activity,
-    prompt,
-    interpretation,
-    nextSteps,
-  };
+  const summaryArgs = { title: results.title, summary: results.summary, metrics, outcomes: results.outcomes, activity, prompt, interpretation, nextSteps };
 
   const handleShare = async () => {
     try {
@@ -77,7 +29,6 @@ export default function ResultsView({
       console.warn("Could not copy the result summary", error);
     }
   };
-
   const handleDownload = () => {
     const blob = new Blob([buildSummaryText(summaryArgs)], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
@@ -91,291 +42,88 @@ export default function ResultsView({
   };
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="w-full max-w-3xl mx-auto">
-      <motion.div
-        initial={{ opacity: 0, scale: 0.96 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ type: "spring", stiffness: 200, damping: 20 }}
-        className="text-center mb-6"
-      >
-        <div className={`inline-flex p-3 rounded-2xl border mb-4 ${isFailure ? "bg-amber-400/10 border-amber-400/20" : "bg-emerald-400/10 border-emerald-400/20 glow-success"}`}>
-          {isFailure
-            ? <AlertTriangle className="w-8 h-8 text-amber-400" />
-            : <CheckCircle2 className="w-8 h-8 text-emerald-400" />}
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mx-auto w-full max-w-5xl pb-8">
+      <div className="mb-7 flex items-start gap-4">
+        <div className={`shrink-0 rounded-2xl border p-3 ${isFailure ? "border-amber-400/20 bg-amber-400/10" : "border-emerald-400/20 bg-emerald-400/10"}`}>
+          {isFailure ? <AlertTriangle className="h-7 w-7 text-amber-400" /> : <CheckCircle2 className="h-7 w-7 text-emerald-400" />}
         </div>
-        <h2 className="text-2xl font-bold mb-1">{results.title || "Workflow complete"}</h2>
-        <p className="text-sm text-muted-foreground max-w-xl mx-auto">{results.summary}</p>
-      </motion.div>
-
-      {metrics.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6"
-        >
-          {metrics.map((metric, index) => (
-            <div key={index} className="rounded-xl border border-white/[0.06] bg-card/40 p-4 text-center">
-              <div className="text-2xl font-bold text-primary">{metric.value}</div>
-              <div className="text-xs text-muted-foreground mt-1">{metric.label}</div>
-            </div>
-          ))}
-        </motion.div>
-      )}
-
-      <motion.section
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.18 }}
-        className="mb-5 overflow-hidden rounded-2xl border border-primary/20 bg-gradient-to-br from-primary/[0.08] via-card/60 to-card/30 shadow-lg shadow-primary/[0.04]"
-      >
-        <div className="flex flex-col gap-5 p-5 sm:p-6">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-            <div className="min-w-0 flex-1">
-              <div className="mb-3 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.14em] text-primary">
-                <FileText className="h-4 w-4" />
-                Your result
-              </div>
-              <h3 className="text-lg font-semibold leading-snug">{primaryResult.title || results.title || "Workflow result"}</h3>
-              {primaryResult.provider && (
-                <span className="mt-2 inline-flex rounded-full border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[11px] text-muted-foreground">
-                  {primaryResult.providerVerb || "Created in"} {primaryResult.provider}
-                </span>
-              )}
-              {primaryResult.kind === "email" ? (
-                <div className="mt-4 overflow-hidden rounded-xl border border-white/[0.07] bg-[#090f1e]/45">
-                  <div className="flex items-center gap-2 border-b border-white/[0.06] px-3.5 py-3 text-xs font-medium">
-                    <MailCheck className="h-4 w-4 text-primary" /> Sent email
-                  </div>
-                  <div className="space-y-2 px-3.5 py-3 text-xs">
-                    {primaryResult.recipient && (
-                      <p><span className="text-muted-foreground">To:</span> {primaryResult.recipient}</p>
-                    )}
-                    {primaryResult.subject && (
-                      <p><span className="text-muted-foreground">Subject:</span> {primaryResult.subject}</p>
-                    )}
-                    <p className="whitespace-pre-line border-t border-white/[0.06] pt-2.5 leading-relaxed text-muted-foreground">
-                      {primaryResult.body || primaryResult.detail || results.summary}
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <p className="mt-4 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">Summary</p>
-                  <p className="mt-1.5 whitespace-pre-line text-sm leading-relaxed text-muted-foreground">
-                    {primaryResult.detail || results.summary}
-                  </p>
-                </>
-              )}
-            </div>
-
-            <div className="flex shrink-0 flex-wrap gap-2 sm:max-w-[15rem] sm:justify-end">
-              {primaryResult.link && (
-                <a
-                  href={primaryResult.link}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-primary to-accent px-3.5 py-2 text-xs font-semibold text-white shadow-lg shadow-primary/20"
-                >
-                  <ExternalLink className="h-3.5 w-3.5" />
-                  {primaryResult.linkLabel || "Open result"}
-                </a>
-              )}
-              {primaryResult.artifact?.link && (
-                <a
-                  href={primaryResult.artifact.link}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-primary/25 bg-primary/[0.06] px-3.5 py-2 text-xs font-medium text-primary hover:bg-primary/[0.12]"
-                >
-                  <Presentation className="h-3.5 w-3.5" />
-                  {primaryResult.artifact.linkLabel || "View presentation"}
-                </a>
-              )}
-              {primaryResult.downloadUrl ? (
-                <a
-                  href={primaryResult.downloadUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-2 text-xs font-medium hover:bg-white/[0.08]"
-                >
-                  <FileDown className="h-3.5 w-3.5" /> Download
-                </a>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handleDownload}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-2 text-xs font-medium hover:bg-white/[0.08]"
-                >
-                  <FileDown className="h-3.5 w-3.5" /> Download summary
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={handleShare}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-2 text-xs font-medium hover:bg-white/[0.08]"
-              >
-                {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Share2 className="h-3.5 w-3.5" />}
-                {copied ? "Copied" : "Share"}
-              </button>
-            </div>
-          </div>
-
-          {results.breakdown ? (
-            <div className="overflow-hidden rounded-xl border border-white/[0.06] bg-[#090f1e]/55">
-              <BreakdownTable breakdown={results.breakdown} />
-            </div>
-          ) : primaryResult.artifact ? (
-            <div className="flex flex-col gap-3 border-t border-white/[0.06] pt-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex min-w-0 items-center gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                  <Paperclip className="h-4 w-4" />
-                </div>
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">{primaryResult.artifact.title}</p>
-                  <p className="mt-0.5 text-[11px] text-muted-foreground">
-                    {(primaryResult.artifactDelivered && primaryResult.attachments?.[0]?.filename) || `Created in ${primaryResult.artifact.provider}`}
-                  </p>
-                </div>
-              </div>
-              <span className="shrink-0 text-[11px] font-medium text-emerald-400">{primaryResult.artifactDelivered ? "Attached and delivered" : "Created in Canva"}</span>
-            </div>
-          ) : primaryResult.items?.length > 0 ? (
-            <div className="grid gap-2 border-t border-white/[0.06] pt-4 sm:grid-cols-2">
-              {primaryResult.items.slice(0, 4).map((item, index) => (
-                <div key={index} className="rounded-xl border border-white/[0.06] bg-[#090f1e]/45 px-3.5 py-3">
-                  <p className="text-sm font-medium">{item.label}</p>
-                  {item.detail && <p className="mt-1 text-xs text-muted-foreground">{item.detail}</p>}
-                </div>
-              ))}
-            </div>
-          ) : null}
+        <div className="min-w-0">
+          <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">{results.title || "Workflow complete"}</h2>
+          {results.summary && <p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted-foreground">{results.summary}</p>}
         </div>
-      </motion.section>
+      </div>
 
-      {receipts.length > 0 && (
-        <motion.section
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.24 }}
-          className="mb-5"
-        >
-          <h3 className="mb-3 text-sm font-medium">Also completed</h3>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {receipts.map((receipt) => (
-              <div key={receipt.key} className="flex items-center gap-2.5 rounded-xl border border-white/[0.06] bg-card/30 px-3.5 py-3">
-                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
-                <div className="min-w-0 flex-1">
-                  <p className="text-[11px] font-medium text-muted-foreground">{receipt.tool}</p>
-                  <p className="mt-0.5 text-sm leading-snug">{receipt.title}</p>
-                </div>
-                {receipt.link && (
-                  <a
-                    href={receipt.link}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-primary"
-                  >
-                    {receipt.linkLabel || `View in ${receipt.tool}`}
-                    <ExternalLink className="h-3 w-3" />
-                  </a>
-                )}
-              </div>
-            ))}
+      {metrics.length > 0 && <div className="mb-7 grid gap-3 sm:grid-cols-3">
+        {metrics.map((metric, index) => <div key={`${metric.label}:${index}`} className="rounded-2xl border border-white/10 bg-card/60 px-5 py-4">
+          <p className="text-3xl font-semibold tracking-tight text-foreground">{metric.value}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{metric.label}</p>
+        </div>)}
+      </div>}
+
+      <section className="mb-5 overflow-hidden rounded-3xl border border-primary/25 bg-gradient-to-br from-primary/[0.09] via-card/80 to-card/50 shadow-xl shadow-primary/[0.06]">
+        <div className="flex flex-wrap items-start justify-between gap-4 px-5 pb-4 pt-6 sm:px-7">
+          <div>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-primary">Your result</p>
+            <h3 className="text-xl font-semibold">{primaryResult.title || results.title || "Workflow result"}</h3>
+            {primaryResult.provider && <p className="mt-1.5 text-xs text-muted-foreground">{primaryResult.providerVerb || "Created in"} {primaryResult.provider}</p>}
           </div>
-        </motion.section>
-      )}
+          <div className="flex flex-wrap gap-2">
+            {primaryResult.link && <a href={primaryResult.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white hover:bg-primary/90"><ExternalLink className="h-4 w-4" />{primaryResult.linkLabel || "Open result"}</a>}
+            {primaryResult.artifact?.link && <a href={primaryResult.artifact.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl border border-primary/30 px-4 py-2.5 text-sm font-medium text-primary hover:bg-primary/10"><ExternalLink className="h-4 w-4" />{primaryResult.artifact.linkLabel || "Open presentation"}</a>}
+          </div>
+        </div>
+        <div className="px-5 pb-6 sm:px-7"><ResultPreview result={primaryResult} results={results} /></div>
+        {primaryResult.artifact && <div className="flex items-center justify-between gap-3 border-t border-white/10 px-5 py-3 text-xs sm:px-7">
+          <span>Presentation · {primaryResult.artifact.title}</span>
+          <span className="text-emerald-400">{primaryResult.artifactDelivered ? "Attached and delivered" : "Created in Canva"}</span>
+        </div>}
+      </section>
+
+      {receipts.length > 0 && <details className="group mb-8 overflow-hidden rounded-2xl border border-white/10 bg-card/40">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 marker:hidden [&::-webkit-details-marker]:hidden">
+          <span className="flex items-center gap-3 text-sm font-medium"><CheckCircle2 className="h-4 w-4 text-emerald-400" />Results from other apps <span className="rounded-full bg-white/10 px-2 py-0.5 text-xs text-muted-foreground">{receipts.length}</span></span>
+          <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180" />
+        </summary>
+        <div className="grid gap-3 border-t border-white/10 p-4 sm:grid-cols-2">
+          {receipts.map((receipt) => <div key={receipt.key} className="rounded-xl border border-white/10 bg-[#0c1422] p-4">
+            <p className="text-xs font-semibold text-primary">{receipt.tool}</p>
+            <p className="mt-1 text-sm font-medium">{receipt.title}</p>
+            {receipt.preview?.length > 0 && <div className="mt-3 space-y-2 border-t border-white/10 pt-3">
+              {receipt.preview.map((audience, index) => <div key={index} className="flex items-start justify-between gap-3 text-xs">
+                <span className="break-words">{audience.name}</span>
+                {audience.contacts !== null && <span className="shrink-0 text-muted-foreground">{audience.contacts.toLocaleString("en-US")} contacts</span>}
+              </div>)}
+            </div>}
+            {receipt.link && <a href={receipt.link} target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline">{receipt.linkLabel || `Open ${receipt.tool}`}<ExternalLink className="h-3 w-3" /></a>}
+          </div>)}
+        </div>
+      </details>}
 
       {creatorsOutcome && <CreatorApprovalList items={creatorsOutcome.items} />}
-
-      <motion.section
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.3 }}
-        className="mb-4 rounded-2xl border border-primary/15 bg-primary/[0.04] p-5"
-      >
-        <h3 className="text-sm font-medium">What would you like to do next?</h3>
-        <p className="mt-1 text-[11px] text-muted-foreground/70">
-          {isFailure
-            ? "AURA saved the completed work. Try again now or adjust the workflow."
-            : "Continue from this result, automate it for later, or start something new."}
-        </p>
-
-        {!isFailure && nextSteps.length > 0 && (
-          <div className="my-4 border-y border-white/[0.06] py-4">
-            <p className="mb-2.5 flex items-center gap-2 text-xs font-medium text-foreground/90">
-              <ArrowRight className="h-3.5 w-3.5 text-primary" /> Suggested next
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {nextSteps.map((step, index) => (
-                <button
-                  key={index}
-                  type="button"
-                  onClick={() => onStartWorkflow(step)}
-                  className="rounded-full border border-primary/20 px-3 py-1.5 text-xs text-primary transition-colors hover:bg-primary/10"
-                >
-                  {step}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div className={`mt-4 grid gap-2 ${isFailure ? "grid-cols-2" : "grid-cols-1 sm:grid-cols-3"}`}>
-          <motion.button
-            whileHover={{ scale: 1.01 }}
-            whileTap={{ scale: 0.99 }}
-            type="button"
-            onClick={() => onStartWorkflow(prompt)}
-            className="flex items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-sm font-medium transition-colors hover:bg-white/10"
-          >
-            <RefreshCw className="h-4 w-4" /> Run again
-          </motion.button>
-          {!isFailure && backendRunId && (
-            <motion.button
-              whileHover={{ scale: 1.01 }}
-              whileTap={{ scale: 0.99 }}
-              type="button"
-              onClick={() => setShowSchedule(true)}
-              className="flex items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-primary to-accent px-3 py-2.5 text-sm font-semibold text-white shadow-lg shadow-primary/20"
-            >
-              <CalendarClock className="h-4 w-4" /> Repeat automatically
-            </motion.button>
-          )}
-          <motion.button
-            whileHover={{ scale: 1.01 }}
-            whileTap={{ scale: 0.99 }}
-            type="button"
-            onClick={onNewWorkflow}
-            className="flex items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-sm font-medium transition-colors hover:bg-white/10"
-          >
-            <Plus className="h-4 w-4" /> New workflow
-          </motion.button>
+      {!isFailure && nextSteps.length > 0 && <section className="mb-6">
+        <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold"><ArrowRight className="h-4 w-4 text-primary" />Suggested next</h3>
+        <div className="flex flex-wrap gap-2">{nextSteps.map((step, index) => <button key={index} type="button" onClick={() => onStartWorkflow(step)} className="rounded-full border border-primary/25 bg-primary/[0.05] px-4 py-2 text-xs text-primary hover:bg-primary/10">{step}</button>)}</div>
+      </section>}
+      <section className="rounded-2xl border border-white/10 bg-card/40 p-5 sm:p-6">
+        <h3 className="font-semibold">What would you like to do next?</h3>
+        <p className="mt-1 text-sm text-muted-foreground">{isFailure ? "Your completed work is saved. Try again or start a new workflow." : "Continue from this result or create something new."}</p>
+        <div className="mt-5 grid gap-3 sm:grid-cols-3">
+          <button type="button" onClick={() => onStartWorkflow(prompt)} className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium hover:bg-white/10"><RefreshCw className="h-4 w-4" />Run again</button>
+          {!isFailure && backendRunId && <button type="button" onClick={() => setShowSchedule(true)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-white hover:bg-primary/90"><CalendarClock className="h-4 w-4" />Schedule</button>}
+          <button type="button" onClick={onNewWorkflow} className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium hover:bg-white/10"><Plus className="h-4 w-4" />New workflow</button>
         </div>
-      </motion.section>
+      </section>
 
-      {!isFailure && !backendRunId && (
-        <div className="flex justify-end border-t border-white/[0.06] pt-4">
-          <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            type="button"
-            onClick={() => setShowModal(true)}
-            className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-primary to-accent px-3.5 py-2 text-xs font-semibold text-white shadow-lg shadow-primary/20"
-          >
-            <Zap className="h-3.5 w-3.5" /> Connect & run for real
-          </motion.button>
-        </div>
-      )}
-
+      <div className="mt-5 flex flex-wrap items-center gap-5 border-t border-white/10 pt-5 text-xs text-muted-foreground">
+        {activity?.length > 0 && <details className="group relative"><summary className="flex cursor-pointer list-none items-center gap-1.5 hover:text-foreground [&::-webkit-details-marker]:hidden"><Activity className="h-4 w-4" />Activity<ChevronDown className="h-3 w-3 group-open:rotate-180" /></summary><ol className="absolute bottom-full left-0 z-10 mb-2 max-h-56 w-72 overflow-y-auto rounded-xl border border-white/10 bg-[#121725] p-3 shadow-xl">{activity.map((step, index) => <li key={step.id || index} className="flex items-start gap-2 py-1.5 text-xs"><CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-emerald-400" /><span>{step.action || step.tool || "Completed"}</span></li>)}</ol></details>}
+        <button type="button" onClick={handleShare} className="inline-flex items-center gap-1.5 hover:text-foreground">{copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Share2 className="h-4 w-4" />}{copied ? "Copied" : "Share"}</button>
+        {primaryResult.downloadUrl
+          ? <a href={primaryResult.downloadUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 hover:text-foreground"><FileDown className="h-4 w-4" />Download result</a>
+          : <button type="button" onClick={handleDownload} className="inline-flex items-center gap-1.5 hover:text-foreground"><FileDown className="h-4 w-4" />Download summary</button>}
+        {!isFailure && !backendRunId && <button type="button" onClick={() => setShowModal(true)} className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 font-semibold text-white"><Zap className="h-4 w-4" />Connect & run for real</button>}
+      </div>
       {!backendRunId && <AccessRequestModal open={showModal} onClose={() => setShowModal(false)} workflowPrompt={workflowPrompt} />}
-      <ScheduleModal
-        open={showSchedule}
-        onClose={() => setShowSchedule(false)}
-        title={scheduleTitle || results.title}
-        backendRunId={backendRunId}
-        historyWorkflowId={historyWorkflowId}
-      />
+      <ScheduleModal open={showSchedule} onClose={() => setShowSchedule(false)} title={scheduleTitle || results.title} backendRunId={backendRunId} historyWorkflowId={historyWorkflowId} />
     </motion.div>
   );
 }

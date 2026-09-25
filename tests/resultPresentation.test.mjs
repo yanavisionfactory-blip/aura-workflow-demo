@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import {
   meaningfulMetrics,
   primaryResultFromOutputs,
+  resultMetrics,
   selectPrimaryOutcome,
   supportingReceipts,
 } from "../src/lib/resultPresentation.mjs";
@@ -69,6 +70,18 @@ test("a Canva presentation remains primary when it is not delivered elsewhere", 
   assert.equal(primary.provider, "Canva");
   assert.equal(primary.link, "https://www.canva.com/design/design-123/edit");
   assert.equal(primary.linkLabel, "Open in Canva");
+});
+
+test("a confirmed Canva import displays its real thumbnail and editor link", () => {
+  const primary = primaryResultFromOutputs([{ operation: "canva.presentation.create", provider_result: {
+    job: { result: { designs: [{ id: "design-123", thumbnail: { url: "https://document-export.canva.com/thumbnail/slide.png?token=abc" }, urls: { edit_url: "https://www.canva.com/api/design/opaque/edit" } }] } },
+  } }], { title: "Pilot brief" });
+  assert.equal(primary.thumbnailUrl, "https://document-export.canva.com/thumbnail/slide.png?token=abc");
+  assert.equal(primary.link, "https://www.canva.com/api/design/opaque/edit");
+  const unsafe = primaryResultFromOutputs([{ operation: "canva.presentation.create", provider_result: {
+    designs: [{ id: "design-123", thumbnail: { url: "https://outside.example/track?token=abc" } }],
+  } }], { title: "Pilot brief" });
+  assert.equal(unsafe.thumbnailUrl, null);
 });
 
 test("verified Canva export URLs become the download action", () => {
@@ -200,23 +213,63 @@ test("an explicit empty supporting contract does not recreate fallback receipts"
   assert.deepEqual(receipts, []);
 });
 
-test("the results UI uses supporting app receipts without duplicate run details", () => {
+test("the results UI emphasizes the artifact and tucks supporting tools away", () => {
   const source = readFileSync(new URL("../src/components/aura/ResultsView.jsx", import.meta.url), "utf8");
   assert.equal(source.includes("Your result"), true);
-  assert.equal(source.includes(">Summary</p>"), true);
-  assert.equal(source.includes("Sent email"), true);
-  assert.equal(source.includes("View presentation"), true);
+  assert.equal(source.includes("<ResultPreview result={primaryResult} results={results}"), true);
+  assert.equal(source.includes("<details className=\"group mb-8"), true);
+  assert.equal(source.includes("Results from other apps"), true);
+  assert.equal(source.indexOf("{metrics.length > 0") < source.indexOf("Your result"), true);
+  assert.equal(source.indexOf("Suggested next") < source.indexOf("What would you like to do next?"), true);
   assert.equal(source.includes("Attached and delivered"), true);
-  assert.equal(source.includes("!isFailure && !backendRunId"), true);
-  assert.equal(source.includes("Also completed"), true);
   assert.equal(source.includes("View run details"), false);
-  assert.equal(source.includes("Workflow activity"), false);
   assert.equal(source.includes("Output receipts"), false);
-  assert.equal(source.includes("View in ${receipt.tool}"), true);
-  assert.equal(source.match(/Suggested next/g)?.length, 1);
-  assert.equal(source.includes("Tools used"), false);
-  assert.equal(source.includes("What happened"), false);
-  assert.equal(source.includes("Still tracking"), false);
+  assert.equal(source.includes("Design ID"), false);
+});
+
+test("finished Canva work shows the exact resolved slide text and receipt-backed metrics", () => {
+  const activity = [{ status: "completed", output: {
+    step_key: "audiences", operation: "mailchimp.audiences.list",
+    provider_result: { lists: [{ name: "Pilot audience", stats: { member_count: 184 } }] },
+  } }, { status: "completed", output: {
+    step_key: "pilot_slide", operation: "canva.presentation.create",
+    resolved_arguments: { title: "Pilot brief", layout: "slides", phases: [{ period: "Pilot", title: "Audience overview", items: ["Audience: Pilot audience", "Contacts: 184"] }] },
+    provider_result: { page_count: 1, designs: [{ id: "a1b2c3" }] },
+  } }];
+  const primary = primaryResultFromOutputs(activity.map((step) => step.output), { title: "Mailchimp audience pilot brief", deliverable: "Design ID: a1b2c3\nEdit URL: https://www.canva.com/design/a1b2c3/edit" }, { primary_step_key: "pilot_slide" });
+  assert.equal(primary.title, "Pilot brief");
+  assert.deepEqual(primary.preview.slides[0].items, ["Audience: Pilot audience", "Contacts: 184"]);
+  assert.deepEqual(resultMetrics([], activity), [
+    { value: "1", label: "slide created" }, { value: "1", label: "audience used" }, { value: "184", label: "contacts in audience" },
+  ]);
+  assert.deepEqual(resultMetrics([], activity.slice(0, 1)), [
+    { value: "1", label: "audience used" }, { value: "184", label: "contacts in audience" },
+  ]);
+});
+
+test("a draft template and incomplete provider calls cannot create a fake visual or metrics", () => {
+  const primary = primaryResultFromOutputs([{ operation: "canva.presentation.create",
+    resolved_arguments: { title: "Draft", phases: [{ period: "Pilot", title: "Overview", items: ["Contacts: {{steps.audiences.lists[0].stats.member_count}}"] }] },
+    provider_result: { designs: [{ id: "a1b2c3" }] },
+  }], { title: "Draft" });
+  assert.equal(primary.preview, null);
+  assert.deepEqual(resultMetrics([], [{ status: "failed", output: { operation: "canva.presentation.create", provider_result: { designs: [{ id: "a1b2c3" }] } } }]), []);
+});
+
+test("Mailchimp supporting result shows real audience details and opens its account", () => {
+  const receipts = supportingReceipts({}, [{ stepKey: "audiences", tool: "Mailchimp", action: "Read audiences", status: "completed", output: {
+    operation: "mailchimp.audiences.list",
+    provider_result: { lists: [{ name: "Pilot audience", web_id: 443, stats: { member_count: 184 }, _links: [{ rel: "self", href: "https://us19.api.mailchimp.com/3.0/lists/list-id" }] }] },
+  } }], { provider: "Canva" }, { supporting_step_keys: ["audiences"] });
+  assert.deepEqual(receipts[0].preview, [{ name: "Pilot audience", contacts: 184 }]);
+  assert.equal(receipts[0].link, "https://us19.admin.mailchimp.com/lists/members/?id=443");
+});
+
+test("created Google Docs display their completed body and link to the original", () => {
+  const result = primaryResultFromOutputs([{ operation: "docs.create", resolved_arguments: { title: "A short story", body: "Once upon a time…" }, provider_result: { id: "doc-123", name: "A short story" } }], { title: "Story" });
+  assert.equal(result.kind, "document");
+  assert.equal(result.preview.body, "Once upon a time…");
+  assert.equal(result.link, "https://docs.google.com/document/d/doc-123/edit");
 });
 
 test("completed backend runs consume resolved presentation metrics", () => {
