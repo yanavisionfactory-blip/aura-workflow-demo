@@ -5683,7 +5683,9 @@ async def approve_plan(
         ):
             planned_step.consequential = True
     from .connection_permissions import (
-        missing_plan_operations, refresh_granted_readbacks, verification_permission_fixes,
+        missing_plan_operations,
+        refresh_granted_readbacks,
+        verification_permission_fixes,
     )
 
     for tool in tools:

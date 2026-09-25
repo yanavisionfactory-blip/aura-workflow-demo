@@ -7,9 +7,19 @@ from sqlalchemy import select
 
 from app import orchestrator
 from app.connection_permissions import (
-    missing_plan_operations, refresh_granted_readbacks, verification_permission_fixes,
+    missing_plan_operations,
+    refresh_granted_readbacks,
+    verification_permission_fixes,
 )
-from app.models import CapabilityManifest, ConnectionRequirement, RunStatus, ToolConnection, ToolKind, WorkflowRun, Workspace
+from app.models import (
+    CapabilityManifest,
+    ConnectionRequirement,
+    RunStatus,
+    ToolConnection,
+    ToolKind,
+    WorkflowRun,
+    Workspace,
+)
 from app.native_connectors import native_manifest
 from app.schemas import PlanStep, WorkflowPlan
 from app.security import CredentialVault
