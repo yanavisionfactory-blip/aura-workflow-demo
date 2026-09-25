@@ -1,12 +1,13 @@
 """Durable integration gates for the standalone Recovery Engineer."""
 
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app import recovery_engineer
+from app import db, dispatch, execution_lock, recovery_engineer, worker
 from app.db import Base
 from app.models import (
     DispatchIntent,
@@ -87,6 +88,76 @@ async def test_workflow_repair_is_counted_and_delayed_through_outbox(database):
         assert incident.attempt_count == 1
         assert intent.kind == "execute"
         assert intent.status == "pending"
+
+
+@pytest.mark.parametrize("phase", ["planning", "execution"])
+async def test_worker_hands_technical_stop_to_engineer_without_scheduler(
+    database, monkeypatch, phase
+):
+    if phase == "planning":
+        async with database() as session:
+            session.add(Workspace(id="workspace", name="Recovery runtime"))
+            session.add(WorkflowRun(
+                id="run", workspace_id="workspace", prompt="Summarize my calendar",
+                status=RunStatus.blocked,
+                execution_context={"__aura_supervisor__": {
+                    "phase": "planning", "status": "recovering",
+                    "attempts": {"planning": 2},
+                    "last_failure_category": "malformed_plan",
+                    "repair_incident": {"kind": "planning_recovery_exhausted", "status": "handoff_pending"},
+                }},
+            ))
+            await session.commit()
+    else:
+        await _create_run(database, category="timeout")
+
+    @asynccontextmanager
+    async def lock(_engine, _workspace_id, _run_id):
+        yield True
+
+    async def delivery(_run_id, _workspace_id):
+        return None
+
+    published = []
+
+    async def publish(_workspace_id, *, run_id, **flags):
+        published.append((run_id, flags))
+
+    monkeypatch.setattr(execution_lock, "execution_lock", lock)
+    monkeypatch.setattr(db, "SessionLocal", database)
+    monkeypatch.setattr(dispatch, "dispatch_pending", publish)
+    monkeypatch.setattr(worker, "plan_run" if phase == "planning" else "execute_run", delivery)
+
+    if phase == "planning":
+        await worker.plan_delivery("run", "workspace")
+    else:
+        await worker.execute_delivery("run", "workspace")
+
+    async with database() as session:
+        run = await session.get(WorkflowRun, "run")
+        incident = await session.scalar(select(RecoveryIncident))
+        intent = await session.scalar(select(DispatchIntent))
+        assert run.status == (RunStatus.queued if phase == "planning" else RunStatus.recovering)
+        assert incident.status == "workflow_retry"
+        assert intent.kind == ("plan" if phase == "planning" else "execute")
+        assert run.execution_context["__aura_supervisor__"]["last_action"] == (
+            "compact_replan" if phase == "planning" else "recovery_engineer"
+        )
+        assert public_run_projection(run, None)["public_status"] == "recovering"
+    assert published == [("run", {"schedule_delayed_plan" if phase == "planning" else "schedule_delayed_execute": True})]
+
+
+async def test_missing_service_authorization_is_recorded_as_internal_configuration_stop(database):
+    await _create_run(database, category="operator_credential")
+
+    assert await recover_with_engineer("run", "workspace") == "configuration_required"
+
+    async with database() as session:
+        run = await session.get(WorkflowRun, "run")
+        incident = await session.scalar(select(RecoveryIncident))
+        assert incident.status == "configuration_required"
+        assert run.execution_context["__aura_supervisor__"]["repair_incident"]["status"] == "configuration_required"
+        assert public_run_projection(run, None)["public_status"] == "blocked"
 
 
 async def test_repeatable_defect_waits_for_one_isolated_dispatch(database):

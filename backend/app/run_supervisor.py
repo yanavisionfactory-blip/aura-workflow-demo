@@ -490,10 +490,11 @@ async def recover_planning_failure(
         outcome = "scheduled"
     else:
         state.update(
-            status="operator_attention",
+            status="recovering",
             next_attempt_at=None,
             repair_incident={
                 "kind": "planning_recovery_exhausted",
+                "status": "handoff_pending",
                 "fingerprint": fingerprint,
                 "required_environment": "isolated_repair_sandbox",
                 "production_write_allowed": False,
@@ -506,11 +507,11 @@ async def recover_planning_failure(
             RunStatus.blocked,
             reason="planning_recovery_exhausted",
             phase="planning",
-            supervisor_status="operator_attention",
+            supervisor_status="recovering",
             error=None,
             result={
                 **recovering_result,
-                "status": "background_attention",
+                "status": "recovering",
                 "incident_queued": True,
             },
             dispatch=None,
@@ -569,13 +570,12 @@ def public_run_projection(run: WorkflowRun, blocker: dict | None) -> dict:
         run.status in {RunStatus.failed, RunStatus.blocked}
         and not is_unavoidable_human_blocker(blocker)
         and (
-            incident_status in {"awaiting_sandbox", "quarantined", "failed", "canary_failed", "rolled_back"}
-            or (isinstance(incident, dict) and incident.get("kind") == "planning_recovery_exhausted" and not incident_status)
+            incident_status in {"awaiting_sandbox", "configuration_required", "quarantined", "failed", "canary_failed", "rolled_back"}
         )
     ):
         # There is no queued retry or active repair in these states. Do not
         # present an indefinitely blocked run as though an agent is working.
-        planning_incident = isinstance(incident, dict) and incident.get("kind") == "planning_recovery_exhausted"
+        planning_incident = state.get("phase") == "planning"
         return {
             "public_status": "blocked",
             "public_error": None,
@@ -583,8 +583,8 @@ def public_run_projection(run: WorkflowRun, blocker: dict | None) -> dict:
                 "kind": "operator_action",
                 "code": "automatic_repair_stopped",
                 "message": (
-                    "AURA couldn't verify a safe plan with the available connector contracts. "
-                    "No workflow steps ran. This needs a technical repair."
+                    "AURA needs an internal repair before it can verify this plan. "
+                    "No workflow steps ran."
                     if planning_incident else
                     "AURA could not repair this run automatically. Its completed work is saved."
                 ),

@@ -177,10 +177,9 @@ async def test_repeated_contract_mismatch_stops_after_one_supervised_repair(data
         await session.commit()
 
         assert run.status == RunStatus.blocked
-        assert public_run_projection(run, None)["public_blocker"]["message"] == (
-            "AURA couldn't verify a safe plan with the available connector contracts. "
-            "No workflow steps ran. This needs a technical repair."
-        )
+        assert public_run_projection(run, None)["public_status"] == "recovering"
+        assert public_run_projection(run, None)["public_blocker"] is None
+        assert run.execution_context["__aura_supervisor__"]["repair_incident"]["status"] == "handoff_pending"
 
 
 async def test_planning_supervisor_changes_strategy_after_malformed_result(database):
@@ -231,10 +230,10 @@ async def test_exhausted_recovery_opens_internal_incident_not_retry_ui(database)
         assert outcome == "internal_incident"
         assert run.status == RunStatus.blocked
         state = run.execution_context["__aura_supervisor__"]
-        assert state["status"] == "operator_attention"
+        assert state["status"] == "recovering"
         assert state["repair_incident"]["required_environment"] == "isolated_repair_sandbox"
         assert state["repair_incident"]["production_write_allowed"] is False
-        assert public_run_projection(run, None)["public_status"] == "blocked"
+        assert public_run_projection(run, None)["public_status"] == "recovering"
 
 
 @pytest.mark.parametrize("code", sorted(HUMAN_ACTION_CODES))

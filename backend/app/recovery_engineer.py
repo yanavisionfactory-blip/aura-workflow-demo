@@ -613,7 +613,13 @@ def _record_engineer_attempt(
         attempts=attempts,
         failure_history=history,
         last_failure_category=diagnostic.category.value,
-        last_action="recovery_engineer",
+        # A planning handoff must change the compilation route. Replaying the
+        # original combined route with the same catalog repeats the same defect.
+        last_action=(
+            "compact_replan"
+            if diagnostic.phase == RecoveryPhase.planning
+            else "recovery_engineer"
+        ),
     )
     context["__aura_supervisor__"] = state
     run.execution_context = context
@@ -746,7 +752,29 @@ async def recover_with_engineer(run_id: str, workspace_id: str) -> str:
         diagnostic = diagnose_run(run, steps, category=category, evidence_codes=evidence)
         program = repair_program(diagnostic)
         if diagnostic.human_action_required:
-            return "human_action"
+            blocker = (run.execution_context or {}).get("__aura_blocker__")
+            if isinstance(blocker, dict) and blocker.get("code") in HUMAN_ACTION_CODES:
+                return "human_action"
+            # Missing service credentials or authorization cannot be solved by
+            # a code retry. Record an internal configuration stop instead of
+            # leaving a supposedly active recovery spinning forever.
+            incident = await open_recovery_incident(session, run, diagnostic, program)
+            incident.status = "configuration_required"
+            _sync_incident_context(run, incident)
+            context = deepcopy(run.execution_context or {})
+            state = recovery_mapping(context.get("__aura_supervisor__"))
+            state.update(status="operator_attention", next_attempt_at=None)
+            context["__aura_supervisor__"] = state
+            run.execution_context = context
+            transition_run(
+                run, RunStatus.blocked,
+                reason="recovery_service_configuration_required",
+                actor="recovery-engineer", phase=diagnostic.phase.value,
+                supervisor_status="operator_attention", error=None,
+                dispatch=None, allow_same=run.status == RunStatus.blocked,
+            )
+            await session.commit()
+            return "configuration_required"
 
         incident = await open_recovery_incident(session, run, diagnostic, program)
         if incident.status in {"repairing", "testing", "canary", "awaiting_sandbox"}:
