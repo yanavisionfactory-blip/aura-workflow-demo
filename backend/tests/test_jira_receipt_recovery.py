@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 from sqlalchemy import select
 
-from app import main, outcome_runtime, scheduler_runtime
+from app import internal_diagnostics, main, outcome_runtime, scheduler_runtime
 from app.models import (
     Approval,
     CapabilityManifest,
@@ -21,6 +21,34 @@ from app.native_connectors import native_manifest, native_operations
 from app.policy import canonical_plan_hash
 from app.schemas import PlanApproval
 from app.workflow_templates import notion_to_jira_template
+
+
+async def test_startup_restores_saved_jira_receipt_even_without_periodic_scheduler(monkeypatch):
+    calls = []
+
+    async def migrate():
+        calls.append("migrate")
+
+    async def recent():
+        calls.append("diagnostics")
+
+    async def saved():
+        calls.append("read_saved_receipt")
+        return [("saved", "w")]
+
+    async def dispatch():
+        calls.append("dispatch_saved_review")
+        return 1
+
+    monkeypatch.setattr(main, "migrate_database", migrate)
+    monkeypatch.setattr(internal_diagnostics, "log_recent_stops_safely", recent)
+    monkeypatch.setattr(scheduler_runtime, "recover_recorded_jira_readbacks", saved)
+    monkeypatch.setattr(main, "dispatch_pending", dispatch)
+    monkeypatch.setattr(main.settings, "recovery_scheduler_enabled", False)
+    monkeypatch.setattr(main.settings, "connector_engineer_enabled", False)
+
+    await main.startup()
+    assert calls == ["migrate", "diagnostics", "read_saved_receipt", "dispatch_saved_review"]
 
 
 async def test_initial_plan_click_cannot_authorize_unseen_jira_tasks(database, monkeypatch):

@@ -228,8 +228,17 @@ app.add_middleware(
 async def startup() -> None:
     await migrate_database()
     from .internal_diagnostics import log_recent_stops_safely
+    from .scheduler_runtime import recover_recorded_jira_readbacks
 
     await log_recent_stops_safely()
+    # A saved Jira bulk receipt must be checked after a verifier fix even in
+    # deployments where the periodic recovery scheduler is disabled. The
+    # recovered step has a recorded result, so execution only reads Jira.
+    try:
+        if await recover_recorded_jira_readbacks():
+            await dispatch_pending()
+    except Exception:  # Failed recovery cannot take down the API.
+        logger.exception("Saved Jira receipt recovery deferred")
     if settings.recovery_scheduler_enabled:
         import asyncio
 
