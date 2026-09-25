@@ -840,12 +840,10 @@ export default function PreviewView({ preview, steps, prepared = false, onApprov
 
       {/* Footer */}
       <div className="flex items-center justify-between gap-3 border-t border-white/10 pt-5">
-        {prepared ? <span className="text-xs text-muted-foreground">The workflow is waiting for your decision.</span> : (
-          <Button variant="ghost" size="sm" onClick={onBack} className="text-muted-foreground hover:text-foreground">
-            <ArrowLeft className="w-3.5 h-3.5 mr-1.5" />
-            Back to plan
-          </Button>
-        )}
+        <Button variant="ghost" size="sm" onClick={onBack} className="text-muted-foreground hover:text-foreground">
+          <ArrowLeft className="w-3.5 h-3.5 mr-1.5" />
+          {prepared ? "Review later" : "Back to plan"}
+        </Button>
         <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
           <Button
             size="sm"

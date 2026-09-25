@@ -527,7 +527,10 @@ export default function Demo() {
   const handlePageBack = useCallback(() => {
     if (phase === "confirm") reset();
     else if (phase === "plan") setPhase("confirm");
-    else if (phase === "preview") setPhase("plan");
+    else if (phase === "preview") {
+      if (preparedActionPreviewRef.current) reset();
+      else setPhase("plan");
+    }
     else if (phase === "executing" || phase === "error") {
       queuedPlanStartRef.current = null;
       setPhase("plan");
@@ -1885,7 +1888,7 @@ Generate a results summary in plain, human-friendly language (not technical).
                 transition={{ duration: 0.4 }}
                 className="w-full flex justify-center"
               >
-                <PreviewView key={preparedActionPreviewRef.current ? `prepared-${approvedSteps.find((step) => step.approvalId)?.approvalId}` : "planned"} preview={previewData} steps={approvedSteps} prepared={preparedActionPreviewRef.current} approvalStep={approvalStep} error={previewError} onApprove={handlePreviewApprove} onBack={() => setPhase("plan")} />
+                <PreviewView key={preparedActionPreviewRef.current ? `prepared-${approvedSteps.find((step) => step.approvalId)?.approvalId}` : "planned"} preview={previewData} steps={approvedSteps} prepared={preparedActionPreviewRef.current} approvalStep={approvalStep} error={previewError} onApprove={handlePreviewApprove} onBack={() => preparedActionPreviewRef.current ? reset() : setPhase("plan")} />
               </motion.div>
             )}
 
