@@ -56,8 +56,7 @@ import { jiraReceiptTasks } from "@/lib/jiraReceipt.mjs";
 import {
   editedArgumentsForStep,
   plannedApprovalStep,
-  requiresActionPreview,
-  requiresPreparedJiraReview,
+  hasImmediateActionPreview,
   resolvedApprovalStep,
 } from "@/lib/approvalReview.mjs";
 
@@ -184,6 +183,7 @@ const uiPlanStepFromRun = (step) => {
     key: step.key,
     tool,
     operation: step.operation,
+    depends_on: step.depends_on || [],
     arguments: step.arguments || {},
     resolvedArguments: step.arguments || {},
     title: friendlyStepTitle(step),
@@ -198,9 +198,7 @@ const uiPlanStepFromRun = (step) => {
       { label: "Creates", value: step.expected_output },
     ],
     riskLevel: step.consequential ? "modify" : "read",
-    riskNote: step.consequential && step.operation !== "jira.issues.create_from_blocks"
-      ? "You'll review this exact action with every other external change before the workflow runs."
-      : "",
+    riskNote: step.consequential ? "AURA will show the exact values before this action runs." : "",
   };
   return plannedApprovalStep(planned, step, tool);
 };
@@ -529,7 +527,10 @@ export default function Demo() {
   const handlePageBack = useCallback(() => {
     if (phase === "confirm") reset();
     else if (phase === "plan") setPhase("confirm");
-    else if (phase === "preview") setPhase("plan");
+    else if (phase === "preview") {
+      if (preparedActionPreviewRef.current) reset();
+      else setPhase("plan");
+    }
     else if (phase === "executing" || phase === "error") {
       queuedPlanStartRef.current = null;
       setPhase("plan");
@@ -787,8 +788,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               approvedStepsRef.current = compiledPlan.steps;
               setApprovedSteps(compiledPlan.steps);
               setWorkflowName(queuedStart.name || compiledPlan.workflowName || "");
-              if (requiresActionPreview(compiledPlan.steps, queuedStart.autoApprove)
-                && !requiresPreparedJiraReview(compiledPlan.steps)) {
+              if (hasImmediateActionPreview(compiledPlan.steps, queuedStart.autoApprove)) {
                 preparedActionPreviewRef.current = false;
                 setPhase("preview");
                 return;
@@ -1154,7 +1154,7 @@ Rules:
       keepPlanInReview();
       return;
     }
-    if (requiresActionPreview(steps, autoApprove) && !requiresPreparedJiraReview(steps)) {
+    if (hasImmediateActionPreview(steps, autoApprove)) {
       preparedActionPreviewRef.current = false;
       setPreviewError("");
       setPhase("preview");
@@ -1394,7 +1394,7 @@ Rules:
           );
         }
       } else {
-        await approvePythonPlan(runId, reviewedPlan.steps, !requiresPreparedJiraReview(reviewedPlan.steps));
+        await approvePythonPlan(runId, reviewedPlan.steps, true);
       }
       for (;;) {
         const run = await getPythonRunResilient(runId, generation);
@@ -1888,7 +1888,7 @@ Generate a results summary in plain, human-friendly language (not technical).
                 transition={{ duration: 0.4 }}
                 className="w-full flex justify-center"
               >
-                <PreviewView preview={previewData} steps={approvedSteps} approvalStep={approvalStep} error={previewError} onApprove={handlePreviewApprove} onBack={() => setPhase("plan")} />
+                <PreviewView key={preparedActionPreviewRef.current ? `prepared-${approvedSteps.find((step) => step.approvalId)?.approvalId}` : "planned"} preview={previewData} steps={approvedSteps} prepared={preparedActionPreviewRef.current} approvalStep={approvalStep} error={previewError} onApprove={handlePreviewApprove} onBack={() => preparedActionPreviewRef.current ? reset() : setPhase("plan")} />
               </motion.div>
             )}
 

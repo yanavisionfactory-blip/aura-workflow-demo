@@ -23,7 +23,7 @@ from app.schemas import ApprovalDecision, PlanApproval
 from app.workflow_templates import weather_presentation_template
 
 
-async def test_weather_plan_can_be_started_with_one_review_and_no_export_approval(
+async def test_weather_plan_holds_dependent_writes_until_their_values_are_ready(
     monkeypatch,
     database,
 ):
@@ -125,6 +125,12 @@ async def test_weather_plan_can_be_started_with_one_review_and_no_export_approva
             for approval in approvals
         }
         assert approved_operations == {"canva.presentation.create", "gmail.send"}
+        statuses = {
+            (await session.get(RunStep, approval.step_id)).operation: approval.status
+            for approval in approvals
+        }
+        assert statuses["canva.presentation.create"] == "pending"
+        assert statuses["gmail.send"] == "pending"
         export = await session.scalar(
             select(RunStep).where(
                 RunStep.run_id == run_id,

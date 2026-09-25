@@ -45,7 +45,10 @@ async def test_edited_approval_appends_history_without_mutating_approved_version
             session.add(RunStep(id=sid, run_id=rid, position=0, step_key='send', agent='email', tool_slug='google', operation='gmail.send', arguments=original['steps'][0]['arguments'], status=StepStatus.awaiting_approval, consequential=True, approval_id=aid, idempotency_key=str(uuid4())))
             session.add(PlanVersion(id=vid, workspace_id=wid, run_id=rid, version=1, status='approved', plan=original, plan_hash=main.canonical_plan_hash(original)))
             await session.flush()
-            session.add(Approval(id=aid, run_id=rid, step_id=sid))
+            session.add(Approval(id=aid, run_id=rid, step_id=sid, preview={
+                'status': 'ready', 'operation': 'gmail.send',
+                'arguments': original['steps'][0]['arguments'],
+            }))
             session.add(ApprovalSnapshot(workspace_id=wid, run_id=rid, plan_version_id=vid, plan_hash=main.canonical_plan_hash(original), approver_subject='tester', approver_role='owner', policy_snapshot={}, permission_snapshot={'google':['gmail.send','gmail.get']}, risk_snapshot={}, cost_snapshot={}))
             await session.commit()
             result = await main.decide_approval(aid, ApprovalDecision(approved=True, edited_arguments=edited), SimpleNamespace(workspace_id=wid, subject='tester', role='owner'), session)
