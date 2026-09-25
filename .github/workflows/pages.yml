@@ -34,6 +34,9 @@ jobs:
         env:
           VITE_AURA_API_URL: https://impartial-emotion-production-49d4.up.railway.app
           VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
+          VITE_AURA_BUILD_SHA: ${{ github.sha }}
+      - name: Publish build version
+        run: printf '%s\n' "$GITHUB_SHA" > dist/version.txt
       - name: Disable Jekyll
         run: touch dist/.nojekyll
       - name: Configure Pages

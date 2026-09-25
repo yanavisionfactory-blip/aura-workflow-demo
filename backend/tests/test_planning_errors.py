@@ -401,7 +401,7 @@ def test_compiled_planner_repairs_a_read_only_plan_before_approval(monkeypatch) 
         set(), {"google": native_manifest("google")},
     ))
 
-    assert calls[0] == []
+    assert "gmail send" in calls[0][0]
     assert "gmail.send" in calls[1][0]
     assert [step.operation for step in plan.steps] == ["calendar.list", "gmail.send"]
     assert set(plan.planning_artifacts["compiled_contracts"]) == {"events", "send"}
@@ -428,6 +428,7 @@ def test_planner_cannot_recover_by_dropping_a_slack_delivery(monkeypatch) -> Non
         ))
 
     assert len(calls) == 2
+    assert "slack send" in calls[0][0]
     assert "slack.post" in calls[1][0]
 
 

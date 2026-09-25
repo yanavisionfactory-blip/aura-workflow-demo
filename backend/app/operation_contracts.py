@@ -528,6 +528,10 @@ def normalize_bound_email_inputs(plan) -> None:
             any(path.startswith(f"steps.{key}.") for key in identity_sources)
             for path in recipient_refs
         )
+        has_complete_preview = all(
+            isinstance(arguments.get(field), str) and arguments[field].strip()
+            for field in ("to", "subject", "body")
+        )
         remaining = []
         for tag in step.required_evidence:
             words = tag.casefold().replace("_", " ")
@@ -537,7 +541,10 @@ def normalize_bound_email_inputs(plan) -> None:
             recipient_input = ("receipt" not in words and "connected" in words and any(
                 token in words for token in ("email", "recipient", "gmail identity")
             ))
-            if (calendar_input and has_calendar_body) or (recipient_input and has_recipient):
+            preview_input = ("receipt" not in words and has_complete_preview
+                             and "recipient" in words and "subject" in words and "body" in words)
+            if ((calendar_input and has_calendar_body) or (recipient_input and has_recipient)
+                    or preview_input):
                 continue
             remaining.append(tag)
         step.required_evidence = remaining
@@ -548,9 +555,9 @@ def normalize_planner_evidence_roles(plan, manifests: dict) -> None:
 
     A model can put an argument name, a dependency reference, or an ordinary
     description of a read result in required_evidence. None is a connector
-    guarantee. Preserve provisional read descriptions in expected_output so
-    the runtime critic still checks the actual provider result; never weaken
-    a typed connector contract or a consequential operation.
+    guarantee. Preserve narrative read descriptions in expected_output so
+    the runtime critic still checks the actual provider result. Exact typed
+    evidence tags and consequential output claims remain strict.
     """
     from .workflow_context import REFERENCE, referenced_paths
 
@@ -582,14 +589,11 @@ def normalize_planner_evidence_roles(plan, manifests: dict) -> None:
             remaining.append(tag)
 
         if module.get("permission_scope") == "read" and remaining:
-            provisional = (reliability["output_validation"] == "provisional"
-                           and not reliability["provides"])
             descriptions = [
                 tag for tag in remaining
-                if " " in tag.strip() and (
-                    provisional
-                    or ("read access" in tag.casefold()
-                        and "result" in tag.casefold())
+                if " " in tag.strip() and not any(
+                    structural in tag.casefold().replace("_", " ")
+                    for structural in ("page body", "document body", "full content")
                 )
             ]
             # Structural tags remain compile-time failures. A successful
