@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { editJiraBatchTask, jiraBatchTasks, removeJiraBatchTask } from "../src/lib/jiraBatchReview.mjs";
-import { plannedApprovalStep, resolvedApprovalStep } from "../src/lib/approvalReview.mjs";
+import { plannedApprovalStep, requiresPreparedJiraReview, resolvedApprovalStep } from "../src/lib/approvalReview.mjs";
+import { jiraReceiptTasks } from "../src/lib/jiraReceipt.mjs";
+import { primaryResultFromOutputs, resultMetrics } from "../src/lib/resultPresentation.mjs";
 
 const block = (type, parts) => ({
   type,
@@ -52,4 +54,30 @@ test("batch Jira approval has its own preview before and after reading Notion", 
   }, "Jira");
   assert.equal(resolved.preview.type, "jira_batch");
   assert.deepEqual(jiraBatchTasks(resolved.resolvedArguments).map((task) => task.title), ["Send summary"]);
+});
+
+test("Jira batch waits for real Notion tasks before approving any write", () => {
+  assert.equal(requiresPreparedJiraReview([
+    { operation: "notion.search" }, { operation: "jira.issues.create_from_blocks" },
+  ]), true);
+  assert.equal(requiresPreparedJiraReview([{ operation: "jira.issue.get" }]), false);
+});
+
+test("saved Jira receipt shows actual task names and safe links during and after verification", () => {
+  const receipt = {
+    issues: [{ key: "AURA-21" }, { key: "AURA-22" }],
+    requested_summaries: ["Write brief", "Invite team"],
+    result_url: "https://example.atlassian.net/browse/AURA-21",
+  };
+  const tasks = jiraReceiptTasks(receipt);
+  assert.deepEqual(tasks.map((task) => task.title), ["Write brief", "Invite team"]);
+  assert.equal(tasks[1].url, "https://example.atlassian.net/browse/AURA-22");
+  const output = { step_key: "create_jira_tasks", operation: "jira.issues.create_from_blocks", provider_result: receipt };
+  const primary = primaryResultFromOutputs([output], {}, { primary_step_key: "create_jira_tasks" });
+  assert.equal(primary.kind, "jira_tasks");
+  assert.deepEqual(primary.tasks, tasks);
+  assert.deepEqual(resultMetrics([], [{ status: "completed", output }]), [
+    { value: "2", label: "Jira tasks created" },
+  ]);
+  assert.equal(jiraReceiptTasks({ ...receipt, result_url: "javascript:alert(1)" })[0].url, null);
 });

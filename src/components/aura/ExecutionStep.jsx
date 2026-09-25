@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Check, Loader2, Clock, AlertTriangle, ArrowRight } from "lucide-react";
+import { Check, Loader2, Clock, AlertTriangle, ArrowRight, ExternalLink } from "lucide-react";
 import { conjugateAction } from "@/lib/auraVerbs";
 
 const statusConfig = {
@@ -20,7 +20,7 @@ const statusConfig = {
     icon: Loader2,
     color: "text-accent",
     bg: "bg-accent/10 border-accent/20 glow-accent",
-    label: "Resolving automatically",
+    label: "Checking result",
     spin: true,
   },
   completed: {
@@ -103,10 +103,21 @@ export default function ExecutionStep({ step, index, isLast }) {
               </div>
               <p className="text-sm font-medium">{displayAction}</p>
               {step.liveOutput && (
-                <div className="mt-3 rounded-lg border border-white/5 bg-background/35 px-3 py-2 text-xs font-mono leading-relaxed text-muted-foreground">
-                  → {step.liveOutput}
+                <div className="mt-3 rounded-lg border border-white/5 bg-background/35 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+                  {step.liveOutput}
                 </div>
               )}
+              {step.jiraTasks?.length > 0 && <div className="mt-3 rounded-xl border border-white/10 bg-background/35 p-3">
+                <p className="mb-2 text-xs font-medium">Jira returned {step.jiraTasks.length} {step.jiraTasks.length === 1 ? "task" : "tasks"}</p>
+                <ul className="space-y-2">
+                  {step.jiraTasks.map((task) => <li key={task.key} className="flex items-start gap-2 text-xs">
+                    <span className="rounded bg-primary/15 px-1.5 py-0.5 font-medium text-primary">{task.key}</span>
+                    <span className="min-w-0 flex-1 break-words">{task.title}</span>
+                    {task.url && <a href={task.url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${task.key} in Jira`} className="text-primary hover:underline"><ExternalLink className="h-3.5 w-3.5" /></a>}
+                  </li>)}
+                </ul>
+                {step.status !== "completed" && <p className="mt-3 text-xs text-muted-foreground">AURA is checking these tasks in Jira.</p>}
+              </div>}
             </div>
           </div>
         </div>

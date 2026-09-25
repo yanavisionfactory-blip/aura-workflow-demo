@@ -329,6 +329,7 @@ async def test_api_recovery_tick_dispatches_due_schedules_without_separate_beat(
     monkeypatch.setattr(process_runtime, "dispatch_due_processes", no_processes)
     monkeypatch.setattr(scheduler_runtime, "dispatch_due_schedules", due)
     monkeypatch.setattr(scheduler_runtime, "recover_stale_runs", none)
+    monkeypatch.setattr(scheduler_runtime, "recover_recorded_jira_readbacks", none)
     monkeypatch.setattr(scheduler_runtime, "recover_waiting_runs", none)
     monkeypatch.setattr(scheduler_runtime, "recover_engineer_runs", none)
     monkeypatch.setattr(dispatch, "dispatch_pending", publish)

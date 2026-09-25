@@ -51,10 +51,12 @@ import { hasDurablePlan, planningRequestPrompt, restorablePlanningRun, sameExecu
 import { weatherStepTitle } from "@/lib/planPresentation.mjs";
 import { instantLanguagePlan, languageDraftPrompt } from "@/lib/languagePlan.mjs";
 import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
+import { jiraReceiptTasks } from "@/lib/jiraReceipt.mjs";
 import {
   editedArgumentsForStep,
   plannedApprovalStep,
   requiresActionPreview,
+  requiresPreparedJiraReview,
   resolvedApprovalStep,
 } from "@/lib/approvalReview.mjs";
 
@@ -163,6 +165,7 @@ const friendlyStepTitle = (step) => {
   if (operation === "jira.issues.search") return "Find Jira issues";
   if (operation === "jira.issue.get") return "Read the Jira issue";
   if (operation === "jira.issue.create") return "Create the Jira tasks";
+  if (operation === "jira.issues.create_from_blocks") return "Create the Jira tasks";
   if (operation === "jira.issue.update") return "Update the Jira task";
   if (/find|identify|determine|search|match/.test(reason)) return "Find matching records";
   if (/get|pull|fetch|read|collect/.test(reason)) return `Get ${tool} data`;
@@ -184,7 +187,8 @@ const uiPlanStepFromRun = (step) => {
     resolvedArguments: step.arguments || {},
     title: friendlyStepTitle(step),
     iWill: firstPersonStepCopy(step.reason),
-    action: cleanSentence(step.reason),
+    action: step.operation === "jira.issues.create_from_blocks"
+      ? "Create the Jira tasks" : cleanSentence(step.reason),
     detail: JSON.stringify(step.arguments, null, 2),
     reason: step.reason,
     output: step.expected_output,
@@ -193,7 +197,7 @@ const uiPlanStepFromRun = (step) => {
       { label: "Creates", value: step.expected_output },
     ],
     riskLevel: step.consequential ? "modify" : "read",
-    riskNote: step.consequential
+    riskNote: step.consequential && step.operation !== "jira.issues.create_from_blocks"
       ? "You'll review this exact action with every other external change before the workflow runs."
       : "",
   };
@@ -205,7 +209,7 @@ const uiPlanFromRun = (run) => ({
   interpretation: run.plan?.interpretation || run.prompt,
   estimatedTime: run.plan?.planning_artifacts?.timings_ms?.total
     ? `Planned in ${(run.plan.planning_artifacts.timings_ms.total / 1000).toFixed(1)}s`
-    : "Runs durably in the AURA control plane",
+    : "Ready to start",
   steps: (run.plan?.steps || []).map(uiPlanStepFromRun),
 });
 
@@ -773,7 +777,8 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               approvedStepsRef.current = compiledPlan.steps;
               setApprovedSteps(compiledPlan.steps);
               setWorkflowName(queuedStart.name || compiledPlan.workflowName || "");
-              if (requiresActionPreview(compiledPlan.steps, queuedStart.autoApprove)) {
+              if (requiresActionPreview(compiledPlan.steps, queuedStart.autoApprove)
+                && !requiresPreparedJiraReview(compiledPlan.steps)) {
                 preparedActionPreviewRef.current = false;
                 setPhase("preview");
                 return;
@@ -1146,7 +1151,7 @@ Rules:
       keepPlanInReview();
       return;
     }
-    if (requiresActionPreview(steps, autoApprove)) {
+    if (requiresActionPreview(steps, autoApprove) && !requiresPreparedJiraReview(steps)) {
       preparedActionPreviewRef.current = false;
       setPreviewError("");
       setPhase("preview");
@@ -1187,17 +1192,19 @@ Rules:
         started_at: step.started_at,
         completed_at: step.completed_at,
         liveOutput: preflightRetrying
-          ? `→ ${run.automation_state.message || "AURA is retrying a temporary preflight failure automatically"}`
+          ? "Checking your connections before continuing."
           : recoveryMessage
-          ? `→ ${recoveryMessage}`
+          ? recoveryMessage
           : step.error
-          ? `→ ${step.error}`
+          ? "AURA is checking this step."
           : step.status === "completed"
-            ? `→ ${planned?.output || "Completed successfully"}`
+            ? "Completed"
             : step.output?.provider_result
-              ? "→ Provider response recorded; step not yet completed."
+              ? "Checking what was created in the app."
               : "",
         output: step.output,
+        jiraTasks: step.operation === "jira.issues.create_from_blocks"
+          ? jiraReceiptTasks(step.output?.provider_result) : [],
       };
     });
     if (runtimeSteps.length || !run.automation_state) return runtimeSteps;
@@ -1384,7 +1391,7 @@ Rules:
           );
         }
       } else {
-        await approvePythonPlan(runId, reviewedPlan.steps);
+        await approvePythonPlan(runId, reviewedPlan.steps, !requiresPreparedJiraReview(reviewedPlan.steps));
       }
       for (;;) {
         const run = await getPythonRunResilient(runId, generation);

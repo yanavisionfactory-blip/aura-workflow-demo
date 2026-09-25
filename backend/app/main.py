@@ -5843,11 +5843,16 @@ async def approve_plan(
             approvals.append(approval)
         elif approval:
             approval.preview = {"status": "preparing"}
+    # Jira tasks depend on the Notion read. Never accept a blanket plan click as
+    # approval for task titles that do not yet exist in the review screen.
+    approve_consequential = payload.approve_consequential and not any(
+        step.operation == "jira.issues.create_from_blocks" for step in steps
+    )
     for approval in approvals:
         step = next(stored for stored in steps if stored.id == approval.step_id)
         if step.status == StepStatus.completed:
             continue
-        if payload.approve_consequential:
+        if approve_consequential:
             approval.status = "approved"
             approval.decided_by = context.subject
             approval.decided_at = datetime.now(UTC)
@@ -5878,7 +5883,7 @@ async def approve_plan(
                 "version": plan_version.version,
                 "plan_hash": plan_hash,
                 "policy_decision": policy_decision,
-                "approval_mode": ("combined" if payload.approve_consequential else "staged"),
+                "approval_mode": ("combined" if approve_consequential else "staged"),
                 "allow_autonomous_read_repairs": payload.allow_autonomous_read_repairs,
             },
         )

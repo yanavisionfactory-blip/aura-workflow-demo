@@ -259,12 +259,12 @@ function JiraBatchReview({ args, editing, onArgumentsChange }) {
         <input
           aria-label="Jira project"
           value={args.project_key || ""}
-          placeholder="Use my only Jira project"
+          placeholder="Use my Jira project"
           readOnly={!editing}
           onChange={(event) => onArgumentsChange({ ...args, project_key: event.target.value })}
           className="w-full rounded-lg border border-white/10 bg-card px-3 py-2 text-sm outline-none focus:border-primary"
         />
-        {!args.project_key && <p className="mt-2 text-xs text-muted-foreground">If you have more than one Jira project, enter the short project key before creating tasks.</p>}
+        {!args.project_key && <p className="mt-2 text-xs text-muted-foreground">AURA will choose your Jira project if there is only one.</p>}
       </div>
     </div>
   );
@@ -689,7 +689,7 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
               <Pencil className="h-3.5 w-3.5" /> {editing ? "Editing" : "Edit in AURA"}
             </button>
           </div>
-          {step.riskNote && <p className="mt-2 text-xs text-amber-200">{step.riskNote}</p>}
+          {step.riskNote && !richJiraBatch && <p className="mt-2 text-xs text-amber-200">{step.riskNote}</p>}
         </div>
       </div>
       <div className={richPresentation ? "border-t border-white/10" : "border-t border-white/10 p-5"}>
@@ -707,7 +707,7 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
                 onArgumentsChange={updateArguments}
               />
             )}
-            {!richPresentation && !richDocument && !richEmail && (
+            {!richPresentation && !richDocument && !richEmail && !richJiraBatch && (
               <SchemaArgumentsEditor
                 contract={contract}
                 args={args}
@@ -715,8 +715,7 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
                 onArgumentsChange={updateArguments}
                 onFieldValidity={fieldValidity}
                 excludeKeys={richTicket
-                    ? ["project_key", "projectKey", "project", "summary", "description", "assignee_id", "assignee"]
-                    : richJiraBatch ? ["source_blocks", "project_key", "project_query"] : []}
+                    ? ["project_key", "projectKey", "project", "summary", "description", "assignee_id", "assignee"] : []}
               />
             )}
           </>

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronLeft, ChevronRight, MailCheck, Presentation } from "lucide-react";
+import { ChevronLeft, ChevronRight, ExternalLink, MailCheck, Presentation } from "lucide-react";
 import BreakdownTable from "./BreakdownTable";
 
 const readableDetail = (value = "") => String(value)
@@ -73,6 +73,14 @@ function ThumbnailOnly({ result }) {
 }
 
 export default function ResultPreview({ result, results }) {
+  if (result.kind === "jira_tasks") return <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#0c1422]">
+    <div className="border-b border-white/10 px-5 py-4 text-sm font-semibold">Tasks created in Jira</div>
+    <div className="divide-y divide-white/10">{result.tasks.map((task) => <div key={task.key} className="flex items-center gap-3 px-5 py-4">
+      <span className="shrink-0 rounded-lg bg-primary/15 px-2 py-1 text-xs font-medium text-primary">{task.key}</span>
+      <span className="min-w-0 flex-1 break-words text-sm">{task.title}</span>
+      {task.url && <a href={task.url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${task.key} in Jira`} className="text-primary hover:underline"><ExternalLink className="h-4 w-4" /></a>}
+    </div>)}</div>
+  </div>;
   if (result.kind === "presentation") {
     return result.preview
       ? <PresentationPreview presentation={result.preview} thumbnailUrl={result.thumbnailUrl} />
