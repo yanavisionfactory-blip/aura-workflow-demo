@@ -935,6 +935,13 @@ class ProviderExecutor:
         params = {"maxResults": min(int(a.get("limit", 10)), 50), "q": a.get("query", "")}
         return await self._request("GET", "https://gmail.googleapis.com/gmail/v1/users/me/messages", params=params)
 
+    async def gmail_connected_address(self) -> str:
+        """Use the same Gmail account identity for review and final delivery."""
+        profile = await self._request(
+            "GET", "https://gmail.googleapis.com/gmail/v1/users/me/profile"
+        )
+        return str(profile.get("emailAddress") or "").strip()
+
     async def _gmail_send(self, a: dict) -> dict:
         from .approval_readiness import unfinished_action_content
 
@@ -942,10 +949,7 @@ class ProviderExecutor:
             raise ValueError("The email body is unfinished; prepare the actual message before sending")
         recipient = str(a.get("to") or "").strip()
         if not recipient or recipient.lower() in {"me", "myself", "self"}:
-            profile = await self._request(
-                "GET", "https://gmail.googleapis.com/gmail/v1/users/me/profile"
-            )
-            recipient = str(profile.get("emailAddress") or "").strip()
+            recipient = await self.gmail_connected_address()
         if not recipient:
             raise ValueError("gmail.send could not resolve the approved recipient")
         message = EmailMessage()

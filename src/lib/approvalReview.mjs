@@ -122,17 +122,27 @@ export const requiresActionPreview = (steps = [], autoApprove = false) => (
   !autoApprove && steps.some((step) => step?.riskLevel === "modify")
 );
 
-// The proposed Jira batch depends on Notion reads. Its first meaningful
-// approval screen is the one containing the actual task titles.
+const UNFINISHED_COPY = /\b(?:will be|to be) (?:generated|written|drafted|filled|summarized)\b|\bplaceholder\b|\btbd\b|\b(?:draft\s+(?:body|email|message|content)|(?:the|this|final)\s+(?:draft|email|message|body|summary|report)|(?:body|email|message|summary|report|recap))\s+(?:will|should|needs?\s+to|to)\s+(?:summari[sz]e|include|contain|cover|describe|provide|mention|be\s+(?:generated|written|composed|filled))\b/i;
+const UNRESOLVED_RECIPIENT = /^(?:me|myself|self|(?:(?:your|my|the)\s+)?connected\s+(?:gmail|email)\s+address|(?:the\s+)?recipient(?:'s)?\s+email(?:\s+address)?)$/i;
+
+export const unresolvedActionValues = (step = {}) => {
+  const args = step.resolvedArguments || step.arguments || {};
+  return JSON.stringify(args).includes("{{")
+    || (step.operation === "gmail.send" && (
+      !String(args.body || "").trim()
+      || UNRESOLVED_RECIPIENT.test(String(args.to || "").trim())
+    ))
+    || ["body", "content", "text", "message", "description"].some((field) => (
+      UNFINISHED_COPY.test(String(args[field] || ""))
+    ));
+};
+
 // Reads and earlier writes must finish before their dependent actions have
 // concrete arguments. Keep their exact approval for the execution boundary.
 export const requiresPreparedActionReview = (step = {}) => (
   step.operation === "jira.issues.create_from_blocks"
   || (step.depends_on || []).length > 0
-  || JSON.stringify(step.arguments || {}).includes("{{")
-  || ["body", "content", "text", "message", "description"].some((field) => (
-    /\b(?:will be|to be) (?:generated|written|drafted|filled|summarized)\b|\bplaceholder\b|\btbd\b/i.test(step.arguments?.[field] || "")
-  ))
+  || unresolvedActionValues(step)
 );
 
 export const requiresPreparedJiraReview = (steps = []) => steps.some(

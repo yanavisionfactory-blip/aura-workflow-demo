@@ -6,7 +6,7 @@ import { aura } from "@/api/auraClient";
 import { downloadEmailEml, safeName } from "@/lib/auraDownload";
 import { applyPresentationCopy, dynamicReferences, presentationCopySchema } from "@/lib/canvaCopyEdit.mjs";
 import { applyEmailCopy, emailCopySchema } from "@/lib/emailCopyEdit.mjs";
-import { fallbackReviewContract, mergeLegacyPreviewIntoArguments, requiresPreparedActionReview, setArgumentAtPath, validateReviewArguments } from "@/lib/approvalReview.mjs";
+import { fallbackReviewContract, mergeLegacyPreviewIntoArguments, requiresPreparedActionReview, setArgumentAtPath, unresolvedActionValues, validateReviewArguments } from "@/lib/approvalReview.mjs";
 import { editJiraBatchTask, jiraBatchTasks, removeJiraBatchTask } from "@/lib/jiraBatchReview.mjs";
 
 function EditableEmail({ preview, onPreviewChange, onCopyChange = null, editing, artifacts = [], args = { subject: "", body: "" }, contract = null }) {
@@ -764,7 +764,8 @@ export default function PreviewView({ preview, steps, prepared = false, onApprov
   const jiraTasksPending = reviewSteps.length === 1
     && reviewSteps[0].step.operation === "jira.issues.create_from_blocks"
     && !Array.isArray((reviewSteps[0].step.resolvedArguments || reviewSteps[0].step.arguments || {}).source_blocks);
-  const approvalBlocked = invalidFields.size > 0 || contractErrors.length > 0 || emptyJiraBatch;
+  const unfinishedReviews = reviewSteps.some(({ step }) => unresolvedActionValues(step));
+  const approvalBlocked = invalidFields.size > 0 || contractErrors.length > 0 || emptyJiraBatch || unfinishedReviews;
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -829,6 +830,8 @@ export default function PreviewView({ preview, steps, prepared = false, onApprov
           Complete the highlighted approval values before running. {contractErrors[0].message}
         </div>
       )}
+
+      {unfinishedReviews && <p className="mb-4 text-xs text-amber-200">AURA is preparing the exact action values. This draft cannot be approved yet.</p>}
 
       {emptyJiraBatch && <p className="mb-4 text-xs text-amber-200">There are no Jira tasks to create. Return to the plan and choose notes with action items.</p>}
 
