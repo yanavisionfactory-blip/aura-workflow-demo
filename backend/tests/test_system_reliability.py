@@ -35,7 +35,12 @@ from app.reliability import (
     classify_failure,
     model_budget,
 )
-from app.request_contracts import requested_external_operations, validate_requested_operations
+from app.request_contracts import (
+    missing_requested_operations,
+    requested_effects,
+    requested_external_operations,
+    validate_requested_operations,
+)
 from app.schemas import PlanStep, WorkflowPlan
 
 
@@ -266,6 +271,7 @@ def test_planner_input_names_and_bound_references_are_not_output_guarantees():
     ("Send today's meeting summary to me via Gmail", {"gmail.send"}),
     ("Email me the calendar summary", {"gmail.send"}),
     ("Use Gmail to send the email", {"gmail.send"}),
+    ("Do not send the draft. Email me the final summary", {"gmail.send"}),
     ("Draft an email for me to review, but do not send it", set()),
     ("Summarize emails and send a Slack message", set()),
 ])
@@ -294,6 +300,87 @@ def test_read_only_calendar_plan_cannot_erase_requested_email_delivery():
         "Send today's meeting summary to me via Gmail", read_only,
         {"calendar.list", "gmail.list", "gmail.send"},
     )
+
+
+@pytest.mark.parametrize("prompt_text,effect", [
+    ("Send today's meeting summary to me via Gmail", "gmail send"),
+    ("Summarize emails and send a Slack message", "slack send"),
+    ("Use Slack to post the summary", "slack send"),
+    ("Schedule an event in Google Calendar", "calendar create"),
+    ("Create a Jira issue", "jira create"),
+    ("Create a Google Doc", "docs create"),
+    ("Create a report from Jira issues", None),
+    ("Read Slack messages and summarize them", None),
+    ("Draft an email but do not send it", None),
+])
+def test_explicit_provider_effects_survive_replanning_across_apps(prompt_text, effect):
+    slugs = ("google", "slack", "jira")
+    inventory = [
+        {"slug": slug, "name": {"google": "Google Workspace", "slack": "Slack",
+                                "jira": "Jira"}[slug],
+         "allowed_operations": [m["name"] for m in native_manifest(slug)["capabilities"]]}
+        for slug in slugs
+    ]
+    effects = requested_effects(prompt_text, inventory, {
+        slug: native_manifest(slug) for slug in slugs
+    })
+    assert [item["effect"] for item in effects] == ([effect] if effect else [])
+
+
+def test_a_required_effect_needs_a_nonoptional_step_and_an_accepted_receipt():
+    inventory = [{"slug": "slack", "name": "Slack", "allowed_operations": [
+        "slack.channels.list", "slack.post",
+    ]}]
+    manifests = {"slack": native_manifest("slack")}
+    prompt = "Send a Slack message"
+    plan = WorkflowPlan(name="Notify", interpretation=prompt, steps=[
+        PlanStep(key="channels", agent="reader", tool_slug="slack",
+                 operation="slack.channels.list", reason="List channels",
+                 expected_output="Channels"),
+    ])
+    with pytest.raises(ValueError, match="slack.post"):
+        validate_requested_operations(prompt, plan, set(inventory[0]["allowed_operations"]),
+                                      inventory, manifests)
+    plan.steps.append(PlanStep(
+        key="notify", agent="sender", tool_slug="slack", operation="slack.post",
+        reason="Post the message", expected_output="Post receipt", optional=True,
+    ))
+    with pytest.raises(ValueError, match="required approved operation"):
+        validate_requested_operations(prompt, plan, set(inventory[0]["allowed_operations"]),
+                                      inventory, manifests)
+    plan.steps[-1].optional = False
+    effects = validate_requested_operations(prompt, plan, set(inventory[0]["allowed_operations"]),
+                                            inventory, manifests)
+    assert not missing_requested_operations(prompt, {"slack.post"}, effects, [{
+        "tool": "slack", "operation": "slack.post",
+    }])
+    assert missing_requested_operations(prompt, {"slack.channels.list"}, effects, [{
+        "tool": "slack", "operation": "slack.channels.list",
+    }]) == {"slack send"}
+
+
+def test_dynamic_sender_can_fulfill_a_provider_effect_without_native_route():
+    inventory = [
+        {"slug": "google", "name": "Google Workspace", "allowed_operations": ["gmail.send"]},
+        {"slug": "pipedream-gmail", "name": "Gmail", "allowed_operations": ["send-email"]},
+    ]
+    manifests = {
+        "google": native_manifest("google"),
+        "pipedream-gmail": {"capabilities": [{
+            "name": "send-email", "permission_scope": "write", "description": "Send an email",
+        }]},
+    }
+    prompt = "Send this message via Gmail"
+    plan = WorkflowPlan(name="Email", interpretation=prompt, steps=[
+        PlanStep(key="mail", agent="sender", tool_slug="pipedream-gmail",
+                 operation="send-email", reason="Send message", expected_output="Receipt"),
+    ])
+    effects = validate_requested_operations(prompt, plan, {"gmail.send", "send-email"},
+                                            inventory, manifests)
+    assert len(effects) == 1
+    assert {target["operation"] for target in effects[0]["targets"]} == {
+        "gmail.send", "send-email",
+    }
 
 
 def test_invalid_output_reference_rejected_but_metadata_alias_compiles():

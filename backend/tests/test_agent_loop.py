@@ -133,6 +133,25 @@ async def test_read_receipts_cannot_verify_an_unsent_email(monkeypatch):
     assert "gmail.send" in result.required_fixes[0]
 
 
+async def test_read_receipts_cannot_verify_an_omitted_slack_post(monkeypatch):
+    async def should_not_run(*args, **kwargs):
+        raise AssertionError("Missing provider action must fail before model verification")
+
+    monkeypatch.setattr(agent_runtime, "_run", should_not_run)
+    result = await verify_outcome(
+        "Send a Slack message",
+        {"planning_artifacts": {"required_effects": [{
+            "effect": "slack send", "targets": [{
+                "tool_slug": "slack", "operation": "slack.post",
+            }],
+        }]}},
+        [{"step_id": "channels", "tool": "slack", "operation": "slack.channels.list",
+          "critic": {"action": "accept"}}],
+    )
+    assert result.status == "unverified"
+    assert "slack send" in result.required_fixes[0]
+
+
 @pytest.mark.parametrize(
     "workspace,subject,verified",
     [("other", "alice", True), ("w", "bob", True), ("w", "alice", False)],

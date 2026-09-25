@@ -766,6 +766,7 @@ async def _create_compiled_plan(
     available_operations = {
         op for item in inventory for op in item.get("allowed_operations", [])
     }
+    catalog_inventory = inventory
     from .workflow_templates import (
         creator_outreach_template,
         mailchimp_canva_pilot_template,
@@ -792,6 +793,7 @@ async def _create_compiled_plan(
 
         validate_requested_operations(
             request_prompt or prompt, audited_plan, available_operations,
+            catalog_inventory, manifests_by_slug,
         )
         audited_plan.planning_artifacts["compiled_contracts"] = compile_contracts(
             audited_plan, manifests_by_slug
@@ -849,6 +851,7 @@ async def _create_compiled_plan(
 
             validate_requested_operations(
                 request_prompt or prompt, plan, available_operations,
+                catalog_inventory, manifests_by_slug,
             )
             plan.planning_artifacts["compiled_contracts"] = compile_contracts(
                 plan, manifests_by_slug
@@ -1392,6 +1395,10 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                     validate_requested_operations(
                         run.prompt, plan,
                         {op for item in inventory for op in item.get("allowed_operations", [])},
+                        inventory,
+                        {item["slug"]: _current_capability_manifest(
+                            item["slug"], manifests_by_slug.get(item["slug"])
+                        ) for item in inventory},
                     )
                 except ValueError:
                     plan = None  # A historical read-only draft cannot satisfy a new delivery.

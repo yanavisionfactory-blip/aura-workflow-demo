@@ -407,6 +407,30 @@ def test_compiled_planner_repairs_a_read_only_plan_before_approval(monkeypatch) 
     assert set(plan.planning_artifacts["compiled_contracts"]) == {"events", "send"}
 
 
+def test_planner_cannot_recover_by_dropping_a_slack_delivery(monkeypatch) -> None:
+    calls = []
+
+    async def fake_create_plan(*_args, **kwargs):
+        calls.append(kwargs.get("planner_repair_requirements"))
+        return WorkflowPlan(name="Notice", interpretation="Send Slack notice", steps=[
+            PlanStep(key="channels", agent="reader", tool_slug="slack",
+                     operation="slack.channels.list", reason="Read channels",
+                     expected_output="Channels"),
+        ])
+
+    monkeypatch.setattr(orchestrator, "create_plan", fake_create_plan)
+    with pytest.raises(ValueError, match="slack.post"):
+        asyncio.run(orchestrator._create_compiled_plan(
+            "Send a Slack message",
+            [{"slug": "slack", "name": "Slack", "allowed_operations": [
+                "slack.channels.list", "slack.post"]}],
+            set(), {"slack": native_manifest("slack")},
+        ))
+
+    assert len(calls) == 2
+    assert "slack.post" in calls[1][0]
+
+
 def test_planner_inventory_preserves_operation_semantics(monkeypatch) -> None:
     captured = {}
     plan = SimpleNamespace(steps=[], planning_artifacts={})
