@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import select
 
 from app import internal_diagnostics, main, outcome_runtime, scheduler_runtime
@@ -165,7 +166,8 @@ async def test_full_jira_batch_reads_all_saved_issues_without_a_second_write(mon
     assert {operation for operation, _ in calls} == {"jira.issue.get"}
 
 
-async def test_scheduler_resumes_only_saved_budget_rejection_and_never_reposts(database, monkeypatch):
+@pytest.mark.parametrize("recorded_status", [StepStatus.failed, StepStatus.running, StepStatus.pending])
+async def test_scheduler_resumes_only_saved_budget_rejection_and_never_reposts(database, monkeypatch, recorded_status):
     monkeypatch.setattr(scheduler_runtime, "SessionLocal", database)
 
     async def workspaces():
@@ -186,7 +188,7 @@ async def test_scheduler_resumes_only_saved_budget_rejection_and_never_reposts(d
         session.add(RunStep(
             id="jira-step", run_id="saved", position=0, step_key="jira",
             agent="jira", tool_slug="jira", operation="jira.issues.create_from_blocks",
-            arguments={}, status=StepStatus.failed, consequential=True, idempotency_key="jira-once",
+            arguments={}, status=recorded_status, consequential=True, idempotency_key="jira-once",
             output={"provider_result": {"issues": [{"key": "AURA-1"}]},
                     "outcome_check": {"status": "unverified", "reasons": ["Read-back resource budget exceeded"]}},
         ))

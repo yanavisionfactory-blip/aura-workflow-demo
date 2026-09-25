@@ -41,8 +41,13 @@ async def log_recent_stops() -> None:
                         continue
                     tool = await session.scalar(select(ToolConnection).where(ToolConnection.workspace_id == wid, ToolConnection.slug == step.tool_slug))
                     reads = required_reads(step.operation, step.arguments)
+                    output = step.output if isinstance(step.output, dict) else {}
+                    check = output.get('outcome_check') if isinstance(output.get('outcome_check'), dict) else {}
                     logger.warning('WORKFLOW_STOP %s', json.dumps({'run_id':run.id, 'step_id':step.id, 'operation':step.operation,
-                        'status':run.status.value, 'event':audit.event_type if audit else None,
+                        'status':run.status.value, 'step_status':step.status.value,
+                        'has_saved_receipt':'provider_result' in output,
+                        'readback_budget_hit':'Read-back resource budget exceeded' in (check.get('reasons') or []),
+                        'event':audit.event_type if audit else None,
                         'category':failure_category(audit.payload or {}) if audit else None,
                         'missing_connection_reads':sorted(reads-set(tool.allowed_operations if tool else [])),
                         'missing_approved_reads':sorted(reads-set((snapshot.permission_snapshot if snapshot else {}).get(step.tool_slug, [])))}, separators=(',', ':')))
