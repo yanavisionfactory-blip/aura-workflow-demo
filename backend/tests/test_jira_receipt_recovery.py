@@ -20,6 +20,7 @@ from app.models import (
 )
 from app.native_connectors import native_manifest, native_operations
 from app.policy import canonical_plan_hash
+from app.run_supervisor import transition_run
 from app.schemas import PlanApproval
 from app.workflow_templates import notion_to_jira_template
 
@@ -167,7 +168,10 @@ async def test_full_jira_batch_reads_all_saved_issues_without_a_second_write(mon
 
 
 @pytest.mark.parametrize("recorded_status", [StepStatus.failed, StepStatus.running, StepStatus.pending])
-async def test_scheduler_resumes_only_saved_budget_rejection_and_never_reposts(database, monkeypatch, recorded_status):
+@pytest.mark.parametrize("check_reason", ["Read-back resource budget exceeded", "Previous check was inconclusive"])
+async def test_scheduler_resumes_saved_receipt_once_and_never_reposts(
+    database, monkeypatch, recorded_status, check_reason
+):
     monkeypatch.setattr(scheduler_runtime, "SessionLocal", database)
 
     async def workspaces():
@@ -190,7 +194,7 @@ async def test_scheduler_resumes_only_saved_budget_rejection_and_never_reposts(d
             agent="jira", tool_slug="jira", operation="jira.issues.create_from_blocks",
             arguments={}, status=recorded_status, consequential=True, idempotency_key="jira-once",
             output={"provider_result": {"issues": [{"key": "AURA-1"}]},
-                    "outcome_check": {"status": "unverified", "reasons": ["Read-back resource budget exceeded"]}},
+                    "outcome_check": {"status": "unverified", "reasons": [check_reason]}},
         ))
         await session.commit()
 
@@ -201,6 +205,14 @@ async def test_scheduler_resumes_only_saved_budget_rejection_and_never_reposts(d
         step = await session.get(RunStep, "jira-step")
         intents = (await session.scalars(select(DispatchIntent).where(DispatchIntent.run_id == "saved"))).all()
         assert run.status == RunStatus.recovering
+        assert run.execution_context["__aura_saved_jira_receipt_reviews"] == ["jira-step"]
         assert step.output["provider_result"]["issues"][0]["key"] == "AURA-1"
         assert step.status == StepStatus.running
         assert len(intents) == 1 and intents[0].kind == "execute"
+        transition_run(
+            run, RunStatus.waiting_for_action,
+            reason="test_inconclusive_readback", actor="test", dispatch=None,
+        )
+        step.status = StepStatus.failed
+        await session.commit()
+    assert await scheduler_runtime.recover_recorded_jira_readbacks() == []

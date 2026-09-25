@@ -743,11 +743,7 @@ async def recover_engineer_runs() -> list[tuple[str, str, str]]:
 
 
 async def recover_recorded_jira_readbacks() -> list[tuple[str, str]]:
-    """After a corrected verifier deploy, revisit saved Jira receipts via reads only.
-
-    This deliberately targets the old 12-item budget error; no Jira POST is
-    retried, and a later unrelated verification failure won't spin forever.
-    """
+    """Revisit paused Jira receipts once, using provider reads without a new write."""
     resumed: list[tuple[str, str]] = []
     for workspace_id in await _workspace_ids():
         async with SessionLocal() as session:
@@ -786,14 +782,16 @@ async def recover_recorded_jira_readbacks() -> list[tuple[str, str]]:
                             ),
                         )
                     )
-                    outcome = (step.output or {}).get("outcome_check", {}) if step else {}
+                    prior_reviews = (run.execution_context or {}).get(
+                        "__aura_saved_jira_receipt_reviews", []
+                    ) if run else []
                     if (
                         not run or not step or run.cancellation_requested
                         or run.status not in {
                             RunStatus.waiting_for_action, RunStatus.failed, RunStatus.blocked
                         }
                         or "provider_result" not in (step.output or {})
-                        or "Read-back resource budget exceeded" not in outcome.get("reasons", [])
+                        or step.id in prior_reviews
                     ):
                         continue
                     # The saved provider receipt makes this a read-only review.
@@ -801,6 +799,10 @@ async def recover_recorded_jira_readbacks() -> list[tuple[str, str]]:
                     # failure flag as a reason to pause the reconciliation again.
                     step.status = StepStatus.running
                     step.error = None
+                    run.execution_context = {
+                        **(run.execution_context or {}),
+                        "__aura_saved_jira_receipt_reviews": [*prior_reviews, step.id],
+                    }
                     transition_run(
                         run,
                         RunStatus.recovering,
