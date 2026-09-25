@@ -266,8 +266,14 @@ def build_agents() -> dict[str, Agent]:
             valid for plan review. Select only listed operations. Every step needs concrete inputs,
             an output contract, a stable lowercase key, and explicit dependencies.
             Use operation_contracts as authoritative input/output and evidence guarantees.
-            Declare required_evidence tags for content needed by each step; an operation
-            must provide those tags. Add dependent content reads when metadata is insufficient. Reads are normally
+            Declare required_evidence only as exact output guarantee tags in that
+            operation's reliability.provides list. Do not put inputs, upstream content,
+            recipients, dates, or descriptions in required_evidence. For provisional
+            connectors with no provides list, leave required_evidence empty and use
+            explicit dependencies and result references instead. Add dependent content reads
+            when metadata is insufficient. When two connected operations can fulfill the
+            same request, prefer the one with a typed output contract and a declared
+            provides list. Reads are normally
             not consequential. Sending, creating, updating, deleting, posting, scheduling, or
             purchasing is consequential. Use {{inputs.name}}, {{vars.name}}, or
             {{steps.key.field}} for reusable values. Plan only real external tool calls. Do not create
@@ -392,7 +398,9 @@ def build_agents() -> dict[str, Agent]:
             as a serialized JSON object matching the selected operation's input schema.
             Ground values in the request and prior step outputs. Use {{steps.key.field}}
             references for dependent values; never invent opaque IDs or recipients.
-            Mark writes consequential and declare dependencies and required evidence.
+            Mark writes consequential and declare dependencies. Required evidence
+            names must match the selected operation's output reliability.provides;
+            never use the field for input descriptions or upstream content.
             Do not send, schedule, or write unless the user requested that action.
             For story creation, supply finished prose in the document body before review;
             a placeholder or drafting instruction is not a story.

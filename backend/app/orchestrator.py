@@ -538,6 +538,9 @@ def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict]) -> None:
             planned_step.reduced_scope_arguments = _required_read_arguments(
                 manifest, planned_step.operation, planned_step.arguments
             )
+    from .operation_contracts import normalize_bound_email_inputs
+
+    normalize_bound_email_inputs(plan)
 
 
 def _include_requested_story_in_email(plan, prompt: str) -> None:
