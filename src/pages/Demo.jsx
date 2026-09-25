@@ -48,7 +48,7 @@ import {
   shouldStartFreshPlanningRun,
   unavailablePlanningState,
 } from "@/lib/planningFlow.mjs";
-import { hasDurablePlan, planningRequestPrompt, restorablePlanningRun, sameExecutablePlan } from "@/lib/runtimePlan.mjs";
+import { hasDurablePlan, planningRequestPrompt, savedRunResumeView, sameExecutablePlan } from "@/lib/runtimePlan.mjs";
 import { weatherStepTitle } from "@/lib/planPresentation.mjs";
 import { instantLanguagePlan } from "@/lib/languagePlan.mjs";
 import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
@@ -377,10 +377,12 @@ export default function Demo() {
     if (!remembered) return undefined;
     let mounted = true;
     getPythonRun(remembered).then((run) => {
-      if (!mounted || originalPromptRef.current || !restorablePlanningRun(run)) return;
+      if (!mounted || originalPromptRef.current) return;
+      const resumeView = savedRunResumeView(run);
+      if (!resumeView) return;
       const intent = String(run.prompt || run.plan?.interpretation || "")
         .split("\n\nThe user reviewed the proposed workflow and requested this change:")[0];
-      const waiting = run.status === "waiting_for_action";
+      const waiting = resumeView === "plan" && run.status === "waiting_for_action";
       const restored = waiting
         ? { ...uiConnectionPlanFromRun(run, intent), provisional: !run.plan?.steps?.length,
           compileState: "waiting_for_connection" }
@@ -392,6 +394,28 @@ export default function Demo() {
       setOriginalPrompt(intent);
       setInterpretation(restored.interpretation);
       setPlan(restored);
+      if (resumeView === "preview") {
+        const preparedSteps = restored.steps.map((step, index) =>
+          resolvedApprovalStep(step, run.steps?.[index], planToolName(run.steps?.[index] || step))
+        );
+        approvedStepsRef.current = preparedSteps;
+        setApprovedSteps(preparedSteps);
+        preparedActionPreviewRef.current = true;
+        setPhase("preview");
+        return;
+      }
+      if (resumeView === "recovery") {
+        showRunRecovery(run);
+        return;
+      }
+      if (resumeView === "execution") {
+        approvedStepsRef.current = restored.steps;
+        setApprovedSteps(restored.steps);
+        // The saved run is already dispatched. Observe its outcome without
+        // approving the plan or replaying a consequential connector action.
+        void startPythonExecutionRef.current?.(null, false, true);
+        return;
+      }
       setPhase("plan");
     }).catch(() => {
       // A failed status read must never manufacture an executable plan.
