@@ -742,6 +742,73 @@ async def recover_engineer_runs() -> list[tuple[str, str, str]]:
     return recovered
 
 
+async def recover_recorded_jira_readbacks() -> list[tuple[str, str]]:
+    """After a corrected verifier deploy, revisit saved Jira receipts via reads only.
+
+    This deliberately targets the old 12-item budget error; no Jira POST is
+    retried, and a later unrelated verification failure won't spin forever.
+    """
+    resumed: list[tuple[str, str]] = []
+    for workspace_id in await _workspace_ids():
+        async with SessionLocal() as session:
+            await set_tenant_context(session, workspace_id)
+            ids = (await session.scalars(
+                select(WorkflowRun.id)
+                .join(RunStep, RunStep.run_id == WorkflowRun.id)
+                .where(
+                    WorkflowRun.workspace_id == workspace_id,
+                    WorkflowRun.plan_approved.is_(True),
+                    WorkflowRun.cancellation_requested.is_(False),
+                    WorkflowRun.status.in_(
+                        [RunStatus.waiting_for_action, RunStatus.failed, RunStatus.blocked]
+                    ),
+                    RunStep.operation == "jira.issues.create_from_blocks",
+                    RunStep.status == StepStatus.failed,
+                )
+                .order_by(WorkflowRun.updated_at.desc())
+                .limit(50)
+            )).all()
+        for run_id in ids:
+            async with execution_lock(engine, workspace_id, run_id) as acquired:
+                if not acquired:
+                    continue
+                async with SessionLocal() as session:
+                    await set_tenant_context(session, workspace_id)
+                    run = await session.get(WorkflowRun, run_id)
+                    step = await session.scalar(
+                        select(RunStep).where(
+                            RunStep.run_id == run_id,
+                            RunStep.operation == "jira.issues.create_from_blocks",
+                            RunStep.status == StepStatus.failed,
+                        )
+                    )
+                    outcome = (step.output or {}).get("outcome_check", {}) if step else {}
+                    if (
+                        not run or not step or run.cancellation_requested
+                        or run.status not in {
+                            RunStatus.waiting_for_action, RunStatus.failed, RunStatus.blocked
+                        }
+                        or "provider_result" not in (step.output or {})
+                        or "Read-back resource budget exceeded" not in outcome.get("reasons", [])
+                    ):
+                        continue
+                    transition_run(
+                        run,
+                        RunStatus.recovering,
+                        reason="jira_saved_receipt_readback_restored",
+                        actor="outcome-checker",
+                        phase="verification",
+                        supervisor_status="recovering",
+                        error=None,
+                        blocker=None,
+                        dispatch="execute",
+                        metadata={"step_id": step.id},
+                    )
+                    await session.commit()
+                    resumed.append((run_id, workspace_id))
+    return resumed
+
+
 async def recover_waiting_runs() -> list[tuple[str, str, str]]:
     """Wake approved paused runs that need the autonomous delivery supervisor.
 

@@ -1,4 +1,5 @@
 """Provider-specific outcome evidence, including compound and asynchronous writes."""
+import asyncio
 import hashlib
 from dataclasses import replace
 
@@ -190,6 +191,15 @@ def evaluate_extended(check, observed):
 async def observe_check(executor, check):
     """All calls here are read operations. Caller supplies shared time/request budgets."""
     if check.kind == "compound":
+        if check.checks and all(child.operation == "jira.issue.get" for child in check.checks):
+            # Bound fan-out while preserving the receipt order for exact comparisons.
+            limit = asyncio.Semaphore(4)
+
+            async def read(child):
+                async with limit:
+                    return await observe_check(executor, child)
+
+            return {"checks": await asyncio.gather(*(read(child) for child in check.checks))}
         return {"checks": [await observe_check(executor, child) for child in check.checks]}
     return await executor.execute(check.operation, check.arguments)
 

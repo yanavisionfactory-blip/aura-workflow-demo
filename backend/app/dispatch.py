@@ -139,6 +139,7 @@ async def recovery_tick() -> dict:
         dispatch_due_schedules,
         recover_engineer_runs,
         recover_stale_runs,
+        recover_recorded_jira_readbacks,
         recover_waiting_runs,
     )
 
@@ -158,6 +159,10 @@ async def recovery_tick() -> dict:
         # Never make normal outbox delivery wait behind optional model-assisted recovery.
         _mark_scheduler_progress("dispatch_after_stale")
         published += await dispatch_pending()
+        _mark_scheduler_progress("saved_jira_receipts")
+        restored = await recover_recorded_jira_readbacks()
+        if restored:
+            published += await dispatch_pending()
         _mark_scheduler_progress("autonomous_recovery")
         supervised = await recover_waiting_runs()
         _mark_scheduler_progress("dispatch_after_autonomous")
@@ -171,6 +176,7 @@ async def recovery_tick() -> dict:
             "processes": processes,
             "scheduled": len(scheduled),
             "recovered": len(recovered),
+            "restored": len(restored),
             "supervised": len(supervised),
             "engineered": len(engineered),
             "published": published,

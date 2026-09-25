@@ -63,8 +63,10 @@ async def _check_provider_outcome(session, run, step, snapshot) -> dict:
         )
     )
     from .extended_outcomes import leaves, observe_check
-    required = {leaf.operation for leaf in leaves(check)}
-    if len(leaves(check)) > 12:
+    readbacks = leaves(check)
+    required = {leaf.operation for leaf in readbacks}
+    limit = 20 if step.operation == "jira.issues.create_from_blocks" else 12
+    if len(readbacks) > limit:
         return {"status": "unverified", "reasons": ["Read-back resource budget exceeded"]}
     approved = snapshot.permission_snapshot.get(step.tool_slug, [])
     if (
@@ -137,7 +139,8 @@ async def _check_provider_outcome(session, run, step, snapshot) -> dict:
                 ),
             )
             observed = await asyncio.wait_for(
-                observe_check(executor, check), timeout=20
+                observe_check(executor, check),
+                timeout=40 if step.operation == "jira.issues.create_from_blocks" else 20,
             )
             result = {
                 **evaluate_outcome_check(check, observed),

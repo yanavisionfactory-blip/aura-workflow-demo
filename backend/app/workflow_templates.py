@@ -203,10 +203,7 @@ def notion_to_jira_template(
                         "issue_type": "Task",
                         "max_issues": 20,
                     },
-                    "reason": (
-                        "Convert the retrieved action-item blocks into one bounded Jira bulk "
-                        "request after approval."
-                    ),
+                    "reason": "Create the Jira tasks you reviewed from your Notion notes.",
                     "expected_output": "A verified receipt for every Jira task created.",
                     "consequential": True,
                     "depends_on": ["read_research_notes"],

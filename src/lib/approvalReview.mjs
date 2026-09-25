@@ -122,6 +122,12 @@ export const requiresActionPreview = (steps = [], autoApprove = false) => (
   !autoApprove && steps.some((step) => step?.riskLevel === "modify")
 );
 
+// The proposed Jira batch depends on Notion reads. Its first meaningful
+// approval screen is the one containing the actual task titles.
+export const requiresPreparedJiraReview = (steps = []) => steps.some(
+  (step) => step?.operation === "jira.issues.create_from_blocks",
+);
+
 export const resolvedApprovalStep = (planned, runtime, toolName = "App") => {
   if (!runtime?.consequential) {
     if (runtime?.operation === "canva.export.create") {

@@ -38,7 +38,9 @@ export default function ExecutionView({ steps, currentStepIndex, isReal, onCance
           </div>
           <div>
             <h2 className="text-lg font-semibold">
-              {failed ? "Workflow paused" : recovering ? "AURA is resolving a step" : "Running your workflow"}
+              {failed ? "Workflow paused" : recovering
+                ? steps.some((step) => step.jiraTasks?.length) ? "Checking your Jira tasks" : "Checking your results"
+                : "Running your workflow"}
             </h2>
             <p className="text-xs text-muted-foreground">
               {stepCount

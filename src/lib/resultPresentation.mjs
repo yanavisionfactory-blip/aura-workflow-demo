@@ -1,3 +1,5 @@
+import { jiraReceiptTasks } from "./jiraReceipt.mjs";
+
 const PROVIDERS = [
   "Canva",
   "Google Sheets",
@@ -101,7 +103,12 @@ export function resultMetrics(metrics = [], activity = []) {
   const audiences = outputs.find((output) => output.operation === "mailchimp.audiences.list");
   const email = outputs.find((output) => output.operation === "gmail.send");
   const document = outputs.find((output) => output.operation === "docs.create");
+  const jiraBatch = outputs.find((output) => output.operation === "jira.issues.create_from_blocks");
   const result = [];
+  if (jiraBatch) {
+    const count = jiraReceiptTasks(jiraBatch.provider_result).length;
+    if (count) result.push({ value: String(count), label: count === 1 ? "Jira task created" : "Jira tasks created" });
+  }
   if (email) result.push({ value: "1", label: "email sent" });
   if (document) result.push({ value: "1", label: "document created" });
   if (canva) {
@@ -365,6 +372,24 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
     };
   }
 
+  const jiraPrimary = explicitPrimary?.operation === "jira.issues.create_from_blocks"
+    ? explicitPrimary
+    : !explicitPrimary ? [...completed].reverse().find((output) => output.operation === "jira.issues.create_from_blocks") : null;
+  if (jiraPrimary) {
+    const tasks = jiraReceiptTasks(jiraPrimary.provider_result || {});
+    return {
+      title: "Jira tasks created",
+      completionTitle: "Jira tasks created",
+      completionSummary: `${tasks.length} ${tasks.length === 1 ? "task" : "tasks"} created from your Notion notes.`,
+      detail: "Your tasks are ready in Jira.",
+      provider: "Jira",
+      providerVerb: "Created in",
+      kind: "jira_tasks",
+      tasks,
+      link: tasks[0]?.url || null,
+      linkLabel: "Open in Jira",
+    };
+  }
   if (artifact && (!explicitPrimary || explicitPrimary.operation === "canva.presentation.create")) {
     return {
       ...artifact,
