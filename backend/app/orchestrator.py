@@ -2450,6 +2450,30 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     await session.commit()
                     return
 
+            if step.consequential and step.status == StepStatus.pending:
+                # Runs approved by an older client can still carry a plan-only
+                # approval with no completed action preview. Prepare it here
+                # instead of letting the dispatch guard strand the saved run.
+                previous = (
+                    await session.get(Approval, step.approval_id)
+                    if step.approval_id else await session.scalar(
+                        select(Approval).where(Approval.step_id == step.id)
+                    )
+                )
+                if not _approved_action_matches(
+                    step, previous, step.tool_slug, step.operation, resolved_arguments
+                ):
+                    if previous is None:
+                        previous = Approval(run_id=run.id, step_id=step.id)
+                        session.add(previous)
+                        await session.flush()
+                    previous.status = "pending"
+                    previous.decided_by = None
+                    previous.decided_at = None
+                    previous.preview = {"status": "preparing"}
+                    step.approval_id = previous.id
+                    step.status = StepStatus.awaiting_approval
+
             if step.status == StepStatus.awaiting_approval:
                 approval = await session.get(Approval, step.approval_id)
                 if not approval or approval.status != "pending":

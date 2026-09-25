@@ -440,6 +440,27 @@ async def test_execution_agent_cannot_change_a_reviewed_write(runtime, monkeypat
         assert (await session.scalars(select(StepAttempt))).all() == []
 
 
+async def test_older_plan_only_approval_is_prepared_for_final_review(runtime, monkeypatch):
+    async with runtime() as session:
+        approval = await session.get(Approval, "approval")
+        approval.preview = {"status": "preparing"}
+        await session.commit()
+
+    async def forbidden(*_args, **_kwargs):
+        pytest.fail("The legacy plan approval reached the provider")
+
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", forbidden)
+    await orchestrator._execute_run("run", "w")
+    async with runtime() as session:
+        step = await session.get(RunStep, "step")
+        approval = await session.get(Approval, "approval")
+        assert (await session.get(WorkflowRun, "run")).status == RunStatus.awaiting_approval
+        assert step.status == StepStatus.awaiting_approval
+        assert approval.status == "pending"
+        assert approval.preview["arguments"] == {"title": "Example"}
+        assert (await session.scalars(select(StepAttempt))).all() == []
+
+
 async def test_manifest_declared_write_is_never_retried_by_operation_name(
     runtime, monkeypatch
 ):
