@@ -2,6 +2,7 @@ import os
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
+from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
 import pytest
@@ -10,7 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app import connector_engineer as engineer_module
-from app import main, migrations
+from app import main, migrations, security
 from app.config import Settings
 from app.connector_engineer import (
     EngineeringSummary,
@@ -659,7 +660,7 @@ async def test_broker_session_prefers_nango_for_certified_provider(monkeypatch):
     monkeypatch.setattr(main, "managed_connector_client", lambda: nango)
     managed_session = AsyncMock(return_value={"connect_link": "https://connect.example"})
     monkeypatch.setattr(main, "create_managed_connector_session", managed_session)
-    session = SimpleNamespace()
+    session = SimpleNamespace(scalar=AsyncMock(return_value=None))
 
     result = await main.create_connector_broker_session(
         "google",
@@ -669,6 +670,95 @@ async def test_broker_session_prefers_nango_for_certified_provider(monkeypatch):
 
     assert result["backend"] == "nango"
     managed_session.assert_awaited_once()
+
+
+async def test_broker_preserves_existing_native_account_without_explicit_id(monkeypatch):
+    monkeypatch.setattr(main, "managed_connector_client", lambda: SimpleNamespace(configured=True))
+    existing = SimpleNamespace(id="google-connection", config={})
+    session = SimpleNamespace(scalar=AsyncMock(return_value=existing))
+    reconnect = AsyncMock(return_value={"authorization_url": "https://accounts.google.com/"})
+    monkeypatch.setattr(main, "reconnect_connection", reconnect)
+    managed_session = AsyncMock()
+    monkeypatch.setattr(main, "create_managed_connector_session", managed_session)
+
+    result = await main.create_connector_broker_session(
+        "google",
+        context=main.TenantContext("workspace-1", "user-1", "owner"),
+        session=session,
+    )
+
+    assert result["backend"] == "native"
+    reconnect.assert_awaited_once()
+    managed_session.assert_not_awaited()
+
+
+async def test_mailchimp_broker_uses_its_registered_native_callback(monkeypatch):
+    config = settings(
+        mailchimp_client_id="registered-mailchimp-app",
+        mailchimp_client_secret="registered-mailchimp-secret",
+        public_url="https://api.aura.example",
+    )
+    monkeypatch.setattr(main, "settings", config)
+    monkeypatch.setattr(security, "get_settings", lambda: config)
+    monkeypatch.setattr(main, "managed_connector_client", lambda: SimpleNamespace(configured=True))
+    managed_session = AsyncMock()
+    monkeypatch.setattr(main, "create_managed_connector_session", managed_session)
+    session = SimpleNamespace(scalar=AsyncMock(return_value=None))
+    context = main.TenantContext("workspace-1", "user-1", "owner")
+
+    result = await main.create_connector_broker_session(
+        "mailchimp", context=context, session=session,
+    )
+
+    assert result["backend"] == "native"
+    params = parse_qs(urlsplit(result["authorization_url"]).query)
+    assert params["redirect_uri"] == [
+        "https://api.aura.example/v1/oauth/installation/callback"
+    ]
+    assert params["client_id"] == ["registered-mailchimp-app"]
+    assert security.decode_oauth_state(params["state"][0])["provider"] == "mailchimp"
+    managed_session.assert_not_awaited()
+
+
+async def test_mailchimp_existing_nango_account_stays_on_nango(monkeypatch):
+    monkeypatch.setattr(main, "settings", settings(
+        mailchimp_client_id="registered-mailchimp-app",
+        mailchimp_client_secret="registered-mailchimp-secret",
+    ))
+    monkeypatch.setattr(main, "managed_connector_client", lambda: SimpleNamespace(configured=True))
+    managed_session = AsyncMock(return_value={"connect_link": "https://connect.example"})
+    monkeypatch.setattr(main, "create_managed_connector_session", managed_session)
+    native_session = AsyncMock()
+    monkeypatch.setattr(main, "oauth_start", native_session)
+    existing = SimpleNamespace(config={"managed_by": "nango"})
+    session = SimpleNamespace(scalar=AsyncMock(return_value=existing))
+
+    result = await main.create_connector_broker_session(
+        "mailchimp",
+        context=main.TenantContext("workspace-1", "user-1", "owner"),
+        session=session,
+    )
+
+    assert result["backend"] == "nango"
+    managed_session.assert_awaited_once()
+    native_session.assert_not_awaited()
+
+
+async def test_foreign_oauth_state_returns_a_safe_error_instead_of_500(monkeypatch):
+    exchange = AsyncMock()
+    monkeypatch.setattr(main, "exchange_oauth_code", exchange)
+
+    response = await main.oauth_callback(
+        "installation", state="broker-state-from-another-service",
+        code="unused-code", session=SimpleNamespace(),
+    )
+
+    assert response.status_code == 307
+    params = parse_qs(urlsplit(response.headers["location"]).query)
+    assert params["oauth_provider"] == ["installation"]
+    assert params["oauth_status"] == ["error"]
+    assert "unused-code" not in response.headers["location"]
+    exchange.assert_not_awaited()
 
 
 async def test_exact_nango_mcp_search_queues_pipedream_bridge(monkeypatch, database):

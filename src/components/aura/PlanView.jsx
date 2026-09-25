@@ -240,15 +240,19 @@ export default function PlanView({
     checkingRef.current = true;
     if (!silent) setConnectingTool(targetName || "accounts");
     try {
-      await hydrateConnections({ force: true });
       const recovered = [];
       for (const tool of needed.filter((item) => !targetName || item.name === targetName)) {
         const account = await getToolConnection(tool.name, null, tool.provider);
         if (!account?.id || !isVerifiedConnection(await testPythonConnection(account.id))) continue;
         recovered.push({ name: tool.name, connectionId: account.id });
       }
-      if (recovered.length) await onConnectionRecovered?.(recovered);
-      else if (targetName && !silent) setConnectionErrors((previous) => ({
+      if (recovered.length) {
+        // Only refresh the full account catalog after a required connection
+        // changes. Background checks otherwise re-tested every healthy app
+        // every five seconds while the plan remained open.
+        await hydrateConnections({ force: true });
+        await onConnectionRecovered?.(recovered);
+      } else if (targetName && !silent) setConnectionErrors((previous) => ({
         ...previous, [targetName]: "AURA has not verified this account yet. Finish provider consent, then check again.",
       }));
     } catch (error) {
