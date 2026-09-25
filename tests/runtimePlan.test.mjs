@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { hasDurablePlan, planningRequestPrompt, restorablePlanningRun, sameExecutablePlan } from "../src/lib/runtimePlan.mjs";
+import { hasDurablePlan, planningRequestPrompt, restorablePlanningRun, savedRunResumeView, sameExecutablePlan } from "../src/lib/runtimePlan.mjs";
 
 test("execution requires both a durable run id and executable backend steps", () => {
   assert.equal(hasDurablePlan("run-1", { steps: [{ operation: "sheets.read" }] }), true);
@@ -18,6 +18,22 @@ test("only an unapproved review or connection wait reopens after a page refresh"
   assert.equal(restorablePlanningRun({ ...waiting, plan_approved: true }), false);
   assert.equal(restorablePlanningRun({ status: "running", plan: { steps: [{ key: "slide" }] } }), false);
   assert.equal(restorablePlanningRun({ status: "awaiting_approval", plan: { steps: [] } }), false);
+});
+
+test("reloading a durable run restores the prepared approval or observes execution without replay", () => {
+  const run = { id: "run-1", plan_approved: true, status: "awaiting_approval",
+    plan: { steps: [{ key: "send", operation: "gmail.send" }] },
+    steps: [{ approval_status: "pending", approval_preview: { status: "ready",
+      arguments: { to: "me", subject: "Today", body: "Prepared summary" } } }] };
+  assert.equal(savedRunResumeView(run), "preview");
+  assert.equal(savedRunResumeView({ ...run, steps: [] }), "execution");
+  assert.equal(savedRunResumeView({ ...run, status: "running" }), "execution");
+  assert.equal(savedRunResumeView({ ...run, status: "recovering" }), "execution");
+  assert.equal(savedRunResumeView({ ...run, status: "completed" }), "execution");
+  assert.equal(savedRunResumeView({ ...run, status: "waiting_for_action" }), "recovery");
+  assert.equal(savedRunResumeView({ ...run, automation_state: { status: "blocked" } }), "recovery");
+  assert.equal(savedRunResumeView({ ...run, plan_approved: false }), "plan");
+  assert.equal(savedRunResumeView({ ...run, plan: { steps: [] } }), null);
 });
 
 test("a planner that ignores a requested edit cannot be presented as a revised plan", () => {
