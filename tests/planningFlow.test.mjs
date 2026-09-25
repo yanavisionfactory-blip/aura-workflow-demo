@@ -115,12 +115,19 @@ test("the UI renders a language plan while durable compilation is still running"
   assert.equal(source.includes('.replace(/^i\\s+will\\s+/i, "")'), true);
   assert.equal(source.includes("iWill: firstPersonStepCopy(step.iWill || step.reason)"), true);
   assert.equal(planViewSource.includes('plan.compileState !== "ready"'), false);
-  assert.equal(planViewSource.includes('plan.compileState === "waiting_for_connection"'), true);
+  assert.equal(planViewSource.includes('["starting", "waiting_for_connection"].includes(plan.compileState)'), true);
   assert.equal(planViewSource.includes('!plan.provisional && missingTools.length > 0'), true);
   assert.equal(source.includes('Poem + illustrations pilot'), false);
   assert.equal(source.includes('Set up a four-app pilot'), false);
   assert.equal(source.includes('if (plan.compileState === "blocked") {'), true);
   assert.equal(source.includes("handleRetryPlanning();"), true);
+  const approveSource = source.slice(
+    source.indexOf("const handleApprove = useCallback"),
+    source.indexOf("const handlePreviewApprove = useCallback"),
+  );
+  assert.equal(approveSource.includes('setPhase("executing")'), false);
+  assert.equal(approveSource.includes('compileState: "starting"'), true);
+  assert.equal(planViewSource.includes("AURA is checking the exact steps"), true);
 });
 
 test("consequential plans use one preview followed by one combined approval", () => {

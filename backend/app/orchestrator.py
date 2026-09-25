@@ -538,9 +538,10 @@ def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict]) -> None:
             planned_step.reduced_scope_arguments = _required_read_arguments(
                 manifest, planned_step.operation, planned_step.arguments
             )
-    from .operation_contracts import normalize_bound_email_inputs
+    from .operation_contracts import normalize_bound_email_inputs, normalize_planner_evidence_roles
 
     normalize_bound_email_inputs(plan)
+    normalize_planner_evidence_roles(plan, manifests_by_slug)
 
 
 def _include_requested_story_in_email(plan, prompt: str) -> None:
@@ -693,6 +694,7 @@ async def _create_compiled_plan(
     requested_tool_names: list[str] | tuple[str, ...] | set[str] = (),
     excluded_tool_families: set[str] | frozenset[str] = frozenset(),
     supervisor_strategy: str | None = None,
+    request_prompt: str | None = None,
 ):
     """Build a schema-valid plan, repairing internal connector mismatches silently."""
     manifests_by_slug = {
@@ -759,6 +761,11 @@ async def _create_compiled_plan(
         }
         for item in inventory
     ]
+    # Intent filtering is advisory. It cannot erase an explicitly requested
+    # external action from the catalog used to check plan completeness.
+    available_operations = {
+        op for item in inventory for op in item.get("allowed_operations", [])
+    }
     from .workflow_templates import (
         creator_outreach_template,
         mailchimp_canva_pilot_template,
@@ -781,7 +788,11 @@ async def _create_compiled_plan(
         reject_excluded_steps(audited_plan)
         _normalize_planned_steps(audited_plan, manifests_by_slug)
         from .operation_contracts import compile_contracts
+        from .request_contracts import validate_requested_operations
 
+        validate_requested_operations(
+            request_prompt or prompt, audited_plan, available_operations,
+        )
         audited_plan.planning_artifacts["compiled_contracts"] = compile_contracts(
             audited_plan, manifests_by_slug
         )
@@ -834,7 +845,11 @@ async def _create_compiled_plan(
             _include_requested_story_in_email(plan, prompt)
             _normalize_illustrated_canva_slides(plan, prompt)
             from .operation_contracts import compile_contracts
+            from .request_contracts import validate_requested_operations
 
+            validate_requested_operations(
+                request_prompt or prompt, plan, available_operations,
+            )
             plan.planning_artifacts["compiled_contracts"] = compile_contracts(
                 plan, manifests_by_slug
             )
@@ -1369,8 +1384,17 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
 
         try:
             from .plan_reuse import reuse_saved_plan
+            from .request_contracts import validate_requested_operations
 
             plan = await reuse_saved_plan(session, run, connected_inventory, manifests_by_slug)
+            if plan is not None:
+                try:
+                    validate_requested_operations(
+                        run.prompt, plan,
+                        {op for item in inventory for op in item.get("allowed_operations", [])},
+                    )
+                except ValueError:
+                    plan = None  # A historical read-only draft cannot satisfy a new delivery.
             if plan is None:
                 supervisor = (run.execution_context or {}).get("__aura_supervisor__") or {}
                 strategy = (
@@ -1387,6 +1411,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                     requested_tools,
                     excluded_families,
                     supervisor_strategy=strategy,
+                    request_prompt=run.prompt,
                 )
             if excluded_families:
                 for planned_step in plan.steps:
