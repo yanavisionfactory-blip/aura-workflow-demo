@@ -50,7 +50,7 @@ import {
 } from "@/lib/planningFlow.mjs";
 import { hasDurablePlan, planningRequestPrompt, restorablePlanningRun, sameExecutablePlan } from "@/lib/runtimePlan.mjs";
 import { weatherStepTitle } from "@/lib/planPresentation.mjs";
-import { instantLanguagePlan, languageDraftPrompt } from "@/lib/languagePlan.mjs";
+import { instantLanguagePlan } from "@/lib/languagePlan.mjs";
 import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
 import { jiraReceiptTasks } from "@/lib/jiraReceipt.mjs";
 import {
@@ -430,7 +430,6 @@ export default function Demo() {
   const pythonPlanRef = useRef(null);
   const reviewedPlanRef = useRef(null);
   const pythonPollGenerationRef = useRef(0);
-  const languageDraftGenerationRef = useRef(0);
   const handleConfirmRef = useRef(null);
   const startPythonExecutionRef = useRef(null);
   const queuedPlanStartRef = useRef(null);
@@ -487,7 +486,6 @@ export default function Demo() {
   const reset = useCallback(() => {
     clearTimeouts();
     pythonPollGenerationRef.current += 1;
-    languageDraftGenerationRef.current += 1;
     runRequestKeyRef.current = null;
     lastPlanningIntentRef.current = "";
     historySavePromiseRef.current = null;
@@ -634,45 +632,14 @@ Write ONE clear, conversational sentence restating what they want — but offer 
           ...instantLanguagePlan(draftIntent, availableCatalog, pilotMode ? pilotTools : selectedTools),
           connectionRequirements: explicitRequirements,
         };
-        const languageDraftGeneration = ++languageDraftGenerationRef.current;
-
-        // The readable plan is independent from connector readiness. Show a
-        // useful language draft now; refine and compile it in parallel.
+        // Show a readable outline immediately. The backend alone compiles the
+        // executable plan; a second browser AI request adds load and can show
+        // a conflicting draft while execution preparation is still running.
         setPlan((current) => revisionInstruction && current?.steps?.length
           ? { ...current, provisional: true, compileState: "validating", compileError: "" }
           : immediatePlan);
         setPlanLoading(false);
         setPhase("plan");
-
-        if (!revisionInstruction && !omittedToolsRef.current.length && !pilotMode) aura.integrations.Core
-          .InvokeLLM({
-            prompt: languageDraftPrompt(confirmedIntent, selectedTools),
-            response_json_schema: PLAN_SCHEMA,
-          })
-          .then((draft) => {
-            if (
-              languageDraftGenerationRef.current !== languageDraftGeneration
-              || !Array.isArray(draft?.steps)
-              || draft.steps.length === 0
-            ) return;
-            setPlan((current) => current?.provisional ? {
-              ...draft,
-              steps: draft.steps.map((step) => ({
-                ...step,
-                iWill: firstPersonStepCopy(step.iWill || step.reason),
-              })),
-              interpretation: draft.interpretation || confirmedIntent,
-              estimatedTime: "Plan ready — validating executable details backstage",
-              connectionRequirements: current.connectionRequirements || explicitRequirements,
-              provisional: true,
-              compileState: current.compileState || "validating",
-              compileError: current.compileError,
-            } : current);
-          })
-          .catch(() => {
-            // The immediate language draft is already visible. Exact execution
-            // compilation remains authoritative and continues independently.
-          });
 
         return (async () => {
           try {
@@ -1064,7 +1031,8 @@ Rules:
     if (currentRunIdRef.current) return currentRunIdRef.current;
     if (historySavePromiseRef.current) return historySavePromiseRef.current;
 
-    historySavePromiseRef.current = (async () => {
+    const backendRunId = pythonRunIdRef.current;
+    const historySave = (async () => {
       let workflowId = currentWorkflowIdRef.current;
       let savedWorkflow = null;
       const now = new Date().toISOString();
@@ -1095,7 +1063,7 @@ Rules:
           });
           workflowId = savedWorkflow.id;
         }
-        currentWorkflowIdRef.current = workflowId;
+        if (pythonRunIdRef.current === backendRunId) currentWorkflowIdRef.current = workflowId;
       } else {
         const [existing] = await aura.entities.Workflow.filter({ id: workflowId }, "-created_date", 1);
         savedWorkflow = await aura.entities.Workflow.update(workflowId, {
@@ -1106,7 +1074,7 @@ Rules:
       }
 
       const savedRun = await aura.entities.WorkflowRun.create({
-        backend_run_id: pythonRunIdRef.current,
+        backend_run_id: backendRunId,
         workflow_id: workflowId,
         prompt: originalPromptRef.current,
         title: name,
@@ -1115,15 +1083,16 @@ Rules:
         backend_created_at: now,
         backend_updated_at: now,
       });
-      currentRunIdRef.current = savedRun.id;
+      if (pythonRunIdRef.current === backendRunId) currentRunIdRef.current = savedRun.id;
       announceWorkflowHistoryChanged({ workflow: savedWorkflow, run: savedRun });
       return savedRun.id;
     })();
+    historySavePromiseRef.current = historySave;
 
     try {
-      return await historySavePromiseRef.current;
+      return await historySave;
     } finally {
-      historySavePromiseRef.current = null;
+      if (historySavePromiseRef.current === historySave) historySavePromiseRef.current = null;
     }
   };
 
@@ -1357,13 +1326,6 @@ Rules:
   const startPythonExecution = async (editedUiSteps = null, prepared = false, observeOnly = false) => {
     const runId = pythonRunIdRef.current;
     if (!runId || !pythonPlanRef.current) return;
-    try {
-      await ensureSavedWorkflowRun();
-    } catch (error) {
-      console.error("Could not save workflow history", error);
-      keepPlanInReview("AURA couldn't save this workflow yet, so it has not started. Please try again.");
-      return;
-    }
     const generation = ++pythonPollGenerationRef.current;
     setPlan((previous) => previous ? { ...previous, startError: "" } : previous);
     setPhase("executing");
@@ -1396,6 +1358,11 @@ Rules:
       } else {
         await approvePythonPlan(runId, reviewedPlan.steps, true);
       }
+      // The backend run is durable. Synchronize the optional history view
+      // after dispatch so its extra data requests cannot gate execution.
+      void ensureSavedWorkflowRun().catch((error) => {
+        console.warn("Workflow history will reconcile from the backend run", error);
+      });
       for (;;) {
         const run = await getPythonRunResilient(runId, generation);
         if (!run) return;
@@ -1601,6 +1568,13 @@ Generate a results summary in plain, human-friendly language (not technical).
 
     let updatedRun = null;
     let updatedWorkflow = null;
+    if (historySavePromiseRef.current) {
+      try {
+        await historySavePromiseRef.current;
+      } catch {
+        // Backend history remains authoritative if the optional save fails.
+      }
+    }
     if (currentRunIdRef.current) {
       try {
         updatedRun = await aura.entities.WorkflowRun.update(currentRunIdRef.current, {

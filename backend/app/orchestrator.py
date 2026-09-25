@@ -1086,6 +1086,7 @@ _PROVIDER_CANDIDATE_STOP_WORDS = {
     "search",
     "send",
     "share",
+    "show",
     "summarize",
     "sync",
     "turn",

@@ -643,7 +643,7 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
       >
         <h3 className="text-sm font-semibold mb-1">
           {plan.compileState === "blocked" ? "Plan needs another try"
-            : plan.compileState === "starting" ? "Preparing your workflow" : "Ready to start?"}
+            : ["starting", "validating"].includes(plan.compileState) ? "Preparing your workflow" : "Ready to start?"}
         </h3>
         <p className="text-xs text-muted-foreground leading-relaxed mb-3">
           {plan.compileState === "blocked"
@@ -651,7 +651,7 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
             : plan.compileState === "starting"
               ? "AURA is checking the exact steps. Your request to start is saved; you'll review any external changes before they happen."
             : plan.compileState === "validating"
-              ? "You can request a start now. AURA will check the exact actions first and ask you to review any changes before sending or creating anything."
+              ? "AURA is preparing the exact actions. You can request a start now; you'll review any external changes before they happen."
             : "Aura will follow this plan and handle technical preparation during execution."}
         </p>
         <div className="mb-3">
