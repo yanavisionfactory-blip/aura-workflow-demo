@@ -23,6 +23,16 @@ def refresh_granted_readbacks(tool) -> None:
     scopes = set(re.split(r"[\s,]+", " ".join(granted) if isinstance(granted, list)
                           else str(granted))) - {""}
     allowed = set(tool.allowed_operations or [])
+    if not scopes & {
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.modify", "https://mail.google.com/",
+    }:
+        allowed.difference_update({"gmail.list", "gmail.get"})
+    if not scopes & {
+        "https://www.googleapis.com/auth/gmail.send",
+        "https://www.googleapis.com/auth/gmail.modify", "https://mail.google.com/",
+    }:
+        allowed.discard("gmail.send")
     if "docs.create" in allowed and not scopes & {
         "https://www.googleapis.com/auth/drive.file",
         "https://www.googleapis.com/auth/drive",
@@ -35,6 +45,8 @@ def refresh_granted_readbacks(tool) -> None:
         "https://www.googleapis.com/auth/gmail.modify", "https://mail.google.com/",
     } and "gmail.get" not in allowed:
         tool.allowed_operations = [*tool.allowed_operations, "gmail.get"]
+    else:
+        tool.allowed_operations = [op for op in tool.allowed_operations if op in allowed]
 
 
 def verification_permission_fixes(plan, inventory) -> list[str]:
@@ -49,3 +61,23 @@ def verification_permission_fixes(plan, inventory) -> list[str]:
             if missing:
                 fixes.append(f"Step {index}: reconnect {slug} to authorize outcome verification ({', '.join(sorted(missing))}) before running {operation}")
     return fixes
+
+
+def missing_plan_operations(plan, inventory) -> dict[str, set[str]]:
+    """Operations, including write readbacks, absent from the connected grants.
+
+    The planner can see connectable catalog entries. A reviewed plan must also
+    be checked against the *connected* allow-list before Start is offered.
+    """
+    allowed = {item["slug"]: set(item.get("allowed_operations") or []) for item in inventory}
+    missing: dict[str, set[str]] = {}
+    for step in plan.steps:
+        choices = [(step.tool_slug, step.operation)]
+        if step.fallback_tool_slug and step.fallback_operation:
+            choices.append((step.fallback_tool_slug, step.fallback_operation))
+        for slug, operation in choices:
+            required = {operation, *required_reads(operation, step.arguments or {})}
+            absent = required - allowed.get(slug, set())
+            if absent:
+                missing.setdefault(slug, set()).update(absent)
+    return missing

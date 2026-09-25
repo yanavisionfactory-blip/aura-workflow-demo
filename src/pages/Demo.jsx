@@ -457,6 +457,7 @@ export default function Demo() {
   const queuedPlanStartRef = useRef(null);
   const preparedActionPreviewRef = useRef(false);
   const runRequestKeyRef = useRef(null);
+  const authorizationRepairRef = useRef(0);
   const lastPlanningIntentRef = useRef("");
   const historySavePromiseRef = useRef(null);
 
@@ -509,6 +510,7 @@ export default function Demo() {
     clearTimeouts();
     pythonPollGenerationRef.current += 1;
     runRequestKeyRef.current = null;
+    authorizationRepairRef.current = 0;
     lastPlanningIntentRef.current = "";
     historySavePromiseRef.current = null;
     queuedPlanStartRef.current = null;
@@ -1416,6 +1418,14 @@ Rules:
           }, null, "completed");
           return;
         }
+        if (run.status === "waiting_for_action"
+            && run.blocker?.code === "connection_required" && !run.plan_approved) {
+          pythonPlanRef.current = run.plan;
+          setPlan({ ...uiConnectionPlanFromRun(run, originalPromptRef.current),
+            provisional: false, compileState: "waiting_for_connection" });
+          setPhase("plan");
+          return;
+        }
         if (run.status === "awaiting_approval") {
           const preparedSteps = approvedStepsRef.current.map((step, index) =>
             resolvedApprovalStep(step, run.steps?.[index], planToolName(run.steps?.[index] || step))
@@ -1461,6 +1471,21 @@ Rules:
         const latest = await getPythonRun(runId).catch(() => null);
         const startFailure = approvalStartFailure(latest, error);
         if (startFailure) {
+          const fixes = error?.details?.detail?.fixes;
+          if (error.status === 422 && Array.isArray(fixes) && fixes.length
+              && authorizationRepairRef.current < 1) {
+            authorizationRepairRef.current += 1;
+            setPhase("plan");
+            setPlan((current) => current ? {
+              ...current, provisional: true, compileState: "validating",
+              startError: "AURA is repairing an invalid plan before execution.",
+            } : current);
+            // This run has not dispatched. Recompile a fresh plan with the
+            // exact backend corrections, then ask for plan review again.
+            void handleConfirm(interpretation,
+              `AURA backend authorization rejected the previous plan. Resolve every issue before offering Start: ${fixes.join("; ")}. Do not represent internal drafting as a connector operation. Preserve the user's requested external actions and final review.`);
+            return;
+          }
           keepPlanStartFailureInReview(startFailure.message);
           return;
         }

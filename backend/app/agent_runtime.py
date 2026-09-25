@@ -789,7 +789,12 @@ def deterministic_plan_fixes(
     variable_producers: dict[str, str] = {}
     for index, step in enumerate(plan.steps, start=1):
         contract = step.expected_output.strip().lower()
-        if contract.startswith(("no tool call", "no external call", "no provider call")):
+        if contract.startswith(("no tool call", "no external call", "no provider call")) or (
+            step.reason.strip().lower().startswith((
+                "no tool call", "no external call", "no provider call",
+                "internal transformation", "internal composition",
+            ))
+        ):
             fixes.append(
                 f"Step {index} describes no provider call but assigns {step.operation}. "
                 "Remove this narrative placeholder; synthesize the answer after real provider steps."

@@ -31,8 +31,13 @@ const REQUIREMENT_ALIASES = {
   jira: "Jira",
 };
 
-const resolveRequirementTool = (raw) => {
+const resolveRequirementTool = (raw, permissions = []) => {
   const value = String(raw || "").trim();
+  if (["google", "google-workspace"].includes(slugifyTool(value))) {
+    if (permissions.some((operation) => operation.startsWith("gmail."))) return "Gmail";
+    if (permissions.some((operation) => operation.startsWith("calendar."))) return "Google Calendar";
+    if (permissions.some((operation) => operation.startsWith("docs."))) return "Google Docs";
+  }
   const catalogMatch = catalogEntryFor(value);
   if (catalogMatch) return catalogMatch.name;
   const slug = slugifyTool(value);
@@ -119,6 +124,13 @@ export default function PlanView({
   }, []);
   const [connectingTool, setConnectingTool] = useState(null);
   const [connectionErrors, setConnectionErrors] = useState({});
+  const hasRequiredGrant = useCallback((tool, account) => (plan.connectionChecklist || [])
+    .filter((requirement) => requirement.status !== "satisfied"
+      && String(requirement.reason || "").startsWith("Authorize exact operations")
+      && resolveRequirementTool(requirement.provider_hint || requirement.capability,
+        requirement.required_permissions) === tool.name)
+    .every((requirement) => (requirement.required_permissions || [])
+      .every((operation) => (account?.allowed_operations || []).includes(operation))), [plan.connectionChecklist]);
   const checkingRef = useRef(false);
   const connectingRef = useRef(false);
   const handleConnect = async (name, provider = null) => {
@@ -147,6 +159,11 @@ export default function PlanView({
       for (const tool of needed) {
         const result = await handleConnect(tool.name, tool.provider);
         if (!result?.connected) return;
+        if (!hasRequiredGrant(tool, result.connection)) {
+          setConnectionErrors((previous) => ({ ...previous, [tool.name]:
+            "This account does not yet grant the access needed to verify this action. Reconnect with the requested permissions." }));
+          return;
+        }
         recovered.push({
           name: tool.name,
           connectionId: result.connection?.id || result.tool?.id || null,
@@ -184,7 +201,7 @@ export default function PlanView({
       const raw = typeof requirement === "string"
         ? requirement
         : requirement.canonical_provider || requirement.provider_hint || requirement.capability;
-      const name = resolveRequirementTool(raw);
+      const name = resolveRequirementTool(raw, requirement.required_permissions);
       if (!name) return;
       if (seen.has(name)) {
         if (String(raw).toLowerCase().endsWith("-mcp")) {
@@ -219,7 +236,7 @@ export default function PlanView({
       const raw = typeof requirement === "string"
         ? requirement
         : requirement.canonical_provider || requirement.provider_hint || requirement.capability;
-      const name = resolveRequirementTool(raw);
+      const name = resolveRequirementTool(raw, requirement.required_permissions);
       if (name) next[name] = false;
     });
     return next;
@@ -243,7 +260,8 @@ export default function PlanView({
       const recovered = [];
       for (const tool of needed.filter((item) => !targetName || item.name === targetName)) {
         const account = await getToolConnection(tool.name, null, tool.provider);
-        if (!account?.id || !isVerifiedConnection(await testPythonConnection(account.id))) continue;
+        if (!account?.id || !hasRequiredGrant(tool, account)
+          || !isVerifiedConnection(await testPythonConnection(account.id))) continue;
         recovered.push({ name: tool.name, connectionId: account.id });
       }
       if (recovered.length) {
@@ -263,7 +281,7 @@ export default function PlanView({
       checkingRef.current = false;
       if (!silent) setConnectingTool(null);
     }
-  }, [connectionsReady, needed, onConnectionRecovered]);
+  }, [connectionsReady, needed, onConnectionRecovered, hasRequiredGrant]);
 
   useEffect(() => {
     if (!connectionsReady || !needed.length || !connectionsCanOpen) return undefined;
