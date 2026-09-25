@@ -1217,7 +1217,7 @@ async def _persist_plan_draft(session, run: WorkflowRun, plan) -> tuple[str, str
     if existing:
         return plan_hash, existing
     logger.info(
-        "Workflow plan ready run_id=%s graph=%s",
+        "Workflow plan ready run_id=%s graph=%s planner_recovery=%s timings_ms=%s",
         run.id,
         [
             {
@@ -1229,6 +1229,8 @@ async def _persist_plan_draft(session, run: WorkflowRun, plan) -> tuple[str, str
             }
             for item in plan.steps
         ],
+        plan.planning_artifacts.get("planner_recovery_mode"),
+        plan.planning_artifacts.get("timings_ms"),
     )
     plan_version = PlanVersion(
         workspace_id=run.workspace_id,
