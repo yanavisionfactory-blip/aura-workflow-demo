@@ -68,6 +68,15 @@ test("document review includes its complete editable title and body", () => {
   assert.equal(googleDoc.preview.docBody, "Whole text");
 });
 
+test("editing a document title preserves its structured content and other action values", () => {
+  const blocks = [{ heading: "Agenda", children: [{ text: "Whole document" }] }];
+  const next = mergeLegacyPreviewIntoArguments(
+    { resolvedArguments: { title: "Original", children: blocks, parent_id: "folder-1" } },
+    { type: "document", docTitle: "Updated", docBody: JSON.stringify(blocks, null, 2) },
+  );
+  assert.deepEqual(next, { title: "Updated", children: blocks, parent_id: "folder-1" });
+});
+
 test("one combined preview is required only for consequential plans", () => {
   assert.equal(requiresActionPreview([{ riskLevel: "read" }, { riskLevel: "modify" }]), true);
   assert.equal(requiresActionPreview([{ riskLevel: "read" }]), false);

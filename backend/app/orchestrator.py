@@ -82,7 +82,7 @@ from .run_supervisor import (
     recover_planning_failure,
     transition_run,
 )
-from .schemas import CriticDecision, OutcomeVerification
+from .schemas import CriticDecision, OutcomeVerification, PlanStep, WorkflowPlan
 from .security import CredentialVault
 from .universal_connectors import (
     ConnectorError,
@@ -394,6 +394,20 @@ def _operation_is_consequential(
     return bool(planned_consequential or contract_consequential)
 
 
+def _approved_action_matches(
+    step: RunStep, approval: Approval | None, tool_slug: str, operation: str, arguments: dict
+) -> bool:
+    """Only the provider action shown in the final review may be dispatched."""
+    return bool(
+        approval
+        and approval.status == "approved"
+        and approval.preview.get("status") == "ready"
+        and approval.preview.get("operation") == operation == step.operation
+        and approval.preview.get("tool_slug", step.tool_slug) == tool_slug == step.tool_slug
+        and approval.preview.get("arguments") == arguments
+    )
+
+
 def _prepare_provider_arguments(
     manifest: dict,
     operation: str,
@@ -519,7 +533,7 @@ def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict]) -> None:
         )
         if (
             capability
-            and capability.get("requires_approval")
+            and (capability.get("requires_approval") or capability.get("permission_scope") in {"write", "destructive"})
             and not is_governed_derivative_step(plan, planned_step)
         ):
             # Approval declarations in verified connector contracts outrank an
@@ -2665,6 +2679,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         return
                 approval_preview = {
                     "status": "ready",
+                    "tool_slug": step.tool_slug,
                     "operation": step.operation,
                     "arguments": resolved_arguments,
                     "review_contract": build_review_contract(
@@ -2752,6 +2767,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         )
                         future_approval.preview = {
                             "status": "ready",
+                            "tool_slug": future_step.tool_slug,
                             "operation": future_step.operation,
                             "arguments": future_arguments,
                             "review_contract": build_review_contract(
@@ -3030,12 +3046,34 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     runtime_capability,
                     planned_consequential=step.consequential,
                 )
-                if consequential and not step.consequential:
+                governed_derivative = (
+                    not step.consequential
+                    and operation == "canva.export.create"
+                    and is_governed_derivative_step(
+                        WorkflowPlan.model_validate(run.plan),
+                        PlanStep.model_validate(plan_steps[step.position]),
+                    )
+                )
+                if consequential and not step.consequential and not governed_derivative:
                     # Persist the verified provider contract's side-effect class
                     # before any attempt. This protects unfamiliar operation names
                     # (for example, records.mutate) from read-style retries and
                     # preserves the no-replay decision across worker restarts.
                     step.consequential = True
+                approved_action = (
+                    await session.get(Approval, step.approval_id)
+                    if consequential and step.approval_id else None
+                )
+                if consequential and not governed_derivative and not _approved_action_matches(
+                    step, approved_action, active_tool.slug, operation, arguments
+                ):
+                    return None, "[authorization_required] Review the exact action before submitting it"
+
+                def confirm_provider_arguments(prepared: dict) -> None:
+                    if consequential and not governed_derivative and not _approved_action_matches(
+                        step, approved_action, active_tool.slug, operation, prepared
+                    ):
+                        raise ValueError("Connector changed the approved action; a new review is required")
                 if operation == "gmail.send" and arguments.get("attachments"):
                     permitted_urls = {
                         url
@@ -3237,6 +3275,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             arguments, capability = _prepare_provider_arguments(
                                 pack.definition, operation, arguments
                             )
+                            confirm_provider_arguments(arguments)
                             await mark_provider_dispatched()
                             result = await asyncio.wait_for(
                                 pipedream_client().run_action(
@@ -3280,6 +3319,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             arguments, capability = _prepare_provider_arguments(
                                 current_manifest, operation, arguments
                             )
+                            confirm_provider_arguments(arguments)
                             await mark_provider_dispatched()
                             result = await asyncio.wait_for(
                                 managed_connector_client().execute_capability(
@@ -3368,6 +3408,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             arguments, _ = _prepare_provider_arguments(
                                 current_manifest, operation, arguments
                             )
+                            confirm_provider_arguments(arguments)
                             await mark_provider_dispatched()
                             result = await asyncio.wait_for(
                                 executor.execute(operation, arguments),

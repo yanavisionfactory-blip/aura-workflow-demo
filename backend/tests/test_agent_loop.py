@@ -16,6 +16,7 @@ from app.agent_runtime import (
 from app.agent_telemetry import calls, record_agent_call
 from app.db import Base
 from app.models import (
+    Approval,
     ApprovalSnapshot,
     CapabilityManifest,
     DispatchIntent,
@@ -283,9 +284,17 @@ async def runtime(monkeypatch):
                 arguments={"title": "Example"},
                 status=StepStatus.pending,
                 consequential=True,
+                approval_id="approval",
                 idempotency_key="write-once",
             )
         )
+        session.add(Approval(
+            id="approval", run_id="run", step_id="step", status="approved",
+            preview={
+                "status": "ready", "tool_slug": "test", "operation": "records.create",
+                "arguments": {"title": "Example"},
+            },
+        ))
         session.add(
             ToolConnection(
                 id="tool",
@@ -409,6 +418,28 @@ async def test_local_connector_validation_stays_before_provider_dispatch(runtime
         assert run.status == RunStatus.waiting_for_action
 
 
+async def test_execution_agent_cannot_change_a_reviewed_write(runtime, monkeypatch):
+    async def rewrite(_prompt, step, arguments, _agent):
+        return (
+            ExecutionDirective(
+                action="execute", step_key=step["key"], tool_slug=step["tool_slug"],
+                operation=step["operation"], arguments={**arguments, "title": "Different"},
+                reason="Changed the title",
+            ),
+            "agent",
+        )
+
+    async def forbidden(*_args, **_kwargs):
+        pytest.fail("The unreviewed action reached the provider")
+
+    monkeypatch.setattr(orchestrator, "prepare_execution_directive", rewrite)
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", forbidden)
+    await orchestrator._execute_run("run", "w")
+    async with runtime() as session:
+        assert (await session.get(WorkflowRun, "run")).status == RunStatus.waiting_for_action
+        assert (await session.scalars(select(StepAttempt))).all() == []
+
+
 async def test_manifest_declared_write_is_never_retried_by_operation_name(
     runtime, monkeypatch
 ):
@@ -486,10 +517,8 @@ async def test_manifest_declared_write_is_never_retried_by_operation_name(
         ).all()
         step = await session.get(RunStep, "step")
         run = await session.get(WorkflowRun, "run")
-        assert calls == 1
-        assert len(attempts) == 1
-        assert attempts[0].provider_dispatched is True
-        assert attempts[0].error.startswith("[uncertain_write]")
+        assert calls == 0
+        assert attempts == []
         assert step.consequential is True
         assert run.status == RunStatus.waiting_for_action
 
@@ -1097,6 +1126,11 @@ async def test_uncertain_known_update_reconciles_without_repeating_write(runtime
             "notion.page.update",
             plan["steps"][0]["arguments"],
         )
+        approval = await session.get(Approval, "approval")
+        approval.preview = {
+            "status": "ready", "tool_slug": "notion", "operation": step.operation,
+            "arguments": step.arguments,
+        }
         tool = await session.get(ToolConnection, "tool")
         tool.slug, tool.allowed_operations = "notion", native_operations("notion")
         manifest = await session.get(CapabilityManifest, "manifest")
@@ -1223,7 +1257,6 @@ async def test_retry_preserves_pending_approval_preparation(
     runtime, monkeypatch, approval_status, expected
 ):
     from app import main
-    from app.models import Approval
     from app.schemas import ResumeDecision
 
     async def no_dispatch(*args):
@@ -1241,7 +1274,8 @@ async def test_retry_preserves_pending_approval_preparation(
         )
         step = await session.get(RunStep, "step")
         step.status = StepStatus.failed
-        session.add(Approval(id="approval", run_id="run", step_id="step", status=approval_status))
+        approval = await session.get(Approval, "approval")
+        approval.status = approval_status
         step.approval_id = "approval"
         await session.commit()
         await main.resume_run(

@@ -20,8 +20,8 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .agent_runtime import deterministic_plan_fixes
-from .approval_readiness import requires_prepared_review, unfinished_action_content
+from .agent_runtime import deterministic_plan_fixes, is_governed_derivative_step
+from .approval_readiness import unfinished_action_content
 from .approval_review import (
     build_review_contract,
     public_review_preview,
@@ -5653,6 +5653,32 @@ async def approve_plan(
             )
         )
     ).all()
+    manifests = (
+        await session.scalars(
+            select(CapabilityManifest).where(
+                CapabilityManifest.tool_id.in_([tool.id for tool in tools]),
+                CapabilityManifest.status == "verified",
+            )
+        )
+    ).all()
+    manifests_by_tool_id = {manifest.tool_id: manifest.manifest for manifest in manifests}
+    tools_by_slug = {tool.slug: tool for tool in tools}
+    original_plan_json = plan.model_dump(mode="json")
+    for planned_step in plan.steps:
+        tool = tools_by_slug.get(planned_step.tool_slug)
+        manifest = current_capability_manifest(
+            planned_step.tool_slug, manifests_by_tool_id.get(tool.id) if tool else None
+        )
+        capability = next((
+            item for item in (manifest or {}).get("capabilities", [])
+            if item.get("name") == planned_step.operation
+        ), None)
+        if (
+            capability
+            and (capability.get("requires_approval") or capability.get("permission_scope") in {"write", "destructive"})
+            and not is_governed_derivative_step(plan, planned_step)
+        ):
+            planned_step.consequential = True
     from .connection_permissions import refresh_granted_readbacks, verification_permission_fixes
 
     for tool in tools:
@@ -5665,17 +5691,6 @@ async def approve_plan(
     if fixes:
         raise HTTPException(422, {"message": "Plan failed authorization", "fixes": fixes})
 
-    manifests = (
-        await session.scalars(
-            select(CapabilityManifest).where(
-                CapabilityManifest.tool_id.in_([tool.id for tool in tools]),
-                CapabilityManifest.status == "verified",
-            )
-        )
-    ).all()
-    manifests_by_tool_id = {manifest.tool_id: manifest.manifest for manifest in manifests}
-    tools_by_slug = {tool.slug: tool for tool in tools}
-    original_plan_json = plan.model_dump(mode="json")
     argument_fixes: list[str] = []
     for index, planned_step in enumerate(plan.steps, start=1):
         tool = tools_by_slug.get(planned_step.tool_slug)
@@ -5782,6 +5797,10 @@ async def approve_plan(
             stored.idempotency_key = idempotency_key(
                 run.id, stored.position, edited.operation, edited.arguments
             )
+    for stored, planned in zip(steps, plan.steps, strict=True):
+        # The verified connector contract can require approval even if an old
+        # client or a revised plan classified the step as a read.
+        stored.consequential = planned.consequential
     run.plan = plan_json
     execution_context = dict(run.execution_context or {})
     write_repairs = {
@@ -5853,23 +5872,16 @@ async def approve_plan(
             approvals.append(approval)
         elif approval:
             approval.preview = {"status": "preparing"}
-    # A plan click only approves actions with complete, static arguments. The
-    # worker must prepare and expose the exact remaining values after reads.
-    approve_consequential = payload.approve_consequential
+    # Approving a plan starts preparation, never an external write. Even static
+    # values must pass the worker's final connector validation and preview.
     for approval in approvals:
         step = next(stored for stored in steps if stored.id == approval.step_id)
         if step.status == StepStatus.completed:
             continue
-        if approve_consequential and not requires_prepared_review(step):
-            approval.status = "approved"
-            approval.decided_by = context.subject
-            approval.decided_at = datetime.now(UTC)
-            step.status = StepStatus.pending
-        else:
-            approval.status = "pending"
-            approval.decided_by = None
-            approval.decided_at = None
-            step.status = StepStatus.awaiting_approval
+        approval.status = "pending"
+        approval.decided_by = None
+        approval.decided_at = None
+        step.status = StepStatus.awaiting_approval
     run.plan_approved = True
     transition_run(
         run,
@@ -5891,11 +5903,7 @@ async def approve_plan(
                 "version": plan_version.version,
                 "plan_hash": plan_hash,
                 "policy_decision": policy_decision,
-                "approval_mode": (
-                    "staged" if any(
-                        approval.status == "pending" for approval in approvals
-                    ) else "combined"
-                ),
+                "approval_mode": "staged",
                 "allow_autonomous_read_repairs": payload.allow_autonomous_read_repairs,
             },
         )
@@ -5956,6 +5964,7 @@ async def decide_approval(
             # Refresh for review; do not approve a different argument silently.
             approval.preview = {
                 "status": "ready",
+                "tool_slug": step.tool_slug,
                 "operation": step.operation,
                 "arguments": canonical,
                 "review_contract": build_review_contract(
@@ -5975,7 +5984,7 @@ async def decide_approval(
     approval.decided_by = context.subject
     approval.decided_at = datetime.now(UTC)
     if payload.approved:
-        if payload.edited_arguments is not None:
+        if payload.edited_arguments is not None or canonical != step.arguments:
             tool = await session.scalar(
                 select(ToolConnection).where(
                     ToolConnection.workspace_id == wid,
@@ -6062,6 +6071,7 @@ async def decide_approval(
             )
             approval.preview = {
                 "status": "ready",
+                "tool_slug": step.tool_slug,
                 "operation": step.operation,
                 "arguments": edited_arguments,
                 "review_contract": build_review_contract(

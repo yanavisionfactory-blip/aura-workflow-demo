@@ -56,7 +56,6 @@ import { jiraReceiptTasks } from "@/lib/jiraReceipt.mjs";
 import {
   editedArgumentsForStep,
   plannedApprovalStep,
-  hasImmediateActionPreview,
   resolvedApprovalStep,
 } from "@/lib/approvalReview.mjs";
 
@@ -366,7 +365,6 @@ export default function Demo() {
   const [editApproval, setEditApproval] = useState("writes");
   const [editFlag, setEditFlag] = useState(null);
   const [editRunMode, setEditRunMode] = useState(false);
-  const [autoApprove, setAutoApprove] = useState(false);
   const [pilotOpen, setPilotOpen] = useState(false);
   const [pilotDraft, setPilotDraft] = useState(null);
   const editOriginalStepsRef = useRef([]);
@@ -514,7 +512,6 @@ export default function Demo() {
     setStartTime(null);
     setWorkflowName("");
     setEditRunMode(false);
-    setAutoApprove(false);
     setPilotOpen(false);
     setPilotDraft(null);
     editOriginalStepsRef.current = [];
@@ -755,11 +752,6 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               approvedStepsRef.current = compiledPlan.steps;
               setApprovedSteps(compiledPlan.steps);
               setWorkflowName(queuedStart.name || compiledPlan.workflowName || "");
-              if (hasImmediateActionPreview(compiledPlan.steps, queuedStart.autoApprove)) {
-                preparedActionPreviewRef.current = false;
-                setPhase("preview");
-                return;
-              }
               startPythonExecutionRef.current?.();
             }
           } catch (error) {
@@ -1108,7 +1100,7 @@ Rules:
     }
     if (!hasDurablePlan(pythonRunIdRef.current, pythonPlanRef.current)) {
       if (plan?.provisional) {
-        queuedPlanStartRef.current = { name, autoApprove };
+        queuedPlanStartRef.current = { name };
         if (plan.compileState === "blocked") {
           handleRetryPlanning();
           return;
@@ -1123,14 +1115,8 @@ Rules:
       keepPlanInReview();
       return;
     }
-    if (hasImmediateActionPreview(steps, autoApprove)) {
-      preparedActionPreviewRef.current = false;
-      setPreviewError("");
-      setPhase("preview");
-      return;
-    }
     startPythonExecution();
-  }, [editRunMode, autoApprove, keepPlanInReview, handleRetryPlanning, plan]);
+  }, [editRunMode, keepPlanInReview, handleRetryPlanning, plan]);
 
   const handlePreviewApprove = useCallback((editedSteps) => {
     setPreviewError("");
@@ -1356,7 +1342,7 @@ Rules:
           );
         }
       } else {
-        await approvePythonPlan(runId, reviewedPlan.steps, true);
+        await approvePythonPlan(runId, reviewedPlan.steps, false);
       }
       // The backend run is durable. Synchronize the optional history view
       // after dispatch so its extra data requests cannot gate execution.
@@ -1652,7 +1638,7 @@ Generate a results summary in plain, human-friendly language (not technical).
   // definition — never the historical run's steps. Historical runs are immutable
   // records; re-running only ever creates a new run on the current workflow.
   const handleRerun = useCallback(
-    (workflow, approval) => {
+    (workflow) => {
       if (!workflow) return;
       if (workflow.prompt?.startsWith("AURA_PILOT_V1\n")) {
         const savedFields = JSON.parse(workflow.prompt.slice("AURA_PILOT_V1\n".length));
@@ -1661,10 +1647,8 @@ Generate a results summary in plain, human-friendly language (not technical).
         setPilotOpen(true);
         return;
       }
-      const auto = approval === "auto";
       const confirmedIntent = workflow.interpretation || workflow.prompt;
       reset();
-      setAutoApprove(auto);
       currentWorkflowIdRef.current = workflow.id || null;
       setOriginalPrompt(workflow.prompt);
       originalPromptRef.current = workflow.prompt;

@@ -112,7 +112,7 @@ test("execution and the My workflows panel are wired to durable history", () => 
   assert.equal(demo.includes("const ensureSavedWorkflowRun = async"), true);
   assert.equal(demo.includes("await ensureSavedWorkflowRun()"), false);
   assert.equal(demo.includes("void ensureSavedWorkflowRun().catch"), true);
-  assert.ok(demo.indexOf("await approvePythonPlan(runId, reviewedPlan.steps, true)")
+  assert.ok(demo.indexOf("await approvePythonPlan(runId, reviewedPlan.steps, false)")
     < demo.indexOf("void ensureSavedWorkflowRun().catch"));
   assert.equal(demo.includes("startPythonPreparation"), false);
   assert.equal(demo.includes("createPythonRunResilient(planningPrompt, null"), true);

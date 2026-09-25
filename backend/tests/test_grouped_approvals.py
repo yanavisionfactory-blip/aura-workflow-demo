@@ -19,8 +19,61 @@ from app.models import (
 )
 from app.native_connectors import native_manifest, native_operations
 from app.policy import canonical_plan_hash
-from app.schemas import ApprovalDecision, PlanApproval
+from app.schemas import ApprovalDecision, PlanApproval, PlanStep, WorkflowPlan
 from app.workflow_templates import weather_presentation_template
+
+
+async def test_static_write_requires_final_preview_even_with_legacy_auto_approval(
+    monkeypatch, database,
+):
+    workspace_id, run_id = str(uuid4()), str(uuid4())
+    plan = WorkflowPlan(
+        name="Presentation", interpretation="Create a presentation",
+        steps=[PlanStep(
+            key="create", agent="designer", tool_slug="canva",
+            operation="canva.presentation.create",
+            arguments={"title": "Ready", "phases": [{"period": "Today", "title": "Ready", "items": ["Done"]}]},
+            reason="Create the requested presentation", expected_output="Design",
+            consequential=False,
+        )],
+    )
+    async def dispatch(_workspace):
+        return None
+
+    monkeypatch.setattr(main, "dispatch_pending", dispatch)
+    async with database() as session:
+        session.add(Workspace(id=workspace_id, name="Approval"))
+        session.add(WorkflowRun(
+            id=run_id, workspace_id=workspace_id, prompt="Create a presentation",
+            plan=plan.model_dump(mode="json"), status=RunStatus.awaiting_approval,
+        ))
+        tool = ToolConnection(
+            workspace_id=workspace_id, slug="canva", display_name="Canva",
+            kind=ToolKind.oauth, allowed_operations=native_operations("canva"), config={},
+        )
+        session.add(tool)
+        await session.flush()
+        session.add(CapabilityManifest(
+            workspace_id=workspace_id, tool_id=tool.id, status="verified",
+            provider_type="oauth", manifest=native_manifest("canva"),
+        ))
+        session.add(RunStep(
+            run_id=run_id, position=0, step_key="create", agent="designer",
+            tool_slug="canva", operation="canva.presentation.create",
+            arguments=plan.steps[0].arguments, status=StepStatus.pending,
+            consequential=False, idempotency_key=str(uuid4()),
+        ))
+        await session.commit()
+        await main.approve_plan(
+            run_id, PlanApproval(approved=True, approve_consequential=True),
+            SimpleNamespace(workspace_id=workspace_id, subject="owner", role="owner"), session,
+        )
+        stored = await session.scalar(select(RunStep).where(RunStep.run_id == run_id))
+        approval = await session.get(Approval, stored.approval_id)
+        assert stored.consequential is True
+        assert stored.status == StepStatus.awaiting_approval
+        assert approval.status == "pending"
+        assert approval.preview == {"status": "preparing"}
 
 
 async def test_weather_plan_holds_dependent_writes_until_their_values_are_ready(

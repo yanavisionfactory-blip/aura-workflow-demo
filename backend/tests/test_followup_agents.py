@@ -814,15 +814,8 @@ async def test_repaired_plan_approval_preserves_completed_write(runtime, monkeyp
             "critic": {"action": "accept"},
         }
         stored.approval_id = "approval"
-        session.add(
-            Approval(
-                id="approval",
-                run_id="run",
-                step_id="step",
-                status="approved",
-                preview={},
-            )
-        )
+        approval = await session.get(Approval, "approval")
+        approval.preview = {}
         session.add(
             RunStep(
                 id="read",

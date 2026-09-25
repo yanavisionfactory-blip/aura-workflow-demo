@@ -11,7 +11,7 @@ async def test_stale_job_preview_refreshes_without_approval_or_dispatch(monkeypa
     run = SimpleNamespace(id="run", workspace_id="tenant", execution_context={"steps": {
         "create": {"provider_result": {"job": {"id": "job", "status": "success",
             "result": {"designs": [{"id": "design"}]}}}}}})
-    step = SimpleNamespace(operation="canva.export.create")
+    step = SimpleNamespace(operation="canva.export.create", tool_slug="canva")
     class Session:
         committed = False
         async def get(self, model, identifier):

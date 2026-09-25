@@ -286,7 +286,7 @@ function JiraBatchReview({ args, editing, onArgumentsChange }) {
   );
 }
 
-function EditableDocument({ preview, onPreviewChange, editing }) {
+function EditableDocument({ preview, onPreviewChange, editing, structuredBody = false }) {
   return (
     <div className="rounded-xl border border-white/8 bg-card/40 overflow-hidden">
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-white/6 bg-card/30">
@@ -313,7 +313,7 @@ function EditableDocument({ preview, onPreviewChange, editing }) {
           <textarea
             value={preview.docBody || ""}
             onChange={(e) => onPreviewChange({ docBody: e.target.value })}
-            readOnly={!editing}
+            readOnly={!editing || structuredBody}
             rows={10}
             className="w-full bg-transparent outline-none text-xs font-sans text-muted-foreground leading-relaxed resize-y border-0"
           />
@@ -330,7 +330,7 @@ const readableField = (key) => String(key)
   .replace(/^./, (first) => first.toUpperCase());
 
 function StructuredArgumentField({ value, editing, onChange, label, depth = 0 }) {
-  if (depth > 5) return <p className="text-xs text-muted-foreground">AURA will prepare these details.</p>;
+  if (depth > 5) return <pre className="overflow-x-auto whitespace-pre-wrap break-words text-xs text-muted-foreground">{JSON.stringify(value, null, 2)}</pre>;
   if (Array.isArray(value)) return (
     <div className="space-y-2">
       {value.length ? value.map((item, index) => (
@@ -339,7 +339,7 @@ function StructuredArgumentField({ value, editing, onChange, label, depth = 0 })
           <StructuredArgumentField value={item} label={label} editing={editing} depth={depth + 1}
             onChange={(next) => onChange(value.map((entry, position) => position === index ? next : entry))} />
         </div>
-      )) : <p className="text-xs text-muted-foreground">AURA will fill this in from earlier steps.</p>}
+      )) : <p className="text-xs text-muted-foreground">No items.</p>}
     </div>
   );
   if (value && typeof value === "object") return (
@@ -655,6 +655,8 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
   const richJiraBatch = contract.operation === "jira.issues.create_from_blocks";
   const richPresentation = contract.operation === "canva.presentation.create";
   const richDocument = contract.kind === "document";
+  const documentTitleKey = ["title", "name", "summary"].find((key) => Object.hasOwn(args, key));
+  const documentBodyKey = ["body", "content", "description", "children"].find((key) => Object.hasOwn(args, key));
   const [editing, setEditing] = useState(() => richPresentation || richDocument || richJiraBatch);
   const updateArguments = (nextArguments) => onUpdate(index, {
     arguments: nextArguments,
@@ -708,7 +710,8 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
             {richEmail && <EditableEmail preview={p} onPreviewChange={updatePreview} onCopyChange={updateEmailCopy} args={args} contract={contract} editing={editing} artifacts={contract.artifacts || (Array.isArray(args.attachments) ? args.attachments.map((attachment) => ({ name: attachment.filename || "Attachment", source: "From this workflow" })) : [])} />}
             {richTicket && <EditableJiraTask preview={p} onPreviewChange={updatePreview} editing={editing} />}
             {richJiraBatch && <JiraBatchReview args={args} editing={editing} onArgumentsChange={updateArguments} />}
-            {richDocument && <EditableDocument preview={p} onPreviewChange={updatePreview} editing={editing} />}
+            {richDocument && <EditableDocument preview={p} onPreviewChange={updatePreview} editing={editing}
+              structuredBody={documentBodyKey && typeof args[documentBodyKey] !== "string"} />}
             {richPresentation && (
               <EditablePresentation
                 args={args}
@@ -717,17 +720,18 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
                 onArgumentsChange={updateArguments}
               />
             )}
-            {!richPresentation && !richDocument && !richEmail && !richJiraBatch && (
-              <SchemaArgumentsEditor
-                contract={contract}
-                args={args}
-                editing={editing}
-                onArgumentsChange={updateArguments}
-                onFieldValidity={fieldValidity}
-                excludeKeys={richTicket
-                    ? ["project_key", "projectKey", "project", "summary", "description", "assignee_id", "assignee"] : []}
-              />
-            )}
+            <SchemaArgumentsEditor
+              contract={contract}
+              args={args}
+              editing={editing}
+              onArgumentsChange={updateArguments}
+              onFieldValidity={fieldValidity}
+              excludeKeys={richEmail ? ["to", "subject", "body", "attachments"]
+                : richDocument ? [documentTitleKey, ...(typeof args[documentBodyKey] === "string" ? [documentBodyKey] : [])]
+                : richPresentation ? ["title", "phases"]
+                : richJiraBatch ? ["project_key", "source_blocks"]
+                : richTicket ? ["project_key", "projectKey", "project", "summary", "description", "assignee_id", "assignee"] : []}
+            />
           </>
         ) : p.type === "email" ? <EditableEmail preview={p} onPreviewChange={updatePreview} editing={editing} />
           : p.type === "jira" ? <EditableJiraTask preview={p} onPreviewChange={updatePreview} editing={editing} />
@@ -778,7 +782,8 @@ export default function PreviewView({ preview, steps, prepared = false, onApprov
     && reviewSteps[0].step.operation === "jira.issues.create_from_blocks"
     && !Array.isArray((reviewSteps[0].step.resolvedArguments || reviewSteps[0].step.arguments || {}).source_blocks);
   const unfinishedReviews = reviewSteps.some(({ step }) => unresolvedActionValues(step));
-  const approvalBlocked = invalidFields.size > 0 || contractErrors.length > 0 || emptyJiraBatch || unfinishedReviews;
+  const approvalBlocked = (prepared && reviewSteps.length === 0)
+    || invalidFields.size > 0 || contractErrors.length > 0 || emptyJiraBatch || unfinishedReviews;
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
