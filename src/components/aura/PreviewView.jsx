@@ -36,9 +36,9 @@ function EditableEmail({ preview, onPreviewChange, onCopyChange = null, editing,
     }
   };
   return (
-    <div className="overflow-hidden">
-      <div className="flex items-center justify-between pb-3 text-xs text-muted-foreground">
-        <span>Review the email</span>
+    <div className="overflow-hidden rounded-xl border border-white/10 bg-[#0c1321]">
+      <div className="flex items-center justify-between gap-3 border-b border-white/10 px-5 py-3 text-xs text-muted-foreground">
+        <span className="flex items-center gap-2 font-medium text-foreground"><Mail className="h-4 w-4 text-primary" /> Email preview</span>
         <button
           onClick={() => downloadEmailEml(`aura-email-${safeName(preview.subject)}.eml`, preview)}
           className="flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:border-white/20"
@@ -46,7 +46,20 @@ function EditableEmail({ preview, onPreviewChange, onCopyChange = null, editing,
           <FileDown className="w-3 h-3" /> Download draft
         </button>
       </div>
-      <div className="space-y-3 text-sm">
+      {!editing ? (
+        <div className="space-y-4 p-5 text-sm">
+          <div className="grid gap-1 sm:grid-cols-[5rem_1fr]"><span className="text-muted-foreground">To</span><span className="break-all font-medium text-foreground">{preview.to}</span></div>
+          <div className="grid gap-1 sm:grid-cols-[5rem_1fr]"><span className="text-muted-foreground">Subject</span><span className="font-medium text-foreground">{preview.subject}</span></div>
+          <p className="whitespace-pre-wrap break-words border-t border-white/10 pt-4 leading-relaxed text-foreground">{preview.body}</p>
+          {artifacts.length > 0 && <div className="space-y-2 border-t border-white/10 pt-3">
+            <p className="text-xs text-muted-foreground">Attachments</p>
+            {artifacts.map((artifact, index) => <p key={`${artifact.name}-${index}`} className="flex items-center gap-2 text-xs text-foreground">
+              <Paperclip className="h-3.5 w-3.5 text-primary" /> {artifact.name}
+            </p>)}
+          </div>}
+          {preview.note && <p className="text-xs italic text-muted-foreground/70">{preview.note}</p>}
+        </div>
+      ) : <div className="space-y-3 p-5 text-sm">
         <div className="flex gap-3 items-center">
           <span className="w-20 flex-shrink-0 text-muted-foreground">To</span>
           <input
@@ -105,7 +118,7 @@ function EditableEmail({ preview, onPreviewChange, onCopyChange = null, editing,
           </div>
           {editError && <p role="alert" className="mt-2 text-xs text-rose-300">{editError}</p>}
         </div>}
-      </div>
+      </div>}
     </div>
   );
 }
@@ -642,7 +655,7 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
   const richJiraBatch = contract.operation === "jira.issues.create_from_blocks";
   const richPresentation = contract.operation === "canva.presentation.create";
   const richDocument = contract.kind === "document";
-  const [editing, setEditing] = useState(() => richEmail || richPresentation || richDocument || richJiraBatch);
+  const [editing, setEditing] = useState(() => richPresentation || richDocument || richJiraBatch);
   const updateArguments = (nextArguments) => onUpdate(index, {
     arguments: nextArguments,
     resolvedArguments: nextArguments,
@@ -683,7 +696,7 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
             </div>
             <button type="button" onClick={() => setEditing((e) => !e)}
               className="flex items-center gap-1 rounded-lg border border-white/10 px-3 py-2 text-xs text-muted-foreground hover:border-primary/50 hover:text-primary">
-              <Pencil className="h-3.5 w-3.5" /> {editing ? "Editing" : "Edit in AURA"}
+              <Pencil className="h-3.5 w-3.5" /> {editing ? "Editing" : richEmail ? "Edit" : "Edit in AURA"}
             </button>
           </div>
           {step.riskNote && !richJiraBatch && <p className="mt-2 text-xs text-amber-200">{step.riskNote}</p>}
