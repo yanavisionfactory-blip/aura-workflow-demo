@@ -4,10 +4,36 @@ import { Eye, Mail, Database, ArrowLeft, Play, List, FileDown, FileText, Pencil,
 import { Button } from "@/components/ui/button";
 import { aura } from "@/api/auraClient";
 import { downloadEmailEml, safeName } from "@/lib/auraDownload";
-import { applyPresentationCopy, presentationCopySchema } from "@/lib/canvaCopyEdit.mjs";
+import { applyPresentationCopy, dynamicReferences, presentationCopySchema } from "@/lib/canvaCopyEdit.mjs";
+import { applyEmailCopy, emailCopySchema } from "@/lib/emailCopyEdit.mjs";
 import { fallbackReviewContract, mergeLegacyPreviewIntoArguments, setArgumentAtPath, validateReviewArguments } from "@/lib/approvalReview.mjs";
 
-function EditableEmail({ preview, onPreviewChange, editing, artifacts = [] }) {
+function EditableEmail({ preview, onPreviewChange, onCopyChange = null, editing, artifacts = [], args = { subject: "", body: "" }, contract = null }) {
+  const [instruction, setInstruction] = useState("");
+  const [applying, setApplying] = useState(false);
+  const [editError, setEditError] = useState("");
+  const applyInstruction = async () => {
+    if (!instruction.trim() || applying) return;
+    setApplying(true);
+    setEditError("");
+    try {
+      const suggestion = await aura.integrations.Core.InvokeLLM({
+        prompt: "Revise only the subject and message of this email according to the user's request. Keep every {{...}} reference exactly intact; those values come from earlier steps. Do not change the recipient, attachments, or claim the email was sent. Return subject and body as JSON.\nCurrent email: "
+          + JSON.stringify({ subject: args.subject || "", body: args.body || "" })
+          + "\nUser request: " + instruction.trim(),
+        response_json_schema: emailCopySchema,
+      });
+      const revised = applyEmailCopy(args, suggestion);
+      const errors = validateReviewArguments(contract, revised);
+      if (errors.length) throw new Error(errors[0].message);
+      onCopyChange(revised);
+      setInstruction("");
+    } catch (error) {
+      setEditError(error.message || "AURA could not apply that change. You can edit the email directly.");
+    } finally {
+      setApplying(false);
+    }
+  };
   return (
     <div className="overflow-hidden">
       <div className="flex items-center justify-between pb-3 text-xs text-muted-foreground">
@@ -23,8 +49,8 @@ function EditableEmail({ preview, onPreviewChange, editing, artifacts = [] }) {
         <div className="flex gap-3 items-center">
           <span className="w-20 flex-shrink-0 text-muted-foreground">To</span>
           <input
-            value={String(preview.to || "").toLowerCase() === "me" ? "" : preview.to || ""}
-            placeholder={String(preview.to || "").toLowerCase() === "me" ? "Your connected Gmail address" : "Recipient email"}
+            value={String(preview.to || "").toLowerCase() === "me" || dynamicReferences(preview.to).length ? "" : preview.to || ""}
+            placeholder={String(preview.to || "").toLowerCase() === "me" || dynamicReferences(preview.to).length ? "Your connected Gmail address" : "Recipient email"}
             onChange={(e) => onPreviewChange({ to: e.target.value })}
             readOnly={!editing}
             className={`min-w-0 flex-1 bg-transparent border-b py-1 outline-none ${editing ? "border-white/10 focus:border-primary" : "border-transparent"}`}
@@ -33,7 +59,8 @@ function EditableEmail({ preview, onPreviewChange, editing, artifacts = [] }) {
         <div className="flex gap-3 items-center">
           <span className="w-20 flex-shrink-0 text-muted-foreground">Subject</span>
           <input
-            value={preview.subject || ""}
+            value={dynamicReferences(preview.subject).length ? "" : preview.subject || ""}
+            placeholder={dynamicReferences(preview.subject).length ? "Filled from the completed steps" : "Subject"}
             onChange={(e) => onPreviewChange({ subject: e.target.value })}
             readOnly={!editing}
             className={`min-w-0 flex-1 bg-transparent border-b py-1 font-medium outline-none ${editing ? "border-white/10 focus:border-primary" : "border-transparent"}`}
@@ -42,7 +69,8 @@ function EditableEmail({ preview, onPreviewChange, editing, artifacts = [] }) {
         <div className="grid gap-3 pt-2 sm:grid-cols-[5rem_1fr]">
           <span className="text-muted-foreground">Message</span>
           <textarea
-            value={preview.body || ""}
+            value={dynamicReferences(preview.body).length ? "" : preview.body || ""}
+            placeholder={dynamicReferences(preview.body).length ? "Filled from the completed steps" : "Write your message"}
             onChange={(e) => onPreviewChange({ body: e.target.value })}
             readOnly={!editing}
             rows={4}
@@ -65,6 +93,14 @@ function EditableEmail({ preview, onPreviewChange, editing, artifacts = [] }) {
           </div>
         )}
         {preview.note && <p className="text-[11px] text-muted-foreground/60 italic pt-1">{preview.note}</p>}
+        {editing && onCopyChange && <div className="border-t border-white/10 pt-4">
+          <label htmlFor="aura-email-instruction" className="flex items-center gap-2 text-sm font-medium"><Sparkles className="h-4 w-4 text-primary" /> Tell AURA what to change in this email</label>
+          <div className="mt-3 flex flex-col gap-3 sm:flex-row">
+            <textarea id="aura-email-instruction" value={instruction} onChange={(event) => setInstruction(event.target.value)} rows={2} placeholder="For example: Make the message warmer and shorter." className="min-w-0 flex-1 resize-y rounded-xl border border-white/10 bg-white/[0.03] p-3 text-sm outline-none focus:border-primary" />
+            <button type="button" disabled={applying || !instruction.trim()} onClick={applyInstruction} className="rounded-xl bg-primary px-5 py-3 text-sm font-medium text-primary-foreground disabled:opacity-50">{applying ? "Applying…" : "Apply with AURA"}</button>
+          </div>
+          {editError && <p role="alert" className="mt-2 text-xs text-rose-300">{editError}</p>}
+        </div>}
       </div>
     </div>
   );
@@ -338,7 +374,7 @@ function SchemaArgumentsEditor({ contract, args, editing, onArgumentsChange, onF
   );
 }
 
-function EditablePresentation({ args, contract, editing, onArgumentsChange, onFieldValidity }) {
+function EditablePresentation({ args, contract, editing, onArgumentsChange }) {
   const phases = Array.isArray(args.phases) ? args.phases : [];
   const [selectedSlide, setSelectedSlide] = useState(0);
   const [instruction, setInstruction] = useState("");
@@ -348,6 +384,9 @@ function EditablePresentation({ args, contract, editing, onArgumentsChange, onFi
   const activeSlide = phases[activeIndex] || { period: "", title: args.title || "Untitled design", items: [] };
   const sceneNames = { rain_window: "Rain at the window", paper_boat: "Paper boat", lantern: "Lantern" };
   const phaseLimit = contract.fields?.find((field) => field.key === "phases")?.max_items || 4;
+  const displayValue = (value) => dynamicReferences(value).length ? String(value || "").replace(/\{\{[^}]+\}\}/g, "live information") : value || "";
+  const editableValue = (value) => dynamicReferences(value).length ? "" : value || "";
+  const inputStyle = editing ? "rounded-sm outline-none hover:ring-1 hover:ring-[#6085bb]/50 focus:ring-2 focus:ring-[#6085bb]" : "outline-none";
   const updatePhase = (index, patch) => {
     onArgumentsChange({ ...args, phases: phases.map((phase, i) => i === index ? { ...phase, ...patch } : phase) });
   };
@@ -357,7 +396,7 @@ function EditablePresentation({ args, contract, editing, onArgumentsChange, onFi
     setEditError("");
     try {
       const suggestion = await aura.integrations.Core.InvokeLLM({
-        prompt: "Revise only the wording of this presentation according to the user's instruction. Keep the same number and order of slides. Never invent an external action or claim Canva has been edited. Return the full title, subtitle and all slides with period, title and items as JSON.\nCurrent content: "
+        prompt: "Revise only the wording of this presentation according to the user's instruction. Keep the same number and order of slides. Keep every {{...}} reference exactly intact; those values come from earlier steps. Never invent an external action or claim Canva has been edited. Return the full title, subtitle and all slides with period, title and items as JSON.\nCurrent content: "
           + JSON.stringify({ title: args.title || "", subtitle: args.subtitle || "", slides: phases.map(({ period, title, items }) => ({ period, title, items })) })
           + "\nUser instruction: " + instruction.trim(),
         response_json_schema: presentationCopySchema,
@@ -378,7 +417,7 @@ function EditablePresentation({ args, contract, editing, onArgumentsChange, onFi
     <div>
       <div className="flex flex-wrap items-center gap-2 border-b border-white/10 px-5 py-3">
         <span className="rounded-xl border border-primary/40 bg-primary/10 px-3 py-2 text-xs text-primary">AURA preview</span>
-        <span className="text-xs text-muted-foreground">A preview of what will be created after approval</span>
+        <span className="text-xs text-muted-foreground">{editing ? "Click the slide to edit its text" : "A preview of what will be created after approval"}</span>
       </div>
       <div className="flex min-h-[320px] bg-[#20222e] sm:min-h-[430px]">
         {phases.length > 1 && (
@@ -388,28 +427,38 @@ function EditablePresentation({ args, contract, editing, onArgumentsChange, onFi
               <button key={index} type="button" onClick={() => setSelectedSlide(index)}
                 aria-current={activeIndex === index ? "true" : undefined}
                 className={activeIndex === index ? "rounded-xl border border-primary bg-primary/15 p-2 text-left text-xs" : "rounded-xl border border-white/10 bg-white/5 p-2 text-left text-xs hover:border-white/25"}>
-                <span className="block truncate text-muted-foreground">{index + 1} · {phase.period || "Slide"}</span>
-                <span className="mt-1 block truncate">{phase.title || "Untitled slide"}</span>
+                <span className="block truncate text-muted-foreground">{index + 1} · {displayValue(phase.period) || "Slide"}</span>
+                <span className="mt-1 block truncate">{displayValue(phase.title) || "Untitled slide"}</span>
               </button>
             ))}
           </nav>
         )}
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex items-center justify-between gap-2 border-b border-white/10 px-4 py-3 text-xs">
-            <span className="truncate font-medium">{args.title || "Untitled presentation"}</span>
+            <input aria-label="Presentation title" value={editableValue(args.title)} placeholder={dynamicReferences(args.title).length ? displayValue(args.title) : "Presentation title"} onChange={(event) => onArgumentsChange({ ...args, title: event.target.value })} readOnly={!editing} className={`min-w-0 flex-1 truncate border-0 bg-transparent font-medium text-foreground ${inputStyle}`} />
             <span className="shrink-0 text-muted-foreground">{phases.length || 1} {phases.length === 1 ? "slide" : "slides"}</span>
           </div>
           <div className="flex flex-1 items-center justify-center p-3 sm:p-6">
             <div className="relative aspect-video w-full max-w-3xl overflow-hidden bg-[#f1f7ff] p-5 text-[#1e2b3d] shadow-xl sm:p-9">
               <div aria-hidden="true" className="absolute -right-[12%] -top-[34%] h-[92%] w-[42%] rounded-full bg-[#c5def8]" />
               <div className="relative flex h-full flex-col">
-                <span className="text-[10px] font-semibold uppercase tracking-[.18em] text-[#42638c] sm:text-xs">{activeSlide.period || "YOUR STORY"}</span>
-                <h3 className="mt-4 max-w-[80%] break-words text-xl font-semibold leading-tight text-[#172238] sm:mt-6 sm:text-3xl">{activeSlide.title || args.title || "Untitled slide"}</h3>
-                <p className="mt-2 max-w-[80%] break-words text-xs text-[#4b607a] sm:text-sm">{args.subtitle}</p>
-                <div className="mt-4 space-y-1 text-xs text-[#364d67] sm:mt-7 sm:text-sm">
-                  {(activeSlide.items || []).slice(0, 4).map((item, index) => <p key={index} className="max-w-[86%] break-words">{item}</p>)}
+                <input aria-label={`Slide ${activeIndex + 1} label`} value={editableValue(activeSlide.period)} placeholder={dynamicReferences(activeSlide.period).length ? displayValue(activeSlide.period) : "SLIDE LABEL"} onChange={(event) => updatePhase(activeIndex, { period: event.target.value })} readOnly={!editing} className={`w-[80%] border-0 bg-transparent text-[10px] font-semibold uppercase tracking-[.18em] text-[#42638c] sm:text-xs ${inputStyle}`} />
+                <textarea aria-label={`Slide ${activeIndex + 1} title`} value={editableValue(activeSlide.title)} placeholder={dynamicReferences(activeSlide.title).length ? displayValue(activeSlide.title) : "Slide heading"} onChange={(event) => updatePhase(activeIndex, { title: event.target.value })} readOnly={!editing} rows={2} className={`mt-4 w-[80%] resize-none border-0 bg-transparent text-xl font-semibold leading-tight text-[#172238] sm:mt-6 sm:text-3xl ${inputStyle}`} />
+                <textarea aria-label="Presentation subtitle" value={editableValue(args.subtitle)} placeholder={dynamicReferences(args.subtitle).length ? displayValue(args.subtitle) : "Add a subtitle"} onChange={(event) => onArgumentsChange({ ...args, subtitle: event.target.value })} readOnly={!editing} rows={2} className={`mt-2 w-[80%] resize-none border-0 bg-transparent text-xs text-[#4b607a] sm:text-sm ${inputStyle}`} />
+                <div className="mt-4 max-h-[30%] space-y-1 overflow-y-auto text-xs text-[#364d67] sm:mt-7 sm:text-sm">
+                  {(activeSlide.items || []).map((item, index) => <div key={index} className="flex items-center gap-2">
+                    <input aria-label={`Slide ${activeIndex + 1} line ${index + 1}`} value={editableValue(item)} placeholder={dynamicReferences(item).length ? displayValue(item) : "Add text"} onChange={(event) => updatePhase(activeIndex, { items: activeSlide.items.map((line, i) => i === index ? event.target.value : line) })} readOnly={!editing} className={`min-w-0 w-[86%] border-0 bg-transparent text-[#364d67] ${inputStyle}`} />
+                    {editing && activeSlide.items.length > 1 && <button type="button" aria-label={`Remove line ${index + 1}`} onClick={() => updatePhase(activeIndex, { items: activeSlide.items.filter((_, i) => i !== index) })} className="text-[#647997] hover:text-rose-500"><Trash2 className="h-3 w-3" /></button>}
+                  </div>)}
+                  {editing && (activeSlide.items || []).length < 5 && <button type="button" onClick={() => updatePhase(activeIndex, { items: [...(activeSlide.items || []), ""] })} className="text-[10px] text-[#42638c] hover:underline">+ Add text</button>}
                 </div>
-                {activeSlide.scene && <span className="mt-auto text-[10px] text-[#647997]">Illustration: {sceneNames[activeSlide.scene] || activeSlide.scene}</span>}
+                {args.layout === "slides" && <div className="mt-auto flex items-center gap-2 text-[10px] text-[#647997]">
+                  <span>Illustration</span>
+                  <select aria-label={`Slide ${activeIndex + 1} illustration`} value={activeSlide.scene || ""} onChange={(event) => updatePhase(activeIndex, { scene: event.target.value || undefined })} disabled={!editing} className="max-w-[65%] rounded bg-white/80 px-1 py-0.5 text-[#42638c] outline-none disabled:opacity-70">
+                    <option value="">Text only</option>
+                    {Object.entries(sceneNames).map(([scene, label]) => <option key={scene} value={scene}>{label}</option>)}
+                  </select>
+                </div>}
               </div>
             </div>
           </div>
@@ -418,7 +467,7 @@ function EditablePresentation({ args, contract, editing, onArgumentsChange, onFi
               {phases.map((phase, index) => (
                 <button type="button" key={index} onClick={() => setSelectedSlide(index)}
                   className={activeIndex === index ? "shrink-0 rounded-lg bg-primary px-3 py-2 text-xs text-primary-foreground" : "shrink-0 rounded-lg bg-white/10 px-3 py-2 text-xs"}>
-                  {index + 1} · {phase.title || "Slide"}
+                  {index + 1} · {displayValue(phase.title) || "Slide"}
                 </button>
               ))}
             </div>
@@ -426,36 +475,10 @@ function EditablePresentation({ args, contract, editing, onArgumentsChange, onFi
         </div>
       </div>
       {editing && (
-        <div className="space-y-4 border-t border-white/10 px-5 py-5">
-          <p className="text-sm font-medium">Edit this design</p>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="text-xs text-muted-foreground">Presentation title
-              <input aria-label="Presentation title" value={args.title || ""} onChange={(event) => onArgumentsChange({ ...args, title: event.target.value })} className="mt-1 w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-foreground outline-none focus:border-primary" />
-            </label>
-            <label className="text-xs text-muted-foreground">Subtitle
-              <input aria-label="Presentation subtitle" value={args.subtitle || ""} onChange={(event) => onArgumentsChange({ ...args, subtitle: event.target.value })} className="mt-1 w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-foreground outline-none focus:border-primary" />
-            </label>
-            {phases.length > 0 && <>
-              <label className="text-xs text-muted-foreground">Slide {activeIndex + 1} heading
-                <input aria-label={"Phase " + (activeIndex + 1) + " title"} value={activeSlide.title || ""} onChange={(event) => updatePhase(activeIndex, { title: event.target.value })} className="mt-1 w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-foreground outline-none focus:border-primary" />
-              </label>
-              <label className="text-xs text-muted-foreground">Slide {activeIndex + 1} label
-                <input aria-label={"Phase " + (activeIndex + 1) + " period"} value={activeSlide.period || ""} onChange={(event) => updatePhase(activeIndex, { period: event.target.value })} className="mt-1 w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-foreground outline-none focus:border-primary" />
-              </label>
-              <label className="text-xs text-muted-foreground sm:col-span-2">Slide {activeIndex + 1} text · one line per point
-                <textarea aria-label={"Phase " + (activeIndex + 1) + " items"} value={(activeSlide.items || []).join("\n")} rows={3} onChange={(event) => updatePhase(activeIndex, { items: event.target.value.split("\n").map((item) => item.trim()).filter(Boolean) })} className="mt-1 w-full resize-y rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-foreground outline-none focus:border-primary" />
-              </label>
-              {args.layout === "slides" && <label className="text-xs text-muted-foreground">Slide {activeIndex + 1} illustration
-                <select aria-label={"Phase " + (activeIndex + 1) + " illustration"} value={activeSlide.scene || ""} onChange={(event) => updatePhase(activeIndex, { scene: event.target.value || undefined })} className="mt-1 w-full rounded-lg border border-white/10 bg-[#20222e] px-3 py-2 text-sm text-foreground outline-none focus:border-primary">
-                  <option value="">Text only</option>
-                  {Object.entries(sceneNames).map(([scene, label]) => <option key={scene} value={scene}>{label}</option>)}
-                </select>
-              </label>}
-            </>}
-          </div>
+        <div className="border-t border-white/10 px-5 py-3">
           <div className="flex flex-wrap gap-3">
             {phases.length > 1 && <button type="button" onClick={() => { onArgumentsChange({ ...args, phases: phases.filter((_, index) => index !== activeIndex) }); setSelectedSlide(Math.max(0, activeIndex - 1)); }} className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-rose-300"><Trash2 className="h-3.5 w-3.5" /> Remove slide</button>}
-            {phases.length < phaseLimit && <button type="button" onClick={() => { onArgumentsChange({ ...args, phases: [...phases, { period: "", title: "", items: [""] }] }); setSelectedSlide(phases.length); }} className="inline-flex items-center gap-1 text-xs text-primary"><Plus className="h-3.5 w-3.5" /> Add slide</button>}
+            {phases.length < phaseLimit && <button type="button" onClick={() => { onArgumentsChange({ ...args, phases: [...phases, { period: `Slide ${phases.length + 1}`, title: "New slide", items: ["Add text"] }] }); setSelectedSlide(phases.length); }} className="inline-flex items-center gap-1 text-xs text-primary"><Plus className="h-3.5 w-3.5" /> Add slide</button>}
           </div>
         </div>
       )}
@@ -468,7 +491,6 @@ function EditablePresentation({ args, contract, editing, onArgumentsChange, onFi
         {editError && <p role="alert" className="mt-2 text-xs text-rose-300">{editError}</p>}
         <p className="mt-2 text-xs text-muted-foreground">Changes here update this preview. The design will be created in Canva after you approve.</p>
       </div>}
-      <div className="px-5 pb-5"><SchemaArgumentsEditor contract={contract} args={args} editing={editing} onArgumentsChange={onArgumentsChange} onFieldValidity={onFieldValidity} excludeKeys={["title", "subtitle", "phases"]} /></div>
     </div>
   );
 }
@@ -564,12 +586,18 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
   });
   const updatePreview = (patch) => {
     const nextPreview = { ...p, ...patch };
+    const nextArguments = richEmail ? { ...args, ...patch } : mergeLegacyPreviewIntoArguments(step, nextPreview);
     onUpdate(index, {
       preview: nextPreview,
-      arguments: mergeLegacyPreviewIntoArguments(step, nextPreview),
-      resolvedArguments: mergeLegacyPreviewIntoArguments(step, nextPreview),
+      arguments: nextArguments,
+      resolvedArguments: nextArguments,
     });
   };
+  const updateEmailCopy = (nextArguments) => onUpdate(index, {
+    preview: { ...p, subject: nextArguments.subject, body: nextArguments.body },
+    arguments: nextArguments,
+    resolvedArguments: nextArguments,
+  });
   const fieldValidity = (fieldKey, valid) => onFieldValidity(`${index}:${fieldKey}`, valid);
 
   if (!isModify) return null;
@@ -601,7 +629,7 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
       <div className={richPresentation ? "border-t border-white/10" : "border-t border-white/10 p-5"}>
         {step.reviewContract ? (
           <>
-            {richEmail && <EditableEmail preview={p} onPreviewChange={updatePreview} editing={editing} artifacts={contract.artifacts || (Array.isArray(args.attachments) ? args.attachments.map((attachment) => ({ name: attachment.filename || "Attachment", source: "From this workflow" })) : [])} />}
+            {richEmail && <EditableEmail preview={p} onPreviewChange={updatePreview} onCopyChange={updateEmailCopy} args={args} contract={contract} editing={editing} artifacts={contract.artifacts || (Array.isArray(args.attachments) ? args.attachments.map((attachment) => ({ name: attachment.filename || "Attachment", source: "From this workflow" })) : [])} />}
             {richTicket && <EditableJiraTask preview={p} onPreviewChange={updatePreview} editing={editing} />}
             {richDocument && <EditableDocument preview={p} onPreviewChange={updatePreview} editing={editing} />}
             {richPresentation && (
@@ -610,19 +638,16 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
                 contract={contract}
                 editing={editing}
                 onArgumentsChange={updateArguments}
-                onFieldValidity={fieldValidity}
               />
             )}
-            {!richPresentation && !richDocument && (
+            {!richPresentation && !richDocument && !richEmail && (
               <SchemaArgumentsEditor
                 contract={contract}
                 args={args}
                 editing={editing}
                 onArgumentsChange={updateArguments}
                 onFieldValidity={fieldValidity}
-                excludeKeys={richEmail
-                  ? ["to", "subject", "body", "attachments"]
-                  : richTicket
+                excludeKeys={richTicket
                     ? ["project_key", "projectKey", "project", "summary", "description", "assignee_id", "assignee"]
                     : []}
               />
