@@ -169,6 +169,11 @@ def build_review_contract(
         if key not in protected
     ]
     kind = _review_kind(operation)
+    title = (
+        "Review Jira tasks before creating them"
+        if operation == "jira.issues.create_from_blocks"
+        else _review_title(kind, operation, tool_name)
+    )
     artifacts = []
     if operation == "gmail.send":
         for attachment in arguments.get("attachments") or []:
@@ -187,7 +192,7 @@ def build_review_contract(
         "version": 1,
         "kind": kind,
         "operation": operation,
-        "title": _review_title(kind, operation, tool_name),
+        "title": title,
         "description": capability.get("description") or "Review the exact values AURA will submit.",
         "fields": fields,
         "editable_paths": [field["path"] for field in fields if field["editable"]],
