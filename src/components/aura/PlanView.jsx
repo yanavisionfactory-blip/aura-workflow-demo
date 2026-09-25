@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { AlertTriangle, Brain, Plus, ArrowRight, Sparkles, Loader2, Check, X, RotateCcw } from "lucide-react";
@@ -119,6 +119,8 @@ export default function PlanView({
   }, []);
   const [connectingTool, setConnectingTool] = useState(null);
   const [connectionErrors, setConnectionErrors] = useState({});
+  const checkingRef = useRef(false);
+  const connectingRef = useRef(false);
   const handleConnect = async (name, provider = null) => {
     setConnectingTool(name);
     setConnectionErrors((prev) => ({ ...prev, [name]: "" }));
@@ -139,17 +141,22 @@ export default function PlanView({
   };
 
   const handleConnectAll = async () => {
+    connectingRef.current = true;
     const recovered = [];
-    for (const tool of needed) {
-      const result = await handleConnect(tool.name, tool.provider);
-      if (!result?.connected) return;
-      recovered.push({
-        name: tool.name,
-        connectionId: result.connection?.id || result.tool?.id || null,
-      });
-    }
-    if (recovered.length === needed.length && recovered.every((item) => item.connectionId)) {
-      await onConnectionRecovered?.(recovered);
+    try {
+      for (const tool of needed) {
+        const result = await handleConnect(tool.name, tool.provider);
+        if (!result?.connected) return;
+        recovered.push({
+          name: tool.name,
+          connectionId: result.connection?.id || result.tool?.id || null,
+        });
+      }
+      if (recovered.length === needed.length && recovered.every((item) => item.connectionId)) {
+        await onConnectionRecovered?.(recovered);
+      }
+    } finally {
+      connectingRef.current = false;
     }
   };
 
@@ -228,9 +235,10 @@ export default function PlanView({
   const planningFailure = steps.length === 0 && Boolean(plan.error) && !connectionOnly;
   const connectionsCanOpen = planningConnectionsEnabled(plan.compileState);
 
-  const handleRecheck = useCallback(async (targetName = "") => {
-    if (!connectionsReady || !needed.length) return;
-    setConnectingTool(targetName || "accounts");
+  const handleRecheck = useCallback(async (targetName = "", silent = false) => {
+    if (!connectionsReady || !needed.length || checkingRef.current || connectingRef.current) return;
+    checkingRef.current = true;
+    if (!silent) setConnectingTool(targetName || "accounts");
     try {
       await hydrateConnections({ force: true });
       const recovered = [];
@@ -240,27 +248,34 @@ export default function PlanView({
         recovered.push({ name: tool.name, connectionId: account.id });
       }
       if (recovered.length) await onConnectionRecovered?.(recovered);
-      else if (targetName) setConnectionErrors((previous) => ({
+      else if (targetName && !silent) setConnectionErrors((previous) => ({
         ...previous, [targetName]: "AURA has not verified this account yet. Finish provider consent, then check again.",
       }));
     } catch (error) {
-      if (targetName) setConnectionErrors((previous) => ({
+      if (targetName && !silent) setConnectionErrors((previous) => ({
         ...previous, [targetName]: error?.message || "AURA couldn't verify this connection yet.",
       }));
     } finally {
-      setConnectingTool(null);
+      checkingRef.current = false;
+      if (!silent) setConnectingTool(null);
     }
   }, [connectionsReady, needed, onConnectionRecovered]);
 
   useEffect(() => {
-    const onFocus = () => { if (document.visibilityState === "visible") void handleRecheck(); };
+    if (!connectionsReady || !needed.length || !connectionsCanOpen) return undefined;
+    // Consent may finish in another tab, browser or device. The plan checks
+    // verified backend state while visible; it never infers consent from the
+    // popup closing and never starts an external action automatically.
+    const onFocus = () => { if (document.visibilityState === "visible") void handleRecheck("", true); };
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onFocus);
+    const timer = window.setInterval(onFocus, 5000);
     return () => {
+      window.clearInterval(timer);
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onFocus);
     };
-  }, [handleRecheck]);
+  }, [connectionsReady, needed.length, connectionsCanOpen, handleRecheck]);
 
   const onDragEnd = (res) => {
     if (!res.destination || res.source.index === res.destination.index) return;
@@ -326,7 +341,8 @@ export default function PlanView({
     setPlanError("");
     try {
       if (onRevisePlan) {
-        await onRevisePlan(text);
+        const result = await onRevisePlan(text);
+        if (result?.ok === false) throw new Error(result.error || "AURA couldn't revise this plan.");
         setPlanInstruction("");
         setPlanEditing(false);
         return;
@@ -359,7 +375,7 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         setPlanError("Couldn't revise the plan — try rephrasing.");
       }
     } catch (e) {
-      setPlanError("Couldn't revise the plan — try rephrasing.");
+      setPlanError(e?.message || "Couldn't revise the plan — try rephrasing.");
     } finally {
       setPlanSubmitting(false);
     }
@@ -642,7 +658,7 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
             onClick={() => onApprove(steps, name.trim())}
-            disabled={missingTools.length > 0 || steps.length === 0 || Boolean(plan.error) || plan.compileState === "blocked"}
+            disabled={missingTools.length > 0 || steps.length === 0 || Boolean(plan.error) || plan.provisional || (plan.compileState && plan.compileState !== "ready")}
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white disabled:cursor-not-allowed disabled:opacity-40"
           >
             {approveLabel} <ArrowRight className="w-4 h-4" />

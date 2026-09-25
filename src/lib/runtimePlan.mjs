@@ -2,9 +2,33 @@ export function hasDurablePlan(runId, backendPlan) {
   return Boolean(runId && backendPlan?.steps?.length);
 }
 
-export function planningRequestPrompt(confirmedIntent, revisionInstruction = "") {
+export function sameExecutablePlan(before = [], after = []) {
+  const identity = (steps) => steps.map((step) => ({
+    tool_slug: step.tool_slug || step.tool,
+    operation: step.operation,
+    arguments: step.arguments,
+    reason: step.reason || step.action,
+    expected_output: step.expected_output || step.output,
+    depends_on: step.depends_on || [],
+  }));
+  return JSON.stringify(identity(before)) === JSON.stringify(identity(after));
+}
+
+export function planningRequestPrompt(confirmedIntent, revisionInstruction = "", reviewedSteps = []) {
   const intent = String(confirmedIntent || "").trim();
   const revision = String(revisionInstruction || "").trim();
   if (!revision) return intent;
-  return `${intent}\n\nThe user reviewed the proposed workflow and requested this change: ${revision}`;
+  const steps = Array.isArray(reviewedSteps) ? reviewedSteps.map((step, index) => ({
+    position: index + 1,
+    key: step.key,
+    tool: step.tool || step.tool_slug,
+    operation: step.operation,
+    title: step.title,
+    action: step.action || step.reason,
+    expected_output: step.output || step.expected_output,
+    arguments: step.arguments,
+    depends_on: step.depends_on,
+  })) : [];
+  const current = steps.length ? `\nCurrent reviewed steps (preserve unchanged steps and dependencies): ${JSON.stringify(steps)}` : "";
+  return `${intent}\n\nThe user reviewed the proposed workflow and requested this change: ${revision}${current}\nReturn the complete revised executable plan. Apply the change exactly; do not repeat the previous plan unchanged.`;
 }

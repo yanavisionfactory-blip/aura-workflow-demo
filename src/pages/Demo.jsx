@@ -47,7 +47,7 @@ import {
   promptConnectionRequirements,
   shouldStartFreshPlanningRun,
 } from "@/lib/planningFlow.mjs";
-import { hasDurablePlan, planningRequestPrompt } from "@/lib/runtimePlan.mjs";
+import { hasDurablePlan, planningRequestPrompt, sameExecutablePlan } from "@/lib/runtimePlan.mjs";
 import { weatherStepTitle } from "@/lib/planPresentation.mjs";
 import { instantLanguagePlan, languageDraftPrompt } from "@/lib/languagePlan.mjs";
 import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
@@ -61,8 +61,7 @@ import {
 const STEP_DURATION = 2.6;
 // The durable planner may need multiple bounded model calls and contract repairs.
 // Keep the readable draft visible while it finishes instead of discarding its run.
-const PLANNING_WAIT_TIMEOUT_MS = 10 * 60_000;
-const PLANNING_POLL_INTERVAL_MS = 750;
+const PLANNING_POLL_INTERVAL_MS = 1500;
 const PLANNING_TRANSIENT_FAILURE_LIMIT = 3;
 
 const planToolName = (step) => {
@@ -178,6 +177,7 @@ const friendlyStepTitle = (step) => {
 const uiPlanStepFromRun = (step) => {
   const tool = planToolName(step);
   const planned = {
+    key: step.key,
     tool,
     operation: step.operation,
     arguments: step.arguments || {},
@@ -398,6 +398,7 @@ export default function Demo() {
   const currentWorkflowIdRef = useRef(null);
   const pythonRunIdRef = useRef(null);
   const pythonPlanRef = useRef(null);
+  const reviewedPlanRef = useRef(null);
   const pythonPollGenerationRef = useRef(0);
   const languageDraftGenerationRef = useRef(0);
   const handleConfirmRef = useRef(null);
@@ -579,6 +580,9 @@ Write ONE clear, conversational sentence restating what they want — but offer 
     (editedInterpretation, revisionInstruction = "", allowLegacyPlanner = false) => {
       setInterpretation(editedInterpretation);
       if (!allowLegacyPlanner) {
+        const reviewedSteps = revisionInstruction
+          ? (pythonPlanRef.current?.steps || reviewedPlanRef.current?.steps || [])
+          : [];
         const confirmedIntent = editedInterpretation.trim() || originalPromptRef.current;
         const pilotMode = confirmedIntent.startsWith("AURA_PILOT_V1\n");
         const pilotDescription = "Create a Google Doc; schedule a Google Calendar event; create a Canva presentation; send a Gmail message";
@@ -601,11 +605,13 @@ Write ONE clear, conversational sentence restating what they want — but offer 
 
         // The readable plan is independent from connector readiness. Show a
         // useful language draft now; refine and compile it in parallel.
-        setPlan(immediatePlan);
+        setPlan((current) => revisionInstruction && current?.steps?.length
+          ? { ...current, provisional: true, compileState: "validating", compileError: "" }
+          : immediatePlan);
         setPlanLoading(false);
         setPhase("plan");
 
-        if (!omittedToolsRef.current.length && !pilotMode) aura.integrations.Core
+        if (!revisionInstruction && !omittedToolsRef.current.length && !pilotMode) aura.integrations.Core
           .InvokeLLM({
             prompt: languageDraftPrompt(confirmedIntent, selectedTools),
             response_json_schema: PLAN_SCHEMA,
@@ -668,7 +674,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               pythonPlanRef.current = null;
             }
             lastPlanningIntentRef.current = confirmedIntent;
-            const planningPrompt = planningRequestPrompt(confirmedIntent, revisionInstruction);
+            const planningPrompt = planningRequestPrompt(confirmedIntent, revisionInstruction, reviewedSteps);
             runRequestKeyRef.current ||= globalThis.crypto?.randomUUID?.()
               || `aura-${Date.now()}-${Math.random().toString(36).slice(2)}`;
             const resources = attachedResourcesRef.current || {};
@@ -683,18 +689,10 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               })),
             });
             pythonRunIdRef.current = created.id;
-            const planningDeadline = Date.now() + PLANNING_WAIT_TIMEOUT_MS;
             const generation = ++pythonPollGenerationRef.current;
             let run;
             for (;;) {
-              if (Date.now() >= planningDeadline) {
-                throw new Error("AURA couldn't prepare this workflow within 10 minutes.");
-              }
-              run = await getPythonRunResilient(
-                created.id,
-                generation,
-                PLANNING_TRANSIENT_FAILURE_LIMIT,
-              );
+              run = await getPythonRunResilient(created.id, generation);
               if (!run) return;
               const disposition = planningDisposition(run);
               if (disposition === "review") break;
@@ -715,6 +713,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
                   provisional: true,
                   compileState: "waiting_for_connection",
                 });
+                if (revisionInstruction) return { ok: false, error: "Connect the required account before revising this plan." };
                 return;
               }
               if (disposition === "unavailable") throw new Error(
@@ -728,7 +727,19 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               provisional: false,
               compileState: "ready",
             };
+            if (revisionInstruction && reviewedSteps.length
+              && sameExecutablePlan(reviewedSteps, run.plan?.steps || [])) {
+              await cancelPythonRun(created.id);
+              forgetActivePythonRun(created.id);
+              pythonRunIdRef.current = null;
+              pythonPlanRef.current = null;
+              runRequestKeyRef.current = null;
+              const error = "AURA returned the original plan without applying your change. Try a more specific edit.";
+              setPlan((current) => ({ ...current, provisional: true, compileState: "blocked", compileError: error }));
+              return { ok: false, error };
+            }
             setPlan(compiledPlan);
+            if (revisionInstruction) return { ok: true, plan: compiledPlan };
             const queuedStart = queuedPlanStartRef.current;
             if (queuedStart) {
               queuedPlanStartRef.current = null;
@@ -747,20 +758,18 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             const queuedStart = queuedPlanStartRef.current;
             queuedPlanStartRef.current = null;
             if (queuedStart) setPhase("plan");
-            if (pythonRunIdRef.current) forgetActivePythonRun(pythonRunIdRef.current);
-            pythonRunIdRef.current = null;
+            // A temporary browser/API failure is not evidence that the durable
+            // run stopped. Retain its idempotency key so Retry reattaches.
             pythonPlanRef.current = null;
-            runRequestKeyRef.current = null;
             setPlan((current) => ({
               ...(current || immediatePlan),
-              estimatedTime: error?.message?.includes("within 10 minutes")
-                ? "Plan ready — preparation timed out"
-                : "Plan ready — one execution detail needs repair",
+              estimatedTime: "Plan saved — reconnect to its preparation",
               connectionRequirements: explicitRequirements,
               provisional: true,
               compileState: "blocked",
               compileError: error?.message || "AURA couldn't prepare this workflow quickly enough.",
             }));
+            if (revisionInstruction) return { ok: false, error: error?.message || "AURA couldn't revise this plan." };
           } finally {
             setPlanLoading(false);
           }
@@ -860,6 +869,7 @@ Rules:
   // handleSubmit is declared earlier for the existing recovery callbacks; the
   // ref lets the first user action enter this planner without a second click.
   handleConfirmRef.current = handleConfirm;
+  reviewedPlanRef.current = plan;
 
   const handlePlanRevision = useCallback(
     (instruction) => handleConfirm(interpretation, instruction),
@@ -910,12 +920,18 @@ Rules:
     );
   }, [handleConfirm, interpretation]);
 
-  const handleRetryPlanning = useCallback(() => {
+  const handleRetryPlanning = useCallback(async () => {
     const failedRunId = pythonRunIdRef.current;
-    if (failedRunId) forgetActivePythonRun(failedRunId);
-    pythonRunIdRef.current = null;
-    pythonPlanRef.current = null;
-    runRequestKeyRef.current = null;
+    if (failedRunId) {
+      const existing = await getPythonRun(failedRunId).catch(() => null);
+      if (existing && existing.public_status !== "recovering"
+        && ["failed", "blocked", "cancelled", "completed"].includes(existing.status)) {
+        forgetActivePythonRun(failedRunId);
+        pythonRunIdRef.current = null;
+        pythonPlanRef.current = null;
+        runRequestKeyRef.current = null;
+      }
+    }
     return handleConfirm(interpretation);
   }, [handleConfirm, interpretation]);
 

@@ -763,7 +763,11 @@ async def _create_compiled_plan(
         weather_presentation_template,
     )
 
-    audited_plan = (
+    # A reviewed change must be compiled from the reviewed steps. The audited
+    # first-draft templates match the original request and would silently
+    # discard a later instruction (for example, changing one to two slides).
+    reviewed_revision = "The user reviewed the proposed workflow and requested this change:" in prompt
+    audited_plan = None if reviewed_revision else (
         pilot_template(prompt, inventory)
         or mailchimp_canva_pilot_template(prompt, inventory)
         or creator_outreach_template(prompt, inventory)
