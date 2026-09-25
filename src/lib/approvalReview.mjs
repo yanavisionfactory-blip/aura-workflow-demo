@@ -68,7 +68,7 @@ const previewForArguments = (contract, args, prepared = false) => {
     return {
       type: "email",
       to: args.to || "",
-      subject: args.subject || "AURA workflow",
+      subject: args.subject ?? "",
       body: args.body || "",
       note: prepared ? "Prepared from the completed workflow steps." : "Exact message from the saved plan.",
     };
@@ -91,7 +91,7 @@ const previewForArguments = (contract, args, prepared = false) => {
     return {
       type: "document",
       title: contract.title,
-      docTitle: args.title || args.name || args.summary || "Untitled document",
+      docTitle: args.title || args.name || args.summary || "",
       docBody: typeof content === "string" ? content : JSON.stringify(content, null, 2),
     };
   }
@@ -197,9 +197,14 @@ export const mergeLegacyPreviewIntoArguments = (step, preview) => {
     };
   }
   if (preview?.type === "document") {
-    const titleKey = Object.hasOwn(args, "title") ? "title" : "name";
-    const bodyKey = Object.hasOwn(args, "body") ? "body" : Object.hasOwn(args, "content") ? "content" : "description";
-    return { ...args, [titleKey]: preview.docTitle, [bodyKey]: preview.docBody };
+    const titleKey = ["title", "name", "summary"].find((key) => Object.hasOwn(args, key)) || "title";
+    const bodyKey = ["body", "content", "description", "children"].find((key) => Object.hasOwn(args, key)) || "body";
+    const originalBody = args[bodyKey];
+    // Changing the title must not turn nested blocks into a JSON string.
+    const body = typeof originalBody === "string"
+      ? preview.docBody
+      : originalBody;
+    return { ...args, [titleKey]: preview.docTitle, [bodyKey]: body };
   }
   return args;
 };

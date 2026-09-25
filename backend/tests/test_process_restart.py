@@ -32,6 +32,7 @@ async def exercise(directory, crash_point, stage):
     from app import orchestrator
     from app.db import Base
     from app.models import (
+        Approval,
         ApprovalSnapshot,
         CapabilityManifest,
         PlanVersion,
@@ -82,7 +83,10 @@ async def exercise(directory, crash_point, stage):
             session.add(RunStep(id="step", run_id="run", position=0, step_key="write",
                 agent="writer", tool_slug="test", operation="records.create",
                 arguments={"title": "Restart fixture"}, status=StepStatus.pending,
-                consequential=True, idempotency_key="restart-fixture-once"))
+                consequential=True, approval_id="write-approval", idempotency_key="restart-fixture-once"))
+            session.add(Approval(id="write-approval", run_id="run", step_id="step",
+                status="approved", preview={"status": "ready", "tool_slug": "test",
+                    "operation": "records.create", "arguments": {"title": "Restart fixture"}}))
             session.add(ToolConnection(id="tool", workspace_id="w", slug="test",
                 display_name="Fixture provider", kind=ToolKind.mcp,
                 allowed_operations=["records.create"], config={}))

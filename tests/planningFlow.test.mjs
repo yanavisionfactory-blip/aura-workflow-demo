@@ -113,8 +113,8 @@ test("the UI renders a language plan while durable compilation is still running"
   assert.equal(source.includes("Executable planning unavailable; the language plan remains visible"), true);
   assert.equal(planViewSource.includes("validating exact actions backstage"), false);
   assert.equal(planViewSource.includes("validatingExecution || missingTools.length"), false);
-  assert.equal(source.includes("queuedPlanStartRef.current = { name, autoApprove }"), true);
-  assert.equal(source.includes("hasImmediateActionPreview(compiledPlan.steps, queuedStart.autoApprove)"), true);
+  assert.equal(source.includes("queuedPlanStartRef.current = { name }"), true);
+  assert.equal(source.includes("hasImmediateActionPreview(compiledPlan.steps, queuedStart.autoApprove)"), false);
   assert.equal(source.includes("PLANNING_WAIT_TIMEOUT_MS"), false);
   assert.equal(source.includes('.replace(/^i\\s+will\\s+/i, "")'), true);
   assert.equal(source.includes("firstPersonStepCopy(step.reason)"), true);
@@ -146,11 +146,11 @@ test("complete actions can be reviewed early and dependent actions wait for exac
 
   assert.equal(source.includes("VITE_STAGED_ACTION_REVIEW_ENABLED"), false);
   assert.equal(source.includes("startPythonPreparation"), false);
-  assert.equal(source.includes("hasImmediateActionPreview(steps, autoApprove)"), true);
-  assert.equal(source.includes("approvePythonPlan(runId, reviewedPlan.steps, true)"), true);
+  assert.equal(source.includes("hasImmediateActionPreview(steps, autoApprove)"), false);
+  assert.equal(source.includes("approvePythonPlan(runId, reviewedPlan.steps, false)"), true);
   assert.equal(source.includes('setPhase("preview")'), true);
   assert.equal(source.includes("startPythonExecution(editedSteps, prepared)"), true);
-  assert.match(api, /approvePythonPlan\(runId, editedSteps = null, approveConsequential = true\)/);
+  assert.match(api, /approvePythonPlan\(runId, editedSteps = null, approveConsequential = false\)/);
 });
 
 test("the combined preview has a renderer for every supported action family", () => {

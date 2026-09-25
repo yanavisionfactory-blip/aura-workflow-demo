@@ -30,6 +30,7 @@ async def runtime(monkeypatch):
     from app import orchestrator
     from app.db import Base
     from app.models import (
+        Approval,
         ApprovalSnapshot,
         CapabilityManifest,
         PlanVersion,
@@ -124,9 +125,22 @@ async def runtime(monkeypatch):
                 arguments={"title": "Example"},
                 status=StepStatus.pending,
                 consequential=True,
+                approval_id="approval",
                 idempotency_key="write-once",
             )
         )
+        session.add(Approval(
+            id="approval",
+            run_id="run",
+            step_id="step",
+            status="approved",
+            preview={
+                "status": "ready",
+                "tool_slug": "test",
+                "operation": "records.create",
+                "arguments": {"title": "Example"},
+            },
+        ))
         session.add(
             ToolConnection(
                 id="tool",

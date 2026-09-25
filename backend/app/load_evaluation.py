@@ -47,8 +47,9 @@ async def evaluate(url, *, samples=30, concurrencies=(1, 2, 4, 8), provider_dela
     os.environ.setdefault("CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
     os.environ.setdefault("SESSION_SIGNING_KEY", uuid.uuid4().hex + uuid.uuid4().hex)
     os.environ.setdefault("DATABASE_URL", url)
-    from . import db, execution_preflight, orchestrator
+    from . import db, execution_preflight, main, orchestrator
     from .models import (
+        Approval,
         ApprovalSnapshot,
         AuditEvent,
         CapabilityManifest,
@@ -69,6 +70,7 @@ async def evaluate(url, *, samples=30, concurrencies=(1, 2, 4, 8), provider_dela
     async with engine.begin() as connection:
         await connection.run_sync(db.Base.metadata.create_all)
     from .config import get_settings
+    from .schemas import ApprovalDecision
     settings = get_settings()
     reports = []
     pages = {}
@@ -96,6 +98,9 @@ async def evaluate(url, *, samples=30, concurrencies=(1, 2, 4, 8), provider_dela
         return UnifiedDeliverable(summary="Fixture", deliverable="Requested fixture reads completed")
     async def credentials(*args):
         return {}, False
+    async def no_dispatch(*_args):
+        # The load fixture drives both sides of the review boundary itself.
+        return None
     async def provider_probe(manifest, credentials):
         """Prove the deterministic connector fixture is ready without network I/O."""
         return {
@@ -112,6 +117,7 @@ async def evaluate(url, *, samples=30, concurrencies=(1, 2, 4, 8), provider_dela
                 stack.enter_context(patch.object(module, "SessionLocal", factory))
                 stack.enter_context(patch.object(module, "engine", engine))
             stack.enter_context(patch.object(settings, "parallel_reads_enabled", True))
+            stack.enter_context(patch.object(main, "dispatch_pending", no_dispatch))
             if not live:
                 stack.enter_context(patch.object(orchestrator.ProviderExecutor, "execute", provider))
                 stack.enter_context(patch.object(orchestrator, "critique_step", critic))
@@ -193,8 +199,14 @@ async def evaluate(url, *, samples=30, concurrencies=(1, 2, 4, 8), provider_dela
                             for i, spec in enumerate(plan.steps):
                                 step = RunStep(run_id=rid, position=i, step_key=spec.key, tool_slug=spec.tool_slug, agent=spec.agent, consequential=spec.consequential,
                                     operation=spec.operation, arguments=spec.arguments, depends_on=spec.depends_on, output_variables=spec.output_variables,
-                                    status=StepStatus.pending, idempotency_key=f"{rid}:{i}")
+                                    status=StepStatus.awaiting_approval if workload == "verified_write" else StepStatus.pending,
+                                    idempotency_key=f"{rid}:{i}")
                                 session.add(step); await session.flush()
+                                if workload == "verified_write":
+                                    approval = Approval(run_id=rid, step_id=step.id, status="pending",
+                                        preview={"status": "preparing"})
+                                    session.add(approval); await session.flush()
+                                    step.approval_id = approval.id
                                 if workload == "receipt_resume" and i == 0:
                                     # Provider receipt survived an interrupted delivery; review was not completed.
                                     step.output = {"provider_result": {"location": "Fixture", "date": "2026-01-01", "summary": "Saved forecast"}, "resolved_arguments": spec.arguments}
@@ -206,6 +218,23 @@ async def evaluate(url, *, samples=30, concurrencies=(1, 2, 4, 8), provider_dela
                             await orchestrator.execute_run(rid, workspace)
                         else:
                             await orchestrator._execute_run(rid, workspace)
+                        if workload == "verified_write":
+                            async with factory() as session:
+                                run = await session.get(WorkflowRun, rid)
+                                step = await session.scalar(select(RunStep).where(RunStep.run_id == rid))
+                                approval = await session.get(Approval, step.approval_id)
+                                if (run.status != RunStatus.awaiting_approval
+                                    or approval.preview.get("status") != "ready"
+                                    or approval.preview.get("arguments") != spec.arguments):
+                                    raise ValueError("The completed action was not prepared for review")
+                                await main.decide_approval(
+                                    approval.id, ApprovalDecision(approved=True),
+                                    main.TenantContext(workspace, "load-fixture", "owner"), session,
+                                )
+                            if url.startswith("postgresql"):
+                                await orchestrator.execute_run(rid, workspace)
+                            else:
+                                await orchestrator._execute_run(rid, workspace)
                         elapsed = (perf_counter()-delivery)*1000
                         async with factory() as session:
                             run = await session.get(WorkflowRun, rid)
