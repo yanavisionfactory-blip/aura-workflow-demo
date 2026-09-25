@@ -48,8 +48,8 @@ def cases():
         },
         {
             "checks": [
-                {"id": "1", "key": "AURA-1", "fields": {"summary": "Prepare launch brief", "project": {"key": "AURA"}, "issuetype": {"name": "Task"}}},
-                {"id": "2", "key": "AURA-2", "fields": {"summary": "Confirm pilot owners", "project": {"key": "AURA"}, "issuetype": {"name": "Task"}}},
+                {"id": "1", "key": "AURA-1", "fields": {"summary": "Prepare launch brief", "project": {"key": "AURA"}, "issuetype": {"id": "3", "name": "Task"}}},
+                {"id": "2", "key": "AURA-2", "fields": {"summary": "Confirm pilot owners", "project": {"key": "AURA"}, "issuetype": {"id": "3", "name": "Task"}}},
             ]
         },
     )
