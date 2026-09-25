@@ -10,6 +10,7 @@ import {
   requiresPreparedActionReview,
   requiresActionPreview,
   resolvedApprovalStep,
+  unresolvedActionValues,
   setArgumentAtPath,
   validateReviewArguments,
 } from "../src/lib/approvalReview.mjs";
@@ -86,6 +87,30 @@ test("a dependent email waits for its complete body while a static write can be 
   assert.equal(hasImmediateActionPreview([staticWrite, email]), true);
   assert.equal(requiresPreparedActionReview({ ...email, depends_on: [] }), true);
   assert.equal(requiresPreparedActionReview(staticWrite), false);
+});
+
+test("a draft describing future work cannot appear as a finished email", () => {
+  const email = plannedApprovalStep(
+    { tool: "Gmail", riskLevel: "modify" },
+    { operation: "gmail.send", consequential: true, arguments: {
+      to: "Your connected Gmail address",
+      subject: "Today's meetings and related Gmail context",
+      body: "Draft body will summarize today's meetings with times and useful context from retrieved Gmail messages.",
+    } },
+  );
+  assert.equal(unresolvedActionValues(email), true);
+  assert.equal(requiresPreparedActionReview(email), true);
+  assert.equal(hasImmediateActionPreview([{ riskLevel: "read" }, email]), false);
+  assert.equal(unresolvedActionValues({ ...email, resolvedArguments: {
+    to: "person@example.com", subject: "Today's meetings",
+    body: "The team meeting starts at 10 AM.",
+  } }), false);
+  assert.equal(requiresPreparedActionReview({ operation: "gmail.send", arguments: {
+    to: "me", body: "Hello from AURA",
+  } }), true);
+  assert.equal(unresolvedActionValues({ operation: "slack.post", arguments: {
+    text: "The message will include the final numbers from the CRM read.",
+  } }), true);
 });
 
 test("runtime review contracts preserve exact editable arguments", () => {

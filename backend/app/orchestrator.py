@@ -24,7 +24,7 @@ from .agent_runtime import (
     verify_outcome,
 )
 from .agent_telemetry import trace_run
-from .approval_readiness import unfinished_action_content
+from .approval_readiness import self_address_recipient, unfinished_action_content
 from .approval_review import build_review_contract
 from .autonomous_delivery import (
     RECONCILIABLE_WRITES,
@@ -543,6 +543,54 @@ def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict]) -> None:
 
     normalize_bound_email_inputs(plan)
     normalize_planner_evidence_roles(plan, manifests_by_slug)
+    # A narrative draft may have no {{step}} reference even though it promises
+    # to summarize earlier reads. Keep those reads in its executable dependency
+    # graph so the argument resolver sees their accepted results before review.
+    for index, planned_step in enumerate(plan.steps):
+        content_arguments = {**planned_step.arguments, "to": "me"}
+        if not unfinished_action_content(planned_step.operation, content_arguments):
+            continue
+        for source in plan.steps[:index]:
+            if operation_scope(source.operation) == "read" and source.key not in planned_step.depends_on:
+                planned_step.depends_on.append(source.key)
+
+
+async def _reviewable_gmail_recipient(
+    tool: ToolConnection,
+    manifest_record: CapabilityManifest | None,
+    arguments: dict,
+) -> dict:
+    """Show the connected address, not an unresolved self alias, at approval."""
+    current = str(arguments.get("to") or "").strip()
+    if not self_address_recipient("gmail.send", arguments) and not unfinished_action_content(
+        "gmail.send", {"to": current, "body": "Approved message text"}
+    ):
+        return arguments
+    verified = (manifest_record.verification or {}) if manifest_record else {}
+    identity = verified.get("identity") or {}
+    email = str(identity.get("email") or "").strip()
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+        if tool.slug != "google" or (tool.config or {}).get("managed_by") == "pipedream":
+            raise NativeConnectorError("Connected Gmail recipient cannot be verified for review")
+        config = tool.config or {}
+        vault = CredentialVault()
+        if config.get("managed_by") == "nango":
+            credentials = await managed_connector_client().get_credentials(
+                managed_connection_reference(tool) or config["connection_id"],
+                config["integration_id"],
+            )
+        else:
+            credentials = vault.decrypt(tool.encrypted_credentials)
+            if tool.kind == ToolKind.oauth:
+                credentials, changed = await refresh_oauth_credentials(
+                    get_settings(), tool.slug, credentials, config
+                )
+                if changed:
+                    tool.encrypted_credentials = vault.encrypt(credentials)
+        email = await ProviderExecutor(credentials, timeout_seconds=12).gmail_connected_address()
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+        raise NativeConnectorError("Connected Gmail recipient cannot be verified for review")
+    return {**arguments, "to": email}
 
 
 def _include_requested_story_in_email(plan, prompt: str) -> None:
@@ -2590,6 +2638,31 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         )
                         await session.commit()
                         return
+                if step.operation == "gmail.send":
+                    try:
+                        resolved_arguments = await _reviewable_gmail_recipient(
+                            tool, manifest_record, resolved_arguments
+                        )
+                    except Exception as exc:  # noqa: BLE001 - preserve unsent action for recovery
+                        logger.warning(
+                            "Gmail recipient review preparation deferred run_id=%s step_id=%s error_type=%s",
+                            run.id,
+                            step.id,
+                            type(exc).__name__,
+                        )
+                        transition_run(
+                            run,
+                            RunStatus.waiting_for_action,
+                            reason="review_recipient_preparation_failed",
+                            actor="recovery-engineer",
+                            phase="execution",
+                            supervisor_status="recovering",
+                            error="AURA is verifying the connected email address before review.",
+                            dispatch=None,
+                            metadata={"step_id": step.id},
+                        )
+                        await session.commit()
+                        return
                 approval_preview = {
                     "status": "ready",
                     "operation": step.operation,
@@ -2656,6 +2729,19 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             continue
                         if unfinished_action_content(future_step.operation, future_arguments):
                             continue
+                        if future_step.operation == "gmail.send":
+                            try:
+                                future_arguments = await _reviewable_gmail_recipient(
+                                    future_tool, future_manifest_record, future_arguments
+                                )
+                            except Exception as exc:  # noqa: BLE001 - review this action on its own later
+                                logger.warning(
+                                    "Grouped Gmail recipient preview deferred run_id=%s step_id=%s error_type=%s",
+                                    run.id,
+                                    future_step.id,
+                                    type(exc).__name__,
+                                )
+                                continue
                         future_capability = next(
                             (
                                 item
