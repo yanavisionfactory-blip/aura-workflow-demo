@@ -146,6 +146,12 @@ def test_receipt_prose_maps_only_to_guarantees_the_connector_provides():
         "calendar.list", ["Calendar list results for today"], ["event_state"],
     ) == ["event_state"]
     assert canonicalize_requested_evidence(
+        "calendar.list", ["Calendar event items for 2026-09-25"], ["event_state"],
+    ) == ["event_state"]
+    assert canonicalize_requested_evidence(
+        "calendar.get", ["Today's calendar event details"], ["event_state"],
+    ) == ["event_state"]
+    assert canonicalize_requested_evidence(
         "gmail.send", ["Calendar results to summarize"], ["write_receipt"],
     ) == ["Calendar results to summarize"]
     plan = WorkflowPlan(name="Doc", interpretation="Create doc", steps=[PlanStep(
@@ -160,6 +166,39 @@ def test_receipt_prose_maps_only_to_guarantees_the_connector_provides():
     plan.steps[0].required_evidence = ["document_body"]
     with pytest.raises(ValueError, match="cannot supply"):
         compile_contracts(plan, manifests)
+
+
+def test_calendar_email_input_labels_require_bound_source_before_compilation():
+    manifest = native_manifest("google")
+    plan = WorkflowPlan(name="Daily summary", interpretation="Email today's events", steps=[
+        PlanStep(key="events", agent="reader", tool_slug="google", operation="calendar.list",
+                 reason="Read events", expected_output="Today's events",
+                 required_evidence=["Calendar event items for 2026-09-25"]),
+        PlanStep(key="send", agent="sender", tool_slug="google", operation="gmail.send",
+                 reason="Send summary", expected_output="Email receipt", consequential=True,
+                 arguments={"to": "me", "body": "Today's events: {{steps.events.items}}"},
+                 depends_on=["events"], required_evidence=[
+                     "Connected recipient email", "Today’s calendar event details", "write_receipt",
+                 ]),
+    ])
+    _normalize_planned_steps(plan, {"google": manifest})
+    assert plan.steps[0].required_evidence == ["event_state"]
+    assert plan.steps[1].required_evidence == ["write_receipt"]
+    assert set(compile_contracts(plan, {"google": manifest})) == {"events", "send"}
+
+    # A description must not authorize a body that does not actually use the read.
+    plan.steps[1].arguments["body"] = "A made-up summary"
+    plan.steps[1].required_evidence = ["Today’s calendar event details"]
+    _normalize_planned_steps(plan, {"google": manifest})
+    with pytest.raises(ValueError, match="cannot supply"):
+        compile_contracts(plan, {"google": manifest})
+
+    # Nor may a read result be claimed as the Gmail send's output guarantee.
+    plan.steps[1].arguments["body"] = "{{steps.events.items}}"
+    plan.steps[1].required_evidence = ["page_body"]
+    _normalize_planned_steps(plan, {"google": manifest})
+    with pytest.raises(ValueError, match="cannot supply"):
+        compile_contracts(plan, {"google": manifest})
 
 
 def test_invalid_output_reference_rejected_but_metadata_alias_compiles():

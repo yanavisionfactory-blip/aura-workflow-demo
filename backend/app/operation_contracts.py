@@ -484,15 +484,63 @@ def canonicalize_requested_evidence(operation: str, requested: list[str], provid
                   token in words for token in ("email", "address")
               )))):
             replacement = "account_identity"
-        elif (operation == "calendar.list" and "event_state" in available
+        elif (operation in {"calendar.list", "calendar.get"} and "event_state" in available
               and ("search results" in words or "calendar list results" in words
-                   or "calendar events" in words)):
+                   or "calendar event" in words)):
             replacement = "event_state"
         resolved.append(replacement or tag)
         if (replacement == "dispatch_receipt" and operation == "canva.presentation.create"
                 and "populated_presentation" in available):
             resolved.append("populated_presentation")
     return list(dict.fromkeys(resolved))
+
+
+def normalize_bound_email_inputs(plan) -> None:
+    """Remove input descriptions from Gmail's *output* evidence requirements.
+
+    The planner sometimes puts a calendar input or recipient in required_evidence,
+    which describes guarantees of the operation's result. Only remove these
+    descriptions when the approved arguments actually bind the upstream read (or
+    Gmail's explicit `me` recipient). Leave unsupported output claims intact.
+    """
+    from .workflow_context import referenced_paths
+
+    operations = {step.key: step.operation for step in plan.steps}
+    for step in plan.steps:
+        if step.operation != "gmail.send" or not step.required_evidence:
+            continue
+        arguments = step.arguments or {}
+        recipient_refs = referenced_paths(arguments.get("to"))
+        body_refs = referenced_paths(arguments.get("body"))
+        calendar_sources = {
+            key for key in step.depends_on
+            if operations.get(key) in {"calendar.list", "calendar.get"}
+        }
+        identity_sources = {
+            key for key in step.depends_on
+            if operations.get(key) == "google.identity.get"
+        }
+        has_calendar_body = any(
+            any(path.startswith(f"steps.{key}.") for key in calendar_sources)
+            for path in body_refs
+        )
+        has_recipient = arguments.get("to") == "me" or any(
+            any(path.startswith(f"steps.{key}.") for key in identity_sources)
+            for path in recipient_refs
+        )
+        remaining = []
+        for tag in step.required_evidence:
+            words = tag.casefold().replace("_", " ")
+            calendar_input = "receipt" not in words and (
+                "calendar event" in words or "today’s calendar" in words
+            )
+            recipient_input = ("receipt" not in words and "connected" in words and any(
+                token in words for token in ("email", "recipient", "gmail identity")
+            ))
+            if (calendar_input and has_calendar_body) or (recipient_input and has_recipient):
+                continue
+            remaining.append(tag)
+        step.required_evidence = remaining
 
 
 def compile_contracts(plan, manifests: dict) -> dict:
