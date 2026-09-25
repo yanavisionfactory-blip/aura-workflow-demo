@@ -7,7 +7,7 @@ from time import perf_counter
 from typing import Literal
 
 from agents import Agent, AgentOutputSchema, Runner
-from pydantic import BaseModel, ConfigDict, Field, create_model
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 
 from .agent_telemetry import record_agent_call
 from .argument_output import ArgumentOutputSchema
@@ -87,7 +87,7 @@ class CompactWorkflowPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str
     interpretation: str
-    steps: list[CompactPlanStep]
+    steps: list[CompactPlanStep] = Field(min_length=1, max_length=20)
 
 
 def _expand_compact_plan(compact: CompactWorkflowPlan) -> WorkflowPlan:
@@ -620,7 +620,8 @@ def _builder_inventory(inventory: list[dict], selected_slugs: set[str]) -> list[
 
 
 async def _run_staged_planner(
-    agents: dict[str, Agent], payload: dict, max_turns: int = 8
+    agents: dict[str, Agent], payload: dict, max_turns: int = 8,
+    *, prefer_compact_builder: bool = False,
 ) -> PlanningBundle:
     """Use independent, smaller schemas when the combined planner cannot recover.
 
@@ -678,18 +679,23 @@ async def _run_staged_planner(
                 ),
                 "response_recovery": payload.get("response_recovery"),
     }
-    try:
-        plan = WorkflowPlan.model_validate(
-            await _run(agents["builder"], builder_payload, max_turns=max_turns)
-        )
-    except Exception as exc:
-        if _stop_model_retry(exc) or "invalid json" not in str(exc).casefold():
-            raise
-        # Flexible Pydantic output schemas can produce malformed JSON for long
-        # operation contracts. A closed, small schema gives the model one safe
-        # recovery route without loosening provider authorization checks.
+    if prefer_compact_builder:
         compact = await _run(agents["compact_builder"], builder_payload, max_turns=max_turns)
         plan = _expand_compact_plan(CompactWorkflowPlan.model_validate(compact))
+    else:
+        try:
+            plan = WorkflowPlan.model_validate(
+                await _run(agents["builder"], builder_payload, max_turns=max_turns)
+            )
+        except Exception as exc:
+            if _stop_model_retry(exc) or not (
+                isinstance(exc, ValidationError) or "invalid json" in str(exc).casefold()
+            ):
+                raise
+            # A structurally invalid builder result (including zero steps) gets
+            # one closed-schema recovery. The same operation checks still run.
+            compact = await _run(agents["compact_builder"], builder_payload, max_turns=max_turns)
+            plan = _expand_compact_plan(CompactWorkflowPlan.model_validate(compact))
     return PlanningBundle(objective=objective, toolset=toolset, plan=plan)
 
 
@@ -1282,6 +1288,7 @@ async def create_plan(
     tool_inventory: list[dict],
     available_input_names: set[str] | None = None,
     planner_repair_requirements: list[str] | None = None,
+    preferred_route: Literal["combined", "staged", "compact"] = "combined",
 ) -> WorkflowPlan:
     started_at = perf_counter()
     agents = build_agents()
@@ -1293,27 +1300,34 @@ async def create_plan(
         "planner_repair_requirements": planner_repair_requirements or [],
     }
     model_started_at = perf_counter()
-    recovery_mode = "combined"
-    try:
-        bundle = await _run_planner(agents["planner"], request_payload, max_turns=8)
-    except ModelInputTooLarge:
+    recovery_mode = preferred_route
+    if preferred_route in {"staged", "compact"}:
+        bundle = await _run_staged_planner(
+            agents, request_payload, max_turns=8,
+            prefer_compact_builder=preferred_route == "compact",
+        )
+        recovery_mode = f"supervisor_{preferred_route}"
+    else:
         try:
-            bundle = await _run_staged_planner(agents, request_payload, max_turns=8)
-            recovery_mode = "staged_input_limit"
-        except Exception as staged_error:
-            raise RuntimeError(
-                "Planner compact recovery exhausted after an input-limit failure"
-            ) from staged_error
-    except Exception as exc:
-        if _stop_model_retry(exc):
-            raise
-        try:
-            bundle = await _run_staged_planner(agents, request_payload, max_turns=8)
-            recovery_mode = "staged"
-        except Exception as staged_error:
-            raise RuntimeError(
-                "Planner recovery exhausted across combined and staged routes"
-            ) from staged_error
+            bundle = await _run_planner(agents["planner"], request_payload, max_turns=8)
+        except ModelInputTooLarge:
+            try:
+                bundle = await _run_staged_planner(agents, request_payload, max_turns=8)
+                recovery_mode = "staged_input_limit"
+            except Exception as staged_error:
+                raise RuntimeError(
+                    "Planner compact recovery exhausted after an input-limit failure"
+                ) from staged_error
+        except Exception as exc:
+            if _stop_model_retry(exc):
+                raise
+            try:
+                bundle = await _run_staged_planner(agents, request_payload, max_turns=8)
+                recovery_mode = "staged"
+            except Exception as staged_error:
+                raise RuntimeError(
+                    "Planner recovery exhausted across combined and staged routes"
+                ) from staged_error
     if _has_only_missing_capabilities(bundle):
         bundle = await _recover_catalog_tool_selection(
             agents, request_payload, bundle, max_turns=8

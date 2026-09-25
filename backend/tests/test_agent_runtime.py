@@ -1188,6 +1188,70 @@ def test_staged_planner_recovers_invalid_builder_json_with_closed_schema(monkeyp
     assert result.plan.steps[0].arguments == {"title": "Story", "body": "Text"}
 
 
+def test_staged_planner_recovers_empty_workflow_from_builder(monkeypatch) -> None:
+    agents = {name: name for name in ("intent", "router", "builder", "compact_builder")}
+    calls = []
+
+    async def fake_run(agent, payload, max_turns=8):
+        calls.append(agent)
+        if agent == "intent":
+            return {"goal": "Read CRM records"}
+        if agent == "router":
+            return {"tools": [{"slug": "crm", "role": "source", "rationale": "Reads records"}]}
+        if agent == "builder":
+            return {"name": "Empty", "interpretation": "Read records", "steps": []}
+        return {
+            "name": "Read CRM", "interpretation": "Read records",
+            "steps": [{
+                "key": "read_records", "agent": "CRM Agent", "tool_slug": "crm",
+                "operation": "records.read", "arguments_json": "{}",
+                "reason": "Read records", "expected_output": "Current records",
+                "consequential": False, "depends_on": [], "required_evidence": [],
+            }],
+        }
+
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+    bundle = asyncio.run(agent_runtime._run_staged_planner(agents, {
+        "user_request": "Read CRM records", "executable_tool_inventory": [{
+            "slug": "crm", "allowed_operations": ["records.read"], "connected": True,
+        }],
+    }))
+    assert calls == ["intent", "router", "builder", "compact_builder"]
+    assert bundle.plan.steps[0].operation == "records.read"
+
+
+def test_supervisor_compact_replan_skips_combined_and_flexible_builder(monkeypatch) -> None:
+    agents = {name: name for name in ("planner", "intent", "router", "builder", "compact_builder")}
+    calls = []
+
+    async def fake_run(agent, payload, max_turns=8):
+        calls.append(agent)
+        if agent == "intent":
+            return {"goal": "Read CRM records"}
+        if agent == "router":
+            return {"tools": [{"slug": "crm", "role": "source", "rationale": "Reads records"}]}
+        if agent == "compact_builder":
+            return {
+                "name": "Read CRM", "interpretation": "Read records",
+                "steps": [{
+                    "key": "read_records", "agent": "CRM Agent", "tool_slug": "crm",
+                    "operation": "records.read", "arguments_json": "{}",
+                    "reason": "Read records", "expected_output": "Current records",
+                    "consequential": False, "depends_on": [], "required_evidence": [],
+                }],
+            }
+        raise AssertionError("Supervisor must change route after repeated malformed plans")
+
+    monkeypatch.setattr(agent_runtime, "build_agents", lambda: agents)
+    monkeypatch.setattr(agent_runtime, "_run", fake_run)
+    result = asyncio.run(create_plan(
+        "Read CRM records", [{"slug": "crm", "allowed_operations": ["records.read"],
+                              "connected": True}], preferred_route="compact",
+    ))
+    assert calls == ["intent", "router", "compact_builder"]
+    assert result.planning_artifacts["planner_recovery_mode"] == "supervisor_compact"
+
+
 def test_combined_planner_retries_invalid_json_once(monkeypatch) -> None:
     calls = []
 

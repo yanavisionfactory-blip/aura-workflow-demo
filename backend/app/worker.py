@@ -34,7 +34,7 @@ async def plan_delivery(run_id, workspace_id):
     await plan_run(run_id, workspace_id)
     # A planning failure can atomically create a delayed supervisor intent.
     # Publishing is browser-independent and never relies on the request thread.
-    await dispatch_pending(workspace_id)
+    await dispatch_pending(workspace_id, run_id=run_id, schedule_delayed_plan=True)
 
 
 settings = get_settings()

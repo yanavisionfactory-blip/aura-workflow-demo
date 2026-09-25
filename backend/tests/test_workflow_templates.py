@@ -2,6 +2,7 @@ import asyncio
 
 from app import orchestrator
 from app.native_connectors import native_manifest
+from app.schemas import WorkflowPlan
 from app.workflow_templates import (
     creator_outreach_template,
     mailchimp_canva_pilot_template,
@@ -33,6 +34,35 @@ def test_mailchimp_canva_brief_uses_verified_source_and_no_send():
     assert mailchimp_canva_pilot_template(
         PILOT_BRIEF + " Отправь кампанию.", inventory,
     ) is None
+
+
+def test_planning_supervisor_changes_planner_route_before_compilation(monkeypatch):
+    routes = []
+
+    async def fake_create_plan(prompt, inventory, inputs, *, planner_repair_requirements, preferred_route):
+        routes.append(preferred_route)
+        return WorkflowPlan.model_validate({
+            "name": "Public forecast", "interpretation": "Read today's weather",
+            "steps": [{
+                "key": "forecast", "agent": "Weather Agent", "tool_slug": "aura",
+                "operation": "weather.forecast", "arguments": {"location": "Berlin", "date": "today"},
+                "reason": "Read public forecast", "expected_output": "Dated forecast",
+                "required_evidence": ["forecast"],
+            }],
+        })
+
+    monkeypatch.setattr(orchestrator, "create_plan", fake_create_plan)
+    inventory = [{"slug": "aura", "connected": True,
+                  "allowed_operations": ["weather.forecast"]}]
+    for strategy, route in (("repair_plan", "staged"), ("compact_replan", "compact")):
+        plan = asyncio.run(orchestrator._create_compiled_plan(
+            "Read today's public forecast in Berlin", inventory, set(),
+            {"aura": native_manifest("aura")},
+            supervisor_strategy=strategy,
+        ))
+        assert plan.planning_artifacts["supervisor_recovery_strategy"] == strategy
+        assert plan.planning_artifacts["compiled_contracts"]
+    assert routes == ["staged", "compact"]
 
 
 def inventory():
