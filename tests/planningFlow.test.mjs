@@ -9,6 +9,7 @@ import {
   planningDisposition,
   promptConnectionRequirements,
   shouldStartFreshPlanningRun,
+  unavailablePlanningState,
 } from "../src/lib/planningFlow.mjs";
 
 test("a rejected Start request stays on the reviewable plan", () => {
@@ -44,6 +45,16 @@ test("pre-execution blockers cannot manufacture an executable fallback", () => {
     assert.equal(planningDisposition({ status }), "unavailable");
   }
   assert.equal(planningDisposition({ status: "waiting_for_action" }), "unavailable");
+});
+
+test("a terminal planning failure replaces the language draft with the backend blocker", () => {
+  const state = unavailablePlanningState({
+    status: "blocked",
+    blocker: { message: "AURA couldn't verify a safe plan with the available connector contracts." },
+  });
+  assert.deepEqual(state.steps, []);
+  assert.equal(state.compileState, "blocked");
+  assert.equal(state.error, "AURA couldn't verify a safe plan with the available connector contracts.");
 });
 
 test("a missing provider becomes an actionable connection state", () => {

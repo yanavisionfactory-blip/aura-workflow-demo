@@ -46,6 +46,7 @@ import {
   planningDisposition,
   promptConnectionRequirements,
   shouldStartFreshPlanningRun,
+  unavailablePlanningState,
 } from "@/lib/planningFlow.mjs";
 import { hasDurablePlan, planningRequestPrompt, restorablePlanningRun, sameExecutablePlan } from "@/lib/runtimePlan.mjs";
 import { weatherStepTitle } from "@/lib/planPresentation.mjs";
@@ -747,9 +748,18 @@ Write ONE clear, conversational sentence restating what they want — but offer 
                 if (revisionInstruction) return { ok: false, error: "Connect the required account before revising this plan." };
                 return;
               }
-              if (disposition === "unavailable") throw new Error(
-                run.error || "The execution backend needs more setup before it can build this plan."
-              );
+              if (disposition === "unavailable") {
+                // A language draft is only an outline. A terminal backend
+                // failure must not leave it on screen as a runnable plan.
+                pythonPlanRef.current = null;
+                queuedPlanStartRef.current = null;
+                setPlan((current) => ({
+                  ...(current || immediatePlan),
+                  ...unavailablePlanningState(run),
+                }));
+                setPhase("plan");
+                return;
+              }
               await new Promise((resolve) => setTimeout(resolve, PLANNING_POLL_INTERVAL_MS));
             }
             pythonPlanRef.current = run.plan;

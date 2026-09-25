@@ -63,6 +63,17 @@ export function planningConnectionsEnabled(compileState = "") {
   return compileState !== "validating";
 }
 
+export function unavailablePlanningState(run = {}) {
+  return {
+    steps: [],
+    provisional: true,
+    compileState: "blocked",
+    compileError: "",
+    error: run.error || run.blocker?.message
+      || "AURA couldn't verify a safe executable plan. Nothing has run.",
+  };
+}
+
 // Planning is only a proposal stage. A runtime blocker must remain an inline,
 // retryable planning error; it must never manufacture an executable fallback.
 export function planningDisposition(run = {}) {

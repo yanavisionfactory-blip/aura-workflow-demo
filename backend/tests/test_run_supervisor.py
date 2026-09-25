@@ -155,6 +155,34 @@ async def test_repeated_malformed_plans_stop_before_eight_expensive_rounds(datab
         assert intent is None
 
 
+async def test_repeated_contract_mismatch_stops_after_one_supervised_repair(database):
+    async with database() as session:
+        run = WorkflowRun(
+            id="contract-run", workspace_id="workspace", prompt="Summarize my calendar",
+            status=RunStatus.planning,
+        )
+        session.add(run)
+        await session.commit()
+
+        failure = ValueError("Plan contract validation failed: calendar.list cannot supply ['events']")
+        assert await recover_planning_failure(
+            session, run, failure, max_attempts=8,
+            base_delay_seconds=1, max_delay_seconds=30,
+        ) == "scheduled"
+        await session.commit()
+        assert await recover_planning_failure(
+            session, run, failure, max_attempts=8,
+            base_delay_seconds=1, max_delay_seconds=30,
+        ) == "internal_incident"
+        await session.commit()
+
+        assert run.status == RunStatus.blocked
+        assert public_run_projection(run, None)["public_blocker"]["message"] == (
+            "AURA couldn't verify a safe plan with the available connector contracts. "
+            "No workflow steps ran. This needs a technical repair."
+        )
+
+
 async def test_planning_supervisor_changes_strategy_after_malformed_result(database):
     async with database() as session:
         run = WorkflowRun(

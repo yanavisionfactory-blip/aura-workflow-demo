@@ -382,7 +382,11 @@ async def recover_planning_failure(
     # routes plus local repairs. Repeating that full sequence eight times burns
     # credits without changing the schema or connector catalog.
     if category == "malformed_plan":
-        max_attempts = min(max_attempts, 3)
+        # The local compilation path already performs a model repair before
+        # surfacing this error. A deterministic contract mismatch cannot be
+        # fixed by repeatedly replaying the same full planning sequence.
+        contract_mismatch = "plan contract validation failed:" in str(exc).casefold()
+        max_attempts = min(max_attempts, 1 if contract_mismatch else 3)
     fingerprint = _failure_fingerprint(category, exc)
     action = _planning_action(category, attempt)
     history = recovery_list(state.get("failure_history"))[-19:]
@@ -571,13 +575,19 @@ def public_run_projection(run: WorkflowRun, blocker: dict | None) -> dict:
     ):
         # There is no queued retry or active repair in these states. Do not
         # present an indefinitely blocked run as though an agent is working.
+        planning_incident = isinstance(incident, dict) and incident.get("kind") == "planning_recovery_exhausted"
         return {
             "public_status": "blocked",
             "public_error": None,
             "public_blocker": {
                 "kind": "operator_action",
                 "code": "automatic_repair_stopped",
-                "message": "AURA could not repair this run automatically. Its completed work is saved.",
+                "message": (
+                    "AURA couldn't verify a safe plan with the available connector contracts. "
+                    "No workflow steps ran. This needs a technical repair."
+                    if planning_incident else
+                    "AURA could not repair this run automatically. Its completed work is saved."
+                ),
                 "action": "contact_support",
                 "retryable": False,
             },
