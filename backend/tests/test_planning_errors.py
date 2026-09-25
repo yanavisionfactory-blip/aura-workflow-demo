@@ -295,32 +295,15 @@ def test_requirement_inventory_discovers_exact_connectable_app(monkeypatch) -> N
 
 
 def test_connector_contract_mismatch_is_replanned_before_reaching_user(monkeypatch) -> None:
-    invalid = SimpleNamespace(
-        steps=[
-            SimpleNamespace(
-                tool_slug="aura",
-                operation="weather.forecast",
-                arguments={"location": "Munich", "internal_hint": True},
-                reduced_scope_arguments=None,
-            )
-        ]
-    )
-    repaired = SimpleNamespace(
-        steps=[
-            SimpleNamespace(
-                tool_slug="aura",
-                operation="weather.forecast",
-                arguments={"location": "Munich"},
-                reduced_scope_arguments=None,
-            )
-        ]
-    )
-    for candidate in (invalid, repaired):
-        candidate.planning_artifacts = {}
-        candidate.steps[0].key = "weather"
-        candidate.steps[0].required_evidence = []
-        candidate.steps[0].output_variables = {}
-        candidate.steps[0].depends_on = []
+    def weather_plan(arguments):
+        return WorkflowPlan(name="Weather", interpretation="Munich weather", steps=[
+            PlanStep(key="weather", agent="forecaster", tool_slug="aura",
+                     operation="weather.forecast", arguments=arguments,
+                     reason="Read forecast", expected_output="Forecast")
+        ])
+
+    invalid = weather_plan({"location": "Munich", "internal_hint": True})
+    repaired = weather_plan({"location": "Munich"})
     plans = [invalid, repaired]
     calls = []
 
@@ -333,7 +316,7 @@ def test_connector_contract_mismatch_is_replanned_before_reaching_user(monkeypat
     result = asyncio.run(
         orchestrator._create_compiled_plan(
             "Find Munich weather",
-            [{"slug": "aura"}],
+            [{"slug": "aura", "allowed_operations": ["weather.forecast"]}],
             set(),
             {"aura": native_manifest("aura")},
         )

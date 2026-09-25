@@ -851,16 +851,19 @@ async def _create_compiled_plan(
     if audited_plan is not None:
         reject_excluded_steps(audited_plan)
         _normalize_planned_steps(audited_plan, manifests_by_slug)
-        from .operation_contracts import compile_contracts
+        from .plan_preflight import preflight_plan
         from .request_contracts import validate_requested_operations
 
         validate_requested_operations(
             request_prompt or prompt, audited_plan, available_operations,
             catalog_inventory, manifests_by_slug,
         )
-        audited_plan.planning_artifacts["compiled_contracts"] = compile_contracts(
-            audited_plan, manifests_by_slug
+        preflight = preflight_plan(
+            audited_plan, catalog_inventory, manifests_by_slug, available_input_names
         )
+        if preflight.fixes:
+            raise ValueError("Plan failed preflight: " + "; ".join(preflight.fixes))
+        audited_plan.planning_artifacts["compiled_contracts"] = preflight.contracts
         return audited_plan
     inventory = intent_bounded_tool_inventory(prompt, inventory, requested_tool_names)
     preferred_route = {
@@ -922,16 +925,19 @@ async def _create_compiled_plan(
             _ensure_document_body_readback(plan, manifests_by_slug)
             _include_requested_story_in_email(plan, prompt)
             _normalize_illustrated_canva_slides(plan, prompt)
-            from .operation_contracts import compile_contracts
+            from .plan_preflight import preflight_plan
             from .request_contracts import validate_requested_operations
 
             validate_requested_operations(
                 request_prompt or prompt, plan, available_operations,
                 catalog_inventory, manifests_by_slug,
             )
-            plan.planning_artifacts["compiled_contracts"] = compile_contracts(
-                plan, manifests_by_slug
+            preflight = preflight_plan(
+                plan, catalog_inventory, manifests_by_slug, available_input_names
             )
+            if preflight.fixes:
+                raise ValueError("Plan failed preflight: " + "; ".join(preflight.fixes))
+            plan.planning_artifacts["compiled_contracts"] = preflight.contracts
             if supervisor_strategy in {"repair_plan", "compact_replan"}:
                 plan.planning_artifacts["supervisor_recovery_strategy"] = supervisor_strategy
             return plan
@@ -1446,7 +1452,17 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
         inventory_by_slug = {item["slug"]: item for item in planning_catalog(connected_slugs)}
         inventory_by_slug.update({item["slug"]: item for item in dynamic_inventory})
         inventory_by_slug.update({item["slug"]: item for item in broker_inventory})
-        inventory_by_slug.update({item["slug"]: item for item in connected_inventory})
+        for item in connected_inventory:
+            # The account's grants decide execution, not what the planner is
+            # allowed to describe. Preserve the declared connector catalog so
+            # missing consent becomes a precise connection request instead of
+            # forcing the model to invent a substitute operation.
+            declared = inventory_by_slug.get(item["slug"], {})
+            inventory_by_slug[item["slug"]] = {
+                **declared, **item,
+                "allowed_operations": declared.get("allowed_operations")
+                or item["allowed_operations"],
+            }
         inventory = list(inventory_by_slug.values())
         manifests_by_slug = dict(dynamic_manifests)
         manifests_by_slug.update(broker_manifests)
@@ -1518,17 +1534,24 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                         if (capability_family(slug) in excluded_families
                             or capability_family(str(operation or "").split(".", 1)[0]) in excluded_families):
                             raise NativeConnectorError("The revised plan still uses an omitted app")
+            from .plan_preflight import preflight_plan
+
+            preflight = preflight_plan(
+                plan, inventory, manifests_by_slug, set((run.inputs or {}).keys()),
+                connected_inventory,
+            )
+            if preflight.fixes:
+                raise ValueError("Plan failed preflight: " + "; ".join(preflight.fixes))
+            plan.planning_artifacts["compiled_contracts"] = preflight.contracts
             reported_missing = list(plan.planning_artifacts.get("connection_requirements", []))
             missing = (
                 reported_missing if run.prompt.startswith(PILOT_PREFIX)
                 else complete_connection_requirements(run.prompt, reported_missing, requirement_inventory)
             )
-            from .connection_permissions import missing_plan_operations
-
             # A catalog connector may be proposed for review, but Start must
             # never be offered until every real operation and verification read
             # is authorized on the connected account.
-            missing_grants = missing_plan_operations(plan, connected_inventory)
+            missing_grants = preflight.missing_grants
             missing = list(dict.fromkeys([*missing, *missing_grants]))
             missing = [item for item in missing if capability_family(item) not in excluded_families]
             if missing:
@@ -1536,11 +1559,33 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 from .semantic_memory import source_owner
 
                 owner = await source_owner(session, workspace_id, run.id)
+                reused = False
                 for slug in list(missing):
                     if await reuse_managed_connection(
                         session, managed_connector_client(), slug, workspace_id, owner
                     ):
+                        reused = True
                         missing.remove(slug)
+                if reused:
+                    # Connection recovery changes the database, not the
+                    # snapshot captured before planning. Recheck actual grants
+                    # before exposing Start; a reused account may lack a readback.
+                    current_tools = (await session.scalars(select(ToolConnection).where(
+                        ToolConnection.workspace_id == workspace_id,
+                        ToolConnection.enabled.is_(True),
+                    ))).all()
+                    current_manifests = (await session.scalars(select(CapabilityManifest).where(
+                        CapabilityManifest.tool_id.in_([tool.id for tool in current_tools]),
+                        CapabilityManifest.status == "verified",
+                    ))).all()
+                    verified_ids = {manifest.tool_id for manifest in current_manifests}
+                    from .connection_permissions import missing_plan_operations
+
+                    missing_grants = missing_plan_operations(plan, [
+                        {"slug": tool.slug, "allowed_operations": tool.allowed_operations}
+                        for tool in current_tools if tool.id in verified_ids
+                    ])
+                    missing = list(dict.fromkeys([*missing, *missing_grants]))
             plan.planning_artifacts["connection_requirements"] = missing
             plan_hash, plan_version_id = await _persist_plan_draft(session, run, plan)
             if missing:

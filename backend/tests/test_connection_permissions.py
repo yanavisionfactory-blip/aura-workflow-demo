@@ -116,7 +116,14 @@ def test_review_checks_connected_grants_and_write_readbacks_before_start():
 
 
 @pytest.mark.asyncio
-async def test_planning_pauses_for_missing_verified_grant_before_offering_start(monkeypatch, database):
+@pytest.mark.parametrize(("granted", "expected_missing", "claimed_reuse"), [
+    (["gmail.send"], ["gmail.get"], False),
+    (["google.identity.get"], ["gmail.get", "gmail.send"], False),
+    (["gmail.send"], ["gmail.get"], True),
+])
+async def test_planning_pauses_for_missing_verified_grant_before_offering_start(
+    monkeypatch, database, granted, expected_missing, claimed_reuse,
+):
     workspace_id, run_id = str(uuid4()), str(uuid4())
     plan = WorkflowPlan(name="Daily summary", interpretation="Send today's summary", steps=[
         PlanStep(key="send", agent="email", tool_slug="google", operation="gmail.send",
@@ -125,12 +132,16 @@ async def test_planning_pauses_for_missing_verified_grant_before_offering_start(
     ])
     monkeypatch.setattr(orchestrator, "SessionLocal", database)
     monkeypatch.setattr(orchestrator, "_create_compiled_plan", AsyncMock(return_value=plan))
+    if claimed_reuse:
+        from app import connection_recovery
+        monkeypatch.setattr(connection_recovery, "reuse_managed_connection",
+                            AsyncMock(return_value=True))
     async with database() as session:
         session.add(Workspace(id=workspace_id, name="Grant preflight"))
         session.add(WorkflowRun(id=run_id, workspace_id=workspace_id, prompt="email a summary to me",
                                 status=RunStatus.queued))
         tool = ToolConnection(workspace_id=workspace_id, slug="google", display_name="Google",
-                              kind=ToolKind.oauth, allowed_operations=["gmail.send"],
+                              kind=ToolKind.oauth, allowed_operations=granted,
                               config={"managed_by": "pipedream"})
         session.add(tool)
         await session.flush()
@@ -144,4 +155,4 @@ async def test_planning_pauses_for_missing_verified_grant_before_offering_start(
         requirement = await session.scalar(select(ConnectionRequirement).where(ConnectionRequirement.run_id == run_id))
         assert run.status == RunStatus.waiting_for_action
         assert run.plan_approved is False
-        assert requirement.required_permissions == ["gmail.get"]
+        assert requirement.required_permissions == expected_missing
