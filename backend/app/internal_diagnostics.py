@@ -14,6 +14,33 @@ logger = logging.getLogger(__name__)
 CATEGORIES = {'authorization_required', 'uncertain_write', 'invalid_request', 'contract_or_runtime_error', 'budget_exhausted', 'rate_limited', 'authentication', 'provider_error'}
 
 
+def jira_readback_summary(output: dict) -> dict:
+    """Count receipt/read mismatches without logging task titles or provider data."""
+    receipt = output.get('provider_result') or {}
+    check = output.get('outcome_check') or {}
+    issues = receipt.get('issues') or []
+    rows = (check.get('observed') or {}).get('checks') or []
+    summaries = receipt.get('requested_summaries') or []
+    if not all(isinstance(item, list) for item in (issues, rows, summaries)):
+        return {'status': 'unavailable'}
+    mismatches = {'key': 0, 'summary': 0, 'project': 0, 'issue_type': 0}
+    for issue, expected, row in zip(issues, summaries, rows):
+        if not isinstance(issue, dict) or not isinstance(row, dict):
+            continue
+        fields = row.get('fields') or {}
+        mismatches['key'] += row.get('key') != issue.get('key')
+        mismatches['summary'] += fields.get('summary') != expected
+        mismatches['project'] += (fields.get('project') or {}).get('key') != receipt.get('project_key')
+        mismatches['issue_type'] += (fields.get('issuetype') or {}).get('name') != receipt.get('issue_type')
+    return {
+        'status': check.get('status') if check.get('status') in {'verified', 'failed', 'unverified', 'pending'} else 'unknown',
+        'receipt_count': len(issues),
+        'read_count': len(rows),
+        'errors_count': len(receipt.get('errors') or []),
+        'mismatches': mismatches,
+    }
+
+
 def failure_category(payload: dict) -> str | None:
     # Never log arbitrary provider/user text from the audit payload.
     message = str(payload.get('internal_error', ''))
@@ -47,6 +74,7 @@ async def log_recent_stops() -> None:
                         'status':run.status.value, 'step_status':step.status.value,
                         'has_saved_receipt':'provider_result' in output,
                         'readback_budget_hit':'Read-back resource budget exceeded' in (check.get('reasons') or []),
+                        'jira_readback':jira_readback_summary(output) if step.operation == 'jira.issues.create_from_blocks' and 'provider_result' in output else None,
                         'event':audit.event_type if audit else None,
                         'category':failure_category(audit.payload or {}) if audit else None,
                         'missing_connection_reads':sorted(reads-set(tool.allowed_operations if tool else [])),
