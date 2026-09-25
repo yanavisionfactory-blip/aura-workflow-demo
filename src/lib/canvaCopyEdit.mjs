@@ -21,6 +21,18 @@ export const presentationCopySchema = {
   },
 };
 
+// References are filled by earlier workflow steps. A wording suggestion must not
+// accidentally turn live data into invented static copy.
+export const dynamicReferences = (value) => String(value || "").match(/\{\{[^}]+\}\}/g) || [];
+
+export function assertReferencesPreserved(before, after) {
+  for (const reference of dynamicReferences(before)) {
+    if (!String(after || "").includes(reference)) {
+      throw new Error("AURA kept the live information in place. Edit it on the preview if you want to replace it.");
+    }
+  }
+}
+
 export function applyPresentationCopy(args, suggestion) {
   const original = Array.isArray(args.phases) ? args.phases : [];
   if (!suggestion || typeof suggestion.title !== "string" || typeof suggestion.subtitle !== "string"
@@ -33,7 +45,12 @@ export function applyPresentationCopy(args, suggestion) {
       || !Array.isArray(slide.items) || slide.items.some((item) => typeof item !== "string")) {
       throw new Error("AURA could not apply that change. Please try again or edit the slide directly.");
     }
+    assertReferencesPreserved(phase.period, slide.period);
+    assertReferencesPreserved(phase.title, slide.title);
+    phase.items?.forEach((item, itemIndex) => assertReferencesPreserved(item, slide.items[itemIndex]));
     return { ...phase, period: slide.period, title: slide.title, items: slide.items };
   });
+  assertReferencesPreserved(args.title, suggestion.title);
+  assertReferencesPreserved(args.subtitle, suggestion.subtitle);
   return { ...args, title: suggestion.title, subtitle: suggestion.subtitle, phases };
 }
