@@ -46,7 +46,9 @@ export const fallbackReviewContract = (operation, args = {}, toolName = "App") =
     version: 1,
     kind,
     operation,
-    title: reviewTitle(kind, operation, toolName),
+    title: operation === "jira.issues.create_from_blocks"
+      ? "Review Jira tasks before creating them"
+      : reviewTitle(kind, operation, toolName),
     description: "Review the exact values AURA will submit.",
     fields: Object.entries(args).map(([key, value]) => ({
       key,
@@ -70,6 +72,9 @@ const previewForArguments = (contract, args) => {
       body: args.body || "",
       note: "Prepared from the completed workflow steps.",
     };
+  }
+  if (contract.operation === "jira.issues.create_from_blocks") {
+    return { type: "jira_batch", title: "Review Jira tasks before creating them" };
   }
   if (contract.kind === "ticket") {
     return {

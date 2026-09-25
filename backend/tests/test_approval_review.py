@@ -47,6 +47,18 @@ def test_google_doc_review_displays_full_editable_content():
     assert body["required"] is True
 
 
+def test_notion_to_jira_batch_review_has_task_title_and_source_block_contract():
+    contract = build_review_contract(
+        "jira.issues.create_from_blocks",
+        {"source_blocks": [{"type": "to_do", "to_do": {"rich_text": [{"plain_text": "Ship"}]}}]},
+        _capability("jira", "jira.issues.create_from_blocks"),
+        "Jira",
+    )
+
+    assert contract["title"] == "Review Jira tasks before creating them"
+    assert next(field for field in contract["fields"] if field["key"] == "source_blocks")["required"]
+
+
 def test_email_review_contract_replaces_attachment_transport_with_receipt():
     contract = build_review_contract(
         "gmail.send",

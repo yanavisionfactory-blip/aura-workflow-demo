@@ -7,6 +7,7 @@ import { downloadEmailEml, safeName } from "@/lib/auraDownload";
 import { applyPresentationCopy, dynamicReferences, presentationCopySchema } from "@/lib/canvaCopyEdit.mjs";
 import { applyEmailCopy, emailCopySchema } from "@/lib/emailCopyEdit.mjs";
 import { fallbackReviewContract, mergeLegacyPreviewIntoArguments, setArgumentAtPath, validateReviewArguments } from "@/lib/approvalReview.mjs";
+import { editJiraBatchTask, jiraBatchTasks, removeJiraBatchTask } from "@/lib/jiraBatchReview.mjs";
 
 function EditableEmail({ preview, onPreviewChange, onCopyChange = null, editing, artifacts = [], args = { subject: "", body: "" }, contract = null }) {
   const [instruction, setInstruction] = useState("");
@@ -200,6 +201,70 @@ function EditableJiraTask({ preview, onPreviewChange, editing }) {
           </div>
         </div>
         {preview.note && <p className="text-[11px] text-muted-foreground/60 pt-1">{preview.note}</p>}
+      </div>
+    </div>
+  );
+}
+
+function JiraBatchReview({ args, editing, onArgumentsChange }) {
+  const ready = Array.isArray(args.source_blocks);
+  const tasks = jiraBatchTasks(args);
+  const [draftTitles, setDraftTitles] = useState({});
+  return (
+    <div className="overflow-hidden rounded-xl border border-white/10 bg-card/40">
+      <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-card/30 px-4 py-3">
+        <div className="flex items-center gap-2 text-sm font-medium">
+          <ListChecks className="h-4 w-4 text-primary" /> Jira tasks
+        </div>
+        {ready && <span className="text-xs text-muted-foreground">{tasks.length} {tasks.length === 1 ? "task" : "tasks"}</span>}
+      </div>
+      {!ready ? (
+        <p className="p-4 text-sm leading-relaxed text-muted-foreground">
+          AURA will read your Notion notes first. You can review the actual Jira tasks before any are created.
+        </p>
+      ) : tasks.length === 0 ? (
+        <p className="p-4 text-sm leading-relaxed text-amber-200">
+          No to-do or list items were found in these notes. Choose different notes before creating tasks.
+        </p>
+      ) : (
+        <div className="divide-y divide-white/5">
+          {tasks.map((task, position) => (
+            <div key={task.index} className="flex items-start gap-3 px-4 py-3">
+              <span className="mt-1 flex h-6 w-6 flex-none items-center justify-center rounded-lg bg-primary/15 text-xs text-primary">{position + 1}</span>
+              {editing ? (
+                <input
+                  aria-label={`Jira task ${position + 1}`}
+                  value={draftTitles[task.index] ?? task.title}
+                  maxLength={255}
+                  onChange={(event) => {
+                    const title = event.target.value;
+                    setDraftTitles((current) => ({ ...current, [task.index]: title }));
+                    if (title.trim()) onArgumentsChange(editJiraBatchTask(args, task.index, title));
+                  }}
+                  onBlur={() => setDraftTitles((current) => {
+                    const next = { ...current };
+                    delete next[task.index];
+                    return next;
+                  })}
+                  className="min-w-0 flex-1 border-b border-white/10 bg-transparent py-1 text-sm outline-none focus:border-primary"
+                />
+              ) : <p className="min-w-0 flex-1 py-1 text-sm">{task.title}</p>}
+              {editing && <button type="button" aria-label={`Remove Jira task ${position + 1}`} onClick={() => { setDraftTitles({}); onArgumentsChange(removeJiraBatchTask(args, task.index)); }} className="rounded-lg p-1 text-muted-foreground hover:bg-white/5 hover:text-rose-300"><Trash2 className="h-4 w-4" /></button>}
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="border-t border-white/10 px-4 py-3">
+        <label className="mb-2 block text-xs font-medium text-muted-foreground">Jira project</label>
+        <input
+          aria-label="Jira project"
+          value={args.project_key || ""}
+          placeholder="Use my only Jira project"
+          readOnly={!editing}
+          onChange={(event) => onArgumentsChange({ ...args, project_key: event.target.value })}
+          className="w-full rounded-lg border border-white/10 bg-card px-3 py-2 text-sm outline-none focus:border-primary"
+        />
+        {!args.project_key && <p className="mt-2 text-xs text-muted-foreground">If you have more than one Jira project, enter the short project key before creating tasks.</p>}
       </div>
     </div>
   );
@@ -577,9 +642,10 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
   );
   const richEmail = contract.operation === "gmail.send";
   const richTicket = contract.operation === "jira.issue.create";
+  const richJiraBatch = contract.operation === "jira.issues.create_from_blocks";
   const richPresentation = contract.operation === "canva.presentation.create";
   const richDocument = contract.kind === "document";
-  const [editing, setEditing] = useState(() => richEmail || richPresentation || richDocument);
+  const [editing, setEditing] = useState(() => richEmail || richPresentation || richDocument || richJiraBatch);
   const updateArguments = (nextArguments) => onUpdate(index, {
     arguments: nextArguments,
     resolvedArguments: nextArguments,
@@ -631,6 +697,7 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
           <>
             {richEmail && <EditableEmail preview={p} onPreviewChange={updatePreview} onCopyChange={updateEmailCopy} args={args} contract={contract} editing={editing} artifacts={contract.artifacts || (Array.isArray(args.attachments) ? args.attachments.map((attachment) => ({ name: attachment.filename || "Attachment", source: "From this workflow" })) : [])} />}
             {richTicket && <EditableJiraTask preview={p} onPreviewChange={updatePreview} editing={editing} />}
+            {richJiraBatch && <JiraBatchReview args={args} editing={editing} onArgumentsChange={updateArguments} />}
             {richDocument && <EditableDocument preview={p} onPreviewChange={updatePreview} editing={editing} />}
             {richPresentation && (
               <EditablePresentation
@@ -649,7 +716,7 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
                 onFieldValidity={fieldValidity}
                 excludeKeys={richTicket
                     ? ["project_key", "projectKey", "project", "summary", "description", "assignee_id", "assignee"]
-                    : []}
+                    : richJiraBatch ? ["source_blocks", "project_key", "project_query"] : []}
               />
             )}
           </>
@@ -690,7 +757,15 @@ export default function PreviewView({ preview, steps, onApprove, onBack, error =
         .map((error) => ({ ...error, stepIndex: index }))
       : []
   ));
-  const approvalBlocked = invalidFields.size > 0 || contractErrors.length > 0;
+  const emptyJiraBatch = reviewSteps.some(({ step }) => {
+    const args = step.resolvedArguments || step.arguments || {};
+    return step.operation === "jira.issues.create_from_blocks"
+      && Array.isArray(args.source_blocks) && jiraBatchTasks(args).length === 0;
+  });
+  const jiraTasksPending = reviewSteps.length === 1
+    && reviewSteps[0].step.operation === "jira.issues.create_from_blocks"
+    && !Array.isArray((reviewSteps[0].step.resolvedArguments || reviewSteps[0].step.arguments || {}).source_blocks);
+  const approvalBlocked = invalidFields.size > 0 || contractErrors.length > 0 || emptyJiraBatch;
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -751,6 +826,8 @@ export default function PreviewView({ preview, steps, onApprove, onBack, error =
         </div>
       )}
 
+      {emptyJiraBatch && <p className="mb-4 text-xs text-amber-200">There are no Jira tasks to create. Return to the plan and choose notes with action items.</p>}
+
       {error && (
         <div className="mb-4 rounded-xl border border-rose-400/20 bg-rose-400/5 px-4 py-3 text-[11px] leading-relaxed text-rose-200">
           {error}
@@ -774,7 +851,7 @@ export default function PreviewView({ preview, steps, onApprove, onBack, error =
             className="gap-1.5 border-0 bg-gradient-to-r from-violet-500 to-violet-600 text-white hover:from-violet-600 hover:to-violet-700"
           >
             <Play className="w-3.5 h-3.5" />
-            {approvalBlocked ? "Complete required values" : "Approve & run"}
+            {approvalBlocked ? "Complete required values" : jiraTasksPending ? "Read notes & preview tasks" : "Approve & run"}
           </Button>
         </motion.div>
       </div>
