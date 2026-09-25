@@ -789,12 +789,18 @@ def deterministic_plan_fixes(
     variable_producers: dict[str, str] = {}
     for index, step in enumerate(plan.steps, start=1):
         contract = step.expected_output.strip().lower()
-        if contract.startswith(("no tool call", "no external call", "no provider call")) or (
-            step.reason.strip().lower().startswith((
-                "no tool call", "no external call", "no provider call",
-                "internal transformation", "internal composition",
-            ))
-        ):
+        reason = step.reason.strip().lower()
+        # A plan step is a provider invocation. A model sometimes dresses an
+        # internal summary up as an identity/read call, even when the sentence
+        # explaining the substitution is buried after the first clause.
+        no_provider_call = re.search(
+            r"(?:^|[.;:(]\s*|\b(?:but|because|and|with)\s+)"
+            r"(?:no|without an?) (?:external|provider|tool|api) "
+            r"(?:call|request)\b|\binternal (?:transformation|composition)\b"
+            r"|\b(?:this|the|a) (?:internal )?placeholder step\b",
+            f"{reason}. {contract}",
+        )
+        if no_provider_call:
             fixes.append(
                 f"Step {index} describes no provider call but assigns {step.operation}. "
                 "Remove this narrative placeholder; synthesize the answer after real provider steps."

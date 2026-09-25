@@ -20,7 +20,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .agent_runtime import deterministic_plan_fixes, is_governed_derivative_step
+from .agent_runtime import is_governed_derivative_step
 from .approval_readiness import unfinished_action_content
 from .approval_review import (
     build_review_contract,
@@ -102,6 +102,7 @@ from .native_connectors import (
     native_manifest,
     native_operations,
     normalize_module_arguments,
+    planning_catalog,
     public_catalog,
     validate_module_arguments,
 )
@@ -5682,24 +5683,43 @@ async def approve_plan(
             and not is_governed_derivative_step(plan, planned_step)
         ):
             planned_step.consequential = True
-    from .connection_permissions import (
-        missing_plan_operations,
-        refresh_granted_readbacks,
-        verification_permission_fixes,
-    )
+    from .connection_permissions import refresh_granted_readbacks
+    from .orchestrator import refresh_native_connection_contract
+    from .plan_preflight import preflight_plan
 
     for tool in tools:
+        refresh_native_connection_contract(tool)
         refresh_granted_readbacks(tool)
     inventory = [
-        {"slug": tool.slug, "allowed_operations": tool.allowed_operations} for tool in tools
+        {"slug": tool.slug, "allowed_operations": tool.allowed_operations}
+        for tool in tools if tool.id in manifests_by_tool_id
     ]
-    fixes = deterministic_plan_fixes(plan, inventory, set((run.inputs or {}).keys()))
-    permission_fixes = verification_permission_fixes(plan, inventory)
-    if permission_fixes and not fixes:
+    available_by_slug = {item["slug"]: item for item in planning_catalog(set(tools_by_slug))}
+    available_manifests = {
+        slug: current_capability_manifest(slug, None)
+        for slug in available_by_slug
+    }
+    for tool in tools:
+        manifest = current_capability_manifest(tool.slug, manifests_by_tool_id.get(tool.id))
+        if manifest:
+            available_manifests[tool.slug] = manifest
+            available_by_slug[tool.slug] = {
+                "slug": tool.slug,
+                "allowed_operations": [
+                    item["name"] for item in manifest.get("capabilities", [])
+                ],
+            }
+    preflight = preflight_plan(
+        plan, list(available_by_slug.values()), available_manifests,
+        set((run.inputs or {}).keys()), inventory,
+    )
+    if preflight.fixes:
+        raise HTTPException(422, {"message": "Plan failed authorization", "fixes": preflight.fixes})
+    if preflight.missing_grants:
         # Old plans could reach review before the connected account's readback
         # permissions were checked. Keep the run and ask for the exact grant,
         # rather than returning an unhelpful 422 on every Start attempt.
-        missing_grants = missing_plan_operations(plan, inventory)
+        missing_grants = preflight.missing_grants
         for slug, operations in missing_grants.items():
             session.add(ConnectionRequirement(
                 workspace_id=wid,
@@ -5725,40 +5745,6 @@ async def approve_plan(
         )
         await session.commit()
         return {"id": run.id, "status": run.status.value}
-    fixes.extend(permission_fixes)
-    if fixes:
-        raise HTTPException(422, {"message": "Plan failed authorization", "fixes": fixes})
-
-    argument_fixes: list[str] = []
-    for index, planned_step in enumerate(plan.steps, start=1):
-        tool = tools_by_slug.get(planned_step.tool_slug)
-        stored_manifest = manifests_by_tool_id.get(tool.id) if tool else None
-        manifest = current_capability_manifest(planned_step.tool_slug, stored_manifest)
-        if not manifest:
-            argument_fixes.append(f"Step {index} connector schema is unavailable")
-            continue
-        try:
-            planned_step.arguments = normalize_module_arguments(
-                manifest, planned_step.operation, planned_step.arguments
-            )
-        except ValueError as exc:
-            argument_fixes.append(f"Step {index} has invalid connector inputs: {exc}")
-    from .operation_contracts import compile_contracts
-
-    try:
-        compile_contracts(
-            plan,
-            {
-                slug: current_capability_manifest(slug, manifests_by_tool_id.get(tool.id))
-                for slug, tool in tools_by_slug.items()
-            },
-        )
-    except ValueError as exc:
-        argument_fixes.append(str(exc))
-    if argument_fixes:
-        raise HTTPException(
-            422, {"message": "AURA is still preparing this workflow", "fixes": argument_fixes}
-        )
     for stored, planned in zip(steps, plan.steps, strict=True):
         if stored.output.get("provider_result") is not None and (
             planned.model_dump(mode="json")
