@@ -877,10 +877,20 @@ async def _create_compiled_plan(
             if attempt == 1:
                 raise
             repair_requirements.append(str(exc))
+            reason = str(exc)
+            failure_category = (
+                "connector_input" if isinstance(exc, NativeConnectorError)
+                else "evidence_contract" if reason.startswith("Plan contract validation failed")
+                and "cannot supply" in reason
+                else "output_reference" if reason.startswith("Plan contract validation failed")
+                else "missing_requested_action" if reason.startswith("Requested external action")
+                else "plan_validation"
+            )
             logger.warning(
-                "Repairing plan connector contract attempt=%s error_type=%s",
+                "Repairing plan connector contract attempt=%s error_type=%s failure_category=%s",
                 attempt + 2,
                 type(exc).__name__,
+                failure_category,
             )
     raise RuntimeError("Plan connector-contract recovery exhausted")
 
@@ -1207,7 +1217,7 @@ async def _persist_plan_draft(session, run: WorkflowRun, plan) -> tuple[str, str
     if existing:
         return plan_hash, existing
     logger.info(
-        "Workflow plan ready run_id=%s graph=%s",
+        "Workflow plan ready run_id=%s graph=%s planner_recovery=%s timings_ms=%s",
         run.id,
         [
             {
@@ -1219,6 +1229,8 @@ async def _persist_plan_draft(session, run: WorkflowRun, plan) -> tuple[str, str
             }
             for item in plan.steps
         ],
+        plan.planning_artifacts.get("planner_recovery_mode"),
+        plan.planning_artifacts.get("timings_ms"),
     )
     plan_version = PlanVersion(
         workspace_id=run.workspace_id,

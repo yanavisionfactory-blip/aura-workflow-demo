@@ -291,7 +291,7 @@ def test_typed_read_descriptions_and_complete_email_preview_compile_without_repl
     _normalize_planned_steps(plan, {"google": manifest})
     assert not plan.steps[0].required_evidence
     assert not plan.steps[1].required_evidence
-    assert not plan.steps[2].required_evidence
+    assert plan.steps[2].required_evidence == ["message_content"]
     assert "provider-local date boundary" in plan.steps[0].expected_output
     assert plan.steps[3].required_evidence == ["write_receipt"]
     assert len(compile_contracts(plan, {"google": manifest})) == 4
@@ -301,6 +301,93 @@ def test_typed_read_descriptions_and_complete_email_preview_compile_without_repl
     _normalize_planned_steps(plan, {"google": manifest})
     with pytest.raises(ValueError, match="cannot supply"):
         compile_contracts(plan, {"google": manifest})
+
+
+@pytest.mark.parametrize("slug,operation,arguments,narrative", [
+    ("google", "calendar.list", {}, "Calendar items with local meeting context"),
+    ("notion", "notion.search", {"query": "project"}, "Relevant project pages discovered"),
+    ("jira", "jira.issues.search", {"jql": "project = DEMO"}, "Current issue metadata to summarize"),
+    ("slack", "slack.post", {"channel": "C123", "text": "Update"},
+     "Complete channel and text included for approval"),
+    ("google", "docs.create", {"title": "Report", "body": "Finished text"},
+     "Complete title and body included for approval"),
+])
+def test_narrative_goals_across_connectors_do_not_impersonate_output_guarantees(
+    slug, operation, arguments, narrative,
+):
+    plan = WorkflowPlan(name="Cross-provider contract", interpretation="Perform requested action", steps=[
+        PlanStep(key="action", agent="agent", tool_slug=slug, operation=operation,
+                 arguments=arguments, reason="Use the provider", expected_output="Provider result",
+                 required_evidence=[narrative]),
+    ])
+    manifests = {slug: native_manifest(slug)}
+    _normalize_planned_steps(plan, manifests)
+    assert plan.steps[0].required_evidence == []
+    assert narrative in plan.steps[0].expected_output
+    assert "action" in compile_contracts(plan, manifests)
+
+
+def test_narrative_goals_never_waive_missing_inputs_or_unbound_source_data():
+    plan = WorkflowPlan(name="Summary", interpretation="Post issue summary", steps=[
+        PlanStep(key="issues", agent="reader", tool_slug="jira", operation="jira.issues.search",
+                 arguments={"jql": "project = DEMO"}, reason="Read issues", expected_output="Issues"),
+        PlanStep(key="post", agent="sender", tool_slug="slack", operation="slack.post",
+                 arguments={"channel": "C123", "text": "An invented summary"},
+                 depends_on=["issues"], reason="Post summary", expected_output="Receipt",
+                 required_evidence=["Jira results included in the Slack text"]),
+    ])
+    manifests = {slug: native_manifest(slug) for slug in ("jira", "slack")}
+    _normalize_planned_steps(plan, manifests)
+    with pytest.raises(ValueError, match="cannot supply"):
+        compile_contracts(plan, manifests)
+
+    plan.steps[1].arguments["text"] = "{{steps.issues.issues}}"
+    _normalize_planned_steps(plan, manifests)
+    assert not plan.steps[1].required_evidence
+    assert "Jira results" in plan.steps[1].expected_output
+    assert "post" in compile_contracts(plan, manifests)
+
+    plan.steps[1].required_evidence = ["Complete channel and text included for approval"]
+    plan.steps[1].arguments["text"] = ""
+    with pytest.raises(Exception, match="text"):
+        _normalize_planned_steps(plan, manifests)
+
+
+def test_untyped_connector_prose_uses_the_same_boundary():
+    manifest = {"capabilities": [{
+        "name": "records.lookup", "permission_scope": "read", "input_schema": None,
+        "output_schema": {"type": "object"},
+    }]}
+    plan = WorkflowPlan(name="CRM lookup", interpretation="Read a customer record", steps=[
+        PlanStep(key="lookup", agent="crm", tool_slug="crm-plugin", operation="records.lookup",
+                 reason="Find customer", expected_output="Customer record",
+                 required_evidence=["Latest customer record with account context"]),
+    ])
+    from app.operation_contracts import normalize_planner_evidence_roles
+
+    normalize_planner_evidence_roles(plan, {"crm-plugin": manifest})
+    assert not plan.steps[0].required_evidence
+    assert "account context" in plan.steps[0].expected_output
+    assert "lookup" in compile_contracts(plan, {"crm-plugin": manifest})
+
+
+def test_unavailable_structural_guarantees_remain_rejected_or_require_readback():
+    for slug, operation, arguments, requested in (
+        ("notion", "notion.page.get", {"page_id": "p"}, "Full page body"),
+        ("google", "docs.create", {"title": "Story", "body": "Full story"}, "Full document body"),
+    ):
+        plan = WorkflowPlan(name="Read full content", interpretation="Verify content", steps=[
+            PlanStep(key="step", agent="agent", tool_slug=slug, operation=operation,
+                     arguments=arguments, reason="Verify content", expected_output="Content",
+                     required_evidence=[requested]),
+        ])
+        manifests = {slug: native_manifest(slug)}
+        _normalize_planned_steps(plan, manifests)
+        assert plan.steps[0].required_evidence == [
+            "page_body" if slug == "notion" else "document_body"
+        ]
+        with pytest.raises(ValueError, match="cannot supply"):
+            compile_contracts(plan, manifests)
 
 
 @pytest.mark.parametrize("prompt_text,required", [

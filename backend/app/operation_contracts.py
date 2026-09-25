@@ -6,6 +6,7 @@ treated as conformance certification. Raw provider fields are retained.
 import hashlib
 import hmac
 import json
+import re
 from copy import deepcopy
 
 from jsonschema import Draft202012Validator
@@ -551,16 +552,29 @@ def normalize_bound_email_inputs(plan) -> None:
 
 
 def normalize_planner_evidence_roles(plan, manifests: dict) -> None:
-    """Keep input bindings and provisional read goals out of output guarantees.
+    """Separate model prose from connector-owned output guarantees.
 
-    A model can put an argument name, a dependency reference, or an ordinary
-    description of a read result in required_evidence. None is a connector
-    guarantee. Preserve narrative read descriptions in expected_output so
-    the runtime critic still checks the actual provider result. Exact typed
-    evidence tags and consequential output claims remain strict.
+    The planner may describe any tool's inputs or desired outcome in the
+    required_evidence field. Only the connector catalog defines output tags.
+    Keep typed tags strict; move other verifiable goals to expected_output.
+    Missing named inputs or unbound upstream sources still fail compilation.
     """
     from .workflow_context import REFERENCE, referenced_paths
 
+    catalog_tags = {
+        tag for _, tags in KNOWN.values() for tag in tags
+    }
+    catalog_tags.update(
+        tag
+        for manifest in manifests.values()
+        for module in manifest.get("capabilities", [])
+        for tag in enrich_operation(module)["reliability"]["provides"]
+    )
+    normalized_tags = {
+        re.sub(r"[^a-z0-9]+", "_", tag.casefold()).strip("_"): tag
+        for tag in catalog_tags
+    }
+    steps_by_key = {step.key: step for step in plan.steps}
     for step in plan.steps:
         module = next(
             (item for item in manifests.get(step.tool_slug, {}).get("capabilities", [])
@@ -588,24 +602,60 @@ def normalize_planner_evidence_roles(plan, manifests: dict) -> None:
                 continue  # The argument already binds an approved upstream result.
             remaining.append(tag)
 
-        if module.get("permission_scope") == "read" and remaining:
-            descriptions = [
-                tag for tag in remaining
-                if " " in tag.strip() and not any(
-                    structural in tag.casefold().replace("_", " ")
-                    for structural in ("page body", "document body", "full content")
-                )
+        guarantees, descriptions = [], []
+        properties = (module.get("input_schema") or {}).get("properties", {})
+        input_refs = referenced_paths(step.arguments)
+        for tag in remaining:
+            value = tag.strip()
+            normalized = re.sub(r"[^a-z0-9]+", "_", value.casefold()).strip("_")
+            # A tag from *any* verified connector remains a strict requirement:
+            # selecting a weaker tool cannot silently satisfy page_body, for example.
+            exact = normalized_tags.get(normalized)
+            if exact:
+                guarantees.append(exact)
+                continue
+            # Body guarantees are sometimes written as sentences. Preserve the
+            # structural meaning, including the Docs create/readback repair.
+            structural = next((name for name in ("document_body", "page_body")
+                               if name in catalog_tags and name.replace("_", " ") in value.casefold()), None)
+            if structural:
+                guarantees.append(structural)
+                continue
+            if (not re.search(r"\s", value) or "{{" in value):
+                guarantees.append(tag)  # Unknown typed tags and unbound references fail closed.
+                continue
+
+            # A write description of its inputs is acceptable only if every
+            # named input is actually present. Connector input schemas supply
+            # the vocabulary for every provider, not a Gmail-specific wordlist.
+            missing_fields = [
+                field for field in properties
+                if re.search(r"\b" + re.escape(field.replace("_", " ")) + r"\b", value, re.IGNORECASE)
+                and step.arguments.get(field) in (None, "")
             ]
-            # Structural tags remain compile-time failures. A successful
-            # access probe is observed only at execution, not guaranteed by a
-            # manifest. The runtime critic checks these narrative read goals.
-            remaining = [tag for tag in remaining if tag not in descriptions]
-            if descriptions:
-                step.expected_output = "\n".join(dict.fromkeys([
-                    step.expected_output,
-                    *descriptions,
-                ]))
-        step.required_evidence = remaining
+            if missing_fields:
+                guarantees.append(tag)
+                continue
+            # A claimed upstream result must be bound into this step's
+            # arguments. A prose goal cannot bless an invented summary.
+            unbound_sources = [
+                source for key in step.depends_on
+                if (source := steps_by_key.get(key)) is not None
+                and any(re.search(r"\b" + re.escape(name) + r"\b", value, re.IGNORECASE)
+                        for name in {source.tool_slug, source.operation.split(".", 1)[0]}
+                        if len(name) >= 4)
+                and not any(path.startswith(f"steps.{key}.") for path in input_refs)
+            ]
+            if unbound_sources:
+                guarantees.append(tag)
+                continue
+            descriptions.append(tag)
+
+        if descriptions:
+            step.expected_output = "\n".join(dict.fromkeys([
+                step.expected_output, *descriptions,
+            ]))
+        step.required_evidence = list(dict.fromkeys(guarantees))
 
 
 def compile_contracts(plan, manifests: dict) -> dict:
