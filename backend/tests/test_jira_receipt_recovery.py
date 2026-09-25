@@ -4,8 +4,19 @@ from types import SimpleNamespace
 from sqlalchemy import select
 
 from app import main, outcome_runtime, scheduler_runtime
-from app.models import (Approval, CapabilityManifest, DispatchIntent, PlanVersion, RunStatus,
-                        RunStep, StepStatus, ToolConnection, ToolKind, WorkflowRun, Workspace)
+from app.models import (
+    Approval,
+    CapabilityManifest,
+    DispatchIntent,
+    PlanVersion,
+    RunStatus,
+    RunStep,
+    StepStatus,
+    ToolConnection,
+    ToolKind,
+    WorkflowRun,
+    Workspace,
+)
 from app.native_connectors import native_manifest, native_operations
 from app.policy import canonical_plan_hash
 from app.schemas import PlanApproval
