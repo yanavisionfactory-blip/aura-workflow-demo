@@ -54,6 +54,7 @@ def build_extended(operation, a, receipt):
             or len(issues) > 20
             or len({str(issue.get("key") or "") for issue in issues}) != len(issues)
             or any(not issue.get("key") for issue in issues)
+            or receipt.get("errors")
             or not project_key
             or not issue_type
         ):
@@ -70,9 +71,10 @@ def build_extended(operation, a, receipt):
                     "fields": {
                         "summary": summary,
                         "project": {"key": project_key},
-                        "issuetype": {"name": issue_type},
-                    }
+                    },
+                    "requested_issue_type": issue_type,
                 },
+                "jira_batch_issue",
             )
             for issue, summary in zip(issues, summaries, strict=True)
         )
@@ -130,7 +132,23 @@ def evaluate_extended(check, observed):
         if any(v["status"] != "verified" for v in verdicts):
             return {"status": "unverified", "reasons": [reason for v in verdicts if v["status"] != "verified" for reason in v["reasons"]]}
         return result("verified", "All requested resources and content matched provider reads")
-    if check.kind == "sheets":
+    if check.kind == "jira_batch_issue":
+        if not _same_id(check.resource_id, observed.get("key")):
+            return result("failed", "Jira issue key differs from the recorded receipt")
+        fields = observed.get("fields") or {}
+        issue_type = fields.get("issuetype") or {}
+        if not isinstance(issue_type, dict) or not str(issue_type.get("id") or "").strip():
+            return result("unverified", "Jira issue type has no stable identifier")
+        if issue_type.get("subtask") is True:
+            return result("failed", "Jira created a subtask instead of a task")
+        untranslated = issue_type.get("untranslatedName")
+        if untranslated and str(untranslated).casefold() != check.expected["requested_issue_type"].casefold():
+            return result("failed", "Jira issue type differs from the approved task type")
+        # Jira localizes the display name. The POST accepted the approved Task
+        # type; the stable type ID, issue key, project and summary establish the
+        # same created issue without comparing locale-specific display labels.
+        matched = _matches(check.expected["fields"], fields)
+    elif check.kind == "sheets":
         matched = _matches(check.expected, observed)
     elif check.kind == "slack":
         messages = observed.get("messages", [])

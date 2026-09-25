@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
@@ -19,10 +20,40 @@ from app.models import (
     Workspace,
 )
 from app.native_connectors import native_manifest, native_operations
+from app.outcome_checks import build_outcome_check, evaluate_outcome_check
 from app.policy import canonical_plan_hash
 from app.run_supervisor import transition_run
 from app.schemas import PlanApproval
 from app.workflow_templates import notion_to_jira_template
+
+
+def test_jira_readback_accepts_localized_display_type_with_stable_identity():
+    receipt = {
+        "issues": [{"id": "10001", "key": "KAN-1"}],
+        "requested_summaries": ["Discuss launch"],
+        "project_key": "KAN", "issue_type": "Task", "errors": [],
+    }
+    check = build_outcome_check("jira.issues.create_from_blocks", {}, receipt)
+    issue = {
+        "id": "10001", "key": "KAN-1",
+        "fields": {
+            "summary": "Discuss launch", "project": {"key": "KAN"},
+            "issuetype": {"id": "10002", "name": "Aufgabe", "subtask": False},
+        },
+    }
+    assert evaluate_outcome_check(check, {"checks": [issue]})["status"] == "verified"
+    without_type_id = deepcopy(issue)
+    without_type_id["fields"]["issuetype"].pop("id")
+    assert evaluate_outcome_check(check, {"checks": [without_type_id]})["status"] != "verified"
+    wrong_canonical_type = deepcopy(issue)
+    wrong_canonical_type["fields"]["issuetype"]["untranslatedName"] = "Bug"
+    assert evaluate_outcome_check(check, {"checks": [wrong_canonical_type]})["status"] != "verified"
+    wrong_project = deepcopy(issue)
+    wrong_project["fields"]["project"]["key"] = "OTHER"
+    assert evaluate_outcome_check(check, {"checks": [wrong_project]})["status"] != "verified"
+    with_partial_error = {**receipt, "errors": [{"issue": "failed"}]}
+    with pytest.raises(ValueError):
+        build_outcome_check("jira.issues.create_from_blocks", {}, with_partial_error)
 
 
 async def test_startup_restores_saved_jira_receipt_even_without_periodic_scheduler(monkeypatch):
@@ -134,7 +165,7 @@ async def test_full_jira_batch_reads_all_saved_issues_without_a_second_write(mon
             return {
                 "id": str(index), "key": f"AURA-{index}",
                 "fields": {"summary": f"Action {index}", "project": {"key": "AURA"},
-                           "issuetype": {"name": "Task"}},
+                           "issuetype": {"id": "3", "name": "Task"}},
             }
 
     tool = SimpleNamespace(
@@ -213,6 +244,58 @@ async def test_scheduler_resumes_saved_receipt_once_and_never_reposts(
             run, RunStatus.waiting_for_action,
             reason="test_inconclusive_readback", actor="test", dispatch=None,
         )
+        step.status = StepStatus.failed
+        await session.commit()
+    assert await scheduler_runtime.recover_recorded_jira_readbacks() == []
+
+
+async def test_localized_jira_receipt_gets_one_safe_recheck_after_prior_attempt(database, monkeypatch):
+    monkeypatch.setattr(scheduler_runtime, "SessionLocal", database)
+
+    async def workspaces():
+        return ["w"]
+
+    @asynccontextmanager
+    async def owned(*args, **kwargs):
+        yield True
+
+    monkeypatch.setattr(scheduler_runtime, "_workspace_ids", workspaces)
+    monkeypatch.setattr(scheduler_runtime, "execution_lock", owned)
+    receipt = {
+        "issues": [{"key": "KAN-1"}], "requested_summaries": ["Discuss launch"],
+        "project_key": "KAN", "issue_type": "Task", "errors": [],
+    }
+    observed = {
+        "checks": [{"key": "KAN-1", "fields": {
+            "summary": "Discuss launch", "project": {"key": "KAN"},
+            "issuetype": {"id": "10002", "name": "Aufgabe", "subtask": False},
+        }}],
+    }
+    async with database() as session:
+        session.add(Workspace(id="w", name="Localized readback"))
+        session.add(WorkflowRun(
+            id="saved", workspace_id="w", prompt="Create Jira tasks",
+            status=RunStatus.waiting_for_action, plan_approved=True, plan={"steps": []},
+            execution_context={"__aura_saved_jira_receipt_reviews": ["jira-step"]},
+        ))
+        session.add(RunStep(
+            id="jira-step", run_id="saved", position=0, step_key="jira",
+            agent="jira", tool_slug="jira", operation="jira.issues.create_from_blocks",
+            arguments={}, status=StepStatus.failed, consequential=True,
+            idempotency_key="jira-once",
+            output={"provider_result": receipt, "outcome_check": {
+                "status": "unverified", "observed": observed,
+            }},
+        ))
+        await session.commit()
+
+    assert await scheduler_runtime.recover_recorded_jira_readbacks() == [("saved", "w")]
+    async with database() as session:
+        run = await session.get(WorkflowRun, "saved")
+        step = await session.get(RunStep, "jira-step")
+        assert run.execution_context["__aura_saved_jira_locale_reviews"] == ["jira-step"]
+        assert step.output["provider_result"] == receipt
+        transition_run(run, RunStatus.waiting_for_action, reason="test_still_unverified", actor="test", dispatch=None)
         step.status = StepStatus.failed
         await session.commit()
     assert await scheduler_runtime.recover_recorded_jira_readbacks() == []

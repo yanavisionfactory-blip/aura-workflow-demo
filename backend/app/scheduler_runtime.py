@@ -782,16 +782,34 @@ async def recover_recorded_jira_readbacks() -> list[tuple[str, str]]:
                             ),
                         )
                     )
-                    prior_reviews = (run.execution_context or {}).get(
+                    saved_context = run.execution_context or {} if run else {}
+                    prior_reviews = saved_context.get(
                         "__aura_saved_jira_receipt_reviews", []
-                    ) if run else []
+                    )
+                    locale_reviews = saved_context.get(
+                        "__aura_saved_jira_locale_reviews", []
+                    )
+                    locale_recheck = False
+                    if step and step.id in prior_reviews and step.id not in locale_reviews:
+                        from .internal_diagnostics import jira_readback_summary
+
+                        summary = jira_readback_summary(step.output or {})
+                        mismatches = summary.get("mismatches", {})
+                        locale_recheck = (
+                            summary.get("status") == "unverified"
+                            and summary.get("receipt_count", 0) > 0
+                            and summary.get("receipt_count") == summary.get("read_count")
+                            and summary.get("errors_count") == 0
+                            and mismatches.get("issue_type", 0) > 0
+                            and all(mismatches.get(key) == 0 for key in ("key", "summary", "project"))
+                        )
                     if (
                         not run or not step or run.cancellation_requested
                         or run.status not in {
                             RunStatus.waiting_for_action, RunStatus.failed, RunStatus.blocked
                         }
                         or "provider_result" not in (step.output or {})
-                        or step.id in prior_reviews
+                        or (step.id in prior_reviews and not locale_recheck)
                     ):
                         continue
                     # The saved provider receipt makes this a read-only review.
@@ -801,7 +819,12 @@ async def recover_recorded_jira_readbacks() -> list[tuple[str, str]]:
                     step.error = None
                     run.execution_context = {
                         **(run.execution_context or {}),
-                        "__aura_saved_jira_receipt_reviews": [*prior_reviews, step.id],
+                        "__aura_saved_jira_receipt_reviews": (
+                            prior_reviews if step.id in prior_reviews else [*prior_reviews, step.id]
+                        ),
+                        "__aura_saved_jira_locale_reviews": (
+                            [*locale_reviews, step.id] if locale_recheck else locale_reviews
+                        ),
                     }
                     transition_run(
                         run,
