@@ -564,8 +564,10 @@ def public_run_projection(run: WorkflowRun, blocker: dict | None) -> dict:
     if (
         run.status in {RunStatus.failed, RunStatus.blocked}
         and not is_unavoidable_human_blocker(blocker)
-        and incident_status
-        in {"awaiting_sandbox", "quarantined", "failed", "canary_failed", "rolled_back"}
+        and (
+            incident_status in {"awaiting_sandbox", "quarantined", "failed", "canary_failed", "rolled_back"}
+            or (isinstance(incident, dict) and incident.get("kind") == "planning_recovery_exhausted" and not incident_status)
+        )
     ):
         # There is no queued retry or active repair in these states. Do not
         # present an indefinitely blocked run as though an agent is working.

@@ -647,6 +647,8 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         <p className="text-xs text-muted-foreground leading-relaxed mb-3">
           {plan.compileState === "blocked"
             ? "Nothing has started. Try again to finish preparing this plan."
+            : plan.compileState === "validating"
+              ? "You can start now. AURA will prepare the exact actions and ask you to review any changes before sending or creating anything."
             : "Aura will follow this plan and handle technical preparation during execution."}
         </p>
         <div className="mb-3">
@@ -662,10 +664,10 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
             onClick={() => onApprove(steps, name.trim())}
-            disabled={missingTools.length > 0 || steps.length === 0 || Boolean(plan.error) || plan.provisional || (plan.compileState && plan.compileState !== "ready")}
+            disabled={Boolean(plan.error) || (plan.compileState === "waiting_for_connection") || (!plan.provisional && missingTools.length > 0) || (steps.length === 0 && plan.compileState !== "blocked")}
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {approveLabel} <ArrowRight className="w-4 h-4" />
+            {plan.compileState === "blocked" ? "Try again" : approveLabel} <ArrowRight className="w-4 h-4" />
           </motion.button>
         </div>
       </motion.div>
