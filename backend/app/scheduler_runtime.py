@@ -792,6 +792,11 @@ async def recover_recorded_jira_readbacks() -> list[tuple[str, str]]:
                         or "Read-back resource budget exceeded" not in outcome.get("reasons", [])
                     ):
                         continue
+                    # The saved provider receipt makes this a read-only review.
+                    # Mark it active so a model supervisor cannot treat a stale
+                    # failure flag as a reason to pause the reconciliation again.
+                    step.status = StepStatus.running
+                    step.error = None
                     transition_run(
                         run,
                         RunStatus.recovering,
