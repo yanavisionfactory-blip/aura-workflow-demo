@@ -206,7 +206,7 @@ async def test_exhausted_recovery_opens_internal_incident_not_retry_ui(database)
         assert state["status"] == "operator_attention"
         assert state["repair_incident"]["required_environment"] == "isolated_repair_sandbox"
         assert state["repair_incident"]["production_write_allowed"] is False
-        assert public_run_projection(run, None)["public_status"] == "recovering"
+        assert public_run_projection(run, None)["public_status"] == "blocked"
 
 
 @pytest.mark.parametrize("code", sorted(HUMAN_ACTION_CODES))

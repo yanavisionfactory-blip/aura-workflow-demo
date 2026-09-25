@@ -136,6 +136,15 @@ def test_receipt_prose_maps_only_to_guarantees_the_connector_provides():
     assert canonicalize_requested_evidence(
         "calendar.list", ["calendar search results", "document_body"], ["event_state"],
     ) == ["event_state", "document_body"]
+    assert canonicalize_requested_evidence(
+        "google.identity.get", ["Connected Google account email"], ["account_identity"],
+    ) == ["account_identity"]
+    assert canonicalize_requested_evidence(
+        "calendar.list", ["Calendar list results for today"], ["event_state"],
+    ) == ["event_state"]
+    assert canonicalize_requested_evidence(
+        "gmail.send", ["Calendar results to summarize"], ["write_receipt"],
+    ) == ["Calendar results to summarize"]
     plan = WorkflowPlan(name="Doc", interpretation="Create doc", steps=[PlanStep(
         key="doc", agent="Docs", tool_slug="google", operation="docs.create",
         arguments={"title": "Story", "body": "Text"}, reason="Create doc",

@@ -479,9 +479,14 @@ def canonicalize_requested_evidence(operation: str, requested: list[str], provid
                 replacement = "write_receipt"
             elif "dispatch_receipt" in available:
                 replacement = "dispatch_receipt"
-        elif operation == "google.identity.get" and "identity" in words and "account_identity" in available:
+        elif (operation == "google.identity.get" and "account_identity" in available
+              and ("identity" in words or ("account" in words and any(
+                  token in words for token in ("email", "access", "address")
+              )))):
             replacement = "account_identity"
-        elif operation == "calendar.list" and "search results" in words and "event_state" in available:
+        elif (operation == "calendar.list" and "event_state" in available
+              and ("search results" in words or "calendar list results" in words
+                   or "calendar events" in words)):
             replacement = "event_state"
         resolved.append(replacement or tag)
         if (replacement == "dispatch_receipt" and operation == "canva.presentation.create"

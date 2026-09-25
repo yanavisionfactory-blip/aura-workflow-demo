@@ -103,7 +103,11 @@ test("the UI renders a language plan while durable compilation is still running"
   assert.equal(source.includes("PLANNING_WAIT_TIMEOUT_MS"), false);
   assert.equal(source.includes('.replace(/^i\\s+will\\s+/i, "")'), true);
   assert.equal(source.includes("iWill: firstPersonStepCopy(step.iWill || step.reason)"), true);
-  assert.equal(planViewSource.includes('plan.compileState !== "ready"'), true);
+  assert.equal(planViewSource.includes('plan.compileState !== "ready"'), false);
+  assert.equal(planViewSource.includes('plan.compileState === "waiting_for_connection"'), true);
+  assert.equal(planViewSource.includes('!plan.provisional && missingTools.length > 0'), true);
+  assert.equal(source.includes('Poem + illustrations pilot'), false);
+  assert.equal(source.includes('Set up a four-app pilot'), false);
   assert.equal(source.includes('if (plan.compileState === "blocked") {'), true);
   assert.equal(source.includes("handleRetryPlanning();"), true);
 });

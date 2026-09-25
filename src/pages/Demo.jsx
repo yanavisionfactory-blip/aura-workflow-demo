@@ -6,7 +6,6 @@ import { CREATOR_APPROVALS_MOCK } from "@/lib/mockWorkflows";
 import TopBar from "@/components/aura/TopBar";
 import CommandInput from "@/components/aura/CommandInput";
 import PilotBuilder from "@/components/aura/PilotBuilder";
-import { POEM_PILOT_FIELDS } from "@/lib/poemPilot.mjs";
 import ConfirmView from "@/components/aura/ConfirmView";
 import PlanView from "@/components/aura/PlanView";
 import PreviewView from "@/components/aura/PreviewView";
@@ -1820,16 +1819,6 @@ Generate a results summary in plain, human-friendly language (not technical).
                 ) : (
                   <>
                     <CommandInput onSubmit={handleSubmit} examples={WORKFLOW_EXAMPLES} onPickExample={handlePickExample} />
-                    <div className="mt-5 text-center">
-                      <button type="button" onClick={() => { setPilotDraft(POEM_PILOT_FIELDS); setPilotOpen(true); }}
-                        className="mr-3 rounded-lg bg-primary px-5 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90">
-                        Poem + illustrations pilot
-                      </button>
-                      <button type="button" onClick={() => setPilotOpen(true)}
-                        className="rounded-lg border border-primary/50 px-5 py-2 text-sm font-medium text-primary hover:bg-primary/10">
-                        Set up a four-app pilot
-                      </button>
-                    </div>
                   </>
                 )}
               </motion.div>
