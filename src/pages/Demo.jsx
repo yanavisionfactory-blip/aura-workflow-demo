@@ -29,6 +29,7 @@ import {
   decidePythonApproval,
   forgetActivePythonRun,
   getPythonRun,
+  rememberedActivePythonRun,
   resumePythonRun,
   resumePythonRunAfterConnection,
 } from "@/lib/auraApi";
@@ -47,7 +48,7 @@ import {
   promptConnectionRequirements,
   shouldStartFreshPlanningRun,
 } from "@/lib/planningFlow.mjs";
-import { hasDurablePlan, planningRequestPrompt, sameExecutablePlan } from "@/lib/runtimePlan.mjs";
+import { hasDurablePlan, planningRequestPrompt, restorablePlanningRun, sameExecutablePlan } from "@/lib/runtimePlan.mjs";
 import { weatherStepTitle } from "@/lib/planPresentation.mjs";
 import { instantLanguagePlan, languageDraftPrompt } from "@/lib/languagePlan.mjs";
 import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
@@ -370,6 +371,33 @@ export default function Demo() {
   const attachedResourcesRef = useRef(null);
   const userSelectedToolsRef = useRef([]);
   const omittedToolsRef = useRef([]);
+
+  useEffect(() => {
+    const remembered = rememberedActivePythonRun();
+    if (!remembered) return undefined;
+    let mounted = true;
+    getPythonRun(remembered).then((run) => {
+      if (!mounted || originalPromptRef.current || !restorablePlanningRun(run)) return;
+      const intent = String(run.prompt || run.plan?.interpretation || "")
+        .split("\n\nThe user reviewed the proposed workflow and requested this change:")[0];
+      const waiting = run.status === "waiting_for_action";
+      const restored = waiting
+        ? { ...uiConnectionPlanFromRun(run, intent), provisional: !run.plan?.steps?.length,
+          compileState: "waiting_for_connection" }
+        : { ...uiPlanFromRun(run), provisional: false, compileState: "ready" };
+      pythonRunIdRef.current = run.id;
+      pythonPlanRef.current = run.plan || null;
+      originalPromptRef.current = intent;
+      lastPlanningIntentRef.current = intent;
+      setOriginalPrompt(intent);
+      setInterpretation(restored.interpretation);
+      setPlan(restored);
+      setPhase("plan");
+    }).catch(() => {
+      // A failed status read must never manufacture an executable plan.
+    });
+    return () => { mounted = false; };
+  }, []);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);

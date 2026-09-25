@@ -2,6 +2,15 @@ export function hasDurablePlan(runId, backendPlan) {
   return Boolean(runId && backendPlan?.steps?.length);
 }
 
+export function restorablePlanningRun(run = {}) {
+  if (run.plan_approved) return false;
+  if (run.status === "awaiting_approval") return Boolean(run.plan?.steps?.length);
+  if (run.status !== "waiting_for_action") return false;
+  return run.result?.status === "waiting_for_connection"
+    || run.blocker?.code === "connection_required"
+    || (run.connection_requirements || []).some((item) => item.status !== "satisfied");
+}
+
 export function sameExecutablePlan(before = [], after = []) {
   const identity = (steps) => steps.map((step) => ({
     tool_slug: step.tool_slug || step.tool,
