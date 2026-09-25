@@ -481,7 +481,7 @@ def canonicalize_requested_evidence(operation: str, requested: list[str], provid
                 replacement = "dispatch_receipt"
         elif (operation == "google.identity.get" and "account_identity" in available
               and ("identity" in words or ("account" in words and any(
-                  token in words for token in ("email", "access", "address")
+                  token in words for token in ("email", "address")
               )))):
             replacement = "account_identity"
         elif (operation == "calendar.list" and "event_state" in available

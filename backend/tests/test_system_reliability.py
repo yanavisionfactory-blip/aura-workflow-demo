@@ -140,6 +140,9 @@ def test_receipt_prose_maps_only_to_guarantees_the_connector_provides():
         "google.identity.get", ["Connected Google account email"], ["account_identity"],
     ) == ["account_identity"]
     assert canonicalize_requested_evidence(
+        "google.identity.get", ["Connected Google account access"], ["account_identity"],
+    ) == ["Connected Google account access"]
+    assert canonicalize_requested_evidence(
         "calendar.list", ["Calendar list results for today"], ["event_state"],
     ) == ["event_state"]
     assert canonicalize_requested_evidence(
