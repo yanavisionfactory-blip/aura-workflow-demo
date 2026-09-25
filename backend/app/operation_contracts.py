@@ -603,7 +603,7 @@ def normalize_planner_evidence_roles(plan, manifests: dict) -> None:
             remaining.append(tag)
 
         guarantees, descriptions = [], []
-        properties = module.get("input_schema", {}).get("properties", {})
+        properties = (module.get("input_schema") or {}).get("properties", {})
         input_refs = referenced_paths(step.arguments)
         for tag in remaining:
             value = tag.strip()

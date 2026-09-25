@@ -353,6 +353,24 @@ def test_narrative_goals_never_waive_missing_inputs_or_unbound_source_data():
         _normalize_planned_steps(plan, manifests)
 
 
+def test_untyped_connector_prose_uses_the_same_boundary():
+    manifest = {"capabilities": [{
+        "name": "records.lookup", "permission_scope": "read", "input_schema": None,
+        "output_schema": {"type": "object"},
+    }]}
+    plan = WorkflowPlan(name="CRM lookup", interpretation="Read a customer record", steps=[
+        PlanStep(key="lookup", agent="crm", tool_slug="crm-plugin", operation="records.lookup",
+                 reason="Find customer", expected_output="Customer record",
+                 required_evidence=["Latest customer record with account context"]),
+    ])
+    from app.operation_contracts import normalize_planner_evidence_roles
+
+    normalize_planner_evidence_roles(plan, {"crm-plugin": manifest})
+    assert not plan.steps[0].required_evidence
+    assert "account context" in plan.steps[0].expected_output
+    assert "lookup" in compile_contracts(plan, {"crm-plugin": manifest})
+
+
 def test_unavailable_structural_guarantees_remain_rejected_or_require_readback():
     for slug, operation, arguments, requested in (
         ("notion", "notion.page.get", {"page_id": "p"}, "Full page body"),
