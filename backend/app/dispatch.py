@@ -138,8 +138,8 @@ async def recovery_tick() -> dict:
     from .scheduler_runtime import (
         dispatch_due_schedules,
         recover_engineer_runs,
-        recover_stale_runs,
         recover_recorded_jira_readbacks,
+        recover_stale_runs,
         recover_waiting_runs,
     )
 
