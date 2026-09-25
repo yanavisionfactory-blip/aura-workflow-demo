@@ -516,6 +516,33 @@ async def test_worker_schedules_only_its_own_future_preflight_retry(database, mo
         assert unrelated.status == "pending"
 
 
+async def test_worker_schedules_only_its_own_future_planning_repair(database, monkeypatch):
+    async with database() as session:
+        for name in ("requested", "unrelated"):
+            session.add(WorkflowRun(id=name, workspace_id="w", prompt="Fixture", status=RunStatus.planning))
+            session.add(DispatchIntent(
+                workspace_id="w", run_id=name, kind="plan",
+                available_at=datetime.now(UTC) + timedelta(seconds=20),
+            ))
+        await session.commit()
+    sent = []
+    monkeypatch.setattr(
+        worker.plan_run_task, "apply_async",
+        lambda *, args, countdown: sent.append((args, countdown)),
+    )
+    assert await dispatch.dispatch_pending(
+        "w", run_id="requested", schedule_delayed_plan=True
+    ) == 1
+    assert len(sent) == 1
+    assert sent[0][0] == ["requested", "w"]
+    assert 0 < sent[0][1] <= 20
+    async with database() as session:
+        requested = await session.scalar(select(DispatchIntent).where(DispatchIntent.run_id == "requested"))
+        unrelated = await session.scalar(select(DispatchIntent).where(DispatchIntent.run_id == "unrelated"))
+        assert requested.status == "published"
+        assert unrelated.status == "pending"
+
+
 @pytest.mark.skipif(not __import__('os').getenv('AURA_TEST_POSTGRES_URL'), reason="Requires PostgreSQL")
 async def test_postgres_scheduler_and_dispatch_concurrency(monkeypatch):
     import os

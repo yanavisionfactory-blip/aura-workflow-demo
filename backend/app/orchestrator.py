@@ -689,6 +689,7 @@ async def _create_compiled_plan(
     manifests_by_slug: dict[str, dict],
     requested_tool_names: list[str] | tuple[str, ...] | set[str] = (),
     excluded_tool_families: set[str] | frozenset[str] = frozenset(),
+    supervisor_strategy: str | None = None,
 ):
     """Build a schema-valid plan, repairing internal connector mismatches silently."""
     manifests_by_slug = {
@@ -779,6 +780,10 @@ async def _create_compiled_plan(
         )
         return audited_plan
     inventory = intent_bounded_tool_inventory(prompt, inventory, requested_tool_names)
+    preferred_route = {
+        "repair_plan": "staged",
+        "compact_replan": "compact",
+    }.get(supervisor_strategy, "combined")
     repair_requirements: list[str] = []
     # Connector-contract validation receives one model repair. Safe generated
     # prose is normalized deterministically before this boundary, so repeating
@@ -789,6 +794,7 @@ async def _create_compiled_plan(
             inventory,
             available_input_names,
             planner_repair_requirements=list(repair_requirements),
+            preferred_route=preferred_route,
         )
         try:
             reject_excluded_steps(plan)
@@ -825,6 +831,8 @@ async def _create_compiled_plan(
             plan.planning_artifacts["compiled_contracts"] = compile_contracts(
                 plan, manifests_by_slug
             )
+            if supervisor_strategy in {"repair_plan", "compact_replan"}:
+                plan.planning_artifacts["supervisor_recovery_strategy"] = supervisor_strategy
             return plan
         except (NativeConnectorError, ValueError) as exc:
             if attempt == 1:
@@ -1357,6 +1365,13 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
 
             plan = await reuse_saved_plan(session, run, connected_inventory, manifests_by_slug)
             if plan is None:
+                supervisor = (run.execution_context or {}).get("__aura_supervisor__") or {}
+                strategy = (
+                    supervisor.get("last_action")
+                    if supervisor.get("phase") == "planning"
+                    and supervisor.get("last_failure_category") == "malformed_plan"
+                    else None
+                )
                 plan = await _create_compiled_plan(
                     _planning_prompt_with_documents(run.prompt, run.inputs),
                     inventory,
@@ -1364,6 +1379,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                     manifests_by_slug,
                     requested_tools,
                     excluded_families,
+                    supervisor_strategy=strategy,
                 )
             if excluded_families:
                 for planned_step in plan.steps:

@@ -54,6 +54,7 @@ async def dispatch_pending(
     run_id: str | None = None,
     *,
     schedule_delayed_execute: bool = False,
+    schedule_delayed_plan: bool = False,
 ) -> int:
     from .scheduler_runtime import _workspace_ids
     from .worker import execute_run_task, index_memory_task, plan_run_task
@@ -68,13 +69,18 @@ async def dispatch_pending(
                 DispatchIntent.workspace_id == tenant,
                 DispatchIntent.status == "pending",
             )
-            if schedule_delayed_execute and run_id:
+            if run_id and (schedule_delayed_execute or schedule_delayed_plan):
                 # The current worker may have just persisted a future preflight
-                # retry. Hand that exact run to the broker now, without relying
-                # on the independent recovery scheduler being enabled.
+                # or planning retry. Hand only that run to the broker now, without
+                # relying on the independent recovery scheduler being enabled.
+                delayed_kinds = set()
+                if schedule_delayed_execute:
+                    delayed_kinds.add("execute")
+                if schedule_delayed_plan:
+                    delayed_kinds.add("plan")
                 query = query.where(
                     (DispatchIntent.available_at <= now)
-                    | (DispatchIntent.kind == "execute")
+                    | (DispatchIntent.kind.in_(delayed_kinds))
                 )
             else:
                 query = query.where(DispatchIntent.available_at <= now)

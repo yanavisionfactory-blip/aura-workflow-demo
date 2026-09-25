@@ -342,7 +342,7 @@ def _planning_action(category: str, attempt: int) -> str:
     if category == "capability_drift":
         return "rediscover_capabilities"
     if category == "malformed_plan":
-        return "repair_plan"
+        return "compact_replan" if attempt >= 2 else "repair_plan"
     if attempt >= 3:
         return "compact_replan"
     return "retry_planning"

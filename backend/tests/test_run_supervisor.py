@@ -155,6 +155,24 @@ async def test_repeated_malformed_plans_stop_before_eight_expensive_rounds(datab
         assert intent is None
 
 
+async def test_planning_supervisor_changes_strategy_after_malformed_result(database):
+    async with database() as session:
+        run = WorkflowRun(
+            id="strategy-run", workspace_id="workspace", prompt="Read inventory",
+            status=RunStatus.planning,
+        )
+        session.add(run)
+        await session.commit()
+        for expected in ("repair_plan", "compact_replan"):
+            assert await recover_planning_failure(
+                session, run, ValueError("Plan contract validation failed"),
+                max_attempts=8, base_delay_seconds=1, max_delay_seconds=30,
+            ) == "scheduled"
+            await session.commit()
+            assert run.execution_context["__aura_supervisor__"]["last_action"] == expected
+            assert run.status == RunStatus.planning
+
+
 async def test_exhausted_recovery_opens_internal_incident_not_retry_ui(database):
     async with database() as session:
         run = WorkflowRun(
