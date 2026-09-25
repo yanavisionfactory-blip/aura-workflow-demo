@@ -877,10 +877,20 @@ async def _create_compiled_plan(
             if attempt == 1:
                 raise
             repair_requirements.append(str(exc))
+            reason = str(exc)
+            failure_category = (
+                "connector_input" if isinstance(exc, NativeConnectorError)
+                else "evidence_contract" if reason.startswith("Plan contract validation failed")
+                and "cannot supply" in reason
+                else "output_reference" if reason.startswith("Plan contract validation failed")
+                else "missing_requested_action" if reason.startswith("Requested external action")
+                else "plan_validation"
+            )
             logger.warning(
-                "Repairing plan connector contract attempt=%s error_type=%s",
+                "Repairing plan connector contract attempt=%s error_type=%s failure_category=%s",
                 attempt + 2,
                 type(exc).__name__,
+                failure_category,
             )
     raise RuntimeError("Plan connector-contract recovery exhausted")
 

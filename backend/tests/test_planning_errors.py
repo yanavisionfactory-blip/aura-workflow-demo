@@ -341,7 +341,7 @@ def test_connector_contract_mismatch_is_replanned_before_reaching_user(monkeypat
     assert "unknown inputs" in calls[1][0]
 
 
-def test_connector_contract_validation_is_repaired_only_once(monkeypatch) -> None:
+def test_connector_contract_validation_is_repaired_only_once(monkeypatch, caplog) -> None:
     calls = []
 
     async def fake_create_plan(*_args, **kwargs):
@@ -373,6 +373,7 @@ def test_connector_contract_validation_is_repaired_only_once(monkeypatch) -> Non
     assert len(calls) == 2
     assert calls[0] == []
     assert "unknown inputs" in calls[1][0]
+    assert "failure_category=connector_input" in caplog.text
 
 
 def test_compiled_planner_repairs_a_read_only_plan_before_approval(monkeypatch) -> None:
@@ -405,6 +406,29 @@ def test_compiled_planner_repairs_a_read_only_plan_before_approval(monkeypatch) 
     assert "gmail.send" in calls[1][0]
     assert [step.operation for step in plan.steps] == ["calendar.list", "gmail.send"]
     assert set(plan.planning_artifacts["compiled_contracts"]) == {"events", "send"}
+
+
+def test_planner_prose_for_a_verified_write_does_not_cost_a_second_model_call(monkeypatch) -> None:
+    calls = []
+
+    async def fake_create_plan(*_args, **kwargs):
+        calls.append(kwargs.get("planner_repair_requirements"))
+        return WorkflowPlan(name="Post update", interpretation="Send a Slack message", steps=[
+            PlanStep(key="post", agent="slack", tool_slug="slack", operation="slack.post",
+                     arguments={"channel": "C123", "text": "Finished update"},
+                     reason="Post message", expected_output="Delivery receipt", consequential=True,
+                     required_evidence=["Complete channel and text included for approval", "write_receipt"]),
+        ])
+
+    monkeypatch.setattr(orchestrator, "create_plan", fake_create_plan)
+    plan = asyncio.run(orchestrator._create_compiled_plan(
+        "Send a Slack message", [{"slug": "slack", "name": "Slack",
+                                  "allowed_operations": ["slack.post"]}],
+        set(), {"slack": native_manifest("slack")},
+    ))
+    assert len(calls) == 1
+    assert plan.steps[0].required_evidence == ["write_receipt"]
+    assert "Complete channel and text" in plan.steps[0].expected_output
 
 
 def test_planner_cannot_recover_by_dropping_a_slack_delivery(monkeypatch) -> None:
