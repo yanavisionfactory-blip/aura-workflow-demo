@@ -763,7 +763,9 @@ async def recover_recorded_jira_readbacks() -> list[tuple[str, str]]:
                         [RunStatus.waiting_for_action, RunStatus.failed, RunStatus.blocked]
                     ),
                     RunStep.operation == "jira.issues.create_from_blocks",
-                    RunStep.status == StepStatus.failed,
+                    RunStep.status.in_(
+                        [StepStatus.failed, StepStatus.running, StepStatus.pending]
+                    ),
                 )
                 .order_by(WorkflowRun.updated_at.desc())
                 .limit(50)
@@ -779,7 +781,9 @@ async def recover_recorded_jira_readbacks() -> list[tuple[str, str]]:
                         select(RunStep).where(
                             RunStep.run_id == run_id,
                             RunStep.operation == "jira.issues.create_from_blocks",
-                            RunStep.status == StepStatus.failed,
+                            RunStep.status.in_(
+                                [StepStatus.failed, StepStatus.running, StepStatus.pending]
+                            ),
                         )
                     )
                     outcome = (step.output or {}).get("outcome_check", {}) if step else {}
