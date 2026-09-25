@@ -6,7 +6,7 @@ import { aura } from "@/api/auraClient";
 import { downloadEmailEml, safeName } from "@/lib/auraDownload";
 import { applyPresentationCopy, dynamicReferences, presentationCopySchema } from "@/lib/canvaCopyEdit.mjs";
 import { applyEmailCopy, emailCopySchema } from "@/lib/emailCopyEdit.mjs";
-import { fallbackReviewContract, mergeLegacyPreviewIntoArguments, setArgumentAtPath, validateReviewArguments } from "@/lib/approvalReview.mjs";
+import { fallbackReviewContract, mergeLegacyPreviewIntoArguments, requiresPreparedActionReview, setArgumentAtPath, validateReviewArguments } from "@/lib/approvalReview.mjs";
 import { editJiraBatchTask, jiraBatchTasks, removeJiraBatchTask } from "@/lib/jiraBatchReview.mjs";
 
 function EditableEmail({ preview, onPreviewChange, onCopyChange = null, editing, artifacts = [], args = { subject: "", body: "" }, contract = null }) {
@@ -50,13 +50,16 @@ function EditableEmail({ preview, onPreviewChange, onCopyChange = null, editing,
         <div className="flex gap-3 items-center">
           <span className="w-20 flex-shrink-0 text-muted-foreground">To</span>
           <input
-            value={String(preview.to || "").toLowerCase() === "me" || dynamicReferences(preview.to).length ? "" : preview.to || ""}
-            placeholder={String(preview.to || "").toLowerCase() === "me" || dynamicReferences(preview.to).length ? "Your connected Gmail address" : "Recipient email"}
+            value={dynamicReferences(preview.to).length ? "" : preview.to || ""}
+            placeholder={dynamicReferences(preview.to).length ? "Filled from the completed steps" : "Recipient email"}
             onChange={(e) => onPreviewChange({ to: e.target.value })}
             readOnly={!editing}
             className={`min-w-0 flex-1 bg-transparent border-b py-1 outline-none ${editing ? "border-white/10 focus:border-primary" : "border-transparent"}`}
           />
         </div>
+        {String(preview.to || "").toLowerCase() === "me" && (
+          <p className="text-xs text-muted-foreground">“me” is the connected Gmail address.</p>
+        )}
         <div className="flex gap-3 items-center">
           <span className="w-20 flex-shrink-0 text-muted-foreground">Subject</span>
           <input
@@ -724,7 +727,7 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
   );
 }
 
-export default function PreviewView({ preview, steps, onApprove, onBack, error = "" }) {
+export default function PreviewView({ preview, steps, prepared = false, onApprove, onBack, error = "" }) {
   const initial = steps && steps.length ? steps : preview?.steps || [];
   const [editSteps, setEditSteps] = useState(() => JSON.parse(JSON.stringify(initial)));
   const [showBackground, setShowBackground] = useState(false);
@@ -740,10 +743,13 @@ export default function PreviewView({ preview, steps, onApprove, onBack, error =
   });
   const reviewSteps = editSteps
     .map((step, index) => ({ step, index }))
-    .filter(({ step }) => step.riskLevel === "modify");
+    .filter(({ step }) => step.riskLevel === "modify" && (prepared || !requiresPreparedActionReview(step)));
+  const laterSteps = prepared ? [] : editSteps.filter((step) => (
+    step.riskLevel === "modify" && requiresPreparedActionReview(step)
+  ));
   const backgroundSteps = editSteps
     .map((step, index) => ({ step, index }))
-    .filter(({ step }) => step.riskLevel !== "modify");
+    .filter(({ step }) => step.riskLevel !== "modify" && !step.approvalPending);
   const contractErrors = reviewSteps.flatMap(({ step, index }) => (
     step.reviewContract
       ? validateReviewArguments(step.reviewContract, step.resolvedArguments || step.arguments || {})
@@ -773,14 +779,14 @@ export default function PreviewView({ preview, steps, onApprove, onBack, error =
           <Eye className="h-5 w-5 text-violet-300" />
         </div>
         <div>
-          <h2 className="text-2xl font-semibold text-foreground">Review before running</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Check what AURA is about to create or send. You can edit each action before approving.</p>
+          <h2 className="text-2xl font-semibold text-foreground">{prepared ? "Review the finished action" : "Review before running"}</h2>
+          <p className="mt-1 text-sm text-muted-foreground">{prepared ? "The needed information is ready. Check the exact values AURA will submit." : "Check the complete actions below. Actions that need more information will be reviewed when they are ready."}</p>
         </div>
       </div>
 
       <div className="mt-6 flex flex-wrap items-center gap-3 text-sm">
         <span className="rounded-full bg-violet-500/15 px-4 py-2 text-violet-200">{reviewSteps.length} {reviewSteps.length === 1 ? "change needs" : "changes need"} approval</span>
-        <span className="text-muted-foreground">Nothing will be created or sent until you approve.</span>
+        <span className="text-muted-foreground">{prepared ? "This action will only run after you approve it." : "These actions will only run after you approve them."}</span>
       </div>
 
       {backgroundSteps.length > 0 && (
@@ -807,6 +813,11 @@ export default function PreviewView({ preview, steps, onApprove, onBack, error =
       )}
 
       {/* Editable steps */}
+      {laterSteps.length > 0 && (
+        <p className="mb-4 rounded-xl border border-violet-400/20 bg-violet-400/5 px-4 py-3 text-sm text-violet-100">
+          {laterSteps.map((step) => step.operation === "gmail.send" ? "The complete email" : step.title || step.action || "A dependent action").join(" and ")} will be shown for approval after AURA prepares the needed information.
+        </p>
+      )}
       <div className="mb-6 mt-5 space-y-4">
         {reviewSteps.map(({ step, index }, reviewIndex) => (
           <EditableStepCard key={index} step={step} number={reviewIndex + 1} index={index} onUpdate={update} onFieldValidity={updateFieldValidity} />
@@ -829,10 +840,12 @@ export default function PreviewView({ preview, steps, onApprove, onBack, error =
 
       {/* Footer */}
       <div className="flex items-center justify-between gap-3 border-t border-white/10 pt-5">
-        <Button variant="ghost" size="sm" onClick={onBack} className="text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="w-3.5 h-3.5 mr-1.5" />
-          Back to plan
-        </Button>
+        {prepared ? <span className="text-xs text-muted-foreground">The workflow is waiting for your decision.</span> : (
+          <Button variant="ghost" size="sm" onClick={onBack} className="text-muted-foreground hover:text-foreground">
+            <ArrowLeft className="w-3.5 h-3.5 mr-1.5" />
+            Back to plan
+          </Button>
+        )}
         <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
           <Button
             size="sm"
@@ -844,7 +857,7 @@ export default function PreviewView({ preview, steps, onApprove, onBack, error =
             className="gap-1.5 border-0 bg-gradient-to-r from-violet-500 to-violet-600 text-white hover:from-violet-600 hover:to-violet-700"
           >
             <Play className="w-3.5 h-3.5" />
-            {approvalBlocked ? "Complete required values" : jiraTasksPending ? "Read notes & preview tasks" : "Approve & run"}
+            {approvalBlocked ? "Complete required values" : prepared ? "Approve & continue" : "Approve & run"}
           </Button>
         </motion.div>
       </div>

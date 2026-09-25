@@ -835,6 +835,26 @@ async def test_linear_and_slack_barrier_plans_and_executes_complete_workflow(
     )
     await orchestrator._execute_run("linear-slack-run", broker_api.context.workspace_id)
 
+    assert boundary.execution.await_count == 1
+    async with broker_api.factory() as session:
+        run = await session.get(WorkflowRun, "linear-slack-run")
+        assert run.status == RunStatus.awaiting_approval
+        action = await session.scalar(
+            select(RunStep).where(RunStep.run_id == run.id, RunStep.operation == slack_operation)
+        )
+        approval = await session.get(main.Approval, action.approval_id)
+        assert approval.status == "pending"
+        assert approval.preview["arguments"]["text"] == "Open issue: Pilot issue"
+        await main.decide_approval(
+            approval.id,
+            main.ApprovalDecision(
+                approved=True, edited_arguments=approval.preview["arguments"]
+            ),
+            broker_api.context,
+            session,
+        )
+    await orchestrator._execute_run("linear-slack-run", broker_api.context.workspace_id)
+
     assert boundary.execution.await_count == 2
     async with broker_api.factory() as session:
         run = await session.get(WorkflowRun, "linear-slack-run")

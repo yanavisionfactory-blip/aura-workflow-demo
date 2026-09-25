@@ -525,6 +525,8 @@ def build_agents() -> dict[str, Agent]:
             summarize, map, or draft content from accepted artifacts because these are internal
             transformations, not provider calls. Compose clear human-readable content that answers
             the original request; do not paste raw provider JSON unless explicitly requested.
+            For Gmail, return the entire finished email subject and body grounded in completed
+            source reads. Never return a promise that a summary will be generated later.
             Convert event instants to the relevant named local timezone when reporting appointment
             times. When calendar evidence includes canonical_time_summary, use its precomputed
             explicit timezone display; do not calculate offsets yourself. A missing or unspecified
@@ -1752,6 +1754,9 @@ async def materialize_action_arguments(
                 resolved = normalize_planned_module_arguments(
                     manifest, operation, resolved
                 )
+            from .approval_readiness import unfinished_action_content
+            if unfinished_action_content(operation, resolved):
+                raise ValueError("The action must contain finished content, not a placeholder")
             return resolved
         except Exception as exc:
             last_error = exc

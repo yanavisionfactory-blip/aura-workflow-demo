@@ -110,7 +110,7 @@ test("the UI renders a language plan while durable compilation is still running"
   assert.equal(planViewSource.includes("validating exact actions backstage"), false);
   assert.equal(planViewSource.includes("validatingExecution || missingTools.length"), false);
   assert.equal(source.includes("queuedPlanStartRef.current = { name, autoApprove }"), true);
-  assert.equal(source.includes("requiresActionPreview(compiledPlan.steps, queuedStart.autoApprove)"), true);
+  assert.equal(source.includes("hasImmediateActionPreview(compiledPlan.steps, queuedStart.autoApprove)"), true);
   assert.equal(source.includes("PLANNING_WAIT_TIMEOUT_MS"), false);
   assert.equal(source.includes('.replace(/^i\\s+will\\s+/i, "")'), true);
   assert.equal(source.includes("iWill: firstPersonStepCopy(step.iWill || step.reason)"), true);
@@ -130,7 +130,7 @@ test("the UI renders a language plan while durable compilation is still running"
   assert.equal(planViewSource.includes("AURA is checking the exact steps"), true);
 });
 
-test("consequential plans use one preview followed by one combined approval", () => {
+test("complete actions can be reviewed early and dependent actions wait for exact approval", () => {
   const source = readFileSync(
     new URL("../src/pages/Demo.jsx", import.meta.url),
     "utf8",
@@ -142,7 +142,8 @@ test("consequential plans use one preview followed by one combined approval", ()
 
   assert.equal(source.includes("VITE_STAGED_ACTION_REVIEW_ENABLED"), false);
   assert.equal(source.includes("startPythonPreparation"), false);
-  assert.equal(source.includes("requiresActionPreview(steps, autoApprove)"), true);
+  assert.equal(source.includes("hasImmediateActionPreview(steps, autoApprove)"), true);
+  assert.equal(source.includes("approvePythonPlan(runId, reviewedPlan.steps, true)"), true);
   assert.equal(source.includes('setPhase("preview")'), true);
   assert.equal(source.includes("startPythonExecution(editedSteps, prepared)"), true);
   assert.match(api, /approvePythonPlan\(runId, editedSteps = null, approveConsequential = true\)/);

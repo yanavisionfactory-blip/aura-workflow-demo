@@ -6,6 +6,8 @@ import {
   fallbackReviewContract,
   mergeLegacyPreviewIntoArguments,
   plannedApprovalStep,
+  hasImmediateActionPreview,
+  requiresPreparedActionReview,
   requiresActionPreview,
   resolvedApprovalStep,
   setArgumentAtPath,
@@ -69,6 +71,21 @@ test("one combined preview is required only for consequential plans", () => {
   assert.equal(requiresActionPreview([{ riskLevel: "read" }, { riskLevel: "modify" }]), true);
   assert.equal(requiresActionPreview([{ riskLevel: "read" }]), false);
   assert.equal(requiresActionPreview([{ riskLevel: "modify" }], true), false);
+});
+
+test("a dependent email waits for its complete body while a static write can be reviewed first", () => {
+  const email = plannedApprovalStep(
+    { tool: "Gmail", riskLevel: "modify" },
+    { operation: "gmail.send", consequential: true, depends_on: ["meetings"], arguments: {
+      to: "me", body: "Summary of today’s calendar meetings will be generated from the retrieved calendar events.",
+    } },
+  );
+  const staticWrite = { operation: "docs.create", riskLevel: "modify", arguments: { title: "Note", body: "Done" } };
+  assert.equal(requiresPreparedActionReview(email), true);
+  assert.equal(hasImmediateActionPreview([{ riskLevel: "read" }, email]), false);
+  assert.equal(hasImmediateActionPreview([staticWrite, email]), true);
+  assert.equal(requiresPreparedActionReview({ ...email, depends_on: [] }), true);
+  assert.equal(requiresPreparedActionReview(staticWrite), false);
 });
 
 test("runtime review contracts preserve exact editable arguments", () => {

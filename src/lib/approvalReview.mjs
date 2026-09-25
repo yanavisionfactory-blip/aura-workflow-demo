@@ -63,14 +63,14 @@ export const fallbackReviewContract = (operation, args = {}, toolName = "App") =
   };
 };
 
-const previewForArguments = (contract, args) => {
+const previewForArguments = (contract, args, prepared = false) => {
   if (contract.kind === "email") {
     return {
       type: "email",
       to: args.to || "",
-      subject: args.subject || "",
+      subject: args.subject || "AURA workflow",
       body: args.body || "",
-      note: "Prepared from the completed workflow steps.",
+      note: prepared ? "Prepared from the completed workflow steps." : "Exact message from the saved plan.",
     };
   }
   if (contract.operation === "jira.issues.create_from_blocks") {
@@ -124,8 +124,24 @@ export const requiresActionPreview = (steps = [], autoApprove = false) => (
 
 // The proposed Jira batch depends on Notion reads. Its first meaningful
 // approval screen is the one containing the actual task titles.
+// Reads and earlier writes must finish before their dependent actions have
+// concrete arguments. Keep their exact approval for the execution boundary.
+export const requiresPreparedActionReview = (step = {}) => (
+  step.operation === "jira.issues.create_from_blocks"
+  || (step.depends_on || []).length > 0
+  || JSON.stringify(step.arguments || {}).includes("{{")
+  || ["body", "content", "text", "message", "description"].some((field) => (
+    /\b(?:will be|to be) (?:generated|written|drafted|filled|summarized)\b|\bplaceholder\b|\btbd\b/i.test(step.arguments?.[field] || "")
+  ))
+);
+
 export const requiresPreparedJiraReview = (steps = []) => steps.some(
   (step) => step?.operation === "jira.issues.create_from_blocks",
+);
+
+export const hasImmediateActionPreview = (steps = [], autoApprove = false) => (
+  requiresActionPreview(steps, autoApprove)
+  && steps.some((step) => step?.riskLevel === "modify" && !requiresPreparedActionReview(step))
 );
 
 export const resolvedApprovalStep = (planned, runtime, toolName = "App") => {
@@ -148,7 +164,7 @@ export const resolvedApprovalStep = (planned, runtime, toolName = "App") => {
     resolvedArguments: args,
     reviewContract,
     approvalId: runtime.approval_id,
-    preview: previewForArguments(reviewContract, args),
+    preview: previewForArguments(reviewContract, args, true),
   };
 };
 

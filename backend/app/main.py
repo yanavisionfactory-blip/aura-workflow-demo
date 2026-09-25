@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .agent_runtime import deterministic_plan_fixes
+from .approval_readiness import requires_prepared_review, unfinished_action_content
 from .approval_review import (
     build_review_contract,
     public_review_preview,
@@ -5852,16 +5853,14 @@ async def approve_plan(
             approvals.append(approval)
         elif approval:
             approval.preview = {"status": "preparing"}
-    # Jira tasks depend on the Notion read. Never accept a blanket plan click as
-    # approval for task titles that do not yet exist in the review screen.
-    approve_consequential = payload.approve_consequential and not any(
-        step.operation == "jira.issues.create_from_blocks" for step in steps
-    )
+    # A plan click only approves actions with complete, static arguments. The
+    # worker must prepare and expose the exact remaining values after reads.
+    approve_consequential = payload.approve_consequential
     for approval in approvals:
         step = next(stored for stored in steps if stored.id == approval.step_id)
         if step.status == StepStatus.completed:
             continue
-        if approve_consequential:
+        if approve_consequential and not requires_prepared_review(step):
             approval.status = "approved"
             approval.decided_by = context.subject
             approval.decided_at = datetime.now(UTC)
@@ -5892,7 +5891,11 @@ async def approve_plan(
                 "version": plan_version.version,
                 "plan_hash": plan_hash,
                 "policy_decision": policy_decision,
-                "approval_mode": ("combined" if approve_consequential else "staged"),
+                "approval_mode": (
+                    "staged" if any(
+                        approval.status == "pending" for approval in approvals
+                    ) else "combined"
+                ),
                 "allow_autonomous_read_repairs": payload.allow_autonomous_read_repairs,
             },
         )
@@ -5927,6 +5930,9 @@ async def decide_approval(
     if payload.approved:
         from .workflow_context import WorkflowContextError, canonical_action_arguments
 
+        if approval.preview.get("status") != "ready":
+            raise HTTPException(409, "AURA is still preparing the exact action for review")
+
         stored_arguments = dict(approval.preview.get("arguments", {}))
         proposed = (
             {**stored_arguments, **payload.edited_arguments}
@@ -5943,6 +5949,8 @@ async def decide_approval(
             )
         except WorkflowContextError as exc:
             raise HTTPException(409, str(exc)) from exc
+        if unfinished_action_content(step.operation, canonical):
+            raise HTTPException(422, "This action must contain its finished content before submitting")
         if canonical != proposed:
             # Existing pending previews may predate a reference-resolution fix.
             # Refresh for review; do not approve a different argument silently.

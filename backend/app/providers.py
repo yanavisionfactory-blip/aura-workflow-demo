@@ -936,6 +936,10 @@ class ProviderExecutor:
         return await self._request("GET", "https://gmail.googleapis.com/gmail/v1/users/me/messages", params=params)
 
     async def _gmail_send(self, a: dict) -> dict:
+        from .approval_readiness import unfinished_action_content
+
+        if unfinished_action_content("gmail.send", a):
+            raise ValueError("The email body is unfinished; prepare the actual message before sending")
         recipient = str(a.get("to") or "").strip()
         if not recipient or recipient.lower() in {"me", "myself", "self"}:
             profile = await self._request(

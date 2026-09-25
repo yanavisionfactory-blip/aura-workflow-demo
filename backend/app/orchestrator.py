@@ -24,6 +24,7 @@ from .agent_runtime import (
     verify_outcome,
 )
 from .agent_telemetry import trace_run
+from .approval_readiness import unfinished_action_content
 from .approval_review import build_review_contract
 from .autonomous_delivery import (
     RECONCILIABLE_WRITES,
@@ -2430,20 +2431,23 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         {},
                     )
                     if not materialized_for_approval and (
-                        requires_content_composition(
+                        unfinished_action_content(step.operation, resolved_arguments)
+                        or requires_content_composition(
                             plan_steps[step.position].get("arguments", {}),
                             capability.get("input_schema", {}),
                             context,
                         )
                     ):
                         raise NativeConnectorError(
-                            "Structured source evidence requires readable content composition before approval"
+                            "Action content requires composition from completed evidence before approval"
                         )
                     resolved_arguments = normalize_planned_module_arguments(
                         manifest, step.operation, resolved_arguments
                     )
                     if referenced_paths(resolved_arguments):
                         raise NativeConnectorError("Approval arguments are not concrete")
+                    if unfinished_action_content(step.operation, resolved_arguments):
+                        raise NativeConnectorError("Action content is still an unfinished draft")
                 except (NativeConnectorError, ValueError) as exc:
                     if not materialized_for_approval:
                         try:
@@ -2457,6 +2461,8 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             )
                             if referenced_paths(resolved_arguments):
                                 raise NativeConnectorError("Approval arguments are not concrete")
+                            if unfinished_action_content(step.operation, resolved_arguments):
+                                raise NativeConnectorError("Action content is still an unfinished draft")
                         except Exception as recovery_exc:
                             logger.exception(
                                 "Approval argument validation recovery failed "
@@ -2621,6 +2627,8 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                                 future_arguments,
                             )
                         except (NativeConnectorError, ValueError):
+                            continue
+                        if unfinished_action_content(future_step.operation, future_arguments):
                             continue
                         future_capability = next(
                             (

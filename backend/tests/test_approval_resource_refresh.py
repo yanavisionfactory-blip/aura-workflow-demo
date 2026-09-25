@@ -7,7 +7,7 @@ from app.schemas import ApprovalDecision
 
 async def test_stale_job_preview_refreshes_without_approval_or_dispatch(monkeypatch):
     approval = SimpleNamespace(id="approval", run_id="run", step_id="step", status="pending",
-        preview={"arguments": {"design_id": "job", "format": "pdf"}})
+        preview={"status": "ready", "arguments": {"design_id": "job", "format": "pdf"}})
     run = SimpleNamespace(id="run", workspace_id="tenant", execution_context={"steps": {
         "create": {"provider_result": {"job": {"id": "job", "status": "success",
             "result": {"designs": [{"id": "design"}]}}}}}})
