@@ -46,7 +46,7 @@ export async function connectTool(toolName, opts = {}) {
     if (backend !== "pipedream") authorizationWindow = reserveAuthorizationWindow(authorizationProvider);
     const result = await authorizeConnectorBroker(authorizationProvider, {
       connection: existing,
-      timeoutMs: 120000,
+      timeoutMs: 600000,
       reservedWindow: authorizationWindow,
     });
 

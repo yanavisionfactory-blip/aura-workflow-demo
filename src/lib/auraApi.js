@@ -226,7 +226,7 @@ function authorizationWindow(provider, reconnecting, reservedWindow) {
   return reserveAuthorizationWindow(provider, reconnecting);
 }
 
-export async function authorizeManagedConnector(provider, timeoutMs = 120000, reservedWindow = null, preparedSession = null) {
+export async function authorizeManagedConnector(provider, timeoutMs = 600000, reservedWindow = null, preparedSession = null) {
   const popup = authorizationWindow(provider, false, reservedWindow);
   let session;
   try {
@@ -239,6 +239,7 @@ export async function authorizeManagedConnector(provider, timeoutMs = 120000, re
     throw error;
   }
   const startedAt = Date.now();
+  let closedAt = null;
   while (Date.now() - startedAt < timeoutMs) {
     await new Promise((resolve) => window.setTimeout(resolve, 1000));
     const result = await syncManagedConnector(provider, {
@@ -256,6 +257,12 @@ export async function authorizeManagedConnector(provider, timeoutMs = 120000, re
           managed: true,
           tool: tools.find((tool) => tool.id === (result.tool_id || result.connection_id)),
         };
+      }
+    }
+    if (popup.closed) {
+      closedAt ||= Date.now();
+      if (Date.now() - closedAt > 10000) {
+        throw new Error("The app did not finish connecting. AURA kept your plan unchanged.");
       }
     }
   }

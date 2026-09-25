@@ -36,6 +36,37 @@ def test_mailchimp_canva_brief_uses_verified_source_and_no_send():
     ) is None
 
 
+def test_reviewed_mailchimp_slide_change_is_compiled_instead_of_reusing_original_template(monkeypatch):
+    inventory = [
+        {"slug": "mailchimp", "connected": True,
+         "allowed_operations": ["mailchimp.audiences.list"]},
+        {"slug": "canva", "connected": True,
+         "allowed_operations": ["canva.presentation.create"]},
+    ]
+    calls = []
+
+    async def revised_plan(prompt, *_args, **_kwargs):
+        calls.append(prompt)
+        plan = mailchimp_canva_pilot_template(PILOT_BRIEF, inventory)
+        assert plan is not None
+        plan.steps[1].arguments["phases"].append({
+            "period": "Follow-up", "title": "Pilot follow-up", "items": ["Next steps"],
+        })
+        return plan
+
+    monkeypatch.setattr(orchestrator, "create_plan", revised_plan)
+    prompt = (PILOT_BRIEF
+              + "\n\nThe user reviewed the proposed workflow and requested this change: "
+              + "Make two slides, adding follow-up actions.")
+    plan = asyncio.run(orchestrator._create_compiled_plan(
+        prompt, inventory, set(),
+        {"mailchimp": native_manifest("mailchimp"), "canva": native_manifest("canva")},
+        ["Mailchimp", "Canva"],
+    ))
+    assert len(calls) == 1
+    assert len(plan.steps[1].arguments["phases"]) == 2
+
+
 def test_planning_supervisor_changes_planner_route_before_compilation(monkeypatch):
     routes = []
 

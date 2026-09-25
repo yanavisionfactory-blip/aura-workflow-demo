@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Check, Pencil, X, GripVertical, Shield, Move, Loader2 } from "lucide-react";
 import { base44 } from "@/api/base44Client";
+import { CATALOG } from "@/lib/toolCatalog";
 
 const STEP_SCHEMA = {
   type: "object",
@@ -50,6 +51,8 @@ export default function PlanStep({ step, index, isLast, provided, onChange, onDe
   const [changeText, setChangeText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [manualEdit, setManualEdit] = useState(false);
+  const [manualFields, setManualFields] = useState({ tool: step.tool || "", action: step.action || step.reason || "", output: step.output || "" });
 
   const title = step.title || step.action;
   const iWill = step.iWill || (step.action ? step.action[0].toLowerCase() + step.action.slice(1) : "");
@@ -63,6 +66,10 @@ export default function PlanStep({ step, index, isLast, provided, onChange, onDe
     }
   }, [forceEdit]);
 
+  useEffect(() => {
+    setManualFields({ tool: step.tool || "", action: step.action || step.reason || "", output: step.output || "" });
+  }, [step]);
+
   const submitChange = async () => {
     const text = changeText.trim();
     if (!text) return;
@@ -70,7 +77,8 @@ export default function PlanStep({ step, index, isLast, provided, onChange, onDe
     setError("");
     try {
       if (onRequestChange) {
-        await onRequestChange(text);
+        const result = await onRequestChange(text);
+        if (result?.ok === false) throw new Error(result.error || "AURA couldn't update this step.");
         setChanging(false);
         setChangeText("");
         return;
@@ -96,7 +104,35 @@ Return the REVISED step with all fields updated to reflect the change. Keep the 
       setChanging(false);
       setChangeText("");
     } catch (e) {
-      setError("Couldn't update that step — please try rephrasing.");
+      setError(e?.message || "Couldn't update that step — please try rephrasing.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const submitManualChange = async () => {
+    if (!manualFields.action.trim() || !manualFields.output.trim()) {
+      setError("Describe what this step does and what it produces.");
+      return;
+    }
+    setSubmitting(true);
+    setError("");
+    try {
+      if (onRequestChange) {
+        const instruction = `Update this step to these exact fields: ${JSON.stringify({
+          tool: manualFields.tool,
+          action: manualFields.action.trim(),
+          expected_output: manualFields.output.trim(),
+        })}. Recompile executable connector operations and dependencies; preserve all other steps.`;
+        const result = await onRequestChange(instruction);
+        if (result?.ok === false) throw new Error(result.error || "AURA couldn't update this step.");
+      } else {
+        onChange({ ...step, ...manualFields, reason: manualFields.action, iWill: manualFields.action });
+      }
+      setManualEdit(false);
+      setChanging(false);
+    } catch (e) {
+      setError(e?.message || "AURA couldn't update this step.");
     } finally {
       setSubmitting(false);
     }
@@ -188,8 +224,28 @@ Return the REVISED step with all fields updated to reflect the change. Keep the 
                 <div className="p-4 space-y-3">
                   <div>
                     <p className="text-sm font-medium">What would you like to change?</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">Tell Aura what should be different.</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">Describe the change or edit the step fields.</p>
                   </div>
+                  <div className="flex gap-2 text-xs">
+                    <button type="button" onClick={() => setManualEdit(false)} className={!manualEdit ? "text-primary" : "text-muted-foreground"}>Tell AURA</button>
+                    <button type="button" onClick={() => setManualEdit(true)} className={manualEdit ? "text-primary" : "text-muted-foreground"}>Edit fields</button>
+                  </div>
+                  {manualEdit ? (
+                    <div className="space-y-2">
+                      <label className="block text-xs text-muted-foreground">App
+                        <select value={manualFields.tool} onChange={(e) => setManualFields((current) => ({ ...current, tool: e.target.value }))} className="mt-1 w-full rounded-lg border border-white/10 bg-card px-3 py-2 text-sm text-foreground">
+                          {[...new Set([step.tool, ...CATALOG.filter((item) => item.connectable).map((item) => item.name)])].filter(Boolean).map((tool) => <option key={tool} value={tool}>{tool}</option>)}
+                        </select>
+                      </label>
+                      <label className="block text-xs text-muted-foreground">What AURA should do
+                        <textarea value={manualFields.action} onChange={(e) => setManualFields((current) => ({ ...current, action: e.target.value }))} rows={2} className="mt-1 w-full rounded-lg border border-white/10 bg-card px-3 py-2 text-sm text-foreground" />
+                      </label>
+                      <label className="block text-xs text-muted-foreground">Expected result
+                        <input value={manualFields.output} onChange={(e) => setManualFields((current) => ({ ...current, output: e.target.value }))} className="mt-1 w-full rounded-lg border border-white/10 bg-card px-3 py-2 text-sm text-foreground" />
+                      </label>
+                      <p className="text-xs text-muted-foreground">AURA will rebuild and validate the executable step before you start.</p>
+                    </div>
+                  ) : <>
                   <textarea
                     value={changeText}
                     onChange={(e) => setChangeText(e.target.value)}
@@ -232,11 +288,12 @@ Return the REVISED step with all fields updated to reflect the change. Keep the 
                       Remove this step
                     </button>
                   </div>
+                  </>}
                   {error && <p className="text-[11px] text-red-400">{error}</p>}
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={submitChange}
-                      disabled={submitting || !changeText.trim()}
+                      onClick={manualEdit ? submitManualChange : submitChange}
+                      disabled={submitting || (!manualEdit && !changeText.trim())}
                       className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
                     >
                       {submitting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
