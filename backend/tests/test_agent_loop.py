@@ -116,6 +116,23 @@ async def test_verifier_outage_preserves_uncertainty(monkeypatch):
     assert result.status == "unverified"
 
 
+async def test_read_receipts_cannot_verify_an_unsent_email(monkeypatch):
+    async def should_not_run(*args, **kwargs):
+        raise AssertionError("A model must not certify a missing Gmail send")
+
+    monkeypatch.setattr(agent_runtime, "_run", should_not_run)
+    result = await verify_outcome(
+        "Send today's meeting summary to me via Gmail",
+        {"steps": [{"operation": "calendar.list"}, {"operation": "gmail.list"}]},
+        [
+            {"step_id": "calendar", "operation": "calendar.list", "critic": {"action": "accept"}},
+            {"step_id": "inbox", "operation": "gmail.list", "critic": {"action": "accept"}},
+        ],
+    )
+    assert result.status == "unverified"
+    assert "gmail.send" in result.required_fixes[0]
+
+
 @pytest.mark.parametrize(
     "workspace,subject,verified",
     [("other", "alice", True), ("w", "bob", True), ("w", "alice", False)],

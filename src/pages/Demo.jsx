@@ -1144,18 +1144,11 @@ Rules:
           handleRetryPlanning();
           return;
         }
-        setPhase("executing");
-        setStartTime(Date.now());
-        setCurrentStepIdx(0);
-        setExecSteps(steps.map((step, index) => ({
-          tool: step.tool,
-          action: step.title || step.action,
-          riskLevel: step.riskLevel,
-          status: index === 0 ? "running" : "pending",
-          liveOutput: index === 0
-            ? "→ Starting now; AURA is finishing technical preparation backstage"
-            : "",
-        })));
+        // A readable draft is not an executable plan. Keep the user on the
+        // planning screen until the backend has approved actual operations.
+        setPlan((current) => current ? {
+          ...current, compileState: "starting", compileError: "",
+        } : current);
         return;
       }
       keepPlanInReview();

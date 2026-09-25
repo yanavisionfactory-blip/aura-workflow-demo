@@ -642,13 +642,16 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         className="mt-5 p-4 rounded-xl border border-white/6 bg-card/50"
       >
         <h3 className="text-sm font-semibold mb-1">
-          {plan.compileState === "blocked" ? "Plan needs another try" : "Ready to start?"}
+          {plan.compileState === "blocked" ? "Plan needs another try"
+            : plan.compileState === "starting" ? "Preparing your workflow" : "Ready to start?"}
         </h3>
         <p className="text-xs text-muted-foreground leading-relaxed mb-3">
           {plan.compileState === "blocked"
             ? "Nothing has started. Try again to finish preparing this plan."
+            : plan.compileState === "starting"
+              ? "AURA is checking the exact steps. Your request to start is saved; you'll review any external changes before they happen."
             : plan.compileState === "validating"
-              ? "You can start now. AURA will prepare the exact actions and ask you to review any changes before sending or creating anything."
+              ? "You can request a start now. AURA will check the exact actions first and ask you to review any changes before sending or creating anything."
             : "Aura will follow this plan and handle technical preparation during execution."}
         </p>
         <div className="mb-3">
@@ -664,10 +667,10 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
             onClick={() => onApprove(steps, name.trim())}
-            disabled={Boolean(plan.error) || (plan.compileState === "waiting_for_connection") || (!plan.provisional && missingTools.length > 0) || (steps.length === 0 && plan.compileState !== "blocked")}
+            disabled={Boolean(plan.error) || ["starting", "waiting_for_connection"].includes(plan.compileState) || (!plan.provisional && missingTools.length > 0) || (steps.length === 0 && plan.compileState !== "blocked")}
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {plan.compileState === "blocked" ? "Try again" : approveLabel} <ArrowRight className="w-4 h-4" />
+            {plan.compileState === "blocked" ? "Try again" : plan.compileState === "starting" ? "Preparing…" : approveLabel} <ArrowRight className="w-4 h-4" />
           </motion.button>
         </div>
       </motion.div>

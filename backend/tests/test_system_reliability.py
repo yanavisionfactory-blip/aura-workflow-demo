@@ -35,6 +35,7 @@ from app.reliability import (
     classify_failure,
     model_budget,
 )
+from app.request_contracts import requested_external_operations, validate_requested_operations
 from app.schemas import PlanStep, WorkflowPlan
 
 
@@ -199,6 +200,100 @@ def test_calendar_email_input_labels_require_bound_source_before_compilation():
     _normalize_planned_steps(plan, {"google": manifest})
     with pytest.raises(ValueError, match="cannot supply"):
         compile_contracts(plan, {"google": manifest})
+
+
+def test_planner_evidence_descriptions_do_not_loop_on_real_read_bindings():
+    google = native_manifest("google")
+    calendar = {
+        "capabilities": [
+            {"name": operation, "permission_scope": "read",
+             "input_schema": {"type": "object", "additionalProperties": True},
+             "output_schema": {"type": "object"}}
+            for operation in ("google-calendar.get-current-user", "google-calendar.list-events")
+        ],
+    }
+    manifests = {"google-calendar": calendar, "google": google}
+    plan = WorkflowPlan(name="Meetings", interpretation="Summarize today's meetings", steps=[
+        PlanStep(key="context", agent="calendar", tool_slug="google-calendar",
+                 operation="google-calendar.get-current-user", arguments={},
+                 reason="Read calendar context", expected_output="Calendar account context",
+                 required_evidence=["Provider-local calendar context"]),
+        PlanStep(key="events", agent="calendar", tool_slug="google-calendar",
+                 operation="google-calendar.list-events", arguments={},
+                 reason="Read meetings", expected_output="Today's meetings",
+                 required_evidence=["Today's calendar events"]),
+        PlanStep(key="gmail_context", agent="gmail", tool_slug="google",
+                 operation="gmail.list", arguments={"query": "meeting"},
+                 reason="Check Gmail access", expected_output="Gmail read check",
+                 required_evidence=["Gmail read access discovery result"]),
+    ])
+    _normalize_planned_steps(plan, manifests)
+    assert all(not step.required_evidence for step in plan.steps)
+    assert "Provider-local calendar context" in plan.steps[0].expected_output
+    assert "Today's calendar events" in plan.steps[1].expected_output
+    assert "Gmail read access discovery result" in plan.steps[2].expected_output
+    assert set(compile_contracts(plan, manifests)) == {"context", "events", "gmail_context"}
+
+
+def test_planner_input_names_and_bound_references_are_not_output_guarantees():
+    manifest = native_manifest("google")
+    plan = WorkflowPlan(name="Mail", interpretation="Email calendar summary", steps=[
+        PlanStep(key="events", agent="calendar", tool_slug="google",
+                 operation="calendar.list", arguments={
+                     "time_min": "2026-09-25T00:00:00Z", "time_max": "2026-09-26T00:00:00Z",
+                 }, reason="Read meetings", expected_output="Events",
+                 required_evidence=["time_min", "time_max"]),
+        PlanStep(key="send", agent="gmail", tool_slug="google", operation="gmail.send",
+                 arguments={"to": "me", "body": "{{steps.events.items}}"},
+                 depends_on=["events"], consequential=True,
+                 reason="Send summary", expected_output="Sent email",
+                 required_evidence=["{{steps.events.items}}", "write_receipt"]),
+    ])
+    _normalize_planned_steps(plan, {"google": manifest})
+    assert plan.steps[0].required_evidence == []
+    assert plan.steps[1].required_evidence == ["write_receipt"]
+    assert set(compile_contracts(plan, {"google": manifest})) == {"events", "send"}
+
+    # Never erase a claimed dependency that is absent from the approved body.
+    plan.steps[1].arguments["body"] = "No provider data here"
+    plan.steps[1].required_evidence = ["{{steps.events.items}}"]
+    _normalize_planned_steps(plan, {"google": manifest})
+    with pytest.raises(ValueError, match="cannot supply"):
+        compile_contracts(plan, {"google": manifest})
+
+
+@pytest.mark.parametrize("prompt_text,required", [
+    ("Send today's meeting summary to me via Gmail", {"gmail.send"}),
+    ("Email me the calendar summary", {"gmail.send"}),
+    ("Use Gmail to send the email", {"gmail.send"}),
+    ("Draft an email for me to review, but do not send it", set()),
+    ("Summarize emails and send a Slack message", set()),
+])
+def test_explicit_email_delivery_is_a_required_external_action(prompt_text, required):
+    assert requested_external_operations(prompt_text) == required
+
+
+def test_read_only_calendar_plan_cannot_erase_requested_email_delivery():
+    read_only = WorkflowPlan(name="Summary", interpretation="Email a summary", steps=[
+        PlanStep(key="events", agent="calendar", tool_slug="google",
+                 operation="calendar.list", reason="Read events", expected_output="Events"),
+        PlanStep(key="inbox", agent="gmail", tool_slug="google",
+                 operation="gmail.list", reason="Read messages", expected_output="Messages"),
+    ])
+    with pytest.raises(ValueError, match="gmail.send"):
+        validate_requested_operations(
+            "Send today's meeting summary to me via Gmail", read_only,
+            {"calendar.list", "gmail.list", "gmail.send"},
+        )
+    read_only.steps.append(PlanStep(
+        key="send", agent="gmail", tool_slug="google", operation="gmail.send",
+        reason="Send the summary", expected_output="Email receipt", consequential=True,
+        depends_on=["events"], arguments={"to": "me", "body": "{{steps.events.items}}"},
+    ))
+    validate_requested_operations(
+        "Send today's meeting summary to me via Gmail", read_only,
+        {"calendar.list", "gmail.list", "gmail.send"},
+    )
 
 
 def test_invalid_output_reference_rejected_but_metadata_alias_compiles():

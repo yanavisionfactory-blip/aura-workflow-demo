@@ -543,6 +543,67 @@ def normalize_bound_email_inputs(plan) -> None:
         step.required_evidence = remaining
 
 
+def normalize_planner_evidence_roles(plan, manifests: dict) -> None:
+    """Keep input bindings and provisional read goals out of output guarantees.
+
+    A model can put an argument name, a dependency reference, or an ordinary
+    description of a read result in required_evidence. None is a connector
+    guarantee. Preserve provisional read descriptions in expected_output so
+    the runtime critic still checks the actual provider result; never weaken
+    a typed connector contract or a consequential operation.
+    """
+    from .workflow_context import REFERENCE, referenced_paths
+
+    for step in plan.steps:
+        module = next(
+            (item for item in manifests.get(step.tool_slug, {}).get("capabilities", [])
+             if item.get("name") == step.operation),
+            None,
+        )
+        if not module or not step.required_evidence:
+            continue
+        reliability = enrich_operation(module)["reliability"]
+        bound_refs = referenced_paths(step.arguments)
+        remaining = []
+        for tag in step.required_evidence:
+            value = tag.strip()
+            if (value not in reliability["provides"] and value in step.arguments
+                    and step.arguments[value] not in (None, "")):
+                continue  # An actual input argument, not an operation output.
+            references = referenced_paths(value)
+            if (REFERENCE.fullmatch(value)
+                    and len(references) == 1 and references <= bound_refs
+                    and all(
+                        any(path.startswith(f"steps.{dependency}.")
+                            for dependency in step.depends_on)
+                        for path in references
+                    )):
+                continue  # The argument already binds an approved upstream result.
+            remaining.append(tag)
+
+        if module.get("permission_scope") == "read" and remaining:
+            provisional = (reliability["output_validation"] == "provisional"
+                           and not reliability["provides"])
+            descriptions = [
+                tag for tag in remaining
+                if " " in tag.strip() and (
+                    provisional
+                    or ("read access" in tag.casefold()
+                        and "result" in tag.casefold())
+                )
+            ]
+            # Structural tags remain compile-time failures. A successful
+            # access probe is observed only at execution, not guaranteed by a
+            # manifest. The runtime critic checks these narrative read goals.
+            remaining = [tag for tag in remaining if tag not in descriptions]
+            if descriptions:
+                step.expected_output = "\n".join(dict.fromkeys([
+                    step.expected_output,
+                    *descriptions,
+                ]))
+        step.required_evidence = remaining
+
+
 def compile_contracts(plan, manifests: dict) -> dict:
     """Validate declared evidence and output references before approval."""
     from .workflow_context import referenced_paths

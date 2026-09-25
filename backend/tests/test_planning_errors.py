@@ -15,7 +15,7 @@ from app.orchestrator import (
     explicit_disconnected_capabilities,
     planning_error_message,
 )
-from app.schemas import AiGenerateRequest
+from app.schemas import AiGenerateRequest, PlanStep, WorkflowPlan
 
 
 class _ScalarRows:
@@ -373,6 +373,38 @@ def test_connector_contract_validation_is_repaired_only_once(monkeypatch) -> Non
     assert len(calls) == 2
     assert calls[0] == []
     assert "unknown inputs" in calls[1][0]
+
+
+def test_compiled_planner_repairs_a_read_only_plan_before_approval(monkeypatch) -> None:
+    calls = []
+
+    async def fake_create_plan(*_args, **kwargs):
+        calls.append(kwargs.get("planner_repair_requirements"))
+        steps = [PlanStep(
+            key="events", agent="calendar", tool_slug="google", operation="calendar.list",
+            reason="Read today's events", expected_output="Meeting events",
+        )]
+        if len(calls) == 2:
+            steps.append(PlanStep(
+                key="send", agent="gmail", tool_slug="google", operation="gmail.send",
+                reason="Send the meeting summary", expected_output="Email receipt",
+                depends_on=["events"], consequential=True,
+                arguments={"to": "me", "body": "{{steps.events.items}}"},
+            ))
+        return WorkflowPlan(name="Meetings", interpretation="Email today's summary", steps=steps)
+
+    monkeypatch.setattr(orchestrator, "create_plan", fake_create_plan)
+    plan = asyncio.run(orchestrator._create_compiled_plan(
+        "Send today's meeting summary to me via Gmail",
+        [{"slug": "google", "name": "Google Workspace", "allowed_operations": [
+            "calendar.list", "gmail.send"]}],
+        set(), {"google": native_manifest("google")},
+    ))
+
+    assert calls[0] == []
+    assert "gmail.send" in calls[1][0]
+    assert [step.operation for step in plan.steps] == ["calendar.list", "gmail.send"]
+    assert set(plan.planning_artifacts["compiled_contracts"]) == {"events", "send"}
 
 
 def test_planner_inventory_preserves_operation_semantics(monkeypatch) -> None:

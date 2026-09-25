@@ -1494,11 +1494,22 @@ async def critique_step(step: dict, provider_result: object) -> CriticDecision:
 async def verify_outcome(prompt: str, plan: dict, artifacts: list[dict],
                          final_deliverable: dict | None = None,
                          prepared_evidence: object | None = None) -> OutcomeVerification:
+    from .request_contracts import missing_requested_operations
+
     evidence_ids = {str(item.get("step_id", "")) for item in artifacts}
     if not artifacts or "" in evidence_ids or any(
         item.get("critic", {}).get("action") != "accept" for item in artifacts
     ):
         return OutcomeVerification(status="unverified", reasons=["Accepted evidence is missing"])
+    missing_actions = missing_requested_operations(
+        prompt, {str(item.get("operation") or "") for item in artifacts}
+    )
+    if missing_actions:
+        return OutcomeVerification(
+            status="unverified",
+            reasons=["Requested external action has no accepted provider receipt"],
+            required_fixes=["Include and verify " + op for op in sorted(missing_actions)],
+        )
     if (plan.get("planning_artifacts") or {}).get("planner_recovery_mode") == "audited_four_app_pilot_v1":
         if _verified_pilot_receipts(artifacts):
             return OutcomeVerification(
