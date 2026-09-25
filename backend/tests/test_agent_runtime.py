@@ -628,6 +628,14 @@ def test_preflight_rejects_narrative_placeholder_assigned_to_real_provider():
     assert any("narrative placeholder" in fix for fix in fixes)
 
 
+def test_preflight_rejects_fake_internal_composition_even_with_other_output_label():
+    workflow = plan(PlanStep(key="compose", agent="writer", tool_slug="google",
+        operation="google.identity.get", reason="No external call required for composition",
+        expected_output="Internal summary text ready for email body"))
+    fixes = deterministic_plan_fixes(workflow, [{"slug": "google", "allowed_operations": ["google.identity.get"]}])
+    assert any("narrative placeholder" in fix for fix in fixes)
+
+
 def test_preflight_does_not_treat_quoted_record_content_as_a_placeholder():
     workflow = plan(PlanStep(key="read", agent="reader", tool_slug="notion",
         operation="notion.page.get", arguments={"page_id": "page-1"},

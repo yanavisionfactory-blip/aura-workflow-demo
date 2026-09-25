@@ -2500,6 +2500,9 @@ def _requirement_accepts_tool(requirement: ConnectionRequirement, tool: ToolConn
     provider_hint = str(requirement.provider_hint or "").casefold()
     canonical_hint = capability_family(provider_hint) if provider_hint else ""
     allowed = {str(item).casefold() for item in tool.allowed_operations or []}
+    if (str(requirement.reason or "").startswith("Authorize exact operations")
+            and not {str(item).casefold() for item in requirement.required_permissions or []} <= allowed):
+        return False
     providers.update(
         capability_family(operation.split(".", 1)[0])
         for operation in allowed
@@ -5679,7 +5682,9 @@ async def approve_plan(
             and not is_governed_derivative_step(plan, planned_step)
         ):
             planned_step.consequential = True
-    from .connection_permissions import refresh_granted_readbacks, verification_permission_fixes
+    from .connection_permissions import (
+        missing_plan_operations, refresh_granted_readbacks, verification_permission_fixes,
+    )
 
     for tool in tools:
         refresh_granted_readbacks(tool)
@@ -5687,7 +5692,38 @@ async def approve_plan(
         {"slug": tool.slug, "allowed_operations": tool.allowed_operations} for tool in tools
     ]
     fixes = deterministic_plan_fixes(plan, inventory, set((run.inputs or {}).keys()))
-    fixes.extend(verification_permission_fixes(plan, inventory))
+    permission_fixes = verification_permission_fixes(plan, inventory)
+    if permission_fixes and not fixes:
+        # Old plans could reach review before the connected account's readback
+        # permissions were checked. Keep the run and ask for the exact grant,
+        # rather than returning an unhelpful 422 on every Start attempt.
+        missing_grants = missing_plan_operations(plan, inventory)
+        for slug, operations in missing_grants.items():
+            session.add(ConnectionRequirement(
+                workspace_id=wid,
+                run_id=run.id,
+                capability=slug,
+                provider_hint=slug,
+                reason=f"Authorize exact operations for {slug}",
+                required_permissions=sorted(operations),
+            ))
+        transition_run(
+            run, RunStatus.waiting_for_action,
+            reason="plan_requires_verified_readback_permission",
+            actor="plan-authorization-gate", phase="connection",
+            supervisor_status="human_action_required",
+            blocker={
+                "kind": "human_action", "code": "connection_required",
+                "message": "The connected account needs permission for the saved plan's verification reads.",
+                "action": "reconnect_account", "missing_capabilities": list(missing_grants),
+                "retryable": False,
+            },
+            result={"status": "waiting_for_connection", "missing_capabilities": list(missing_grants)},
+            dispatch=None,
+        )
+        await session.commit()
+        return {"id": run.id, "status": run.status.value}
+    fixes.extend(permission_fixes)
     if fixes:
         raise HTTPException(422, {"message": "Plan failed authorization", "fixes": fixes})
 

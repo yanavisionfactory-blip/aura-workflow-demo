@@ -8,6 +8,7 @@ from app.models import (
     Approval,
     ApprovalSnapshot,
     CapabilityManifest,
+    ConnectionRequirement,
     PlanVersion,
     RunStatus,
     RunStep,
@@ -21,6 +22,42 @@ from app.native_connectors import native_manifest, native_operations
 from app.policy import canonical_plan_hash
 from app.schemas import ApprovalDecision, PlanApproval, PlanStep, WorkflowPlan
 from app.workflow_templates import weather_presentation_template
+
+
+async def test_old_review_missing_gmail_readback_becomes_connection_wait(monkeypatch, database):
+    workspace_id, run_id = str(uuid4()), str(uuid4())
+    plan = WorkflowPlan(name="Daily summary", interpretation="Send today's summary", steps=[
+        PlanStep(key="send", agent="email", tool_slug="google", operation="gmail.send",
+                 arguments={"to": "me", "subject": "Today", "body": "Summary"},
+                 reason="Send summary", expected_output="Gmail send receipt", consequential=True),
+    ])
+    async with database() as session:
+        session.add(Workspace(id=workspace_id, name="Readback grant"))
+        session.add(WorkflowRun(id=run_id, workspace_id=workspace_id, prompt="Send a summary",
+                                plan=plan.model_dump(mode="json"), status=RunStatus.awaiting_approval))
+        tool = ToolConnection(workspace_id=workspace_id, slug="google", display_name="Google",
+                              kind=ToolKind.oauth, allowed_operations=["gmail.send"],
+                              config={"managed_by": "pipedream"})
+        session.add(tool)
+        await session.flush()
+        session.add(CapabilityManifest(workspace_id=workspace_id, tool_id=tool.id,
+                                       provider_type="oauth", status="verified",
+                                       manifest=native_manifest("google")))
+        session.add(RunStep(run_id=run_id, position=0, step_key="send", agent="email",
+                            tool_slug="google", operation="gmail.send", arguments=plan.steps[0].arguments,
+                            status=StepStatus.awaiting_approval, consequential=True,
+                            idempotency_key=str(uuid4())))
+        await session.commit()
+        result = await main.approve_plan(run_id, PlanApproval(approved=True),
+                                         SimpleNamespace(workspace_id=workspace_id, subject="owner", role="owner"), session)
+        requirement = await session.scalar(select(ConnectionRequirement).where(ConnectionRequirement.run_id == run_id))
+        stored = await session.get(WorkflowRun, run_id)
+        assert result["status"] == "waiting_for_action"
+        assert stored.plan_approved is False
+        assert requirement.required_permissions == ["gmail.get"]
+        assert not main._requirement_accepts_tool(requirement, tool)
+        tool.allowed_operations = ["gmail.send", "gmail.get"]
+        assert main._requirement_accepts_tool(requirement, tool)
 
 
 async def test_static_write_requires_final_preview_even_with_legacy_auto_approval(

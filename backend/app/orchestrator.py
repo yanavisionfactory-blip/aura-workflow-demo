@@ -1523,6 +1523,13 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 reported_missing if run.prompt.startswith(PILOT_PREFIX)
                 else complete_connection_requirements(run.prompt, reported_missing, requirement_inventory)
             )
+            from .connection_permissions import missing_plan_operations
+
+            # A catalog connector may be proposed for review, but Start must
+            # never be offered until every real operation and verification read
+            # is authorized on the connected account.
+            missing_grants = missing_plan_operations(plan, connected_inventory)
+            missing = list(dict.fromkeys([*missing, *missing_grants]))
             missing = [item for item in missing if capability_family(item) not in excluded_families]
             if missing:
                 from .connection_recovery import reuse_managed_connection
@@ -1544,10 +1551,12 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                             run_id=run.id,
                             capability=capability,
                             provider_hint=capability,
-                            reason=f"Connect {capability} so AURA can finish the saved plan",
-                            required_permissions=_required_permissions(
-                                capability, requirement_inventory
-                            ),
+                            reason=(f"Authorize exact operations for {capability}"
+                                    if capability in missing_grants
+                                    else f"Connect {capability} so AURA can finish the saved plan"),
+                            required_permissions=(sorted(missing_grants[capability])
+                                                  if capability in missing_grants
+                                                  else _required_permissions(capability, requirement_inventory)),
                         )
                     )
                 blocker = {
