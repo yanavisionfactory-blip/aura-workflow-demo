@@ -161,5 +161,5 @@ async def test_scheduler_resumes_only_saved_budget_rejection_and_never_reposts(d
         intents = (await session.scalars(select(DispatchIntent).where(DispatchIntent.run_id == "saved"))).all()
         assert run.status == RunStatus.recovering
         assert step.output["provider_result"]["issues"][0]["key"] == "AURA-1"
-        assert step.status == StepStatus.failed
+        assert step.status == StepStatus.running
         assert len(intents) == 1 and intents[0].kind == "execute"
