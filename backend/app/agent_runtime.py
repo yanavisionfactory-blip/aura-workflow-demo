@@ -1501,8 +1501,10 @@ async def verify_outcome(prompt: str, plan: dict, artifacts: list[dict],
         item.get("critic", {}).get("action") != "accept" for item in artifacts
     ):
         return OutcomeVerification(status="unverified", reasons=["Accepted evidence is missing"])
+    effects = (plan.get("planning_artifacts") or {}).get("required_effects")
     missing_actions = missing_requested_operations(
-        prompt, {str(item.get("operation") or "") for item in artifacts}
+        prompt, {str(item.get("operation") or "") for item in artifacts},
+        effects if isinstance(effects, list) else None, artifacts,
     )
     if missing_actions:
         return OutcomeVerification(

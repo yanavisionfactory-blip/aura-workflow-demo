@@ -1,39 +1,197 @@
-"""Deterministic coverage for explicitly requested consequential operations."""
+"""Keep requested external effects intact across planning and recovery routes."""
 
 from __future__ import annotations
 
 import re
 
+from .connection_families import capability_family
+
+_ACTION = re.compile(
+    r"\b(send|email|deliver|forward|post|publish|create|make|schedule|add|"
+    r"upload|append|update|edit|modify|delete|remove|archive|cancel|share)\b",
+    re.IGNORECASE,
+)
+_VERBS = {
+    "send": {"send", "email", "deliver", "forward", "post", "publish"},
+    "create": {"create", "make", "schedule", "add", "upload", "append"},
+    "update": {"update", "edit", "modify"},
+    "delete": {"delete", "remove", "archive", "cancel"},
+    "share": {"share"},
+}
+_OPERATION_VERBS = {
+    "send": {"send", "post", "publish", "deliver", "forward"},
+    "create": {"create", "schedule", "add", "upload", "append", "insert"},
+    "update": {"update", "edit", "modify", "append"},
+    "delete": {"delete", "remove", "archive", "cancel", "revoke"},
+    "share": {"share"},
+}
+_ALIASES = {
+    "gmail": ("gmail", "e-mail", "email"),
+    "calendar": ("google calendar", "calendar"),
+    "docs": ("google docs", "google doc"),
+    "sheets": ("google sheets", "google sheet"),
+    "drive": ("google drive",),
+    "slack": ("slack",),
+    "jira": ("jira",),
+    "notion": ("notion",),
+    "canva": ("canva",),
+}
+_NEGATION = re.compile(r"\b(?:do not|don't|never|without|no)\s+$", re.IGNORECASE)
+_SOURCE = re.compile(r"\b(?:from|using|about|regarding)\s+$", re.IGNORECASE)
+
 
 def requested_external_operations(prompt: str) -> set[str]:
-    """Recognize explicit Gmail delivery, without treating an email draft as a send."""
-    text = prompt.casefold()
-    if re.search(r"\b(?:do not|don't|never|without)\s+(?:send|email|mail|deliver)\b", text):
-        return set()
-    send_to_mail = re.search(
-        r"\b(?:send|deliver|forward)\b[^.!?\n]{0,140}\b(?:email|e-mail|gmail)\b",
-        text,
+    """Legacy fallback for Gmail requests without a catalog-bound effect contract."""
+    for clause in re.split(r"[.!?;\n]+", prompt.casefold()):
+        if re.search(r"\b(?:do not|don't|never|without)\s+(?:send|email|mail|deliver)\b", clause):
+            continue
+        if (re.search(r"\b(?:send|deliver|forward)\b.{0,140}\b(?:email|e-mail|gmail)\b", clause)
+                or re.search(r"\b(?:gmail|e-mail|email)\b.{0,90}\b(?:send|deliver)\b", clause)
+                or re.search(r"\bemail\s+(?:me|us|them|it|this|the|a|an)\b", clause)):
+            return {"gmail.send"}
+    return set()
+
+
+def _family(slug: str, operation: str) -> str:
+    prefix = operation.split(".", 1)[0]
+    family = capability_family(prefix if "." in operation else slug)
+    for known in _ALIASES:
+        if family == known or known in capability_family(slug).split("-"):
+            return known
+    return family
+
+
+def _aliases(family: str, item: dict) -> set[str]:
+    aliases = set(_ALIASES.get(family, ()))
+    # Shared Google Workspace operations need their app name, while a
+    # dedicated connector can use its public name as a provider cue.
+    if family in capability_family(item.get("slug")).split("-"):
+        aliases.add(str(item.get("slug") or "").replace("-", " "))
+        aliases.add(str(item.get("name") or ""))
+    return {alias.casefold() for alias in aliases if alias and len(alias) >= 3}
+
+
+def _operation_matches(kind: str, module: dict) -> bool:
+    if module.get("permission_scope") not in {"write", "destructive"}:
+        return False
+    words = re.findall(
+        r"[a-z]+", (str(module.get("name") or "") + " "
+                 + str(module.get("description") or "")).casefold()
     )
-    mail_to_send = re.search(
-        r"\b(?:gmail|e-mail|email)\b[^.!?\n]{0,90}\b(?:send|deliver)\b",
-        text,
-    )
-    email_as_verb = re.search(r"\bemail\s+(?:me|us|them|it|this|the|a|an)\b", text)
-    return {"gmail.send"} if send_to_mail or mail_to_send or email_as_verb else set()
+    return bool(set(words).intersection(_OPERATION_VERBS[kind]))
 
 
-def missing_requested_operations(prompt: str, operations: set[str]) -> set[str]:
-    return requested_external_operations(prompt) - operations
+def requested_effects(prompt: str, inventory: list[dict], manifests: dict) -> list[dict]:
+    """Bind explicit provider actions to permitted writes in the real catalog.
+
+    A requirement accepts equivalent native or dynamic operations for the
+    named provider. Ambiguous phrases such as 'create a summary from Jira'
+    remain for the model outcome reviewer to assess.
+    """
+    catalog: dict[tuple[str, str], tuple[dict, dict]] = {}
+    for item in inventory:
+        slug = str(item.get("slug") or "")
+        allowed = set(item.get("allowed_operations") or [])
+        for module in manifests.get(slug, {}).get("capabilities", []):
+            name = str(module.get("name") or "")
+            if name in allowed and module.get("permission_scope") in {"write", "destructive"}:
+                catalog[slug, name] = (module, item)
+
+    effects: dict[tuple[str, str], set[tuple[str, str]]] = {}
+    for clause in re.split(r"[.!?;\n]+", prompt.casefold()):
+        actions = list(_ACTION.finditer(clause))
+        for index, action in enumerate(actions):
+            if _NEGATION.search(clause[max(0, action.start() - 20):action.start()]):
+                continue
+            kind = next(k for k, verbs in _VERBS.items() if action.group() in verbs)
+            tail = clause[action.end():actions[index + 1].start() if index + 1 < len(actions) else None]
+            lead = clause[max(0, action.start() - 90):action.start()]
+            for (slug, operation), (module, item) in catalog.items():
+                if not _operation_matches(kind, module):
+                    continue
+                family = _family(slug, operation)
+                for alias in _aliases(family, item):
+                    match = re.search(r"\b" + re.escape(alias) + r"\b", tail)
+                    direct_target = bool(match) and not _SOURCE.search(
+                        tail[max(0, match.start() - 12):match.start()]
+                    )
+                    leading_provider = re.search(
+                        r"\b(?:use|with|in|on)\s+(?:the\s+)?" + re.escape(alias)
+                        + r"\s+to\s+$", lead,
+                    )
+                    if not direct_target and not leading_provider:
+                        continue
+                    effects.setdefault((family, kind), set()).add((slug, operation))
+                    break
+
+    # 'Email me' has no named provider but clearly asks for delivery. Include
+    # every catalog route able to send via Gmail, not just one native slug.
+    if requested_external_operations(prompt) and ("gmail", "send") not in effects:
+        email_senders = {
+            (slug, operation) for (slug, operation), (module, _) in catalog.items()
+            if _family(slug, operation) == "gmail" and _operation_matches("send", module)
+        }
+        if email_senders:
+            effects[("gmail", "send")] = email_senders
+
+    return [
+        {"effect": f"{family} {kind}", "targets": [
+            {"tool_slug": slug, "operation": operation}
+            for slug, operation in sorted(targets)
+        ]}
+        for (family, kind), targets in sorted(effects.items())
+    ]
 
 
-def validate_requested_operations(prompt: str, plan, available: set[str]) -> None:
-    required = requested_external_operations(prompt) & available
-    missing = required - {step.operation for step in plan.steps}
-    if missing:
-        # This is fed into the model's bounded repair pass, then into the
-        # durable Recovery Engineer if the model still omits the action.
-        raise ValueError(
-            "Requested external action is absent from the executable plan: "
-            + ", ".join(sorted(missing))
-            + ". Add the exact approved operation with its real inputs and dependencies."
-        )
+def missing_requested_operations(
+    prompt: str, operations: set[str], effects: list[dict] | None = None,
+    artifacts: list[dict] | None = None,
+) -> set[str]:
+    if effects is None:
+        return requested_external_operations(prompt) - operations
+    missing = set()
+    for effect in effects:
+        targets = effect.get("targets") or []
+        if artifacts is not None:
+            matched = any(
+                item.get("operation") == target.get("operation")
+                and item.get("tool") == target.get("tool_slug")
+                for item in artifacts for target in targets
+            )
+        else:
+            matched = any(target.get("operation") in operations for target in targets)
+        if not matched:
+            missing.add(str(effect.get("effect") or "requested external action"))
+    return missing
+
+
+def validate_requested_operations(
+    prompt: str, plan, available: set[str],
+    inventory: list[dict] | None = None, manifests: dict | None = None,
+) -> list[dict]:
+    effects = requested_effects(prompt, inventory, manifests) if inventory is not None and manifests is not None else []
+    if not effects:
+        missing = requested_external_operations(prompt) - {
+            step.operation for step in plan.steps if not getattr(step, "optional", False)
+        }
+        if missing:
+            raise ValueError(
+                "Requested external action is absent from the executable plan: "
+                + ", ".join(sorted(missing))
+                + ". Add the exact approved operation with its real inputs and dependencies."
+            )
+    for effect in effects:
+        if not any(
+            not getattr(step, "optional", False) and any(
+                step.tool_slug == target["tool_slug"] and step.operation == target["operation"]
+                for target in effect["targets"]
+            ) for step in plan.steps
+        ):
+            raise ValueError(
+                "Requested external action is absent from the executable plan: "
+                + effect["effect"] + ". Add a required approved operation from: "
+                + ", ".join(sorted({target["operation"] for target in effect["targets"]}))
+                + ". Keep it through every recovery attempt."
+            )
+    plan.planning_artifacts["required_effects"] = effects
+    return effects
