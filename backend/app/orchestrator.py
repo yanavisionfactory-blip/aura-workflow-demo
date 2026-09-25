@@ -805,7 +805,20 @@ async def _create_compiled_plan(
         "repair_plan": "staged",
         "compact_replan": "compact",
     }.get(supervisor_strategy, "combined")
-    repair_requirements: list[str] = []
+    from .request_contracts import requested_effects
+
+    # Give the planner the independently checked delivery requirements on its
+    # first call; discovering a missing action only after generation costs an
+    # entire second model pass and can produce an apparently complete read plan.
+    repair_requirements = [
+        "The user requires a nonoptional " + effect["effect"]
+        + " step before completion. Choose a permitted operation from: "
+        + ", ".join(sorted({target["operation"] for target in effect["targets"]}))
+        + ". Show its resolved arguments for approval before dispatch."
+        for effect in requested_effects(
+            request_prompt or prompt, catalog_inventory, manifests_by_slug,
+        )
+    ]
     # Connector-contract validation receives one model repair. Safe generated
     # prose is normalized deterministically before this boundary, so repeating
     # the same repair cannot improve a persistent schema mismatch.

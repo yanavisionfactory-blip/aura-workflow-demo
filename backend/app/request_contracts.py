@@ -42,6 +42,15 @@ _SOURCE = re.compile(r"\b(?:from|using|about|regarding)\s+$", re.IGNORECASE)
 
 def requested_external_operations(prompt: str) -> set[str]:
     """Legacy fallback for Gmail requests without a catalog-bound effect contract."""
+    # A review checkpoint is a request to send *after* approval. The draft and
+    # its delivery can be in different sentences, so inspect the full prompt.
+    reviewed_delivery = (
+        re.search(r"\b(?:prepare|draft|compose|write)\s+(?:an?\s+)?(?:email|e-mail)\s+to\b", prompt, re.IGNORECASE)
+        and re.search(r"\bbefore\s+sending\s+(?:it|this|the\s+email)\b", prompt, re.IGNORECASE)
+        and not re.search(r"\b(?:do not|don't|never|without)\s+send\b", prompt, re.IGNORECASE)
+    )
+    if reviewed_delivery:
+        return {"gmail.send"}
     for clause in re.split(r"[.!?;\n]+", prompt.casefold()):
         if re.search(r"\b(?:do not|don't|never|without)\s+(?:send|email|mail|deliver)\b", clause):
             continue

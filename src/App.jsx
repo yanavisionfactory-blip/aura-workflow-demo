@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Show, SignIn, SignUp } from "@clerk/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter as Router, Route, Routes } from "react-router-dom";
@@ -8,6 +8,45 @@ import { AuthProvider, useAuth } from "@/lib/AuthContext";
 import PageNotFound from "@/lib/PageNotFound";
 import { queryClientInstance } from "@/lib/query-client";
 import Demo from "@/pages/Demo";
+
+function UpdateNotice() {
+  const [available, setAvailable] = useState(false);
+
+  useEffect(() => {
+    const build = import.meta.env.VITE_AURA_BUILD_SHA;
+    if (!build) return undefined;
+    let mounted = true;
+    const check = async () => {
+      try {
+        const response = await fetch(`${import.meta.env.BASE_URL}version.txt?at=${Date.now()}`, {
+          cache: "no-store",
+        });
+        if (!response.ok) return;
+        const published = (await response.text()).trim();
+        if (mounted && published && published !== build) setAvailable(true);
+      } catch {
+        // A temporary network failure must not interrupt the active workflow.
+      }
+    };
+    const onVisible = () => { if (document.visibilityState === "visible") void check(); };
+    void check();
+    const timer = window.setInterval(check, 30_000);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      mounted = false;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
+
+  if (!available) return null;
+  return (
+    <div role="status" className="fixed left-1/2 top-4 z-[110] flex w-[min(92vw,34rem)] -translate-x-1/2 items-center justify-between gap-4 rounded-xl border border-violet-300/30 bg-[#111827] px-4 py-3 text-sm text-white shadow-2xl">
+      <span>AURA has an update. Refresh to use the latest workflow fixes.</span>
+      <button type="button" onClick={() => window.location.reload()} className="shrink-0 rounded-lg bg-violet-500 px-3 py-1.5 font-medium">Refresh</button>
+    </div>
+  );
+}
 
 function AuthLanding() {
   const [mode, setMode] = useState("sign-in");
@@ -61,6 +100,7 @@ export default function App() {
         <Show when="signed-out"><AuthLanding /></Show>
         <Show when="signed-in"><AuthProvider><ProductRoutes /></AuthProvider></Show>
       </Router>
+      <UpdateNotice />
       <Toaster />
     </QueryClientProvider>
   );
