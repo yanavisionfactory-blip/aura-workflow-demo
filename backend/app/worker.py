@@ -23,6 +23,7 @@ def _run_async(coroutine):
 async def execute_delivery(run_id, workspace_id):
     from .dispatch import dispatch_pending
     await execute_run(run_id, workspace_id)
+    await recover_pending_engineer(run_id, workspace_id)
     # Preflight may checkpoint a retry several seconds in the future. Deliver
     # this run's delayed intent to Celery immediately so it can resume without
     # an API request or a separately enabled recovery loop.
@@ -32,9 +33,34 @@ async def execute_delivery(run_id, workspace_id):
 async def plan_delivery(run_id, workspace_id):
     from .dispatch import dispatch_pending
     await plan_run(run_id, workspace_id)
+    await recover_pending_engineer(run_id, workspace_id)
     # A planning failure can atomically create a delayed supervisor intent.
     # Publishing is browser-independent and never relies on the request thread.
     await dispatch_pending(workspace_id, run_id=run_id, schedule_delayed_plan=True)
+
+
+async def recover_pending_engineer(run_id, workspace_id):
+    """Hand technical stops to the engineer within the delivery that found them.
+
+    The periodic scheduler remains a crash fallback. The worker releases the
+    planner/executor lock before acquiring it here, so repair cannot race a
+    live delivery or require the consumer to keep a browser tab open.
+    """
+    from .db import SessionLocal, engine, set_tenant_context
+    from .execution_lock import execution_lock
+    from .models import WorkflowRun
+    from .recovery_engineer import recover_with_engineer
+    from .scheduler_runtime import _recovery_engineer_candidate
+
+    async with execution_lock(engine, workspace_id, run_id) as acquired:
+        if not acquired:
+            return "busy"
+        async with SessionLocal() as session:
+            await set_tenant_context(session, workspace_id)
+            run = await session.get(WorkflowRun, run_id)
+            if not run or run.workspace_id != workspace_id or not _recovery_engineer_candidate(run):
+                return "not_applicable"
+        return await recover_with_engineer(run_id, workspace_id)
 
 
 settings = get_settings()

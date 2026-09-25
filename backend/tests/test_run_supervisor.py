@@ -155,6 +155,33 @@ async def test_repeated_malformed_plans_stop_before_eight_expensive_rounds(datab
         assert intent is None
 
 
+async def test_repeated_contract_mismatch_stops_after_one_supervised_repair(database):
+    async with database() as session:
+        run = WorkflowRun(
+            id="contract-run", workspace_id="workspace", prompt="Summarize my calendar",
+            status=RunStatus.planning,
+        )
+        session.add(run)
+        await session.commit()
+
+        failure = ValueError("Plan contract validation failed: calendar.list cannot supply ['events']")
+        assert await recover_planning_failure(
+            session, run, failure, max_attempts=8,
+            base_delay_seconds=1, max_delay_seconds=30,
+        ) == "scheduled"
+        await session.commit()
+        assert await recover_planning_failure(
+            session, run, failure, max_attempts=8,
+            base_delay_seconds=1, max_delay_seconds=30,
+        ) == "internal_incident"
+        await session.commit()
+
+        assert run.status == RunStatus.blocked
+        assert public_run_projection(run, None)["public_status"] == "recovering"
+        assert public_run_projection(run, None)["public_blocker"] is None
+        assert run.execution_context["__aura_supervisor__"]["repair_incident"]["status"] == "handoff_pending"
+
+
 async def test_planning_supervisor_changes_strategy_after_malformed_result(database):
     async with database() as session:
         run = WorkflowRun(
@@ -203,10 +230,10 @@ async def test_exhausted_recovery_opens_internal_incident_not_retry_ui(database)
         assert outcome == "internal_incident"
         assert run.status == RunStatus.blocked
         state = run.execution_context["__aura_supervisor__"]
-        assert state["status"] == "operator_attention"
+        assert state["status"] == "recovering"
         assert state["repair_incident"]["required_environment"] == "isolated_repair_sandbox"
         assert state["repair_incident"]["production_write_allowed"] is False
-        assert public_run_projection(run, None)["public_status"] == "blocked"
+        assert public_run_projection(run, None)["public_status"] == "recovering"
 
 
 @pytest.mark.parametrize("code", sorted(HUMAN_ACTION_CODES))

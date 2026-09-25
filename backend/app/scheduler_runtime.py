@@ -489,7 +489,11 @@ def _recovery_engineer_candidate(run: WorkflowRun) -> bool:
             "testing",
             "canary",
             "awaiting_sandbox",
+            "configuration_required",
             "quarantined",
+            "failed",
+            "canary_failed",
+            "rolled_back",
         }
         and (run.status == RunStatus.blocked or autonomy.get("handoff_reason_code"))
     )
