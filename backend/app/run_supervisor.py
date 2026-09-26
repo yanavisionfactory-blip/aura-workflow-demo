@@ -275,6 +275,7 @@ HUMAN_ACTION_CODES = frozenset(
         "resource_not_found",
         "resource_access_denied",
         "plan_approval_required",
+        "planning_retry_required",
         "operator_billing_required",
         "pilot_details_required",
         "external_submission_approval_required",
@@ -558,6 +559,32 @@ def is_unavoidable_human_blocker(blocker: dict | None) -> bool:
         isinstance(blocker, dict)
         and blocker.get("kind") == "human_action"
         and blocker.get("code") in HUMAN_ACTION_CODES
+    )
+
+
+def pause_direct_planning_failure(run: WorkflowRun) -> None:
+    """End a failed direct LLM attempt without an agent repair loop."""
+    message = (
+        "AURA couldn't prepare the actions for this plan. "
+        "Nothing has started. Please try again."
+    )
+    transition_run(
+        run,
+        RunStatus.waiting_for_action,
+        reason="direct_llm_plan_needs_retry",
+        actor="plan-builder",
+        phase="planning",
+        supervisor_status="human_action_required",
+        error=message,
+        result={"status": "planning_unavailable"},
+        blocker={
+            "kind": "human_action",
+            "code": "planning_retry_required",
+            "message": message,
+            "action": "retry_planning",
+            "retryable": True,
+        },
+        dispatch=None,
     )
 
 

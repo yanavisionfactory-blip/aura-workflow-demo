@@ -383,21 +383,26 @@ export default function Demo() {
       if (!resumeView) return;
       const intent = String(run.prompt || run.plan?.interpretation || "")
         .split("\n\nThe user reviewed the proposed workflow and requested this change:")[0];
-      const waiting = resumeView === "plan" && run.status === "waiting_for_action";
-      const pending = resumeView === "plan" && planningDisposition(run) === "wait";
+      const disposition = planningDisposition(run);
+      const waiting = resumeView === "plan" && disposition === "connection";
+      const pending = resumeView === "plan" && disposition === "wait";
+      const failedPlanning = resumeView === "plan" && disposition === "unavailable";
       const storedVisiblePlan = run.inputs?.aura_visible_plan;
       const visiblePlan = resumeView === "plan" && Array.isArray(storedVisiblePlan?.steps)
         && storedVisiblePlan.steps.length > 0 ? storedVisiblePlan : null;
       const restored = waiting
         ? { ...uiConnectionPlanFromRun(run, intent), provisional: !run.plan?.steps?.length,
           compileState: "waiting_for_connection" }
-        : { ...uiPlanFromRun(run), provisional: pending, compileState: pending ? "validating" : "ready" };
+        : { ...uiPlanFromRun(run), provisional: pending || failedPlanning,
+          compileState: pending ? "validating" : failedPlanning ? "blocked" : "ready",
+          error: failedPlanning ? run.error || run.blocker?.message : "" };
       const displayed = visiblePlan ? {
         ...visiblePlan,
         connectionRequirements: restored.connectionRequirements,
         connectionChecklist: restored.connectionChecklist,
         provisional: restored.provisional,
         compileState: restored.compileState,
+        error: restored.error,
       } : restored;
       pythonRunIdRef.current = run.id;
       pythonPlanRef.current = run.plan || null;
@@ -528,6 +533,7 @@ export default function Demo() {
   const handleConfirmRef = useRef(null);
   const startPythonExecutionRef = useRef(null);
   const queuedPlanStartRef = useRef(null);
+  const restartingPreparationRef = useRef(false);
   const preparedActionPreviewRef = useRef(false);
   const runRequestKeyRef = useRef(null);
   const lastPlanningIntentRef = useRef("");
@@ -543,7 +549,8 @@ export default function Demo() {
     let transientFailures = 0;
     while (pythonPollGenerationRef.current === generation) {
       try {
-        return await getPythonRun(runId);
+        const run = await getPythonRun(runId);
+        return pythonPollGenerationRef.current === generation ? run : null;
       } catch (error) {
         const transient = !error.status || error.status === 429 || error.status >= 500;
         if (!transient) throw error;
@@ -620,6 +627,10 @@ export default function Demo() {
   const handlePageBack = useCallback(() => {
     if (phase === "confirm") reset();
     else if (phase === "plan") setPhase("confirm");
+    else if (phase === "preparing") {
+      queuedPlanStartRef.current = null;
+      setPhase("plan");
+    }
     else if (phase === "preview") {
       if (preparedActionPreviewRef.current) reset();
       else setPhase("plan");
@@ -769,6 +780,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
                     compileState: "blocked",
                     compileError: error.message || "Could not stop the previous run. Try revising again.",
                   }));
+                  setPhase("plan");
                   return;
                 }
                 forgetActivePythonRun(previousRunId);
@@ -799,6 +811,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               // planning run without replacing the newer ID or visible plan.
               if (requestKey !== runRequestKeyRef.current) {
                 await cancelPythonRun(created.id).catch(() => {});
+                forgetActivePythonRun(created.id);
               }
               return;
             }
@@ -844,6 +857,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               queuedPlanStartRef.current = null;
               setPlan((current) => ({ ...current, provisional: true, compileState: "blocked",
                 compileError: `AURA's actions in ${unreviewed.join(", ")} don't match the plan you saw. Nothing was started.` }));
+              setPhase("plan");
               await cancelPythonRun(created.id).catch(() => {});
               forgetActivePythonRun(created.id);
               pythonRunIdRef.current = null;
@@ -864,6 +878,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               runRequestKeyRef.current = null;
               const error = "AURA returned the original plan without applying your change. Try a more specific edit.";
               setPlan((current) => ({ ...current, provisional: true, compileState: "blocked", compileError: error }));
+              setPhase("plan");
               return { ok: false, error };
             }
             setPlan((current) => ({
@@ -1051,8 +1066,12 @@ Rules:
     const failedRunId = pythonRunIdRef.current;
     if (failedRunId) {
       const existing = await getPythonRun(failedRunId).catch(() => null);
-      if (existing && existing.public_status !== "recovering"
-        && ["failed", "blocked", "cancelled", "completed"].includes(existing.status)) {
+      if (existing?.blocker?.code === "planning_retry_required") {
+        await cancelPythonRun(failedRunId);
+      }
+      if (existing?.blocker?.code === "planning_retry_required"
+        || (existing && existing.public_status !== "recovering"
+          && ["failed", "blocked", "cancelled", "completed"].includes(existing.status))) {
         forgetActivePythonRun(failedRunId);
         pythonRunIdRef.current = null;
         pythonPlanRef.current = null;
@@ -1061,6 +1080,34 @@ Rules:
     }
     return handleConfirm(interpretation, "", false, visiblePlanRef.current);
   }, [handleConfirm, interpretation]);
+
+  const handleRestartPreparation = useCallback(async () => {
+    if (restartingPreparationRef.current) return;
+    restartingPreparationRef.current = true;
+    const oldRunId = pythonRunIdRef.current;
+    const startName = queuedPlanStartRef.current?.name || workflowName;
+    ++pythonPollGenerationRef.current;
+    queuedPlanStartRef.current = null;
+    try {
+      if (oldRunId) {
+        const stopped = await cancelPythonRun(oldRunId);
+        if (stopped.status !== "cancelled") throw new Error("AURA is still stopping the previous preparation.");
+        forgetActivePythonRun(oldRunId);
+      }
+      pythonRunIdRef.current = null;
+      pythonPlanRef.current = null;
+      runRequestKeyRef.current = null;
+      queuedPlanStartRef.current = { name: startName };
+      void handleConfirm(interpretation, "", false, visiblePlanRef.current);
+      setPhase("preparing");
+    } catch (error) {
+      setPlan((current) => ({ ...current, provisional: true, compileState: "blocked",
+        compileError: error.message || "AURA couldn't restart preparation." }));
+      setPhase("plan");
+    } finally {
+      restartingPreparationRef.current = false;
+    }
+  }, [handleConfirm, interpretation, workflowName]);
 
   const handlePlanningConnectionRecovered = async (recoveries) => {
     const runId = pythonRunIdRef.current;
@@ -1243,15 +1290,9 @@ Rules:
     if (!hasDurablePlan(pythonRunIdRef.current, pythonPlanRef.current)) {
       if (plan?.provisional) {
         queuedPlanStartRef.current = { name };
-        if (plan.compileState === "blocked") {
-          handleRetryPlanning();
-          return;
-        }
-        // A readable draft is not an executable plan. Keep the user on the
-        // planning screen until the backend has approved actual operations.
-        setPlan((current) => current ? {
-          ...current, compileState: "starting", compileError: "",
-        } : current);
+        // Start is accepted immediately. Preparation happens in its own view;
+        // external changes still wait for exact backend approval.
+        setPhase("preparing");
         return;
       }
       keepPlanInReview();
@@ -1987,6 +2028,24 @@ Generate a results summary in plain, human-friendly language (not technical).
                     approveLabel={editRunMode ? "Review changes" : "Start"}
                   />
                 ) : null}
+              </motion.div>
+            )}
+
+            {phase === "preparing" && (
+              <motion.div key="preparing" className="w-full flex flex-col items-center gap-4 text-center">
+                <ThinkingAnimation />
+                <h2 className="text-lg font-semibold">Start requested</h2>
+                <p className="max-w-md text-sm text-muted-foreground">
+                  AURA is preparing the actions in your plan. You will review external changes before they happen.
+                </p>
+                <button type="button" onClick={handlePageBack}
+                  className="rounded-lg border border-white/15 px-4 py-2 text-sm text-muted-foreground hover:text-foreground">
+                  Back to plan
+                </button>
+                <button type="button" onClick={() => void handleRestartPreparation()}
+                  className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground">
+                  Restart preparation if it is taking too long
+                </button>
               </motion.div>
             )}
 

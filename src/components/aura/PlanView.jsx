@@ -660,16 +660,13 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         className="mt-5 p-4 rounded-xl border border-white/6 bg-card/50"
       >
         <h3 className="text-sm font-semibold mb-1">
-          {plan.compileState === "blocked" ? "Plan needs another try"
-            : ["starting", "validating"].includes(plan.compileState) ? "Preparing your workflow" : "Ready to start?"}
+          {plan.compileState === "blocked" || plan.error ? "Plan needs another try" : "Ready to start?"}
         </h3>
         <p className="text-xs text-muted-foreground leading-relaxed mb-3">
-          {plan.compileState === "blocked"
+          {plan.compileState === "blocked" || plan.error
             ? "Nothing has started. Try again to finish preparing this plan."
-            : plan.compileState === "starting"
-              ? "AURA is checking the exact steps. Your request to start is saved; you'll review any external changes before they happen."
             : plan.compileState === "validating"
-              ? "AURA is preparing the exact actions. You can request a start now; you'll review any external changes before they happen."
+              ? "You can start now. AURA will prepare the actions while you follow its progress."
             : "Aura will follow this plan and handle technical preparation during execution."}
         </p>
         <div className="mb-3">
@@ -684,11 +681,20 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
           <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
-            onClick={() => onApprove(steps, name.trim())}
-            disabled={Boolean(plan.error) || ["starting", "waiting_for_connection"].includes(plan.compileState) || (!plan.provisional && missingTools.length > 0) || (steps.length === 0 && plan.compileState !== "blocked")}
+            onClick={() => {
+              if (plan.compileState === "waiting_for_connection"
+                || (!plan.provisional && missingTools.length > 0)) {
+                void handleConnectAll();
+                return;
+              }
+              onApprove(steps, name.trim());
+            }}
+            disabled={steps.length === 0 && plan.compileState !== "blocked"}
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {plan.compileState === "blocked" ? "Try again" : plan.compileState === "starting" ? "Preparing…" : approveLabel} <ArrowRight className="w-4 h-4" />
+            {plan.compileState === "blocked" || plan.error ? "Try again"
+              : plan.compileState === "waiting_for_connection" || (!plan.provisional && missingTools.length > 0)
+                ? "Connect to start" : approveLabel} <ArrowRight className="w-4 h-4" />
           </motion.button>
         </div>
       </motion.div>

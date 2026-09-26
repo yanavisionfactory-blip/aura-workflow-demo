@@ -76,6 +76,10 @@ async def create_llm_plan(
         "For a requested email attachment include the actual created artifact reference. "
         "If a required capability is absent from the catalog, do not substitute an "
         "unrelated operation; the application will reject unsupported plans. "
+        "Every item in requirements is mandatory. Before returning, verify each "
+        "requested external action has a nonoptional step using one of its exact "
+        "listed operations and the right tool slug. In particular, an export of "
+        "a Canva file does not create the slide or presentation to be exported. "
         "For revisions, honor the latest change and remove replaced providers."
     )
     async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=1) as client:
