@@ -47,6 +47,10 @@ def user_request_text(prompt: str) -> str:
     if not marker:
         return prompt
     instruction = revision.split("\nCurrent reviewed steps (", 1)[0]
+    if instruction.lstrip().startswith("AURA backend authorization rejected the previous plan."):
+        # Recovery diagnostics quote rejected operations verbatim. They are
+        # internal repair hints, not a new user authorization to send.
+        return original
     return original + "\n" + instruction
 
 

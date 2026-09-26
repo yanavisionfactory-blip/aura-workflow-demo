@@ -421,6 +421,12 @@ def test_draft_only_customer_request_cannot_send_even_when_old_plan_contains_sen
                 "\nReturn the complete revised executable plan.")
     assert draft_only_email_request(revision)
     assert requested_external_operations(revision) == set()
+    repair = (prompt + "\n\nThe user reviewed the proposed workflow and requested this change: "
+              "AURA backend authorization rejected the previous plan. Resolve every issue: "
+              "gmail.send transmits emails; remove every send step. "
+              "Preserve the user's requested external actions and final review.")
+    assert draft_only_email_request(repair)
+    assert requested_external_operations(repair) == set()
     manifest = native_manifest("google")
     inventory = [{"slug": "google", "name": "Google Workspace", "allowed_operations": [
         module["name"] for module in manifest["capabilities"]]}]
