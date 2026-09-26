@@ -6,6 +6,7 @@ from app.schemas import PlanStep, StepCondition, WorkflowPlan
 from app.workflow_context import (
     WorkflowContextError,
     evaluate_condition,
+    qualify_prior_step_references,
     referenced_paths,
     referenced_step_keys,
     resolve_value,
@@ -18,6 +19,21 @@ def test_referenced_paths_includes_all_template_roots() -> None:
         "inputs.email",
         "weather_facts",
     }
+
+
+def test_only_prior_step_keys_can_qualify_bare_model_references() -> None:
+    values = {
+        "design_id": "{{create_sukkot_slide.job.id}}",
+        "attachments": [{"url": "{{export_sukkot_pdf.job.urls[0]}}"}],
+        "unknown": "{{other.job.id}}",
+        "input": "{{inputs.title}}",
+    }
+    qualified = qualify_prior_step_references(values, {"create_sukkot_slide", "export_sukkot_pdf"})
+    assert qualified["design_id"] == "{{steps.create_sukkot_slide.job.id}}"
+    assert qualified["attachments"][0]["url"] == "{{steps.export_sukkot_pdf.job.urls[0]}}"
+    assert qualified["unknown"] == "{{other.job.id}}"
+    assert qualified["input"] == "{{inputs.title}}"
+    assert values["design_id"] == "{{create_sukkot_slide.job.id}}"
 
 
 def _step(**changes) -> PlanStep:
