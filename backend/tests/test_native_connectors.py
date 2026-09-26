@@ -228,6 +228,21 @@ def test_generated_gmail_list_discards_only_unsupported_display_hints():
         })
 
 
+def test_calendar_planning_drops_response_projection_but_keeps_attendee_filter():
+    manifest = native_manifest("google")
+    assert normalize_planned_module_arguments(manifest, "calendar.list", {
+        "query": "planning", "fields": "items(id,attendees)", "max_attendees": 3,
+    }) == {"query": "planning", "max_attendees": 3}
+    with pytest.raises(NativeConnectorError, match="unknown inputs"):
+        normalize_module_arguments(manifest, "calendar.list", {
+            "query": "planning", "fields": "items(id,attendees)",
+        })
+    with pytest.raises(NativeConnectorError, match="unknown inputs"):
+        normalize_planned_module_arguments(manifest, "calendar.list", {
+            "query": "planning", "recipient_override": "someone@example.test",
+        })
+
+
 def test_planning_accepts_structured_step_reference_for_array_input():
     manifest = {
         "capabilities": [
