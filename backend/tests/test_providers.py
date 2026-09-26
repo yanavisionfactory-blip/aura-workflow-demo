@@ -52,6 +52,29 @@ def _settings() -> Settings:
     )
 
 
+def test_calendar_attendee_filter_reads_all_pages_before_claiming_matches(monkeypatch):
+    executor = ProviderExecutor({"access_token": "token"})
+    calls = []
+
+    async def request(_method, _url, **kwargs):
+        calls.append(dict(kwargs["params"]))
+        if "pageToken" not in kwargs["params"]:
+            return {"items": [{"id": "busy", "attendees": [{"email": "a"},
+                {"email": "b"}]}, {"id": "unknown", "attendeesOmitted": True}],
+                "nextPageToken": "next", "timeZone": "UTC"}
+        return {"items": [{"id": "small", "attendees": [{"email": "a"}]},
+                          {"id": "solo"}], "timeZone": "UTC"}
+
+    monkeypatch.setattr(executor, "_request", request)
+    result = asyncio.run(executor._calendar_list({"query": "planning", "max_attendees": 1}))
+
+    assert [event["id"] for event in result["items"]] == ["small", "solo"]
+    assert result["attendee_filter"] == {"max_attendees": 1}
+    assert result["coverage_limited"] is False
+    assert calls[0]["maxResults"] == 100
+    assert calls[1]["pageToken"] == "next"
+
+
 def test_gmail_conversation_read_fetches_multiple_threads_with_sent_history(monkeypatch):
     executor = ProviderExecutor({"access_token": "token"})
     body = base64.urlsafe_b64encode(b"Thanks for your order. Can we meet next week?").decode()
