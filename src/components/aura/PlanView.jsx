@@ -203,9 +203,12 @@ export default function PlanView({
         : requirement.canonical_provider || requirement.provider_hint || requirement.capability;
       const name = resolveRequirementTool(raw, requirement.required_permissions);
       if (!name) return;
+      const accessNeeded = typeof requirement === "object"
+        && String(requirement.reason || "").startsWith("Authorize exact operations");
       if (seen.has(name)) {
+        const existing = out.find((item) => item.name === name);
+        if (existing && accessNeeded) existing.accessNeeded = true;
         if (String(raw).toLowerCase().endsWith("-mcp")) {
-          const existing = out.find((item) => item.name === name);
           if (existing) existing.provider = raw;
         }
         return;
@@ -214,6 +217,7 @@ export default function PlanView({
       out.push({
         name,
         provider: raw,
+        accessNeeded,
         reason: typeof requirement === "object" && requirement.reason
           ? requirement.reason
           : `AURA needs ${name} access to finish building this plan`,
