@@ -40,7 +40,11 @@ from .schemas import (
     UnifiedDeliverable,
     WorkflowPlan,
 )
-from .workflow_context import referenced_paths, referenced_step_keys
+from .workflow_context import (
+    qualify_prior_step_references,
+    referenced_paths,
+    referenced_step_keys,
+)
 
 
 class ConnectionRequiredError(RuntimeError):
@@ -1009,6 +1013,14 @@ def normalize_plan_graph(plan: WorkflowPlan) -> WorkflowPlan:
     variable_producers: dict[str, str] = {}
     write_markers = ("send", "create", "update", "delete", "post", "schedule", "purchase", "append", "destroy", "purge", "revoke")
     for step in plan.steps:
+        step.arguments = qualify_prior_step_references(step.arguments, known)
+        step.reduced_scope_arguments = qualify_prior_step_references(step.reduced_scope_arguments, known)
+        step.output_variables = qualify_prior_step_references(step.output_variables, known)
+        if step.condition:
+            step.condition = step.condition.model_copy(update={
+                "left": qualify_prior_step_references(step.condition.left, known),
+                "right": qualify_prior_step_references(step.condition.right, known),
+            })
         referenced = referenced_step_keys(
             {
                 "arguments": step.arguments,

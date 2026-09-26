@@ -28,6 +28,29 @@ def normalize_reference_path(path: str) -> str:
     return BRACKET_INDEX.sub(lambda match: f".{match.group(1)}", path)
 
 
+def qualify_prior_step_references(value: Any, prior_keys: set[str]) -> Any:
+    """Qualify an unambiguous model reference to an earlier planned step.
+
+    Only an exact, already declared step key may become a ``steps.*`` path.
+    Other roots still fail preflight; this never invents a resource or output.
+    """
+    if isinstance(value, dict):
+        return {key: qualify_prior_step_references(item, prior_keys) for key, item in value.items()}
+    if isinstance(value, list):
+        return [qualify_prior_step_references(item, prior_keys) for item in value]
+    if not isinstance(value, str):
+        return value
+
+    def qualify(match: re.Match) -> str:
+        path = match.group(1).strip()
+        root = re.split(r"[.\[]", path, maxsplit=1)[0]
+        if root in prior_keys and root not in {"inputs", "vars", "steps"}:
+            return "{{steps." + path + "}}"
+        return match.group(0)
+
+    return REFERENCE.sub(qualify, value)
+
+
 def referenced_step_keys(value: Any) -> set[str]:
     if isinstance(value, dict):
         return set().union(*(referenced_step_keys(item) for item in value.values()))
