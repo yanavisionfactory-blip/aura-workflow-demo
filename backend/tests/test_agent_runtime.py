@@ -82,6 +82,18 @@ def test_explicit_linear_provider_does_not_expand_generic_issue_to_jira() -> Non
     assert [item["slug"] for item in bounded] == ["linear"]
 
 
+def test_google_disk_alias_keeps_drive_catalog_available() -> None:
+    inventory = [
+        {"slug": "google", "name": "Google Workspace",
+         "allowed_operations": ["drive.files.search"]},
+        {"slug": "google-drive", "name": "Google Drive",
+         "allowed_operations": ["google-drive.create-file"]},
+        {"slug": "canva", "allowed_operations": ["canva.presentation.create"]},
+    ]
+    selected = intent_bounded_tool_inventory("Create a file in Google Disk", inventory)
+    assert [item["slug"] for item in selected] == ["google", "google-drive"]
+
+
 def test_google_doc_write_uses_native_receipt_when_both_connectors_exist() -> None:
     inventory = [
         {"slug": "google-docs", "name": "Google Docs", "allowed_operations": ["google-docs.create-document"]},

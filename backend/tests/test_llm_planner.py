@@ -1,5 +1,6 @@
 """The direct planner makes one model call and never bypasses preflight."""
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -12,6 +13,122 @@ from app.native_connectors import NativeConnectorError, native_manifest
 from app.plan_preflight import preflight_plan
 from app.request_contracts import requested_effects
 from app.schemas import PlanStep, WorkflowPlan
+
+
+@pytest.mark.asyncio
+async def test_large_catalog_is_packed_before_the_only_planning_call(monkeypatch):
+    prompt = "Create a Google Drive file from my notes: " + "Project notes. " * 1100
+    inventory = [{
+        "slug": "google-drive", "name": "Google Drive", "connected": True,
+        "allowed_operations": ["google-drive.create-file", "google-drive.list-files"],
+        "operation_contracts": [
+            {"name": "google-drive.create-file", "permission_scope": "write",
+             "description": "Create a Drive file", "input_schema": {
+                 "type": "object", "required": ["name"], "properties": {
+                     "name": {"type": "string"}, "content": {"type": "string"},
+                 },
+             }, "output_schema": {"description": "receipt" * 12000}},
+            {"name": "google-drive.list-files", "permission_scope": "read",
+             "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+             "output_schema": {"description": "listing" * 12000}},
+        ],
+    }]
+    captured = []
+
+    async def parse(**kwargs):
+        captured.append(json.loads(kwargs["input"]))
+        return SimpleNamespace(output_parsed=kwargs["text_format"].model_validate({
+            "name": "Create file", "interpretation": "Create one file", "steps": [],
+            "required_action_0": {
+                "key": "create", "agent": "Google Drive", "tool_slug": "google-drive",
+                "operation": "google-drive.create-file",
+                "arguments_json": '{"name":"Notes","content":"Project notes."}',
+                "reason": "Save the notes", "expected_output": "A Drive file",
+                "consequential": True, "depends_on": [], "required_evidence": [],
+            },
+        }))
+
+    class Client:
+        def __init__(self, **_kwargs):
+            self.responses = SimpleNamespace(parse=parse)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(llm_planner, "AsyncOpenAI", Client)
+    monkeypatch.setattr(llm_planner, "get_settings", lambda: SimpleNamespace(
+        openai_api_key="test", openai_model="test-model", model_call_timeout_seconds=30,
+    ))
+    effects = [{"effect": "drive create", "targets": [{
+        "tool_slug": "google-drive", "operation": "google-drive.create-file",
+    }]}]
+    result = await llm_planner.create_llm_plan(prompt, inventory, set(), required_effects=effects)
+
+    assert len(captured) == 1
+    assert captured[0]["request"] == prompt
+    assert captured[0]["required_actions"][0]["targets"] == effects[0]["targets"]
+    operation = captured[0]["operations"][0]["operation_contracts"][0]
+    assert operation["name"] == "google-drive.create-file"
+    assert operation["input_schema"]["required"] == ["name"]
+    assert "output_schema" not in operation
+    assert result.steps[0].operation == "google-drive.create-file"
+
+
+def test_huge_schema_annotations_do_not_remove_required_argument_names():
+    properties = {f"field_{index}": {"type": "string", "description": str(index) + "D" * 1000}
+                  for index in range(110)}
+    data = {
+        "request": "Create a file in Google Drive", "selected_tools": [],
+        "temporal_context": {}, "available_input_names": [], "requirements": [],
+        "required_actions": [{"effect": "drive create", "targets": [{
+            "tool_slug": "google-drive", "operation": "google-drive.create-file",
+        }]}],
+        "operations": [{
+            "slug": "google-drive", "allowed_operations": ["google-drive.create-file"],
+            "operation_contracts": [{
+                "name": "google-drive.create-file", "permission_scope": "write",
+                "input_schema": {"type": "object", "required": ["field_0"],
+                                 "properties": properties},
+            }],
+        }],
+    }
+    packed = json.loads(llm_planner._bounded_planning_payload(data))
+    schema = packed["operations"][0]["operation_contracts"][0]["input_schema"]
+    assert schema["required"] == ["field_0"]
+    assert list(schema["properties"]) == list(properties)
+    assert schema["properties"]["field_0"] == {"type": "string"}
+
+
+def test_many_large_operations_keep_required_action_and_valid_catalog():
+    modules = [{
+        "name": f"connector.action-{index}", "description": str(index) + "X" * 4000,
+        "permission_scope": "write", "input_schema": {"type": "object", "properties": {
+            "name": {"type": "string"},
+        }},
+    } for index in range(80)]
+    modules[-1]["name"] = "connector.create-file"
+    data = {
+        "request": "Create a file with connector", "selected_tools": [],
+        "temporal_context": {}, "available_input_names": [], "requirements": [],
+        "required_actions": [{"effect": "connector create", "targets": [{
+            "tool_slug": "connector", "operation": "connector.create-file",
+        }]}],
+        "operations": [{
+            "slug": "connector", "connected": True,
+            "allowed_operations": [module["name"] for module in modules],
+            "operation_contracts": modules,
+        }],
+    }
+    result = json.loads(llm_planner._bounded_planning_payload(data))
+    item = result["operations"][0]
+    assert "connector.create-file" in item["allowed_operations"]
+    assert set(item["allowed_operations"]) == {
+        module["name"] for module in item["operation_contracts"]
+    }
+    assert len(item["allowed_operations"]) < len(modules)
 
 
 @pytest.mark.asyncio

@@ -18,7 +18,7 @@ from .agent_runtime import (
     planning_temporal_context,
 )
 from .config import get_settings
-from .model_inputs import bounded_input
+from .model_inputs import ModelInputTooLarge, bounded_input
 from .reliability import bounded_model_call
 from .schemas import PlanEvaluation, WorkflowPlan
 
@@ -103,6 +103,105 @@ def _sensitivity_tags(prompt: str, operations: list[str]) -> list[str]:
     return sorted(set(tags))
 
 
+def _compact_operation(module: dict) -> dict:
+    """Keep the argument contract; execution checks use the original manifest."""
+    return {key: module[key] for key in (
+        "name", "description", "input_schema", "permission_scope", "reliability",
+    ) if key in module}
+
+
+def _compact_schema(schema):
+    """Discard schema annotations, while retaining argument shape and constraints."""
+    if isinstance(schema, list):
+        return [_compact_schema(value) for value in schema]
+    if not isinstance(schema, dict):
+        return schema
+    kept = {
+        "type", "properties", "required", "items", "additionalProperties",
+        "enum", "const", "format", "pattern", "minimum", "maximum",
+        "minItems", "maxItems", "anyOf", "oneOf", "allOf", "$ref", "$defs",
+    }
+    return {
+        key: ({name: _compact_schema(child) for name, child in value.items()}
+              if key in {"properties", "$defs"} and isinstance(value, dict)
+              else _compact_schema(value))
+        for key, value in schema.items() if key in kept
+    }
+
+
+def _bounded_planning_payload(payload: dict) -> str:
+    """Pack large connector catalogs before the one LLM call, with no retry loop.
+
+    Request text and required actions are never shortened. Full operation
+    contracts remain with the caller for validation and execution.
+    """
+    try:
+        return bounded_input(payload)
+    except ModelInputTooLarge:
+        pass
+
+    catalog = payload["operations"]
+    compact = [
+        {key: item[key] for key in ("slug", "name", "connected", "canonical_provider")
+         if key in item}
+        | {"allowed_operations": [], "operation_contracts": []}
+        for item in catalog
+    ]
+    reduced = {**payload, "operations": compact}
+    # A request with unusually large attached text cannot be made safe by
+    # trimming catalog metadata; retain the explicit input-limit error.
+    bounded_input(reduced)
+
+    required = {
+        (target["tool_slug"], target["operation"])
+        for effect in payload["required_actions"] for target in effect["targets"]
+    }
+    words = set(re.findall(r"[a-z0-9]{3,}", payload["request"].casefold()))
+    required_roots = {name.split(".", 1)[0] for _, name in required}
+    candidates = []
+    for index, item in enumerate(catalog):
+        slug = item.get("slug", "")
+        for module in item.get("operation_contracts") or []:
+            name = module.get("name")
+            if not isinstance(name, str) or name not in (item.get("allowed_operations") or []):
+                continue
+            name_words = set(re.findall(r"[a-z0-9]{3,}", name.casefold()))
+            description_words = set(re.findall(
+                r"[a-z0-9]{3,}", str(module.get("description") or "").casefold()
+            ))
+            scope = module.get("permission_scope")
+            score = (
+                10000 * ((slug, name) in required)
+                + 100 * len(words & name_words)
+                + 5 * len(words & description_words)
+                + 20 * (name.split(".", 1)[0] in required_roots and scope == "read")
+                + 2 * bool(item.get("connected"))
+            )
+            candidates.append((-score, index, name, module))
+
+    for _, index, name, module in sorted(candidates):
+        item = compact[index]
+        contract = _compact_operation(module)
+        item["allowed_operations"].append(name)
+        item["operation_contracts"].append(contract)
+        try:
+            bounded_input(reduced)
+        except ModelInputTooLarge:
+            contract["input_schema"] = _compact_schema(contract.get("input_schema"))
+            contract.pop("reliability", None)
+            try:
+                bounded_input(reduced)
+            except ModelInputTooLarge:
+                item["allowed_operations"].pop()
+                item["operation_contracts"].pop()
+                if (catalog[index].get("slug"), name) in required:
+                    raise ModelInputTooLarge(
+                        "Required action contracts exceed the planning input budget"
+                    ) from None
+                continue
+    return bounded_input(reduced)
+
+
 async def create_llm_plan(
     prompt: str,
     inventory: list[dict],
@@ -122,7 +221,7 @@ async def create_llm_plan(
     started = perf_counter()
     relevant = intent_bounded_tool_inventory(prompt, inventory, requested_tool_names)
     effects = required_effects or []
-    payload = bounded_input({
+    payload = _bounded_planning_payload({
         "request": prompt,
         "selected_tools": sorted(requested_tool_names),
         "temporal_context": planning_temporal_context(),
