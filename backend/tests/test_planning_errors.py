@@ -394,6 +394,37 @@ def test_compiled_planner_repairs_a_read_only_plan_before_approval(monkeypatch) 
     assert set(plan.planning_artifacts["compiled_contracts"]) == {"events", "send"}
 
 
+def test_followup_plan_never_degrades_to_an_identity_read(monkeypatch) -> None:
+    prompt = "Find customers I missed this week and send personalized check-in emails via Gmail"
+    calls = []
+    seen_inventories = []
+
+    async def incomplete_plan(_prompt, inventory, *_args, **kwargs):
+        calls.append(kwargs.get("planner_repair_requirements"))
+        seen_inventories.append(inventory)
+        return WorkflowPlan(name="Follow-ups", interpretation=prompt, steps=[
+            PlanStep(key="identity", agent="google", tool_slug="google",
+                     operation="google.identity.get", reason="Get account",
+                     expected_output="Account email")
+        ])
+
+    monkeypatch.setattr(orchestrator, "create_plan", incomplete_plan)
+    manifest = native_manifest("google")
+    with pytest.raises(ValueError, match="gmail send"):
+        asyncio.run(orchestrator._create_compiled_plan(
+            prompt,
+            [{"slug": "google", "name": "Google Workspace", "allowed_operations": [
+                item["name"] for item in manifest["capabilities"]]}],
+            set(), {"google": manifest},
+        ))
+    assert len(calls) == 2
+    assert any("gmail.send" in requirement for requirement in calls[0])
+    assert all(
+        operation.startswith("gmail.")
+        for operation in seen_inventories[0][0]["allowed_operations"]
+    )
+
+
 def test_planner_prose_for_a_verified_write_does_not_cost_a_second_model_call(monkeypatch) -> None:
     calls = []
 

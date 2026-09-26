@@ -187,6 +187,22 @@ def test_module_argument_normalization_still_rejects_unknown_inputs():
         )
 
 
+def test_generated_gmail_list_discards_only_unsupported_display_hints():
+    manifest = native_manifest("google")
+    assert normalize_planned_module_arguments(manifest, "gmail.list", {
+        "query": "newer_than:7d", "limit": 10, "body_chars": 1000,
+        "fields": "messages(id,payload)", "format": "full",
+    }) == {"query": "newer_than:7d", "limit": 10}
+    with pytest.raises(NativeConnectorError, match="unknown inputs"):
+        normalize_planned_module_arguments(manifest, "gmail.list", {
+            "query": "newer_than:7d", "recipient_override": "someone@example.test",
+        })
+    with pytest.raises(NativeConnectorError, match="unknown inputs"):
+        normalize_module_arguments(manifest, "gmail.list", {
+            "query": "newer_than:7d", "format": "full",
+        })
+
+
 def test_planning_accepts_structured_step_reference_for_array_input():
     manifest = {
         "capabilities": [

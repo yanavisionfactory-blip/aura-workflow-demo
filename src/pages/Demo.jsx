@@ -71,7 +71,8 @@ const planToolName = (step) => {
     if (step.operation.startsWith("calendar.")) return "Google Calendar";
     if (step.operation.startsWith("docs.")) return "Google Docs";
     if (step.operation.startsWith("sheets.")) return "Google Sheets";
-    return "Google Drive";
+    if (step.operation.startsWith("drive.")) return "Google Drive";
+    return "Google account";
   }
   const names = {
     aura: "AURA Intelligence",
@@ -144,6 +145,7 @@ const friendlyStepTitle = (step) => {
   const operation = String(step.operation || "");
 
   if (operation === "weather.forecast") return weatherStepTitle(step);
+  if (operation === "google.identity.get") return "Check the connected Google account";
   if (operation === "gmail.send") return "Send the email";
   if (operation.startsWith("gmail.")) return "Review email context";
   if (operation.startsWith("calendar.")) return operation.includes("create") ? "Schedule the event" : "Check the calendar";

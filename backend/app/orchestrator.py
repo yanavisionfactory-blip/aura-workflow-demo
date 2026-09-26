@@ -787,6 +787,30 @@ async def _create_compiled_plan(
             if slug in included_slugs
         }
 
+    from .request_contracts import requested_external_operations
+
+    objective = request_prompt or prompt
+    selected_google_sources = " ".join(str(tool) for tool in requested_tool_names)
+    if (
+        requested_external_operations(objective) == {"gmail.send"}
+        and re.search(r"\b(?:gmail|e-mails?|emails?|inbox|mailbox)\b", objective, re.IGNORECASE)
+        and not re.search(
+            r"\b(?:drive|docs?|documents?|sheets?|spreadsheets?|calendar|meetings?)\b",
+            objective + " " + selected_google_sources,
+            re.IGNORECASE,
+        )
+    ):
+        # Google Workspace is one connector with many unrelated operations.
+        # A Gmail-only delivery request should not invite the planner to read
+        # Drive or substitute account identity for mailbox and send actions.
+        inventory = [
+            {**item, "allowed_operations": [
+                operation for operation in item.get("allowed_operations", [])
+                if operation.startswith("gmail.")
+            ]} if item["slug"] == "google" else item
+            for item in inventory
+        ]
+
     def reject_excluded_steps(plan) -> None:
         if not excluded_tool_families:
             return
