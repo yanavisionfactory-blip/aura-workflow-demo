@@ -36,6 +36,7 @@ from app.reliability import (
     model_budget,
 )
 from app.request_contracts import (
+    draft_only_email_request,
     missing_requested_operations,
     requested_effects,
     requested_external_operations,
@@ -402,9 +403,47 @@ def test_unavailable_structural_guarantees_remain_rejected_or_require_readback()
     ("Find customers I have not followed up with this week and send personalized check-in emails via Gmail", {"gmail.send"}),
     ("Follow up with my customers via Gmail", {"gmail.send"}),
     ("Find customers I have not followed up with this week; draft emails but do not send them", set()),
+    ("Find customers I haven't followed up with this week and draft a personalized check-in email for each one", set()),
+    ("Draft a follow-up email to customers via Gmail", set()),
+    ("Draft a follow up with customers via Gmail", set()),
 ])
 def test_explicit_email_delivery_is_a_required_external_action(prompt_text, required):
     assert requested_external_operations(prompt_text) == required
+
+
+def test_draft_only_customer_request_cannot_send_even_when_old_plan_contains_send():
+    prompt = ("Find customers I haven't followed up with this week and draft a "
+              "personalized check-in email for each one")
+    revision = (prompt + "\n\nThe user reviewed the proposed workflow and requested this change: "
+                "For ‘Identify overdue follow-ups’: Use gmail instead of AURA Intelligence"
+                "\nCurrent reviewed steps (preserve unchanged steps and dependencies): "
+                '[{"operation":"gmail.send","reason":"Send follow-up"}]'
+                "\nReturn the complete revised executable plan.")
+    assert draft_only_email_request(revision)
+    assert requested_external_operations(revision) == set()
+    manifest = native_manifest("google")
+    inventory = [{"slug": "google", "name": "Google Workspace", "allowed_operations": [
+        module["name"] for module in manifest["capabilities"]]}]
+    read = PlanStep(key="search", agent="gmail", tool_slug="google", operation="gmail.list",
+                    arguments={"query": "in:sent"}, reason="Find messages", expected_output="IDs")
+    get = PlanStep(key="message", agent="gmail", tool_slug="google", operation="gmail.get",
+                   arguments={"message_id": "{{steps.search.messages.0.id}}"},
+                   depends_on=["search"], reason="Read conversation", expected_output="Context")
+    plan = WorkflowPlan(name="Follow-up drafts", interpretation=prompt, steps=[read, get])
+    validate_requested_operations(revision, plan, set(inventory[0]["allowed_operations"]),
+                                  inventory, {"google": manifest})
+    plan.steps.append(PlanStep(key="send", agent="gmail", tool_slug="google",
+                               operation="gmail.send", consequential=True,
+                               arguments={"to": "customer@example.test", "body": "Message"},
+                               reason="Send message", expected_output="Receipt"))
+    with pytest.raises(ValueError, match="drafts only"):
+        validate_requested_operations(revision, plan, set(inventory[0]["allowed_operations"]),
+                                      inventory, {"google": manifest})
+    plan.steps.pop()
+    plan.steps.pop()
+    with pytest.raises(ValueError, match="gmail.get"):
+        validate_requested_operations(revision, plan, set(inventory[0]["allowed_operations"]),
+                                      inventory, {"google": manifest})
 
 
 def test_read_only_calendar_plan_cannot_erase_requested_email_delivery():
@@ -511,6 +550,7 @@ def test_review_before_sending_requires_email_action_with_real_catalog():
     ("Create a report from Jira issues", None),
     ("Read Slack messages and summarize them", None),
     ("Draft an email but do not send it", None),
+    ("Draft a personalized email to each customer via Gmail", None),
 ])
 def test_explicit_provider_effects_survive_replanning_across_apps(prompt_text, effect):
     slugs = ("google", "slack", "jira")
