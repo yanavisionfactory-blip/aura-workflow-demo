@@ -38,10 +38,40 @@ _ALIASES = {
 }
 _NEGATION = re.compile(r"\b(?:do not|don't|never|without|no)\s+$", re.IGNORECASE)
 _SOURCE = re.compile(r"\b(?:from|using|about|regarding)\s+$", re.IGNORECASE)
+_REVIEW_MARKER = "\n\nThe user reviewed the proposed workflow and requested this change:"
+
+
+def user_request_text(prompt: str) -> str:
+    """Ignore serialized previous plans when deciding what the user authorized."""
+    original, marker, revision = prompt.partition(_REVIEW_MARKER)
+    if not marker:
+        return prompt
+    instruction = revision.split("\nCurrent reviewed steps (", 1)[0]
+    if instruction.lstrip().startswith("AURA backend authorization rejected the previous plan."):
+        # Recovery diagnostics quote rejected operations verbatim. They are
+        # internal repair hints, not a new user authorization to send.
+        return original
+    return original + "\n" + instruction
+
+
+def draft_only_email_request(prompt: str) -> bool:
+    """A request for email prose does not authorize transmitting an email."""
+    instruction = user_request_text(prompt)
+    if requested_external_operations(instruction):
+        return False
+    return bool(re.search(
+        r"\b(?:draft|compose|write|prepare)\b.{0,120}\b(?:emails?|e-mails?)\b",
+        instruction, re.IGNORECASE | re.DOTALL,
+    ) or (
+        re.search(r"\b(?:draft|compose|write|prepare)\b.{0,120}"
+                  r"\bfollow[\s-]?ups?\b", instruction, re.IGNORECASE | re.DOTALL)
+        and re.search(r"\b(?:gmail|email|e-mail)\b", instruction, re.IGNORECASE)
+    ))
 
 
 def requested_external_operations(prompt: str) -> set[str]:
     """Legacy fallback for Gmail requests without a catalog-bound effect contract."""
+    prompt = user_request_text(prompt)
     # A review checkpoint is a request to send *after* approval. The draft and
     # its delivery can be in different sentences, so inspect the full prompt.
     reviewed_delivery = (
@@ -53,6 +83,10 @@ def requested_external_operations(prompt: str) -> set[str]:
         return {"gmail.send"}
     for clause in re.split(r"[.!?;\n]+", prompt.casefold()):
         if re.search(r"\b(?:do not|don't|never|without)\s+(?:send|email|mail|deliver)\b", clause):
+            continue
+        if (re.search(r"\b(?:draft|compose|write|prepare)\b.{0,120}"
+                      r"\b(?:emails?|e-mails?|follow[\s-]?ups?)\b", clause)
+                and not re.search(r"\b(?:send|deliver|forward)\b", clause)):
             continue
         if (re.search(r"\b(?:send|deliver|forward)\b.{0,140}\b(?:emails?|e-mails?|gmail)\b", clause)
                 or re.search(
@@ -99,6 +133,29 @@ def _operation_matches(kind: str, module: dict) -> bool:
     return bool(set(words).intersection(_OPERATION_VERBS[kind]))
 
 
+def is_gmail_delivery_step(step, manifests: dict | None = None) -> bool:
+    field = step.get if isinstance(step, dict) else lambda key: getattr(step, key, None)
+    for slug, operation in (
+        (field("tool_slug"), field("operation")),
+        (field("fallback_tool_slug"), field("fallback_operation")),
+    ):
+        if not operation:
+            continue
+        if operation == "gmail.send":
+            return True
+        if _family(str(slug or ""), str(operation)) != "gmail":
+            continue
+        module = next((item for item in (manifests or {}).get(slug, {}).get("capabilities", [])
+                       if item.get("name") == operation), None)
+        if module and _operation_matches("send", module):
+            return True
+        if module is None and re.search(
+            r"(?:^|[._-])(?:send|deliver|forward)(?:$|[._-])", str(operation), re.IGNORECASE
+        ):
+            return True
+    return False
+
+
 def requested_effects(prompt: str, inventory: list[dict], manifests: dict) -> list[dict]:
     """Bind explicit provider actions to permitted writes in the real catalog.
 
@@ -106,6 +163,7 @@ def requested_effects(prompt: str, inventory: list[dict], manifests: dict) -> li
     named provider. Ambiguous phrases such as 'create a summary from Jira'
     remain for the model outcome reviewer to assess.
     """
+    prompt = user_request_text(prompt)
     catalog: dict[tuple[str, str], tuple[dict, dict]] = {}
     for item in inventory:
         slug = str(item.get("slug") or "")
@@ -118,6 +176,11 @@ def requested_effects(prompt: str, inventory: list[dict], manifests: dict) -> li
     effects: dict[tuple[str, str], set[tuple[str, str]]] = {}
     for clause in re.split(r"[.!?;\n]+", prompt.casefold()):
         actions = list(_ACTION.finditer(clause))
+        if (re.search(r"\b(?:draft|compose|write|prepare)\b.{0,120}\b(?:emails?|e-mails?)\b", clause)
+                and not re.search(r"\b(?:send|deliver|forward)\b", clause)):
+            # In "draft an email", email is an object, not a command to
+            # transmit it. An adjacent Gmail source does not change that.
+            actions = [action for action in actions if action.group() != "email"]
         for index, action in enumerate(actions):
             if _NEGATION.search(clause[max(0, action.start() - 20):action.start()]):
                 continue
@@ -187,6 +250,24 @@ def validate_requested_operations(
     prompt: str, plan, available: set[str],
     inventory: list[dict] | None = None, manifests: dict | None = None,
 ) -> list[dict]:
+    if draft_only_email_request(prompt) and any(
+        is_gmail_delivery_step(step, manifests) for step in plan.steps
+    ):
+        raise ValueError(
+            "The user requested email drafts only. Gmail send operations transmit emails; "
+            "remove every send step and synthesize the finished drafts from read evidence."
+        )
+    if (
+        draft_only_email_request(prompt)
+        and re.search(r"\b(?:gmail|inbox|mailbox)\b", user_request_text(prompt), re.IGNORECASE)
+        and re.search(r"\b(?:customers?|clients?|contacts?)\b", prompt, re.IGNORECASE)
+        and re.search(r"\bfollow[\s-]?up\b|\bfollowed\s+up\b", prompt, re.IGNORECASE)
+        and not {"gmail.list", "gmail.get"} <= {step.operation for step in plan.steps}
+    ):
+        raise ValueError(
+            "To find customer follow-ups in Gmail and draft personalized emails, "
+            "read the mailbox with gmail.list and the matching message content with gmail.get."
+        )
     effects = requested_effects(prompt, inventory, manifests) if inventory is not None and manifests is not None else []
     if not effects:
         missing = requested_external_operations(prompt) - {

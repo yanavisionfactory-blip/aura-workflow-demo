@@ -667,6 +667,9 @@ Write ONE clear, conversational sentence restating what they want — but offer 
         setPhase("plan");
 
         return (async () => {
+          // The first revision may arrive before the initial create-run call
+          // returns. Only the latest request may take ownership of the view.
+          const generation = ++pythonPollGenerationRef.current;
           try {
             const previousRunId = pythonRunIdRef.current;
             const startFresh = shouldStartFreshPlanningRun({
@@ -679,6 +682,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               if (previousRunId) {
                 try {
                   const stopped = await cancelPythonRun(previousRunId);
+                  if (generation !== pythonPollGenerationRef.current) return;
                   if (stopped.status !== "cancelled") {
                     throw new Error("The previous run is still stopping. Check its status before revising this plan.");
                   }
@@ -693,7 +697,6 @@ Write ONE clear, conversational sentence restating what they want — but offer 
                 }
                 forgetActivePythonRun(previousRunId);
               }
-              pythonPollGenerationRef.current += 1;
               runRequestKeyRef.current = null;
               pythonRunIdRef.current = null;
               pythonPlanRef.current = null;
@@ -702,8 +705,9 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             const planningPrompt = planningRequestPrompt(confirmedIntent, revisionInstruction, reviewedSteps);
             runRequestKeyRef.current ||= globalThis.crypto?.randomUUID?.()
               || `aura-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            const requestKey = runRequestKeyRef.current;
             const resources = attachedResourcesRef.current || {};
-            const created = await createPythonRunResilient(planningPrompt, null, runRequestKeyRef.current, {
+            const created = await createPythonRunResilient(planningPrompt, null, requestKey, {
               requested_tools: selectedTools,
               excluded_tool_families: [...omittedToolsRef.current],
               saved_workflow_id: currentWorkflowIdRef.current,
@@ -713,8 +717,15 @@ Write ONE clear, conversational sentence restating what they want — but offer 
                 size,
               })),
             });
+            if (generation !== pythonPollGenerationRef.current) {
+              // A newer edit owns the screen and its run. Retire the stale
+              // planning run without replacing the newer ID or visible plan.
+              if (requestKey !== runRequestKeyRef.current) {
+                await cancelPythonRun(created.id).catch(() => {});
+              }
+              return;
+            }
             pythonRunIdRef.current = created.id;
-            const generation = ++pythonPollGenerationRef.current;
             let run;
             for (;;) {
               run = await getPythonRunResilient(created.id, generation);
@@ -783,6 +794,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               startPythonExecutionRef.current?.();
             }
           } catch (error) {
+            if (generation !== pythonPollGenerationRef.current) return;
             console.warn("Executable planning unavailable; the language plan remains visible", error);
             const queuedStart = queuedPlanStartRef.current;
             queuedPlanStartRef.current = null;
@@ -800,7 +812,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             }));
             if (revisionInstruction) return { ok: false, error: error?.message || "AURA couldn't revise this plan." };
           } finally {
-            setPlanLoading(false);
+            if (generation === pythonPollGenerationRef.current) setPlanLoading(false);
           }
         })();
       }

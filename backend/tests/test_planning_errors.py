@@ -425,6 +425,40 @@ def test_followup_plan_never_degrades_to_an_identity_read(monkeypatch) -> None:
     )
 
 
+def test_draft_revision_only_offers_gmail_reads_and_repairs_an_old_send(monkeypatch) -> None:
+    prompt = ("Find customers I haven't followed up with this week and draft a "
+              "personalized check-in email for each one")
+    revision = (prompt + "\n\nThe user reviewed the proposed workflow and requested this change: "
+                "For ‘Identify overdue follow-ups’: Use gmail instead of AURA Intelligence"
+                "\nCurrent reviewed steps (preserve unchanged steps and dependencies): "
+                '[{"operation":"gmail.send","reason":"Old proposed send"}]'
+                "\nReturn the complete revised executable plan.")
+    inventories = []
+    requirements = []
+
+    async def fake_create_plan(_prompt, inventory, *_args, **kwargs):
+        inventories.append(inventory)
+        requirements.append(kwargs["planner_repair_requirements"])
+        return WorkflowPlan(name="Drafts", interpretation=prompt, steps=[
+            PlanStep(key="send", agent="gmail", tool_slug="google", operation="gmail.send",
+                     reason="Send an email", expected_output="Receipt", consequential=True),
+        ])
+
+    monkeypatch.setattr(orchestrator, "create_plan", fake_create_plan)
+    manifest = native_manifest("google")
+    with pytest.raises(ValueError, match="drafts only"):
+        asyncio.run(orchestrator._create_compiled_plan(
+            revision,
+            [{"slug": "google", "name": "Google Workspace", "allowed_operations": [
+                item["name"] for item in manifest["capabilities"]]}],
+            set(), {"google": manifest}, request_prompt=revision,
+        ))
+    assert len(inventories) == 2
+    assert all(set(items[0]["allowed_operations"]) == {"gmail.list", "gmail.get"}
+               for items in inventories)
+    assert "DRAFTS" in " ".join(requirements[0])
+
+
 def test_planner_prose_for_a_verified_write_does_not_cost_a_second_model_call(monkeypatch) -> None:
     calls = []
 

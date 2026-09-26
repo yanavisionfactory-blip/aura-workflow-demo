@@ -787,29 +787,45 @@ async def _create_compiled_plan(
             if slug in included_slugs
         }
 
-    from .request_contracts import requested_external_operations
+    from .request_contracts import (
+        draft_only_email_request,
+        requested_external_operations,
+        user_request_text,
+    )
 
     objective = request_prompt or prompt
+    requested_text = user_request_text(objective)
+    draft_only_email = draft_only_email_request(objective)
     selected_google_sources = " ".join(str(tool) for tool in requested_tool_names)
     if (
-        requested_external_operations(objective) == {"gmail.send"}
-        and re.search(r"\b(?:gmail|e-mails?|emails?|inbox|mailbox)\b", objective, re.IGNORECASE)
+        (requested_external_operations(objective) == {"gmail.send"} or draft_only_email)
+        and re.search(r"\b(?:gmail|e-mails?|emails?|inbox|mailbox)\b", requested_text, re.IGNORECASE)
         and not re.search(
             r"\b(?:drive|docs?|documents?|sheets?|spreadsheets?|calendar|meetings?)\b",
-            objective + " " + selected_google_sources,
+            requested_text + " " + selected_google_sources,
             re.IGNORECASE,
         )
     ):
         # Google Workspace is one connector with many unrelated operations.
-        # A Gmail-only delivery request should not invite the planner to read
-        # Drive or substitute account identity for mailbox and send actions.
+        # A Gmail-only request must not invite unrelated Drive or identity
+        # operations. Draft-only requests have no permission to send.
         inventory = [
             {**item, "allowed_operations": [
                 operation for operation in item.get("allowed_operations", [])
                 if operation.startswith("gmail.")
+                and (not draft_only_email or operation in {"gmail.list", "gmail.get"})
             ]} if item["slug"] == "google" else item
             for item in inventory
         ]
+        manifests_by_slug = {
+            slug: {**manifest, "capabilities": [
+                module for module in manifest.get("capabilities", [])
+                if module.get("name") in next(
+                    (item.get("allowed_operations", []) for item in inventory if item["slug"] == slug), []
+                )
+            ]} if slug == "google" else manifest
+            for slug, manifest in manifests_by_slug.items()
+        }
 
     def reject_excluded_steps(plan) -> None:
         if not excluded_tool_families:
@@ -908,6 +924,13 @@ async def _create_compiled_plan(
             request_prompt or prompt, catalog_inventory, manifests_by_slug,
         )
     ]
+    if draft_only_email:
+        repair_requirements.append(
+            "The user asked for finished email DRAFTS, not delivery. Read the needed "
+            "Gmail messages using gmail.list and gmail.get, then synthesize the "
+            "personalized recipients, subjects and full bodies in the final result. "
+            "Do not add gmail.send or any provider write to transmit an email."
+        )
     # Connector-contract validation receives one model repair. Safe generated
     # prose is normalized deterministically before this boundary, so repeating
     # the same repair cannot improve a persistent schema mismatch.
@@ -945,13 +968,20 @@ async def _create_compiled_plan(
                 raise NativeConnectorError(
                     "The requested file attachment must be present in gmail.send attachments, not substituted with a body link"
                 )
+            from .request_contracts import validate_requested_operations
+
+            if draft_only_email:
+                # An invented send is a scope error. Reject it before input
+                # normalization spends a repair pass on its missing fields.
+                validate_requested_operations(
+                    request_prompt or prompt, plan, available_operations,
+                    catalog_inventory, manifests_by_slug,
+                )
             _normalize_planned_steps(plan, manifests_by_slug)
             _ensure_document_body_readback(plan, manifests_by_slug)
             _include_requested_story_in_email(plan, prompt)
             _normalize_illustrated_canva_slides(plan, prompt)
             from .plan_preflight import preflight_plan
-            from .request_contracts import validate_requested_operations
-
             validate_requested_operations(
                 request_prompt or prompt, plan, available_operations,
                 catalog_inventory, manifests_by_slug,
@@ -2089,6 +2119,34 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     "kind": "human_action",
                     "code": "plan_approval_required",
                     "message": "Review and approve the workflow plan.",
+                    "action": "review_plan",
+                    "retryable": False,
+                },
+                dispatch=None,
+            )
+            await session.commit()
+            return
+        from .request_contracts import draft_only_email_request, is_gmail_delivery_step
+
+        if draft_only_email_request(run.prompt) and any(
+            is_gmail_delivery_step(step)
+            for step in (run.plan or {}).get("steps", [])
+        ):
+            # Older plans can already be approved or replayed by a schedule.
+            # Approval of a mistaken send is never authority to change a draft
+            # request into outbound delivery.
+            transition_run(
+                run,
+                RunStatus.waiting_for_action,
+                reason="draft_only_plan_requires_revision",
+                actor="policy-governor",
+                phase="approval",
+                supervisor_status="human_action_required",
+                error="This draft-only request has an unauthorized Gmail send step.",
+                blocker={
+                    "kind": "human_action",
+                    "code": "plan_revision_required",
+                    "message": "Rebuild this plan as Gmail reads and finished email drafts.",
                     "action": "review_plan",
                     "retryable": False,
                 },
