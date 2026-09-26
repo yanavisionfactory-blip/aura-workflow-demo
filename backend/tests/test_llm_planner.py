@@ -88,29 +88,23 @@ async def test_direct_candidate_passes_existing_compiler_and_approval_preflight(
 
 
 @pytest.mark.asyncio
-async def test_direct_planner_repairs_one_omitted_requested_action_without_agents(monkeypatch):
+async def test_direct_planner_rejects_omitted_requested_action_without_regenerating(monkeypatch):
     monkeypatch.setattr(get_settings(), "planner_mode", "llm")
     incomplete = WorkflowPlan(name="Notice", interpretation="Send a Slack message", steps=[
         PlanStep(key="channels", agent="slack", tool_slug="slack",
                  operation="slack.channels.list", arguments={}, reason="Find channel",
                  expected_output="Channels"),
     ])
-    complete = WorkflowPlan(name="Notice", interpretation="Send a Slack message", steps=[
-        PlanStep(key="post", agent="slack", tool_slug="slack", operation="slack.post",
-                 arguments={"channel": "C123", "text": "Finished update"},
-                 reason="Send the requested message", expected_output="Delivery receipt",
-                 consequential=True),
-    ])
-    calls = AsyncMock(side_effect=[incomplete, complete])
+    calls = AsyncMock(return_value=incomplete)
     monkeypatch.setattr(llm_planner, "create_llm_plan", calls)
     inventory = [{"slug": "slack", "name": "Slack", "connected": True,
                   "allowed_operations": ["slack.channels.list", "slack.post"]}]
-    result = await orchestrator._create_compiled_plan(
-        "Send a Slack message", inventory, set(), {"slack": native_manifest("slack")},
-    )
-    assert result.steps[0].operation == "slack.post"
-    assert calls.await_count == 2
-    assert any("slack.post" in requirement for requirement in calls.await_args_list[1].args[4])
+    with pytest.raises(ValueError, match="slack.post"):
+        await orchestrator._create_compiled_plan(
+            "Send a Slack message", inventory, set(), {"slack": native_manifest("slack")},
+        )
+    assert calls.await_count == 1
+    assert any("slack.post" in requirement for requirement in calls.await_args.args[4])
 
 
 @pytest.mark.asyncio
@@ -121,29 +115,21 @@ async def test_canva_slide_creation_is_required_before_a_plan_can_start(monkeypa
                  operation="canva.import.get", arguments={"import_id": "unknown"},
                  reason="Read Canva", expected_output="Read"),
     ])
-    complete = WorkflowPlan(name="Sukkot slide", interpretation="Create a Sukkot slide", steps=[
-        PlanStep(key="slide", agent="canva", tool_slug="canva",
-                 operation="canva.presentation.create", consequential=True,
-                 arguments={"title": "Sukkot", "layout": "slides",
-                            "phases": [{"period": "Holiday", "title": "Sukkot",
-                                        "items": ["Harvest festival", "Sukkah and four species"]}]},
-                 reason="Create the Sukkot slide", expected_output="Created slide"),
-    ])
-    calls = AsyncMock(side_effect=[incomplete, complete])
+    calls = AsyncMock(return_value=incomplete)
     monkeypatch.setattr(llm_planner, "create_llm_plan", calls)
     manifest = native_manifest("canva")
-    plan = await orchestrator._create_compiled_plan(
-        "Create a Sukkot slide in Canva",
-        [{"slug": "canva", "name": "Canva", "connected": True,
-          "allowed_operations": [item["name"] for item in manifest["capabilities"]]}],
-        set(), {"canva": manifest},
-    )
-    assert calls.await_count == 2
-    assert plan.steps[0].operation == "canva.presentation.create"
+    with pytest.raises(ValueError, match="canva.presentation.create"):
+        await orchestrator._create_compiled_plan(
+            "Create a Sukkot slide in Canva",
+            [{"slug": "canva", "name": "Canva", "connected": True,
+              "allowed_operations": [item["name"] for item in manifest["capabilities"]]}],
+            set(), {"canva": manifest},
+        )
+    assert calls.await_count == 1
 
 
 @pytest.mark.asyncio
-async def test_direct_planner_stops_after_one_failed_correction(monkeypatch):
+async def test_direct_planner_does_not_correct_failed_plan(monkeypatch):
     monkeypatch.setattr(get_settings(), "planner_mode", "llm")
     incomplete = WorkflowPlan(name="Notice", interpretation="Send a Slack message", steps=[
         PlanStep(key="channels", agent="slack", tool_slug="slack",
@@ -159,4 +145,4 @@ async def test_direct_planner_stops_after_one_failed_correction(monkeypatch):
               "allowed_operations": ["slack.channels.list", "slack.post"]}],
             set(), {"slack": native_manifest("slack")},
         )
-    assert calls.await_count == 2
+    assert calls.await_count == 1

@@ -883,7 +883,7 @@ async def _create_compiled_plan(
     # first-draft templates match the original request and would silently
     # discard a later instruction (for example, changing one to two slides).
     reviewed_revision = "The user reviewed the proposed workflow and requested this change:" in prompt
-    audited_plan = None if reviewed_revision else (
+    audited_plan = None if reviewed_revision or get_settings().planner_mode == "llm" else (
         pilot_template(prompt, inventory)
         or mailchimp_canva_pilot_template(prompt, inventory)
         or creator_outreach_template(prompt, inventory)
@@ -933,11 +933,10 @@ async def _create_compiled_plan(
             "personalized recipients, subjects and full bodies in the final result. "
             "Do not add gmail.send or any provider write to transmit an email."
         )
-    # Direct mode makes one structured call when it is valid. An omitted
-    # explicitly requested action gets one corrected call, without an agent.
-    # Both routes go through the same deterministic contract checks below.
+    # In direct mode the LLM response is the only plan. A validation failure
+    # must be surfaced for an explicit retry, never silently replace the plan.
     direct_planning = get_settings().planner_mode == "llm"
-    for attempt in range(2):
+    for attempt in range(1 if direct_planning else 2):
         if direct_planning:
             from .llm_planner import create_llm_plan
 
@@ -1007,10 +1006,7 @@ async def _create_compiled_plan(
                 plan.planning_artifacts["supervisor_recovery_strategy"] = supervisor_strategy
             return plan
         except (NativeConnectorError, ValueError) as exc:
-            missing_action = isinstance(exc, ValueError) and str(exc).startswith(
-                "Requested external action is absent from the executable plan:"
-            )
-            if attempt == 1 or (direct_planning and not missing_action):
+            if direct_planning or attempt == 1:
                 raise
             repair_requirements.append(str(exc))
             reason = str(exc)
@@ -1437,14 +1433,18 @@ async def plan_run(run_id: str, workspace_id: str) -> None:
                         and run.workspace_id == workspace_id
                         and run.status in {RunStatus.queued, RunStatus.planning}
                     ):
-                        await recover_planning_failure(
-                            session,
-                            run,
-                            exc,
-                            max_attempts=get_settings().max_planning_recovery_rounds,
-                            base_delay_seconds=get_settings().autonomous_recovery_base_delay_seconds,
-                            max_delay_seconds=get_settings().autonomous_recovery_max_delay_seconds,
-                        )
+                        if (get_settings().planner_mode == "llm"
+                                and planning_failure_category(exc) != "operator_quota"):
+                            pause_direct_planning_failure(run)
+                        else:
+                            await recover_planning_failure(
+                                session,
+                                run,
+                                exc,
+                                max_attempts=get_settings().max_planning_recovery_rounds,
+                                base_delay_seconds=get_settings().autonomous_recovery_base_delay_seconds,
+                                max_delay_seconds=get_settings().autonomous_recovery_max_delay_seconds,
+                            )
                         await session.commit()
 
 
@@ -1562,7 +1562,9 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             from .plan_reuse import reuse_saved_plan
             from .request_contracts import validate_requested_operations
 
-            plan = await reuse_saved_plan(session, run, connected_inventory, manifests_by_slug)
+            plan = (None if get_settings().planner_mode == "llm" else await reuse_saved_plan(
+                session, run, connected_inventory, manifests_by_slug,
+            ))
             if plan is not None:
                 try:
                     validate_requested_operations(

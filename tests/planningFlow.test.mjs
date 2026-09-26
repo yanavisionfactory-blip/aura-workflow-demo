@@ -102,7 +102,7 @@ test("a direct LLM planning failure returns a retryable state", () => {
   }), "unavailable");
 });
 
-test("the UI shows one LLM plan and keeps its content during backend validation", () => {
+test("the UI displays the validated backend LLM plan without a second browser planner", () => {
   const source = readFileSync(
     new URL("../src/pages/Demo.jsx", import.meta.url),
     "utf8",
@@ -113,19 +113,18 @@ test("the UI shows one LLM plan and keeps its content during backend validation"
   );
 
   assert.equal(source.includes("instantLanguagePlan(draftIntent"), false);
-  assert.equal(source.includes("const draft = await aura.integrations.Core.InvokeLLM({"), true);
-  assert.equal(source.includes("prompt: languageDraftPrompt("), true);
-  assert.equal(source.includes("setPlan(languagePlan)"), true);
-  assert.equal(source.includes("setPlan(compiledPlan)"), false);
-  assert.equal(source.includes("aura_visible_plan: languagePlan"), true);
-  assert.equal(source.includes("run.inputs?.aura_visible_plan"), true);
-  assert.equal(source.includes("handleConfirm(interpretation, \"\", false, visiblePlanRef.current)"), true);
-  assert.equal(source.includes("unmatchedWriteTools(languagePlan.steps, run.plan.steps, planToolName)"), true);
+  assert.equal(source.includes("const draft = await aura.integrations.Core.InvokeLLM({"), false);
+  assert.equal(source.includes("prompt: languageDraftPrompt("), false);
+  assert.equal(source.includes("aura_visible_plan:"), false);
+  assert.equal(source.includes("run.inputs?.aura_visible_plan"), false);
+  assert.equal(source.includes("const completedPlan = { ...uiPlanFromRun(run)"), true);
+  assert.equal(source.includes("setPlan(completedPlan)"), true);
+  assert.equal(source.includes("unmatchedWriteTools("), false);
   assert.equal(source.includes("AURA is repairing an invalid plan before execution."), false);
-  assert.equal(source.includes("Executable planning unavailable"), true);
+  assert.equal(source.includes("LLM planning unavailable"), true);
   assert.equal(planViewSource.includes("validating exact actions backstage"), false);
   assert.equal(planViewSource.includes("validatingExecution || missingTools.length"), false);
-  assert.equal(source.includes("queuedPlanStartRef.current = { name }"), true);
+  assert.equal(source.includes("queuedPlanStartRef.current"), false);
   assert.equal(source.includes("hasImmediateActionPreview(compiledPlan.steps, queuedStart.autoApprove)"), false);
   assert.equal(source.includes("PLANNING_WAIT_TIMEOUT_MS"), false);
   assert.equal(source.includes('.replace(/^i\\s+will\\s+/i, "")'), true);
@@ -142,7 +141,7 @@ test("the UI shows one LLM plan and keeps its content during backend validation"
     source.indexOf("const handlePreviewApprove = useCallback"),
   );
   assert.equal(approveSource.includes('setPhase("executing")'), false);
-  assert.equal(approveSource.includes('setPhase("preparing")'), true);
+  assert.equal(approveSource.includes('startPythonExecution()'), true);
   assert.equal(planViewSource.includes("AURA is checking the exact steps"), false);
   assert.equal(planViewSource.includes('disabled={steps.length === 0 && plan.compileState !== "blocked"}'), true);
 });
