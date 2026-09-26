@@ -168,6 +168,76 @@ async def test_gmail_pack_stays_available_without_native_send_and_read_grants(mo
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("ready_slug,expected_operation", [
+    ("google", "docs.create"),
+    ("google-docs", "google-docs.create-document"),
+])
+async def test_doc_writer_required_action_uses_granted_route(
+    monkeypatch, ready_slug, expected_operation,
+):
+    monkeypatch.setattr(get_settings(), "planner_mode", "llm")
+    broker = {"capabilities": [{
+        "name": operation, "description": "Create or get a Google Doc",
+        "permission_scope": "write" if "create" in operation else "read",
+        "input_schema": {"type": "object"},
+    } for operation in ("google-docs.create-document", "google-docs.get-document")]}
+    inventory = [
+        {"slug": "google", "name": "Google Workspace", "connected": True,
+         "allowed_operations": ["docs.create", "docs.get", "gmail.send", "gmail.get"]},
+        {"slug": "google-docs", "name": "Google Docs", "connected": ready_slug == "google-docs",
+         "allowed_operations": ["google-docs.create-document", "google-docs.get-document"]},
+    ]
+    grants = [
+        {"slug": "google", "allowed_operations": [
+            "docs.create", "docs.get", "gmail.send", "gmail.get",
+        ] if ready_slug == "google" else ["docs.get", "gmail.send", "gmail.get"]},
+    ]
+    if ready_slug == "google-docs":
+        grants.append({"slug": "google-docs", "allowed_operations": [
+            "google-docs.create-document", "google-docs.get-document",
+        ]})
+    create = AsyncMock(side_effect=ValueError("Catalog captured"))
+    monkeypatch.setattr(llm_planner, "create_llm_plan", create)
+    with pytest.raises(ValueError, match="Catalog captured"):
+        await orchestrator._create_compiled_plan(
+            "Create a Google Doc about shorter meetings and email the link to me through Gmail",
+            inventory, set(), {"google": native_manifest("google"), "google-docs": broker},
+            connected_inventory=grants,
+        )
+    offered = {operation for item in create.await_args.args[1]
+               for operation in item["allowed_operations"]}
+    assert expected_operation in offered
+    assert {target["operation"] for effect in create.await_args.args[5]
+            if effect["effect"] == "docs create" for target in effect["targets"]} == {
+        expected_operation,
+    }
+
+
+@pytest.mark.asyncio
+async def test_broker_gmail_read_catalog_is_not_hidden_by_native_send_grants(monkeypatch):
+    monkeypatch.setattr(get_settings(), "planner_mode", "llm")
+    inventory = [
+        {"slug": "google", "name": "Google Workspace", "connected": True,
+         "allowed_operations": ["gmail.send", "gmail.get"]},
+        {"slug": "gmail", "name": "Gmail", "connected": False,
+         "allowed_operations": ["gmail.list-labels"]},
+    ]
+    create = AsyncMock(side_effect=ValueError("Catalog captured"))
+    monkeypatch.setattr(llm_planner, "create_llm_plan", create)
+    with pytest.raises(ValueError, match="Catalog captured"):
+        await orchestrator._create_compiled_plan(
+            "Read my Gmail labels", inventory, set(),
+            {"google": native_manifest("google"), "gmail": {"capabilities": [{
+                "name": "gmail.list-labels", "description": "List labels",
+                "permission_scope": "read", "input_schema": {"type": "object"},
+            }]}}, connected_inventory=[
+                {"slug": "google", "allowed_operations": ["gmail.send", "gmail.get"]},
+            ],
+        )
+    assert "gmail" in {item["slug"] for item in create.await_args.args[1]}
+
+
+@pytest.mark.asyncio
 async def test_single_llm_response_includes_required_canva_creation(monkeypatch):
     monkeypatch.setattr(get_settings(), "planner_mode", "llm")
     monkeypatch.setattr(get_settings(), "openai_api_key", "test")
