@@ -48,6 +48,7 @@ export function recoveryForRun(run = {}) {
       no_safe_recovery: "AURA couldn't complete the remaining step automatically.",
       governed_derivative_retry_required: "Canva is taking longer than expected to prepare the finished presentation.",
       automatic_repair_stopped: "AURA stopped automatic repair for this run.",
+      final_result_unverified: "The planned steps finished, but the requested result could not be verified.",
     };
     const fixes = {
       connect_account: "Connect the requested account once; AURA will preserve this run and continue from the same point.",
@@ -72,7 +73,9 @@ export function recoveryForRun(run = {}) {
       connectedAccount: blocker.connected_account || null,
       what: labels[blocker.code] || "AURA stopped at a required human decision.",
       why: blocker.message || "AURA cannot safely continue this run without this decision.",
-      fix: fixes[blocker.action] || "Resolve the exact blocker shown above, then return to this saved run.",
+      fix: blocker.code === "final_result_unverified"
+        ? "Review the saved results, then provide the missing source details in a revised request. The completed steps will not run again automatically."
+        : fixes[blocker.action] || "Resolve the exact blocker shown above, then return to this saved run.",
       canRetry: connectionAction || retryAction,
       canSkip: false,
       buttonLabel: retryAction

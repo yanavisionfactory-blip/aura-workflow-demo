@@ -150,6 +150,28 @@ async def test_direct_llm_failure_stops_without_scheduling_an_agent_repair(datab
         assert await session.scalar(select(DispatchIntent).where(DispatchIntent.run_id == run.id)) is None
 
 
+def test_completed_steps_with_unverified_result_show_a_human_handoff():
+    from app.main import _run_blocker
+    from app.models import RunStep, StepStatus
+
+    run = WorkflowRun(
+        status=RunStatus.waiting_for_action, prompt="Draft grounded check-ins",
+        plan_approved=True,
+        result={"verification": {"status": "unverified"}},
+        execution_context={
+            "__aura_autonomy__": {"handoff_reason_code": "no_safe_recovery"},
+            "__aura_supervisor__": {"status": "operator_attention"},
+        },
+    )
+    steps = [RunStep(step_key="read", status=StepStatus.completed)]
+    blocker = _run_blocker(run, steps, {}, [])
+    public = public_run_projection(run, blocker)
+
+    assert blocker["code"] == "final_result_unverified"
+    assert public["public_status"] == "waiting_for_action"
+    assert public["public_blocker"] == blocker
+
+
 async def test_repeated_malformed_plans_stop_before_eight_expensive_rounds(database):
     async with database() as session:
         run = WorkflowRun(

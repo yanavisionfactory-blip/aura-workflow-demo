@@ -275,6 +275,25 @@ async def test_completed_provider_work_retries_only_final_review(runtime, monkey
         assert state["review_recoveries"] == 1
 
 
+async def test_completed_steps_stop_after_final_review_budget(runtime, monkeypatch):
+    monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
+    monkeypatch.setattr(autonomous_delivery.get_settings(), "max_autonomous_review_recoveries", 0)
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        transition_run(run, RunStatus.waiting_for_action, reason="unverified", actor="test", dispatch=None)
+        run.result = {"verification": {"status": "unverified"}}
+        step = await session.get(RunStep, "step")
+        step.status = StepStatus.completed
+        await session.commit()
+
+    assert await autonomously_recover_run("run", "w") == "handoff"
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        assert run.execution_context["__aura_autonomy__"]["handoff_reason_code"] == "final_result_unverified"
+        assert run.status == RunStatus.waiting_for_action
+        assert await session.scalar(select(DispatchIntent).where(DispatchIntent.run_id == "run")) is None
+
+
 async def test_repaired_platform_schema_retries_before_any_write(runtime, monkeypatch):
     monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
     async with runtime() as session:
