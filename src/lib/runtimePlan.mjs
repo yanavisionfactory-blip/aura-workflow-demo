@@ -15,10 +15,9 @@ export function savedRunResumeView(run = {}) {
   if (!run?.id) return null;
   if (!run.plan_approved) {
     if (restorablePlanningRun(run)) return "plan";
-    if (run.inputs?.aura_visible_plan?.steps?.length
-      && (["queued", "planning", "recovering"].includes(run.status)
-        || run.blocker?.code === "planning_retry_required"
-        || run.public_status === "recovering")) return "plan";
+    if (["queued", "planning", "recovering"].includes(run.status)
+      || run.blocker?.code === "planning_retry_required"
+      || run.public_status === "recovering") return "plan";
     return null;
   }
   if (!run.plan?.steps?.length) return null;
