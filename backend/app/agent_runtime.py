@@ -207,10 +207,17 @@ def intent_bounded_tool_inventory(
         and {"docs.create", "docs.get"} <= set(item.get("allowed_operations") or [])
         for item in inventory
     )
-    writing_doc = " google docs " in text and bool(
-        set(text.split()).intersection({"create", "write", "draft"})
+    writing_doc = bool(re.search(r"\bgoogle docs?\b", original)) and bool(
+        set(text.split()).intersection({"create", "make", "write", "draft"})
         or re.search(r"\b(?:созда\w*|напиши\w*|состав\w*)\b", original)
     )
+    if writing_doc:
+        selected.update(
+            index for index, item in enumerate(inventory)
+            if item.get("slug") == "google-docs"
+            or (item.get("slug") == "google"
+                and {"docs.create", "docs.get"} <= set(item.get("allowed_operations") or []))
+        )
     if native_docs and not separate_docs_writer and writing_doc:
         selected = {
             index for index in selected
