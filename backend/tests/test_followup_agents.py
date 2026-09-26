@@ -5,6 +5,7 @@ import pytest
 from sqlalchemy import select
 
 from app import replanning, semantic_memory
+from app.config import get_settings
 from app.models import (
     AuditEvent,
     CapabilityManifest,
@@ -94,6 +95,7 @@ def test_repair_rejects_scope_expansion_and_missing_inputs(operation, arguments)
 
 @pytest.mark.parametrize("preapproved", [False, True])
 async def test_automatic_replanning_stages_a_reviewable_version(runtime, monkeypatch, preapproved):
+    monkeypatch.setattr(get_settings(), "planner_mode", "agent")
     monkeypatch.setattr(replanning, "SessionLocal", runtime)
     original = notion_plan()
     if preapproved:
@@ -190,7 +192,36 @@ async def test_automatic_replanning_stages_a_reviewable_version(runtime, monkeyp
     assert await maybe_replan_run("run", "w") is False  # Must wait for approval.
 
 
+async def test_direct_llm_run_keeps_approved_plan_after_failed_step(runtime, monkeypatch):
+    monkeypatch.setattr(get_settings(), "planner_mode", "llm")
+    monkeypatch.setattr(replanning, "SessionLocal", runtime)
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        original = run.plan
+        transition_run(
+            run, RunStatus.waiting_for_action,
+            reason="test_failed_step", actor="test", dispatch=None,
+        )
+        step = await session.get(RunStep, "step")
+        step.status = StepStatus.failed
+        await session.commit()
+
+    async def forbidden(*_args):
+        pytest.fail("A direct LLM run called the repair planner")
+
+    monkeypatch.setattr(replanning, "_run", forbidden)
+    assert await maybe_replan_run("run", "w") is False
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        versions = (await session.scalars(select(PlanVersion))).all()
+        assert run.plan == original
+        assert run.plan_approved
+        assert run.status == RunStatus.waiting_for_action
+        assert len(versions) == 1
+
+
 async def test_delegated_read_repair_auto_applies_inside_permission_envelope(runtime, monkeypatch):
+    monkeypatch.setattr(get_settings(), "planner_mode", "agent")
     monkeypatch.setattr(replanning, "SessionLocal", runtime)
     original = notion_plan()
     digest = canonical_plan_hash(original)
@@ -313,6 +344,7 @@ def test_delegated_read_repair_cannot_change_literal_resource_target(monkeypatch
 
 
 async def test_automatic_replanning_never_rewrites_an_attempted_write(runtime, monkeypatch):
+    monkeypatch.setattr(get_settings(), "planner_mode", "agent")
     monkeypatch.setattr(replanning, "SessionLocal", runtime)
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
@@ -337,6 +369,7 @@ async def test_automatic_replanning_never_rewrites_an_attempted_write(runtime, m
 async def test_definitively_rejected_write_becomes_grounded_reviewable_plan(
     runtime, monkeypatch
 ):
+    monkeypatch.setattr(get_settings(), "planner_mode", "agent")
     monkeypatch.setattr(replanning, "SessionLocal", runtime)
     completed_one = PlanStep(
         key="completed_one",
