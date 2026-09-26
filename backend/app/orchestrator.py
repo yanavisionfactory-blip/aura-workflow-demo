@@ -917,14 +917,15 @@ async def _create_compiled_plan(
     # Give the planner the independently checked delivery requirements on its
     # first call; discovering a missing action only after generation costs an
     # entire second model pass and can produce an apparently complete read plan.
+    required_effects = requested_effects(
+        request_prompt or prompt, catalog_inventory, manifests_by_slug,
+    )
     repair_requirements = [
         "The user requires a nonoptional " + effect["effect"]
         + " step before completion. Choose a permitted operation from: "
         + ", ".join(sorted({target["operation"] for target in effect["targets"]}))
         + ". Show its resolved arguments for approval before dispatch."
-        for effect in requested_effects(
-            request_prompt or prompt, catalog_inventory, manifests_by_slug,
-        )
+        for effect in required_effects
     ]
     if draft_only_email:
         repair_requirements.append(
@@ -944,7 +945,7 @@ async def _create_compiled_plan(
 
             plan = await create_llm_plan(
                 prompt, inventory, available_input_names, requested_tool_names,
-                repair_requirements,
+                repair_requirements, required_effects,
             )
         else:
             plan = await create_plan(

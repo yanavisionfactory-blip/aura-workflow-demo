@@ -191,6 +191,19 @@ def requested_effects(prompt: str, inventory: list[dict], manifests: dict) -> li
                 if not _operation_matches(kind, module):
                     continue
                 family = _family(slug, operation)
+                if family == "canva" and kind == "create":
+                    # Creating a populated slide is a presentation action.
+                    # An export job or a blank design cannot satisfy it.
+                    wants_slide = re.search(
+                        r"\b(?:slides?|presentations?|decks?|roadmaps?|timelines?)\b",
+                        clause,
+                    )
+                    if wants_slide and operation != "canva.presentation.create":
+                        continue
+                    if operation == "canva.export.create" and not re.search(
+                        r"\bexport\b", clause,
+                    ):
+                        continue
                 for alias in _aliases(family, item):
                     match = re.search(r"\b" + re.escape(alias) + r"\b", tail)
                     direct_target = bool(match) and not _SOURCE.search(

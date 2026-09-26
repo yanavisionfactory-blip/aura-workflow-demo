@@ -9,6 +9,7 @@ from app import llm_planner, orchestrator
 from app.agent_runtime import CompactWorkflowPlan
 from app.config import get_settings
 from app.native_connectors import NativeConnectorError, native_manifest
+from app.request_contracts import requested_effects
 from app.schemas import PlanStep, WorkflowPlan
 
 
@@ -48,6 +49,60 @@ async def test_direct_planner_uses_one_structured_call(monkeypatch):
     assert plan.steps[0].arguments == {"location": "Berlin"}
     assert plan.planning_artifacts["planner_recovery_mode"] == "direct_llm"
     assert plan.planning_artifacts["preflight_evaluation"]["permission_scope"] == "read"
+
+
+@pytest.mark.asyncio
+async def test_single_llm_response_includes_required_canva_creation(monkeypatch):
+    monkeypatch.setattr(get_settings(), "planner_mode", "llm")
+    monkeypatch.setattr(get_settings(), "openai_api_key", "test")
+    calls = []
+
+    async def parse(**kwargs):
+        calls.append(kwargs)
+        schema = kwargs["text_format"]
+        assert "required_action_0" in schema.model_json_schema()["required"]
+        return SimpleNamespace(output_parsed=schema.model_validate({
+            "name": "One Canva slide",
+            "interpretation": "Create one slide in Canva",
+            "steps": [],
+            "required_action_0": {
+                "key": "slide", "agent": "Canva", "tool_slug": "canva",
+                "operation": "canva.presentation.create",
+                "arguments_json": '{"title":"A slide","phases":[{"period":"Now","title":"Main point","items":["One idea"]}]}',
+                "reason": "Create the requested slide", "expected_output": "Populated slide",
+                "consequential": True, "depends_on": [], "required_evidence": [],
+            },
+        }))
+
+    class Client:
+        def __init__(self, **_kwargs):
+            self.responses = SimpleNamespace(parse=parse)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(llm_planner, "AsyncOpenAI", Client)
+    manifest = native_manifest("canva")
+    inventory = [{"slug": "canva", "name": "Canva", "connected": True,
+                  "allowed_operations": [item["name"] for item in manifest["capabilities"]]}]
+    assert requested_effects("Create one populated slide in Canva", inventory, {
+        "canva": manifest,
+    }) == [{"effect": "canva create", "targets": [
+        {"tool_slug": "canva", "operation": "canva.presentation.create"},
+    ]}]
+    plan = await orchestrator._create_compiled_plan(
+        "Create one populated slide in Canva",
+        inventory,
+        set(), {"canva": manifest},
+    )
+    assert len(calls) == 1
+    assert [(step.key, step.operation) for step in plan.steps] == [
+        ("slide", "canva.presentation.create")
+    ]
+    assert plan.planning_artifacts["compiled_contracts"]
 
 
 @pytest.mark.asyncio
