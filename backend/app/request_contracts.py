@@ -133,6 +133,29 @@ def _operation_matches(kind: str, module: dict) -> bool:
     return bool(set(words).intersection(_OPERATION_VERBS[kind]))
 
 
+def is_gmail_delivery_step(step, manifests: dict | None = None) -> bool:
+    field = step.get if isinstance(step, dict) else lambda key: getattr(step, key, None)
+    for slug, operation in (
+        (field("tool_slug"), field("operation")),
+        (field("fallback_tool_slug"), field("fallback_operation")),
+    ):
+        if not operation:
+            continue
+        if operation == "gmail.send":
+            return True
+        if _family(str(slug or ""), str(operation)) != "gmail":
+            continue
+        module = next((item for item in (manifests or {}).get(slug, {}).get("capabilities", [])
+                       if item.get("name") == operation), None)
+        if module and _operation_matches("send", module):
+            return True
+        if module is None and re.search(
+            r"(?:^|[._-])(?:send|deliver|forward)(?:$|[._-])", str(operation), re.IGNORECASE
+        ):
+            return True
+    return False
+
+
 def requested_effects(prompt: str, inventory: list[dict], manifests: dict) -> list[dict]:
     """Bind explicit provider actions to permitted writes in the real catalog.
 
@@ -228,11 +251,10 @@ def validate_requested_operations(
     inventory: list[dict] | None = None, manifests: dict | None = None,
 ) -> list[dict]:
     if draft_only_email_request(prompt) and any(
-        step.operation == "gmail.send" or step.fallback_operation == "gmail.send"
-        for step in plan.steps
+        is_gmail_delivery_step(step, manifests) for step in plan.steps
     ):
         raise ValueError(
-            "The user requested email drafts only. gmail.send transmits emails; "
+            "The user requested email drafts only. Gmail send operations transmit emails; "
             "remove every send step and synthesize the finished drafts from read evidence."
         )
     if (

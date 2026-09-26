@@ -37,6 +37,7 @@ from app.reliability import (
 )
 from app.request_contracts import (
     draft_only_email_request,
+    is_gmail_delivery_step,
     missing_requested_operations,
     requested_effects,
     requested_external_operations,
@@ -626,6 +627,22 @@ def test_dynamic_sender_can_fulfill_a_provider_effect_without_native_route():
     assert {target["operation"] for target in effects[0]["targets"]} == {
         "gmail.send", "send-email",
     }
+
+
+def test_draft_only_request_rejects_dynamic_gmail_sender_too():
+    prompt = "Draft a personalized follow-up email to each customer via Gmail"
+    inventory = [{"slug": "pipedream-gmail", "name": "Gmail",
+                  "allowed_operations": ["send-email"]}]
+    manifests = {"pipedream-gmail": {"capabilities": [{
+        "name": "send-email", "permission_scope": "write", "description": "Send an email",
+    }]}}
+    plan = WorkflowPlan(name="Drafts", interpretation=prompt, steps=[
+        PlanStep(key="delivery", agent="email", tool_slug="pipedream-gmail",
+                 operation="send-email", reason="Send email", expected_output="Receipt"),
+    ])
+    with pytest.raises(ValueError, match="drafts only"):
+        validate_requested_operations(prompt, plan, {"send-email"}, inventory, manifests)
+    assert is_gmail_delivery_step(plan.model_dump()["steps"][0])
 
 
 def test_invalid_output_reference_rejected_but_metadata_alias_compiles():

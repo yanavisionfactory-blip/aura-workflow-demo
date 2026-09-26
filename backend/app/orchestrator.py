@@ -968,13 +968,20 @@ async def _create_compiled_plan(
                 raise NativeConnectorError(
                     "The requested file attachment must be present in gmail.send attachments, not substituted with a body link"
                 )
+            from .request_contracts import validate_requested_operations
+
+            if draft_only_email:
+                # An invented send is a scope error. Reject it before input
+                # normalization spends a repair pass on its missing fields.
+                validate_requested_operations(
+                    request_prompt or prompt, plan, available_operations,
+                    catalog_inventory, manifests_by_slug,
+                )
             _normalize_planned_steps(plan, manifests_by_slug)
             _ensure_document_body_readback(plan, manifests_by_slug)
             _include_requested_story_in_email(plan, prompt)
             _normalize_illustrated_canva_slides(plan, prompt)
             from .plan_preflight import preflight_plan
-            from .request_contracts import validate_requested_operations
-
             validate_requested_operations(
                 request_prompt or prompt, plan, available_operations,
                 catalog_inventory, manifests_by_slug,
@@ -2119,11 +2126,10 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             )
             await session.commit()
             return
-        from .request_contracts import draft_only_email_request
+        from .request_contracts import draft_only_email_request, is_gmail_delivery_step
 
         if draft_only_email_request(run.prompt) and any(
-            step.get("operation") == "gmail.send"
-            or step.get("fallback_operation") == "gmail.send"
+            is_gmail_delivery_step(step)
             for step in (run.plan or {}).get("steps", [])
         ):
             # Older plans can already be approved or replayed by a schedule.
