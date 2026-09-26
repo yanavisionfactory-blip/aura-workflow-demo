@@ -788,7 +788,9 @@ async def _create_compiled_plan(
         }
 
     from .request_contracts import (
-        draft_only_email_request, requested_external_operations, user_request_text,
+        draft_only_email_request,
+        requested_external_operations,
+        user_request_text,
     )
 
     objective = request_prompt or prompt
