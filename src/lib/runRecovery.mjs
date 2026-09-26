@@ -62,6 +62,11 @@ export function recoveryForRun(run = {}) {
       contact_support: "Contact AURA support with the run ID. Your completed work is saved; avoid starting a duplicate workflow.",
     };
     const retryAction = blocker.action === "retry_step" && blocker.retryable === true;
+    const incompleteCustomerRead = blocker.code === "final_result_unverified"
+      && steps.length > 0
+      && steps.every((step) => !step.consequential)
+      && steps.some((step) => step.operation === "gmail.list")
+      && steps.some((step) => step.operation === "gmail.get");
     return {
       index: blockerIndex >= 0 ? blockerIndex : null,
       stepId: blocker.step_id || null,
@@ -73,9 +78,12 @@ export function recoveryForRun(run = {}) {
       connectedAccount: blocker.connected_account || null,
       what: labels[blocker.code] || "AURA stopped at a required human decision.",
       why: blocker.message || "AURA cannot safely continue this run without this decision.",
-      fix: blocker.code === "final_result_unverified"
+      fix: incompleteCustomerRead
+        ? "Build a new plan that reads customer conversations and sent history, then review it before starting. This run only read messages; it sent nothing."
+        : blocker.code === "final_result_unverified"
         ? "Review the saved results, then provide the missing source details in a revised request. The completed steps will not run again automatically."
         : fixes[blocker.action] || "Resolve the exact blocker shown above, then return to this saved run.",
+      canRestartReadPlan: incompleteCustomerRead,
       canRetry: connectionAction || retryAction,
       canSkip: false,
       buttonLabel: retryAction

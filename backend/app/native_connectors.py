@@ -226,6 +226,9 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
             _module("gmail.list", "search", "Find Gmail messages.", properties={
                 "query": _TEXT, "limit": {**_POSITIVE_INTEGER, "maximum": 50}
             }),
+            _module("gmail.threads.read", "search", "Search and read up to 20 complete Gmail conversations, including their sent-message history. Use for customer follow-ups and personalized drafts; a message-ID list or one gmail.get cannot establish which customers were followed up with.", properties={
+                "query": _TEXT, "limit": {**_POSITIVE_INTEGER, "maximum": 20}
+            }),
             _module("gmail.send", "action", "Send an approved email.", required=("to", "body"), properties={
                 "to": {
                     "type": "string",

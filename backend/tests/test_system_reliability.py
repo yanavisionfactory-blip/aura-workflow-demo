@@ -437,6 +437,12 @@ def test_draft_only_customer_request_cannot_send_even_when_old_plan_contains_sen
                    arguments={"message_id": "{{steps.search.messages.0.id}}"},
                    depends_on=["search"], reason="Read conversation", expected_output="Context")
     plan = WorkflowPlan(name="Follow-up drafts", interpretation=prompt, steps=[read, get])
+    with pytest.raises(ValueError, match="gmail.threads.read"):
+        validate_requested_operations(revision, plan, set(inventory[0]["allowed_operations"]),
+                                      inventory, {"google": manifest})
+    plan.steps = [PlanStep(key="conversations", agent="gmail", tool_slug="google",
+                           operation="gmail.threads.read", arguments={"query": "newer_than:30d"},
+                           reason="Read conversations", expected_output="Full history")]
     validate_requested_operations(revision, plan, set(inventory[0]["allowed_operations"]),
                                   inventory, {"google": manifest})
     plan.steps.append(PlanStep(key="send", agent="gmail", tool_slug="google",
@@ -447,8 +453,8 @@ def test_draft_only_customer_request_cannot_send_even_when_old_plan_contains_sen
         validate_requested_operations(revision, plan, set(inventory[0]["allowed_operations"]),
                                       inventory, {"google": manifest})
     plan.steps.pop()
-    plan.steps.pop()
-    with pytest.raises(ValueError, match="gmail.get"):
+    plan.steps = [read]
+    with pytest.raises(ValueError, match="gmail.threads.read"):
         validate_requested_operations(revision, plan, set(inventory[0]["allowed_operations"]),
                                       inventory, {"google": manifest})
 
@@ -643,6 +649,30 @@ def test_draft_only_request_rejects_dynamic_gmail_sender_too():
     with pytest.raises(ValueError, match="drafts only"):
         validate_requested_operations(prompt, plan, {"send-email"}, inventory, manifests)
     assert is_gmail_delivery_step(plan.model_dump()["steps"][0])
+
+
+def test_customer_check_in_drafts_require_conversation_history_not_one_message():
+    prompt = "Find customers I haven't followed up with this week and draft a personalized check-in email for each one from Gmail"
+    plan = WorkflowPlan(name="Check-ins", interpretation=prompt, steps=[
+        PlanStep(key="search", agent="gmail", tool_slug="google", operation="gmail.list",
+                 arguments={"query": "newer_than:30d"}, reason="Find messages", expected_output="IDs"),
+        PlanStep(key="single", agent="gmail", tool_slug="google", operation="gmail.get",
+                 arguments={"message_id": "{{steps.search.messages.0.id}}"}, depends_on=["search"],
+                 reason="Read one message", expected_output="Message"),
+    ])
+    with pytest.raises(ValueError, match="gmail.threads.read"):
+        validate_requested_operations(prompt, plan, {"gmail.list", "gmail.get", "gmail.threads.read"})
+    plan.steps = [PlanStep(key="conversations", agent="gmail", tool_slug="google",
+                           operation="gmail.threads.read", arguments={"query": "newer_than:30d", "limit": 20},
+                           reason="Read conversations and sent history", expected_output="Messages")]
+    validate_requested_operations(prompt, plan, {"gmail.threads.read"})
+    from app.native_connectors import native_manifest
+    from app.plan_preflight import preflight_plan
+
+    inventory = [{"slug": "google", "allowed_operations": ["gmail.threads.read"]}]
+    preflight = preflight_plan(plan, inventory, {"google": native_manifest("google")}, set(), inventory)
+    assert preflight.fixes == []
+    assert preflight.missing_grants == {}
 
 
 def test_invalid_output_reference_rejected_but_metadata_alias_compiles():

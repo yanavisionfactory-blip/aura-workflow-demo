@@ -237,6 +237,11 @@ KNOWN.update({
         ["candidate_deduplication"],
     ),
     "gmail.list": ({"type": "object", "properties": {"messages": {"type": "array", "items": {"type": "object", "required": ["id"], "properties": {"id": TEXT}}}, "nextPageToken": TEXT, "resultSizeEstimate": {"type": "integer"}}, "anyOf": [{"required": ["messages"]}, {"required": ["resultSizeEstimate"]}]}, ["message_metadata"]),
+    "gmail.threads.read": ({"type": "object", "required": ["query", "threads", "coverage_limited"],
+        "properties": {"query": TEXT, "threads": {"type": "array", "items": {"type": "object", "required": ["id", "messages"],
+            "properties": {"id": TEXT, "messages": {"type": "array", "items": {"type": "object", "required": ["id", "text"],
+                "properties": {"id": TEXT, "text": TEXT}}}}}}, "coverage_limited": {"type": "boolean"}}},
+        ["message_content", "message_metadata"]),
     "calendar.list": (envelope("items"), ["event_state"]),
     "drive.files.search": ({
         **envelope("files"),

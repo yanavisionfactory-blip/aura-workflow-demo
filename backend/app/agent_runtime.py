@@ -481,6 +481,11 @@ def build_agents() -> dict[str, Agent]:
             If the user requested email drafts, return the complete recipient, subject and
             body of each grounded draft, with its customer and relevant conversation context.
             Never claim a draft was sent or saved in Gmail when the plan only read messages.
+            For customer check-ins, examine each conversation's received and SENT messages
+            using temporal_context before deciding whether a follow-up is due. A promotional
+            email is not proof of a customer relationship. If no identifiable customer
+            conversation qualifies, say so plainly and do not invent a recipient or draft.
+            If a search has coverage_limited=true, state the reviewed scope explicitly.
             Calendar canonical_time_summary is calculated from the provider timestamp by the
             application. Use its named-zone display and UTC instant when comparing a requested
             meeting time; two offsets showing the same instant are not a mismatch. An accepted
@@ -501,6 +506,10 @@ def build_agents() -> dict[str, Agent]:
             Cite evidence using only the supplied step IDs. Return unverified when evidence is
             insufficient, failed when it contradicts the objective, and verified only when the
             outcome is supported. Check final_deliverable against the original request as well:
+            For customer check-ins, compare sent-message history with temporal_context and
+            ensure each draft is grounded in a customer conversation. A bounded search with
+            no qualifying customer must say that no supported draft can be produced; never
+            assert that the entire mailbox was exhaustively examined if coverage_limited=true.
             requested fields must appear in the delivered answer, not merely in raw artifacts.
             Never invent evidence or execute tools. Required fixes must
             stay within the original scope; a changed action requires new approval.""",
@@ -1535,7 +1544,7 @@ async def verify_outcome(prompt: str, plan: dict, artifacts: list[dict],
                 reasons=["All five approved operations have matching provider read-back receipts"],
             )
         return OutcomeVerification(status="unverified", reasons=["Pilot provider read-back is incomplete"])
-    payload = {"original_request": prompt, "approved_plan": plan,
+    payload = {"original_request": prompt, "temporal_context": planning_temporal_context(), "approved_plan": plan,
                "accepted_artifacts": artifacts if prepared_evidence is None else prepared_evidence,
                "accepted_evidence_index": [{"step_id": item["step_id"], "operation": item.get("operation"),
                    "provider_check": item.get("outcome_check", {}).get("status", "unsupported")} for item in artifacts]}
@@ -1663,7 +1672,7 @@ async def synthesize_result(prompt: str, accepted_artifacts: list[dict],
                 "claim": f"Provider confirmed {item['operation']}",
             } for item in accepted_artifacts],
         )
-    payload = {"original_request": prompt, "accepted_artifacts":
+    payload = {"original_request": prompt, "temporal_context": planning_temporal_context(), "accepted_artifacts":
                accepted_artifacts if prepared_evidence is None else prepared_evidence}
     for attempt in range(3):
         try:

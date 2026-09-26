@@ -12,6 +12,7 @@ export default function ErrorView({
   onEdit,
   onSkip,
   onAlternative,
+  alternativeLabel = "Ask AURA for another solution",
   onSuggest,
   onLater,
   onCancel,
@@ -147,7 +148,7 @@ export default function ErrorView({
         {onAlternative && (
           <Button variant="outline" size="sm" onClick={onAlternative} disabled={busy} className="gap-1.5 border-white/10">
             <Lightbulb className="w-3.5 h-3.5" />
-            Ask AURA for another solution
+            {alternativeLabel}
           </Button>
         )}
         {onSuggest && (

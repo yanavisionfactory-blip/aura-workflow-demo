@@ -815,7 +815,7 @@ async def _create_compiled_plan(
             {**item, "allowed_operations": [
                 operation for operation in item.get("allowed_operations", [])
                 if operation.startswith("gmail.")
-                and (not draft_only_email or operation in {"gmail.list", "gmail.get"})
+                and (not draft_only_email or operation in {"gmail.list", "gmail.get", "gmail.threads.read"})
             ]} if item["slug"] == "google" else item
             for item in inventory
         ]
@@ -928,9 +928,11 @@ async def _create_compiled_plan(
     ]
     if draft_only_email:
         repair_requirements.append(
-            "The user asked for finished email DRAFTS, not delivery. Read the needed "
-            "Gmail messages using gmail.list and gmail.get, then synthesize the "
-            "personalized recipients, subjects and full bodies in the final result. "
+            "The user asked for finished email DRAFTS, not delivery. For customer "
+            "follow-ups, use gmail.threads.read to examine multiple conversation histories "
+            "and sent follow-ups; gmail.list returns IDs and one gmail.get is insufficient. "
+            "Synthesize grounded recipients, subjects and full bodies from the retrieved "
+            "conversations in the final result. "
             "Do not add gmail.send or any provider write to transmit an email."
         )
     # In direct mode the LLM response is the only plan. A validation failure
@@ -1998,6 +2000,18 @@ async def review_recorded_result(session, run, step, snapshot, contract, result)
     ) + incomplete_evidence(step.operation, result, contract.get("required_evidence", []))
     if errors:
         return CriticDecision(action="escalate", reasons=errors)
+    if step.operation == "gmail.threads.read":
+        # This bounded read is its own receipt. Customer qualification and
+        # drafting belong to the final response, never to a per-call agent
+        # that can reject valid conversations before they reach synthesis.
+        step.output = {
+            **step.output,
+            "outcome_check": {
+                "status": "verified", "mode": "accepted_read_receipt",
+                "operation": step.operation,
+            },
+        }
+        return CriticDecision(action="accept", reasons=["Conversation read matched its output contract"])
     if step.operation == "calendar.list":
         from .calendar_time import calendar_list_errors
 

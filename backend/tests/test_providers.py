@@ -52,6 +52,56 @@ def _settings() -> Settings:
     )
 
 
+def test_gmail_conversation_read_fetches_multiple_threads_with_sent_history(monkeypatch):
+    executor = ProviderExecutor({"access_token": "token"})
+    body = base64.urlsafe_b64encode(b"Thanks for your order. Can we meet next week?").decode()
+    paths = []
+
+    async def request(_method, url, **kwargs):
+        paths.append(url)
+        if url.endswith("/threads"):
+            assert kwargs["params"]["maxResults"] == 20
+            return {"threads": [{"id": "customer-1"}, {"id": "customer-2"}]}
+        if url.endswith("customer-1"):
+            return {"id": "customer-1", "messages": [{
+                "id": "inbox-1", "threadId": "customer-1", "labelIds": ["INBOX"],
+                "payload": {"headers": [{"name": "From", "value": "alice@example.test"}],
+                            "mimeType": "text/plain", "body": {"data": body}},
+            }]}
+        return {"id": "customer-2", "messages": [{
+            "id": "sent-2", "threadId": "customer-2", "labelIds": ["SENT"],
+            "payload": {"headers": [{"name": "To", "value": "bob@example.test"}],
+                        "mimeType": "text/plain", "body": {"data": body}},
+        }]}
+
+    monkeypatch.setattr(executor, "_request", request)
+    result = asyncio.run(executor._gmail_threads_read({"limit": 20}))
+
+    assert len(paths) == 3
+    assert len(result["threads"]) == 2
+    assert result["threads"][0]["messages"][0]["text"].startswith("Thanks for your order")
+    assert result["threads"][1]["messages"][0]["labelIds"] == ["SENT"]
+    assert result["coverage_limited"] is False
+
+
+def test_gmail_conversation_read_discloses_limited_coverage(monkeypatch):
+    executor = ProviderExecutor({"access_token": "token"})
+
+    async def request(_method, url, **_kwargs):
+        if url.endswith("/threads"):
+            return {"threads": [{"id": "thread-1"}], "nextPageToken": "next"}
+        return {"id": "thread-1", "messages": [{
+            "id": "message-1", "threadId": "thread-1", "snippet": "x" * 2200,
+            "payload": {},
+        }]}
+
+    monkeypatch.setattr(executor, "_request", request)
+    result = asyncio.run(executor._gmail_threads_read({"limit": 1}))
+    assert result["coverage_limited"] is True
+    assert result["nextPageToken"] == "next"
+    assert result["threads"][0]["messages"][0]["content_truncated"] is True
+
+
 def test_notion_uses_shared_callback_and_owner_authorization():
     provider = PROVIDERS["notion"]
     settings = _settings()

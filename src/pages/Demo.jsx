@@ -144,6 +144,7 @@ const friendlyStepTitle = (step) => {
   if (operation === "weather.forecast") return weatherStepTitle(step);
   if (operation === "google.identity.get") return "Check the connected Google account";
   if (operation === "gmail.send") return "Send the email";
+  if (operation === "gmail.threads.read") return "Read customer conversations and sent history";
   if (operation.startsWith("gmail.")) return "Review email context";
   if (operation.startsWith("calendar.")) return operation.includes("create") ? "Schedule the event" : "Check the calendar";
   if (operation === "docs.create") return "Create the Google Doc";
@@ -1774,7 +1775,15 @@ Generate a results summary in plain, human-friendly language (not technical).
                       : undefined)
                     : handleRetry}
                   onCheck={recoveryRun && !activeRecovery.canRetry ? () => handleRunRecovery("check") : undefined}
-                  onAlternative={recoveryRun ? () => startAlternativePlan(recoveryRun) : undefined}
+                  onAlternative={recoveryRun ? () => {
+                    if (activeRecovery.canRestartReadPlan) {
+                      const previousRequest = recoveryRun.prompt;
+                      reset();
+                      window.setTimeout(() => handleSubmit(previousRequest), 0);
+                    } else startAlternativePlan(recoveryRun);
+                  } : undefined}
+                  alternativeLabel={activeRecovery?.canRestartReadPlan
+                    ? "Build a complete plan" : "Ask AURA for another solution"}
                   onSuggest={recoveryRun ? (suggestion) => startAlternativePlan(recoveryRun, suggestion) : undefined}
                   onLater={recoveryRun ? () => keepRunForLater(recoveryRun) : undefined}
                   onCancel={recoveryRun ? () => cancelSavedRun(recoveryRun) : undefined}

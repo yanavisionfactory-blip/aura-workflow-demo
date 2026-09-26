@@ -27,7 +27,7 @@ def refresh_granted_readbacks(tool) -> None:
         "https://www.googleapis.com/auth/gmail.readonly",
         "https://www.googleapis.com/auth/gmail.modify", "https://mail.google.com/",
     }:
-        allowed.difference_update({"gmail.list", "gmail.get"})
+        allowed.difference_update({"gmail.list", "gmail.get", "gmail.threads.read"})
     if not scopes & {
         "https://www.googleapis.com/auth/gmail.send",
         "https://www.googleapis.com/auth/gmail.modify", "https://mail.google.com/",
@@ -47,6 +47,8 @@ def refresh_granted_readbacks(tool) -> None:
         tool.allowed_operations = [*tool.allowed_operations, "gmail.get"]
     else:
         tool.allowed_operations = [op for op in tool.allowed_operations if op in allowed]
+    if "gmail.list" in allowed and "gmail.threads.read" not in tool.allowed_operations:
+        tool.allowed_operations = [*tool.allowed_operations, "gmail.threads.read"]
 
 
 def verification_permission_fixes(plan, inventory) -> list[str]:

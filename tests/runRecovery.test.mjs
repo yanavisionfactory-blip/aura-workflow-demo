@@ -122,6 +122,16 @@ test('final verification resumes review only, without a completed step ID', () =
   assert.equal(r.canRetry, true); assert.equal(r.stepId, null);
   assert.equal(r.buttonLabel, 'Check the final result again');
 });
+test('a completed read-only Gmail plan can be replanned with full conversations', () => {
+  const r = recoveryForRun(run({
+    steps: [{ id: 'list', operation: 'gmail.list', status: 'completed', consequential: false },
+      { id: 'get', operation: 'gmail.get', status: 'completed', consequential: false }],
+    blocker: { code: 'final_result_unverified', action: 'inspect_run', message: 'Insufficient conversation history' },
+  }));
+  assert.equal(r.canRestartReadPlan, true);
+  assert.equal(r.canRetry, false);
+  assert.match(r.fix, /reads customer conversations and sent history/);
+});
 test('generic failures do not invent a cause or an applied fix', () => {
   const r = recoveryForRun(run());
   assert.match(r.why, /doesn't identify a specific cause/);
