@@ -5,8 +5,8 @@ import pytest
 from fastapi import HTTPException
 
 from app import main, orchestrator
-from app.config import get_settings
 from app.agent_runtime import _stop_model_retry
+from app.config import get_settings
 from app.native_connectors import NativeConnectorError, native_manifest
 from app.orchestrator import (
     _capitalized_provider_candidates,
