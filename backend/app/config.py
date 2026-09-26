@@ -1,5 +1,6 @@
 import json
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -15,6 +16,9 @@ class Settings(BaseSettings):
     redis_url: str = "redis://redis:6379/0"
     openai_api_key: str = ""
     openai_model: str = "gpt-5.4-mini"
+    # One structured model response followed by the existing deterministic
+    # contract checks. The former planner remains an explicit rollback route.
+    planner_mode: Literal["llm", "agent"] = "llm"
     memory_embedding_model: str = "text-embedding-3-small"
     memory_candidate_limit: int = Field(default=200, ge=1, le=1000)
     performance_targets_json: str = "{}"

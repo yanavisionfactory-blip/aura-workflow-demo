@@ -161,18 +161,22 @@ export function instantLanguagePlan(prompt = "", catalog = [], selectedTools = [
   };
 }
 
-export function languageDraftPrompt(intent = "", selectedTools = []) {
+export function languageDraftPrompt(intent = "", selectedTools = [], revision = "", currentSteps = []) {
   const preferred = selectedTools.length
     ? `The user explicitly selected these tools: ${selectedTools.join(", ")}. Use them when relevant.`
+    : "";
+  const revisionContext = revision
+    ? `Latest requested change: "${normalize(revision)}"\nPrevious steps: ${currentSteps.map((item) => item.title || item.reason || item.operation || "").join("; ")}\nThe latest change overrides earlier provider choices. Remove any provider the user replaced.`
     : "";
   return `You are AURA. Turn the user's request into a short, plain-language workflow plan.
 
 User request: "${normalize(intent)}"
 ${preferred}
+${revisionContext}
 
 This is a language-only planning pass. Do not check connections, OAuth, APIs, action schemas, or whether a provider is currently released. A missing connection must never prevent the plan from being written.
 
-Return 2-6 ordered steps. Preserve every provider the user explicitly names. Add an AURA Intelligence step for reasoning, summarizing, comparing, drafting, or transforming data. Use provider names for external steps and "AURA Intelligence" for internal reasoning.
+Return 2-6 ordered steps. Preserve every provider the user explicitly names unless a later instruction replaces it. Add an AURA Intelligence step for reasoning, summarizing, comparing, drafting, or transforming data. Use provider names for external steps and "AURA Intelligence" for internal reasoning.
 
 Each step needs: title, iWill, action, reason, output, flow, riskLevel, and riskNote. Use riskLevel "modify" for sending, posting, creating, deleting, scheduling, or updating; otherwise use "read". Tell the user they will review consequential changes. Keep wording concise and non-technical. Never claim that data has already been fetched or an action has already happened.`;
 }

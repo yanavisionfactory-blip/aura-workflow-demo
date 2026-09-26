@@ -23,6 +23,13 @@ VITE_CLERK_PUBLISHABLE_KEY=pk_test_...
 
 See [`docs/PYTHON_BACKEND.md`](docs/PYTHON_BACKEND.md), [`docs/autonomous-processes.md`](docs/autonomous-processes.md), [`backend/RELIABILITY.md`](backend/RELIABILITY.md), and [`docs/production-deployment.md`](docs/production-deployment.md) for PostgreSQL, Redis, Clerk, encryption, worker, and connector-network configuration. Start the API and Celery worker before using the frontend.
 
+Planning defaults to one structured LLM call followed by deterministic operation,
+argument, dependency, connection and approval checks. The browser displays an
+immediate outline and refines it while the executable plan is compiled. Set
+`PLANNER_MODE=agent` on the backend for the previous planner during rollout;
+`PLANNER_MODE=llm` is the default. A failed validation never turns a language
+outline into an executable plan.
+
 ## Release validation
 
 Pull requests run the frontend tests and build, the complete Python test suite, and the isolated execution load evaluation. GitHub Pages publishes the frontend after the pull request is merged to `main`; Railway should also deploy the `backend/` directory from `main`.

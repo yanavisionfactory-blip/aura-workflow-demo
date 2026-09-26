@@ -931,17 +931,25 @@ async def _create_compiled_plan(
             "personalized recipients, subjects and full bodies in the final result. "
             "Do not add gmail.send or any provider write to transmit an email."
         )
-    # Connector-contract validation receives one model repair. Safe generated
-    # prose is normalized deterministically before this boundary, so repeating
-    # the same repair cannot improve a persistent schema mismatch.
-    for attempt in range(2):
-        plan = await create_plan(
-            prompt,
-            inventory,
-            available_input_names,
-            planner_repair_requirements=list(repair_requirements),
-            preferred_route=preferred_route,
-        )
+    # Direct mode makes one structured call. Both routes go through the same
+    # deterministic requested-action and connector-contract checks below.
+    direct_planning = get_settings().planner_mode == "llm"
+    for attempt in range(1 if direct_planning else 2):
+        if direct_planning:
+            from .llm_planner import create_llm_plan
+
+            plan = await create_llm_plan(
+                prompt, inventory, available_input_names, requested_tool_names,
+                repair_requirements,
+            )
+        else:
+            plan = await create_plan(
+                prompt,
+                inventory,
+                available_input_names,
+                planner_repair_requirements=list(repair_requirements),
+                preferred_route=preferred_route,
+            )
         try:
             reject_excluded_steps(plan)
             requested = prompt.casefold()
@@ -996,7 +1004,7 @@ async def _create_compiled_plan(
                 plan.planning_artifacts["supervisor_recovery_strategy"] = supervisor_strategy
             return plan
         except (NativeConnectorError, ValueError) as exc:
-            if attempt == 1:
+            if direct_planning or attempt == 1:
                 raise
             repair_requirements.append(str(exc))
             reason = str(exc)

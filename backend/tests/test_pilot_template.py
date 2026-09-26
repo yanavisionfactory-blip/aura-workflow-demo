@@ -9,10 +9,16 @@ import pytest
 from pptx import Presentation
 
 from app import agent_runtime, orchestrator
+from app.config import get_settings
 from app.connection_permissions import verification_permission_fixes
 from app.native_connectors import native_manifest
 from app.pilot_template import PILOT_OPERATIONS, PILOT_PREFIX, PilotInputError, pilot_template
 from app.presentation_content import render_timeline
+
+
+@pytest.fixture(autouse=True)
+def legacy_agent_planner_for_route_tests(monkeypatch):
+    monkeypatch.setattr(get_settings(), "planner_mode", "agent")
 
 
 def inventory(connected=True):
