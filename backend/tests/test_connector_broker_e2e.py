@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app import execution_preflight, main, orchestrator, pipedream_connect
+from app import execution_preflight, llm_planner, main, orchestrator, pipedream_connect
 from app.config import Settings
 from app.db import Base
 from app.models import (
@@ -315,6 +315,13 @@ async def test_connect_click_never_discovers_uncached_action_schemas(broker_api,
 async def test_named_disconnected_provider_gets_visible_plan_before_connection(
     broker_api, monkeypatch
 ):
+    from app.workflow_templates import weather_presentation_template
+
+    async def one_model_response(prompt, inventory, *_args):
+        return weather_presentation_template(prompt, inventory)
+
+    model = AsyncMock(side_effect=one_model_response)
+    monkeypatch.setattr(llm_planner, "create_llm_plan", model)
     async with broker_api.factory() as session:
         session.add(
             WorkflowRun(
@@ -337,6 +344,7 @@ async def test_named_disconnected_provider_gets_visible_plan_before_connection(
     await orchestrator._plan_run(
         "canva-preflight-run", broker_api.context.workspace_id
     )
+    model.assert_awaited_once()
 
     async with broker_api.factory() as session:
         run = await session.get(WorkflowRun, "canva-preflight-run")
@@ -369,6 +377,13 @@ async def test_named_disconnected_provider_gets_visible_plan_before_connection(
 async def test_notion_and_jira_get_a_complete_visible_plan_before_connections(
     broker_api, monkeypatch
 ):
+    from app.workflow_templates import notion_to_jira_template
+
+    async def one_model_response(prompt, inventory, *_args):
+        return notion_to_jira_template(prompt, inventory)
+
+    model = AsyncMock(side_effect=one_model_response)
+    monkeypatch.setattr(llm_planner, "create_llm_plan", model)
     async with broker_api.factory() as session:
         session.add(
             WorkflowRun(
@@ -394,6 +409,7 @@ async def test_notion_and_jira_get_a_complete_visible_plan_before_connections(
     await orchestrator._plan_run(
         "notion-jira-preflight-run", broker_api.context.workspace_id
     )
+    model.assert_awaited_once()
 
     async with broker_api.factory() as session:
         run = await session.get(WorkflowRun, "notion-jira-preflight-run")
