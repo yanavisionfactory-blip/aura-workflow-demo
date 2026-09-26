@@ -121,6 +121,11 @@ async def test_static_write_requires_final_preview_even_with_legacy_auto_approva
             id=run_id, workspace_id=workspace_id, prompt="Create a presentation",
             plan=plan.model_dump(mode="json"), status=RunStatus.awaiting_approval,
         ))
+        session.add(PlanVersion(
+            workspace_id=workspace_id, run_id=run_id, version=1, status="draft",
+            plan=plan.model_dump(mode="json"),
+            plan_hash=canonical_plan_hash(plan.model_dump(mode="json")),
+        ))
         tool = ToolConnection(
             workspace_id=workspace_id, slug="canva", display_name="Canva",
             kind=ToolKind.oauth, allowed_operations=native_operations("canva"), config={},
@@ -138,10 +143,15 @@ async def test_static_write_requires_final_preview_even_with_legacy_auto_approva
             consequential=False, idempotency_key=str(uuid4()),
         ))
         await session.commit()
-        await main.approve_plan(
-            run_id, PlanApproval(approved=True, approve_consequential=True),
+        approved = await main.approve_plan(
+            run_id, PlanApproval(approved=True, edited_steps=plan.steps, approve_consequential=True),
             SimpleNamespace(workspace_id=workspace_id, subject="owner", role="owner"), session,
         )
+        versions = (await session.scalars(select(PlanVersion).where(PlanVersion.run_id == run_id))).all()
+        assert approved["plan_version"] == 1
+        assert len(versions) == 1
+        assert versions[0].status == "approved"
+        assert versions[0].plan_hash == approved["plan_hash"]
         stored = await session.scalar(select(RunStep).where(RunStep.run_id == run_id))
         approval = await session.get(Approval, stored.approval_id)
         assert stored.consequential is True

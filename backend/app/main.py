@@ -5671,6 +5671,13 @@ async def approve_plan(
             raise HTTPException(422, "Edited plan must contain the same number of reviewed steps")
         plan_data["steps"] = [step.model_dump(mode="json") for step in payload.edited_steps]
     plan = WorkflowPlan.model_validate(plan_data)
+    # Older clients submit every step on Start, even when no argument was
+    # edited. An identical submission must not create another plan version.
+    steps_edited = (
+        payload.edited_steps is not None
+        and [step.model_dump(mode="json") for step in plan.steps]
+        != [step.model_dump(mode="json") for step in WorkflowPlan.model_validate(run.plan).steps]
+    )
     tools = (
         await session.scalars(
             select(ToolConnection).where(
@@ -5799,7 +5806,13 @@ async def approve_plan(
     )
     plan_json = plan.model_dump(mode="json")
     plan_hash = canonical_plan_hash(plan_json)
-    if payload.edited_steps is not None or normalized_arguments or not latest_version:
+    if (steps_edited or normalized_arguments) and latest_version and latest_version.status == "draft" and get_settings().planner_mode == "llm":
+        # The direct LLM planner has one visible proposal per run. The user is
+        # approving this draft, so normalize/edit it in place before approval.
+        latest_version.plan = plan_json
+        latest_version.plan_hash = plan_hash
+        plan_version = latest_version
+    elif steps_edited or normalized_arguments or not latest_version:
         plan_version = PlanVersion(
             workspace_id=wid,
             run_id=run.id,
@@ -5840,7 +5853,7 @@ async def approve_plan(
     }:
         raise HTTPException(403, "Destructive plans require an administrator")
 
-    if payload.edited_steps is not None or normalized_arguments:
+    if steps_edited or normalized_arguments:
         for stored, edited in zip(steps, plan.steps, strict=True):
             stored.step_key = edited.key
             stored.agent = edited.agent

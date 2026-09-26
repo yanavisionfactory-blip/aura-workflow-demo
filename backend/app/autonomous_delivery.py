@@ -691,6 +691,18 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
                 select(RunStep).where(RunStep.run_id == run.id).order_by(RunStep.position)
             )
         ).all()
+        if (
+            settings.planner_mode == "llm"
+            and steps
+            and all(step.status in {StepStatus.completed, StepStatus.skipped} for step in steps)
+            and (run.result or {}).get("verification", {}).get("status") != "verified"
+        ):
+            # The direct plan is immutable. Repeating a failed final model
+            # review in the background can leave a completed graph looking
+            # frozen for minutes. Preserve receipts and show the honest handoff.
+            await _handoff(session, run, state, "final_result_unverified")
+            await session.commit()
+            return "handoff"
         failed_step = next((item for item in steps if item.status == StepStatus.failed), None)
         failure = await _failure_evidence(session, run, failed_step) if failed_step else None
         options = await _safe_options(session, run, steps, state, failure)

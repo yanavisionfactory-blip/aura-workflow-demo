@@ -453,7 +453,7 @@ export default function Demo() {
   };
   const pushT = (t) => timeoutRefs.current.push(t);
 
-  const getPythonRunResilient = async (runId, generation, maxTransientFailures = Number.POSITIVE_INFINITY) => {
+  const getPythonRunResilient = async (runId, generation, maxTransientFailures = PLANNING_TRANSIENT_FAILURE_LIMIT) => {
     let transientFailures = 0;
     while (pythonPollGenerationRef.current === generation) {
       try {
@@ -1181,14 +1181,14 @@ Write ONE clear, conversational sentence restating what they want — but offer 
     setExecSteps(mapRuntimeSteps({ plan: pythonPlanRef.current, steps: [] }));
     setVerifyingResult(false);
     setStartTime(Date.now());
-    const reviewedPlan = {
-      ...pythonPlanRef.current,
-      steps: pythonPlanRef.current.steps.map((step, index) => {
-        const ui = editedUiSteps?.[index];
-        if (!ui) return step;
-        return { ...step, arguments: editedArgumentsForStep(ui) };
-      }),
-    };
+    // Starting an approved proposal is not a plan edit. Send edited steps only
+    // when the user explicitly changed their arguments in the review UI.
+    const editedSteps = editedUiSteps?.length
+      ? pythonPlanRef.current.steps.map((step, index) => {
+          const ui = editedUiSteps[index];
+          return ui ? { ...step, arguments: editedArgumentsForStep(ui) } : step;
+        })
+      : null;
     try {
       if (observeOnly) {
         // Resume has already dispatched this run. Only observe; do not approve again.
@@ -1207,7 +1207,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
           );
         }
       } else {
-        await approvePythonPlan(runId, reviewedPlan.steps, false);
+        await approvePythonPlan(runId, editedSteps, false);
       }
       // The backend run is durable. Synchronize the optional history view
       // after dispatch so its extra data requests cannot gate execution.

@@ -249,6 +249,7 @@ async def test_scheduler_recovers_attempt_committed_before_error_text(runtime, m
 
 async def test_completed_provider_work_retries_only_final_review(runtime, monkeypatch):
     monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
+    monkeypatch.setattr(autonomous_delivery.get_settings(), "planner_mode", "agent")
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
         transition_run(
@@ -273,6 +274,28 @@ async def test_completed_provider_work_retries_only_final_review(runtime, monkey
         assert step.output["provider_result"] == {"id": "saved"}
         assert state["last_action"] == "retry_final_review"
         assert state["review_recoveries"] == 1
+
+
+async def test_direct_llm_completed_work_hands_off_unverified_result_without_loop(runtime, monkeypatch):
+    monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
+    monkeypatch.setattr(autonomous_delivery.get_settings(), "planner_mode", "llm")
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        transition_run(run, RunStatus.waiting_for_action, reason="unverified", actor="test", dispatch=None)
+        run.result = {"verification": {"status": "unverified"}}
+        step = await session.get(RunStep, "step")
+        step.status = StepStatus.completed
+        step.output = {"provider_result": {"id": "saved"}}
+        await session.commit()
+
+    assert await autonomously_recover_run("run", "w") == "handoff"
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        step = await session.get(RunStep, "step")
+        assert run.execution_context["__aura_autonomy__"]["handoff_reason_code"] == "final_result_unverified"
+        assert run.status == RunStatus.waiting_for_action
+        assert step.output["provider_result"] == {"id": "saved"}
+        assert await session.scalar(select(DispatchIntent).where(DispatchIntent.run_id == "run")) is None
 
 
 async def test_completed_steps_stop_after_final_review_budget(runtime, monkeypatch):
