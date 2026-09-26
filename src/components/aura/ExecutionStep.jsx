@@ -1,6 +1,5 @@
 import { motion } from "framer-motion";
 import { Check, Loader2, Clock, AlertTriangle, ArrowRight, ExternalLink } from "lucide-react";
-import { conjugateAction } from "@/lib/auraVerbs";
 
 const statusConfig = {
   pending: {
@@ -46,12 +45,7 @@ const statusConfig = {
 export default function ExecutionStep({ step, index, isLast }) {
   const config = statusConfig[step.status] || statusConfig.pending;
   const Icon = config.icon;
-  const displayAction =
-    step.status === "completed"
-      ? conjugateAction(step.action, "past")
-      : step.status === "running" || step.status === "recovering"
-      ? conjugateAction(step.action, "ing")
-      : step.action;
+  const displayAction = step.action;
   const isModify = step.riskLevel === "modify";
 
   return (

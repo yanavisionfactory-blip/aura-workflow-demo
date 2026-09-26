@@ -5166,6 +5166,20 @@ def _run_blocker(
     handoff_code = autonomy.get("handoff_reason_code")
     failed_step = next((step for step in steps if step.status == StepStatus.failed), None)
     if handoff_code:
+        if (steps and all(step.status in {StepStatus.completed, StepStatus.skipped}
+                          for step in steps)
+                and (run.result or {}).get("verification", {}).get("status") == "unverified"):
+            return {
+                "code": "final_result_unverified",
+                "kind": "human_action",
+                "message": (
+                    "The planned steps finished, but the available results do not verify "
+                    "the requested outcome. Review the saved results and supply the missing "
+                    "source details in a revised request. No completed action will repeat."
+                ),
+                "action": "inspect_run",
+                "retryable": False,
+            }
         repair = (
             ((run.execution_context or {}).get("__aura_write_repairs__") or {}).get(
                 failed_step.id

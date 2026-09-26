@@ -49,6 +49,7 @@ import {
 import { hasDurablePlan, planningRequestPrompt, savedRunResumeView, sameExecutablePlan } from "@/lib/runtimePlan.mjs";
 import { weatherStepTitle } from "@/lib/planPresentation.mjs";
 import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
+import { alignExecutionSteps } from "@/lib/executionSteps.mjs";
 import { jiraReceiptTasks } from "@/lib/jiraReceipt.mjs";
 import {
   editedArgumentsForStep,
@@ -58,7 +59,7 @@ import {
 
 const STEP_DURATION = 2.6;
 // Show the executable LLM plan as soon as the backend has validated it.
-const PLANNING_POLL_INTERVAL_MS = 1500;
+const PLANNING_POLL_INTERVAL_MS = 400;
 const PLANNING_TRANSIENT_FAILURE_LIMIT = 3;
 
 const planToolName = (step) => {
@@ -292,6 +293,7 @@ export default function Demo() {
   const [recoveryMessage, setRecoveryMessage] = useState("");
   const recoveryPendingRef = useRef(false);
   const [execSteps, setExecSteps] = useState([]);
+  const [verifyingResult, setVerifyingResult] = useState(false);
   const [currentStepIdx, setCurrentStepIdx] = useState(0);
   const [approvedSteps, setApprovedSteps] = useState([]);
   const [previewError, setPreviewError] = useState("");
@@ -516,6 +518,7 @@ export default function Demo() {
     setRecoveryBusy(false);
     setRecoveryMessage("");
     setExecSteps([]);
+    setVerifyingResult(false);
     setCurrentStepIdx(0);
     setStartTime(null);
     setWorkflowName("");
@@ -990,34 +993,36 @@ Write ONE clear, conversational sentence restating what they want — but offer 
   }, [keepPlanInReview]);
 
   const mapRuntimeSteps = (run) => {
-    const runtimeSteps = (run.steps || []).map((step, index) => {
-      const planned = approvedStepsRef.current[index];
+    const reviewedSteps = approvedStepsRef.current.length
+      ? approvedStepsRef.current
+      : (run.plan?.steps || []).map(uiPlanStepFromRun);
+    const runtimeSteps = alignExecutionSteps(reviewedSteps, run.steps || []).map(({ planned, runtime: step }, index) => {
       const preflightRetrying = index === 0
-        && step.status === "pending"
+        && step?.status === "pending"
         && run.automation_state?.status === "retrying";
-      const recoveryMessage = recoveryProgressMessage(run, step);
+      const recoveryMessage = step ? recoveryProgressMessage(run, step) : "";
       return {
-        id: step.id,
-        stepKey: step.key,
-        tool: planned?.tool || planToolName(step),
-        action: planned?.title || planned?.action || friendlyStepTitle(step),
-        riskLevel: step.consequential ? "modify" : "read",
-        status: preflightRetrying ? "recovering" : visibleRecoveryStepStatus(run, step),
-        started_at: step.started_at,
-        completed_at: step.completed_at,
+        id: step?.id || planned.key,
+        stepKey: planned.key,
+        tool: planned.tool,
+        action: planned.title || planned.action,
+        riskLevel: planned.riskLevel,
+        status: step ? preflightRetrying ? "recovering" : visibleRecoveryStepStatus(run, step) : "pending",
+        started_at: step?.started_at,
+        completed_at: step?.completed_at,
         liveOutput: preflightRetrying
           ? "Checking your connections before continuing."
           : recoveryMessage
           ? recoveryMessage
-          : step.error
+          : step?.error
           ? "AURA is checking this step."
-          : step.status === "completed"
+          : step?.status === "completed"
             ? "Completed"
-            : step.output?.provider_result
+            : step?.output?.provider_result
               ? "Checking what was created in the app."
               : "",
-        output: step.output,
-        jiraTasks: step.operation === "jira.issues.create_from_blocks"
+        output: step?.output,
+        jiraTasks: step?.operation === "jira.issues.create_from_blocks"
           ? jiraReceiptTasks(step.output?.provider_result) : [],
       };
     });
@@ -1041,6 +1046,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
       ? { ...run, blocker: preflightBlocker }
       : run);
     setRecoveryMessage("");
+    setVerifyingResult(false);
     setExecSteps(mapRuntimeSteps(run));
     setPhase("error");
   };
@@ -1171,6 +1177,8 @@ Write ONE clear, conversational sentence restating what they want — but offer 
     const generation = ++pythonPollGenerationRef.current;
     setPlan((previous) => previous ? { ...previous, startError: "" } : previous);
     setPhase("executing");
+    setExecSteps(mapRuntimeSteps({ plan: pythonPlanRef.current, steps: [] }));
+    setVerifyingResult(false);
     setStartTime(Date.now());
     const reviewedPlan = {
       ...pythonPlanRef.current,
@@ -1209,8 +1217,16 @@ Write ONE clear, conversational sentence restating what they want — but offer 
         const run = await getPythonRunResilient(runId, generation);
         if (!run) return;
         setExecSteps(mapRuntimeSteps(run));
+        setVerifyingResult(
+          (run.steps || []).length > 0
+          && (run.steps || []).every((step) => ["completed", "skipped"].includes(step.status))
+          && run.status !== "completed"
+        );
         const active = (run.steps || []).findIndex((step) => step.status === "running");
         if (active >= 0) setCurrentStepIdx(active);
+        else if ((run.steps || []).length && (run.steps || []).every((step) => ["completed", "skipped"].includes(step.status))) {
+          setCurrentStepIdx(Math.max(0, approvedStepsRef.current.length - 1));
+        }
         if (run.status === "completed") {
           forgetActivePythonRun(runId);
           const stepKeysById = new Map(
@@ -1727,6 +1743,7 @@ Generate a results summary in plain, human-friendly language (not technical).
                 className="w-full flex justify-center"
               >
                 <ExecutionView steps={execSteps} currentStepIndex={currentStepIdx} isReal={!mock}
+                  verifying={verifyingResult}
                   onCancel={pythonRunIdRef.current ? () => cancelSavedRun({ id: pythonRunIdRef.current }) : undefined}
                   cancelBusy={recoveryBusy} cancelError={recoveryMessage} />
               </motion.div>

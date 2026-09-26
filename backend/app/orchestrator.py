@@ -1193,6 +1193,7 @@ def _required_permissions(capability: str, inventory: list[dict]) -> list[str]:
 
 
 _PROVIDER_CANDIDATE_STOP_WORDS = {
+    "i",
     "add",
     "analyze",
     "build",
@@ -1488,10 +1489,27 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
         manifests_by_tool = {manifest.tool_id: manifest for manifest in manifests}
         from .connection_permissions import refresh_granted_readbacks
 
+        requested_tools = [
+            str(value)
+            for value in (run.inputs or {}).get("requested_tools", [])
+            if value
+        ]
+        request_text = run.prompt.casefold()
+        selected_names = {name.casefold() for name in requested_tools}
         for tool in tools:
             refresh_native_connection_contract(tool)
             refresh_granted_readbacks(tool)
-            await refresh_browser_connection_contract(tool, manifests_by_tool.get(tool.id))
+            # Browser discovery may call a remote service. Refresh only an app
+            # named in this request; other verified contracts remain available
+            # from the saved manifest without delaying the first model response.
+            names = (tool.slug, tool.display_name)
+            if any(name and (
+                name.casefold() in selected_names
+                or (len(name) > 2 and re.search(
+                    rf"(?<!\w){re.escape(name.casefold())}(?!\w)", request_text,
+                ))
+            ) for name in names):
+                await refresh_browser_connection_contract(tool, manifests_by_tool.get(tool.id))
         connected_inventory = [
             {
                 "slug": tool.slug,
@@ -1540,11 +1558,6 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             for manifest in manifests
             if manifest.tool_id == tool.id
         })
-        requested_tools = [
-            str(value)
-            for value in (run.inputs or {}).get("requested_tools", [])
-            if value
-        ]
         from .connection_families import capability_family
 
         excluded_families = {

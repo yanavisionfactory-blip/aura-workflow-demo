@@ -695,6 +695,16 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
         failure = await _failure_evidence(session, run, failed_step) if failed_step else None
         options = await _safe_options(session, run, steps, state, failure)
         if not options:
+            # A completed graph with an unverified deliverable needs more
+            # evidence or a revised request. Replanning behind the user's
+            # reviewed plan cannot make the existing receipts prove more.
+            if (steps
+                    and all(step.status in {StepStatus.completed, StepStatus.skipped}
+                            for step in steps)
+                    and (run.result or {}).get("verification", {}).get("status") != "verified"):
+                await _handoff(session, run, state, "final_result_unverified")
+                await session.commit()
+                return "handoff"
             return "not_applicable"
         selected, source, reason = await supervise_recovery(
             {

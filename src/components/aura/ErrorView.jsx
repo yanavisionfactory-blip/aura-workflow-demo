@@ -2,7 +2,6 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { AlertOctagon, Pencil, SkipForward, Check, ChevronRight, ArrowRight, Clock3, Lightbulb, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { conjugateAction } from "@/lib/auraVerbs";
 
 export default function ErrorView({
   error,
@@ -113,7 +112,7 @@ export default function ErrorView({
                         )}
                         <span className="text-muted-foreground/50">{s.tool}</span>
                         <span className={failed ? "text-amber-200/90" : "text-muted-foreground"}>
-                          {failed ? label : conjugateAction(label, "past")}
+                          {label}
                         </span>
                       </div>
                     );

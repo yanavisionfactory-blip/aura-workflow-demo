@@ -4,7 +4,7 @@ import ExecutionStep from "./ExecutionStep";
 
 const STEP_DURATION = 2.6; // seconds per step (for ETA)
 
-export default function ExecutionView({ steps, currentStepIndex, isReal, onCancel, cancelBusy = false, cancelError = "" }) {
+export default function ExecutionView({ steps, currentStepIndex, isReal, verifying = false, onCancel, cancelBusy = false, cancelError = "" }) {
   const stepCount = steps.length;
   const completedCount = steps.filter((s) => s.status === "completed").length;
   const failed = steps.some((s) => s.status === "failed");
@@ -38,7 +38,7 @@ export default function ExecutionView({ steps, currentStepIndex, isReal, onCance
           </div>
           <div>
             <h2 className="text-lg font-semibold">
-              {failed ? "Workflow paused" : recovering
+              {failed ? "Workflow paused" : verifying ? "Checking the final result" : recovering
                 ? steps.some((step) => step.jiraTasks?.length) ? "Checking your Jira tasks" : "Checking your results"
                 : "Running your workflow"}
             </h2>
@@ -46,7 +46,7 @@ export default function ExecutionView({ steps, currentStepIndex, isReal, onCance
               {stepCount
                 ? `Step ${Math.min(currentStepIndex + 1, stepCount)} of ${stepCount}`
                 : "Restoring the saved run"}
-              {eta ? ` · ${eta}` : ""}
+              {eta ? ` · ${eta}` : verifying ? " · Completed steps are saved" : ""}
             </p>
           </div>
         </div>

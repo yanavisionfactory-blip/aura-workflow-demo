@@ -280,6 +280,7 @@ HUMAN_ACTION_CODES = frozenset(
         "pilot_details_required",
         "external_submission_approval_required",
         "external_effect_uncertain",
+        "final_result_unverified",
     }
 )
 
@@ -632,7 +633,7 @@ def public_run_projection(run: WorkflowRun, blocker: dict | None) -> dict:
     }
     unavoidable = is_unavoidable_human_blocker(blocker)
     technical_terminal = run.status in {RunStatus.failed, RunStatus.blocked} and not unavoidable
-    if internal_recovery or technical_terminal or blocker and not unavoidable:
+    if (internal_recovery and not unavoidable) or technical_terminal or (blocker and not unavoidable):
         return {
             "public_status": "recovering",
             "public_error": None,
