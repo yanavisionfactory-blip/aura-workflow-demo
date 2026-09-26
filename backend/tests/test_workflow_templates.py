@@ -1,6 +1,8 @@
 import asyncio
+import pytest
 
 from app import orchestrator
+from app.config import get_settings
 from app.native_connectors import native_manifest
 from app.schemas import WorkflowPlan
 from app.workflow_templates import (
@@ -11,6 +13,11 @@ from app.workflow_templates import (
 )
 
 PILOT_BRIEF = "Сделай один слайд для пилота в Canva на основе моей аудитории Mailchimp."
+
+
+@pytest.fixture(autouse=True)
+def legacy_agent_planner_for_route_tests(monkeypatch):
+    monkeypatch.setattr(get_settings(), "planner_mode", "agent")
 
 
 def test_mailchimp_canva_brief_uses_verified_source_and_no_send():

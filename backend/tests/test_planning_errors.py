@@ -5,6 +5,7 @@ import pytest
 from fastapi import HTTPException
 
 from app import main, orchestrator
+from app.config import get_settings
 from app.agent_runtime import _stop_model_retry
 from app.native_connectors import NativeConnectorError, native_manifest
 from app.orchestrator import (
@@ -16,6 +17,11 @@ from app.orchestrator import (
     planning_error_message,
 )
 from app.schemas import AiGenerateRequest, PlanStep, WorkflowPlan
+
+
+@pytest.fixture(autouse=True)
+def legacy_agent_planner_for_route_tests(monkeypatch):
+    monkeypatch.setattr(get_settings(), "planner_mode", "agent")
 
 
 class _ScalarRows:

@@ -50,7 +50,7 @@ import {
 } from "@/lib/planningFlow.mjs";
 import { hasDurablePlan, planningRequestPrompt, savedRunResumeView, sameExecutablePlan } from "@/lib/runtimePlan.mjs";
 import { weatherStepTitle } from "@/lib/planPresentation.mjs";
-import { instantLanguagePlan } from "@/lib/languagePlan.mjs";
+import { instantLanguagePlan, languageDraftPrompt } from "@/lib/languagePlan.mjs";
 import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
 import { jiraReceiptTasks } from "@/lib/jiraReceipt.mjs";
 import {
@@ -657,9 +657,8 @@ Write ONE clear, conversational sentence restating what they want — but offer 
           ...instantLanguagePlan(draftIntent, availableCatalog, pilotMode ? pilotTools : selectedTools),
           connectionRequirements: explicitRequirements,
         };
-        // Show a readable outline immediately. The backend alone compiles the
-        // executable plan; a second browser AI request adds load and can show
-        // a conflicting draft while execution preparation is still running.
+        // Show the immediate outline, then refine it with one language-only
+        // model call while the backend validates its own executable candidate.
         setPlan((current) => revisionInstruction && current?.steps?.length
           ? { ...current, provisional: true, compileState: "validating", compileError: "" }
           : immediatePlan);
@@ -670,6 +669,29 @@ Write ONE clear, conversational sentence restating what they want — but offer 
           // The first revision may arrive before the initial create-run call
           // returns. Only the latest request may take ownership of the view.
           const generation = ++pythonPollGenerationRef.current;
+          void aura.integrations.Core.InvokeLLM({
+            prompt: languageDraftPrompt(
+              draftIntent, pilotMode ? pilotTools : selectedTools, revisionInstruction, reviewedSteps,
+            ),
+            response_json_schema: PLAN_SCHEMA,
+          }).then((draft) => {
+            if (generation !== pythonPollGenerationRef.current || !Array.isArray(draft?.steps)
+              || draft.steps.length === 0 || draft.steps.length > 6
+              || !draft.steps.every((item) => typeof item.tool === "string"
+                && typeof item.title === "string"
+                && ["read", "modify"].includes(item.riskLevel))) return;
+            setPlan((current) => current?.provisional && current.compileState === "validating"
+              ? {
+                ...current,
+                ...draft,
+                connectionRequirements: explicitRequirements,
+                provisional: true,
+                compileState: "validating",
+              }
+              : current);
+          }).catch(() => {
+            // The immediate draft remains visible until the durable plan is ready.
+          });
           try {
             const previousRunId = pythonRunIdRef.current;
             const startFresh = shouldStartFreshPlanningRun({
