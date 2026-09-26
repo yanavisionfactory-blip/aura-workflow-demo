@@ -44,13 +44,12 @@ import {
   approvalStartFailure,
   planningConnectionRequirements,
   planningDisposition,
-  promptConnectionRequirements,
   shouldStartFreshPlanningRun,
   unavailablePlanningState,
 } from "@/lib/planningFlow.mjs";
-import { hasDurablePlan, planningRequestPrompt, savedRunResumeView, sameExecutablePlan } from "@/lib/runtimePlan.mjs";
+import { hasDurablePlan, planningRequestPrompt, savedRunResumeView, sameExecutablePlan, unmatchedWriteTools } from "@/lib/runtimePlan.mjs";
 import { weatherStepTitle } from "@/lib/planPresentation.mjs";
-import { instantLanguagePlan, languageDraftPrompt } from "@/lib/languagePlan.mjs";
+import { languageDraftPrompt } from "@/lib/languagePlan.mjs";
 import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
 import { jiraReceiptTasks } from "@/lib/jiraReceipt.mjs";
 import {
@@ -60,8 +59,8 @@ import {
 } from "@/lib/approvalReview.mjs";
 
 const STEP_DURATION = 2.6;
-// The durable planner may need multiple bounded model calls and contract repairs.
-// Keep the readable draft visible while it finishes instead of discarding its run.
+// The visible plan comes from one language-model response. Backend validation
+// updates only its readiness, never the displayed plan content.
 const PLANNING_POLL_INTERVAL_MS = 1500;
 const PLANNING_TRANSIENT_FAILURE_LIMIT = 3;
 
@@ -385,17 +384,42 @@ export default function Demo() {
       const intent = String(run.prompt || run.plan?.interpretation || "")
         .split("\n\nThe user reviewed the proposed workflow and requested this change:")[0];
       const waiting = resumeView === "plan" && run.status === "waiting_for_action";
+      const pending = resumeView === "plan" && planningDisposition(run) === "wait";
+      const storedVisiblePlan = run.inputs?.aura_visible_plan;
+      const visiblePlan = resumeView === "plan" && Array.isArray(storedVisiblePlan?.steps)
+        && storedVisiblePlan.steps.length > 0 ? storedVisiblePlan : null;
       const restored = waiting
         ? { ...uiConnectionPlanFromRun(run, intent), provisional: !run.plan?.steps?.length,
           compileState: "waiting_for_connection" }
-        : { ...uiPlanFromRun(run), provisional: false, compileState: "ready" };
+        : { ...uiPlanFromRun(run), provisional: pending, compileState: pending ? "validating" : "ready" };
+      const displayed = visiblePlan ? {
+        ...visiblePlan,
+        connectionRequirements: restored.connectionRequirements,
+        connectionChecklist: restored.connectionChecklist,
+        provisional: restored.provisional,
+        compileState: restored.compileState,
+      } : restored;
       pythonRunIdRef.current = run.id;
       pythonPlanRef.current = run.plan || null;
+      visiblePlanRef.current = displayed;
       originalPromptRef.current = intent;
       lastPlanningIntentRef.current = intent;
       setOriginalPrompt(intent);
-      setInterpretation(restored.interpretation);
-      setPlan(restored);
+      setInterpretation(displayed.interpretation);
+      setPlan(displayed);
+      if (visiblePlan && run.plan?.steps?.length) {
+        const unreviewed = unmatchedWriteTools(visiblePlan.steps, run.plan.steps, planToolName);
+        if (unreviewed.length) {
+          pythonPlanRef.current = null;
+          setPlan({ ...displayed, provisional: true, compileState: "blocked",
+            compileError: `AURA's actions in ${unreviewed.join(", ")} don't match the plan you saw. Nothing was started.` });
+          setPhase("plan");
+          void cancelPythonRun(run.id).catch(() => {});
+          forgetActivePythonRun(run.id);
+          pythonRunIdRef.current = null;
+          return;
+        }
+      }
       if (resumeView === "preview") {
         const preparedSteps = restored.steps.map((step, index) =>
           resolvedApprovalStep(step, run.steps?.[index], planToolName(run.steps?.[index] || step))
@@ -419,6 +443,52 @@ export default function Demo() {
         return;
       }
       setPhase("plan");
+      if (pending) {
+        const generation = ++pythonPollGenerationRef.current;
+        void (async () => {
+          while (mounted && generation === pythonPollGenerationRef.current) {
+            const latest = await getPythonRun(run.id);
+            if (!mounted || generation !== pythonPollGenerationRef.current) return;
+            const disposition = planningDisposition(latest);
+            if (disposition === "review") {
+              const unreviewed = unmatchedWriteTools(
+                visiblePlan.steps, latest.plan.steps, planToolName,
+              );
+              if (unreviewed.length) {
+                pythonPlanRef.current = null;
+                setPlan((current) => ({ ...current, provisional: true, compileState: "blocked",
+                  compileError: `AURA's actions in ${unreviewed.join(", ")} don't match the plan you saw. Nothing was started.` }));
+                await cancelPythonRun(run.id).catch(() => {});
+                forgetActivePythonRun(run.id);
+                pythonRunIdRef.current = null;
+                return;
+              }
+              pythonPlanRef.current = latest.plan;
+              setPlan((current) => ({ ...current, provisional: false, compileState: "ready", compileError: "" }));
+              return;
+            }
+            if (disposition === "connection") {
+              pythonPlanRef.current = latest.plan || null;
+              const connectionPlan = uiConnectionPlanFromRun(latest, intent);
+              setPlan((current) => ({ ...current,
+                connectionRequirements: connectionPlan.connectionRequirements,
+                connectionChecklist: connectionPlan.connectionChecklist,
+                compileState: "waiting_for_connection" }));
+              return;
+            }
+            if (disposition === "unavailable") {
+              setPlan((current) => ({ ...current, ...unavailablePlanningState(latest), steps: current.steps }));
+              return;
+            }
+            await new Promise((resolve) => window.setTimeout(resolve, PLANNING_POLL_INTERVAL_MS));
+          }
+        })().catch((error) => {
+          if (mounted && generation === pythonPollGenerationRef.current) {
+            setPlan((current) => ({ ...current, provisional: true, compileState: "blocked",
+              compileError: error.message || "AURA couldn't reconnect to this plan." }));
+          }
+        });
+      }
     }).catch(() => {
       // A failed status read must never manufacture an executable plan.
     });
@@ -452,6 +522,7 @@ export default function Demo() {
   const currentWorkflowIdRef = useRef(null);
   const pythonRunIdRef = useRef(null);
   const pythonPlanRef = useRef(null);
+  const visiblePlanRef = useRef(null);
   const reviewedPlanRef = useRef(null);
   const pythonPollGenerationRef = useRef(0);
   const handleConfirmRef = useRef(null);
@@ -459,7 +530,6 @@ export default function Demo() {
   const queuedPlanStartRef = useRef(null);
   const preparedActionPreviewRef = useRef(false);
   const runRequestKeyRef = useRef(null);
-  const authorizationRepairRef = useRef(0);
   const lastPlanningIntentRef = useRef("");
   const historySavePromiseRef = useRef(null);
 
@@ -512,7 +582,6 @@ export default function Demo() {
     clearTimeouts();
     pythonPollGenerationRef.current += 1;
     runRequestKeyRef.current = null;
-    authorizationRepairRef.current = 0;
     lastPlanningIntentRef.current = "";
     historySavePromiseRef.current = null;
     queuedPlanStartRef.current = null;
@@ -527,6 +596,7 @@ export default function Demo() {
     currentWorkflowIdRef.current = null;
     pythonRunIdRef.current = null;
     pythonPlanRef.current = null;
+    visiblePlanRef.current = null;
     setPhase("input");
     setOriginalPrompt("");
     setInterpretation("");
@@ -633,7 +703,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
 
   // ---- Confirm interpretation ----
   const handleConfirm = useCallback(
-    (editedInterpretation, revisionInstruction = "", allowLegacyPlanner = false) => {
+    (editedInterpretation, revisionInstruction = "", allowLegacyPlanner = false, existingLanguagePlan = null) => {
       setInterpretation(editedInterpretation);
       if (!allowLegacyPlanner) {
         const reviewedSteps = revisionInstruction
@@ -644,55 +714,39 @@ Write ONE clear, conversational sentence restating what they want — but offer 
         const pilotDescription = "Create a Google Doc; schedule a Google Calendar event; create a Canva presentation; send a Gmail message";
         const draftIntent = pilotMode ? pilotDescription : confirmedIntent;
         const pilotTools = ["Google Docs", "Google Calendar", "Canva", "Gmail"];
-        const availableCatalog = CATALOG.filter((tool) => !omittedToolsRef.current.includes(tool.name));
         const selectedTools = userSelectedToolsRef.current.filter(
           (tool) => !omittedToolsRef.current.includes(tool)
         );
-        const explicitRequirements = promptConnectionRequirements(
-          draftIntent,
-          availableCatalog.map((tool) => ({ ...tool, slug: tool.provider })),
-          getAllConnections(),
-        );
-        const immediatePlan = {
-          ...instantLanguagePlan(draftIntent, availableCatalog, pilotMode ? pilotTools : selectedTools),
-          connectionRequirements: explicitRequirements,
-        };
-        // Show the immediate outline, then refine it with one language-only
-        // model call while the backend validates its own executable candidate.
-        setPlan((current) => revisionInstruction && current?.steps?.length
-          ? { ...current, provisional: true, compileState: "validating", compileError: "" }
-          : immediatePlan);
-        setPlanLoading(false);
+        setPlanLoading(!existingLanguagePlan);
         setPhase("plan");
 
         return (async () => {
           // The first revision may arrive before the initial create-run call
           // returns. Only the latest request may take ownership of the view.
           const generation = ++pythonPollGenerationRef.current;
-          void aura.integrations.Core.InvokeLLM({
-            prompt: languageDraftPrompt(
-              draftIntent, pilotMode ? pilotTools : selectedTools, revisionInstruction, reviewedSteps,
-            ),
-            response_json_schema: PLAN_SCHEMA,
-          }).then((draft) => {
-            if (generation !== pythonPollGenerationRef.current || !Array.isArray(draft?.steps)
-              || draft.steps.length === 0 || draft.steps.length > 6
-              || !draft.steps.every((item) => typeof item.tool === "string"
-                && typeof item.title === "string"
-                && ["read", "modify"].includes(item.riskLevel))) return;
-            setPlan((current) => current?.provisional && current.compileState === "validating"
-              ? {
-                ...current,
-                ...draft,
-                connectionRequirements: explicitRequirements,
-                provisional: true,
-                compileState: "validating",
-              }
-              : current);
-          }).catch(() => {
-            // The immediate draft remains visible until the durable plan is ready.
-          });
+          let languagePlan = existingLanguagePlan?.steps?.length
+            ? { ...existingLanguagePlan, provisional: true, compileState: "validating", compileError: "", error: "", startError: "" }
+            : null;
           try {
+            if (!languagePlan) {
+              const draft = await aura.integrations.Core.InvokeLLM({
+                prompt: languageDraftPrompt(
+                  draftIntent, pilotMode ? pilotTools : selectedTools, revisionInstruction, reviewedSteps,
+                ),
+                response_json_schema: PLAN_SCHEMA,
+              });
+              if (generation !== pythonPollGenerationRef.current) return;
+              if (!Array.isArray(draft?.steps) || draft.steps.length === 0 || draft.steps.length > 6
+                || !draft.steps.every((item) => typeof item.tool === "string"
+                  && typeof item.title === "string"
+                  && ["read", "modify"].includes(item.riskLevel))) {
+                throw new Error("AURA couldn't write a complete plan. Please try again.");
+              }
+              languagePlan = { ...draft, provisional: true, compileState: "validating" };
+            }
+            visiblePlanRef.current = languagePlan;
+            setPlan(languagePlan);
+            setPlanLoading(false);
             const previousRunId = pythonRunIdRef.current;
             const startFresh = shouldStartFreshPlanningRun({
               nextIntent: confirmedIntent,
@@ -710,7 +764,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
                   }
                 } catch (error) {
                   setPlan((current) => ({
-                    ...(current || immediatePlan),
+                    ...(current || languagePlan),
                     provisional: true,
                     compileState: "blocked",
                     compileError: error.message || "Could not stop the previous run. Try revising again.",
@@ -730,6 +784,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             const requestKey = runRequestKeyRef.current;
             const resources = attachedResourcesRef.current || {};
             const created = await createPythonRunResilient(planningPrompt, null, requestKey, {
+              aura_visible_plan: languagePlan,
               requested_tools: selectedTools,
               excluded_tool_families: [...omittedToolsRef.current],
               saved_workflow_id: currentWorkflowIdRef.current,
@@ -759,29 +814,23 @@ Write ONE clear, conversational sentence restating what they want — but offer 
                 setPhase("plan");
                 pythonPlanRef.current = run.plan || null;
                 const connectionPlan = uiConnectionPlanFromRun(run, editedInterpretation);
-                setPlan((current) => connectionPlan.steps.length ? {
-                  ...connectionPlan,
-                  provisional: false,
-                  compileState: "waiting_for_connection",
-                } : {
-                  ...(current || immediatePlan),
-                  ...connectionPlan,
-                  workflowName: connectionPlan.workflowName || current?.workflowName || immediatePlan.workflowName,
-                  steps: current?.steps?.length ? current.steps : immediatePlan.steps,
+                setPlan((current) => ({
+                  ...(current || languagePlan),
+                  connectionRequirements: connectionPlan.connectionRequirements,
+                  connectionChecklist: connectionPlan.connectionChecklist,
                   provisional: true,
                   compileState: "waiting_for_connection",
-                });
+                }));
                 if (revisionInstruction) return { ok: false, error: "Connect the required account before revising this plan." };
                 return;
               }
               if (disposition === "unavailable") {
-                // A language draft is only an outline. A terminal backend
-                // failure must not leave it on screen as a runnable plan.
                 pythonPlanRef.current = null;
                 queuedPlanStartRef.current = null;
                 setPlan((current) => ({
-                  ...(current || immediatePlan),
+                  ...(current || languagePlan),
                   ...unavailablePlanningState(run),
+                  steps: current?.steps || languagePlan?.steps || [],
                 }));
                 setPhase("plan");
                 return;
@@ -789,6 +838,18 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               await new Promise((resolve) => setTimeout(resolve, PLANNING_POLL_INTERVAL_MS));
             }
             pythonPlanRef.current = run.plan;
+            const unreviewed = unmatchedWriteTools(languagePlan.steps, run.plan.steps, planToolName);
+            if (unreviewed.length) {
+              pythonPlanRef.current = null;
+              queuedPlanStartRef.current = null;
+              setPlan((current) => ({ ...current, provisional: true, compileState: "blocked",
+                compileError: `AURA's actions in ${unreviewed.join(", ")} don't match the plan you saw. Nothing was started.` }));
+              await cancelPythonRun(created.id).catch(() => {});
+              forgetActivePythonRun(created.id);
+              pythonRunIdRef.current = null;
+              runRequestKeyRef.current = null;
+              return { ok: false, error: "The prepared actions did not match the visible plan." };
+            }
             const compiledPlan = {
               ...uiPlanFromRun(run),
               provisional: false,
@@ -805,7 +866,12 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               setPlan((current) => ({ ...current, provisional: true, compileState: "blocked", compileError: error }));
               return { ok: false, error };
             }
-            setPlan(compiledPlan);
+            setPlan((current) => ({
+              ...(current || languagePlan),
+              provisional: false,
+              compileState: "ready",
+              compileError: "",
+            }));
             if (revisionInstruction) return { ok: true, plan: compiledPlan };
             const queuedStart = queuedPlanStartRef.current;
             if (queuedStart) {
@@ -817,7 +883,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             }
           } catch (error) {
             if (generation !== pythonPollGenerationRef.current) return;
-            console.warn("Executable planning unavailable; the language plan remains visible", error);
+            console.warn("Executable planning unavailable", error);
             const queuedStart = queuedPlanStartRef.current;
             queuedPlanStartRef.current = null;
             if (queuedStart) setPhase("plan");
@@ -825,9 +891,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             // run stopped. Retain its idempotency key so Retry reattaches.
             pythonPlanRef.current = null;
             setPlan((current) => ({
-              ...(current || immediatePlan),
-              estimatedTime: "Plan saved — reconnect to its preparation",
-              connectionRequirements: explicitRequirements,
+              ...(current || languagePlan || { interpretation: editedInterpretation, steps: [] }),
               provisional: true,
               compileState: "blocked",
               compileError: error?.message || "AURA couldn't prepare this workflow quickly enough.",
@@ -995,7 +1059,7 @@ Rules:
         runRequestKeyRef.current = null;
       }
     }
-    return handleConfirm(interpretation);
+    return handleConfirm(interpretation, "", false, visiblePlanRef.current);
   }, [handleConfirm, interpretation]);
 
   const handlePlanningConnectionRecovered = async (recoveries) => {
@@ -1021,24 +1085,33 @@ Rules:
         if (!run) return;
         const disposition = planningDisposition(run);
         if (disposition === "review") {
+          const unreviewed = unmatchedWriteTools(
+            visiblePlanRef.current?.steps || [], run.plan.steps, planToolName,
+          );
+          if (unreviewed.length) {
+            pythonPlanRef.current = null;
+            setPlan((current) => ({ ...current, provisional: true, compileState: "blocked",
+              compileError: `AURA's actions in ${unreviewed.join(", ")} don't match the plan you saw. Nothing was started.` }));
+            await cancelPythonRun(runId).catch(() => {});
+            forgetActivePythonRun(runId);
+            pythonRunIdRef.current = null;
+            runRequestKeyRef.current = null;
+            return;
+          }
           pythonPlanRef.current = run.plan;
-          setPlan({ ...uiPlanFromRun(run), provisional: false, compileState: "ready" });
+          setPlan((current) => ({ ...current, provisional: false, compileState: "ready", compileError: "" }));
           return;
         }
         if (disposition === "connection") {
           pythonPlanRef.current = run.plan || null;
           const connectionPlan = uiConnectionPlanFromRun(run, interpretation);
-          setPlan((current) => connectionPlan.steps.length ? {
-            ...connectionPlan,
-            provisional: false,
-            compileState: "waiting_for_connection",
-          } : {
-            ...(current || connectionPlan),
-            ...connectionPlan,
-            steps: current?.steps || [],
+          setPlan((current) => ({
+            ...(current || { interpretation, workflowName: "", steps: [] }),
+            connectionRequirements: connectionPlan.connectionRequirements,
+            connectionChecklist: connectionPlan.connectionChecklist,
             provisional: true,
             compileState: "waiting_for_connection",
-          });
+          }));
           return;
         }
         if (disposition === "unavailable") {
@@ -1053,8 +1126,8 @@ Rules:
         : null;
       setPlan((current) => ({
         ...(current || { interpretation, workflowName: "", steps: [] }),
-        ...(authoritative || {}),
-        steps: authoritative?.steps?.length ? authoritative.steps : (current?.steps || []),
+        connectionRequirements: authoritative?.connectionRequirements || current?.connectionRequirements,
+        connectionChecklist: authoritative?.connectionChecklist || current?.connectionChecklist,
         provisional: true,
         compileState: authoritative ? "waiting_for_connection" : "blocked",
         compileError: error?.message || "AURA couldn't resume executable validation right now.",
@@ -1152,8 +1225,15 @@ Rules:
 
   // ---- Approve plan -> preview (both mock and custom) ----
   const handleApprove = useCallback((steps, name = "") => {
-    approvedStepsRef.current = steps;
-    setApprovedSteps(steps);
+    if (plan?.compileState === "blocked") {
+      void handleRetryPlanning();
+      return;
+    }
+    const executionSteps = hasDurablePlan(pythonRunIdRef.current, pythonPlanRef.current)
+      ? pythonPlanRef.current.steps.map(uiPlanStepFromRun)
+      : steps;
+    approvedStepsRef.current = executionSteps;
+    setApprovedSteps(executionSteps);
     setWorkflowName(name);
     if (editRunMode) {
       setEditFlag(detectNewConsequential(editOriginalStepsRef.current, steps));
@@ -1457,8 +1537,11 @@ Rules:
         if (run.status === "waiting_for_action"
             && run.blocker?.code === "connection_required" && !run.plan_approved) {
           pythonPlanRef.current = run.plan;
-          setPlan({ ...uiConnectionPlanFromRun(run, originalPromptRef.current),
-            provisional: false, compileState: "waiting_for_connection" });
+          const connectionPlan = uiConnectionPlanFromRun(run, originalPromptRef.current);
+          setPlan((current) => ({ ...current,
+            connectionRequirements: connectionPlan.connectionRequirements,
+            connectionChecklist: connectionPlan.connectionChecklist,
+            provisional: true, compileState: "waiting_for_connection" }));
           setPhase("plan");
           return;
         }
@@ -1507,21 +1590,6 @@ Rules:
         const latest = await getPythonRun(runId).catch(() => null);
         const startFailure = approvalStartFailure(latest, error);
         if (startFailure) {
-          const fixes = error?.details?.detail?.fixes;
-          if (error.status === 422 && Array.isArray(fixes) && fixes.length
-              && authorizationRepairRef.current < 1) {
-            authorizationRepairRef.current += 1;
-            setPhase("plan");
-            setPlan((current) => current ? {
-              ...current, provisional: true, compileState: "validating",
-              startError: "AURA is repairing an invalid plan before execution.",
-            } : current);
-            // This run has not dispatched. Recompile a fresh plan with the
-            // exact backend corrections, then ask for plan review again.
-            void handleConfirm(interpretation,
-              `AURA backend authorization rejected the previous plan. Resolve every issue before offering Start: ${fixes.join("; ")}. Do not represent internal drafting as a connector operation. Preserve the user's requested external actions and final review.`);
-            return;
-          }
           keepPlanStartFailureInReview(startFailure.message);
           return;
         }

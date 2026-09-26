@@ -94,7 +94,7 @@ test("unfinished durable planning remains in background wait state", () => {
   }
 });
 
-test("the UI renders a language plan while durable compilation is still running", () => {
+test("the UI shows one LLM plan and keeps its content during backend validation", () => {
   const source = readFileSync(
     new URL("../src/pages/Demo.jsx", import.meta.url),
     "utf8",
@@ -104,14 +104,17 @@ test("the UI renders a language plan while durable compilation is still running"
     "utf8",
   );
 
-  assert.equal(source.includes("instantLanguagePlan(draftIntent"), true);
-  const preparation = source.slice(
-    source.indexOf("const immediatePlan ="),
-    source.indexOf("return (async () =>", source.indexOf("const immediatePlan =")),
-  );
+  assert.equal(source.includes("instantLanguagePlan(draftIntent"), false);
+  assert.equal(source.includes("const draft = await aura.integrations.Core.InvokeLLM({"), true);
   assert.equal(source.includes("prompt: languageDraftPrompt("), true);
-  assert.equal(source.includes('current?.provisional && current.compileState === "validating"'), true);
-  assert.equal(source.includes("Executable planning unavailable; the language plan remains visible"), true);
+  assert.equal(source.includes("setPlan(languagePlan)"), true);
+  assert.equal(source.includes("setPlan(compiledPlan)"), false);
+  assert.equal(source.includes("aura_visible_plan: languagePlan"), true);
+  assert.equal(source.includes("run.inputs?.aura_visible_plan"), true);
+  assert.equal(source.includes("handleConfirm(interpretation, \"\", false, visiblePlanRef.current)"), true);
+  assert.equal(source.includes("unmatchedWriteTools(languagePlan.steps, run.plan.steps, planToolName)"), true);
+  assert.equal(source.includes("AURA is repairing an invalid plan before execution."), false);
+  assert.equal(source.includes("Executable planning unavailable"), true);
   assert.equal(planViewSource.includes("validating exact actions backstage"), false);
   assert.equal(planViewSource.includes("validatingExecution || missingTools.length"), false);
   assert.equal(source.includes("queuedPlanStartRef.current = { name }"), true);

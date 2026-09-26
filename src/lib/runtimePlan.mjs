@@ -13,7 +13,13 @@ export function restorablePlanningRun(run = {}) {
 
 export function savedRunResumeView(run = {}) {
   if (!run?.id) return null;
-  if (!run.plan_approved) return restorablePlanningRun(run) ? "plan" : null;
+  if (!run.plan_approved) {
+    if (restorablePlanningRun(run)) return "plan";
+    if (run.inputs?.aura_visible_plan?.steps?.length
+      && (["queued", "planning", "recovering"].includes(run.status)
+        || run.public_status === "recovering")) return "plan";
+    return null;
+  }
   if (!run.plan?.steps?.length) return null;
   if (run.automation_state?.status === "blocked"
       || ["waiting_for_action", "blocked", "failed"].includes(run.status)) return "recovery";
@@ -34,6 +40,23 @@ export function sameExecutablePlan(before = [], after = []) {
     depends_on: step.depends_on || [],
   }));
   return JSON.stringify(identity(before)) === JSON.stringify(identity(after));
+}
+
+export function unmatchedWriteTools(visibleSteps = [], executableSteps = [], toolName = (step) => step.tool) {
+  const visibleWrites = visibleSteps
+    .filter((step) => step.riskLevel === "modify"
+      && String(step.tool || "").trim().toLowerCase() !== "aura intelligence")
+    .map((step) => String(step.tool || "").trim());
+  const executableWrites = executableSteps
+    .filter((step) => step.consequential)
+    .map((step) => String(toolName(step) || "").trim())
+    .filter(Boolean);
+  const visibleNames = new Set(visibleWrites.map((tool) => tool.toLowerCase()));
+  const executableNames = new Set(executableWrites.map((tool) => tool.toLowerCase()));
+  return [...new Set([
+    ...executableWrites.filter((tool) => !visibleNames.has(tool.toLowerCase())),
+    ...visibleWrites.filter((tool) => !executableNames.has(tool.toLowerCase())),
+  ])];
 }
 
 export function planningRequestPrompt(confirmedIntent, revisionInstruction = "", reviewedSteps = []) {
