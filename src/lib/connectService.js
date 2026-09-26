@@ -37,10 +37,15 @@ export async function connectTool(toolName, opts = {}) {
   const requestedRoute = entry.routes?.find(
     (route) => route.provider === requestedProvider && route.connectable
   );
+  if (requestedProvider && !requestedRoute) {
+    throw new Error(`${toolName} needs its exact plan connection. This connector route is not available for one-click access yet.`);
+  }
   const provider = requestedRoute?.provider || entry.provider;
   let authorizationWindow = null;
   try {
-    const existing = await getToolConnection(toolName, opts.connectionId, provider);
+    const existing = await getToolConnection(toolName, opts.connectionId, provider, {
+      exactProvider: Boolean(requestedProvider),
+    });
     const authorizationProvider = existing?.slug || provider;
     const backend = existing?.connection_backend || requestedRoute?.connectionBackend || entry.connectionBackend;
     if (backend !== "pipedream") authorizationWindow = reserveAuthorizationWindow(authorizationProvider);
@@ -58,12 +63,12 @@ export async function connectTool(toolName, opts = {}) {
     if (!isVerifiedConnection(verification)) {
       throw new Error(`AURA is still restoring ${toolName} access. Your work is preserved.`);
     }
-    await hydrateConnections({ force: true });
+    const refreshedTools = await hydrateConnections({ force: true });
     return {
       method: result.managed ? "managed" : "oauth",
       connected: true,
       provider: authorizationProvider,
-      connection: result.tool,
+      connection: refreshedTools.find((tool) => tool.id === result.tool.id) || result.tool,
     };
   } catch (error) {
     if (authorizationWindow && !authorizationWindow.closed) authorizationWindow.close();
@@ -112,12 +117,13 @@ export async function hydrateConnections({ force = false } = {}) {
   return hydrationPromise;
 }
 
-export async function getToolConnection(toolName, connectionId = null, providerOverride = null) {
+export async function getToolConnection(toolName, connectionId = null, providerOverride = null, options = {}) {
   const tools = await listPythonTools();
   return selectConnection(tools, {
     toolName,
     provider: providerOverride || providerForTool(toolName),
     connectionId,
+    exactProvider: Boolean(options.exactProvider),
   });
 }
 
