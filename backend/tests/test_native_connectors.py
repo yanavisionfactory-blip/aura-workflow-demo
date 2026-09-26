@@ -178,6 +178,31 @@ def test_generated_identifier_is_never_silently_truncated():
         )
 
 
+def test_planner_omits_null_optional_connector_input_without_coercing_ids():
+    manifest = {"capabilities": [{
+        "name": "google-docs.create-document",
+        "input_schema": {
+            "type": "object", "required": ["title"],
+            "properties": {"title": {"type": "string"}, "folderId": {"type": "string"}},
+            "additionalProperties": False,
+        },
+    }]}
+    arguments = {"title": "Shorter meetings", "folderId": None}
+    assert normalize_planned_module_arguments(
+        manifest, "google-docs.create-document", arguments,
+    ) == {"title": "Shorter meetings"}
+    with pytest.raises(NativeConnectorError, match="folderId must be string"):
+        normalize_module_arguments(manifest, "google-docs.create-document", arguments)
+    with pytest.raises(NativeConnectorError, match="folderId must be string"):
+        normalize_planned_module_arguments(manifest, "google-docs.create-document", {
+            "title": "Shorter meetings", "folderId": 123,
+        })
+    with pytest.raises(NativeConnectorError, match="missing required inputs: title"):
+        normalize_planned_module_arguments(manifest, "google-docs.create-document", {
+            "title": None,
+        })
+
+
 def test_module_argument_normalization_still_rejects_unknown_inputs():
     with pytest.raises(NativeConnectorError, match="unknown inputs"):
         normalize_module_arguments(

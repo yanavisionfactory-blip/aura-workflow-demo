@@ -806,11 +806,14 @@ def _normalize_planned_value(schema: dict[str, Any], value: Any, path: str) -> A
     schema_type = schema.get("type")
     if schema_type == "object" and isinstance(value, dict):
         properties = schema.get("properties", {})
+        required = set(schema.get("required") or [])
         return {
             key: _normalize_planned_value(
                 properties.get(key, {}), item, f"{path}.{key}"
             )
             for key, item in value.items()
+            if not (item is None and key not in required
+                    and _non_nullable_schema(properties.get(key, {})))
         }
     if schema_type == "array" and isinstance(value, list):
         item_schema = schema.get("items", {})
@@ -829,6 +832,15 @@ def _normalize_planned_value(schema: dict[str, Any], value: Any, path: str) -> A
                 value, maximum, int(schema.get("minLength", 0))
             )
     return value
+
+
+def _non_nullable_schema(schema: dict[str, Any]) -> bool:
+    schema_type = schema.get("type")
+    return (
+        isinstance(schema_type, str) and schema_type != "null"
+        and "anyOf" not in schema and "oneOf" not in schema
+        and not schema.get("nullable", False)
+    )
 
 
 _ARGUMENT_ALIASES = {
@@ -888,10 +900,18 @@ def _normalize_module_arguments(
     if not module:
         raise NativeConnectorError(f"Module {operation!r} is not declared")
     properties = module.get("input_schema", {}).get("properties", {})
+    required = set(module.get("input_schema", {}).get("required") or [])
     normalized: dict[str, Any] = {}
     for key, value in arguments.items():
         snake_key = re.sub(r"(?<!^)(?=[A-Z])", "_", key).lower()
         target = _schema_argument_target(snake_key, properties)
+        property_schema = properties.get(target, {})
+        if (normalize_generated_text and value is None and target not in required
+                and _non_nullable_schema(property_schema)):
+            # Models often spell an omitted optional connector input as null.
+            # Preserve required values and nullable fields, but do not block a
+            # plan because an optional opaque ID such as folderId is absent.
+            continue
         if target in normalized and target != key:
             raise NativeConnectorError(f"Duplicate values supplied for {target!r}")
         if properties.get(target, {}).get("format") == "date-time" and isinstance(value, str) and "{{" not in value:
