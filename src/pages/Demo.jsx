@@ -181,6 +181,7 @@ const uiPlanStepFromRun = (step) => {
   const planned = {
     key: step.key,
     tool,
+    toolSlug: step.tool_slug,
     operation: step.operation,
     depends_on: step.depends_on || [],
     arguments: step.arguments || {},
