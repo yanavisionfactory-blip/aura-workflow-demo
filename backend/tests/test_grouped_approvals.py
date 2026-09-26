@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+from fastapi import HTTPException
 from sqlalchemy import select
 
 from app import main
@@ -22,6 +24,41 @@ from app.native_connectors import native_manifest, native_operations
 from app.policy import canonical_plan_hash
 from app.schemas import ApprovalDecision, PlanApproval, PlanStep, WorkflowPlan
 from app.workflow_templates import weather_presentation_template
+
+
+async def test_saved_identity_only_plan_cannot_start_customer_followups(database):
+    workspace_id, run_id = str(uuid4()), str(uuid4())
+    prompt = "Find customers I have not followed up with this week and send follow-up emails via Gmail"
+    plan = WorkflowPlan(name="Follow-ups", interpretation=prompt, steps=[
+        PlanStep(key="identity", agent="google", tool_slug="google",
+                 operation="google.identity.get", reason="Read my account",
+                 expected_output="Account email"),
+    ])
+    async with database() as session:
+        session.add(Workspace(id=workspace_id, name="Follow-up contract"))
+        session.add(WorkflowRun(id=run_id, workspace_id=workspace_id, prompt=prompt,
+                                plan=plan.model_dump(mode="json"), status=RunStatus.awaiting_approval))
+        tool = ToolConnection(workspace_id=workspace_id, slug="google", display_name="Google",
+                              kind=ToolKind.oauth, allowed_operations=native_operations("google"),
+                              config={"managed_by": "pipedream"})
+        session.add(tool)
+        await session.flush()
+        session.add(CapabilityManifest(workspace_id=workspace_id, tool_id=tool.id,
+                                       provider_type="oauth", status="verified",
+                                       manifest=native_manifest("google")))
+        session.add(RunStep(run_id=run_id, position=0, step_key="identity", agent="google",
+                            tool_slug="google", operation="google.identity.get", arguments={},
+                            idempotency_key=str(uuid4())))
+        await session.commit()
+        with pytest.raises(HTTPException) as exc:
+            await main.approve_plan(
+                run_id, PlanApproval(approved=True),
+                SimpleNamespace(workspace_id=workspace_id, subject="owner", role="owner"),
+                session,
+            )
+        assert exc.value.status_code == 422
+        assert "gmail send" in str(exc.value.detail)
+        assert (await session.get(WorkflowRun, run_id)).plan_approved is False
 
 
 async def test_old_review_missing_gmail_readback_becomes_connection_wait(monkeypatch, database):

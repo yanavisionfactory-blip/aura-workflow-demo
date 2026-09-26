@@ -925,6 +925,16 @@ def normalize_planned_module_arguments(
     manifest: dict[str, Any], operation: str, arguments: dict[str, Any]
 ) -> dict[str, Any]:
     """Fit safe generated prose to connector limits before review and approval."""
+    if operation == "gmail.list":
+        # Models sometimes attach Gmail GET response selectors to the list
+        # request. List returns message IDs; it cannot accept these selectors.
+        # The objective contract separately requires gmail.get when full
+        # message content is needed, so discarding these hints cannot fabricate
+        # a successful read or hide a requested action.
+        arguments = {
+            key: value for key, value in arguments.items()
+            if key not in {"body_chars", "fields", "format"}
+        }
     return _normalize_module_arguments(
         manifest,
         operation,

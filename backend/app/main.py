@@ -5709,6 +5709,20 @@ async def approve_plan(
                     item["name"] for item in manifest.get("capabilities", [])
                 ],
             }
+    from .request_contracts import validate_requested_operations
+
+    try:
+        validate_requested_operations(
+            run.prompt, plan,
+            {operation for item in available_by_slug.values()
+             for operation in item.get("allowed_operations", [])},
+            list(available_by_slug.values()), available_manifests,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, {
+            "message": "The saved plan is missing work required by your request",
+            "fixes": [str(exc)],
+        }) from exc
     preflight = preflight_plan(
         plan, list(available_by_slug.values()), available_manifests,
         set((run.inputs or {}).keys()), inventory,

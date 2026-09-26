@@ -399,6 +399,9 @@ def test_unavailable_structural_guarantees_remain_rejected_or_require_readback()
     ("Prepare an email to me summarizing meetings. Show me the complete recipient, subject, and email body for approval before sending it.", {"gmail.send"}),
     ("Prepare an email to me. Show it before sending it, but do not send it.", set()),
     ("Summarize emails and send a Slack message", set()),
+    ("Find customers I have not followed up with this week and send personalized check-in emails via Gmail", {"gmail.send"}),
+    ("Follow up with my customers via Gmail", {"gmail.send"}),
+    ("Find customers I have not followed up with this week; draft emails but do not send them", set()),
 ])
 def test_explicit_email_delivery_is_a_required_external_action(prompt_text, required):
     assert requested_external_operations(prompt_text) == required
@@ -427,6 +430,57 @@ def test_read_only_calendar_plan_cannot_erase_requested_email_delivery():
     )
 
 
+def test_gmail_followup_requires_delivery_and_message_content():
+    prompt = (
+        "Find customers I have not followed up with this week and send "
+        "personalized check-in emails to each via Gmail"
+    )
+    plan = WorkflowPlan(name="Follow-ups", interpretation=prompt, steps=[
+        PlanStep(key="search", agent="gmail", tool_slug="google", operation="gmail.list",
+                 arguments={"query": "newer_than:7d"}, reason="Find conversations",
+                 expected_output="Message IDs"),
+    ])
+    available = {"gmail.list", "gmail.get", "gmail.send"}
+    with pytest.raises(ValueError, match="gmail.send"):
+        validate_requested_operations(prompt, plan, available)
+    plan.steps.append(PlanStep(key="send", agent="gmail", tool_slug="google",
+                               operation="gmail.send", arguments={"to": "me", "body": "Draft"},
+                               depends_on=["search"], consequential=True,
+                               reason="Send follow-up", expected_output="Receipt"))
+    with pytest.raises(ValueError, match="gmail.get"):
+        validate_requested_operations(prompt, plan, available)
+    plan.steps.insert(1, PlanStep(key="read", agent="gmail", tool_slug="google",
+                                  operation="gmail.get", arguments={"message_id": "{{steps.search.messages.0.id}}"},
+                                  depends_on=["search"], reason="Read context",
+                                  expected_output="Full message"))
+    with pytest.raises(ValueError, match="depend on"):
+        validate_requested_operations(prompt, plan, available)
+    plan.steps[-1].depends_on = ["read"]
+    with pytest.raises(ValueError, match="resolved customers"):
+        validate_requested_operations(prompt, plan, available)
+    plan.steps[-1].arguments["to"] = "customer@example.test"
+    validate_requested_operations(prompt, plan, available)
+
+
+def test_gmail_get_output_fields_use_verified_evidence_tags():
+    plan = WorkflowPlan(name="Email context", interpretation="Read message", steps=[
+        PlanStep(key="message", agent="gmail", tool_slug="google",
+                 operation="gmail.get", arguments={"message_id": "message-1"},
+                 reason="Read the full message and its thread", expected_output="Message context",
+                 required_evidence=["payload", "threadId"]),
+    ])
+    manifests = {"google": native_manifest("google")}
+    _normalize_planned_steps(plan, manifests)
+    assert plan.steps[0].required_evidence == ["message_content", "message_metadata"]
+    compile_contracts(plan, manifests)
+    from app.operation_contracts import output_errors
+
+    assert output_errors("gmail.get", {"id": "message-1"})
+    assert output_errors("gmail.get", {
+        "id": "message-1", "threadId": "thread-1", "payload": {},
+    }) == []
+
+
 def test_review_before_sending_requires_email_action_with_real_catalog():
     prompt = ("Read my Google Calendar meetings for today and any Gmail messages relevant to "
               "those meetings. Prepare an email to me summarizing the meetings, including their "
@@ -448,6 +502,7 @@ def test_review_before_sending_requires_email_action_with_real_catalog():
 
 @pytest.mark.parametrize("prompt_text,effect", [
     ("Send today's meeting summary to me via Gmail", "gmail send"),
+    ("Send personalized follow-up emails to customers via Gmail", "gmail send"),
     ("Summarize emails and send a Slack message", "slack send"),
     ("Use Slack to post the summary", "slack send"),
     ("Schedule an event in Google Calendar", "calendar create"),

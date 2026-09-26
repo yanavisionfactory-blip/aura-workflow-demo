@@ -26,7 +26,7 @@ _OPERATION_VERBS = {
     "share": {"share"},
 }
 _ALIASES = {
-    "gmail": ("gmail", "e-mail", "email"),
+    "gmail": ("gmail", "e-mail", "email", "e-mails", "emails"),
     "calendar": ("google calendar", "calendar"),
     "docs": ("google docs", "google doc"),
     "sheets": ("google sheets", "google sheet"),
@@ -54,9 +54,18 @@ def requested_external_operations(prompt: str) -> set[str]:
     for clause in re.split(r"[.!?;\n]+", prompt.casefold()):
         if re.search(r"\b(?:do not|don't|never|without)\s+(?:send|email|mail|deliver)\b", clause):
             continue
-        if (re.search(r"\b(?:send|deliver|forward)\b.{0,140}\b(?:email|e-mail|gmail)\b", clause)
-                or re.search(r"\b(?:gmail|e-mail|email)\b.{0,90}\b(?:send|deliver)\b", clause)
-                or re.search(r"\bemail\s+(?:me|us|them|it|this|the|a|an)\b", clause)):
+        if (re.search(r"\b(?:send|deliver|forward)\b.{0,140}\b(?:emails?|e-mails?|gmail)\b", clause)
+                or re.search(
+                    r"\b(?:use|with|via|through|on|in)\s+(?:my\s+)?"
+                    r"(?:gmail|e-mails?|emails?)\b.{0,90}\b(?:send|deliver)\b",
+                    clause,
+                )
+                or re.search(r"\bemail\s+(?:me|us|them|it|this|the|a|an)\b", clause)
+                or re.search(
+                    r"\bfollow[\s-]?up\s+with\b.{0,160}"
+                    r"\b(?:via|through|using|by|on|in)\s+(?:my\s+)?(?:gmail|e-mails?|emails?)\b",
+                    clause,
+                )):
             return {"gmail.send"}
     return set()
 
@@ -202,5 +211,54 @@ def validate_requested_operations(
                 + ", ".join(sorted({target["operation"] for target in effect["targets"]}))
                 + ". Keep it through every recovery attempt."
             )
+    if (
+        any(step.operation == "gmail.list" for step in plan.steps)
+        and not any(step.operation == "gmail.get" for step in plan.steps)
+        and re.search(r"\b(?:gmail|e-mails?|emails?|inbox|mailbox|messages?)\b", prompt, re.IGNORECASE)
+        and re.search(
+            r"\b(?:personaliz\w*|summari[sz]\w*|draft\w*|compos\w*|"
+            r"follow(?:ed|ing)?[\s-]?up|check[\s-]?in)\b",
+            prompt, re.IGNORECASE,
+        )
+    ):
+        raise ValueError(
+            "Gmail.list returns message IDs, not the message content needed for this "
+            "request. Add gmail.get after the search and use its verified output "
+            "before drafting or sending."
+        )
+    if (
+        any(step.operation == "gmail.list" for step in plan.steps)
+        and re.search(r"\bpersonaliz\w*\b", prompt, re.IGNORECASE)
+    ):
+        reads = {step.key for step in plan.steps if step.operation == "gmail.get"}
+        by_key = {step.key: step for step in plan.steps}
+        for send in (step for step in plan.steps if step.operation == "gmail.send"):
+            pending = list(send.depends_on)
+            visited: set[str] = set()
+            while pending:
+                key = pending.pop()
+                if key in visited:
+                    continue
+                visited.add(key)
+                pending.extend(by_key[key].depends_on if key in by_key else [])
+            if not reads.intersection(visited):
+                raise ValueError(
+                    "A personalized Gmail follow-up must depend on the gmail.get "
+                    "message context before its approval and send step."
+                )
+    if (
+        "gmail.send" in requested_external_operations(prompt)
+        and re.search(r"\b(?:customers?|clients?|contacts?)\b", prompt, re.IGNORECASE)
+        and re.search(r"\b(?:follow[\s-]?up|check[\s-]?in|personaliz\w*)\b", prompt, re.IGNORECASE)
+        and not re.search(r"\b(?:send|email|deliver)\b.{0,100}\b(?:to me|my inbox|myself)\b", prompt, re.IGNORECASE)
+        and any(
+            step.operation == "gmail.send" and str(step.arguments.get("to", "")).casefold() in {"me", "myself", "self"}
+            for step in plan.steps
+        )
+    ):
+        raise ValueError(
+            "Customer follow-up emails must address the resolved customers, not the connected account. "
+            "Use recipient values from verified customer context and show each completed email for approval."
+        )
     plan.planning_artifacts["required_effects"] = effects
     return effects

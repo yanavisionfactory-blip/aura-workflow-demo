@@ -27,9 +27,9 @@ KNOWN = {
     "notion.blocks.children.list": (COLLECTION, ["page_body"]),
     "notion.page.create": (PAGE, ["resource_metadata"]),
     "notion.page.update": (PAGE, ["resource_metadata"]),
-    "gmail.get": ({"type": "object", "required": ["id"], "properties": {
+    "gmail.get": ({"type": "object", "required": ["id", "threadId", "payload"], "properties": {
         "id": TEXT, "threadId": TEXT, "payload": OBJECT,
-        "labelIds": {"type": "array", "items": TEXT}}}, ["message_content"]),
+        "labelIds": {"type": "array", "items": TEXT}}}, ["message_content", "message_metadata"]),
     "gmail.send": ({"type": "object", "required": ["id"], "properties": {"id": TEXT}}, ["write_receipt"]),
     "calendar.get": ({"type": "object", "required": ["id"], "properties": {
         "id": TEXT, "summary": TEXT, "start": OBJECT, "end": OBJECT, "status": TEXT}}, ["event_state"]),
@@ -485,6 +485,10 @@ def canonicalize_requested_evidence(operation: str, requested: list[str], provid
                   token in words for token in ("email", "address")
               )))):
             replacement = "account_identity"
+        elif operation == "gmail.get" and tag == "payload" and "message_content" in available:
+            replacement = "message_content"
+        elif operation == "gmail.get" and tag == "threadId" and "message_metadata" in available:
+            replacement = "message_metadata"
         elif (operation in {"calendar.list", "calendar.get"} and "event_state" in available
               and ("search results" in words or "calendar list results" in words
                    or "calendar event" in words)):
