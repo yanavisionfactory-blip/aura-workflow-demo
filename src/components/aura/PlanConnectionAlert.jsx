@@ -75,7 +75,7 @@ export default function PlanConnectionAlert({
         <div className="min-w-0">
           <p className="text-sm font-semibold">AURA connection checklist</p>
           <p className="text-[11px] text-muted-foreground">
-            {connectedCount} of {checklist.length} required {checklist.length === 1 ? "account" : "accounts"} connected
+            {connectedCount} of {checklist.length} required {checklist.length === 1 ? "account" : "accounts"} ready
           </p>
         </div>
       </div>
@@ -93,7 +93,9 @@ export default function PlanConnectionAlert({
           {isConnecting
             ? `Connecting ${connectingTool}…`
             : connectionEnabled
-              ? needed.length === 1 ? `Connect ${needed[0].name}` : "Connect remaining accounts"
+              ? needed.length === 1
+                ? needed[0].accessNeeded ? `Update ${needed[0].name} access` : `Connect ${needed[0].name}`
+                : "Connect or update remaining accounts"
               : "Validating required accounts…"}
         </button>
       </div>
@@ -113,7 +115,7 @@ export default function PlanConnectionAlert({
                   <span className="text-sm font-medium">{t.name}</span>
                   <span className={`inline-flex items-center gap-1 text-[11px] ${connected ? "text-emerald-400" : "text-amber-400"}`}>
                     {connected && <CheckCircle2 className="h-3 w-3" />}
-                    {connected ? "Connected" : "Connection needed"}
+                    {connected ? "Ready" : t.accessNeeded ? "More access needed" : "Connection needed"}
                   </span>
                 </div>
                 {t.reason && (

@@ -839,11 +839,44 @@ async def _create_compiled_plan(
         and {"gmail.send", "gmail.get"} <= set(item.get("allowed_operations") or [])
         for item in connected_inventory or []
     )
-    if native_gmail_ready:
+    if native_gmail_ready and "gmail.send" in requested_external_operations(objective):
         connected_slugs = {item["slug"] for item in connected_inventory or []}
         inventory = [
             item for item in inventory
             if item.get("slug") != "gmail" or "gmail" in connected_slugs
+        ]
+
+    # A shared Google account and a dedicated Docs connector can both expose
+    # document creation. The required-action schema is built from this full
+    # catalog, so remove the unavailable duplicate before the single LLM call.
+    # Keep the shared Google account for Gmail and other unrelated operations.
+    native_docs_ready = any(
+        item.get("slug") == "google"
+        and {"docs.create", "docs.get"} <= set(item.get("allowed_operations") or [])
+        for item in connected_inventory or []
+    )
+    separate_docs_ready = any(
+        item.get("slug") == "google-docs"
+        and {"google-docs.create-document", "google-docs.get-document"}
+        <= set(item.get("allowed_operations") or [])
+        for item in connected_inventory or []
+    )
+    writing_google_doc = (
+        "google doc" in requested_text.casefold()
+        and bool(re.search(r"\b(?:create|make|write|draft)\b", requested_text, re.IGNORECASE))
+    )
+    if writing_google_doc and separate_docs_ready and not native_docs_ready:
+        inventory = [
+            {**item, "allowed_operations": [
+                operation for operation in item.get("allowed_operations") or []
+                if operation not in {"docs.create", "docs.get"}
+            ]} if item.get("slug") == "google" else item
+            for item in inventory
+        ]
+    elif writing_google_doc and native_docs_ready and not separate_docs_ready:
+        inventory = [
+            item for item in inventory
+            if item.get("slug") != "google-docs"
         ]
 
     def reject_excluded_steps(plan) -> None:
