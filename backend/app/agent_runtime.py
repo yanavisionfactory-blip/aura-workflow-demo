@@ -137,6 +137,7 @@ def intent_bounded_tool_inventory(
     """Bound clear requests to relevant tools before model-based planning."""
     text = _intent_words(prompt)
     original = prompt.casefold()
+    wants_google_disk = bool(re.search(r"\bgoogle\s+disk\b", original))
     wants_public_weather = bool(
         {"weather", "forecast", "temperature", "rain"}.intersection(text.split())
         or re.search(r"\b(?:погод\w*|прогноз\w*|температур\w*|осадк\w*)\b", original)
@@ -157,6 +158,13 @@ def intent_bounded_tool_inventory(
             external_matches.add(index)
 
     selected = set(external_matches)
+    if wants_google_disk:
+        selected.update(
+            index for index, item in enumerate(inventory)
+            if any("drive" in alias.split() for alias in _inventory_aliases(item))
+            or any(str(operation).startswith("drive.")
+                   for operation in item.get("allowed_operations") or [])
+        )
     # Explicit Linear, for example, must not become Jira merely because the
     # request also contains the generic word "issues".
     if not external_matches:
