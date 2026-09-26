@@ -243,6 +243,8 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                 "time_min": {"type": "string", "format": "date-time", "x-preserve-on-recovery": True},
                 "time_max": {"type": "string", "format": "date-time", "x-preserve-on-recovery": True},
                 "limit": {**_POSITIVE_INTEGER, "maximum": 100},
+                "max_attendees": {"type": "integer", "minimum": 0, "maximum": 1000,
+                                  "description": "Include only events with no more than this many listed attendees. Events whose attendee list is omitted cannot be counted."},
             }),
             _module("calendar.create", "action", "Create an approved calendar event.", required=("start", "end"), properties={
                 "title": _TEXT, "description": _TEXT,
@@ -958,6 +960,11 @@ def normalize_planned_module_arguments(
             key: value for key, value in arguments.items()
             if key not in {"body_chars", "fields", "format"}
         }
+    if operation == "calendar.list":
+        # A model may copy Google's response projection into a Calendar read.
+        # We return the complete event evidence needed for attendee filtering.
+        arguments = {key: value for key, value in arguments.items()
+                     if key != "fields"}
     return _normalize_module_arguments(
         manifest,
         operation,
