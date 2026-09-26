@@ -662,6 +662,9 @@ def test_customer_check_in_drafts_require_conversation_history_not_one_message()
     ])
     with pytest.raises(ValueError, match="gmail.threads.read"):
         validate_requested_operations(prompt, plan, {"gmail.list", "gmail.get", "gmail.threads.read"})
+    without_provider_name = "Find customers I haven't followed up with this week and draft a personalized check-in email for each one"
+    with pytest.raises(ValueError, match="gmail.threads.read"):
+        validate_requested_operations(without_provider_name, plan, {"gmail.list", "gmail.get", "gmail.threads.read"})
     plan.steps = [PlanStep(key="conversations", agent="gmail", tool_slug="google",
                            operation="gmail.threads.read", arguments={"query": "newer_than:30d", "limit": 20},
                            reason="Read conversations and sent history", expected_output="Messages")]

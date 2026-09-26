@@ -259,7 +259,8 @@ def validate_requested_operations(
         )
     if (
         draft_only_email_request(prompt)
-        and re.search(r"\b(?:gmail|inbox|mailbox)\b", user_request_text(prompt), re.IGNORECASE)
+        and (re.search(r"\b(?:gmail|inbox|mailbox)\b", user_request_text(prompt), re.IGNORECASE)
+             or any(step.operation.startswith("gmail.") for step in plan.steps))
         and re.search(r"\b(?:customers?|clients?|contacts?)\b", prompt, re.IGNORECASE)
         and re.search(r"\bfollow[\s-]?up\b|\bfollowed\s+up\b", prompt, re.IGNORECASE)
         and "gmail.threads.read" not in {step.operation for step in plan.steps}
