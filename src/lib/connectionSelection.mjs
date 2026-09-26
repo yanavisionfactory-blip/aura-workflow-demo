@@ -8,6 +8,16 @@ const GOOGLE_FAMILY_OPERATION = {
   gmail: "gmail.",
 };
 
+export function planConnectionRoute(requirement) {
+  if (typeof requirement === "string") return requirement;
+  return requirement?.provider_hint || requirement?.capability
+    || requirement?.canonical_provider || "";
+}
+
+export function planConnectionKey(toolName, provider) {
+  return `${toolName}:${provider || ""}`;
+}
+
 export function matchingConnections(tools, toolName, provider) {
   const name = normalized(toolName);
   const slug = name.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
@@ -26,15 +36,19 @@ export function matchingConnections(tools, toolName, provider) {
   });
 }
 
-export function selectConnection(tools, { toolName, provider, connectionId } = {}) {
-  const matches = matchingConnections(tools, toolName, provider);
+export function selectConnection(tools, { toolName, provider, connectionId, exactProvider = false } = {}) {
+  // A reviewed plan names an executable connector slug. An account for the
+  // same app on another connector cannot grant that slug's operations.
+  const matches = exactProvider && provider
+    ? (tools || []).filter((tool) => normalized(tool.slug) === normalized(provider))
+    : matchingConnections(tools, toolName, provider);
   if (connectionId) {
     return matches.find((tool) => tool.id === connectionId) || null;
   }
   // A Google Docs (or Calendar/Gmail) connection can coexist with a broad
   // Workspace connection. Manage/Test must inspect the exact app used by the
   // approved plan, even if the broad account is the only healthy one.
-  if (GOOGLE_FAMILY_OPERATION[normalized(toolName)]) {
+  if (!exactProvider && GOOGLE_FAMILY_OPERATION[normalized(toolName)]) {
     const appSlug = normalized(toolName).replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
     const exact = matches.filter((tool) => normalized(tool.slug) === appSlug);
     if (exact.length === 1) return exact[0];
