@@ -9,7 +9,7 @@ import { CATALOG, catalogEntryFor } from "@/lib/toolCatalog";
 import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
 import { connectTool, getToolConnection, hydrateConnections } from "@/lib/connectService";
 import { testPythonConnection } from "@/lib/auraApi";
-import { isVerifiedConnection } from "@/lib/connectionSelection.mjs";
+import { isVerifiedConnection, planConnectionKey, planConnectionRoute } from "@/lib/connectionSelection.mjs";
 import { planningConnectionsEnabled } from "@/lib/planningFlow.mjs";
 const resolveTool = (raw) => {
   if (!raw || typeof raw !== "string") return null;
@@ -124,20 +124,24 @@ export default function PlanView({
   }, []);
   const [connectingTool, setConnectingTool] = useState(null);
   const [connectionErrors, setConnectionErrors] = useState({});
-  const hasRequiredGrant = useCallback((tool, account) => (plan.connectionChecklist || [])
-    .filter((requirement) => requirement.status !== "satisfied"
-      && String(requirement.reason || "").startsWith("Authorize exact operations")
-      && resolveRequirementTool(requirement.provider_hint || requirement.capability,
-        requirement.required_permissions) === tool.name)
-    .every((requirement) => (requirement.required_permissions || [])
-      .every((operation) => (account?.allowed_operations || []).includes(operation))), [plan.connectionChecklist]);
+  const hasRequiredGrant = useCallback((tool, account) => Boolean(account)
+    && (!tool.provider || account.slug === tool.provider)
+    && (plan.connectionChecklist || [])
+      .filter((requirement) => requirement.status !== "satisfied"
+        && String(requirement.reason || "").startsWith("Authorize exact operations")
+        && (tool.provider
+          ? (requirement.provider_hint || requirement.capability) === tool.provider
+          : resolveRequirementTool(requirement.provider_hint || requirement.capability,
+            requirement.required_permissions) === tool.name))
+      .every((requirement) => (requirement.required_permissions || [])
+        .every((operation) => (account.allowed_operations || []).includes(operation))), [plan.connectionChecklist]);
   const checkingRef = useRef(false);
   const connectingRef = useRef(false);
-  const handleConnect = async (name, provider = null) => {
-    setConnectingTool(name);
-    setConnectionErrors((prev) => ({ ...prev, [name]: "" }));
+  const handleConnect = async (tool) => {
+    setConnectingTool(tool.name);
+    setConnectionErrors((prev) => ({ ...prev, [tool.key]: "" }));
     try {
-      const res = await connectTool(name, { provider });
+      const res = await connectTool(tool.name, { provider: tool.provider });
       if (res.connected) {
         await hydrateConnections({ force: true });
       }
@@ -145,7 +149,7 @@ export default function PlanView({
     } catch (e) {
       setConnectionErrors((prev) => ({
         ...prev,
-        [name]: e?.message || `AURA couldn't connect ${name}. Your plan is unchanged.`,
+        [tool.key]: e?.message || `AURA couldn't connect ${tool.name}. Your plan is unchanged.`,
       }));
     } finally {
       setConnectingTool(null);
@@ -157,10 +161,10 @@ export default function PlanView({
     const recovered = [];
     try {
       for (const tool of needed) {
-        const result = await handleConnect(tool.name, tool.provider);
+        const result = await handleConnect(tool);
         if (!result?.connected) return;
         if (!hasRequiredGrant(tool, result.connection)) {
-          setConnectionErrors((previous) => ({ ...previous, [tool.name]:
+          setConnectionErrors((previous) => ({ ...previous, [tool.key]:
             "This account does not yet grant the access needed to verify this action. Reconnect with the requested permissions." }));
           return;
         }
@@ -184,39 +188,45 @@ export default function PlanView({
     const out = [];
     steps.forEach((s) => {
       toolsForStep(s).forEach((t) => {
-        if (!t || seen.has(t)) return;
-        seen.add(t);
+        const provider = resolveTool(s.tool) === t ? s.toolSlug || s.tool_slug || null : null;
+        const key = planConnectionKey(t, provider);
+        if (!t || seen.has(key)) return;
+        seen.add(key);
         const match = steps.find(
           (st) =>
             resolveTool(st.tool) === t ||
             (st.flow || []).some((f) => f.label === "Uses" && resolveTool(f.value) === t)
         );
-        out.push({ name: t, reason: match ? match.iWill || match.action || "" : "" });
+        out.push({ key, name: t, provider, reason: match ? match.iWill || match.action || "" : "" });
       });
     });
     const requirements = plan.connectionChecklist?.length
       ? plan.connectionChecklist.filter((requirement) => requirement.status !== "satisfied")
       : (plan.connectionRequirements || []);
     requirements.forEach((requirement) => {
-      const raw = typeof requirement === "string"
-        ? requirement
-        : requirement.canonical_provider || requirement.provider_hint || requirement.capability;
+      const raw = planConnectionRoute(requirement);
       const name = resolveRequirementTool(raw, requirement.required_permissions);
       if (!name) return;
+      const provider = raw;
+      const key = planConnectionKey(name, provider);
       const accessNeeded = typeof requirement === "object"
         && String(requirement.reason || "").startsWith("Authorize exact operations");
-      if (seen.has(name)) {
-        const existing = out.find((item) => item.name === name);
+      const existing = out.find((item) => item.name === name
+        && (!item.provider || item.provider === provider));
+      if (existing) {
+        seen.delete(existing.key);
+        existing.key = key;
+        existing.provider = provider;
+        seen.add(key);
         if (existing && accessNeeded) existing.accessNeeded = true;
-        if (String(raw).toLowerCase().endsWith("-mcp")) {
-          if (existing) existing.provider = raw;
-        }
         return;
       }
-      seen.add(name);
+      if (seen.has(key)) return;
+      seen.add(key);
       out.push({
+        key,
         name,
-        provider: raw,
+        provider,
         accessNeeded,
         reason: typeof requirement === "object" && requirement.reason
           ? requirement.reason
@@ -232,22 +242,23 @@ export default function PlanView({
   // loaded. Unknown state is not the same thing as disconnected.
   const effectiveConnections = useMemo(() => {
     const next = { ...connections };
-    requiredReconnectTools.forEach((toolName) => { next[toolName] = false; });
+    planTools.forEach((tool) => { next[tool.key] = Boolean(connections[tool.name]); });
+    requiredReconnectTools.forEach((toolName) => {
+      planTools.filter((tool) => tool.name === toolName).forEach((tool) => { next[tool.key] = false; });
+    });
     const authoritativeRequirements = plan.connectionChecklist?.length
       ? plan.connectionChecklist.filter((requirement) => requirement.status !== "satisfied")
       : (plan.connectionRequirements || []);
     authoritativeRequirements.forEach((requirement) => {
-      const raw = typeof requirement === "string"
-        ? requirement
-        : requirement.canonical_provider || requirement.provider_hint || requirement.capability;
+      const raw = planConnectionRoute(requirement);
       const name = resolveRequirementTool(raw, requirement.required_permissions);
-      if (name) next[name] = false;
+      if (name) next[planConnectionKey(name, raw)] = false;
     });
     return next;
-  }, [connections, requiredReconnectTools, plan.connectionChecklist, plan.connectionRequirements]);
+  }, [connections, requiredReconnectTools, plan.connectionChecklist, plan.connectionRequirements, planTools]);
 
   const missingTools = connectionsReady
-    ? planTools.filter((tool) => !effectiveConnections[tool.name])
+    ? planTools.filter((tool) => !effectiveConnections[tool.key])
     : [];
   const needed = missingTools.filter((tool) => catalogEntryFor(tool.name));
   const backstageOnly = missingTools.filter((tool) => !catalogEntryFor(tool.name));
@@ -256,14 +267,16 @@ export default function PlanView({
   const planningFailure = steps.length === 0 && Boolean(plan.error) && !connectionOnly;
   const connectionsCanOpen = planningConnectionsEnabled(plan.compileState);
 
-  const handleRecheck = useCallback(async (targetName = "", silent = false) => {
+  const handleRecheck = useCallback(async (targetKey = "", silent = false) => {
     if (!connectionsReady || !needed.length || checkingRef.current || connectingRef.current) return;
     checkingRef.current = true;
-    if (!silent) setConnectingTool(targetName || "accounts");
+    if (!silent) setConnectingTool(needed.find((tool) => tool.key === targetKey)?.name || "accounts");
     try {
       const recovered = [];
-      for (const tool of needed.filter((item) => !targetName || item.name === targetName)) {
-        const account = await getToolConnection(tool.name, null, tool.provider);
+      for (const tool of needed.filter((item) => !targetKey || item.key === targetKey)) {
+        const account = await getToolConnection(tool.name, null, tool.provider, {
+          exactProvider: Boolean(tool.provider),
+        });
         if (!account?.id || !hasRequiredGrant(tool, account)
           || !isVerifiedConnection(await testPythonConnection(account.id))) continue;
         recovered.push({ name: tool.name, connectionId: account.id });
@@ -274,12 +287,12 @@ export default function PlanView({
         // every five seconds while the plan remained open.
         await hydrateConnections({ force: true });
         await onConnectionRecovered?.(recovered);
-      } else if (targetName && !silent) setConnectionErrors((previous) => ({
-        ...previous, [targetName]: "AURA has not verified this account yet. Finish provider consent, then check again.",
+      } else if (targetKey && !silent) setConnectionErrors((previous) => ({
+        ...previous, [targetKey]: "This plan needs access through its selected connector. Use Connect or update access, then check again.",
       }));
     } catch (error) {
-      if (targetName && !silent) setConnectionErrors((previous) => ({
-        ...previous, [targetName]: error?.message || "AURA couldn't verify this connection yet.",
+      if (targetKey && !silent) setConnectionErrors((previous) => ({
+        ...previous, [targetKey]: error?.message || "AURA couldn't verify this connection yet.",
       }));
     } finally {
       checkingRef.current = false;
