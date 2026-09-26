@@ -443,7 +443,7 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         </div>
       )}
 
-      {plan.compileState === "blocked" && (
+      {plan.compileState === "blocked" && !plan.error && (
         <div className="mb-4 rounded-xl border border-amber-400/25 bg-amber-400/5 p-3 text-sm text-amber-100">
           <div className="flex items-center gap-2 font-medium">
             <AlertTriangle className="h-4 w-4 text-amber-400" />
