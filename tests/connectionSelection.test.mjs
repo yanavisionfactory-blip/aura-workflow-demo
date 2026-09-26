@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { isVerifiedConnection, selectConnection } from "../src/lib/connectionSelection.mjs";
+import {
+  isVerifiedConnection, planConnectionKey, planConnectionRoute, selectConnection,
+} from "../src/lib/connectionSelection.mjs";
 
 test("selects the exact account by stable connection id", () => {
   const tools = [
@@ -69,6 +71,29 @@ test("calendar and documents can reuse the verified Google Workspace account", (
     "google-account");
   assert.equal(selectConnection(tools, { toolName: "Google Docs", provider: "google-docs" })?.id,
     "google-account");
+});
+
+test("a reviewed plan binds each app to its exact executable connector", () => {
+  const tools = [
+    { id: "native", slug: "google", display_name: "Google Workspace",
+      allowed_operations: ["calendar.list", "drive.files.search"] },
+    { id: "calendar", slug: "google-calendar", display_name: "Google Calendar",
+      allowed_operations: ["google-calendar.list-events"] },
+    { id: "drive", slug: "google-drive", display_name: "Google Drive",
+      allowed_operations: ["google-drive.find-folder"] },
+  ];
+  assert.equal(planConnectionRoute({ canonical_provider: "google", provider_hint: "google-calendar" }),
+    "google-calendar");
+  assert.equal(planConnectionRoute({ canonical_provider: "google", provider_hint: "google-drive" }),
+    "google-drive");
+  assert.notEqual(planConnectionKey("Google Calendar", "google"),
+    planConnectionKey("Google Calendar", "google-calendar"));
+  assert.equal(selectConnection(tools, { toolName: "Google Calendar", provider: "google-calendar",
+    exactProvider: true })?.id, "calendar");
+  assert.equal(selectConnection(tools, { toolName: "Google Drive", provider: "google-drive",
+    exactProvider: true })?.id, "drive");
+  assert.equal(selectConnection(tools.slice(0, 1), { toolName: "Google Calendar",
+    provider: "google-calendar", exactProvider: true }), null);
 });
 
 test("Google Docs Manage selects its dedicated route even when Workspace is verified", () => {
