@@ -224,6 +224,10 @@ def derive_repaired_plan(
 
 async def maybe_replan_run(run_id: str, workspace_id: str) -> bool | str:
     # Caller holds the per-run advisory lock.
+    # The direct LLM planner produces the sole proposal for a run. Recover
+    # approved steps without asking another model to revise the visible plan.
+    if get_settings().planner_mode == "llm":
+        return False
     async with SessionLocal() as session:
         await set_tenant_context(session, workspace_id)
         run = await session.get(WorkflowRun, run_id)
