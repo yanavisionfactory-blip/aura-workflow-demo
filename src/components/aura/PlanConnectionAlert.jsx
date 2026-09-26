@@ -58,7 +58,7 @@ export default function PlanConnectionAlert({
   // user explicitly selected are their responsibility — they connect those in
   // the command input, so we don't nag about them here.
   const checklist = tools.filter((t) => !userSelectedTools.includes(t.name));
-  const needed = checklist.filter((t) => !connections[t.name]);
+  const needed = checklist.filter((t) => !connections[t.key]);
   if (needed.length === 0) return null;
   const connectedCount = checklist.length - needed.length;
 
@@ -103,10 +103,10 @@ export default function PlanConnectionAlert({
       <div className="divide-y divide-white/5">
         {checklist.map((t) => {
           const Icon = iconFor(t.name);
-          const error = errors[t.name];
-          const connected = Boolean(connections[t.name]);
+          const error = errors[t.key];
+          const connected = Boolean(connections[t.key]);
           return (
-            <div key={t.name} className="flex items-start gap-3 px-4 py-3">
+            <div key={t.key} className="flex items-start gap-3 px-4 py-3">
               <div className="mt-0.5 p-1.5 rounded-lg bg-secondary/60 border border-white/8 flex-shrink-0">
                 <Icon className="w-3.5 h-3.5 text-foreground/70" />
               </div>
@@ -124,7 +124,7 @@ export default function PlanConnectionAlert({
                 {error && <p className="mt-1 text-[11px] leading-relaxed text-red-300">{error}</p>}
                 {!connected && connectionEnabled && (
                   <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <button type="button" onClick={() => onRecheck?.(t.name)} disabled={isConnecting}
+                    <button type="button" onClick={() => onRecheck?.(t.key)} disabled={isConnecting}
                       className="rounded-md border border-white/15 px-2.5 py-1 text-[11px] text-foreground hover:bg-white/5 disabled:opacity-50">
                       I've connected it — check again
                     </button>
