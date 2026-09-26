@@ -107,6 +107,67 @@ async def test_one_llm_sukkot_plan_qualifies_bare_canva_and_attachment_reference
 
 
 @pytest.mark.asyncio
+async def test_connected_google_gmail_route_is_used_before_disconnected_gmail_pack(monkeypatch):
+    monkeypatch.setattr(get_settings(), "planner_mode", "llm")
+    native = native_manifest("google")
+    broker = {"capabilities": [{
+        "name": "gmail.send-email", "description": "Send an email",
+        "permission_scope": "write", "input_schema": {"type": "object"},
+    }]}
+    inventory = [
+        {"slug": "google", "name": "Google Workspace", "connected": True,
+         "allowed_operations": [item["name"] for item in native["capabilities"]]},
+        {"slug": "gmail", "name": "Gmail", "connected": False,
+         "allowed_operations": ["gmail.send-email"]},
+    ]
+    grants = [{"slug": "google", "allowed_operations": ["gmail.send", "gmail.get"]}]
+    candidate = WorkflowPlan(name="Mail", interpretation="Send mail", steps=[
+        PlanStep(key="send", agent="Gmail", tool_slug="google", operation="gmail.send",
+                 arguments={"to": "me", "body": "Hello"}, reason="Send the message",
+                 expected_output="Sent receipt", consequential=True),
+    ])
+    create = AsyncMock(return_value=candidate)
+    monkeypatch.setattr(llm_planner, "create_llm_plan", create)
+
+    result = await orchestrator._create_compiled_plan(
+        "Send an email to me through Gmail", inventory, set(),
+        {"google": native, "gmail": broker}, connected_inventory=grants,
+    )
+
+    assert result is candidate
+    assert [item["slug"] for item in create.await_args.args[1]] == ["google"]
+    assert create.await_args.args[5] == [{"effect": "gmail send", "targets": [
+        {"tool_slug": "google", "operation": "gmail.send"},
+    ]}]
+    assert preflight_plan(result, inventory, {"google": native, "gmail": broker},
+                          set(), grants).missing_grants == {}
+
+
+@pytest.mark.asyncio
+async def test_gmail_pack_stays_available_without_native_send_and_read_grants(monkeypatch):
+    monkeypatch.setattr(get_settings(), "planner_mode", "llm")
+    inventory = [
+        {"slug": "google", "name": "Google Workspace", "connected": True,
+         "allowed_operations": ["gmail.send", "gmail.get"]},
+        {"slug": "gmail", "name": "Gmail", "connected": False,
+         "allowed_operations": ["gmail.send-email"]},
+    ]
+    create = AsyncMock(side_effect=ValueError("Stop after selecting catalog"))
+    monkeypatch.setattr(llm_planner, "create_llm_plan", create)
+    with pytest.raises(ValueError, match="Stop after selecting catalog"):
+        await orchestrator._create_compiled_plan(
+            "Send an email via Gmail", inventory, set(),
+            {"google": native_manifest("google"), "gmail": {"capabilities": [{
+                "name": "gmail.send-email", "description": "Send an email",
+                "permission_scope": "write", "input_schema": {"type": "object"},
+            }]}}, connected_inventory=[
+                {"slug": "google", "allowed_operations": ["gmail.send"]},
+            ],
+        )
+    assert "gmail" in {item["slug"] for item in create.await_args.args[1]}
+
+
+@pytest.mark.asyncio
 async def test_single_llm_response_includes_required_canva_creation(monkeypatch):
     monkeypatch.setattr(get_settings(), "planner_mode", "llm")
     monkeypatch.setattr(get_settings(), "openai_api_key", "test")
