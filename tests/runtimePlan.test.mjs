@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { hasDurablePlan, planningRequestPrompt, restorablePlanningRun, savedRunResumeView, sameExecutablePlan } from "../src/lib/runtimePlan.mjs";
+import { hasDurablePlan, planningRequestPrompt, restorablePlanningRun, savedRunResumeView, sameExecutablePlan, unmatchedWriteTools } from "../src/lib/runtimePlan.mjs";
 
 test("execution requires both a durable run id and executable backend steps", () => {
   assert.equal(hasDurablePlan("run-1", { steps: [{ operation: "sheets.read" }] }), true);
@@ -33,6 +33,8 @@ test("reloading a durable run restores the prepared approval or observes executi
   assert.equal(savedRunResumeView({ ...run, status: "waiting_for_action" }), "recovery");
   assert.equal(savedRunResumeView({ ...run, automation_state: { status: "blocked" } }), "recovery");
   assert.equal(savedRunResumeView({ ...run, plan_approved: false }), "plan");
+  assert.equal(savedRunResumeView({ id: "run-2", status: "planning", plan_approved: false,
+    inputs: { aura_visible_plan: { steps: [{ tool: "Gmail", riskLevel: "modify" }] } } }), "plan");
   assert.equal(savedRunResumeView({ ...run, plan: { steps: [] } }), null);
 });
 
@@ -40,6 +42,26 @@ test("a planner that ignores a requested edit cannot be presented as a revised p
   const original = [{ tool_slug: "canva", operation: "canva.presentation.create", arguments: { phases: [{ title: "One" }] }, reason: "One slide" }];
   assert.equal(sameExecutablePlan(original, structuredClone(original)), true);
   assert.equal(sameExecutablePlan(original, [{ ...original[0], arguments: { phases: [{ title: "One" }, { title: "Two" }] } }]), false);
+});
+
+test("a hidden executable write cannot bypass the LLM plan the user reviewed", () => {
+  const visible = [
+    { tool: "AURA Intelligence", riskLevel: "read" },
+    { tool: "Google Docs", riskLevel: "modify" },
+    { tool: "Gmail", riskLevel: "read" },
+  ];
+  const compiled = [
+    { tool_slug: "google", operation: "docs.create", consequential: true },
+    { tool_slug: "google", operation: "gmail.send", consequential: true },
+  ];
+  const name = (step) => step.operation.startsWith("docs.") ? "Google Docs" : "Gmail";
+  assert.deepEqual(unmatchedWriteTools(visible, compiled, name), ["Gmail"]);
+  assert.deepEqual(unmatchedWriteTools(
+    [...visible, { tool: "Gmail", riskLevel: "modify" }], compiled, name,
+  ), []);
+  assert.deepEqual(unmatchedWriteTools(
+    [...visible, { tool: "Jira", riskLevel: "modify" }], compiled, name,
+  ), ["Gmail", "Jira"]);
 });
 
 test("a requested plan change includes the reviewed actions and dependencies", () => {
