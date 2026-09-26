@@ -760,6 +760,7 @@ async def _create_compiled_plan(
     excluded_tool_families: set[str] | frozenset[str] = frozenset(),
     supervisor_strategy: str | None = None,
     request_prompt: str | None = None,
+    connected_inventory: list[dict] | None = None,
 ):
     """Build a schema-valid plan, repairing internal connector mismatches silently."""
     manifests_by_slug = {
@@ -828,6 +829,22 @@ async def _create_compiled_plan(
             ]} if slug == "google" else manifest
             for slug, manifest in manifests_by_slug.items()
         }
+
+    # The native Google account can already send and verify Gmail messages.
+    # A separately released, disconnected Gmail route may advertise an equally
+    # valid send operation, but selecting it would strand the reviewed plan at
+    # Connect even though the user's existing account has the required grants.
+    native_gmail_ready = any(
+        item.get("slug") == "google"
+        and {"gmail.send", "gmail.get"} <= set(item.get("allowed_operations") or [])
+        for item in connected_inventory or []
+    )
+    if native_gmail_ready:
+        connected_slugs = {item["slug"] for item in connected_inventory or []}
+        inventory = [
+            item for item in inventory
+            if item.get("slug") != "gmail" or "gmail" in connected_slugs
+        ]
 
     def reject_excluded_steps(plan) -> None:
         if not excluded_tool_families:
@@ -1610,6 +1627,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                     excluded_families,
                     supervisor_strategy=strategy,
                     request_prompt=run.prompt,
+                    connected_inventory=connected_inventory,
                 )
             if excluded_families:
                 for planned_step in plan.steps:
