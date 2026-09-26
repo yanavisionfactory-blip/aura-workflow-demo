@@ -526,6 +526,7 @@ class ProviderExecutor:
             )
         handlers = {
             "gmail.list": self._gmail_list,
+            "gmail.threads.read": self._gmail_threads_read,
             "gmail.send": self._gmail_send,
             "gmail.get": self._gmail_get,
             "google.identity.get": self._google_identity_get,
@@ -934,6 +935,68 @@ class ProviderExecutor:
     async def _gmail_list(self, a: dict) -> dict:
         params = {"maxResults": min(int(a.get("limit", 10)), 50), "q": a.get("query", "")}
         return await self._request("GET", "https://gmail.googleapis.com/gmail/v1/users/me/messages", params=params)
+
+    async def _gmail_threads_read(self, a: dict) -> dict:
+        """Read actual conversation histories with a fixed mailbox and content budget."""
+        from html import unescape
+
+        query = str(a.get("query") or "newer_than:30d -category:promotions -category:social")
+        limit = min(max(int(a.get("limit", 20)), 1), 20)
+        root = "https://gmail.googleapis.com/gmail/v1/users/me/threads"
+        listing = await self._request("GET", root, params={"maxResults": limit, "q": query})
+        semaphore = asyncio.Semaphore(5)
+
+        def compact_message(message: dict) -> dict:
+            payload = message.get("payload") or {}
+            headers = {str(item.get("name", "")).casefold(): item.get("value", "")
+                       for item in payload.get("headers", [])}
+            candidates = []
+            pending = [payload]
+            while pending:
+                part = pending.pop()
+                pending.extend(part.get("parts") or [])
+                if part.get("filename"):
+                    continue
+                data = (part.get("body") or {}).get("data")
+                if data and part.get("mimeType") in {"text/plain", "text/html"}:
+                    try:
+                        decoded = base64.urlsafe_b64decode(data + "=" * (-len(data) % 4)).decode("utf-8", "replace")
+                        if part.get("mimeType") == "text/html":
+                            decoded = unescape(re.sub(r"<[^>]*>", " ", decoded))
+                        candidates.append((part.get("mimeType") != "text/plain", decoded))
+                    except (ValueError, TypeError):
+                        pass
+            text = next((body for _, body in sorted(candidates) if body.strip()), "")
+            text = " ".join(text.split()) or str(message.get("snippet") or "")
+            return {
+                "id": message.get("id"), "threadId": message.get("threadId"),
+                "from": headers.get("from", ""), "to": headers.get("to", ""),
+                "subject": headers.get("subject", ""), "date": headers.get("date", ""),
+                "internalDate": message.get("internalDate"),
+                "labelIds": message.get("labelIds") or [],
+                "text": text[:2000], "content_truncated": len(text) > 2000,
+            }
+
+        async def read_thread(item: dict) -> dict:
+            async with semaphore:
+                thread = await self._request("GET", root + "/" + quote(str(item["id"]), safe=""), params={"format": "full"})
+            messages = thread.get("messages") or []
+            return {
+                "id": thread.get("id") or item["id"],
+                "message_count": len(messages),
+                "messages": [compact_message(message) for message in messages[-8:]],
+                "history_truncated": len(messages) > 8,
+            }
+
+        threads = await asyncio.gather(*(read_thread(item) for item in listing.get("threads") or []))
+        return {
+            "query": query, "threads": threads,
+            "nextPageToken": listing.get("nextPageToken"),
+            "resultSizeEstimate": listing.get("resultSizeEstimate", len(threads)),
+            "coverage_limited": bool(listing.get("nextPageToken") or any(item["history_truncated"]
+                                                             or any(message["content_truncated"] for message in item["messages"])
+                                                             for item in threads)),
+        }
 
     async def gmail_connected_address(self) -> str:
         """Use the same Gmail account identity for review and final delivery."""

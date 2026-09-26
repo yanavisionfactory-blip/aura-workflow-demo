@@ -463,7 +463,7 @@ def test_draft_revision_only_offers_gmail_reads_and_repairs_an_old_send(monkeypa
             set(), {"google": manifest}, request_prompt=revision,
         ))
     assert len(inventories) == 2
-    assert all(set(items[0]["allowed_operations"]) == {"gmail.list", "gmail.get"}
+    assert all(set(items[0]["allowed_operations"]) == {"gmail.list", "gmail.get", "gmail.threads.read"}
                for items in inventories)
     assert "DRAFTS" in " ".join(requirements[0])
 

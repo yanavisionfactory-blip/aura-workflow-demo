@@ -5169,10 +5169,18 @@ def _run_blocker(
         if (steps and all(step.status in {StepStatus.completed, StepStatus.skipped}
                           for step in steps)
                 and (run.result or {}).get("verification", {}).get("status") == "unverified"):
+            incomplete_gmail_read = (
+                {step.operation for step in steps} == {"gmail.list", "gmail.get"}
+                and any(word in run.prompt.casefold() for word in ("customer", "follow-up", "follow up"))
+            )
             return {
                 "code": "final_result_unverified",
                 "kind": "human_action",
                 "message": (
+                    "This plan read only one Gmail message and could not establish which "
+                    "customer conversations need a check-in. Start a new plan to read the "
+                    "conversation histories. No email was sent."
+                    if incomplete_gmail_read else
                     "The planned steps finished, but the available results do not verify "
                     "the requested outcome. Review the saved results and supply the missing "
                     "source details in a revised request. No completed action will repeat."

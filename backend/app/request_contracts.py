@@ -262,11 +262,12 @@ def validate_requested_operations(
         and re.search(r"\b(?:gmail|inbox|mailbox)\b", user_request_text(prompt), re.IGNORECASE)
         and re.search(r"\b(?:customers?|clients?|contacts?)\b", prompt, re.IGNORECASE)
         and re.search(r"\bfollow[\s-]?up\b|\bfollowed\s+up\b", prompt, re.IGNORECASE)
-        and not {"gmail.list", "gmail.get"} <= {step.operation for step in plan.steps}
+        and "gmail.threads.read" not in {step.operation for step in plan.steps}
     ):
         raise ValueError(
             "To find customer follow-ups in Gmail and draft personalized emails, "
-            "read the mailbox with gmail.list and the matching message content with gmail.get."
+            "read the actual conversation and sent history with gmail.threads.read. "
+            "Message IDs and a single message cannot establish the missing follow-ups."
         )
     effects = requested_effects(prompt, inventory, manifests) if inventory is not None and manifests is not None else []
     if not effects:

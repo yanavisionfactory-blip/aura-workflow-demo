@@ -35,7 +35,7 @@ def test_legacy_google_read_grant_supports_verification_idempotently():
     tool = connection()
     refresh_granted_readbacks(tool)
     refresh_granted_readbacks(tool)
-    assert tool.allowed_operations == ["gmail.list", "gmail.send", "gmail.get"]
+    assert tool.allowed_operations == ["gmail.list", "gmail.send", "gmail.get", "gmail.threads.read"]
 
 
 def test_google_identity_without_drive_write_cannot_advertise_docs_create():
@@ -71,6 +71,7 @@ def test_requested_or_insufficient_scopes_do_not_grant_full_message_reads(scope)
     tool = connection(encrypted_credentials=CredentialVault().encrypt({"scope": scope}))
     refresh_granted_readbacks(tool)
     assert "gmail.get" not in tool.allowed_operations
+    assert "gmail.threads.read" not in tool.allowed_operations
 
 
 def test_native_google_snapshot_cannot_advertise_gmail_reads_from_send_only_consent():
