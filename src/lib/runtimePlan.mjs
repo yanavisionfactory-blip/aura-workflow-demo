@@ -17,6 +17,7 @@ export function savedRunResumeView(run = {}) {
     if (restorablePlanningRun(run)) return "plan";
     if (run.inputs?.aura_visible_plan?.steps?.length
       && (["queued", "planning", "recovering"].includes(run.status)
+        || run.blocker?.code === "planning_retry_required"
         || run.public_status === "recovering")) return "plan";
     return null;
   }

@@ -94,6 +94,14 @@ test("unfinished durable planning remains in background wait state", () => {
   }
 });
 
+test("a direct LLM planning failure returns a retryable state", () => {
+  assert.equal(planningDisposition({
+    status: "waiting_for_action",
+    blocker: { code: "planning_retry_required", retryable: true },
+    result: { status: "planning_unavailable" },
+  }), "unavailable");
+});
+
 test("the UI shows one LLM plan and keeps its content during backend validation", () => {
   const source = readFileSync(
     new URL("../src/pages/Demo.jsx", import.meta.url),
@@ -123,19 +131,20 @@ test("the UI shows one LLM plan and keeps its content during backend validation"
   assert.equal(source.includes('.replace(/^i\\s+will\\s+/i, "")'), true);
   assert.equal(source.includes("firstPersonStepCopy(step.reason)"), true);
   assert.equal(planViewSource.includes('plan.compileState !== "ready"'), false);
-  assert.equal(planViewSource.includes('["starting", "waiting_for_connection"].includes(plan.compileState)'), true);
+  assert.equal(planViewSource.includes('["starting", "waiting_for_connection"].includes(plan.compileState)'), false);
   assert.equal(planViewSource.includes('!plan.provisional && missingTools.length > 0'), true);
   assert.equal(source.includes('Poem + illustrations pilot'), false);
   assert.equal(source.includes('Set up a four-app pilot'), false);
-  assert.equal(source.includes('if (plan.compileState === "blocked") {'), true);
+  assert.equal(source.includes('if (plan?.compileState === "blocked") {'), true);
   assert.equal(source.includes("handleRetryPlanning();"), true);
   const approveSource = source.slice(
     source.indexOf("const handleApprove = useCallback"),
     source.indexOf("const handlePreviewApprove = useCallback"),
   );
   assert.equal(approveSource.includes('setPhase("executing")'), false);
-  assert.equal(approveSource.includes('compileState: "starting"'), true);
-  assert.equal(planViewSource.includes("AURA is checking the exact steps"), true);
+  assert.equal(approveSource.includes('setPhase("preparing")'), true);
+  assert.equal(planViewSource.includes("AURA is checking the exact steps"), false);
+  assert.equal(planViewSource.includes('disabled={steps.length === 0 && plan.compileState !== "blocked"}'), true);
 });
 
 test("complete actions can be reviewed early and dependent actions wait for exact approval", () => {

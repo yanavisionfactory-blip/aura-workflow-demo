@@ -79,6 +79,8 @@ from .providers import (
 from .replanning import maybe_replan_run
 from .result_presentation import resolve_result_presentation
 from .run_supervisor import (
+    pause_direct_planning_failure,
+    planning_failure_category,
     recover_planning_failure,
     transition_run,
 )
@@ -931,10 +933,11 @@ async def _create_compiled_plan(
             "personalized recipients, subjects and full bodies in the final result. "
             "Do not add gmail.send or any provider write to transmit an email."
         )
-    # Direct mode makes one structured call. Both routes go through the same
-    # deterministic requested-action and connector-contract checks below.
+    # Direct mode makes one structured call when it is valid. An omitted
+    # explicitly requested action gets one corrected call, without an agent.
+    # Both routes go through the same deterministic contract checks below.
     direct_planning = get_settings().planner_mode == "llm"
-    for attempt in range(1 if direct_planning else 2):
+    for attempt in range(2):
         if direct_planning:
             from .llm_planner import create_llm_plan
 
@@ -1004,7 +1007,10 @@ async def _create_compiled_plan(
                 plan.planning_artifacts["supervisor_recovery_strategy"] = supervisor_strategy
             return plan
         except (NativeConnectorError, ValueError) as exc:
-            if direct_planning or attempt == 1:
+            missing_action = isinstance(exc, ValueError) and str(exc).startswith(
+                "Requested external action is absent from the executable plan:"
+            )
+            if attempt == 1 or (direct_planning and not missing_action):
                 raise
             repair_requirements.append(str(exc))
             reason = str(exc)
@@ -1885,14 +1891,21 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 )
                 await session.commit()
                 return
-            await recover_planning_failure(
-                session,
-                run,
-                exc,
-                max_attempts=get_settings().max_planning_recovery_rounds,
-                base_delay_seconds=get_settings().autonomous_recovery_base_delay_seconds,
-                max_delay_seconds=get_settings().autonomous_recovery_max_delay_seconds,
-            )
+            if (get_settings().planner_mode == "llm"
+                    and planning_failure_category(exc) != "operator_quota"):
+                # A direct model response that failed deterministic validation
+                # must not enter the agent-style supervisor retry loop. Leave
+                # the visible proposal intact and offer an explicit retry.
+                pause_direct_planning_failure(run)
+            else:
+                await recover_planning_failure(
+                    session,
+                    run,
+                    exc,
+                    max_attempts=get_settings().max_planning_recovery_rounds,
+                    base_delay_seconds=get_settings().autonomous_recovery_base_delay_seconds,
+                    max_delay_seconds=get_settings().autonomous_recovery_max_delay_seconds,
+                )
             await session.commit()
 
 

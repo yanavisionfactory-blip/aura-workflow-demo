@@ -10,6 +10,7 @@ from app.db import Base
 from app.models import DispatchIntent, RunStatus, WorkflowRun, Workspace
 from app.run_supervisor import (
     HUMAN_ACTION_CODES,
+    pause_direct_planning_failure,
     planning_failure_category,
     public_run_projection,
     recover_planning_failure,
@@ -130,6 +131,23 @@ async def test_exhausted_api_credits_stop_retries_and_show_operator_action(datab
         assert public["public_blocker"]["code"] == "operator_billing_required"
         intent = await session.scalar(select(DispatchIntent).where(DispatchIntent.run_id == run.id))
         assert intent is None
+
+
+async def test_direct_llm_failure_stops_without_scheduling_an_agent_repair(database):
+    async with database() as session:
+        run = WorkflowRun(id="direct-run", workspace_id="workspace",
+                          prompt="Create a Canva slide", status=RunStatus.planning)
+        session.add(run)
+        await session.commit()
+
+        pause_direct_planning_failure(run)
+        await session.commit()
+
+        assert run.status == RunStatus.waiting_for_action
+        blocker = run.execution_context["__aura_blocker__"]
+        assert blocker["code"] == "planning_retry_required"
+        assert public_run_projection(run, blocker)["public_status"] == "waiting_for_action"
+        assert await session.scalar(select(DispatchIntent).where(DispatchIntent.run_id == run.id)) is None
 
 
 async def test_repeated_malformed_plans_stop_before_eight_expensive_rounds(database):

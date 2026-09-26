@@ -35,6 +35,9 @@ test("reloading a durable run restores the prepared approval or observes executi
   assert.equal(savedRunResumeView({ ...run, plan_approved: false }), "plan");
   assert.equal(savedRunResumeView({ id: "run-2", status: "planning", plan_approved: false,
     inputs: { aura_visible_plan: { steps: [{ tool: "Gmail", riskLevel: "modify" }] } } }), "plan");
+  assert.equal(savedRunResumeView({ id: "run-3", status: "waiting_for_action", plan_approved: false,
+    blocker: { code: "planning_retry_required" },
+    inputs: { aura_visible_plan: { steps: [{ tool: "Canva", riskLevel: "modify" }] } } }), "plan");
   assert.equal(savedRunResumeView({ ...run, plan: { steps: [] } }), null);
 });
 
