@@ -30,7 +30,7 @@ _ALIASES = {
     "calendar": ("google calendar", "calendar"),
     "docs": ("google docs", "google doc"),
     "sheets": ("google sheets", "google sheet"),
-    "drive": ("google drive",),
+    "drive": ("google drive", "google disk"),
     "slack": ("slack",),
     "jira": ("jira",),
     "notion": ("notion",),
