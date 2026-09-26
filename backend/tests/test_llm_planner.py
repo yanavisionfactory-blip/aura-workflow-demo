@@ -9,6 +9,7 @@ from app import llm_planner, orchestrator
 from app.agent_runtime import CompactWorkflowPlan
 from app.config import get_settings
 from app.native_connectors import NativeConnectorError, native_manifest
+from app.plan_preflight import preflight_plan
 from app.request_contracts import requested_effects
 from app.schemas import PlanStep, WorkflowPlan
 
@@ -49,6 +50,60 @@ async def test_direct_planner_uses_one_structured_call(monkeypatch):
     assert plan.steps[0].arguments == {"location": "Berlin"}
     assert plan.planning_artifacts["planner_recovery_mode"] == "direct_llm"
     assert plan.planning_artifacts["preflight_evaluation"]["permission_scope"] == "read"
+
+
+@pytest.mark.asyncio
+async def test_one_llm_sukkot_plan_qualifies_bare_canva_and_attachment_references(monkeypatch):
+    response = CompactWorkflowPlan.model_validate({
+        "name": "Sukkot PDF", "interpretation": "Create and email a Sukkot slide",
+        "steps": [
+            {"key": "create_sukkot_slide", "agent": "Canva", "tool_slug": "canva",
+             "operation": "canva.presentation.create",
+             "arguments_json": '{"title":"Sukkot","phases":[{"period":"Now","title":"Sukkot","items":["Gather"]}]}',
+             "reason": "Create slide", "expected_output": "Populated design", "consequential": True,
+             "depends_on": [], "required_evidence": []},
+            {"key": "export_sukkot_pdf", "agent": "Canva", "tool_slug": "canva",
+             "operation": "canva.export.create",
+             "arguments_json": '{"design_id":"{{create_sukkot_slide.job.id}}","format":"pdf"}',
+             "reason": "Export PDF", "expected_output": "PDF URL", "consequential": False,
+             "depends_on": [], "required_evidence": []},
+            {"key": "send_sukkot_email", "agent": "Gmail", "tool_slug": "google",
+             "operation": "gmail.send",
+             "arguments_json": '{"to":"me","subject":"Sukkot","body":"Slide attached","attachments":[{"filename":"Sukkot.pdf","url":"{{export_sukkot_pdf.job.urls[0]}}"}]}',
+             "reason": "Email PDF", "expected_output": "Sent message", "consequential": True,
+             "depends_on": [], "required_evidence": []},
+        ],
+    })
+    parse = AsyncMock(return_value=SimpleNamespace(output_parsed=response))
+
+    class Client:
+        def __init__(self, **_kwargs):
+            self.responses = SimpleNamespace(parse=parse)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(llm_planner, "AsyncOpenAI", Client)
+    monkeypatch.setattr(llm_planner, "get_settings", lambda: SimpleNamespace(
+        openai_api_key="test", openai_model="test-model", model_call_timeout_seconds=30,
+    ))
+    manifests = {slug: native_manifest(slug) for slug in ("canva", "google")}
+    inventory = [{"slug": slug, "connected": True,
+                  "allowed_operations": [item["name"] for item in manifest["capabilities"]]}
+                 for slug, manifest in manifests.items()]
+    plan = await llm_planner.create_llm_plan(
+        "Create a Sukkot slide, export a PDF and email it to me", inventory, set(),
+    )
+
+    assert parse.await_count == 1
+    assert plan.steps[1].arguments["design_id"] == "{{steps.create_sukkot_slide.job.id}}"
+    assert plan.steps[2].arguments["attachments"][0]["url"] == "{{steps.export_sukkot_pdf.job.urls[0]}}"
+    assert plan.steps[1].depends_on == ["create_sukkot_slide"]
+    assert plan.steps[2].depends_on == ["export_sukkot_pdf"]
+    assert preflight_plan(plan, inventory, manifests, set(), inventory).fixes == []
 
 
 @pytest.mark.asyncio
