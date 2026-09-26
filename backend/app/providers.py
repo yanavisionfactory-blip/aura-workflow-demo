@@ -1351,12 +1351,37 @@ class ProviderExecutor:
         }
 
     async def _calendar_list(self, a: dict) -> dict:
-        params = {"singleEvents": "true", "orderBy": "startTime", "maxResults": min(int(a.get("limit", 20)), 100)}
+        attendee_limit = a.get("max_attendees")
+        output_limit = min(int(a.get("limit", 20)), 100)
+        params = {"singleEvents": "true", "orderBy": "startTime",
+                  "maxResults": 100 if attendee_limit is not None else output_limit}
         if a.get("query"): params["q"] = a["query"]
         if a.get("time_min"): params["timeMin"] = a["time_min"]
         if a.get("time_max"): params["timeMax"] = a["time_max"]
         from .calendar_time import annotate_calendar_times
-        return annotate_calendar_times(await self._request("GET", "https://www.googleapis.com/calendar/v3/calendars/primary/events", params=params))
+        url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+        if attendee_limit is None:
+            return annotate_calendar_times(await self._request("GET", url, params=params))
+        matches = []
+        tokens = set()
+        for _ in range(10):
+            page = await self._request("GET", url, params=params)
+            for event in page.get("items", []):
+                if (isinstance(event, dict) and not event.get("attendeesOmitted")
+                        and len(event.get("attendees") or []) <= int(attendee_limit)):
+                    matches.append(event)
+            token = page.get("nextPageToken")
+            if not token:
+                return annotate_calendar_times({
+                    **page, "items": matches[:output_limit],
+                    "coverage_limited": len(matches) > output_limit,
+                    "attendee_filter": {"max_attendees": int(attendee_limit)},
+                })
+            if token in tokens:
+                raise ValueError("Calendar returned a repeated page token")
+            tokens.add(token)
+            params["pageToken"] = token
+        raise ValueError("Too many events to filter by attendee count; narrow the date range")
 
     async def _calendar_create(self, a: dict) -> dict:
         if not a.get("start") or not a.get("end"):
