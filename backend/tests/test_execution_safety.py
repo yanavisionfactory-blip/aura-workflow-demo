@@ -197,6 +197,62 @@ def test_semantic_retry_does_not_replay_successful_read():
     assert _accept_successful_read_after_critic("gmail.send", semantic_retry) is False
 
 
+def test_recorded_read_survives_semantic_critic_retry_without_a_second_provider_call(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    from app import orchestrator
+
+    async def unsupported(*args):
+        return {"status": "unsupported"}
+
+    async def semantic_retry(*args):
+        return CriticDecision(
+            action="retry",
+            reasons=["The event has no optional location field"],
+            policy_violations=["expected_output may be incomplete"],
+        )
+
+    monkeypatch.setattr(orchestrator, "check_provider_outcome", unsupported)
+    monkeypatch.setattr(orchestrator, "critique_step", semantic_retry)
+    step = SimpleNamespace(operation="google-calendar.list-events", output={})
+    receipt = {"ret": [{"id": "event-1", "start": {"dateTime": "2026-09-28T10:00:00-05:00"}}]}
+    decision = asyncio.run(orchestrator.review_recorded_result(
+        None, None, step, None, {"required_evidence": ["event_state"]}, receipt,
+    ))
+
+    assert decision.action == "accept"
+    assert step.output["outcome_check"]["mode"] == "accepted_read_receipt"
+    assert receipt["ret"][0].get("location") is None
+
+
+def test_recorded_read_does_not_override_real_policy_or_evidence_failure(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    from app import orchestrator
+
+    async def unsupported(*args):
+        return {"status": "unsupported"}
+
+    async def policy_retry(*args):
+        return CriticDecision(action="retry", policy_violations=["Response exceeds approved scope"])
+
+    monkeypatch.setattr(orchestrator, "check_provider_outcome", unsupported)
+    monkeypatch.setattr(orchestrator, "critique_step", policy_retry)
+    step = SimpleNamespace(operation="google-calendar.list-events", output={})
+    decision = asyncio.run(orchestrator.review_recorded_result(
+        None, None, step, None, {"required_evidence": ["event_state"]}, {"ret": []},
+    ))
+    assert decision.action == "retry"
+    incomplete = asyncio.run(orchestrator.review_recorded_result(
+        None, None, step, None,
+        {"required_evidence": ["complete_collection"]},
+        {"ret": [], "nextPageToken": "more"},
+    ))
+    assert incomplete.action == "escalate"
+
+
 def test_builtin_connector_uses_current_manifest_over_stored_snapshot():
     stale = {"name": "Notion", "catalog_version": 0, "capabilities": []}
 
