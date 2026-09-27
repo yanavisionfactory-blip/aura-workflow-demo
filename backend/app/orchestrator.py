@@ -2113,6 +2113,16 @@ async def review_recorded_result(session, run, step, snapshot, contract, result)
     review_contract = {key: value for key, value in contract.items() if key != "required_evidence"}
     review_contract["validated_capability_tags"] = contract.get("required_evidence", [])
     decision = await critique_step(review_contract, evidence)
+    if _accept_successful_read_after_critic(step.operation, decision):
+        # The provider call and its released output contract have already
+        # succeeded. A model request to reformat or enrich this source read
+        # cannot make the provider supply an optional field (for example a
+        # Calendar event without a location). Let later steps use the actual
+        # receipt; final verification still checks the requested outcome.
+        decision = CriticDecision(
+            action="accept",
+            reasons=["Provider read recorded; optional presentation details are checked in the final result"],
+        )
     # A read receipt is the provider observation itself. Once its typed output,
     # completeness requirements and semantic contract are accepted, mark that
     # evidence verified instead of asking a write-oriented read-back checker to
