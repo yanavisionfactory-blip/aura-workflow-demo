@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { aura } from "@/api/auraClient";
 import { formatDistanceToNow } from "date-fns";
 import { conjugateAction } from "@/lib/auraVerbs";
-import { announceWorkflowHistoryChanged } from "@/lib/workflowHistory.mjs";
+import { announceWorkflowHistoryChanged, backendRunHistoryProjection } from "@/lib/workflowHistory.mjs";
 import { cancelPythonRun, dispatchDuePythonRun, getPythonRun, resumePythonRun } from "@/lib/auraApi";
 import RunAgainModal from "./RunAgainModal";
 
@@ -66,6 +66,12 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
     try {
       const result = await dispatchDuePythonRun(run.backend_run_id);
       const latest = await getPythonRun(run.backend_run_id);
+      const projected = backendRunHistoryProjection(latest).run;
+      if (run.id && (run.backend_updated_at !== projected.backend_updated_at
+          || run.status !== projected.status || run.summary !== projected.summary)) {
+        const updated = await aura.entities.WorkflowRun.update(run.id, projected);
+        announceWorkflowHistoryChanged({ run: updated });
+      }
       const blocked = result.preflight_blocker;
       const pendingReview = latest.status === "awaiting_approval" && latest.steps?.some((step) =>
         step.approval_status === "pending" && step.approval_preview?.status === "ready"
