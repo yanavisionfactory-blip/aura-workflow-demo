@@ -72,10 +72,13 @@ export function backendRunHistoryProjection(run = {}) {
   const title = run.plan?.name || "Saved workflow";
   const prompt = run.prompt || run.plan?.interpretation || title;
   const interpretation = run.plan?.interpretation || prompt;
-  const summary = run.result?.unified_deliverable?.summary
-    || run.result?.summary
-    || (status === "failed" ? run.error : "")
-    || (status === "running" ? "AURA is running this workflow." : "AURA completed this workflow.");
+  const summary = status === "failed"
+    ? run.error || "This run needs attention before it can continue."
+    : status === "running"
+      ? "AURA is running this workflow."
+      : run.result?.unified_deliverable?.summary
+        || run.result?.summary
+        || "AURA completed this workflow.";
   const completedCount = Number(run.result?.completed_steps || 0);
   const steps = historyStepsForBackendRun(run);
   const runDate = run.updated_at || run.created_at || new Date().toISOString();
