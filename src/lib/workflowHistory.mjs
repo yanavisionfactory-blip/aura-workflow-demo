@@ -53,7 +53,8 @@ export function historyStatusForBackendRun(run = {}) {
   if (run.status === "completed") return "completed";
   const scheduledAttention = Boolean(run.execution_context?.schedule?.id)
     && ["awaiting_approval", "waiting_for_action"].includes(run.status);
-  if (FAILED_STATUSES.has(run.status) || scheduledAttention) return "failed";
+  const approvedPlanNeedsReview = Boolean(run.plan_approved) && run.status === "awaiting_approval";
+  if (FAILED_STATUSES.has(run.status) || scheduledAttention || approvedPlanNeedsReview) return "failed";
   return "running";
 }
 
