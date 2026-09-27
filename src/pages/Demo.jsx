@@ -27,6 +27,7 @@ import {
   decidePythonApproval,
   forgetActivePythonRun,
   getPythonRun,
+  rememberActivePythonRun,
   rememberedActivePythonRun,
   resumePythonRun,
   resumePythonRunAfterConnection,
@@ -1020,10 +1021,10 @@ Write ONE clear, conversational sentence restating what they want — but offer 
           ? "AURA is checking this step."
           : step?.status === "completed"
             ? "Completed"
-            : step?.output?.provider_result
-              ? step?.consequential
-                ? "Checking what was created in the app."
-                : "Checking the saved response from the app."
+          : step?.output?.provider_result
+            ? step?.consequential
+              ? "Checking what was created in the app."
+              : "Checking the saved response from the app."
               : "",
         output: step?.output,
         jiraTasks: step?.operation === "jira.issues.create_from_blocks"
@@ -1157,6 +1158,33 @@ Write ONE clear, conversational sentence restating what they want — but offer 
   };
 
   const keepRunForLater = () => reset();
+
+  const openSavedRunReview = async (runId) => {
+    const run = await getPythonRun(runId);
+    if (savedRunResumeView(run) !== "preview") {
+      throw new Error("This action is no longer waiting for review. Check the saved run again.");
+    }
+    reset();
+    const intent = String(run.prompt || run.plan?.interpretation || "")
+      .split("\n\nThe user reviewed the proposed workflow and requested this change:")[0];
+    const restored = uiPlanFromRun(run);
+    const preparedSteps = restored.steps.map((step, index) =>
+      resolvedApprovalStep(step, run.steps?.[index], planToolName(run.steps?.[index] || step))
+    );
+    pythonRunIdRef.current = run.id;
+    pythonPlanRef.current = run.plan;
+    originalPromptRef.current = intent;
+    lastPlanningIntentRef.current = intent;
+    approvedStepsRef.current = preparedSteps;
+    preparedActionPreviewRef.current = true;
+    rememberActivePythonRun(run.id);
+    setOriginalPrompt(intent);
+    setInterpretation(restored.interpretation);
+    setPlan(restored);
+    setApprovedSteps(preparedSteps);
+    setPhase("preview");
+    setHistoryOpen(false);
+  };
 
   const cancelSavedRun = async (run = recoveryRun) => {
     if (!run || recoveryPendingRef.current) return;
@@ -1837,7 +1865,7 @@ Generate a results summary in plain, human-friendly language (not technical).
         </footer>
       </div>
 
-      <HistoryPanel open={historyOpen} onClose={() => setHistoryOpen(false)} onRerun={handleRerun} onEditRun={handleEditRun} />
+      <HistoryPanel open={historyOpen} onClose={() => setHistoryOpen(false)} onRerun={handleRerun} onEditRun={handleEditRun} onOpenRun={openSavedRunReview} />
 
       <EditRunReviewModal
         open={editReviewOpen}
