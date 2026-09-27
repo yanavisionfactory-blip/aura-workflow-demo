@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { aura } from "@/api/auraClient";
 import { formatDistanceToNow } from "date-fns";
 import { conjugateAction } from "@/lib/auraVerbs";
-import { announceWorkflowHistoryChanged } from "@/lib/workflowHistory.mjs";
+import { announceWorkflowHistoryChanged, backendRunHistoryProjection } from "@/lib/workflowHistory.mjs";
 import { cancelPythonRun, dispatchDuePythonRun, getPythonRun, resumePythonRun } from "@/lib/auraApi";
 import RunAgainModal from "./RunAgainModal";
 
@@ -17,7 +17,7 @@ const outcomeIcons = {
   metric: BarChart3,
 };
 
-export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, onRerun, onEditRun }) {
+export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, onRerun, onEditRun, onOpenRun }) {
   const [showSteps, setShowSteps] = useState(false);
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(run.title || "");
@@ -29,6 +29,7 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
   const [repairReady, setRepairReady] = useState(false);
   const [reviewStepId, setReviewStepId] = useState(null);
   const [retryStepId, setRetryStepId] = useState(null);
+  const [reviewReady, setReviewReady] = useState(false);
 
   const requestRerun = (mode) => setRunAgainMode(mode);
 
@@ -61,10 +62,21 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
     setRepairReady(false);
     setReviewStepId(null);
     setRetryStepId(null);
+    setReviewReady(false);
     try {
       const result = await dispatchDuePythonRun(run.backend_run_id);
       const latest = await getPythonRun(run.backend_run_id);
+      const projected = backendRunHistoryProjection(latest).run;
+      if (run.id && (run.backend_updated_at !== projected.backend_updated_at
+          || run.status !== projected.status || run.summary !== projected.summary)) {
+        const updated = await aura.entities.WorkflowRun.update(run.id, projected);
+        announceWorkflowHistoryChanged({ run: updated });
+      }
       const blocked = result.preflight_blocker;
+      const pendingReview = latest.status === "awaiting_approval" && latest.steps?.some((step) =>
+        step.approval_status === "pending" && step.approval_preview?.status === "ready"
+      );
+      setReviewReady(Boolean(pendingReview));
       // The public run view can say "recovering" while its durable status is
       // waiting_for_action. Use the scoped dispatch response to identify a pause.
       const paused = ["waiting_for_action", "failed"].includes(result.status);
@@ -79,7 +91,9 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
         }
       }
       setRepairReady(blocked?.action === "wait_for_connector_repair" && result.preflight_status === "blocked");
-      setCheckResult(blocked && result.preflight_status === "blocked"
+      setCheckResult(pendingReview
+        ? "The next action is ready for your review. Open its prepared content to continue this saved run."
+        : blocked && result.preflight_status === "blocked"
         ? blocked.action === "wait_for_connector_repair"
           ? `Paused before step 1: ${blocked.tool_slug || "the selected app"} needs connector repair.`
           : `Paused before step 1: ${blocked.tool_slug || "the selected app"} needs ${blocked.action === "reconnect_account" ? "reconnection" : "attention"}.`
@@ -109,6 +123,15 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
       setCheckResult(error.message || "Could not continue this saved run.");
     } finally {
       setCheckBusy(false);
+    }
+  };
+
+  const openPendingReview = async () => {
+    try {
+      await onOpenRun?.(run.backend_run_id);
+    } catch (error) {
+      setReviewReady(false);
+      setCheckResult(error.message || "Could not open the pending review.");
     }
   };
 
@@ -301,6 +324,12 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
               <Button size="sm" variant="outline" className="w-full border-amber-400/25 text-amber-200"
                 onClick={retryFailedStep} disabled={checkBusy}>
                 Continue saved run
+              </Button>
+            )}
+            {reviewReady && (
+              <Button size="sm" variant="outline" className="w-full border-amber-400/25 text-amber-200"
+                onClick={openPendingReview} disabled={checkBusy}>
+                Review pending action
               </Button>
             )}
             {run.status === "running" && (
