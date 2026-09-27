@@ -28,6 +28,7 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
   const [checkResult, setCheckResult] = useState("");
   const [repairReady, setRepairReady] = useState(false);
   const [reviewStepId, setReviewStepId] = useState(null);
+  const [retryStepId, setRetryStepId] = useState(null);
 
   const requestRerun = (mode) => setRunAgainMode(mode);
 
@@ -59,6 +60,7 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
     setCheckResult("");
     setRepairReady(false);
     setReviewStepId(null);
+    setRetryStepId(null);
     try {
       const result = await dispatchDuePythonRun(run.backend_run_id);
       const latest = await getPythonRun(run.backend_run_id);
@@ -72,6 +74,9 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
       );
       if (paused) {
         setReviewStepId(recordedReceipt?.id || null);
+        if (!recordedReceipt && !blocked) {
+          setRetryStepId(latest.steps?.find((step) => step.status === "failed")?.id || null);
+        }
       }
       setRepairReady(blocked?.action === "wait_for_connector_repair" && result.preflight_status === "blocked");
       setCheckResult(blocked && result.preflight_status === "blocked"
@@ -87,6 +92,21 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
           : `No due work for this run. Current status: ${result.status}.`);
     } catch (error) {
       setCheckResult(error.message || "Could not check this run.");
+    } finally {
+      setCheckBusy(false);
+    }
+  };
+
+  const retryFailedStep = async () => {
+    if (!run.backend_run_id || !retryStepId || checkBusy) return;
+    setCheckBusy(true);
+    setCheckResult("");
+    try {
+      await resumePythonRun(run.backend_run_id, retryStepId);
+      setRetryStepId(null);
+      setCheckResult("Continuing this saved run from the failed step. Check pending work for the latest result.");
+    } catch (error) {
+      setCheckResult(error.message || "Could not continue this saved run.");
     } finally {
       setCheckBusy(false);
     }
@@ -179,9 +199,9 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {/* Summary */}
         {run.summary && (
-          <div className="p-3 rounded-xl bg-emerald-400/5 border border-emerald-400/15">
+          <div className={`p-3 rounded-xl ${run.status === "completed" ? "bg-emerald-400/5 border border-emerald-400/15" : "bg-amber-400/5 border border-amber-400/15"}`}>
             <div className="flex items-start gap-2">
-              <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+              {run.status === "completed" && <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />}
               <p className="text-sm text-foreground/80 leading-relaxed">{run.summary}</p>
             </div>
           </div>
@@ -275,6 +295,12 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
               <Button size="sm" variant="outline" className="w-full border-amber-400/25 text-amber-200"
                 onClick={recheckRecordedResult} disabled={checkBusy}>
                 Recheck saved provider result
+              </Button>
+            )}
+            {retryStepId && (
+              <Button size="sm" variant="outline" className="w-full border-amber-400/25 text-amber-200"
+                onClick={retryFailedStep} disabled={checkBusy}>
+                Continue saved run
               </Button>
             )}
             {run.status === "running" && (

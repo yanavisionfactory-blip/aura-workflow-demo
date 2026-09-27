@@ -214,6 +214,37 @@ def test_step_result_normalizes_provider_collection_aliases() -> None:
     assert resolve_value("{{steps.search.pages[0].id}}", context) == "page-1"
 
 
+@pytest.mark.parametrize(
+    "receipt",
+    [
+        {"ret": {"id": "folder-1", "name": "Meeting notes"}, "os": []},
+        {"ret": [{"id": "folder-1", "name": "Meeting notes"}], "os": []},
+        {"ret": {"data": {"files": [{"id": "folder-1"}]}}, "os": []},
+        {"ret": None, "exports": {"folder": {"id": "folder-1"}}},
+    ],
+)
+def test_pipedream_folder_lookup_exposes_single_confirmed_id(receipt):
+    context = {"steps": {"folder_lookup": step_context_value(receipt, "google-drive.find-folder")}}
+
+    assert resolve_value("{{steps.folder_lookup.id}}", context) == "folder-1"
+    assert context["steps"]["folder_lookup"]["provider_result"] == receipt
+
+
+@pytest.mark.parametrize(
+    "receipt",
+    [
+        {"ret": [{"id": "folder-1"}, {"id": "folder-2"}]},
+        {"ret": {"data": {"files": [{"id": "folder-1"}, {"id": "folder-2"}]}}},
+        {"ret": [], "exports": {"id": "unrelated-export"}},
+    ],
+)
+def test_pipedream_folder_lookup_never_guesses_an_ambiguous_id(receipt):
+    context = {"steps": {"folder_lookup": step_context_value(receipt, "google-drive.find-folder")}}
+
+    with pytest.raises(WorkflowContextError):
+        resolve_value("{{steps.folder_lookup.id}}", context)
+
+
 def test_missing_resource_id_never_falls_back_to_an_unrelated_id():
     import pytest
 

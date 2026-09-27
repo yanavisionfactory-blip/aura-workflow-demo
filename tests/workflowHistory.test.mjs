@@ -60,6 +60,16 @@ test("running and unsuccessful backend states map to panel statuses", () => {
   assert.equal(historyStatusForBackendRun({ status: "cancelled" }), "failed");
 });
 
+test("paused runs do not display a stale completion summary", () => {
+  const paused = backendRunHistoryProjection({
+    ...backendRun,
+    status: "blocked",
+    error: "Folder lookup needs attention.",
+  });
+  assert.equal(paused.run.status, "failed");
+  assert.equal(paused.run.summary, "Folder lookup needs attention.");
+});
+
 test("reruns prefer their explicit saved workflow before prompt matching", () => {
   const workflows = [
     { id: "prompt-match", prompt: backendRun.prompt },
