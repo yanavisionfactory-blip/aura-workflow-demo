@@ -68,7 +68,7 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
       const paused = ["waiting_for_action", "failed"].includes(result.status);
       const recordedReceipt = latest.steps?.find((step) =>
         ["failed", "running"].includes(step.status)
-        && step.consequential && step.output?.provider_result,
+        && step.output?.provider_result,
       );
       if (paused) {
         setReviewStepId(recordedReceipt?.id || null);
@@ -258,7 +258,7 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
 
       {/* Actions */}
       <div className="p-4 border-t border-white/5">
-        {run.status === "running" && run.backend_run_id && (
+        {["running", "failed"].includes(run.status) && run.backend_run_id && (
           <div className="mb-3 space-y-2">
             <Button size="sm" variant="outline" className="w-full border-white/15"
               onClick={checkPendingWork} disabled={checkBusy}>
@@ -277,11 +277,15 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
                 Recheck saved provider result
               </Button>
             )}
-            <Button size="sm" variant="outline" className="w-full border-rose-400/25 text-rose-300"
-              onClick={cancelRun} disabled={cancelBusy || Boolean(cancelResult && !cancelResult.startsWith("Could not"))}>
-              {cancelBusy ? "Cancelling saved run…" : "Cancel saved run"}
-            </Button>
-            {cancelResult && <p role="status" className="mt-2 text-xs text-muted-foreground">{cancelResult}</p>}
+            {run.status === "running" && (
+              <>
+                <Button size="sm" variant="outline" className="w-full border-rose-400/25 text-rose-300"
+                  onClick={cancelRun} disabled={cancelBusy || Boolean(cancelResult && !cancelResult.startsWith("Could not"))}>
+                  {cancelBusy ? "Cancelling saved run…" : "Cancel saved run"}
+                </Button>
+                {cancelResult && <p role="status" className="mt-2 text-xs text-muted-foreground">{cancelResult}</p>}
+              </>
+            )}
           </div>
         )}
         {runAgainMode ? (

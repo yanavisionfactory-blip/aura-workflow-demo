@@ -1021,7 +1021,9 @@ Write ONE clear, conversational sentence restating what they want — but offer 
           : step?.status === "completed"
             ? "Completed"
             : step?.output?.provider_result
-              ? "Checking what was created in the app."
+              ? step?.consequential
+                ? "Checking what was created in the app."
+                : "Checking the saved response from the app."
               : "",
         output: step?.output,
         jiraTasks: step?.operation === "jira.issues.create_from_blocks"

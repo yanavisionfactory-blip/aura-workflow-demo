@@ -287,6 +287,23 @@ def test_only_explicit_unavoidable_actions_reach_the_user(code):
     assert public["public_blocker"] == blocker
 
 
+def test_exhausted_run_is_visible_as_stopped_when_no_retry_is_scheduled():
+    run = WorkflowRun(
+        status=RunStatus.waiting_for_action, prompt="Read Monday events",
+        plan_approved=True,
+        execution_context={
+            "__aura_autonomy__": {"handoff_reason_code": "no_safe_recovery", "next_attempt_at": None},
+            "__aura_supervisor__": {"status": "operator_attention", "phase": "execution"},
+        },
+    )
+    blocker = {"kind": "human_action", "code": "no_safe_recovery", "action": "inspect_run"}
+    projection = public_run_projection(run, blocker)
+
+    assert projection["public_status"] == "blocked"
+    assert projection["public_blocker"] == blocker
+    assert projection["supervisor"]["status"] == "operator_attention"
+
+
 @pytest.mark.parametrize(
     "blocker",
     [

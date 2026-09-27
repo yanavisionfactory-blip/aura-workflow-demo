@@ -592,6 +592,33 @@ def pause_direct_planning_failure(run: WorkflowRun) -> None:
 def public_run_projection(run: WorkflowRun, blocker: dict | None) -> dict:
     """Return the only run state technical users should need to understand."""
     state = supervisor_state(run)
+    autonomy = (run.execution_context or {}).get("__aura_autonomy__") or {}
+    if (
+        run.status in {RunStatus.waiting_for_action, RunStatus.failed, RunStatus.blocked}
+        and autonomy.get("handoff_reason_code")
+        and not autonomy.get("next_attempt_at")
+        and not is_unavoidable_human_blocker(blocker)
+    ):
+        # Bounded delivery has ended. An operator-attention supervisor flag
+        # must not hide this terminal handoff behind an endless "recovering" UI.
+        return {
+            "public_status": "blocked",
+            "public_error": None,
+            "public_blocker": blocker or {
+                "kind": "operator_action",
+                "code": "recovery_budget_exhausted",
+                "message": "AURA stopped automatic recovery. Completed work is saved.",
+                "action": "inspect_run",
+                "retryable": False,
+            },
+            "supervisor": {
+                "owner": "run_supervisor",
+                "phase": state.get("phase") or "execution",
+                "status": "operator_attention",
+                "completed_work_preserved": True,
+                "browser_independent": True,
+            },
+        }
     incident = state.get("repair_incident")
     incident_status = incident.get("status") if isinstance(incident, dict) else None
     if (
