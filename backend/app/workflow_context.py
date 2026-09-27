@@ -144,6 +144,36 @@ def _notion_context_value(value: Any) -> Any:
     return normalized
 
 
+def _pipedream_result_object(result: dict[str, Any]) -> dict[str, Any] | None:
+    """Find a single returned object inside a Pipedream action receipt.
+
+    Action receipts wrap the application result in ``ret`` or ``exports``.
+    An ID is usable as a downstream resource only when the receipt identifies
+    exactly one object; choosing the first search match could target the wrong
+    folder or document.
+    """
+    def single(value: Any, depth: int = 0) -> dict[str, Any] | None:
+        if depth > 4:
+            return None
+        if isinstance(value, list):
+            return single(value[0], depth + 1) if len(value) == 1 else None
+        if not isinstance(value, dict):
+            return None
+        if value.get("id"):
+            return value
+        candidates = [
+            single(value[key], depth + 1)
+            for key in ("data", "results", "items", "records", "files", "folders", "folder")
+            if key in value
+        ]
+        found = [candidate for candidate in candidates if candidate and candidate.get("id")]
+        return found[0] if len(found) == 1 else None
+
+    if result.get("ret") is not None:
+        return single(result["ret"])
+    return single(result.get("exports"))
+
+
 def step_context_value(result: Any, operation: str | None = None) -> Any:
     """Expose provider results through both canonical and compatibility paths.
 
@@ -162,6 +192,11 @@ def step_context_value(result: Any, operation: str | None = None) -> Any:
         value.setdefault("output", result)
         value.setdefault("result", result)
         value.setdefault("provider_result", evidence)
+        if "ret" in result or "exports" in result:
+            returned = _pipedream_result_object(result)
+            if returned:
+                for key, item in returned.items():
+                    value.setdefault(key, item)
 
     # Structured planners sometimes name a downstream value after the source
     # operation (for example ``steps.weather.forecast``). Expose that operation
