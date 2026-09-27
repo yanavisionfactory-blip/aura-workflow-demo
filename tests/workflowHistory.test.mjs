@@ -55,6 +55,7 @@ test("backend executions become reusable workflow and history records", () => {
 
 test("running and unsuccessful backend states map to panel statuses", () => {
   assert.equal(historyStatusForBackendRun({ status: "awaiting_approval" }), "running");
+  assert.equal(historyStatusForBackendRun({ status: "awaiting_approval", plan_approved: true }), "failed");
   assert.equal(historyStatusForBackendRun({ status: "recovering" }), "running");
   assert.equal(historyStatusForBackendRun({ status: "failed" }), "failed");
   assert.equal(historyStatusForBackendRun({ status: "cancelled" }), "failed");
