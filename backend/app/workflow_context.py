@@ -177,6 +177,31 @@ def _pipedream_result_object(result: dict[str, Any]) -> dict[str, Any] | None:
     return single(result.get("exports"))
 
 
+def _exact_folder_result(result: dict[str, Any], arguments: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Resolve a broad folder search only when one result has the requested name."""
+    args = arguments if isinstance(arguments, dict) else {}
+    name = next((args.get(key) for key in ("searchName", "name", "folderName")
+                 if isinstance(args.get(key), str) and args[key].strip()), None)
+    if not name:
+        return None
+    candidates = result.get("ret")
+    if isinstance(candidates, dict):
+        if candidates.get("id"):
+            candidates = [candidates]
+        else:
+            candidates = candidates.get("files", candidates.get("folders", candidates.get("data")))
+        if isinstance(candidates, dict) and not candidates.get("id"):
+            candidates = candidates.get("files", candidates.get("folders", candidates.get("results")))
+        if isinstance(candidates, dict) and candidates.get("id"):
+            candidates = [candidates]
+    if not isinstance(candidates, list):
+        return None
+    matching = [item for item in candidates if isinstance(item, dict)
+                and item.get("name") == name.strip() and item.get("id")
+                and item.get("mimeType") in (None, "application/vnd.google-apps.folder")]
+    return matching[0] if len(matching) == 1 else None
+
+
 def _result_shape(value: Any, depth: int = 0) -> Any:
     """Describe receipt structure without logging folder names, IDs or content."""
     if depth >= 3:
@@ -195,7 +220,9 @@ def _result_shape(value: Any, depth: int = 0) -> Any:
     return type(value).__name__
 
 
-def step_context_value(result: Any, operation: str | None = None) -> Any:
+def step_context_value(
+    result: Any, operation: str | None = None, arguments: dict[str, Any] | None = None,
+) -> Any:
     """Expose provider results through both canonical and compatibility paths.
 
     The planner is instructed to use ``steps.key.field`` for named fields, but
@@ -215,11 +242,18 @@ def step_context_value(result: Any, operation: str | None = None) -> Any:
         value.setdefault("provider_result", evidence)
         if "ret" in result or "exports" in result:
             returned = _pipedream_result_object(result)
+            if operation == "google-drive.find-folder" and isinstance(arguments, dict) and any(
+                isinstance(arguments.get(key), str) and arguments[key].strip()
+                for key in ("searchName", "name", "folderName")
+            ):
+                returned = _exact_folder_result(result, arguments)
             if operation == "google-drive.find-folder":
                 logger.info(
-                    "drive_folder_receipt_shape ret=%s exports=%s confirmed_single=%s",
+                    "drive_folder_receipt_shape ret=%s exports=%s lookup_fields=%s confirmed_single=%s",
                     _result_shape(result.get("ret")),
                     _result_shape(result.get("exports")),
+                    sorted({"searchName", "name", "folderName"} &
+                           (arguments.keys() if isinstance(arguments, dict) else set())),
                     bool(returned),
                 )
             if returned:
