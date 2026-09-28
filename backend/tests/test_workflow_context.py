@@ -260,6 +260,10 @@ def test_folder_search_uses_the_single_exact_name_from_its_arguments(receipt):
         receipt, "google-drive.find-folder", {"searchName": "EB2 NIW"},
     )}}
     assert resolve_value("{{steps.folder_lookup.files[0].id}}", context) == "target"
+    pipedream_context = {"steps": {"folder_lookup": step_context_value(
+        receipt, "google-drive.find-folder", {"nameSearchTerm": "EB2 NIW"},
+    )}}
+    assert resolve_value("{{steps.folder_lookup.files[0].id}}", pipedream_context) == "target"
 
 
 @pytest.mark.parametrize("matches,arguments", [

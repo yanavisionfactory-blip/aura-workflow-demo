@@ -180,7 +180,7 @@ def _pipedream_result_object(result: dict[str, Any]) -> dict[str, Any] | None:
 def _exact_folder_result(result: dict[str, Any], arguments: dict[str, Any] | None) -> dict[str, Any] | None:
     """Resolve a broad folder search only when one result has the requested name."""
     args = arguments if isinstance(arguments, dict) else {}
-    name = next((args.get(key) for key in ("searchName", "name", "folderName")
+    name = next((args.get(key) for key in ("nameSearchTerm", "searchName", "name", "folderName")
                  if isinstance(args.get(key), str) and args[key].strip()), None)
     if not name:
         return None
@@ -244,7 +244,7 @@ def step_context_value(
             returned = _pipedream_result_object(result)
             if operation == "google-drive.find-folder" and isinstance(arguments, dict) and any(
                 isinstance(arguments.get(key), str) and arguments[key].strip()
-                for key in ("searchName", "name", "folderName")
+                for key in ("nameSearchTerm", "searchName", "name", "folderName")
             ):
                 returned = _exact_folder_result(result, arguments)
             if operation == "google-drive.find-folder":
