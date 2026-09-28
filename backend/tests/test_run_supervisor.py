@@ -172,6 +172,61 @@ def test_completed_steps_with_unverified_result_show_a_human_handoff():
     assert public["public_blocker"] == blocker
 
 
+def test_exhausted_run_is_visible_as_stopped_when_no_retry_is_scheduled():
+    run = WorkflowRun(
+        status=RunStatus.waiting_for_action, prompt="Read Monday events",
+        plan_approved=True,
+        execution_context={
+            "__aura_autonomy__": {"handoff_reason_code": "no_safe_recovery", "next_attempt_at": None},
+            "__aura_supervisor__": {"status": "operator_attention", "phase": "execution"},
+        },
+    )
+    blocker = {"kind": "human_action", "code": "no_safe_recovery", "action": "inspect_run"}
+    projection = public_run_projection(run, blocker)
+
+    assert projection["public_status"] == "blocked"
+    assert projection["public_blocker"] == blocker
+    assert projection["supervisor"]["status"] == "operator_attention"
+
+
+@pytest.mark.parametrize(
+    "reason", ["provider_result_review_rejected", "recorded_result_review_incomplete"]
+)
+def test_saved_provider_result_without_queued_retry_offers_read_only_recheck(reason):
+    run = WorkflowRun(
+        status=RunStatus.waiting_for_action,
+        prompt="Create a Google Doc",
+        plan_approved=True,
+        result={"failed_step": {"id": "saved-write"}},
+        execution_context={
+            "__aura_supervisor__": {
+                "status": "recovering",
+                "phase": "verification",
+                "last_transition": {"reason": reason},
+            }
+        },
+    )
+
+    projection = public_run_projection(run, None)
+
+    assert projection["public_status"] == "blocked"
+    assert projection["public_error"] is None
+    assert projection["public_blocker"]["action"] == "recheck_saved_result"
+    assert projection["public_blocker"]["step_id"] == "saved-write"
+    assert projection["supervisor"]["status"] == "operator_attention"
+
+
+def test_unrelated_waiting_run_is_not_offered_a_saved_result_recheck():
+    run = WorkflowRun(
+        status=RunStatus.waiting_for_action,
+        prompt="Create a Google Doc",
+        plan_approved=True,
+        result={"failed_step": {"id": "saved-write"}},
+        execution_context={"__aura_supervisor__": {"status": "recovering"}},
+    )
+    assert public_run_projection(run, None)["public_status"] == "recovering"
+
+
 async def test_repeated_malformed_plans_stop_before_eight_expensive_rounds(database):
     async with database() as session:
         run = WorkflowRun(
@@ -285,23 +340,6 @@ def test_only_explicit_unavoidable_actions_reach_the_user(code):
 
     assert public["public_status"] == "waiting_for_action"
     assert public["public_blocker"] == blocker
-
-
-def test_exhausted_run_is_visible_as_stopped_when_no_retry_is_scheduled():
-    run = WorkflowRun(
-        status=RunStatus.waiting_for_action, prompt="Read Monday events",
-        plan_approved=True,
-        execution_context={
-            "__aura_autonomy__": {"handoff_reason_code": "no_safe_recovery", "next_attempt_at": None},
-            "__aura_supervisor__": {"status": "operator_attention", "phase": "execution"},
-        },
-    )
-    blocker = {"kind": "human_action", "code": "no_safe_recovery", "action": "inspect_run"}
-    projection = public_run_projection(run, blocker)
-
-    assert projection["public_status"] == "blocked"
-    assert projection["public_blocker"] == blocker
-    assert projection["supervisor"]["status"] == "operator_attention"
 
 
 @pytest.mark.parametrize(
