@@ -279,6 +279,21 @@ def test_folder_search_never_guesses_without_one_exact_requested_name(matches, a
         resolve_value("{{steps.folder_lookup.files[0].id}}", context)
 
 
+@pytest.mark.parametrize("matches,expected", [
+    ([{"id": "only-note", "name": "EB2 NIW notes"}], "only-note"),
+    ([{"id": "one"}, {"id": "two"}], None),
+])
+def test_drive_file_list_handoff_requires_one_confirmed_file(matches, expected):
+    context = {"steps": {"notes": step_context_value(
+        {"ret": matches}, "google-drive.list-files",
+    )}}
+    if expected is None:
+        with pytest.raises(WorkflowContextError):
+            resolve_value("{{steps.notes.files[0].id}}", context)
+    else:
+        assert resolve_value("{{steps.notes.files[0].id}}", context) == expected
+
+
 def test_missing_resource_id_never_falls_back_to_an_unrelated_id():
     import pytest
 
