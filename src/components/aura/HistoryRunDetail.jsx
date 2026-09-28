@@ -67,11 +67,6 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
       const result = await dispatchDuePythonRun(run.backend_run_id);
       const latest = await getPythonRun(run.backend_run_id);
       const projected = backendRunHistoryProjection(latest).run;
-      if (run.id && (run.backend_updated_at !== projected.backend_updated_at
-          || run.status !== projected.status || run.summary !== projected.summary)) {
-        const updated = await aura.entities.WorkflowRun.update(run.id, projected);
-        announceWorkflowHistoryChanged({ run: updated });
-      }
       const blocked = result.preflight_blocker;
       const pendingReview = latest.status === "awaiting_approval" && latest.steps?.some((step) =>
         step.approval_status === "pending" && step.approval_preview?.status === "ready"
@@ -87,7 +82,9 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
       if (paused) {
         setReviewStepId(recordedReceipt?.id || null);
         if (!recordedReceipt && !blocked) {
-          setRetryStepId(latest.steps?.find((step) => step.status === "failed")?.id || null);
+          setRetryStepId(latest.steps?.find((step) =>
+            step.status === "failed" && (step.consequential === false || step.recovery?.can_retry === true)
+          )?.id || null);
         }
       }
       setRepairReady(blocked?.action === "wait_for_connector_repair" && result.preflight_status === "blocked");
@@ -104,6 +101,15 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
         : result.next_attempt_at
           ? `Next retry: ${new Date(result.next_attempt_at).toLocaleString()}.`
           : `No due work for this run. Current status: ${result.status}.`);
+      if (run.id && (run.backend_updated_at !== projected.backend_updated_at
+          || run.status !== projected.status || run.summary !== projected.summary)) {
+        try {
+          const updated = await aura.entities.WorkflowRun.update(run.id, projected);
+          announceWorkflowHistoryChanged({ run: updated });
+        } catch {
+          // A history sync error must not hide a saved provider receipt or its recovery action.
+        }
+      }
     } catch (error) {
       setCheckResult(error.message || "Could not check this run.");
     } finally {
