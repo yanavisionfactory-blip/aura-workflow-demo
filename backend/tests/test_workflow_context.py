@@ -227,6 +227,7 @@ def test_pipedream_folder_lookup_exposes_single_confirmed_id(receipt):
     context = {"steps": {"folder_lookup": step_context_value(receipt, "google-drive.find-folder")}}
 
     assert resolve_value("{{steps.folder_lookup.id}}", context) == "folder-1"
+    assert resolve_value("{{steps.folder_lookup.files[0].id}}", context) == "folder-1"
     assert context["steps"]["folder_lookup"]["provider_result"] == receipt
 
 
@@ -243,6 +244,8 @@ def test_pipedream_folder_lookup_never_guesses_an_ambiguous_id(receipt):
 
     with pytest.raises(WorkflowContextError):
         resolve_value("{{steps.folder_lookup.id}}", context)
+    with pytest.raises(WorkflowContextError):
+        resolve_value("{{steps.folder_lookup.files[0].id}}", context)
 
 
 def test_missing_resource_id_never_falls_back_to_an_unrelated_id():
