@@ -235,6 +235,17 @@ def evaluate_outcome_check(check: OutcomeCheck, observed: dict) -> dict:
         )
     else:
         matched = _matches(check.expected, observed)
+        if check.kind == "docs" and not matched and check.expected.get("title") == observed.get("title"):
+            # Plain-text Drive export can include the Doc title as a heading.
+            # Accept only that exact heading and the complete original body;
+            # arbitrary prefixes, suffixes, and edited content still fail.
+            title = check.expected["title"]
+            body = str(observed.get("body") or "")
+            expected_body = str(check.expected["body"])
+            matched = (
+                body.startswith(title + "\n")
+                and body[len(title):].lstrip("\n") == expected_body
+            )
         if check.kind == "calendar" and observed.get("status") == "cancelled":
             matched = False
         if check.expected.get("archived") is False and observed.get("in_trash") is True:
