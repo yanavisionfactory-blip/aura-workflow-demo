@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import unicodedata
+from difflib import SequenceMatcher
 from time import perf_counter
 
 from sqlalchemy import select
@@ -32,13 +33,24 @@ def _log_doc_readback_difference(expected: dict, observed: dict, status: str) ->
     logger.info(
         "google_docs_readback status=%s id_matches=%s title_matches=%s "
         "body_matches=%s normalized_body_matches=%s source_chars=%d exported_chars=%d "
-        "source_lines=%d exported_lines=%d",
+        "source_lines=%d exported_lines=%d title_chars=%d source_in_export=%s "
+        "source_is_suffix=%s title_header_only=%s diff_shapes=%s",
         status,
         expected.get("id") == observed.get("id") if expected.get("id") else None,
         expected.get("title") == observed.get("title"),
         source == actual,
         normalize(source) == normalize(actual),
         len(source), len(actual), source.count("\n") + 1, actual.count("\n") + 1,
+        len(str(expected.get("title") or "")),
+        source in actual, actual.endswith(source),
+        actual.startswith(str(expected.get("title") or "") + "\n")
+        and actual[len(str(expected.get("title") or "")):].lstrip("\n") == source,
+        [
+            (tag, end_a - start_a, end_b - start_b)
+            for tag, start_a, end_a, start_b, end_b in
+            SequenceMatcher(None, source, actual, autojunk=False).get_opcodes()
+            if tag != "equal"
+        ][:12],
     )
 
 

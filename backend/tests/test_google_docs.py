@@ -84,6 +84,17 @@ async def test_docs_readback_uses_drive_export_when_docs_api_denies_the_read(mon
     assert evaluate_outcome_check(check, observed)["status"] == "verified"
 
 
+def test_docs_export_with_exact_title_heading_keeps_complete_body_verification():
+    title = "Monday briefing"
+    body = "Agenda\nNotes from Drive"
+    check = build_outcome_check("docs.create", {"title": title, "body": body}, {"id": "doc-123"})
+    observed = {"id": "doc-123", "title": title, "body": f"{title}\n\n\n{body}"}
+
+    assert evaluate_outcome_check(check, observed)["status"] == "verified"
+    assert evaluate_outcome_check(check, {**observed, "body": f"Different heading\n{body}"})["status"] == "failed"
+    assert evaluate_outcome_check(check, {**observed, "body": f"{title}\n{body} altered"})["status"] == "failed"
+
+
 @pytest.mark.asyncio
 async def test_docs_drive_fallback_rejects_a_different_resource(monkeypatch):
     calls = []
