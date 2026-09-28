@@ -263,6 +263,12 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
                     <div>
                       <p className="text-sm font-medium">{o.title}</p>
                       <p className="text-xs text-muted-foreground mt-0.5">{o.detail}</p>
+                      {/^https:\/\//i.test(o.link || "") && (
+                        <a href={o.link} target="_blank" rel="noopener noreferrer"
+                          className="mt-2 inline-block text-xs font-medium text-primary hover:underline">
+                          {o.linkLabel || "Open result"}
+                        </a>
+                      )}
                     </div>
                   </div>
                 );
