@@ -1,8 +1,11 @@
 import json
+import logging
 import re
 from typing import Any
 
 from .schemas import StepCondition
+
+logger = logging.getLogger(__name__)
 
 REFERENCE = re.compile(r"\{\{\s*([a-zA-Z0-9_.\-\[\]'\" ]+?)\s*\}\}")
 BRACKET_INDEX = re.compile(r"\[(\d+)\]")
@@ -174,6 +177,24 @@ def _pipedream_result_object(result: dict[str, Any]) -> dict[str, Any] | None:
     return single(result.get("exports"))
 
 
+def _result_shape(value: Any, depth: int = 0) -> Any:
+    """Describe receipt structure without logging folder names, IDs or content."""
+    if depth >= 3:
+        return type(value).__name__
+    if isinstance(value, list):
+        return {"type": "list", "count": len(value),
+                "first": _result_shape(value[0], depth + 1) if len(value) == 1 else None}
+    if isinstance(value, dict):
+        known = {"ret", "exports", "data", "files", "folders", "folder", "results",
+                 "items", "id", "name", "status", "error", "success", "details", "object"}
+        return {"type": "object", "keys": sorted(known & value.keys()),
+                "other_keys": len(value.keys() - known),
+                "children": {key: _result_shape(value[key], depth + 1)
+                             for key in ("data", "files", "folders", "folder", "results", "items")
+                             if key in value}}
+    return type(value).__name__
+
+
 def step_context_value(result: Any, operation: str | None = None) -> Any:
     """Expose provider results through both canonical and compatibility paths.
 
@@ -194,6 +215,13 @@ def step_context_value(result: Any, operation: str | None = None) -> Any:
         value.setdefault("provider_result", evidence)
         if "ret" in result or "exports" in result:
             returned = _pipedream_result_object(result)
+            if operation == "google-drive.find-folder":
+                logger.info(
+                    "drive_folder_receipt_shape ret=%s exports=%s confirmed_single=%s",
+                    _result_shape(result.get("ret")),
+                    _result_shape(result.get("exports")),
+                    bool(returned),
+                )
             if returned:
                 for key, item in returned.items():
                     value.setdefault(key, item)
