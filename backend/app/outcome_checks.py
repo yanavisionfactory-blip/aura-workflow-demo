@@ -246,6 +246,18 @@ def evaluate_outcome_check(check: OutcomeCheck, observed: dict) -> dict:
                 body.startswith(title + "\n")
                 and body[len(title):].lstrip("\n") == expected_body
             )
+            if not matched:
+                # Drive can add indentation and blank paragraphs when it
+                # converts a plain-text upload. Preserve every nonblank line's
+                # characters and order; edits within a line still fail.
+                def content_lines(text: str) -> list[str]:
+                    return [
+                        line.strip()
+                        for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+                        if line.strip()
+                    ]
+
+                matched = content_lines(body) == content_lines(expected_body)
         if check.kind == "calendar" and observed.get("status") == "cancelled":
             matched = False
         if check.expected.get("archived") is False and observed.get("in_trash") is True:
