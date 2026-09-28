@@ -1,4 +1,5 @@
 import { primaryResultFromOutputs } from "./resultPresentation.mjs";
+import { normalizeResultSuggestions } from "./resultSuggestions.mjs";
 
 const FAILED_STATUSES = new Set(["blocked", "cancelled", "failed"]);
 
@@ -134,6 +135,7 @@ export function backendRunHistoryProjection(run = {}) {
         link: documentResult.link,
         linkLabel: "Open in Google Docs",
       }] : [],
+      nextSteps: normalizeResultSuggestions(run.result?.unified_deliverable?.next_steps),
       steps,
       duration_seconds: durationSeconds(run),
       backend_created_at: run.created_at || runDate,
