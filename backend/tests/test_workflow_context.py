@@ -248,6 +248,33 @@ def test_pipedream_folder_lookup_never_guesses_an_ambiguous_id(receipt):
         resolve_value("{{steps.folder_lookup.files[0].id}}", context)
 
 
+@pytest.mark.parametrize("receipt", [
+    {"ret": [{"id": "other", "name": "EB2 projects"},
+             {"id": "target", "name": "EB2 NIW"},
+             {"id": "elsewhere", "name": "NIW archive"}]},
+    {"ret": {"data": {"files": [{"id": "other", "name": "EB2 NIW draft"},
+                               {"id": "target", "name": "EB2 NIW"}]}}},
+])
+def test_folder_search_uses_the_single_exact_name_from_its_arguments(receipt):
+    context = {"steps": {"folder_lookup": step_context_value(
+        receipt, "google-drive.find-folder", {"searchName": "EB2 NIW"},
+    )}}
+    assert resolve_value("{{steps.folder_lookup.files[0].id}}", context) == "target"
+
+
+@pytest.mark.parametrize("matches,arguments", [
+    ([{"id": "one", "name": "EB2 NIW"}, {"id": "two", "name": "EB2 NIW"}],
+     {"searchName": "EB2 NIW"}),
+    ([{"id": "other", "name": "EB2 NIW draft"}], {"searchName": "EB2 NIW"}),
+])
+def test_folder_search_never_guesses_without_one_exact_requested_name(matches, arguments):
+    context = {"steps": {"folder_lookup": step_context_value(
+        {"ret": matches}, "google-drive.find-folder", arguments,
+    )}}
+    with pytest.raises(WorkflowContextError):
+        resolve_value("{{steps.folder_lookup.files[0].id}}", context)
+
+
 def test_missing_resource_id_never_falls_back_to_an_unrelated_id():
     import pytest
 
