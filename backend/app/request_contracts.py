@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 from .connection_families import capability_family
@@ -48,6 +49,18 @@ _PROVIDER_STEP_ADD = re.compile(
     r"\s+(?:" + "|".join(
         re.escape(alias) for aliases in _ALIASES.values() for alias in aliases
     ) + r")\s+as\s+(?:the\s+)?(?:first|next|last)\s+step\b",
+    re.IGNORECASE,
+)
+_READ_ADD = re.compile(
+    r"\s+(?:(?:a|an|the)\s+)?(?:read|lookup|search)\b|"
+    r"\s+(?:(?:a|an|the)\s+)?(?:google\s+)?calendar\s+(?:read|lookup|search)\b",
+    re.IGNORECASE,
+)
+_CALENDAR_EVENT_TARGET = re.compile(
+    r"\s+(?:(?:a|an|the|new|my|one)\s+)?"
+    r"(?:(?:google\s+)?calendar\s+)?(?:events?|meetings?|appointments?|reminders?)\b"
+    r"(?!\s+(?:summary|briefing|notes|report|recap|agenda)\b)|"
+    r"\s+(?:to|in|on)\s+(?:(?:my|the)\s+)?(?:google\s+)?calendar\b",
     re.IGNORECASE,
 )
 
@@ -202,6 +215,7 @@ def requested_effects(prompt: str, inventory: list[dict], manifests: dict) -> li
             # read that source, while "add an event in Calendar" remains a write.
             if action.group() == "add" and (
                 _STEP_ADD.match(tail) or _PROVIDER_STEP_ADD.match(tail)
+                or _READ_ADD.match(tail)
             ):
                 continue
             lead = clause[max(0, action.start() - 90):action.start()]
@@ -209,6 +223,10 @@ def requested_effects(prompt: str, inventory: list[dict], manifests: dict) -> li
                 if not _operation_matches(kind, module):
                     continue
                 family = _family(slug, operation)
+                if family == "calendar" and not _CALENDAR_EVENT_TARGET.match(tail):
+                    # "Create a briefing from Calendar" describes a source,
+                    # even when Calendar appears later in the same sentence.
+                    continue
                 if family == "canva" and kind == "create":
                     # Creating a populated slide is a presentation action.
                     # An export job or a blank design cannot satisfy it.
@@ -255,6 +273,48 @@ def requested_effects(prompt: str, inventory: list[dict], manifests: dict) -> li
     ]
 
 
+def validate_revision_write_scope(prompt: str, plan, inventory: list[dict], manifests: dict) -> None:
+    """The orchestrator may add a write only when the user requested it.
+
+    Read expansions can preserve reviewed writes, but a model-generated write
+    for another app must never become an approvable revision.
+    """
+    if _REVIEW_MARKER not in prompt:
+        return
+    marker = "\nCurrent reviewed steps (preserve unchanged steps and dependencies): "
+    _, found, serialized = prompt.partition(marker)
+    if not found:
+        return
+    try:
+        reviewed, _ = json.JSONDecoder().raw_decode(serialized)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise ValueError("The reviewed plan could not be read for revision authorization") from exc
+    if not isinstance(reviewed, list):
+        raise TypeError("The reviewed plan must contain a list of steps")
+    prior_operations = {
+        (str(step.get("tool")), str(step.get("operation"))) for step in reviewed
+        if isinstance(step, dict) and isinstance(step.get("tool"), str)
+        and isinstance(step.get("operation"), str)
+    }
+    authorized = {
+        (target["tool_slug"], target["operation"])
+        for effect in requested_effects(prompt, inventory, manifests)
+        for target in effect["targets"]
+    }
+    for step in plan.steps:
+        module = next((item for item in manifests.get(step.tool_slug, {}).get("capabilities", [])
+                       if item.get("name") == step.operation), None)
+        if not module or module.get("permission_scope") not in {"write", "destructive"}:
+            continue
+        if (step.tool_slug, step.operation) in prior_operations | authorized:
+            continue
+        family = _family(step.tool_slug, step.operation)
+        raise ValueError(
+            f"Unrequested {family} write in the revised plan: {step.operation}. "
+            "Keep the reviewed actions and add only the requested reads."
+        )
+
+
 def missing_requested_operations(
     prompt: str, operations: set[str], effects: list[dict] | None = None,
     artifacts: list[dict] | None = None,
@@ -281,6 +341,8 @@ def validate_requested_operations(
     prompt: str, plan, available: set[str],
     inventory: list[dict] | None = None, manifests: dict | None = None,
 ) -> list[dict]:
+    if inventory is not None and manifests is not None:
+        validate_revision_write_scope(prompt, plan, inventory, manifests)
     if draft_only_email_request(prompt) and any(
         is_gmail_delivery_step(step, manifests) for step in plan.steps
     ):
