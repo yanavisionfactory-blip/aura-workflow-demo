@@ -115,7 +115,7 @@ export default function WorkflowDetail({
         )}
         <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">{workflow.interpretation || workflow.prompt}</p>
         <div className="flex items-center gap-2 mt-2 text-[11px] text-muted-foreground/60">
-          <span>{workflow.run_count || wfRuns.length || 0} runs</span>
+          <span>{wfRuns.length} {wfRuns.length === 1 ? "run" : "runs"}</span>
           {workflow.last_run_date && (
             <>
               <span>•</span>
