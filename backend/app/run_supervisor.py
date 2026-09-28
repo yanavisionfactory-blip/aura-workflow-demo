@@ -563,17 +563,18 @@ def is_unavoidable_human_blocker(blocker: dict | None) -> bool:
     )
 
 
-def pause_direct_planning_failure(run: WorkflowRun) -> None:
+def pause_direct_planning_failure(run: WorkflowRun, scope_error: str | None = None) -> None:
     """End a failed direct LLM attempt without an agent repair loop."""
-    message = (
+    message = (f"AURA's orchestrator blocked this plan: {scope_error} No action started."
+               if scope_error else
         "AURA couldn't prepare the actions for this plan. "
         "Nothing has started. Please try again."
     )
     transition_run(
         run,
         RunStatus.waiting_for_action,
-        reason="direct_llm_plan_needs_retry",
-        actor="plan-builder",
+        reason="orchestrator_blocked_unrequested_write" if scope_error else "direct_llm_plan_needs_retry",
+        actor="orchestrator" if scope_error else "plan-builder",
         phase="planning",
         supervisor_status="human_action_required",
         error=message,

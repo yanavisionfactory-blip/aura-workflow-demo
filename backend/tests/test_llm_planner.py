@@ -5,7 +5,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from pydantic import ValidationError
 
 from app import llm_planner, orchestrator
 from app.agent_runtime import CompactWorkflowPlan
@@ -16,31 +15,10 @@ from app.request_contracts import requested_effects
 from app.schemas import PlanStep, WorkflowPlan
 
 
-def test_required_action_schema_binds_google_doc_operation_to_its_tool():
-    effects = [{"effect": "docs create", "targets": [
-        {"tool_slug": "google", "operation": "docs.create"},
-        {"tool_slug": "google-docs", "operation": "google-docs.create-document"},
-    ]}]
-    schema = llm_planner._contract_bound_response(effects)
-    action = {
-        "key": "doc", "agent": "Google Docs", "tool_slug": "google",
-        "operation": "docs.create", "arguments_json": '{"title":"Briefing","body":"Text"}',
-        "reason": "Create the briefing", "expected_output": "A Google Doc",
-        "consequential": True, "depends_on": [], "required_evidence": [],
+def test_planner_schema_only_describes_a_plan():
+    assert set(CompactWorkflowPlan.model_json_schema()["required"]) == {
+        "name", "interpretation", "steps",
     }
-    payload = {"name": "Briefing", "interpretation": "Create a briefing", "steps": [],
-               "required_action_0": action}
-
-    for slug, operation in (("google", "docs.create"),
-                            ("google-docs", "google-docs.create-document")):
-        result = schema.model_validate({**payload, "required_action_0": {
-            **action, "tool_slug": slug, "operation": operation,
-        }})
-        assert result.required_action_0.tool_slug == slug
-    with pytest.raises(ValidationError):
-        schema.model_validate({**payload, "required_action_0": {
-            **action, "tool_slug": "google-docs", "operation": "docs.create",
-        }})
 
 
 @pytest.mark.asyncio
@@ -66,14 +44,13 @@ async def test_large_catalog_is_packed_before_the_only_planning_call(monkeypatch
     async def parse(**kwargs):
         captured.append(json.loads(kwargs["input"]))
         return SimpleNamespace(output_parsed=kwargs["text_format"].model_validate({
-            "name": "Create file", "interpretation": "Create one file", "steps": [],
-            "required_action_0": {
+            "name": "Create file", "interpretation": "Create one file", "steps": [{
                 "key": "create", "agent": "Google Drive", "tool_slug": "google-drive",
                 "operation": "google-drive.create-file",
                 "arguments_json": '{"name":"Notes","content":"Project notes."}',
                 "reason": "Save the notes", "expected_output": "A Drive file",
                 "consequential": True, "depends_on": [], "required_evidence": [],
-            },
+            }],
         }))
 
     class Client:
@@ -194,7 +171,7 @@ async def test_direct_planner_uses_one_structured_call(monkeypatch):
     assert parse.await_args.kwargs["text_format"] is CompactWorkflowPlan
     assert plan.steps[0].arguments == {"location": "Berlin"}
     assert plan.planning_artifacts["planner_recovery_mode"] == "direct_llm"
-    assert plan.planning_artifacts["preflight_evaluation"]["permission_scope"] == "read"
+    assert "preflight_evaluation" not in plan.planning_artifacts
 
 
 @pytest.mark.asyncio
@@ -391,18 +368,17 @@ async def test_single_llm_response_includes_required_canva_creation(monkeypatch)
     async def parse(**kwargs):
         calls.append(kwargs)
         schema = kwargs["text_format"]
-        assert "required_action_0" in schema.model_json_schema()["required"]
+        assert schema is CompactWorkflowPlan
         return SimpleNamespace(output_parsed=schema.model_validate({
             "name": "One Canva slide",
             "interpretation": "Create one slide in Canva",
-            "steps": [],
-            "required_action_0": {
+            "steps": [{
                 "key": "slide", "agent": "Canva", "tool_slug": "canva",
                 "operation": "canva.presentation.create",
                 "arguments_json": '{"title":"A slide","phases":[{"period":"Now","title":"Main point","items":["One idea"]}]}',
                 "reason": "Create the requested slide", "expected_output": "Populated slide",
                 "consequential": True, "depends_on": [], "required_evidence": [],
-            },
+            }],
         }))
 
     class Client:
