@@ -277,6 +277,23 @@ def step_context_value(
         value.setdefault("provider_result", evidence)
         if "ret" in result or "exports" in result:
             returned = _pipedream_result_object(result)
+            if operation == "google-docs.get-document":
+                doc = result.get("ret")
+                if isinstance(doc, dict) and isinstance(doc.get("textContent"), str):
+                    tabs = doc.get("tabs")
+                    tab_texts = [
+                        tab.get("textContent") for tab in tabs
+                        if isinstance(tab, dict) and isinstance(tab.get("textContent"), str)
+                    ] if isinstance(tabs, list) else []
+                    value.setdefault("textContent", "\n\n".join(tab_texts) if tab_texts
+                                     else doc["textContent"])
+                logger.info(
+                    "docs_receipt_text ret_type=%s text_present=%s tabs=%s",
+                    type(doc).__name__,
+                    bool(isinstance(doc, dict) and isinstance(doc.get("textContent"), str)),
+                    len(doc.get("tabs", [])) if isinstance(doc, dict)
+                    and isinstance(doc.get("tabs"), list) else 0,
+                )
             if operation == "google-drive.find-folder" and isinstance(arguments, dict) and any(
                 isinstance(arguments.get(key), str) and arguments[key].strip()
                 for key in ("nameSearchTerm", "searchName", "name", "folderName")

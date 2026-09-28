@@ -332,6 +332,16 @@ def test_drive_file_list_exposes_all_only_when_approved_reads_cover_all_indices(
         assert "files" not in value
 
 
+def test_google_docs_read_exposes_provider_confirmed_text_for_later_draft():
+    receipt = {"ret": {"documentId": "doc-one", "textContent": "First tab facts",
+                       "tabs": [{"title": "First", "textContent": "First tab facts"},
+                                {"title": "Second", "textContent": "Second tab facts"}]}}
+    context = {"steps": {"read": step_context_value(receipt, "google-docs.get-document")}}
+    assert resolve_value("{{steps.read.textContent}}", context) == (
+        "First tab facts\n\nSecond tab facts"
+    )
+
+
 def test_missing_resource_id_never_falls_back_to_an_unrelated_id():
     import pytest
 
