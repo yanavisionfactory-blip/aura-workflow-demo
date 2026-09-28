@@ -202,6 +202,21 @@ def _exact_folder_result(result: dict[str, Any], arguments: dict[str, Any] | Non
     return matching[0] if len(matching) == 1 else None
 
 
+def _unique_notes_doc(result: dict[str, Any]) -> tuple[dict[str, Any] | None, int, int]:
+    """Choose only an unambiguous Docs file for a planned notes-document read."""
+    returned = result.get("ret")
+    files = returned.get("files") if isinstance(returned, dict) else returned
+    if not isinstance(files, list):
+        return None, 0, 0
+    docs = [item for item in files if isinstance(item, dict) and item.get("id")
+            and item.get("mimeType") == "application/vnd.google-apps.document"]
+    notes = [item for item in docs if isinstance(item.get("name"), str)
+             and re.search(r"\bnotes?\b", item["name"], re.IGNORECASE)]
+    if len(notes) == 1:
+        return notes[0], len(docs), len(notes)
+    return (docs[0] if len(docs) == 1 else None), len(docs), len(notes)
+
+
 def _result_shape(value: Any, depth: int = 0) -> Any:
     """Describe receipt structure without logging folder names, IDs or content."""
     if depth >= 3:
@@ -247,6 +262,9 @@ def step_context_value(
                 for key in ("nameSearchTerm", "searchName", "name", "folderName")
             ):
                 returned = _exact_folder_result(result, arguments)
+            doc_count = notes_count = 0
+            if operation == "google-drive.list-files" and not returned:
+                returned, doc_count, notes_count = _unique_notes_doc(result)
             if operation == "google-drive.find-folder":
                 logger.info(
                     "drive_folder_receipt_shape ret=%s exports=%s argument_fields=%s confirmed_single=%s",
@@ -257,9 +275,11 @@ def step_context_value(
                 )
             if operation == "google-drive.list-files":
                 logger.info(
-                    "drive_file_receipt_shape ret=%s exports=%s confirmed_single=%s",
+                    "drive_file_receipt_shape ret=%s exports=%s docs=%s notes_docs=%s selected=%s",
                     _result_shape(result.get("ret")),
                     _result_shape(result.get("exports")),
+                    doc_count,
+                    notes_count,
                     bool(returned),
                 )
             if returned:
