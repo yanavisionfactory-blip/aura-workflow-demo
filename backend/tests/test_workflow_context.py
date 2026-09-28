@@ -315,6 +315,23 @@ def test_drive_file_list_selects_only_one_relevant_google_doc(files, expected):
         assert resolve_value("{{steps.notes.files[0].id}}", context) == expected
 
 
+def test_drive_file_list_exposes_all_only_when_approved_reads_cover_all_indices():
+    receipt = {"ret": {"files": [
+        {"id": f"doc-{index}", "mimeType": "application/vnd.google-apps.document"}
+        for index in range(8)
+    ]}}
+    reads = [{"operation": "google-docs.get-document", "arguments": {
+        "documentId": f"{{{{steps.list_files.files[{index}].id}}}}",
+    }} for index in range(8)]
+    value = step_context_value(receipt, "google-drive.list-files", planned_steps=reads,
+                               step_key="list_files")
+    assert [item["id"] for item in value["files"]] == [f"doc-{i}" for i in range(8)]
+    for incomplete in (reads[:1], reads[:-1]):
+        value = step_context_value(receipt, "google-drive.list-files",
+                                   planned_steps=incomplete, step_key="list_files")
+        assert "files" not in value
+
+
 def test_missing_resource_id_never_falls_back_to_an_unrelated_id():
     import pytest
 
