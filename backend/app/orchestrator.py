@@ -1965,7 +1965,8 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 # A direct model response that failed deterministic validation
                 # must not enter the agent-style supervisor retry loop. Leave
                 # the visible proposal intact and offer an explicit retry.
-                pause_direct_planning_failure(run)
+                scope_error = str(exc) if str(exc).startswith("Unrequested ") else None
+                pause_direct_planning_failure(run, scope_error=scope_error)
             else:
                 await recover_planning_failure(
                     session,
