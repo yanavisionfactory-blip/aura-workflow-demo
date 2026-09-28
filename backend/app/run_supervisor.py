@@ -593,6 +593,36 @@ def public_run_projection(run: WorkflowRun, blocker: dict | None) -> dict:
     """Return the only run state technical users should need to understand."""
     state = supervisor_state(run)
     autonomy = (run.execution_context or {}).get("__aura_autonomy__") or {}
+    transition = state.get("last_transition") or {}
+    failed_step = (run.result or {}).get("failed_step") or {}
+    if (
+        run.status == RunStatus.waiting_for_action
+        and transition.get("reason") in {
+            "provider_result_review_rejected", "recorded_result_review_incomplete"
+        }
+        and failed_step.get("id")
+    ):
+        # The write receipt is saved, but no retry is queued. Give the user a
+        # way to recheck that receipt without submitting the write a second time.
+        return {
+            "public_status": "blocked",
+            "public_error": None,
+            "public_blocker": {
+                "kind": "operator_action",
+                "code": "recorded_result_needs_review",
+                "message": "The provider action was recorded, but AURA could not verify its result.",
+                "action": "recheck_saved_result",
+                "step_id": failed_step["id"],
+                "retryable": True,
+            },
+            "supervisor": {
+                "owner": "run_supervisor",
+                "phase": "verification",
+                "status": "operator_attention",
+                "completed_work_preserved": True,
+                "browser_independent": True,
+            },
+        }
     if (
         run.status in {RunStatus.waiting_for_action, RunStatus.failed, RunStatus.blocked}
         and autonomy.get("handoff_reason_code")
