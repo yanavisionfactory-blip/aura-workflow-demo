@@ -197,6 +197,11 @@ def step_context_value(result: Any, operation: str | None = None) -> Any:
             if returned:
                 for key, item in returned.items():
                     value.setdefault(key, item)
+                if operation == "google-drive.find-folder":
+                    # Pipedream may return one folder object in ret, while a
+                    # planner references it as files[0]. Only expose this
+                    # collection alias when the receipt confirms one ID.
+                    value.setdefault("files", [returned])
 
     # Structured planners sometimes name a downstream value after the source
     # operation (for example ``steps.weather.forecast``). Expose that operation
