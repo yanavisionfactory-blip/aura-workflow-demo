@@ -59,11 +59,13 @@ export function recoveryForRun(run = {}) {
       review_plan: "Review the plan and start it when it is correct.",
       review_submission: "Review the exact prepared payload. AURA will submit it only after you approve it.",
       inspect_run: "Review the provider result before deciding what should happen next; completed work and receipts are preserved.",
+      retry_final_review: "AURA will review the saved receipts again. No completed action will repeat.",
       retry_step: "Try only the remaining export again. The presentation is saved and AURA will not recreate it.",
       recheck_saved_result: "AURA will inspect the saved result without creating it again.",
       contact_support: "Contact AURA support with the run ID. Your completed work is saved; avoid starting a duplicate workflow.",
     };
     const retryAction = blocker.action === "retry_step" && blocker.retryable === true;
+    const finalReviewRetry = blocker.action === "retry_final_review" && blocker.retryable === true;
     const savedReadback = blocker.action === "recheck_saved_result"
       && blocker.retryable === true && Boolean(blocker.step_id);
     const incompleteCustomerRead = blocker.code === "final_result_unverified"
@@ -84,14 +86,18 @@ export function recoveryForRun(run = {}) {
       why: blocker.message || "AURA cannot safely continue this run without this decision.",
       fix: incompleteCustomerRead
         ? "Build a new plan that reads customer conversations and sent history, then review it before starting. This run only read messages; it sent nothing."
+        : finalReviewRetry
+        ? fixes.retry_final_review
         : blocker.code === "final_result_unverified"
         ? "Review the saved results, then provide the missing source details in a revised request. The completed steps will not run again automatically."
         : fixes[blocker.action] || "Resolve the exact blocker shown above, then return to this saved run.",
       canRestartReadPlan: incompleteCustomerRead,
-      canRetry: connectionAction || retryAction || savedReadback,
+      canRetry: connectionAction || retryAction || savedReadback || finalReviewRetry,
       canSkip: false,
       buttonLabel: savedReadback
         ? "Recheck saved result"
+        : finalReviewRetry
+        ? "Verify saved result"
         : retryAction
         ? "Try export again"
         : blocker.action === "wait_for_connector_repair"
@@ -101,6 +107,8 @@ export function recoveryForRun(run = {}) {
           : "Connect account",
       subtitle: savedReadback
         ? "The saved provider action will not be submitted again."
+        : finalReviewRetry
+        ? "All workflow steps finished. Final review uses the saved receipts."
         : blocker.action === "wait_for_connector_repair"
         ? "AURA paused before execution. The saved run is preserved."
         : blocker.action === "contact_support"

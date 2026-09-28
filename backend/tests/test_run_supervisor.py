@@ -172,6 +172,27 @@ def test_completed_steps_with_unverified_result_show_a_human_handoff():
     assert public["public_blocker"] == blocker
 
 
+def test_completed_actions_with_temporary_final_review_failure_offer_review_only_retry():
+    from app.main import _run_blocker
+    from app.models import RunStep, StepStatus
+
+    run = WorkflowRun(
+        status=RunStatus.waiting_for_action, prompt="Create a Google Doc briefing",
+        plan_approved=True,
+        result={"verification": {
+            "status": "unverified", "reasons": ["Final evidence preparation unavailable"],
+        }},
+        execution_context={"__aura_autonomy__": {"handoff_reason_code": "final_result_unverified"}},
+    )
+    steps = [RunStep(step_key="create", status=StepStatus.completed)]
+    blocker = _run_blocker(run, steps, {}, [])
+
+    assert blocker["code"] == "final_result_unverified"
+    assert blocker["action"] == "retry_final_review"
+    assert blocker["retryable"] is True
+    assert "without repeating any action" in blocker["message"]
+
+
 def test_exhausted_run_is_visible_as_stopped_when_no_retry_is_scheduled():
     run = WorkflowRun(
         status=RunStatus.waiting_for_action, prompt="Read Monday events",
