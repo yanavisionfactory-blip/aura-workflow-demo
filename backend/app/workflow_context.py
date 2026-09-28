@@ -255,10 +255,17 @@ def step_context_value(
                     sorted(arguments) if isinstance(arguments, dict) else [],
                     bool(returned),
                 )
+            if operation == "google-drive.list-files":
+                logger.info(
+                    "drive_file_receipt_shape ret=%s exports=%s confirmed_single=%s",
+                    _result_shape(result.get("ret")),
+                    _result_shape(result.get("exports")),
+                    bool(returned),
+                )
             if returned:
                 for key, item in returned.items():
                     value.setdefault(key, item)
-                if operation == "google-drive.find-folder":
+                if operation in {"google-drive.find-folder", "google-drive.list-files"}:
                     # Pipedream may return one folder object in ret, while a
                     # planner references it as files[0]. Only expose this
                     # collection alias when the receipt confirms one ID.
