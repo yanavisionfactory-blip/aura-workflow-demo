@@ -932,6 +932,17 @@ class ProviderExecutor:
                 return {"status_code": 204}
             return response.json()
 
+    async def _request_text(self, url: str, *, params: dict[str, str]) -> str:
+        """Read a bounded UTF-8 export from a provider without parsing it as JSON."""
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+            response = await client.get(
+                url, headers={**self._headers(), "Accept": "text/plain"}, params=params
+            )
+            response.raise_for_status()
+            if len(response.content) > 10_000_000:
+                raise ValueError("Provider document export exceeds the verification budget")
+            return response.content.decode("utf-8-sig")
+
     async def _gmail_list(self, a: dict) -> dict:
         params = {"maxResults": min(int(a.get("limit", 10)), 50), "q": a.get("query", "")}
         return await self._request("GET", "https://gmail.googleapis.com/gmail/v1/users/me/messages", params=params)
@@ -1120,12 +1131,36 @@ class ProviderExecutor:
             raise
 
     async def _docs_get(self, a: dict) -> dict:
-        result = await self._request(
-            "GET",
-            "https://docs.googleapis.com/v1/documents/"
-            + quote(a["document_id"], safe=""),
-            params={"includeTabsContent": "true"},
-        )
+        document_id = str(a["document_id"])
+        try:
+            result = await self._request(
+                "GET",
+                "https://docs.googleapis.com/v1/documents/"
+                + quote(document_id, safe=""),
+                params={"includeTabsContent": "true"},
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 403:
+                raise
+            # A Drive import can succeed even when the Docs API denies this
+            # connection a read. Verify the same saved ID and full text using
+            # Drive metadata and export; never repeat the create request.
+            base = "https://www.googleapis.com/drive/v3/files/" + quote(document_id, safe="")
+            metadata = await self._request(
+                "GET", base,
+                params={"fields": "id,name,mimeType,trashed"},
+            )
+            if (
+                metadata.get("id") != document_id
+                or metadata.get("mimeType") != "application/vnd.google-apps.document"
+                or metadata.get("trashed") is True
+                or not metadata.get("name")
+            ):
+                raise ValueError("Drive read-back did not identify the created Google Doc") from exc
+            body = await self._request_text(
+                base + "/export", params={"mimeType": "text/plain"}
+            )
+            return {"id": metadata["id"], "title": metadata["name"], "body": body.rstrip("\n")}
 
         def text_from_body(body: dict) -> str:
             return "".join(
