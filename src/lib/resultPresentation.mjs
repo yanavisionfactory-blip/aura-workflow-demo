@@ -275,6 +275,7 @@ const documentUrl = (result = {}) => {
   const id = [result.id, result.documentId, result.ret?.documentId, result.ret?.id]
     .find((value) => typeof value === "string" && /^[a-zA-Z0-9_-]+$/.test(value));
   return safeHttpsUrl(result.webViewLink) || safeHttpsUrl(result.ret?.webViewLink)
+    || safeHttpsUrl(result.ret?.url)
     || (id ? `https://docs.google.com/document/d/${encodeURIComponent(id)}/edit` : null);
 };
 
