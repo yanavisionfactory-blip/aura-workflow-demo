@@ -3,6 +3,7 @@
 import hashlib
 import json
 import re
+from functools import reduce
 from time import perf_counter
 from typing import Literal
 
@@ -33,13 +34,17 @@ def _contract_bound_response(effects: list[dict]):
     fields = {"steps": (list[CompactPlanStep], Field(min_length=0, max_length=20))}
     for index, effect in enumerate(effects):
         targets = effect["targets"]
-        operations = tuple(sorted({target["operation"] for target in targets}))
-        slugs = tuple(sorted({target["tool_slug"] for target in targets}))
-        step_type = create_model(
-            f"RequiredActionStep{contract_id}_{index}", __base__=CompactPlanStep,
-            operation=(Literal[operations], ...),
-            tool_slug=(Literal[slugs], ...),
-        )
+        # A separate Literal for each field admits invalid cross-products,
+        # such as google-docs + docs.create. Bind the slug and operation as a
+        # pair so the model can only choose an actual catalog route.
+        routes = sorted({(target["tool_slug"], target["operation"]) for target in targets})
+        route_types = tuple(create_model(
+            f"RequiredActionStep{contract_id}_{index}_{route_index}",
+            __base__=CompactPlanStep,
+            operation=(Literal[operation], ...),
+            tool_slug=(Literal[slug], ...),
+        ) for route_index, (slug, operation) in enumerate(routes))
+        step_type = reduce(lambda left, right: left | right, route_types)
         fields[f"required_action_{index}"] = (
             step_type,
             Field(description=(
