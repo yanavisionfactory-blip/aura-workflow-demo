@@ -51,6 +51,39 @@ async def test_small_final_review_needs_only_two_model_calls(monkeypatch):
     assert len(calls) == 2 and not cache and verdict.status == "verified"
 
 
+async def test_eight_docs_final_review_keeps_full_text_and_completed_write(monkeypatch):
+    artifacts = []
+    for index in range(8):
+        content = (f"Document {index} source fact. " * 180)
+        artifacts.append({
+            "step_id": f"read-{index}", "operation": "google-docs.get-document",
+            "critic": {"action": "accept"}, "outcome_check": {"status": "verified"},
+            "provider_result": {"ret": {"documentId": f"doc-{index}",
+                "title": f"Source {index}", "textContent": content,
+                "tabs": [{"documentTab": {"body": {"content": content}}}]},
+                "exports": {"$summary": "Get Document"}},
+        })
+    artifacts.append({
+        "step_id": "created", "operation": "google-docs.create-document",
+        "critic": {"action": "accept"}, "outcome_check": {"status": "verified"},
+        "provider_result": {"ret": {"documentId": "briefing-id", "title": "Monday Briefing Draft"}},
+    })
+    original = copy.deepcopy(artifacts)
+
+    async def unexpected(*args, **kwargs):
+        raise AssertionError("Duplicated Docs bodies should not require chunk readers")
+
+    monkeypatch.setattr(agent_runtime, "_run", unexpected)
+    evidence, _, hit = await agent_runtime.prepare_final_review("Create briefing", {}, artifacts)
+    assert not hit
+    assert len(evidence) == 9
+    assert evidence[7]["provider_result"]["ret"]["textContent"] == original[7]["provider_result"]["ret"]["textContent"]
+    assert "tabs" not in evidence[7]["provider_result"]["ret"]
+    assert evidence[-1]["provider_result"] == original[-1]["provider_result"]
+    assert evidence[-1]["outcome_check"]["status"] == "verified"
+    assert artifacts == original
+
+
 @pytest.mark.parametrize("status", [400, 401, 403, 404])
 async def test_permanent_model_failures_do_not_retry_or_sleep(monkeypatch, status):
     calls = []
