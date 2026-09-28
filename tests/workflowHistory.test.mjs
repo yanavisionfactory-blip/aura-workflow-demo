@@ -57,9 +57,10 @@ test("backend executions become reusable workflow and history records", () => {
 test("completed Google Docs results remain openable from saved history", () => {
   const completed = backendRunHistoryProjection({
     ...backendRun,
-    result: { completed_steps: 1, unified_deliverable: { summary: "Created the briefing." }, outputs: [{
+    result: { completed_steps: 1, verification: { status: "verified" },
+      unified_deliverable: { summary: "Created the briefing." }, outputs: [{
       operation: "google-docs.create-document", tool: "google-docs",
-      critic: { action: "accept" }, outcome_check: { status: "verified" },
+      critic: { action: "accept" }, outcome_check: { status: "unsupported" },
       resolved_arguments: { title: "Monday Briefing Draft", content: "Grounded briefing" },
       provider_result: { ret: { documentId: "briefing-123" } },
     }] },
