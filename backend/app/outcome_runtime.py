@@ -34,7 +34,9 @@ def _log_doc_readback_difference(expected: dict, observed: dict, status: str) ->
         "google_docs_readback status=%s id_matches=%s title_matches=%s "
         "body_matches=%s normalized_body_matches=%s source_chars=%d exported_chars=%d "
         "source_lines=%d exported_lines=%d title_chars=%d source_in_export=%s "
-        "source_is_suffix=%s title_header_only=%s diff_shapes=%s",
+        "source_is_suffix=%s title_header_only=%s line_content_matches=%s "
+        "insertions_only_whitespace=%s insertions_at_line_edges=%s "
+        "inserted_categories=%s diff_shapes=%s",
         status,
         expected.get("id") == observed.get("id") if expected.get("id") else None,
         expected.get("title") == observed.get("title"),
@@ -45,6 +47,27 @@ def _log_doc_readback_difference(expected: dict, observed: dict, status: str) ->
         source in actual, actual.endswith(source),
         actual.startswith(str(expected.get("title") or "") + "\n")
         and actual[len(str(expected.get("title") or "")):].lstrip("\n") == source,
+        [line.strip() for line in source.splitlines() if line.strip()]
+        == [line.strip() for line in actual.splitlines() if line.strip()],
+        all(
+            tag == "equal" or (tag == "insert" and actual[start_b:end_b].isspace())
+            for tag, start_a, end_a, start_b, end_b in
+            SequenceMatcher(None, source, actual, autojunk=False).get_opcodes()
+        ),
+        all(
+            tag == "equal" or (
+                tag == "insert" and actual[start_b:end_b].isspace()
+                and (start_a == 0 or source[start_a - 1] == "\n" or start_a == len(source) or source[start_a] == "\n")
+            )
+            for tag, start_a, end_a, start_b, end_b in
+            SequenceMatcher(None, source, actual, autojunk=False).get_opcodes()
+        ),
+        sorted({
+            unicodedata.category(char)
+            for tag, _, _, start_b, end_b in
+            SequenceMatcher(None, source, actual, autojunk=False).get_opcodes()
+            if tag != "equal" for char in actual[start_b:end_b]
+        }),
         [
             (tag, end_a - start_a, end_b - start_b)
             for tag, start_a, end_a, start_b, end_b in
