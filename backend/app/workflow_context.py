@@ -249,11 +249,10 @@ def step_context_value(
                 returned = _exact_folder_result(result, arguments)
             if operation == "google-drive.find-folder":
                 logger.info(
-                    "drive_folder_receipt_shape ret=%s exports=%s lookup_fields=%s confirmed_single=%s",
+                    "drive_folder_receipt_shape ret=%s exports=%s argument_fields=%s confirmed_single=%s",
                     _result_shape(result.get("ret")),
                     _result_shape(result.get("exports")),
-                    sorted({"searchName", "name", "folderName"} &
-                           (arguments.keys() if isinstance(arguments, dict) else set())),
+                    sorted(arguments) if isinstance(arguments, dict) else [],
                     bool(returned),
                 )
             if returned:
