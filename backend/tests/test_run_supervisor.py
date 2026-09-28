@@ -150,6 +150,25 @@ async def test_direct_llm_failure_stops_without_scheduling_an_agent_repair(datab
         assert await session.scalar(select(DispatchIntent).where(DispatchIntent.run_id == run.id)) is None
 
 
+async def test_unrequested_write_is_attributed_to_orchestrator(database):
+    async with database() as session:
+        run = WorkflowRun(id="calendar-scope", workspace_id="workspace",
+                          prompt="Read my meeting", status=RunStatus.planning)
+        session.add(run)
+        await session.commit()
+
+        pause_direct_planning_failure(
+            run, scope_error="Unrequested calendar write in the revised plan: calendar.create."
+        )
+        await session.commit()
+
+        assert run.status == RunStatus.waiting_for_action
+        assert "orchestrator blocked" in run.error
+        assert "calendar.create" in run.error
+        assert run.execution_context["__aura_supervisor__"]["last_transition"]["actor"] == "orchestrator"
+        assert await session.scalar(select(DispatchIntent).where(DispatchIntent.run_id == run.id)) is None
+
+
 def test_completed_steps_with_unverified_result_show_a_human_handoff():
     from app.main import _run_blocker
     from app.models import RunStep, StepStatus
