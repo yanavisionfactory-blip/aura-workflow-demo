@@ -1274,6 +1274,38 @@ async def test_paused_recorded_write_resumes_review_without_repeating_provider(r
         assert len((await session.scalars(select(StepAttempt))).all()) == 1
 
 
+async def test_user_can_retry_saved_read_after_automatic_recovery_budget(runtime, monkeypatch):
+    from app import main
+    from app.schemas import ResumeDecision
+
+    async def no_dispatch(*args, **kwargs):
+        return 0
+
+    monkeypatch.setattr(main, "dispatch_pending", no_dispatch)
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        transition_run(
+            run, RunStatus.waiting_for_action,
+            reason="read_handoff_fixed", actor="test", dispatch=None,
+        )
+        step = await session.get(RunStep, "step")
+        step.status = StepStatus.failed
+        step.consequential = False
+        step.operation = "drive.files.search"
+        run.execution_context = {**(run.execution_context or {}),
+                                 "__aura_recovery__": {"step": 3}}
+        await session.commit()
+
+        result = await main.resume_run(
+            "run", ResumeDecision(action="retry", step_id="step"),
+            main.TenantContext("w", "alice", "owner"), session,
+        )
+
+        assert result["status"] == "recovering"
+        assert step.status == StepStatus.pending
+        assert "step" not in run.execution_context["__aura_recovery__"]
+
+
 @pytest.mark.parametrize(
     "approval_status,expected",
     [("pending", StepStatus.awaiting_approval), ("approved", StepStatus.pending)],
