@@ -105,6 +105,28 @@ def test_executor_aliases_do_not_multiply_model_source_size():
     assert inflated["output"] == receipt  # original remains usable for deterministic resolution
 
 
+def test_eight_google_docs_use_full_text_once_for_action_composition():
+    from app.model_inputs import canonical_execution_evidence, encoded
+    from app.workflow_context import step_context_value
+    context = {"steps": {}}
+    for index in range(8):
+        body = f"Document {index} source fact " * 180
+        receipt = {"ret": {"documentId": f"doc-{index}", "title": f"Source {index}",
+                           "textContent": body,
+                           "body": {"content": [{"paragraph": {"elements": [
+                               {"textRun": {"content": body}},
+                           ]}}]}}}
+        context["steps"][f"read_{index}"] = step_context_value(
+            receipt, "google-docs.get-document",
+        )
+    evidence = canonical_execution_evidence(context)
+    assert len(encoded(context)) > 288000
+    assert len(encoded(evidence)) < 96000
+    assert evidence["steps"]["read_7"]["textContent"].endswith("source fact ")
+    assert "body" not in evidence["steps"]["read_7"]
+    assert "body" in context["steps"]["read_7"]["provider_result"]["ret"]
+
+
 def test_source_caveats_and_long_but_bounded_summaries_do_not_block_drafting(monkeypatch):
     seen = []
     async def run(agent, payload, **kwargs):
@@ -145,4 +167,3 @@ def test_transport_bytes_do_not_trigger_source_reader_calls(monkeypatch):
         "body": {"data": base64.urlsafe_b64encode(b"x" * 400000).decode()}}]}
     result = asyncio.run(agent_runtime._prepare_action_evidence(payload, "accepted_artifacts"))
     assert "binary_evidence" in result["accepted_artifacts"][0]["body"]
-
