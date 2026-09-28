@@ -144,6 +144,18 @@ def canonical_execution_evidence(context):
         if not isinstance(receipt, dict):
             steps[step_key] = {"provider_result": receipt}
             continue
+        document = receipt.get("ret")
+        if isinstance(document, dict) and isinstance(document.get("textContent"), str):
+            # Get Document returns both the text and a full structural body
+            # containing the same text again. For content composition, keep
+            # one complete text copy and its identity; receipts stay intact.
+            steps[step_key] = {
+                "documentId": document.get("documentId"),
+                "title": document.get("title"),
+                "textContent": value.get("textContent", document["textContent"]),
+                "source_kind": "Google Docs full text; original receipt retained",
+            }
+            continue
         canonical = dict(receipt)
         aliases = {"provider_result": "."}
         known_values = {}
