@@ -294,6 +294,27 @@ def test_drive_file_list_handoff_requires_one_confirmed_file(matches, expected):
         assert resolve_value("{{steps.notes.files[0].id}}", context) == expected
 
 
+@pytest.mark.parametrize("files,expected", [
+    ([{"id": "pdf", "name": "packet.pdf", "mimeType": "application/pdf"},
+      {"id": "doc", "name": "Case notes", "mimeType": "application/vnd.google-apps.document"}], "doc"),
+    ([{"id": "draft", "name": "Draft", "mimeType": "application/vnd.google-apps.document"},
+      {"id": "notes", "name": "Case notes", "mimeType": "application/vnd.google-apps.document"}], "notes"),
+    ([{"id": "a", "name": "Legal notes", "mimeType": "application/vnd.google-apps.document"},
+      {"id": "b", "name": "Project notes", "mimeType": "application/vnd.google-apps.document"}], None),
+    ([{"id": "a", "name": "Document A", "mimeType": "application/vnd.google-apps.document"},
+      {"id": "b", "name": "Document B", "mimeType": "application/vnd.google-apps.document"}], None),
+])
+def test_drive_file_list_selects_only_one_relevant_google_doc(files, expected):
+    context = {"steps": {"notes": step_context_value(
+        {"ret": {"files": files}}, "google-drive.list-files",
+    )}}
+    if expected is None:
+        with pytest.raises(WorkflowContextError):
+            resolve_value("{{steps.notes.files[0].id}}", context)
+    else:
+        assert resolve_value("{{steps.notes.files[0].id}}", context) == expected
+
+
 def test_missing_resource_id_never_falls_back_to_an_unrelated_id():
     import pytest
 
