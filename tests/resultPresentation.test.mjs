@@ -272,6 +272,20 @@ test("created Google Docs display their completed body and link to the original"
   assert.equal(result.link, "https://docs.google.com/document/d/doc-123/edit");
 });
 
+test("Pipedream Google Docs creation shows the exact completed briefing and link", () => {
+  const output = {
+    step_key: "draft", operation: "google-docs.create-document", tool: "google-docs",
+    resolved_arguments: { title: "Monday Briefing Draft", content: "Calendar and eight source notes." },
+    provider_result: { ret: { documentId: "149UIO7QH2jBEgsZmSGUc3NIrWP6dEJ0BY2zZPBIiSFw", title: "Monday Briefing Draft" } },
+  };
+  const result = primaryResultFromOutputs([output], { title: "Monday calendar + EB2 NIW notes to Google Doc briefing", deliverable: "Old plan text" }, { primary_step_key: "draft" });
+  assert.equal(result.kind, "document");
+  assert.equal(result.preview.title, "Monday Briefing Draft");
+  assert.equal(result.preview.body, "Calendar and eight source notes.");
+  assert.equal(result.provider, "Google Docs");
+  assert.equal(result.link, "https://docs.google.com/document/d/149UIO7QH2jBEgsZmSGUc3NIrWP6dEJ0BY2zZPBIiSFw/edit");
+});
+
 test("completed backend runs consume resolved presentation metrics", () => {
   const source = readFileSync(new URL("../src/pages/Demo.jsx", import.meta.url), "utf8");
   assert.equal(source.includes("run.result?.result_presentation"), true);
