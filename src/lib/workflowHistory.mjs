@@ -1,3 +1,5 @@
+import { primaryResultFromOutputs } from "./resultPresentation.mjs";
+
 const FAILED_STATUSES = new Set(["blocked", "cancelled", "failed"]);
 
 export const WORKFLOW_HISTORY_CHANGED_EVENT = "aura:workflow-history-changed";
@@ -12,6 +14,20 @@ export function upsertHistoryRecord(records = [], record = null) {
   const existingIndex = records.findIndex((item) => item.id === record.id);
   if (existingIndex < 0) return [record, ...records];
   return records.map((item, index) => index === existingIndex ? record : item);
+}
+
+export function uniqueBackendRuns(records = []) {
+  const selected = new Map();
+  for (const [index, run] of records.entries()) {
+    const key = run.backend_run_id ? `backend:${run.backend_run_id}` : `saved:${run.id || index}`;
+    const previous = selected.get(key);
+    const rank = (item) => (item.status === "completed" ? 2 : item.status === "running" ? 0 : 1);
+    const updated = (item) => Date.parse(item.backend_updated_at || item.updated_date || item.created_date || 0) || 0;
+    if (!previous || rank(run) > rank(previous) || (rank(run) === rank(previous) && updated(run) > updated(previous))) {
+      selected.set(key, run);
+    }
+  }
+  return [...selected.values()];
 }
 
 const displayToolName = (slug = "") => {
@@ -83,6 +99,13 @@ export function backendRunHistoryProjection(run = {}) {
   const completedCount = Number(run.result?.completed_steps || 0);
   const steps = historyStepsForBackendRun(run);
   const runDate = run.updated_at || run.created_at || new Date().toISOString();
+  const createdDoc = status === "completed" ? (run.result?.outputs || []).find((output) =>
+    ["docs.create", "google-docs.create-document"].includes(output.operation)
+    && output.critic?.action === "accept" && output.outcome_check?.status === "verified"
+  ) : null;
+  const documentResult = createdDoc ? primaryResultFromOutputs([createdDoc], {
+    title: createdDoc.resolved_arguments?.title || title,
+  }) : null;
 
   return {
     workflow: {
@@ -103,7 +126,13 @@ export function backendRunHistoryProjection(run = {}) {
       metrics: completedCount > 0
         ? [{ value: String(completedCount), label: completedCount === 1 ? "step completed" : "steps completed" }]
         : [],
-      outcomes: [],
+      outcomes: documentResult?.link ? [{
+        type: "document",
+        title: documentResult.preview?.title || documentResult.title,
+        detail: "Google Doc created",
+        link: documentResult.link,
+        linkLabel: "Open in Google Docs",
+      }] : [],
       steps,
       duration_seconds: durationSeconds(run),
       backend_created_at: run.created_at || runDate,
@@ -117,7 +146,8 @@ export function backendRunNeedsSync(savedRun = null, projectedRun = {}) {
   return savedRun.backend_updated_at !== projectedRun.backend_updated_at
     || savedRun.status !== projectedRun.status
     || savedRun.title !== projectedRun.title
-    || savedRun.summary !== projectedRun.summary;
+    || savedRun.summary !== projectedRun.summary
+    || JSON.stringify(savedRun.outcomes || []) !== JSON.stringify(projectedRun.outcomes || []);
 }
 
 export function workflowForBackendRun(run = {}, workflows = []) {
@@ -135,7 +165,7 @@ export function workflowForBackendRun(run = {}, workflows = []) {
 }
 
 export function workflowRollup(workflowId, runs = []) {
-  const workflowRuns = runs
+  const workflowRuns = uniqueBackendRuns(runs)
     .filter((run) => run.workflow_id === workflowId)
     .sort((left, right) => Date.parse(right.backend_updated_at || right.updated_date || right.created_date || 0)
       - Date.parse(left.backend_updated_at || left.updated_date || left.created_date || 0));
