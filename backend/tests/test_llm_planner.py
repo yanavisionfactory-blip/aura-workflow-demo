@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import ValidationError
 
 from app import llm_planner, orchestrator
 from app.agent_runtime import CompactWorkflowPlan
@@ -13,6 +14,33 @@ from app.native_connectors import NativeConnectorError, native_manifest
 from app.plan_preflight import preflight_plan
 from app.request_contracts import requested_effects
 from app.schemas import PlanStep, WorkflowPlan
+
+
+def test_required_action_schema_binds_google_doc_operation_to_its_tool():
+    effects = [{"effect": "docs create", "targets": [
+        {"tool_slug": "google", "operation": "docs.create"},
+        {"tool_slug": "google-docs", "operation": "google-docs.create-document"},
+    ]}]
+    schema = llm_planner._contract_bound_response(effects)
+    action = {
+        "key": "doc", "agent": "Google Docs", "tool_slug": "google",
+        "operation": "docs.create", "arguments_json": '{"title":"Briefing","body":"Text"}',
+        "reason": "Create the briefing", "expected_output": "A Google Doc",
+        "consequential": True, "depends_on": [], "required_evidence": [],
+    }
+    payload = {"name": "Briefing", "interpretation": "Create a briefing", "steps": [],
+               "required_action_0": action}
+
+    for slug, operation in (("google", "docs.create"),
+                            ("google-docs", "google-docs.create-document")):
+        result = schema.model_validate({**payload, "required_action_0": {
+            **action, "tool_slug": slug, "operation": operation,
+        }})
+        assert result.required_action_0.tool_slug == slug
+    with pytest.raises(ValidationError):
+        schema.model_validate({**payload, "required_action_0": {
+            **action, "tool_slug": "google-docs", "operation": "docs.create",
+        }})
 
 
 @pytest.mark.asyncio
