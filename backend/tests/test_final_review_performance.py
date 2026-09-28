@@ -51,6 +51,28 @@ async def test_small_final_review_needs_only_two_model_calls(monkeypatch):
     assert len(calls) == 2 and not cache and verdict.status == "verified"
 
 
+async def test_synthesis_includes_future_suggestions_without_an_extra_model_call(monkeypatch):
+    calls = []
+
+    async def run(agent, payload, **kwargs):
+        calls.append(agent.name)
+        return {
+            "summary": "Briefing created",
+            "deliverable": "The verified briefing is ready.",
+            "next_steps": ["Summarize the briefing for the team", "Compare it with last week's briefing"],
+        }
+
+    monkeypatch.setattr(agent_runtime, "_run", run)
+    result = await agent_runtime.synthesize_result("Create a briefing", [{
+        "step_id": "doc", "operation": "docs.create", "provider_result": {"id": "doc-1"},
+    }])
+
+    assert result.model_dump(mode="json")["next_steps"] == [
+        "Summarize the briefing for the team", "Compare it with last week's briefing",
+    ]
+    assert calls == ["Unified Response Synthesizer Agent"]
+
+
 async def test_eight_docs_final_review_keeps_full_text_and_completed_write(monkeypatch):
     artifacts = []
     for index in range(8):
