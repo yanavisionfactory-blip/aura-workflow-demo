@@ -276,7 +276,8 @@ test("Pipedream Google Docs creation shows the exact completed briefing and link
   const output = {
     step_key: "draft", operation: "google-docs.create-document", tool: "google-docs",
     resolved_arguments: { title: "Monday Briefing Draft", content: "Calendar and eight source notes." },
-    provider_result: { ret: { documentId: "149UIO7QH2jBEgsZmSGUc3NIrWP6dEJ0BY2zZPBIiSFw", title: "Monday Briefing Draft" } },
+    provider_result: { ret: { documentId: "149UIO7QH2jBEgsZmSGUc3NIrWP6dEJ0BY2zZPBIiSFw", title: "Monday Briefing Draft",
+      url: "https://docs.google.com/document/d/149UIO7QH2jBEgsZmSGUc3NIrWP6dEJ0BY2zZPBIiSFw/edit" } },
   };
   const result = primaryResultFromOutputs([output], { title: "Monday calendar + EB2 NIW notes to Google Doc briefing", deliverable: "Old plan text" }, { primary_step_key: "draft" });
   assert.equal(result.kind, "document");
