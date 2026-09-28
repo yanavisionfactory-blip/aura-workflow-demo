@@ -217,6 +217,25 @@ def _unique_notes_doc(result: dict[str, Any]) -> tuple[dict[str, Any] | None, in
     return (docs[0] if len(docs) == 1 else None), len(docs), len(notes)
 
 
+def _complete_indexed_doc_reads(
+    result: dict[str, Any], step_key: str | None, planned_steps: list[dict] | None,
+) -> list[dict] | None:
+    """Expose a multi-file list only if the reviewed plan reads every Docs item."""
+    returned = result.get("ret")
+    files = returned.get("files") if isinstance(returned, dict) else returned
+    if not isinstance(files, list) or not files or len(files) > 20 or not step_key or not planned_steps:
+        return None
+    if any(not isinstance(item, dict) or not item.get("id") or
+           item.get("mimeType") != "application/vnd.google-apps.document" for item in files):
+        return None
+    expected = {f"steps.{step_key}.files.{index}.id" for index in range(len(files))}
+    covered = set().union(*(
+        referenced_paths(step.get("arguments", {})) for step in planned_steps
+        if step.get("operation") == "google-docs.get-document" and not step.get("optional")
+    ))
+    return files if expected <= covered else None
+
+
 def _result_shape(value: Any, depth: int = 0) -> Any:
     """Describe receipt structure without logging folder names, IDs or content."""
     if depth >= 3:
@@ -237,6 +256,7 @@ def _result_shape(value: Any, depth: int = 0) -> Any:
 
 def step_context_value(
     result: Any, operation: str | None = None, arguments: dict[str, Any] | None = None,
+    planned_steps: list[dict] | None = None, step_key: str | None = None,
 ) -> Any:
     """Expose provider results through both canonical and compatibility paths.
 
@@ -265,6 +285,10 @@ def step_context_value(
             doc_count = notes_count = 0
             if operation == "google-drive.list-files" and not returned:
                 returned, doc_count, notes_count = _unique_notes_doc(result)
+            all_files = (
+                _complete_indexed_doc_reads(result, step_key, planned_steps)
+                if operation == "google-drive.list-files" else None
+            )
             if operation == "google-drive.find-folder":
                 logger.info(
                     "drive_folder_receipt_shape ret=%s exports=%s argument_fields=%s confirmed_single=%s",
@@ -275,12 +299,13 @@ def step_context_value(
                 )
             if operation == "google-drive.list-files":
                 logger.info(
-                    "drive_file_receipt_shape ret=%s exports=%s docs=%s notes_docs=%s selected=%s",
+                    "drive_file_receipt_shape ret=%s exports=%s docs=%s notes_docs=%s selected=%s all_read=%s",
                     _result_shape(result.get("ret")),
                     _result_shape(result.get("exports")),
                     doc_count,
                     notes_count,
                     bool(returned),
+                    bool(all_files),
                 )
             if returned:
                 for key, item in returned.items():
@@ -290,6 +315,8 @@ def step_context_value(
                     # planner references it as files[0]. Only expose this
                     # collection alias when the receipt confirms one ID.
                     value.setdefault("files", [returned])
+            if all_files:
+                value["files"] = all_files
 
     # Structured planners sometimes name a downstream value after the source
     # operation (for example ``steps.weather.forecast``). Expose that operation
