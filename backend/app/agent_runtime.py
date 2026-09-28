@@ -16,6 +16,7 @@ from .model_inputs import (
     ModelInputTooLarge,
     bounded_input,
     canonical_execution_evidence,
+    canonical_review_artifacts,
     encoded,
     evidence_chunks,
     is_input_limit,
@@ -1839,10 +1840,11 @@ async def prepare_final_review(prompt: str, plan: dict, artifacts: list[dict], c
     """
     source = {"original_request": prompt, "approved_plan": plan,
               "accepted_artifacts": semantic_evidence(artifacts)}
-    fingerprint = hashlib.sha256(encoded({"version": 1, **source}).encode()).hexdigest()
+    fingerprint = hashlib.sha256(encoded({"version": 2, **source}).encode()).hexdigest()
     if cached and cached.get("fingerprint") == fingerprint and "evidence" in cached:
         return cached["evidence"], cached, True
-    prepared = await _prepare_action_evidence(source, "accepted_artifacts")
+    review_source = {**source, "accepted_artifacts": canonical_review_artifacts(source["accepted_artifacts"])}
+    prepared = await _prepare_action_evidence(review_source, "accepted_artifacts")
     evidence = prepared["accepted_artifacts"]
     # Small receipts require no reader calls and need no second durable copy.
     cache = {"fingerprint": fingerprint, "evidence": evidence} if isinstance(evidence, dict) and "evidence_summaries" in evidence else {}
