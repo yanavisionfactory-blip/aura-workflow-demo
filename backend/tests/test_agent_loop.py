@@ -1252,6 +1252,9 @@ async def test_paused_recorded_write_resumes_review_without_repeating_provider(r
         step.status = StepStatus.running
         step.consequential = True
         step.output = {"provider_result": {"id": "export-job-1"}}
+        context = dict(run.execution_context or {})
+        context["__aura_recovery__"] = {"step": 3}
+        run.execution_context = context
         session.add(StepAttempt(
             workspace_id="w", run_id="run", step_id="step",
             attempt_number=1, status="succeeded", provider_dispatched=True,
@@ -1267,6 +1270,7 @@ async def test_paused_recorded_write_resumes_review_without_repeating_provider(r
         assert result["status"] == "recovering"
         assert step.status == StepStatus.pending
         assert step.output["provider_result"]["id"] == "export-job-1"
+        assert run.execution_context["__aura_recovery__"]["step"] == 3
         assert len((await session.scalars(select(StepAttempt))).all()) == 1
 
 

@@ -6387,6 +6387,7 @@ async def resume_run(
             await dispatch_pending(wid)
             return {"id": run.id, "status": run.status.value, "review_only": True}
         raise HTTPException(404, "Failed step not found")
+    recorded_result = isinstance(step.output, dict) and "provider_result" in step.output
     if step.consequential and payload.action in {"retry", "fallback"}:
         attempted = await session.scalar(
             select(StepAttempt.id)
@@ -6396,8 +6397,7 @@ async def resume_run(
             )
             .limit(1)
         )
-        recorded = isinstance(step.output, dict) and "provider_result" in step.output
-        if attempted and (not recorded or payload.action == "fallback"):
+        if attempted and (not recorded_result or payload.action == "fallback"):
             raise HTTPException(
                 409,
                 "Prior action may already have executed; reconcile its outcome before a new approved action",
@@ -6484,11 +6484,13 @@ async def resume_run(
         )
         execution_context = reset_read_attempt_cycle(execution_context, step.id, attempt_count)
     recovery_counts = dict(execution_context.get("__aura_recovery__") or {})
-    recovery_count = int(recovery_counts.get(step.id, 0)) + 1
-    if recovery_count > 3:
-        raise HTTPException(409, "Automatic recovery attempts are exhausted")
-    recovery_counts[step.id] = recovery_count
-    execution_context["__aura_recovery__"] = recovery_counts
+    recovery_count = int(recovery_counts.get(step.id, 0))
+    if not (payload.action == "retry" and recorded_result):
+        recovery_count += 1
+        if recovery_count > 3:
+            raise HTTPException(409, "Automatic recovery attempts are exhausted")
+        recovery_counts[step.id] = recovery_count
+        execution_context["__aura_recovery__"] = recovery_counts
     run.execution_context = execution_context
     dead_letter = await session.scalar(
         select(DeadLetterEntry).where(
