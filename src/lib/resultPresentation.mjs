@@ -25,6 +25,8 @@ const PROVIDER_ALIASES = {
   docs: "Google Docs",
   "google docs": "Google Docs",
   "google drive": "Google Drive",
+  "google-docs": "Google Docs",
+  "google-drive": "Google Drive",
   google: "Google Workspace",
   gmail: "Gmail",
   canva: "Canva",
@@ -102,7 +104,7 @@ export function resultMetrics(metrics = [], activity = []) {
     && canvaDesignId(output.provider_result || {}));
   const audiences = outputs.find((output) => output.operation === "mailchimp.audiences.list");
   const email = outputs.find((output) => output.operation === "gmail.send");
-  const document = outputs.find((output) => output.operation === "docs.create");
+  const document = outputs.find((output) => ["docs.create", "google-docs.create-document"].includes(output.operation));
   const jiraBatch = outputs.find((output) => output.operation === "jira.issues.create_from_blocks");
   const result = [];
   if (jiraBatch) {
@@ -219,7 +221,7 @@ export function supportingReceipts(results = {}, activity = [], primary = null, 
         : null;
       const link = safeHttpsUrl(providerResult.result_url)
         || (designId ? `https://www.canva.com/design/${encodeURIComponent(designId)}/edit` : null)
-        || (operation === "docs.create" ? documentUrl(providerResult) : null)
+        || (isDocumentCreate(operation) ? documentUrl(providerResult) : null)
         || (operation === "mailchimp.audiences.list" ? mailchimpAudienceLink(providerResult) : null);
       const tool = step.tool || "AURA";
       return {
@@ -267,9 +269,14 @@ const canvaThumbnailUrl = (value) => {
   return host === "canva.com" || host.endsWith(".canva.com") ? url : null;
 };
 
-const documentUrl = (result = {}) => safeHttpsUrl(result.webViewLink)
-  || (typeof result.id === "string" && /^[a-zA-Z0-9_-]+$/.test(result.id)
-    ? `https://docs.google.com/document/d/${encodeURIComponent(result.id)}/edit` : null);
+const isDocumentCreate = (operation) => ["docs.create", "google-docs.create-document"].includes(operation);
+
+const documentUrl = (result = {}) => {
+  const id = [result.id, result.documentId, result.ret?.documentId, result.ret?.id]
+    .find((value) => typeof value === "string" && /^[a-zA-Z0-9_-]+$/.test(value));
+  return safeHttpsUrl(result.webViewLink) || safeHttpsUrl(result.ret?.webViewLink)
+    || (id ? `https://docs.google.com/document/d/${encodeURIComponent(id)}/edit` : null);
+};
 
 const canvaDownloadUrl = (outputs = []) => {
   for (const output of [...outputs].reverse()) {
@@ -400,15 +407,16 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
 
   const linked = explicitPrimary || completed
     .filter((output) => safeHttpsUrl(output.provider_result?.result_url)
-      || (output.operation === "docs.create" && documentUrl(output.provider_result)))
+      || (isDocumentCreate(output.operation) && documentUrl(output.provider_result)))
     .sort((left, right) => outputScore(right, context.title) - outputScore(left, context.title))[0];
   const link = safeHttpsUrl(linked?.provider_result?.result_url)
-    || (linked?.operation === "docs.create" ? documentUrl(linked.provider_result) : null);
+    || (isDocumentCreate(linked?.operation) ? documentUrl(linked.provider_result) : null);
   const provider = linked ? providerForOutput(linked) : "";
-  const docArguments = linked?.operation === "docs.create" ? linked.resolved_arguments : null;
-  const docPreview = typeof docArguments?.body === "string" && docArguments.body.trim()
-    && !/\{\{[^}]+\}\}/.test(docArguments.body)
-    ? { title: docArguments.title || context.title || "Document", body: docArguments.body }
+  const docArguments = isDocumentCreate(linked?.operation) ? linked.resolved_arguments : null;
+  const docBody = docArguments?.body ?? docArguments?.content;
+  const docPreview = typeof docBody === "string" && docBody.trim()
+    && !/\{\{[^}]+\}\}/.test(docBody)
+    ? { title: docArguments.title || context.title || "Document", body: docBody }
     : null;
   return {
     title: docPreview?.title || context.title || "Workflow result",
