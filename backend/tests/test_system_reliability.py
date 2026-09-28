@@ -582,6 +582,56 @@ def test_explicit_provider_effects_survive_replanning_across_apps(prompt_text, e
     assert [item["effect"] for item in effects] == ([effect] if effect else [])
 
 
+def test_briefing_sources_do_not_become_calendar_writes():
+    manifest = native_manifest("google")
+    inventory = [{"slug": "google", "name": "Google Workspace",
+                  "allowed_operations": [item["name"] for item in manifest["capabilities"]]}]
+    for prompt in (
+        "Create a Google Doc briefing from Monday's Google Calendar meeting and eight Drive documents",
+        "Create a meeting summary from Google Calendar",
+        "Add a read of Google Calendar and read all eight Google Drive documents",
+        "Add a Google Calendar read as the first step, then create a Google Doc briefing",
+    ):
+        effects = requested_effects(prompt, inventory, {"google": manifest})
+        assert "calendar create" not in [effect["effect"] for effect in effects]
+    assert "calendar create" in [effect["effect"] for effect in requested_effects(
+        "Create a meeting in Google Calendar", inventory, {"google": manifest},
+    )]
+
+
+def test_orchestrator_rejects_an_invented_calendar_write_in_read_revision():
+    manifest = native_manifest("google")
+    inventory = [{"slug": "google", "name": "Google Workspace",
+                  "allowed_operations": [item["name"] for item in manifest["capabilities"]]}]
+    prompt = ("Create a Google Doc briefing from Monday's Calendar event "
+              "and the eight documents in Drive")
+    revision = (prompt + "\n\nThe user reviewed the proposed workflow and requested this change: "
+                "Read all eight documents in the EB2 NIW folder, keep Calendar read only."
+                "\nCurrent reviewed steps (preserve unchanged steps and dependencies): "
+                '[{"operation":"calendar.list","tool":"google"},'
+                '{"operation":"docs.create","tool":"google"}]'
+                "\nReturn the complete revised executable plan.")
+    calendar_read = PlanStep(key="meeting", agent="calendar", tool_slug="google",
+                             operation="calendar.list", reason="Read meeting",
+                             expected_output="Events")
+    doc_read = PlanStep(key="documents", agent="docs", tool_slug="google",
+                        operation="docs.get", reason="Read all eight documents",
+                        expected_output="Document bodies")
+    doc_write = PlanStep(key="briefing", agent="docs", tool_slug="google",
+                         operation="docs.create", reason="Save briefing",
+                         expected_output="Briefing", consequential=True)
+    plan = WorkflowPlan(name="Briefing", interpretation=prompt,
+                        steps=[calendar_read, doc_read, doc_write])
+    validate_requested_operations(revision, plan, set(inventory[0]["allowed_operations"]),
+                                  inventory, {"google": manifest})
+    plan.steps.append(PlanStep(key="invented", agent="calendar", tool_slug="google",
+                               operation="calendar.create", reason="Invent a meeting",
+                               expected_output="Event", consequential=True))
+    with pytest.raises(ValueError, match="Unrequested calendar write"):
+        validate_requested_operations(revision, plan, set(inventory[0]["allowed_operations"]),
+                                      inventory, {"google": manifest})
+
+
 def test_a_required_effect_needs_a_nonoptional_step_and_an_accepted_receipt():
     inventory = [{"slug": "slack", "name": "Slack", "allowed_operations": [
         "slack.channels.list", "slack.post",
