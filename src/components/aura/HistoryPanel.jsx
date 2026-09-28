@@ -54,7 +54,6 @@ async function reconcileDurableHistory(initialWorkflows, initialRuns) {
     const executedRuns = backendRuns
       .filter(isExecutedBackendRun)
       .sort((a, b) => Date.parse(a.created_at || 0) - Date.parse(b.created_at || 0));
-    let historyChanged = false;
 
     for (const backendRun of executedRuns) {
       const projection = backendRunHistoryProjection(backendRun);
@@ -76,25 +75,30 @@ async function reconcileDurableHistory(initialWorkflows, initialRuns) {
           ? await aura.entities.WorkflowRun.update(savedRun.id, runData)
           : await aura.entities.WorkflowRun.create(runData);
         runs = upsertHistoryRecord(runs, savedRun);
-        historyChanged = true;
       } catch (error) {
         console.warn("Could not synchronize durable workflow history", error);
       }
     }
 
-    if (historyChanged) {
-      const updatedWorkflows = await Promise.all(workflows.map(async (workflow) => {
-        const rollup = workflowRollup(workflow.id, runs);
-        if (rollup.run_count === 0) return workflow;
-        try {
-          return await aura.entities.Workflow.update(workflow.id, rollup);
-        } catch (error) {
-          console.warn("Could not update saved workflow summary", error);
-          return workflow;
-        }
-      }));
-      workflows = updatedWorkflows;
-    }
+    // A run can be synchronized from its detail view before this panel opens.
+    // Its parent summary still needs updating even when no run changed here.
+    const updatedWorkflows = await Promise.all(workflows.map(async (workflow) => {
+      const rollup = workflowRollup(workflow.id, runs);
+      if (rollup.run_count === 0 || (
+        workflow.run_count === rollup.run_count
+        && workflow.last_run_status === rollup.last_run_status
+        && workflow.last_run_date === rollup.last_run_date
+        && workflow.last_summary === rollup.last_summary
+        && JSON.stringify(workflow.steps || []) === JSON.stringify(rollup.steps || [])
+      )) return workflow;
+      try {
+        return await aura.entities.Workflow.update(workflow.id, rollup);
+      } catch (error) {
+        console.warn("Could not update saved workflow summary", error);
+        return workflow;
+      }
+    }));
+    workflows = updatedWorkflows;
 
     const orphaned = runs.filter((run) => !run.workflow_id);
     if (orphaned.length > 0) {
