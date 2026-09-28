@@ -910,6 +910,16 @@ Write ONE clear, conversational sentence restating what they want — but offer 
 
     const backendRunId = pythonRunIdRef.current;
     const historySave = (async () => {
+      const [existingSavedRun] = backendRunId
+        ? await aura.entities.WorkflowRun.filter({ backend_run_id: backendRunId }, "-created_date", 1).catch(() => [])
+        : [];
+      if (existingSavedRun) {
+        if (pythonRunIdRef.current === backendRunId) {
+          currentRunIdRef.current = existingSavedRun.id;
+          currentWorkflowIdRef.current = existingSavedRun.workflow_id || currentWorkflowIdRef.current;
+        }
+        return existingSavedRun.id;
+      }
       let workflowId = currentWorkflowIdRef.current;
       let savedWorkflow = null;
       const now = new Date().toISOString();
