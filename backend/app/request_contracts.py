@@ -341,8 +341,6 @@ def validate_requested_operations(
     prompt: str, plan, available: set[str],
     inventory: list[dict] | None = None, manifests: dict | None = None,
 ) -> list[dict]:
-    if inventory is not None and manifests is not None:
-        validate_revision_write_scope(prompt, plan, inventory, manifests)
     if draft_only_email_request(prompt) and any(
         is_gmail_delivery_step(step, manifests) for step in plan.steps
     ):
@@ -350,6 +348,8 @@ def validate_requested_operations(
             "The user requested email drafts only. Gmail send operations transmit emails; "
             "remove every send step and synthesize the finished drafts from read evidence."
         )
+    if inventory is not None and manifests is not None:
+        validate_revision_write_scope(prompt, plan, inventory, manifests)
     if (
         draft_only_email_request(prompt)
         and (re.search(r"\b(?:gmail|inbox|mailbox)\b", user_request_text(prompt), re.IGNORECASE)
