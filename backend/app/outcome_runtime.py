@@ -1,6 +1,8 @@
 """Run allow-listed read-back operations without replaying the original action."""
 
 import asyncio
+import logging
+import unicodedata
 from time import perf_counter
 
 from sqlalchemy import select
@@ -16,6 +18,28 @@ from .providers import (
     verify_oauth_credentials,
 )
 from .security import CredentialVault
+
+logger = logging.getLogger(__name__)
+
+
+def _log_doc_readback_difference(expected: dict, observed: dict, status: str) -> None:
+    """Log only shape and comparison flags; document text stays out of logs."""
+    source = str(expected.get("body") or "")
+    actual = str(observed.get("body") or "")
+    normalize = lambda value: unicodedata.normalize(
+        "NFC", value.replace("\r\n", "\n").replace("\r", "\n")
+    ).rstrip("\n")
+    logger.info(
+        "google_docs_readback status=%s id_matches=%s title_matches=%s "
+        "body_matches=%s normalized_body_matches=%s source_chars=%d exported_chars=%d "
+        "source_lines=%d exported_lines=%d",
+        status,
+        expected.get("id") == observed.get("id") if expected.get("id") else None,
+        expected.get("title") == observed.get("title"),
+        source == actual,
+        normalize(source) == normalize(actual),
+        len(source), len(actual), source.count("\n") + 1, actual.count("\n") + 1,
+    )
 
 
 async def check_provider_outcome(session, run, step, snapshot) -> dict:
@@ -149,6 +173,8 @@ async def _check_provider_outcome(session, run, step, snapshot) -> dict:
                 "observed": observed,
                 "attempts": attempt + 1,
             }
+            if step.operation == "docs.create" and result["status"] != "verified":
+                _log_doc_readback_difference(check.expected, observed, result["status"])
             # Eventual consistency can briefly expose old values; retry only the read.
             if result["status"] in {"verified", "pending"}:
                 break
