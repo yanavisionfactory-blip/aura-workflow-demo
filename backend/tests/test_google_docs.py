@@ -95,6 +95,18 @@ def test_docs_export_with_exact_title_heading_keeps_complete_body_verification()
     assert evaluate_outcome_check(check, {**observed, "body": f"{title}\n{body} altered"})["status"] == "failed"
 
 
+def test_docs_export_allows_added_blank_lines_and_indentation_but_not_edits():
+    title = "Monday briefing"
+    body = "Agenda\n- Notes from Drive\nNext step"
+    check = build_outcome_check("docs.create", {"title": title, "body": body}, {"id": "doc-123"})
+    observed = {"id": "doc-123", "title": title,
+                "body": "  Agenda\n\n  - Notes from Drive  \n\nNext step"}
+
+    assert evaluate_outcome_check(check, observed)["status"] == "verified"
+    assert evaluate_outcome_check(check, {**observed, "body": observed["body"].replace("Next step", "Next steps")})["status"] == "failed"
+    assert evaluate_outcome_check(check, {**observed, "body": observed["body"].replace("Notes", "  Notes")})["status"] == "failed"
+
+
 @pytest.mark.asyncio
 async def test_docs_drive_fallback_rejects_a_different_resource(monkeypatch):
     calls = []
