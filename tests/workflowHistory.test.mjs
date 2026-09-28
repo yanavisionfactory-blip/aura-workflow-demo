@@ -8,6 +8,7 @@ import {
   historyStatusForBackendRun,
   isExecutedBackendRun,
   upsertHistoryRecord,
+  uniqueBackendRuns,
   workflowForBackendRun,
   workflowRollup,
 } from "../src/lib/workflowHistory.mjs";
@@ -53,6 +54,23 @@ test("backend executions become reusable workflow and history records", () => {
   assert.equal(projection.run.steps[0].riskLevel, "modify");
 });
 
+test("completed Google Docs results remain openable from saved history", () => {
+  const completed = backendRunHistoryProjection({
+    ...backendRun,
+    result: { completed_steps: 1, unified_deliverable: { summary: "Created the briefing." }, outputs: [{
+      operation: "google-docs.create-document", tool: "google-docs",
+      critic: { action: "accept" }, outcome_check: { status: "verified" },
+      resolved_arguments: { title: "Monday Briefing Draft", content: "Grounded briefing" },
+      provider_result: { ret: { documentId: "briefing-123" } },
+    }] },
+  });
+  assert.deepEqual(completed.run.outcomes, [{
+    type: "document", title: "Monday Briefing Draft", detail: "Google Doc created",
+    link: "https://docs.google.com/document/d/briefing-123/edit", linkLabel: "Open in Google Docs",
+  }]);
+  assert.equal(backendRunNeedsSync({ ...completed.run, outcomes: [] }, completed.run), true);
+});
+
 test("running and unsuccessful backend states map to panel statuses", () => {
   assert.equal(historyStatusForBackendRun({ status: "awaiting_approval" }), "running");
   assert.equal(historyStatusForBackendRun({ status: "awaiting_approval", plan_approved: true }), "failed");
@@ -93,6 +111,16 @@ test("workflow rollups are derived from saved run records without double countin
   assert.equal(rollup.last_run_status, "failed");
   assert.equal(rollup.last_summary, "Latest");
   assert.deepEqual(rollup.steps, [{ tool: "Canva" }]);
+});
+
+test("a resumed backend run is one history entry even with a stale running copy", () => {
+  const duplicates = [
+    { id: "stale", backend_run_id: "backend-1", workflow_id: "workflow-1", status: "running", backend_updated_at: "2026-09-28T11:17:00Z" },
+    { id: "finished", backend_run_id: "backend-1", workflow_id: "workflow-1", status: "completed", backend_updated_at: "2026-09-28T11:27:00Z" },
+  ];
+  assert.deepEqual(uniqueBackendRuns(duplicates).map((run) => run.id), ["finished"]);
+  assert.equal(workflowRollup("workflow-1", duplicates).run_count, 1);
+  assert.equal(workflowRollup("workflow-1", duplicates).last_run_status, "completed");
 });
 
 test("unchanged backend history is not written again", () => {
