@@ -100,9 +100,11 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
       </details>}
 
       {creatorsOutcome && <CreatorApprovalList items={creatorsOutcome.items} />}
-      {!isFailure && nextSteps.length > 0 && <section className="mb-6">
+      {!isFailure && <section className="mb-6" aria-live="polite">
         <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold"><ArrowRight className="h-4 w-4 text-primary" />Suggested next</h3>
-        <div className="flex flex-wrap gap-2">{nextSteps.map((step, index) => <button key={index} type="button" onClick={() => onStartWorkflow(step)} className="rounded-full border border-primary/25 bg-primary/[0.05] px-4 py-2 text-xs text-primary hover:bg-primary/10">{step}</button>)}</div>
+        {nextSteps.length > 0
+          ? <div className="flex flex-wrap gap-2">{nextSteps.map((step, index) => <button key={index} type="button" onClick={() => onStartWorkflow(step)} className="rounded-full border border-primary/25 bg-primary/[0.05] px-4 py-2 text-xs text-primary hover:bg-primary/10">{step}</button>)}</div>
+          : <p className="text-sm text-muted-foreground">{results.suggestionsLoading ? "Finding useful follow-ups…" : "No follow-up suggestions are available for this result."}</p>}
       </section>}
       <section className="rounded-2xl border border-white/10 bg-card/40 p-5 sm:p-6">
         <h3 className="font-semibold">What would you like to do next?</h3>
