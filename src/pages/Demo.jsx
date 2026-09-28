@@ -1626,7 +1626,9 @@ Generate a results summary in plain, human-friendly language (not technical).
   const handleEditReviewRun = () => {
     setEditReviewOpen(false);
     setEditRunMode(false);
-    handleConfirm(plan?.interpretation || interpretation);
+    // The edited plan was already compiled and reviewed. Approve that same
+    // durable run; replanning here can replace its steps just before Start.
+    startPythonExecutionRef.current?.();
   };
 
   useEffect(() => {
