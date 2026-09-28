@@ -18,6 +18,7 @@ import {
   backendRunNeedsSync,
   backendRunHistoryProjection,
   isExecutedBackendRun,
+  uniqueBackendRuns,
   upsertHistoryRecord,
   WORKFLOW_HISTORY_CHANGED_EVENT,
   workflowForBackendRun,
@@ -426,7 +427,7 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun, onOpen
                 <HistoryRunDetail
                   run={selectedRun}
                   workflow={selectedWf}
-                  runCount={runs.filter((r) => r.workflow_id === selectedRun.workflow_id).length}
+                  runCount={uniqueBackendRuns(runs).filter((r) => r.workflow_id === selectedRun.workflow_id).length}
                   onBack={() => setSelectedRun(null)}
                   onOpenRun={onOpenRun}
                   onRerun={async (approval) => {
