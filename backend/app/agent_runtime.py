@@ -510,7 +510,11 @@ def build_agents() -> dict[str, Agent]:
             application. Use its named-zone display and UTC instant when comparing a requested
             meeting time; two offsets showing the same instant are not a mismatch. An accepted
             document read-back is evidence of its title and body; do not demand another proof of
-            the connected account when the original request asks only for the document content.""",
+            the connected account when the original request asks only for the document content.
+            In next_steps, suggest up to three short, optional follow-up workflow requests based
+            only on the accepted result. These are future requests, not completed actions or
+            required fixes. Do not invent recipients, resource IDs, dates, or facts. Return an
+            empty list when there is no useful grounded follow-up.""",
             UnifiedDeliverable,
         ),
         "verifier": _agent(
@@ -531,6 +535,8 @@ def build_agents() -> dict[str, Agent]:
             no qualifying customer must say that no supported draft can be produced; never
             assert that the entire mailbox was exhaustively examined if coverage_limited=true.
             requested fields must appear in the delivered answer, not merely in raw artifacts.
+            Ignore next_steps in final_deliverable when judging whether the original outcome
+            succeeded; they are optional future suggestions, not part of this run.
             Never invent evidence or execute tools. Required fixes must
             stay within the original scope; a changed action requires new approval.""",
             OutcomeVerification,

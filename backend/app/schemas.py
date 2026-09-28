@@ -686,6 +686,7 @@ class UnifiedDeliverable(BaseModel):
     summary: str
     deliverable: str
     traceability: list[ClaimEvidence] = Field(default_factory=list)
+    next_steps: list[str] = Field(default_factory=list)
     validation_passed: bool = True
     required_fixes: list[str] = Field(default_factory=list)
 

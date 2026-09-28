@@ -50,6 +50,7 @@ import {
 import { hasDurablePlan, planningRequestPrompt, savedRunResumeView, sameExecutablePlan } from "@/lib/runtimePlan.mjs";
 import { weatherStepTitle } from "@/lib/planPresentation.mjs";
 import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
+import { normalizeResultSuggestions, resultSuggestionsPrompt, RESULT_SUGGESTIONS_SCHEMA } from "@/lib/resultSuggestions.mjs";
 import { alignExecutionSteps } from "@/lib/executionSteps.mjs";
 import { jiraReceiptTasks } from "@/lib/jiraReceipt.mjs";
 import {
@@ -1297,13 +1298,14 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             step_key: output.step_key || stepKeysById.get(output.step_id),
           }));
           const synthesis = run.result?.unified_deliverable || {};
+          const nextSteps = normalizeResultSuggestions(synthesis.next_steps);
           const resultPresentation = run.result?.result_presentation || null;
           const primaryResult = primaryResultFromOutputs(outputs, {
             title: run.plan?.name || "Workflow completed",
             summary: synthesis.summary,
             deliverable: synthesis.deliverable,
           }, resultPresentation);
-          finishExecution({
+          const completedResult = {
             title: primaryResult.completionTitle || run.plan?.name || "Workflow completed",
             summary: primaryResult.completionSummary || synthesis.summary || "AURA completed the requested workflow.",
             metrics: resultPresentation?.metrics || [],
@@ -1320,8 +1322,46 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               link: primaryResult.link,
               linkLabel: primaryResult.linkLabel,
             }],
-            nextSteps: [],
-          }, null, "completed");
+            nextSteps,
+            suggestionsLoading: nextSteps.length === 0,
+          };
+          const savedResult = finishExecution(completedResult, null, "completed");
+          if (nextSteps.length === 0) {
+            const completedGeneration = generation;
+            const completedRunId = run.id;
+            void (async () => {
+              let suggestions = [];
+              try {
+                const response = await aura.integrations.Core.InvokeLLM({
+                  prompt: resultSuggestionsPrompt({
+                    prompt: originalPromptRef.current || run.prompt,
+                    summary: completedResult.summary,
+                    deliverable: synthesis.deliverable,
+                    title: completedResult.title,
+                  }),
+                  response_json_schema: RESULT_SUGGESTIONS_SCHEMA,
+                });
+                suggestions = normalizeResultSuggestions(response.nextSteps);
+              } catch (error) {
+                console.warn("Could not generate result suggestions", error);
+              }
+              if (pythonPollGenerationRef.current !== completedGeneration
+                  || pythonRunIdRef.current !== completedRunId) return;
+              setResults((previous) => previous?.status === "completed"
+                ? { ...previous, nextSteps: suggestions, suggestionsLoading: false }
+                : previous);
+              if (!suggestions.length) return;
+              await savedResult;
+              if (pythonPollGenerationRef.current !== completedGeneration
+                  || pythonRunIdRef.current !== completedRunId
+                  || !currentRunIdRef.current) return;
+              try {
+                await aura.entities.WorkflowRun.update(currentRunIdRef.current, { nextSteps: suggestions });
+              } catch (error) {
+                console.warn("Could not save result suggestions", error);
+              }
+            })();
+          }
           return;
         }
         if (run.status === "waiting_for_action"
@@ -1512,6 +1552,7 @@ Generate a results summary in plain, human-friendly language (not technical).
           summary: res.summary,
           metrics: res.metrics,
           outcomes: res.outcomes,
+          nextSteps: normalizeResultSuggestions(res.nextSteps),
           steps: approvedStepsRef.current,
           duration_seconds: startTime ? (Date.now() - startTime) / 1000 : null,
           backend_updated_at: new Date().toISOString(),

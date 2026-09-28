@@ -70,7 +70,11 @@ async function reconcileDurableHistory(initialWorkflows, initialRuns) {
           });
           workflows = upsertHistoryRecord(workflows, workflow);
         }
-        const runData = { ...projection.run, workflow_id: workflow.id };
+        const runData = {
+          ...projection.run,
+          workflow_id: workflow.id,
+          nextSteps: projection.run.nextSteps.length ? projection.run.nextSteps : savedRun?.nextSteps || [],
+        };
         if (savedRun && !backendRunNeedsSync(savedRun, runData)) continue;
         savedRun = savedRun
           ? await aura.entities.WorkflowRun.update(savedRun.id, runData)

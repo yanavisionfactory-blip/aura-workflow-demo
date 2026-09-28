@@ -54,6 +54,17 @@ test("backend executions become reusable workflow and history records", () => {
   assert.equal(projection.run.steps[0].riskLevel, "modify");
 });
 
+test("LLM suggestions travel with a completed backend result", () => {
+  const projection = backendRunHistoryProjection({
+    ...backendRun,
+    result: { ...backendRun.result, unified_deliverable: {
+      summary: "Created the forecast presentation.",
+      next_steps: ["Share the forecast with the team"],
+    } },
+  });
+  assert.deepEqual(projection.run.nextSteps, ["Share the forecast with the team"]);
+});
+
 test("completed Google Docs results remain openable from saved history", () => {
   const completed = backendRunHistoryProjection({
     ...backendRun,
