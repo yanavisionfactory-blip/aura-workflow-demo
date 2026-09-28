@@ -99,9 +99,10 @@ export function backendRunHistoryProjection(run = {}) {
   const completedCount = Number(run.result?.completed_steps || 0);
   const steps = historyStepsForBackendRun(run);
   const runDate = run.updated_at || run.created_at || new Date().toISOString();
-  const createdDoc = status === "completed" ? (run.result?.outputs || []).find((output) =>
+  const createdDoc = status === "completed" && run.result?.verification?.status === "verified"
+    ? (run.result?.outputs || []).find((output) =>
     ["docs.create", "google-docs.create-document"].includes(output.operation)
-    && output.critic?.action === "accept" && output.outcome_check?.status === "verified"
+    && output.critic?.action === "accept"
   ) : null;
   const documentResult = createdDoc ? primaryResultFromOutputs([createdDoc], {
     title: createdDoc.resolved_arguments?.title || title,
