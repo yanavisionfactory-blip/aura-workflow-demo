@@ -447,6 +447,7 @@ export default function Demo() {
   const preparedActionPreviewRef = useRef(false);
   const runRequestKeyRef = useRef(null);
   const lastPlanningIntentRef = useRef("");
+  const pendingPlanRevisionRef = useRef(null);
   const historySavePromiseRef = useRef(null);
 
   const clearTimeouts = () => {
@@ -500,6 +501,7 @@ export default function Demo() {
     pythonPollGenerationRef.current += 1;
     runRequestKeyRef.current = null;
     lastPlanningIntentRef.current = "";
+    pendingPlanRevisionRef.current = null;
     historySavePromiseRef.current = null;
     preparedActionPreviewRef.current = false;
     pendingMock.current = null;
@@ -620,9 +622,13 @@ Write ONE clear, conversational sentence restating what they want — but offer 
   const handleConfirm = useCallback(
     (editedInterpretation, revisionInstruction = "") => {
       setInterpretation(editedInterpretation);
+      const currentSteps = pythonPlanRef.current?.steps?.length
+        ? pythonPlanRef.current.steps : reviewedPlanRef.current?.steps || [];
       const reviewedSteps = revisionInstruction
-        ? (pythonPlanRef.current?.steps || reviewedPlanRef.current?.steps || [])
+        ? (currentSteps.length ? currentSteps : pendingPlanRevisionRef.current?.reviewedSteps || [])
         : [];
+      pendingPlanRevisionRef.current = revisionInstruction
+        ? { instruction: revisionInstruction, reviewedSteps } : null;
       const confirmedIntent = editedInterpretation.trim() || originalPromptRef.current;
       const selectedTools = userSelectedToolsRef.current.filter(
         (tool) => !omittedToolsRef.current.includes(tool)
@@ -717,8 +723,19 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             setPhase("plan");
             return { ok: false, error };
           }
+          if (revisionInstruction) {
+            // A successful edit becomes the saved workflow's intent, including
+            // its source correction, so a later rerun does not use the old scope.
+            const revisedIntent = `${confirmedIntent}\n\n${revisionInstruction.trim()}`;
+            originalPromptRef.current = revisedIntent;
+            setOriginalPrompt(revisedIntent);
+            setInterpretation(revisedIntent);
+            const revisedPlan = { ...completedPlan, interpretation: revisedIntent };
+            setPlan(revisedPlan);
+            pendingPlanRevisionRef.current = null;
+            return { ok: true, plan: revisedPlan };
+          }
           setPlan(completedPlan);
-          if (revisionInstruction) return { ok: true, plan: completedPlan };
         } catch (error) {
           if (generation !== pythonPollGenerationRef.current) return;
           console.warn("LLM planning unavailable", error);
@@ -809,7 +826,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
         runRequestKeyRef.current = null;
       }
     }
-    return handleConfirm(interpretation);
+    return handleConfirm(interpretation, pendingPlanRevisionRef.current?.instruction || "");
   }, [handleConfirm, interpretation]);
 
   const handlePlanningConnectionRecovered = async (recoveries) => {
@@ -898,6 +915,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
       const now = new Date().toISOString();
       const name = workflowName || plan?.workflowName || originalPromptRef.current.slice(0, 60) || "Workflow";
       const workflowUpdate = {
+        prompt: originalPromptRef.current,
         steps: approvedStepsRef.current,
         interpretation: plan?.interpretation || interpretation,
         last_run_status: "running",
