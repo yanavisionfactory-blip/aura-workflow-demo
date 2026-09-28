@@ -185,3 +185,36 @@ def canonical_execution_evidence(context):
             canonical["__aura_context_aliases__"] = aliases
         steps[step_key] = canonical
     return {"inputs": context.get("inputs", {}), "vars": context.get("vars", {}), "steps": steps}
+
+
+def canonical_review_artifacts(artifacts):
+    """Use one full Google Docs text copy in final model review.
+
+    Pipedream's Get Document receipt contains `textContent` as well as a
+    structural `body`/`tabs` tree with the same text. The durable receipt and
+    its read-back check remain unchanged; only the model's review input is
+    projected so eight source documents fit without dropping source text.
+    """
+    projected = []
+    for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            projected.append(artifact)
+            continue
+        receipt = artifact.get("provider_result")
+        document = receipt.get("ret") if isinstance(receipt, dict) else None
+        if not (isinstance(document, dict) and isinstance(document.get("textContent"), str)):
+            projected.append(artifact)
+            continue
+        projected.append({
+            **artifact,
+            "provider_result": {
+                **receipt,
+                "ret": {
+                    "documentId": document.get("documentId"),
+                    "title": document.get("title"),
+                    "textContent": document["textContent"],
+                    "source_kind": "Google Docs full text; original receipt retained",
+                },
+            },
+        })
+    return projected
