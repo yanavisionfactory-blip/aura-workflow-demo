@@ -2557,6 +2557,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 context.setdefault("steps", {})[step.step_key] = step_context_value(
                     step.output.get("provider_result", step.output), step.operation,
                     step.output.get("resolved_arguments", step.arguments),
+                    planned_steps=plan_steps, step_key=step.step_key,
                 )
                 for name, value in step.output_variables.items():
                     try:
@@ -4042,6 +4043,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             outputs.append(step.output)
             context.setdefault("steps", {})[step.step_key] = step_context_value(
                 result, step.operation, resolved_arguments,
+                planned_steps=plan_steps, step_key=step.step_key,
             )
             try:
                 for name, value in step.output_variables.items():
