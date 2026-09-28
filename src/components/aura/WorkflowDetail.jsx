@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { aura } from "@/api/auraClient";
 import { formatDistanceToNow, format } from "date-fns";
-import { announceWorkflowHistoryChanged } from "@/lib/workflowHistory.mjs";
+import { announceWorkflowHistoryChanged, uniqueBackendRuns } from "@/lib/workflowHistory.mjs";
 import { scheduleSummary } from "@/lib/workflowSchedule.mjs";
 import RunAgainModal from "./RunAgainModal";
 
@@ -54,7 +54,7 @@ export default function WorkflowDetail({
     setEditing(false);
   };
 
-  const wfRuns = runs
+  const wfRuns = uniqueBackendRuns(runs)
     .filter((r) => r.workflow_id === workflow.id)
     .sort((a, b) => new Date(b.backend_created_at || b.created_date) - new Date(a.backend_created_at || a.created_date));
 
