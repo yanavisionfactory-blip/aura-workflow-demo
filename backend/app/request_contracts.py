@@ -39,6 +39,17 @@ _ALIASES = {
 _NEGATION = re.compile(r"\b(?:do not|don't|never|without|no)\s+$", re.IGNORECASE)
 _SOURCE = re.compile(r"\b(?:from|using|about|regarding)\s+$", re.IGNORECASE)
 _REVIEW_MARKER = "\n\nThe user reviewed the proposed workflow and requested this change:"
+_STEP_ADD = re.compile(
+    r"\s+(?:(?:a|an|the)\s+)?(?:(?:separate|new|first|next|last)\s+)?"
+    r"(?:(?:read|lookup|search|workflow|planning)\s+)?step\b",
+    re.IGNORECASE,
+)
+_PROVIDER_STEP_ADD = re.compile(
+    r"\s+(?:" + "|".join(
+        re.escape(alias) for aliases in _ALIASES.values() for alias in aliases
+    ) + r")\s+as\s+(?:the\s+)?(?:first|next|last)\s+step\b",
+    re.IGNORECASE,
+)
 
 
 def user_request_text(prompt: str) -> str:
@@ -186,6 +197,13 @@ def requested_effects(prompt: str, inventory: list[dict], manifests: dict) -> li
                 continue
             kind = next(k for k, verbs in _VERBS.items() if action.group() in verbs)
             tail = clause[action.end():actions[index + 1].start() if index + 1 < len(actions) else None]
+            # Editing the workflow structure is not permission to create a
+            # provider resource. "Add Google Calendar as the first step" means
+            # read that source, while "add an event in Calendar" remains a write.
+            if action.group() == "add" and (
+                _STEP_ADD.match(tail) or _PROVIDER_STEP_ADD.match(tail)
+            ):
+                continue
             lead = clause[max(0, action.start() - 90):action.start()]
             for (slug, operation), (module, item) in catalog.items():
                 if not _operation_matches(kind, module):
