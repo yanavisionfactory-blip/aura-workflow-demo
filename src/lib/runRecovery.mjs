@@ -48,6 +48,7 @@ export function recoveryForRun(run = {}) {
       no_safe_recovery: "AURA couldn't complete the remaining step automatically.",
       governed_derivative_retry_required: "Canva is taking longer than expected to prepare the finished presentation.",
       automatic_repair_stopped: "AURA stopped automatic repair for this run.",
+      recorded_result_needs_review: "AURA needs to check the saved provider result.",
       final_result_unverified: "The planned steps finished, but the requested result could not be verified.",
     };
     const fixes = {
@@ -59,9 +60,12 @@ export function recoveryForRun(run = {}) {
       review_submission: "Review the exact prepared payload. AURA will submit it only after you approve it.",
       inspect_run: "Review the provider result before deciding what should happen next; completed work and receipts are preserved.",
       retry_step: "Try only the remaining export again. The presentation is saved and AURA will not recreate it.",
+      recheck_saved_result: "AURA will inspect the saved result without creating it again.",
       contact_support: "Contact AURA support with the run ID. Your completed work is saved; avoid starting a duplicate workflow.",
     };
     const retryAction = blocker.action === "retry_step" && blocker.retryable === true;
+    const savedReadback = blocker.action === "recheck_saved_result"
+      && blocker.retryable === true && Boolean(blocker.step_id);
     const incompleteCustomerRead = blocker.code === "final_result_unverified"
       && steps.length > 0
       && steps.every((step) => !step.consequential)
@@ -84,16 +88,20 @@ export function recoveryForRun(run = {}) {
         ? "Review the saved results, then provide the missing source details in a revised request. The completed steps will not run again automatically."
         : fixes[blocker.action] || "Resolve the exact blocker shown above, then return to this saved run.",
       canRestartReadPlan: incompleteCustomerRead,
-      canRetry: connectionAction || retryAction,
+      canRetry: connectionAction || retryAction || savedReadback,
       canSkip: false,
-      buttonLabel: retryAction
+      buttonLabel: savedReadback
+        ? "Recheck saved result"
+        : retryAction
         ? "Try export again"
         : blocker.action === "wait_for_connector_repair"
           ? "Recheck connector"
         : blocker.action === "reconnect_account"
           ? "Reconnect account"
           : "Connect account",
-      subtitle: blocker.action === "wait_for_connector_repair"
+      subtitle: savedReadback
+        ? "The saved provider action will not be submitted again."
+        : blocker.action === "wait_for_connector_repair"
         ? "AURA paused before execution. The saved run is preserved."
         : blocker.action === "contact_support"
           ? "Automatic repair has stopped. No background retry is scheduled."

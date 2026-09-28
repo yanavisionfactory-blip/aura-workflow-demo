@@ -78,6 +78,26 @@ test('a proven rejected derivative offers one safe last-resort retry', () => {
   assert.match(result.fix, /will not recreate/i);
 });
 
+test('a recorded write offers a saved-result recheck without replay', () => {
+  const result = recoveryForRun(run({
+    status: 'blocked',
+    steps: [{ id: 'saved-write', status: 'failed', consequential: true }],
+    blocker: {
+      code: 'recorded_result_needs_review',
+      kind: 'operator_action',
+      action: 'recheck_saved_result',
+      retryable: true,
+      step_id: 'saved-write',
+      message: 'The provider action was recorded, but AURA could not verify its result.',
+    },
+  }));
+  assert.equal(result.canRetry, true);
+  assert.equal(result.stepId, 'saved-write');
+  assert.equal(result.buttonLabel, 'Recheck saved result');
+  assert.match(result.fix, /without creating it again/i);
+  assert.equal(recoveryForRun(run({ blocker: { action: 'recheck_saved_result', retryable: true } })).canRetry, false);
+});
+
 test('alternative recovery plans preserve safety boundaries and user direction', () => {
   const saved = run({
     prompt: 'Review creator candidates',

@@ -49,6 +49,64 @@ async def test_create_imports_complete_approved_text_and_reads_it_back(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_docs_readback_uses_drive_export_when_docs_api_denies_the_read(monkeypatch):
+    title = "Monday briefing"
+    body = "Event details\nNotes from Drive"
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        assert request.method == "GET"
+        if request.url.host == "docs.googleapis.com":
+            return httpx.Response(403, request=request, json={"error": {"code": 403}})
+        if request.url.path.endswith("/export"):
+            assert request.url.params["mimeType"] == "text/plain"
+            return httpx.Response(200, request=request, text=body + "\n")
+        assert request.url.params["fields"] == "id,name,mimeType,trashed"
+        return httpx.Response(200, request=request, json={
+            "id": "doc-123", "name": title,
+            "mimeType": "application/vnd.google-apps.document", "trashed": False,
+        })
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: real_client(
+        transport=httpx.MockTransport(respond), **kwargs
+    ))
+    executor = ProviderExecutor({"access_token": "test-token"}, capability_manifest=native_manifest("google"))
+    observed = await executor.execute("docs.get", {"document_id": "doc-123"})
+
+    assert observed == {
+        "id": "doc-123", "title": title, "body": body,
+        "result_url": "https://docs.google.com/document/d/doc-123/edit",
+    }
+    assert len(calls) == 3
+    check = build_outcome_check("docs.create", {"title": title, "body": body}, {"id": "doc-123"})
+    assert evaluate_outcome_check(check, observed)["status"] == "verified"
+
+
+@pytest.mark.asyncio
+async def test_docs_drive_fallback_rejects_a_different_resource(monkeypatch):
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        if request.url.host == "docs.googleapis.com":
+            return httpx.Response(403, request=request)
+        return httpx.Response(200, request=request, json={
+            "id": "another-doc", "name": "Other", "mimeType": "application/vnd.google-apps.document",
+        })
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: real_client(
+        transport=httpx.MockTransport(respond), **kwargs
+    ))
+    executor = ProviderExecutor({"access_token": "test-token"})
+    with pytest.raises(ValueError, match="did not identify"):
+        await executor.execute("docs.get", {"document_id": "doc-123"})
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
 async def test_create_rejects_empty_content_without_an_external_write(monkeypatch):
     executor = ProviderExecutor({"access_token": "test-token"})
     request = AsyncMock()
