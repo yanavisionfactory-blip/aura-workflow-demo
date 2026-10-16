@@ -810,6 +810,24 @@ async def _discover_agent_intent(
             )
         except httpx.HTTPStatusError as exc:
             return candidate, None, exc.response.status_code in {401, 403}
+        except ExceptionGroup as exc:
+            # MCP task groups wrap HTTP failures when their transports close.
+            # Preserve real authentication gates without swallowing unexpected
+            # errors or treating a failed probe as a verified connection.
+            _, unexpected = exc.split(
+                (TimeoutError, ConnectorError, httpx.HTTPError, OSError, ValueError)
+            )
+            if unexpected is not None:
+                raise
+            pending = list(exc.exceptions)
+            authorization_required = False
+            while pending:
+                error = pending.pop()
+                if isinstance(error, ExceptionGroup):
+                    pending.extend(error.exceptions)
+                elif isinstance(error, httpx.HTTPStatusError):
+                    authorization_required |= error.response.status_code in {401, 403}
+            return candidate, None, authorization_required
         except (TimeoutError, ConnectorError, httpx.HTTPError, OSError, ValueError):
             return candidate, None, False
         return candidate, manifest, False
