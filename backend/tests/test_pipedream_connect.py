@@ -528,6 +528,56 @@ async def test_connector_engineer_prioritizes_actions_before_mcp_discovery(datab
     assert client.calls[0] == ("list_actions", "linear")
 
 
+async def test_popular_connector_scan_advances_across_small_batches(database):
+    client = FakePipedream()
+    client.list_apps = AsyncMock(return_value=[
+        {**app_definition(), "name_slug": name, "name": name.title()}
+        for name in ("first-app", "second-app", "third-app")
+    ])
+    async with database() as session:
+        for _ in range(3):
+            result = await engineer_pipedream_catalog(
+                session, client=client,
+                settings=settings(connector_engineer_max_integrations_per_scan=1),
+            )
+            assert result.released == 1
+        packs = list((await session.scalars(select(BrokerCapabilityPack))).all())
+        assert {pack.provider_slug for pack in packs} == {
+            "first-app", "second-app", "third-app",
+        }
+
+
+async def test_requested_apps_survive_a_batch_smaller_than_the_queue(database):
+    client = FakePipedream()
+    client.list_apps = AsyncMock(return_value=[])
+    for name in ("requested-first", "requested-second", "requested-third"):
+        assert queue_pipedream_certification(
+            {**app_definition(), "name_slug": name, "name": name.title()}
+        )
+    async with database() as session:
+        for _ in range(3):
+            await engineer_pipedream_catalog(
+                session, client=client,
+                settings=settings(connector_engineer_max_integrations_per_scan=1),
+            )
+        packs = list((await session.scalars(select(BrokerCapabilityPack))).all())
+        assert {pack.provider_slug for pack in packs} == {
+            "requested-first", "requested-second", "requested-third",
+        }
+    assert engineer_module._drain_pipedream_certifications() == {}
+
+
+async def test_requested_apps_survive_popular_catalog_failure(database):
+    client = FakePipedream()
+    client.list_apps = AsyncMock(side_effect=PipedreamConnectError("Unavailable"))
+    requested = {**app_definition(), "name_slug": "requested-app", "name": "Requested"}
+    assert queue_pipedream_certification(requested)
+    async with database() as session:
+        with pytest.raises(PipedreamConnectError):
+            await engineer_pipedream_catalog(session, client=client, settings=settings())
+    assert set(engineer_module._drain_pipedream_certifications()) == {"requested-app"}
+
+
 async def test_scheduler_does_not_let_fresh_nango_snapshot_hide_missing_pipedream_scan(
     database, monkeypatch
 ):
