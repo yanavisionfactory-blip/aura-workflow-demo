@@ -191,6 +191,21 @@ def test_complete_requirements_collapse_routes_and_reuse_connected_family() -> N
     ) == []
 
 
+def test_slack_adapter_versions_require_one_account_without_merging_other_providers():
+    inventory = [
+        {"slug": "slack", "name": "Slack", "connected": False},
+        {"slug": "slack-v2", "name": "Slack", "connected": False},
+        {"slug": "google-ads", "name": "Google Ads", "connected": False},
+        {"slug": "unrelated-v2", "name": "Unrelated", "connected": False},
+    ]
+    assert complete_connection_requirements(
+        "Use Slack and Google Ads", ["slack-v2", "unrelated-v2"], inventory
+    ) == ["slack", "google-ads", "unrelated-v2"]
+    assert complete_connection_requirements(
+        "Use Slack", ["slack-v2"], [{**inventory[0], "connected": True}, inventory[1]]
+    ) == []
+
+
 def test_google_workspace_connection_satisfies_named_gmail_family() -> None:
     inventory = [
         {

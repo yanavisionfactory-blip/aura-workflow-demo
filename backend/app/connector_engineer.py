@@ -1080,12 +1080,18 @@ async def engineer_pipedream_catalog(
     if not client.configured or len(settings.connector_release_signing_key) < 32:
         return EngineeringSummary(status="disabled")
     pending = _drain_pipedream_certifications()
-    apps = await client.list_apps(
-        "",
-        limit=100,
-        sort_key="featured_weight",
-        sort_direction="desc",
-    )
+    try:
+        apps = await client.list_apps(
+            "",
+            limit=100,
+            sort_key="featured_weight",
+            sort_direction="desc",
+        )
+    except Exception:
+        # A failed popularity refresh must not discard customer-requested apps.
+        for app_definition in pending.values():
+            queue_pipedream_certification(app_definition)
+        raise
     apps_by_provider = {_slug(item.get("name_slug") or item.get("name")): item for item in apps}
     apps_by_provider.update(pending)
     apps = list(apps_by_provider.values())
@@ -1128,7 +1134,28 @@ async def engineer_pipedream_catalog(
         )
     )
     summary.skipped = len(apps) - len(eligible)
-    for app_definition in eligible[: settings.connector_engineer_max_integrations_per_scan]:
+    maximum = settings.connector_engineer_max_integrations_per_scan
+    requested = [
+        item for item in eligible
+        if _slug(item.get("name_slug") or item.get("name")) in pending
+    ]
+    popular = [
+        item for item in eligible
+        if _slug(item.get("name_slug") or item.get("name")) not in pending
+    ]
+    batch = requested[:maximum]
+    for app_definition in requested[maximum:]:
+        queue_pipedream_certification(app_definition)
+    if popular and len(batch) < maximum:
+        # Persist progress across processes and restarts, as on the Nango plane.
+        # Rechecking the first batch forever leaves later apps unavailable.
+        start = (snapshot.scan_cursor or 0) % len(popular)
+        rotated = popular[start:] + popular[:start]
+        selected = rotated[: maximum - len(batch)]
+        batch.extend(selected)
+        snapshot.scan_cursor = (start + len(selected)) % len(popular)
+
+    for app_definition in batch:
         provider_slug = _slug(app_definition.get("name_slug") or app_definition.get("name"))
         try:
             async with session.begin_nested():
