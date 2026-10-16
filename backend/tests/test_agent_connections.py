@@ -1,4 +1,6 @@
+import httpx
 import pytest
+from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import select
 
@@ -136,6 +138,37 @@ async def test_agent_intent_discovers_the_contract_automatically(monkeypatch) ->
     assert kind == ToolKind.agent
     assert manifest["side_effects"] == "artifact_only"
     assert calls[0][3]["agent_protocol"] == "a2a"
+
+
+@pytest.mark.parametrize("status", [401, 403])
+async def test_mcp_grouped_authorization_errors_return_the_permission_gate(monkeypatch, status):
+    async def denied(*_args):
+        request = httpx.Request("POST", "https://research.example.com/mcp")
+        error = httpx.HTTPStatusError(
+            "private upstream payload", request=request,
+            response=httpx.Response(status, request=request),
+        )
+        raise ExceptionGroup("transport", [ExceptionGroup("session", [error])])
+
+    monkeypatch.setattr(main, "discover_provider", denied)
+    with pytest.raises(HTTPException) as caught:
+        await main.autoconnect_agent(
+            AgentConnectionIntent(source="https://research.example.com/mcp"), None, None,
+        )
+    assert caught.value.status_code == 409
+    assert caught.value.detail["code"] == "agent_authorization_required"
+    assert "private upstream payload" not in str(caught.value.detail)
+
+
+async def test_unexpected_mcp_group_failure_is_not_reclassified_as_missing_permission(monkeypatch):
+    async def broken(*_args):
+        raise ExceptionGroup("transport", [RuntimeError("unexpected failure")])
+
+    monkeypatch.setattr(main, "discover_provider", broken)
+    with pytest.raises(ExceptionGroup, match="transport"):
+        await main._discover_agent_intent(
+            AgentConnectionIntent(source="https://research.example.com/mcp"),
+        )
 
 
 async def test_autoconnect_persists_the_agent_without_user_supplied_technical_fields(
