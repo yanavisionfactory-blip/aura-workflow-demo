@@ -236,6 +236,31 @@ def test_google_marketplace_app_keeps_its_family_even_with_shared_provider() -> 
     assert explicit_disconnected_capabilities("Create a Google Calendar event", inventory) == ["calendar"]
 
 
+def test_named_google_apps_do_not_require_a_disconnected_workspace_connector() -> None:
+    inventory = [
+        {"slug": "google", "name": "Gmail", "canonical_provider": "google",
+         "connected": False, "allowed_operations": ["gmail.send", "docs.create"]},
+        {"slug": "google-docs", "name": "Google Docs", "connected": True,
+         "allowed_operations": ["docs.create"]},
+        {"slug": "google-drive", "name": "Google Drive", "connected": True,
+         "allowed_operations": ["drive.folder.create"]},
+    ]
+    assert complete_connection_requirements(
+        "Create a Google Doc inside a new Google Drive folder using Google Docs.",
+        [], inventory,
+    ) == []
+    # Removing the brand-word false positive must not suppress a real Gmail
+    # request or the exact-operation grant checks performed by preflight.
+    assert complete_connection_requirements("Send an intake email with Gmail", [], inventory) == ["google"]
+
+
+def test_explicit_google_workspace_name_still_requires_its_account() -> None:
+    inventory = [
+        {"slug": "google", "name": "Google Workspace", "connected": False},
+    ]
+    assert explicit_disconnected_capabilities("Connect Google Workspace", inventory) == ["google"]
+
+
 def test_omitting_calendar_hides_its_operations_and_rejects_reintroduced_steps(monkeypatch) -> None:
     seen = []
 

@@ -1183,6 +1183,12 @@ def explicit_disconnected_capabilities(prompt: str, inventory: list[dict]) -> li
             }
             if value
         }
+        if family == "google":
+            # The storage slug is a brand shared by several app connectors.
+            # "Google Docs" must not also request the broad Workspace account
+            # (displayed as Gmail). Exact app grants are checked by preflight.
+            aliases.discard("google")
+            aliases.add("google workspace")
         if any(alias and f" {alias} " in text for alias in aliases):
             missing.append(family)
             seen_families.add(family)
