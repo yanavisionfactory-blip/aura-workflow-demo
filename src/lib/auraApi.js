@@ -398,7 +398,7 @@ async function authorizePipedreamConnector(provider, session, timeoutMs) {
       },
       onError: (error) => finish(
         reject,
-        new Error(error?.message || "The provider did not grant AURA access."),
+        new Error(error?.message || "AURA could not verify this connection."),
       ),
       onClose: ({ successful }) => {
         if (successful && completion) return;
@@ -414,7 +414,7 @@ async function authorizePipedreamConnector(provider, session, timeoutMs) {
 
 export async function authorizeConnectorBroker(
   provider,
-  { connection = null, timeoutMs = 120000, reservedWindow = null } = {},
+  { connection = null, timeoutMs = null, reservedWindow = null } = {},
 ) {
   let session;
   try {
@@ -432,13 +432,15 @@ export async function authorizeConnectorBroker(
   }
   if (session.backend === "pipedream") {
     if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
-    return authorizePipedreamConnector(provider, session, timeoutMs);
+    // Match the broker grant's default lifetime: account sign-in and multiple
+    // verification factors routinely take longer than the old two-minute wait.
+    return authorizePipedreamConnector(provider, session, timeoutMs ?? 15 * 60 * 1000);
   }
   if (session.backend === "nango") {
-    return authorizeManagedConnector(provider, timeoutMs, reservedWindow, session);
+    return authorizeManagedConnector(provider, timeoutMs ?? 120000, reservedWindow, session);
   }
   if (session.backend === "native") {
-    return authorizeOAuth(provider, timeoutMs, reservedWindow, session);
+    return authorizeOAuth(provider, timeoutMs ?? 120000, reservedWindow, session);
   }
   if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
   throw new Error("AURA could not select a secure connection route for this app.");
