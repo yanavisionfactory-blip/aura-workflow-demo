@@ -5382,9 +5382,23 @@ def _run_blocker(
         if (steps and all(step.status in {StepStatus.completed, StepStatus.skipped}
                           for step in steps)
                 and (run.result or {}).get("verification", {}).get("status") == "unverified"):
-            review_preparation_unavailable = (
-                "Final evidence preparation unavailable"
-                in ((run.result or {}).get("verification", {}).get("reasons") or [])
+            verification = (run.result or {}).get("verification") or {}
+            reasons = verification.get("reasons") or []
+            corrections = verification.get("required_fixes") or []
+            # Older verifier responses could claim success with [""] as a
+            # correction. Recheck that malformed decision using saved receipts;
+            # never reinterpret a real correction or replay a provider action.
+            blank_corrections = (
+                "Verifier identified unresolved corrections" in reasons
+                and bool(corrections)
+                and all(isinstance(item, str) and not item.strip() for item in corrections)
+            )
+            review_retryable = blank_corrections or any(
+                reason in {
+                    "Final evidence preparation unavailable",
+                    "Outcome verification is temporarily unavailable",
+                }
+                for reason in reasons
             )
             incomplete_gmail_read = (
                 {step.operation for step in steps} == {"gmail.list", "gmail.get"}
@@ -5394,9 +5408,9 @@ def _run_blocker(
                 "code": "final_result_unverified",
                 "kind": "human_action",
                 "message": (
-                    "The completed actions are saved. Final review was temporarily unavailable; "
+                    "The completed actions are saved. Final review needs to be checked again; "
                     "retry verification using the saved receipts without repeating any action."
-                    if review_preparation_unavailable else
+                    if review_retryable else
                     "This plan read only one Gmail message and could not establish which "
                     "customer conversations need a check-in. Start a new plan to read the "
                     "conversation histories. No email was sent."
@@ -5405,8 +5419,8 @@ def _run_blocker(
                     "the requested outcome. Review the saved results and supply the missing "
                     "source details in a revised request. No completed action will repeat."
                 ),
-                "action": "retry_final_review" if review_preparation_unavailable else "inspect_run",
-                "retryable": review_preparation_unavailable,
+                "action": "retry_final_review" if review_retryable else "inspect_run",
+                "retryable": review_retryable,
             }
         repair = (
             ((run.execution_context or {}).get("__aura_write_repairs__") or {}).get(

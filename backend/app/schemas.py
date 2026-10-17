@@ -1,7 +1,7 @@
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
+from pydantic import BaseModel, Field, HttpUrl, StringConstraints, field_validator, model_validator
 
 
 class ConnectionResume(BaseModel):
@@ -695,7 +695,12 @@ class OutcomeVerification(BaseModel):
     status: Literal["verified", "unverified", "failed"]
     evidence_step_ids: list[str] = Field(default_factory=list)
     reasons: list[str] = Field(default_factory=list)
-    required_fixes: list[str] = Field(default_factory=list)
+    required_fixes: list[
+        Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    ] = Field(
+        default_factory=list,
+        description="Concrete corrections still required. Return an empty list when none remain.",
+    )
 
 
 class StepRepair(BaseModel):
