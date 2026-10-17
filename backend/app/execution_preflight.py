@@ -402,7 +402,7 @@ async def _connection_credentials(
         tool.enabled = True
         return credentials, verification, None
 
-    if tool.kind == ToolKind.oauth and tool.config.get("oauth_custom"):
+    if tool.config.get("oauth_custom"):
         credentials, changed = await _refresh_custom_oauth_credentials(tool, credentials)
         if changed:
             tool.encrypted_credentials = CredentialVault().encrypt(credentials)
