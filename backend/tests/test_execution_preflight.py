@@ -159,14 +159,15 @@ async def test_native_oauth_is_refreshed_and_identity_probed(monkeypatch):
     verify.assert_awaited_once_with("notion", {"access_token": "fresh"})
 
 
-async def test_custom_oauth_refreshes_then_runs_generic_probe(monkeypatch):
+@pytest.mark.parametrize("kind", [ToolKind.oauth, ToolKind.mcp])
+async def test_custom_oauth_refreshes_then_runs_generic_probe(monkeypatch, kind):
     vault = CredentialVault()
     tool = ToolConnection(
         id="custom",
         workspace_id="w",
         slug="custom-crm",
         display_name="Custom CRM",
-        kind=ToolKind.oauth,
+        kind=kind,
         config={"oauth_custom": True, "token_url": "https://auth.example/token"},
         encrypted_credentials=vault.encrypt({"access_token": "old", "refresh_token": "r"}),
     )
