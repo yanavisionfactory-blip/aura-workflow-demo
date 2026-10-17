@@ -117,6 +117,60 @@ async def test_verifier_outage_preserves_uncertainty(monkeypatch):
     assert result.status == "unverified"
 
 
+@pytest.mark.parametrize("blank", ["", " \t "])
+async def test_blank_verifier_correction_retries_review_instead_of_rejecting_receipt(
+    monkeypatch, blank
+):
+    calls = 0
+
+    async def output(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return {
+            "status": "verified",
+            "evidence_step_ids": ["one"],
+            "reasons": ["The accepted receipt matches the requested keyword metrics"],
+            "required_fixes": [blank] if calls == 1 else [],
+        }
+
+    async def no_sleep(*args):
+        pass
+
+    monkeypatch.setattr(agent_runtime, "_run", output)
+    monkeypatch.setattr(agent_runtime.asyncio, "sleep", no_sleep)
+    result = await verify_outcome(
+        "Read keyword metrics", {}, [{"step_id": "one", "critic": {"action": "accept"}}]
+    )
+
+    assert result.status == "verified"
+    assert result.evidence_step_ids == ["one"]
+    assert calls == 2
+
+
+async def test_repeated_malformed_verifier_corrections_cannot_certify_success(monkeypatch):
+    calls = 0
+
+    async def output(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return {
+            "status": "verified", "evidence_step_ids": ["one"], "required_fixes": [""],
+        }
+
+    async def no_sleep(*args):
+        pass
+
+    monkeypatch.setattr(agent_runtime, "_run", output)
+    monkeypatch.setattr(agent_runtime.asyncio, "sleep", no_sleep)
+    result = await verify_outcome(
+        "Read keyword metrics", {}, [{"step_id": "one", "critic": {"action": "accept"}}]
+    )
+
+    assert result.status == "unverified"
+    assert result.reasons == ["Outcome verification is temporarily unavailable"]
+    assert calls == 3
+
+
 async def test_read_receipts_cannot_verify_an_unsent_email(monkeypatch):
     async def should_not_run(*args, **kwargs):
         raise AssertionError("A model must not certify a missing Gmail send")

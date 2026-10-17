@@ -191,7 +191,10 @@ def test_completed_steps_with_unverified_result_show_a_human_handoff():
     assert public["public_blocker"] == blocker
 
 
-def test_completed_actions_with_temporary_final_review_failure_offer_review_only_retry():
+@pytest.mark.parametrize("reason", [
+    "Final evidence preparation unavailable", "Outcome verification is temporarily unavailable",
+])
+def test_completed_actions_with_temporary_final_review_failure_offer_review_only_retry(reason):
     from app.main import _run_blocker
     from app.models import RunStep, StepStatus
 
@@ -199,7 +202,7 @@ def test_completed_actions_with_temporary_final_review_failure_offer_review_only
         status=RunStatus.waiting_for_action, prompt="Create a Google Doc briefing",
         plan_approved=True,
         result={"verification": {
-            "status": "unverified", "reasons": ["Final evidence preparation unavailable"],
+            "status": "unverified", "reasons": [reason],
         }},
         execution_context={"__aura_autonomy__": {"handoff_reason_code": "final_result_unverified"}},
     )
@@ -210,6 +213,32 @@ def test_completed_actions_with_temporary_final_review_failure_offer_review_only
     assert blocker["action"] == "retry_final_review"
     assert blocker["retryable"] is True
     assert "without repeating any action" in blocker["message"]
+
+
+@pytest.mark.parametrize("fixes,retryable", [
+    ([""], True), ([" \t "], True), (["", "Missing source evidence"], False),
+    (["Missing source evidence"], False), ([], False),
+])
+def test_legacy_blank_verifier_corrections_offer_saved_review_only(fixes, retryable):
+    from app.main import _run_blocker
+    from app.models import RunStep, StepStatus
+
+    run = WorkflowRun(
+        status=RunStatus.waiting_for_action, prompt="Read keyword metrics",
+        plan_approved=True,
+        result={"verification": {
+            "status": "unverified",
+            "reasons": ["Accepted receipt matches the request", "Verifier identified unresolved corrections"],
+            "required_fixes": fixes,
+        }},
+        execution_context={"__aura_autonomy__": {"handoff_reason_code": "final_result_unverified"}},
+    )
+    steps = [RunStep(step_key="read", status=StepStatus.completed)]
+    blocker = _run_blocker(run, steps, {}, [])
+
+    assert blocker["retryable"] is retryable
+    assert blocker["action"] == ("retry_final_review" if retryable else "inspect_run")
+    assert blocker.get("step_id") is None
 
 
 def test_exhausted_run_is_visible_as_stopped_when_no_retry_is_scheduled():
