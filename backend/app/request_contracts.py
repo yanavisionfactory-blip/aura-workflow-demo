@@ -149,7 +149,8 @@ def _aliases(family: str, item: dict) -> set[str]:
     aliases = set(_ALIASES.get(family, ()))
     # Shared Google Workspace operations need their app name, while a
     # dedicated connector can use its public name as a provider cue.
-    if family in capability_family(item.get("slug")).split("-"):
+    slug_family = capability_family(item.get("slug"))
+    if family == slug_family or family in slug_family.split("-"):
         aliases.add(str(item.get("slug") or "").replace("-", " "))
         aliases.add(str(item.get("name") or ""))
     return {alias.casefold() for alias in aliases if alias and len(alias) >= 3}
@@ -257,6 +258,13 @@ def requested_effects(prompt: str, inventory: list[dict], manifests: dict) -> li
                     direct_target = bool(match) and not _SOURCE.search(
                         tail[max(0, match.start() - 12):match.start()]
                     )
+                    if direct_target and family not in _ALIASES:
+                        # A provider can be the write destination or merely
+                        # source material inside another app's new document.
+                        prefix = tail[:match.start()]
+                        direct_target = bool(re.fullmatch(
+                            r"\s*(?:(?:a|an|the|one|new)\s+)*", prefix,
+                        ) or re.search(r"\b(?:in|on|via|through)\s+(?:the\s+)?$", prefix))
                     leading_provider = re.search(
                         r"\b(?:use|with|in|on)\s+(?:the\s+)?" + re.escape(alias)
                         + r"\s+to\s+$", lead,

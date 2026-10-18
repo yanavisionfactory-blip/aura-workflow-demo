@@ -618,6 +618,32 @@ def test_briefing_sources_do_not_become_calendar_writes():
     )]
 
 
+def test_hyphenated_provider_write_target_is_required_without_writing_to_a_source():
+    inventory = [{"slug": "wordpress-org", "name": "WordPressOrg",
+                  "allowed_operations": ["wordpress-org.update-post"]},
+                 {"slug": "google-ads", "name": "Google Ads",
+                  "allowed_operations": ["google-ads.create-campaign"]}]
+    manifests = {
+        "wordpress-org": {"capabilities": [{
+            "name": "wordpress-org.update-post", "description": "Updates a post",
+            "permission_scope": "destructive",
+        }]},
+        "google-ads": {"capabilities": [{
+            "name": "google-ads.create-campaign", "description": "Create a campaign",
+            "permission_scope": "write",
+        }]},
+    }
+    assert requested_effects("Update WordPressOrg drafts 107, 108 and 109.", inventory, manifests) == [{
+        "effect": "wordpress-org update", "targets": [{
+            "tool_slug": "wordpress-org", "operation": "wordpress-org.update-post",
+        }],
+    }]
+    assert requested_effects(
+        "Create a Google Doc containing Google Ads keyword research.", inventory, manifests,
+    ) == []
+    assert requested_effects("Create a campaign in Google Ads", inventory, manifests)[0]["effect"] == "google-ads create"
+
+
 def test_orchestrator_rejects_an_invented_calendar_write_in_read_revision():
     manifest = native_manifest("google")
     inventory = [{"slug": "google", "name": "Google Workspace",
