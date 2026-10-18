@@ -103,9 +103,14 @@ async def saved_run(session, name, body, *, dispatched=False):
     return run, read, write, approval
 
 
-async def test_check_pending_work_rebuilds_only_unfinished_unsubmitted_preview(database, monkeypatch):
+@pytest.mark.parametrize("unfinished_body", [
+    "{{steps.research.$return_value}}", "<h2>Homeowner checks</h2><p>...</p>",
+])
+async def test_check_pending_work_rebuilds_only_unfinished_unsubmitted_preview(
+    database, monkeypatch, unfinished_body
+):
     async with database() as session:
-        run, read, write, approval = await saved_run(session, "requested", "{{steps.research.$return_value}}")
+        run, read, write, approval = await saved_run(session, "requested", unfinished_body)
         unrelated = await saved_run(session, "unrelated", "{{steps.research.$return_value}}")
         sent = []
 

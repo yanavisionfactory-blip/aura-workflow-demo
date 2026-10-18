@@ -14,6 +14,49 @@ from app.schemas import ApprovalDecision, PlanStep, WorkflowPlan
 from app.security import CredentialVault
 
 
+@pytest.mark.parametrize("content", [
+    "<h2>Homeowner checks</h2><p>...</p>",
+    "<p class='draft'> … </p>",
+    "<ul><li>...</li></ul>",
+    "A useful introduction.\n...\nMore sections follow.",
+])
+def test_empty_prose_blocks_cannot_be_approved_as_finished_content(content):
+    assert unfinished_action_content("wordpress-org.create-post", {"content": content})
+
+
+@pytest.mark.parametrize("content", [
+    "<p>Wait... then check the thermostat again.</p>",
+    "<p>A quoted pause … is part of this complete sentence.</p>",
+])
+def test_ellipsis_inside_finished_prose_remains_valid(content):
+    assert not unfinished_action_content("wordpress-org.create-post", {"content": content})
+
+
+async def test_materializer_expands_empty_html_sections_before_review(monkeypatch):
+    from app import agent_runtime
+
+    attempts = []
+
+    async def generate(_agent, payload, **_kwargs):
+        attempts.append(dict(payload))
+        return {"arguments": {"content": (
+            "<h2>Homeowner checks</h2><p>...</p>" if len(attempts) == 1
+            else "<h2>Homeowner checks</h2><p>Check the thermostat setting and replace a dirty filter.</p>"
+        )}}
+
+    async def no_sleep(_delay):
+        pass
+
+    monkeypatch.setattr(agent_runtime, "_run", generate)
+    monkeypatch.setattr(agent_runtime.asyncio, "sleep", no_sleep)
+    arguments = await materialize_action_arguments(
+        "Prepare the complete article", {"operation": "wordpress-org.create-post"}, {"steps": {}},
+    )
+    assert len(attempts) == 2
+    assert "Check the thermostat" in arguments["content"]
+    assert "finished content" in attempts[1]["argument_validation_error"]
+
+
 def test_plan_approval_cannot_authorize_unknown_action_values():
     email = SimpleNamespace(
         operation="gmail.send",
