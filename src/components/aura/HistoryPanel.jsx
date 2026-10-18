@@ -143,7 +143,7 @@ async function reconcileDurableHistory(initialWorkflows, initialRuns) {
   return reconciliationPromise;
 }
 
-export default function HistoryPanel({ open, onClose, onRerun, onEditRun, onOpenRun }) {
+export default function HistoryPanel({ open, onClose, onRerun, onEditRun, onOpenRun, onViewResults }) {
   const [workflows, setWorkflows] = useState([]);
   const [runs, setRuns] = useState([]);
   const [schedules, setSchedules] = useState([]);
@@ -434,6 +434,7 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun, onOpen
                   runCount={uniqueBackendRuns(runs).filter((r) => r.workflow_id === selectedRun.workflow_id).length}
                   onBack={() => setSelectedRun(null)}
                   onOpenRun={onOpenRun}
+                  onViewResults={onViewResults}
                   onRerun={async (approval) => {
                     let wf = selectedWf;
                     if (!wf && selectedRun.workflow_id) {
