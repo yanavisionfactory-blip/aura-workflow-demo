@@ -762,6 +762,15 @@ class PipedreamClient:
                 "provider"
             )
         )
+        from .wordpress_rest import execute as execute_wordpress_rest
+        from .wordpress_rest import handles as handles_wordpress_rest
+
+        if transport_type == "pipedream_action" and handles_wordpress_rest(
+            provider, str(capability.get("name") or ""), arguments
+        ):
+            return await execute_wordpress_rest(
+                self, external_user_id, account_id, capability["name"], arguments
+            )
         if transport_type == "pipedream_mcp":
             tool_name = str(transport.get("tool_name") or "").strip()
             vendor_app = str(transport.get("app") or provider).strip()
