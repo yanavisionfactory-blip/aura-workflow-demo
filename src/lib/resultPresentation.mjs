@@ -393,7 +393,11 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
     ? completed.find((output) => output.step_key === presentation.primary_step_key)
     : null;
   const articles = verifiedDraftArticles(completed);
-  if (articles.length && (!explicitPrimary || explicitPrimary.operation?.startsWith("wordpress-org."))) {
+  // A read-back of the handoff accompanies the content; it is not the content
+  // artifact itself. Keep verified complete drafts visible before that receipt.
+  const articleHandoff = explicitPrimary?.operation === "jira.issue.get"
+    && articles.every((article) => article.reused);
+  if (articles.length && (!explicitPrimary || articleHandoff || explicitPrimary.operation?.startsWith("wordpress-org."))) {
     if (articles.every((article) => article.reused)) return {
       title: "Existing unpublished articles reviewed", kind: "articles", provider: "WordPress", providerVerb: "Reused from",
       completionTitle: "Existing article drafts verified",

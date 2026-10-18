@@ -39,6 +39,11 @@ test("read-only WordPress reviews show actual full drafts and never claim new sa
   assert.deepEqual(resultMetrics([], [{ status: "completed", output }]), [{ value: "1", label: "existing draft articles reviewed" }]);
   assert.notEqual(primaryResultFromOutputs([{ ...output, outcome_check: { status: "pending" } }]).kind, "articles");
   assert.notEqual(primaryResultFromOutputs([{ ...output, resolved_arguments: { statuses: ["publish"] } }]).kind, "articles");
+  const handoff = { step_key: "handoff", operation: "jira.issue.get", provider_result: { result_url: "https://example.atlassian.net/browse/DEMO-1" } };
+  const withHandoff = primaryResultFromOutputs([output, handoff], {}, { primary_step_key: "handoff" });
+  assert.equal(withHandoff.kind, "articles");
+  assert.equal(withHandoff.articles[0].body, "Full existing article.");
+  assert.notEqual(primaryResultFromOutputs([handoff], {}, { primary_step_key: "handoff" }).kind, "articles");
 });
 
 test("workflow transport is not rendered as a deliverable", () => {
