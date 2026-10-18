@@ -294,6 +294,31 @@ export function supportingReceipts(results = {}, activity = [], primary = null, 
       };
     });
 
+  // A workflow can produce several designs in Canva. Keep the other saved
+  // designs and completed downloads reachable even when one is the main result.
+  for (const step of activity.filter((item) => item.status === "completed")) {
+    const operation = step.output?.operation;
+    const result = step.output?.provider_result || {};
+    const job = result.job || result;
+    if (job.status !== "success") continue;
+    if (operation === "canva.import.get") {
+      for (const design of job.result?.designs || []) {
+        const link = safeHttpsUrl(design.urls?.edit_url);
+        if (link) completed.push({ key: `canva-design:${design.id}`, tool: "Canva",
+          title: design.title || "Saved Canva design", link,
+          linkLabel: "Edit in Canva", preview: [] });
+      }
+    }
+    if (operation === "canva.export.get") {
+      for (const [index, value] of (job.urls || []).entries()) {
+        const link = safeHttpsUrl(value);
+        if (link) completed.push({ key: `canva-export:${job.id || step.stepKey}:${index}`,
+          tool: "Canva", title: "Completed creative export", link,
+          linkLabel: "Download creative", preview: [] });
+      }
+    }
+  }
+
   if (primary?.delivery && !completed.some((receipt) => receipt.tool.toLowerCase() === "gmail")) {
     completed.push({ key: "presentation-delivery", tool: "Gmail", title: primary.delivery.subject || "Email sent",
       link: safeHttpsUrl(primary.delivery.link), linkLabel: "View in Gmail", preview: [] });
@@ -301,6 +326,7 @@ export function supportingReceipts(results = {}, activity = [], primary = null, 
 
   if (hasCompiledSelection || completed.length) {
     return completed.filter((receipt, index, all) => (!primary?.link || receipt.link !== primary.link)
+      && (!primary?.downloadUrl || receipt.link !== primary.downloadUrl)
       && all.findIndex((candidate) => candidate.key === receipt.key || (receipt.link && candidate.link === receipt.link)) === index
     );
   }

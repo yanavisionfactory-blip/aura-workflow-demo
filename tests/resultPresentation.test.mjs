@@ -11,6 +11,23 @@ import {
   supportingReceipts,
 } from "../src/lib/resultPresentation.mjs";
 
+test("multiple Canva designs and completed exports stay reachable beside the main creative", () => {
+  const activity = [
+    { status: "completed", stepKey: "square", tool: "Canva", output: { operation: "canva.import.get", provider_result: {
+      job: { status: "success", result: { designs: [{ id: "square", title: "Square creative", urls: { edit_url: "https://www.canva.com/design/square/edit" } }] } } } } },
+    { status: "completed", stepKey: "square_export", tool: "Canva", output: { operation: "canva.export.get", provider_result: {
+      job: { id: "square-export", status: "success", urls: ["https://export-download.canva.com/square.png"] } } } },
+    { status: "completed", stepKey: "main_export", tool: "Canva", output: { operation: "canva.export.get", provider_result: {
+      job: { id: "main-export", status: "success", urls: ["https://export-download.canva.com/main.png"] } } } },
+    { status: "completed", stepKey: "pending_export", tool: "Canva", output: { operation: "canva.export.get", provider_result: {
+      job: { id: "pending-export", status: "in_progress", urls: ["https://export-download.canva.com/not-finished.png"] } } } },
+  ];
+  const receipts = supportingReceipts({}, activity, { provider: "Canva", link: "https://www.canva.com/design/main/edit",
+    downloadUrl: "https://export-download.canva.com/main.png" }, { supporting_step_keys: [] });
+  assert.deepEqual(receipts.map((item) => item.link), ["https://www.canva.com/design/square/edit", "https://export-download.canva.com/square.png"]);
+  assert.equal(receipts[0].title, "Square creative");
+});
+
 test("saved WordPress articles use verified returned bodies instead of old planned content", () => {
   const output = { operation: "wordpress-org.update-post", critic: { action: "accept" }, outcome_check: { status: "verified" },
     resolved_arguments: { post: "108", content: "old preparation note" }, provider_result: { ret: {
