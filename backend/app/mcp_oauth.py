@@ -18,26 +18,59 @@ UBERSUGGEST_ORIGIN = "https://ubersuggest-mcp.neilpatelapi.com"
 UBERSUGGEST_ENDPOINT = f"{UBERSUGGEST_ORIGIN}/mcp"
 UBERSUGGEST_SCOPES = ["profile", "domain", "keywords", "serp", "utility"]
 
+# Reviewed vendor endpoints only. Never derive OAuth destinations from a pasted
+# URL or accept a different provider's authorization metadata.
+MCP_SERVICES = {
+    "ubersuggest": {
+        "name": "Ubersuggest", "owner": "NP Digital", "endpoint": UBERSUGGEST_ENDPOINT,
+        "issuer": UBERSUGGEST_ORIGIN + "/", "auth_origins": [UBERSUGGEST_ORIGIN],
+        "scopes": UBERSUGGEST_SCOPES, "required_scope": "keywords",
+        "canonical_provider": "ubersuggest",
+    },
+    "semrush": {
+        "name": "Semrush", "owner": "Semrush", "endpoint": "https://mcp.semrush.com/v2/mcp",
+        "issuer": "https://oauth.semrush.com",
+        "auth_origins": ["https://oauth.semrush.com", "https://api.semrush.com"],
+        "scopes": ["mcp.access", "offline_access"], "required_scope": "mcp.access",
+        "canonical_provider": "semrush",
+    },
+    "sitebulb-cloud": {
+        "name": "Sitebulb Cloud", "owner": "Sitebulb", "endpoint": "https://mcp.sitebulb.com/cloud",
+        "issuer": "https://auth.sitebulb.com", "auth_origins": ["https://auth.sitebulb.com"],
+        "scopes": ["mcp:read"], "required_scope": "mcp:read", "canonical_provider": "sitebulb",
+    },
+    "sitebulb-desktop": {
+        "name": "Sitebulb Desktop", "owner": "Sitebulb", "endpoint": "https://mcp.sitebulb.com/desktop",
+        "issuer": "https://auth.sitebulb.com", "auth_origins": ["https://auth.sitebulb.com"],
+        "scopes": ["mcp:read"], "required_scope": "mcp:read", "canonical_provider": "sitebulb",
+    },
+}
+
+
+def mcp_service(provider: str) -> dict:
+    if provider not in MCP_SERVICES:
+        raise ConnectorError("This MCP service has no reviewed authorization route")
+    return MCP_SERVICES[provider]
+
 
 def managed_mcp_provider(source: str) -> str | None:
-    parsed = urlsplit(source)
-    if (
-        parsed.scheme == "https"
-        and parsed.netloc == "ubersuggest-mcp.neilpatelapi.com"
-        and parsed.path.rstrip("/") in {"", "/mcp"}
-        and not parsed.query
-        and not parsed.fragment
-    ):
+    for provider, service in MCP_SERVICES.items():
+        if source.rstrip("/") == service["endpoint"]:
+            return provider
+    if source.rstrip("/") == UBERSUGGEST_ORIGIN:
         return "ubersuggest"
     return None
 
 
-def _service_url(value: object) -> str:
+def _service_url(value: object, provider: str = "ubersuggest", *, resource: bool = False) -> str:
     value = str(value or "")
     parsed = urlsplit(value)
     if (
         parsed.scheme != "https"
-        or parsed.netloc != "ubersuggest-mcp.neilpatelapi.com"
+        or f"{parsed.scheme}://{parsed.netloc}" not in (
+            [f"https://{urlsplit(mcp_service(provider)['endpoint']).netloc}"]
+            if resource else mcp_service(provider)["auth_origins"]
+        )
         or parsed.query
         or parsed.fragment
     ):
@@ -50,8 +83,9 @@ def pkce_challenge(verifier: str) -> str:
     return base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
 
 
-async def _json(client: httpx.AsyncClient, method: str, url: str, **kwargs) -> dict:
-    response = await client.request(method, _service_url(url), **kwargs)
+async def _json(client: httpx.AsyncClient, method: str, url: str, *,
+                provider: str = "ubersuggest", resource: bool = False, **kwargs) -> dict:
+    response = await client.request(method, _service_url(url, provider, resource=resource), **kwargs)
     response.raise_for_status()
     result = response.json()
     if not isinstance(result, dict):
@@ -59,38 +93,47 @@ async def _json(client: httpx.AsyncClient, method: str, url: str, **kwargs) -> d
     return result
 
 
-async def prepare_authorization(credentials: dict, state: str, callback_url: str) -> tuple[str, dict, dict]:
+async def prepare_authorization(credentials: dict, state: str, callback_url: str,
+                                provider: str = "ubersuggest") -> tuple[str, dict, dict]:
     """Register a public client and return a consent URL, never a user token."""
+    service = mcp_service(provider)
+    endpoint = service["endpoint"]
+    parsed = urlsplit(endpoint)
+    resource_url = f"https://{parsed.netloc}/.well-known/oauth-protected-resource{parsed.path}"
     async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
         resource = await _json(
-            client, "GET", f"{UBERSUGGEST_ORIGIN}/.well-known/oauth-protected-resource/mcp"
+            client, "GET", resource_url, provider=provider, resource=True,
         )
         if (
-            resource.get("resource") != UBERSUGGEST_ENDPOINT
-            or f"{UBERSUGGEST_ORIGIN}/" not in resource.get("authorization_servers", [])
+            resource.get("resource") != endpoint
+            or service["issuer"].rstrip("/") not in {
+                str(issuer).rstrip("/") for issuer in resource.get("authorization_servers", [])
+            }
         ):
             raise ConnectorError("The MCP service's resource identity could not be verified")
         metadata = await _json(
-            client, "GET", f"{UBERSUGGEST_ORIGIN}/.well-known/oauth-authorization-server"
+            client, "GET", service["issuer"].rstrip("/") + "/.well-known/oauth-authorization-server",
+            provider=provider,
         )
         if (
-            metadata.get("issuer") != f"{UBERSUGGEST_ORIGIN}/"
+            str(metadata.get("issuer") or "").rstrip("/") != service["issuer"].rstrip("/")
             or "S256" not in metadata.get("code_challenge_methods_supported", [])
             or "none" not in metadata.get("token_endpoint_auth_methods_supported", [])
         ):
             raise ConnectorError("The MCP service does not support the required OAuth protection")
-        authorization_url = _service_url(metadata.get("authorization_endpoint"))
-        token_url = _service_url(metadata.get("token_endpoint"))
-        registration_url = _service_url(metadata.get("registration_endpoint"))
-        scopes = [scope for scope in UBERSUGGEST_SCOPES if scope in metadata.get("scopes_supported", [])]
-        if "keywords" not in scopes:
-            raise ConnectorError("The MCP service did not offer keyword research access")
+        authorization_url = _service_url(metadata.get("authorization_endpoint"), provider)
+        token_url = _service_url(metadata.get("token_endpoint"), provider)
+        registration_url = _service_url(metadata.get("registration_endpoint"), provider)
+        scopes = [scope for scope in service["scopes"] if scope in metadata.get("scopes_supported", [])]
+        if service["required_scope"] not in scopes:
+            raise ConnectorError("The MCP service did not offer the required research access")
         credentials = dict(credentials)
         # Client registrations belong to one redirect URI. Never reuse a client
         # after a deployment changes that URI.
         if not credentials.get("client_id") or credentials.get("registered_redirect_uri") != callback_url:
             registration = await _json(
                 client, "POST", registration_url,
+                provider=provider,
                 json={
                     "client_name": "AURA",
                     "redirect_uris": [callback_url],
@@ -110,13 +153,13 @@ async def prepare_authorization(credentials: dict, state: str, callback_url: str
             "expires_at": int(time.time()) + 600,
         }
         config = {
-            "canonical_provider": "ubersuggest",
-            "mcp_oauth_provider": "ubersuggest",
+            "canonical_provider": service["canonical_provider"],
+            "mcp_oauth_provider": provider,
             "oauth_custom": True,
             "authorization_url": authorization_url,
             "token_url": token_url,
             "token_auth_method": "none",
-            "token_params": {"resource": UBERSUGGEST_ENDPOINT},
+            "token_params": {"resource": endpoint},
             "scopes": scopes,
         }
         params = {
@@ -127,7 +170,7 @@ async def prepare_authorization(credentials: dict, state: str, callback_url: str
             "state": state,
             "code_challenge": pkce_challenge(verifier),
             "code_challenge_method": "S256",
-            "resource": UBERSUGGEST_ENDPOINT,
+            "resource": endpoint,
         }
         return f"{authorization_url}?{urlencode(params)}", credentials, config
 
@@ -135,17 +178,20 @@ async def prepare_authorization(credentials: dict, state: str, callback_url: str
 async def exchange_code(credentials: dict, config: dict, code: str, verifier: str) -> dict:
     credentials = dict(credentials)
     credentials.pop("mcp_oauth_pending", None)
-    token_url = _service_url(config.get("token_url"))
+    provider = config.get("mcp_oauth_provider", "ubersuggest")
+    service = mcp_service(provider)
+    token_url = _service_url(config.get("token_url"), provider)
     async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
         result = await _json(
             client, "POST", token_url,
+            provider=provider,
             data={
                 "grant_type": "authorization_code",
                 "client_id": credentials["client_id"],
                 "redirect_uri": credentials["registered_redirect_uri"],
                 "code": code,
                 "code_verifier": verifier,
-                "resource": UBERSUGGEST_ENDPOINT,
+                "resource": service["endpoint"],
             },
         )
     if not isinstance(result.get("access_token"), str) or not result["access_token"]:

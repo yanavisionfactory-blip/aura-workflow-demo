@@ -60,11 +60,11 @@ from .managed_connectors import (
     managed_connector_client,
 )
 from .mcp_oauth import (
-    UBERSUGGEST_ENDPOINT,
-    managed_mcp_provider,
+    exchange_code as exchange_mcp_oauth_code,
 )
 from .mcp_oauth import (
-    exchange_code as exchange_mcp_oauth_code,
+    managed_mcp_provider,
+    mcp_service,
 )
 from .mcp_oauth import (
     prepare_authorization as prepare_mcp_authorization,
@@ -1080,12 +1080,13 @@ async def autoconnect_agent(
 ) -> dict:
     try:
         source = _agent_source_url(intent.source)
-        if managed_mcp_provider(source):
-            result = await _managed_mcp_connection(context, session)
+        provider = managed_mcp_provider(source)
+        if provider:
+            result = await _managed_mcp_connection(context, session, provider=provider)
             if result.get("authorization_url"):
                 raise HTTPException(409, detail={
                     "code": "agent_authorization_required",
-                    "message": "Approve AURA on Ubersuggest to connect keyword research.",
+                    "message": f"Approve AURA on {mcp_service(provider)['name']} to connect research.",
                     "authorization_url": result["authorization_url"],
                 })
             return {**result, "connected_by": "aura_autodiscovery"}
@@ -1113,20 +1114,21 @@ async def autoconnect_agent(
     }
 
 
-def _mcp_payload(credentials: dict) -> AgentConnectionCreate:
+def _mcp_payload(credentials: dict, provider: str = "ubersuggest") -> AgentConnectionCreate:
+    service = mcp_service(provider)
     return AgentConnectionCreate(
-        protocol="mcp", name="Ubersuggest", owner="NP Digital",
-        endpoint=UBERSUGGEST_ENDPOINT, authentication="bearer",
+        protocol="mcp", name=service["name"], owner=service["owner"],
+        endpoint=service["endpoint"], authentication="bearer",
         credential=credentials["access_token"],
-        data_access=["Ubersuggest keyword and domain research"],
+        data_access=[f"{service['name']} research and audit data"],
         data_retention="provider-defined", max_runtime_seconds=30, max_cost_usd=5,
     )
 
 
-async def _verify_managed_mcp(credentials: dict) -> dict:
+async def _verify_managed_mcp(credentials: dict, provider: str = "ubersuggest") -> dict:
     try:
         manifest, _, _ = await asyncio.wait_for(
-            _discover_agent_payload(_mcp_payload(credentials)), timeout=25
+            _discover_agent_payload(_mcp_payload(credentials, provider)), timeout=25
         )
         return manifest
     except ExceptionGroup as exc:
@@ -1148,15 +1150,18 @@ async def _verify_managed_mcp(credentials: dict) -> dict:
 
 async def _managed_mcp_connection(
     context: TenantContext, session: AsyncSession, *, force_authorization: bool = False,
+    provider: str = "ubersuggest",
 ) -> dict:
+    service = mcp_service(provider)
+    endpoint = service["endpoint"]
     tool = await session.scalar(select(ToolConnection).where(
         ToolConnection.workspace_id == context.workspace_id,
-        ToolConnection.base_url == UBERSUGGEST_ENDPOINT,
+        ToolConnection.base_url == endpoint,
         ToolConnection.kind == ToolKind.mcp,
     ))
     credentials = CredentialVault().decrypt(tool.encrypted_credentials) if tool else {}
     if tool and (tool.config or {}).get("managed_by") != "agent_gateway":
-        raise ConnectorError("Manage the existing Ubersuggest connection before adding another route")
+        raise ConnectorError(f"Manage the existing {service['name']} connection before adding another route")
     if credentials.get("access_token") and not force_authorization:
         try:
             credentials, changed = await refresh_oauth_credentials(
@@ -1165,29 +1170,30 @@ async def _managed_mcp_connection(
             if changed:
                 tool.encrypted_credentials = CredentialVault().encrypt(credentials)
                 await session.commit()
-            manifest = await _verify_managed_mcp(credentials)
+            manifest = await _verify_managed_mcp(credentials, provider)
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code not in {400, 401, 403}:
                 raise
         else:
             return await _persist_agent_connection(
-                _mcp_payload(credentials), manifest, credentials, ToolKind.mcp,
+                _mcp_payload(credentials, provider), manifest, credentials, ToolKind.mcp,
                 context, session, connection_config=_mcp_auth_config(tool.config),
             )
     if not tool:
-        digest = hashlib.sha256(f"mcp:{UBERSUGGEST_ENDPOINT}".encode()).hexdigest()[:10]
+        digest = hashlib.sha256(f"mcp:{endpoint}".encode()).hexdigest()[:10]
         tool = ToolConnection(
-            workspace_id=context.workspace_id, slug=f"agent-ubersuggest-{digest}",
-            display_name="Ubersuggest", kind=ToolKind.mcp,
-            base_url=UBERSUGGEST_ENDPOINT, enabled=False, allowed_operations=[],
+            workspace_id=context.workspace_id, slug=f"agent-{provider}-{digest}",
+            display_name=service["name"], kind=ToolKind.mcp,
+            base_url=endpoint, enabled=False, allowed_operations=[],
             config={"managed_by": "agent_gateway", "agent_protocol": "mcp",
-                    "registration_endpoint": UBERSUGGEST_ENDPOINT},
+                    "registration_endpoint": endpoint},
         )
         session.add(tool)
         await session.flush()
     state = create_oauth_state(context.workspace_id, f"mcp-agent:{tool.id}")
     authorization_url, credentials, config = await prepare_mcp_authorization(
         credentials, state, oauth_route_callback_url(settings, "mcp-agent"),
+        provider=provider,
     )
     credentials["mcp_oauth_pending"]["subject"] = context.subject
     tool.encrypted_credentials = CredentialVault().encrypt(credentials)
@@ -1208,7 +1214,7 @@ async def mcp_agent_oauth_callback(
     state: str, code: str | None = None, error: str | None = None,
     session: AsyncSession = Depends(session_dependency),
 ):
-    def redirect(status: str, message: str, provider: str = "ubersuggest"):
+    def redirect(status: str, message: str, provider: str = "mcp-agent"):
         return RedirectResponse(f"{frontend_url}?{urlencode({
             'oauth_provider': provider, 'oauth_status': status, 'oauth_message': message,
         })}")
@@ -1225,10 +1231,11 @@ async def mcp_agent_oauth_callback(
     tool = await session.scalar(select(ToolConnection).where(
         ToolConnection.id == state_provider.removeprefix("mcp-agent:"),
         ToolConnection.workspace_id == wid,
-        ToolConnection.base_url == UBERSUGGEST_ENDPOINT,
     ).with_for_update())
-    if not tool or tool.config.get("mcp_oauth_provider") != "ubersuggest":
+    provider = managed_mcp_provider(tool.base_url) if tool else None
+    if not provider or tool.config.get("mcp_oauth_provider") != provider:
         return redirect("error", "The authorization request is no longer available.")
+    service = mcp_service(provider)
     credentials = CredentialVault().decrypt(tool.encrypted_credentials)
     pending = credentials.get("mcp_oauth_pending") or {}
     state_hash = hashlib.sha256(state.encode()).hexdigest()
@@ -1248,20 +1255,20 @@ async def mcp_agent_oauth_callback(
     tool.encrypted_credentials = CredentialVault().encrypt(credentials)
     await session.commit()
     if not membership or error or not code:
-        return redirect("error", "Ubersuggest did not grant access. Existing connections were kept.", tool.slug)
+        return redirect("error", f"{service['name']} did not grant access. Existing connections were kept.", tool.slug)
     try:
         credentials = await exchange_mcp_oauth_code(
             credentials, tool.config, code, pending["code_verifier"],
         )
-        manifest = await _verify_managed_mcp(credentials)
+        manifest = await _verify_managed_mcp(credentials, provider)
         await _persist_agent_connection(
-            _mcp_payload(credentials), manifest, credentials, ToolKind.mcp,
+            _mcp_payload(credentials, provider), manifest, credentials, ToolKind.mcp,
             TenantContext(wid, membership.subject, membership.role), session,
             connection_config=_mcp_auth_config(tool.config),
         )
     except (ConnectorError, httpx.HTTPError, ValueError, TimeoutError, KeyError):
-        return redirect("error", "Ubersuggest access could not be verified. Return to Connect and try again.", tool.slug)
-    return redirect("success", "Ubersuggest is connected and its live tools are verified.", tool.slug)
+        return redirect("error", f"{service['name']} access could not be verified. Return to Connect and try again.", tool.slug)
+    return redirect("success", f"{service['name']} is connected and its live tools are verified.", tool.slug)
 
 
 def _marketplace_route(item: dict) -> dict:
@@ -3914,13 +3921,14 @@ async def test_connection(
             result = {"ok": False, "reason": "authorization_required"}
     elif (tool.config or {}).get("managed_by") == "agent_gateway":
         try:
-            if (tool.config or {}).get("mcp_oauth_provider") == "ubersuggest":
+            provider = managed_mcp_provider(tool.base_url)
+            if provider and (tool.config or {}).get("mcp_oauth_provider") == provider:
                 credentials, changed = await refresh_oauth_credentials(
                     settings, tool.slug, credentials, tool.config,
                 )
                 if changed:
                     tool.encrypted_credentials = CredentialVault().encrypt(credentials)
-                refreshed_manifest = await _verify_managed_mcp(credentials)
+                refreshed_manifest = await _verify_managed_mcp(credentials, provider)
             else:
                 refreshed_manifest = await discover_provider(
                     tool.kind.value,
@@ -4123,10 +4131,12 @@ async def reconnect_connection(
         raise HTTPException(404, "Connection not found")
     if (
         tool.kind == ToolKind.mcp
-        and tool.base_url == UBERSUGGEST_ENDPOINT
-        and (tool.config or {}).get("mcp_oauth_provider") == "ubersuggest"
+        and managed_mcp_provider(tool.base_url)
+        and (tool.config or {}).get("mcp_oauth_provider") == managed_mcp_provider(tool.base_url)
     ):
-        result = await _managed_mcp_connection(context, session, force_authorization=True)
+        result = await _managed_mcp_connection(
+            context, session, force_authorization=True, provider=managed_mcp_provider(tool.base_url),
+        )
         return {**result, "previous_updated_at": tool.updated_at.isoformat() if tool.updated_at else None}
     if tool.kind != ToolKind.oauth:
         raise HTTPException(

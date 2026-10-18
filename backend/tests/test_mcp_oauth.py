@@ -124,14 +124,16 @@ def manifest():
 def managed_auth(monkeypatch):
     monkeypatch.setattr(main, "settings", main.settings.model_copy(update={"public_url": "https://aura.example.com"}))
 
-    async def prepare(credentials, state, callback):
-        return ORIGIN + "/authorize?state=" + state, {
+    async def prepare(credentials, state, callback, provider="ubersuggest"):
+        service = mcp_oauth.mcp_service(provider)
+        return service["issuer"].rstrip("/") + "/authorize?state=" + state, {
             **credentials, "client_id": "aura-test-client", "registered_redirect_uri": callback,
             "mcp_oauth_pending": {"state_hash": hashlib.sha256(state.encode()).hexdigest(),
                                   "code_verifier": "verifier", "expires_at": int(time.time()) + 600},
-        }, {"canonical_provider": "ubersuggest", "mcp_oauth_provider": "ubersuggest", "oauth_custom": True,
-            "token_url": ORIGIN + "/token", "token_auth_method": "none",
-            "token_params": {"resource": ENDPOINT}, "scopes": ["keywords"]}
+        }, {"canonical_provider": service["canonical_provider"], "mcp_oauth_provider": provider,
+            "oauth_custom": True, "token_url": service["issuer"].rstrip("/") + "/token",
+            "token_auth_method": "none", "token_params": {"resource": service["endpoint"]},
+            "scopes": service["scopes"]}
 
     prepare_mock = AsyncMock(side_effect=prepare)
     exchange = AsyncMock(return_value={"client_id": "aura-test-client", "access_token": "access-secret",
@@ -234,3 +236,93 @@ async def test_wrong_callback_provider_never_exchanges_code(database, managed_au
             response = await main.mcp_agent_oauth_callback(state, "code", session=session)
             assert "oauth_status=error" in response.headers["location"]
         exchange.assert_not_awaited()
+
+
+@pytest.mark.parametrize("provider", ["semrush", "sitebulb-cloud", "sitebulb-desktop"])
+async def test_reviewed_vendor_discovery_and_token_exchange_are_provider_bound(monkeypatch, provider):
+    service = mcp_oauth.mcp_service(provider)
+    endpoint = service["endpoint"]
+    requests = []
+    auth_origin = service["auth_origins"][-1]
+
+    def handle(request):
+        requests.append(request)
+        if "oauth-protected-resource" in request.url.path:
+            data = {"resource": endpoint, "authorization_servers": [service["issuer"]]}
+        elif "oauth-authorization-server" in request.url.path:
+            data = {"issuer": service["issuer"], "authorization_endpoint": auth_origin + "/authorize",
+                    "registration_endpoint": auth_origin + "/register", "token_endpoint": auth_origin + "/token",
+                    "scopes_supported": service["scopes"] + ["unrelated:write"],
+                    "code_challenge_methods_supported": ["S256"],
+                    "token_endpoint_auth_methods_supported": ["none"]}
+        elif request.url.path == "/register":
+            data = {"client_id": provider + "-client"}
+        elif request.url.path == "/token":
+            data = {"access_token": "test-access", "token_type": "Bearer"}
+        else:
+            raise AssertionError(str(request.url))
+        return httpx.Response(200, json=data)
+
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(mcp_oauth.httpx, "AsyncClient", lambda **kwargs: client_type(
+        transport=httpx.MockTransport(handle), **kwargs,
+    ))
+    monkeypatch.setattr(mcp_oauth, "validate_public_endpoint", lambda url: None)
+    url, credentials, config = await mcp_oauth.prepare_authorization({}, "state", CALLBACK, provider)
+    query = parse_qs(urlsplit(url).query)
+    assert query["resource"] == [endpoint]
+    assert set(query["scope"][0].split()) == set(service["scopes"])
+    assert config["canonical_provider"] == service["canonical_provider"]
+    assert mcp_oauth.managed_mcp_provider(endpoint) == provider
+    await mcp_oauth.exchange_code(credentials, config, "code", "verifier")
+    assert parse_qs(requests[-1].content.decode())["resource"] == [endpoint]
+    before = len(requests)
+    with pytest.raises(ValueError):
+        await mcp_oauth.exchange_code(credentials, {**config, "token_url": ORIGIN + "/token"}, "code", "verifier")
+    assert len(requests) == before
+
+
+@pytest.mark.parametrize("provider", ["semrush", "sitebulb-cloud", "sitebulb-desktop"])
+async def test_new_service_requires_consent_and_live_verification(database, managed_auth, provider):
+    prepare, exchange, verify = managed_auth
+    service = mcp_oauth.mcp_service(provider)
+    verify.return_value = {**manifest(), "name": service["name"], "base_url": service["endpoint"]}
+    async with database() as session:
+        session.add(Workspace(id="workspace", name="Pilot"))
+        session.add(TenantMembership(workspace_id="workspace", subject="owner", role="owner"))
+        await session.commit()
+        context = main.TenantContext("workspace", "owner", "owner")
+        with pytest.raises(HTTPException) as caught:
+            await main.autoconnect_agent(main.AgentConnectionIntent(source=service["endpoint"]), context, session)
+        assert caught.value.status_code == 409
+        tool = await session.scalar(select(ToolConnection))
+        assert tool.display_name == service["name"] and not tool.enabled
+        assert not tool.allowed_operations
+        state = parse_qs(urlsplit(caught.value.detail["authorization_url"]).query)["state"][0]
+        response = await main.mcp_agent_oauth_callback(state, "code", session=session)
+        assert "oauth_status=success" in response.headers["location"]
+        assert tool.enabled and tool.base_url == service["endpoint"]
+        assert tool.config["canonical_provider"] == service["canonical_provider"]
+        verify.assert_awaited_once_with(exchange.return_value, provider)
+        result = await main.autoconnect_agent(main.AgentConnectionIntent(source=service["endpoint"]), context, session)
+        assert result["enabled"] and prepare.await_count == 1
+
+
+async def test_callback_cannot_switch_a_pending_request_to_another_reviewed_provider(database, managed_auth):
+    _, exchange, _ = managed_auth
+    async with database() as session:
+        _, state, tool = await start(session)
+        tool.base_url = mcp_oauth.mcp_service("semrush")["endpoint"]
+        await session.commit()
+        response = await main.mcp_agent_oauth_callback(state, "code", session=session)
+        assert "oauth_status=error" in response.headers["location"]
+        exchange.assert_not_awaited()
+
+
+@pytest.mark.parametrize("source", [
+    "https://mcp.semrush.com.evil.example/v2/mcp", "https://user@mcp.semrush.com/v2/mcp",
+    "https://mcp.semrush.com/v2/mcp?key=secret", "http://mcp.sitebulb.com/cloud",
+    "https://mcp.sitebulb.com/cloud/other", "https://mcp.sitebulb.com:443/cloud",
+])
+def test_new_routes_reject_lookalikes_and_secret_bearing_urls(source):
+    assert mcp_oauth.managed_mcp_provider(source) is None
