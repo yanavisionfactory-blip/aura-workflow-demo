@@ -91,6 +91,12 @@ _CAPABILITIES = {
             ("media_id",),
         ),
         _capability(
+            "imagify.media.preview",
+            "Preview quota and confirmation requirements for one existing demo image without optimizing it. Use before asking approval for media.optimize.",
+            {**_MEDIA, "optimization_level": {"type": "integer", "minimum": 0, "maximum": 2}},
+            ("media_id",),
+        ),
+        _capability(
             "imagify.media.optimize",
             "Optimize an existing media attachment with Imagify. Preserves the vendor quota/API-key checks and confirmation preview. Poll media_status after queued work; never claim optimization completed from a queue response.",
             {
@@ -255,7 +261,9 @@ async def verify(session, tool: ToolConnection) -> dict:
     )
     data = await _wordpress_request(parent, "GET", "/status")
     plugin = (data.get("plugins") or {}).get(tool.slug) or {}
-    expected = {x["name"] for x in _CAPABILITIES.get(tool.slug, [])}
+    # Preview is a read-only application alias for the bridge's existing
+    # confirmation path; established sites need no plugin upgrade.
+    expected = {x["name"] for x in _CAPABILITIES.get(tool.slug, [])} - {"imagify.media.preview"}
     available = set(plugin.get("operations") or [])
     if not expected or not expected.issubset(available):
         raise WordPressPluginError(
@@ -334,8 +342,12 @@ async def execute(session, tool, operation: str, arguments: dict) -> dict:
     if not capability or operation not in (tool.allowed_operations or []) or not tool.enabled:
         raise WordPressPluginError("The WordPress plugin operation is not allowed")
     Draft202012Validator(capability["input_schema"]).validate(arguments)
+    bridge_operation = operation
+    if operation == "imagify.media.preview":
+        bridge_operation = "imagify.media.optimize"
+        arguments = {**arguments, "confirm": False}
     result = await _wordpress_request(
-        parent, "POST", "/" + tool.slug + "/" + quote(operation, safe=""), arguments
+        parent, "POST", "/" + tool.slug + "/" + quote(bridge_operation, safe=""), arguments
     )
     if result.get("error") or result.get("status") in {
         "error",

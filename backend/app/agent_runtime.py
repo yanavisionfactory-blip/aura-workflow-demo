@@ -43,6 +43,7 @@ from .schemas import (
     WorkflowPlan,
 )
 from .workflow_context import (
+    canonical_action_arguments,
     qualify_prior_step_references,
     referenced_paths,
     referenced_step_keys,
@@ -1761,6 +1762,7 @@ async def materialize_action_arguments(
 
     operation = str(step.get("operation", ""))
     from .approval_readiness import unfinished_action_content
+    from .composed_content import preserve_action_targets, validate_composed_content
 
     planned_arguments = step.get("arguments") or {}
     composed_fields = {
@@ -1818,16 +1820,14 @@ async def materialize_action_arguments(
             if isinstance(raw, dict) and "arguments" not in raw:
                 raw = {"arguments": raw}
             resolved = MaterializedActionArguments.model_validate(raw).arguments
+            resolved = preserve_action_targets(planned_arguments, resolved)
+            resolved = canonical_action_arguments(operation, resolved, execution_context)
             if referenced_paths(resolved):
                 raise ValueError("Approval arguments still contain workflow references")
             if capability:
                 resolved = normalize_planned_module_arguments(
                     manifest, operation, resolved
                 )
-            missing_content = [field for field in composed_fields
-                               if not isinstance(resolved.get(field), str) or not resolved[field].strip()]
-            if missing_content:
-                raise ValueError("Composed action omitted requested content fields: " + ", ".join(sorted(missing_content)))
             if operation == "wordpress-org.update-post" and "content" in composed_fields:
                 allowed_fields = set(planned_arguments) | {"title"}
                 unrelated = set(resolved) - allowed_fields
@@ -1836,6 +1836,7 @@ async def materialize_action_arguments(
                 resolved = {field: value for field, value in resolved.items() if field in allowed_fields}
             if unfinished_action_content(operation, resolved):
                 raise ValueError("The action must contain finished content, not a placeholder")
+            validate_composed_content(step, resolved)
             return resolved
         except Exception as exc:
             last_error = exc

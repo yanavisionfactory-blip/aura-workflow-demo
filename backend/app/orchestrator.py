@@ -33,6 +33,7 @@ from .autonomous_delivery import (
     mark_autonomous_handoff,
     mark_recovery_checkpoint_succeeded,
 )
+from .composed_content import validate_composed_content
 from .config import get_settings
 from .db import SessionLocal, engine, set_tenant_context
 from .execution_lock import execution_lock
@@ -2888,6 +2889,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         raise NativeConnectorError("Approval arguments are not concrete")
                     if unfinished_action_content(step.operation, resolved_arguments):
                         raise NativeConnectorError("Action content is still an unfinished draft")
+                    validate_composed_content(plan_steps[step.position], resolved_arguments)
                 except (NativeConnectorError, ValueError) as exc:
                     if not materialized_for_approval:
                         try:

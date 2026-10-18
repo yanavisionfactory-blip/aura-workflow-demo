@@ -1860,13 +1860,8 @@ class ProviderExecutor:
 
     @staticmethod
     def _jira_description(value: Any) -> Any:
-        if not isinstance(value, str):
-            return value
-        return {
-            "type": "doc",
-            "version": 1,
-            "content": [{"type": "paragraph", "content": [{"type": "text", "text": value}]}],
-        }
+        from .jira_content import jira_description
+        return jira_description(value)
 
     async def _jira_issue_create(self, a: dict) -> dict:
         fields: dict[str, Any] = {

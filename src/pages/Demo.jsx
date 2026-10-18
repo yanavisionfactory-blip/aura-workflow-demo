@@ -48,7 +48,7 @@ import {
   unavailablePlanningState,
 } from "@/lib/planningFlow.mjs";
 import { hasDurablePlan, planningRequestPrompt, savedRunResumeView, sameExecutablePlan } from "@/lib/runtimePlan.mjs";
-import { weatherStepTitle } from "@/lib/planPresentation.mjs";
+import { operationStepTitle, weatherStepTitle } from "@/lib/planPresentation.mjs";
 import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
 import { normalizeResultSuggestions, resultSuggestionsPrompt, RESULT_SUGGESTIONS_SCHEMA } from "@/lib/resultSuggestions.mjs";
 import { alignExecutionSteps } from "@/lib/executionSteps.mjs";
@@ -142,6 +142,8 @@ const friendlyStepTitle = (step) => {
   const tool = planToolName(step);
   const reason = String(step.reason || "").toLowerCase();
   const operation = String(step.operation || "");
+  const operationTitle = operationStepTitle(step, tool);
+  if (operationTitle) return operationTitle;
 
   if (operation === "weather.forecast") return weatherStepTitle(step);
   if (operation === "google.identity.get") return "Check the connected Google account";

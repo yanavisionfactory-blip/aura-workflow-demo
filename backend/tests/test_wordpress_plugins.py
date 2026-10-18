@@ -56,7 +56,7 @@ def bridge_status():
                 "version": "1.0.280" if provider == "rankmath" else "2.3.4",
                 "api_key_configured": True,
                 "api_key_valid": True,
-                "operations": [x["name"] for x in wp.manifest(provider)["capabilities"]],
+                "operations": [x["name"] for x in wp.manifest(provider)["capabilities"] if x["name"] != "imagify.media.preview"],
             }
             for provider in wp.PROVIDERS
         },
@@ -105,6 +105,24 @@ async def test_unavailable_bridge_never_creates_a_verified_connection(wordpress,
             await session.scalar(select(ToolConnection).where(ToolConnection.slug == "rankmath"))
             is None
         )
+
+
+async def test_imagify_preview_uses_existing_bridge_without_optimizing(wordpress, monkeypatch):
+    request = AsyncMock(return_value=bridge_status())
+    monkeypatch.setattr(wp, "_wordpress_request", request)
+    async with wordpress() as session:
+        tool = await wp.connect(session, "w", "imagify")
+        cap = next(item for item in wp.manifest("imagify")["capabilities"] if item["name"] == "imagify.media.preview")
+        assert cap["permission_scope"] == "read"
+        assert cap["requires_approval"] is False
+        request.return_value = {"status": "confirmation_required", "media_id": 92, "original_bytes": 218000}
+        result = await wp.execute(session, tool, "imagify.media.preview", {"media_id": 92})
+        assert result["status"] == "confirmation_required"
+        assert request.call_args.args[1:] == ("POST", "/imagify/imagify.media.optimize", {"media_id": 92, "confirm": False})
+        request.reset_mock()
+        with pytest.raises(ValidationError):
+            await wp.execute(session, tool, "imagify.media.preview", {"media_id": 92, "confirm": True})
+        request.assert_not_called()
 
 
 async def test_imagify_requires_verified_key_and_not_just_installed_plugin(wordpress, monkeypatch):

@@ -8,6 +8,7 @@ import { applyPresentationCopy, dynamicReferences, presentationCopySchema } from
 import { applyEmailCopy, emailCopySchema } from "@/lib/emailCopyEdit.mjs";
 import { fallbackReviewContract, mergeLegacyPreviewIntoArguments, requiresPreparedActionReview, setArgumentAtPath, unresolvedActionValues, validateReviewArguments } from "@/lib/approvalReview.mjs";
 import { editJiraBatchTask, jiraBatchTasks, removeJiraBatchTask } from "@/lib/jiraBatchReview.mjs";
+import { ArticleActionReview, JiraUpdateReview, SeoActionReview } from "./ContentActionReview";
 
 function EditableEmail({ preview, onPreviewChange, onCopyChange = null, editing, artifacts = [], args = { subject: "", body: "" }, contract = null }) {
   const [instruction, setInstruction] = useState("");
@@ -655,6 +656,10 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
   const richJiraBatch = contract.operation === "jira.issues.create_from_blocks";
   const richPresentation = contract.operation === "canva.presentation.create";
   const richDocument = contract.kind === "document";
+  const richArticle = contract.operation === "wordpress-org.update-post" && typeof args.content === "string";
+  const richSeo = contract.operation === "rankmath.post_seo.update";
+  const richJiraUpdate = contract.operation === "jira.issue.update"
+    && Object.keys(args.fields || {}).every((key) => ["description", "summary", "labels"].includes(key));
   const documentTitleKey = ["title", "name", "summary"].find((key) => Object.hasOwn(args, key));
   const documentBodyKey = ["body", "content", "description", "children"].find((key) => Object.hasOwn(args, key));
   const [editing, setEditing] = useState(() => richPresentation || richDocument || richJiraBatch);
@@ -707,6 +712,9 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
       <div className={richPresentation ? "border-t border-white/10" : "border-t border-white/10 p-5"}>
         {step.reviewContract ? (
           <>
+            {richArticle && <ArticleActionReview args={args} editing={editing} onChange={updateArguments} />}
+            {richSeo && <SeoActionReview args={args} editing={editing} onChange={updateArguments} />}
+            {richJiraUpdate && <JiraUpdateReview args={args} editing={editing} onChange={updateArguments} />}
             {richEmail && <EditableEmail preview={p} onPreviewChange={updatePreview} onCopyChange={updateEmailCopy} args={args} contract={contract} editing={editing} artifacts={contract.artifacts || (Array.isArray(args.attachments) ? args.attachments.map((attachment) => ({ name: attachment.filename || "Attachment", source: "From this workflow" })) : [])} />}
             {richTicket && <EditableJiraTask preview={p} onPreviewChange={updatePreview} editing={editing} />}
             {richJiraBatch && <JiraBatchReview args={args} editing={editing} onArgumentsChange={updateArguments} />}
@@ -720,7 +728,7 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
                 onArgumentsChange={updateArguments}
               />
             )}
-            <SchemaArgumentsEditor
+            {!richArticle && !richSeo && !richJiraUpdate && <SchemaArgumentsEditor
               contract={contract}
               args={args}
               editing={editing}
@@ -731,7 +739,7 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
                 : richPresentation ? ["title", "phases"]
                 : richJiraBatch ? ["project_key", "source_blocks"]
                 : richTicket ? ["project_key", "projectKey", "project", "summary", "description", "assignee_id", "assignee"] : []}
-            />
+            />}
           </>
         ) : p.type === "email" ? <EditableEmail preview={p} onPreviewChange={updatePreview} editing={editing} />
           : p.type === "jira" ? <EditableJiraTask preview={p} onPreviewChange={updatePreview} editing={editing} />
