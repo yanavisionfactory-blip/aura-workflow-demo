@@ -3,10 +3,12 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import select
 
 from app import main, orchestrator
 from app.agent_runtime import _stop_model_retry
 from app.config import get_settings
+from app.models import ConnectionRequirement, DispatchIntent, RunStatus, WorkflowRun, Workspace
 from app.native_connectors import NativeConnectorError, native_manifest
 from app.orchestrator import (
     _capitalized_provider_candidates,
@@ -127,6 +129,67 @@ def test_explicit_disconnected_capabilities_matches_named_provider_only() -> Non
     assert explicit_disconnected_capabilities(
         "Build an advertising report and email it", inventory
     ) == []
+
+
+@pytest.mark.parametrize("prompt", [
+    "No Slack or email messages.", "Use Jira without Slack.",
+    "Do not connect Slack.", "Don't use Slack.",
+])
+def test_excluded_provider_mentions_do_not_request_a_connection(prompt):
+    inventory = [{"slug": "slack", "name": "Slack", "connected": False}]
+    assert explicit_disconnected_capabilities(prompt, inventory) == []
+
+
+def test_negative_provider_mention_does_not_hide_another_required_account():
+    inventory = [
+        {"slug": "linear", "name": "Linear", "connected": False},
+        {"slug": "slack", "name": "Slack", "connected": False},
+    ]
+    assert explicit_disconnected_capabilities(
+        "Read Linear issues. No Slack messages.", inventory,
+    ) == ["linear"]
+    assert explicit_disconnected_capabilities(
+        "Read Slack messages, but do not connect Linear.", inventory,
+    ) == ["slack"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("planner_mode", ["agent", "llm"])
+async def test_model_quota_failure_precedes_inferred_app_connection(
+    database, monkeypatch, planner_mode,
+):
+    monkeypatch.setattr(orchestrator, "SessionLocal", database)
+    monkeypatch.setattr(get_settings(), "planner_mode", planner_mode)
+
+    async def empty_catalog(*_args):
+        return [], {}
+
+    async def catalog_with_disconnected_slack(_session, _prompt, inventory, *_args):
+        return inventory + [{"slug": "slack", "name": "Slack", "connected": False}]
+
+    async def quota_failure(*_args, **_kwargs):
+        raise RuntimeError("credit_balance_exhausted: private provider payload")
+
+    monkeypatch.setattr("app.connector_engineer.dynamic_planning_catalog", empty_catalog)
+    monkeypatch.setattr("app.pipedream_connect.planning_catalog", empty_catalog)
+    monkeypatch.setattr(orchestrator, "connection_requirement_inventory", catalog_with_disconnected_slack)
+    monkeypatch.setattr(orchestrator, "_create_compiled_plan", quota_failure)
+    async with database() as session:
+        session.add(Workspace(id="quota-workspace", name="Planning quota regression"))
+        session.add(WorkflowRun(
+            id="quota-routing", workspace_id="quota-workspace",
+            prompt="Prepare an SEO report using Slack", status=RunStatus.planning,
+        ))
+        await session.commit()
+    await orchestrator._plan_run("quota-routing", "quota-workspace")
+    async with database() as session:
+        run = await session.get(WorkflowRun, "quota-routing")
+        assert run.status == RunStatus.waiting_for_action
+        assert run.execution_context["__aura_blocker__"]["code"] == "operator_billing_required"
+        assert "credits are exhausted" in run.error
+        assert "private provider payload" not in str(run.execution_context)
+        assert await session.scalar(select(ConnectionRequirement)) is None
+        assert await session.scalar(select(DispatchIntent)) is None
 
 
 def test_only_exact_backend_catalog_provider_becomes_user_connection_action() -> None:

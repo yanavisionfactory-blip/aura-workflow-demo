@@ -815,10 +815,12 @@ Write ONE clear, conversational sentence restating what they want — but offer 
     const failedRunId = pythonRunIdRef.current;
     if (failedRunId) {
       const existing = await getPythonRun(failedRunId).catch(() => null);
-      if (existing?.blocker?.code === "planning_retry_required") {
+      const stoppedPlanningGate = ["planning_retry_required", "operator_billing_required"]
+        .includes(existing?.blocker?.code);
+      if (stoppedPlanningGate) {
         await cancelPythonRun(failedRunId);
       }
-      if (existing?.blocker?.code === "planning_retry_required"
+      if (stoppedPlanningGate
         || (existing && existing.public_status !== "recovering"
           && ["failed", "blocked", "cancelled", "completed"].includes(existing.status))) {
         forgetActivePythonRun(failedRunId);
