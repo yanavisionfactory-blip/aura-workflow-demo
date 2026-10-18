@@ -1,6 +1,7 @@
 import TopBar from "./TopBar";
 import AmbientBackground from "./AmbientBackground";
 
+/** @param {{ phase?: string, onHistoryOpen: () => void, onBack?: () => void, backLabel?: string, children: import("react").ReactNode }} props */
 export default function WorkspaceShell({ phase = "results", onHistoryOpen, onBack, backLabel, children }) {
   return (
     <div className="relative min-h-screen bg-background font-inter">
