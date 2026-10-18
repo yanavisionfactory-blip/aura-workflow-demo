@@ -124,6 +124,19 @@ async def test_json_repair_cannot_bypass_normal_schema_validation(malformed_plan
 def test_long_workflow_keeps_supporting_reads_with_a_shared_finite_bound():
     assert CompactWorkflowPlan.model_json_schema()["properties"]["steps"]["maxItems"] == 40
     assert WorkflowPlan.model_json_schema()["properties"]["steps"]["maxItems"] == 40
+    steps = [{
+        "key": f"read_{index}", "agent": "weather", "tool_slug": "aura",
+        "operation": "weather.forecast", "arguments_json": '{"location":"Berlin"}',
+        "reason": "Read", "expected_output": "Forecast", "consequential": False,
+        "depends_on": [f"read_{prior}" for prior in range(index)], "required_evidence": [],
+    } for index in range(40)]
+    compact = CompactWorkflowPlan(name="Agency", interpretation="Full workflow", steps=steps)
+    expanded = llm_planner._expand_compact_plan(compact)
+    assert len(expanded.steps) == 40
+    assert len(expanded.result_contract.supporting_step_keys) == 39
+    assert len(expanded.steps[-1].depends_on) == 39
+    with pytest.raises(ValueError):
+        CompactWorkflowPlan(name="Too long", interpretation="Bounded", steps=steps + [steps[0]])
 
 
 def test_planner_schema_only_describes_a_plan():
