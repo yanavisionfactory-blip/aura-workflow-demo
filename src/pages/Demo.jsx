@@ -1,9 +1,10 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { useLocation } from "react-router-dom";
 import { aura } from "@/api/auraClient";
 import { WORKFLOW_EXAMPLES } from "@/lib/demoData";
 import { CREATOR_APPROVALS_MOCK } from "@/lib/mockWorkflows";
-import TopBar from "@/components/aura/TopBar";
+import WorkspaceShell from "@/components/aura/WorkspaceShell";
 import CommandInput from "@/components/aura/CommandInput";
 import PilotBuilder from "@/components/aura/PilotBuilder";
 import ConfirmView from "@/components/aura/ConfirmView";
@@ -12,7 +13,6 @@ import PreviewView from "@/components/aura/PreviewView";
 import ExecutionView from "@/components/aura/ExecutionView";
 import ErrorView from "@/components/aura/ErrorView";
 import ResultsView from "@/components/aura/ResultsView";
-import AmbientBackground from "@/components/aura/AmbientBackground";
 import HistoryPanel from "@/components/aura/HistoryPanel";
 import EditRunReviewModal from "@/components/aura/EditRunReviewModal";
 import { detectNewConsequential } from "@/lib/editRunDetect";
@@ -288,6 +288,7 @@ const RESULTS_SCHEMA = {
 };
 
 export default function Demo() {
+  const location = useLocation();
   const [phase, setPhase] = useState("input");
   const [originalPrompt, setOriginalPrompt] = useState("");
   const [interpretation, setInterpretation] = useState("");
@@ -304,7 +305,7 @@ export default function Demo() {
   const [currentStepIdx, setCurrentStepIdx] = useState(0);
   const [approvedSteps, setApprovedSteps] = useState([]);
   const [previewError, setPreviewError] = useState("");
-  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(Boolean(location.state?.openHistory));
   const [startTime, setStartTime] = useState(null);
   const [workflowName, setWorkflowName] = useState("");
   const [editRun, setEditRun] = useState(null);
@@ -1776,14 +1777,12 @@ Generate a results summary in plain, human-friendly language (not technical).
   const activeRecovery = recoveryRun ? recoveryForRun(recoveryRun) : null;
 
   return (
-    <div className="min-h-screen bg-background font-inter relative">
-      <AmbientBackground phase={phase} />
-
-      <div className="relative z-10 flex flex-col min-h-screen">
-        <TopBar
-          onHistoryOpen={() => setHistoryOpen(true)}
-          onBack={phase === "input" ? undefined : handlePageBack}
-        />
+    <>
+      <WorkspaceShell
+        phase={phase}
+        onHistoryOpen={() => setHistoryOpen(true)}
+        onBack={phase === "input" ? undefined : handlePageBack}
+      >
 
         <main className="flex-1 flex items-center justify-center px-4 py-8 md:py-12">
           <AnimatePresence mode="wait">
@@ -1949,14 +1948,7 @@ Generate a results summary in plain, human-friendly language (not technical).
           </AnimatePresence>
         </main>
 
-        <footer className="px-6 py-3 border-t border-white/5 flex items-center justify-between">
-          <span className="text-[11px] text-muted-foreground/40">AURA v2.6 · Durable autonomous runs</span>
-          <div className="flex items-center gap-1">
-            <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="text-[11px] text-muted-foreground/40">System ready</span>
-          </div>
-        </footer>
-      </div>
+      </WorkspaceShell>
 
       <HistoryPanel open={historyOpen} onClose={() => setHistoryOpen(false)} onRerun={handleRerun} onEditRun={handleEditRun} onOpenRun={openSavedRunReview} onViewResults={openSavedRunResults} />
 
@@ -1969,7 +1961,7 @@ Generate a results summary in plain, human-friendly language (not technical).
         onClose={() => setEditReviewOpen(false)}
         onRun={handleEditReviewRun}
       />
-    </div>
+    </>
   );
 }
 
