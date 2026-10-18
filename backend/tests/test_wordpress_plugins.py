@@ -8,8 +8,8 @@ from jsonschema import ValidationError
 from sqlalchemy import select
 
 from app import main, orchestrator
-from app.agent_runtime import deterministic_plan_fixes, normalize_plan_graph
 from app import wordpress_plugins as wp
+from app.agent_runtime import deterministic_plan_fixes, normalize_plan_graph
 from app.config import Settings
 from app.models import CapabilityManifest, ToolConnection, ToolKind, Workspace
 from app.pipedream_connect import PipedreamClient, PipedreamConnectError
