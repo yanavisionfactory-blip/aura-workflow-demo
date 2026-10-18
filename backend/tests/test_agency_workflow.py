@@ -102,6 +102,35 @@ def test_explicit_recipe_compiles_in_direct_planner_mode(resolve_support):
     assert plan.planning_artifacts["compiled_contracts"]
 
 
+def test_full_agency_recipe_reaches_execution_supervision(resolve_support, monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(agent_runtime, "get_settings", lambda: SimpleNamespace(
+        agent_managed_execution_enabled=False, openai_api_key="",
+    ))
+    inventory, manifests = catalog()
+    plan = asyncio.run(orchestrator._create_compiled_plan(request(), inventory, set(), manifests))
+    decision, source = asyncio.run(agent_runtime.supervise_execution(
+        request(), plan.model_dump(), [{"key": step.key, "status": "pending"} for step in plan.steps],
+    ))
+    assert source == "deterministic_fallback"
+    assert len(decision.delegations) == len(plan.steps) > 20
+    assert [(item.step_key, item.operation) for item in decision.delegations] == [
+        (item.key, item.operation) for item in plan.steps
+    ]
+
+
+def test_execution_supervision_uses_the_same_finite_step_limit():
+    from pydantic import ValidationError
+
+    from app.schemas import MAX_WORKFLOW_STEPS, ExecutionSupervision
+    delegations = [{"step_key": f"step_{i}", "execution_agent": "Read Agent",
+                    "tool_slug": "google-docs", "operation": "google-docs.get-document"}
+                   for i in range(MAX_WORKFLOW_STEPS + 1)]
+    assert len(ExecutionSupervision(action="continue", reason="Approved", delegations=delegations[:-1]).delegations) == MAX_WORKFLOW_STEPS
+    with pytest.raises(ValidationError):
+        ExecutionSupervision(action="continue", reason="Approved", delegations=delegations)
+
+
 def test_recipe_never_intercepts_general_requests_or_reviewed_revisions(resolve_support):
     inventory, manifests = catalog()
     assert asyncio.run(agency_workflow_recipe("Run SEO research", inventory, manifests)) is None

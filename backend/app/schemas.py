@@ -551,7 +551,7 @@ class StepDelegation(BaseModel):
 class ExecutionSupervision(BaseModel):
     action: Literal["continue", "pause"]
     reason: str = Field(min_length=1, max_length=1000)
-    delegations: list[StepDelegation] = Field(default_factory=list, max_length=20)
+    delegations: list[StepDelegation] = Field(default_factory=list, max_length=MAX_WORKFLOW_STEPS)
 
 
 class ExecutionDirective(BaseModel):
