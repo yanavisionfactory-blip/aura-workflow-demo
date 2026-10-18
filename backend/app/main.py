@@ -5375,6 +5375,25 @@ def _run_blocker(
     stored = (run.execution_context or {}).get("__aura_blocker__") or (run.result or {}).get(
         "blocker"
     )
+    if (run.status in {RunStatus.waiting_for_action, RunStatus.failed, RunStatus.blocked}
+            and run.plan_approved
+            and (not stored or stored.get("action") in {"inspect_run", "recheck_saved_result"})):
+        retained_read = next((step for step in steps
+            if step.status == StepStatus.failed
+            and step.tool_slug == "wordpress-org"
+            and step.operation == "wordpress-org.search-posts"
+            and isinstance(step.output, dict)
+            and isinstance(step.output.get("provider_result"), dict)
+            and step.output["provider_result"].get("aura_transport") == "authenticated_wordpress_rest"
+            and isinstance(step.output["provider_result"].get("ret"), list)), None)
+        if retained_read:
+            # Automatic recovery remains bounded. An explicit operator can
+            # still recheck this retained read after its verifier is repaired;
+            # the retry endpoint preserves the receipt and never repeats a write.
+            return {"code": "recorded_result_needs_review", "kind": "operator_action",
+                    "message": "Recheck the saved WordPress read response without repeating any provider action.",
+                    "action": "recheck_saved_result", "tool_slug": retained_read.tool_slug,
+                    "step_id": retained_read.id, "retryable": True}
     if stored:
         return stored
     if run.status == RunStatus.awaiting_approval:

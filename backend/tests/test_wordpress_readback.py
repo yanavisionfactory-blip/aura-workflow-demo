@@ -80,3 +80,35 @@ async def test_missing_written_target_is_not_accepted():
     decision = await orchestrator.review_recorded_result(None, run, step, None,
         {"arguments": {"statuses": ["draft"]}, "depends_on": ["article"]}, receipt(posts()[1:]))
     assert decision.action == "escalate"
+
+
+def test_explicit_saved_read_review_remains_available_after_automatic_budget_ends():
+    from app import main
+    from app.models import RunStatus, StepStatus, WorkflowRun
+    from app.run_supervisor import public_run_projection
+
+    run = WorkflowRun(status=RunStatus.waiting_for_action, plan_approved=True,
+        prompt="Verify existing drafts", result={"failed_step": {"id": "read"}},
+        execution_context={"__aura_autonomy__": {"handoff_reason_code": "no_safe_recovery"},
+                           "__aura_supervisor__": {"status": "operator_attention", "phase": "verification"}})
+    step = SimpleNamespace(id="read", status=StepStatus.failed, tool_slug="wordpress-org",
+                           operation="wordpress-org.search-posts", output={"provider_result": receipt()})
+    blocker = main._run_blocker(run, [step], {}, [])
+    assert blocker["action"] == "recheck_saved_result" and blocker["retryable"]
+    assert public_run_projection(run, blocker)["public_blocker"]["action"] == "recheck_saved_result"
+    assert run.execution_context["__aura_autonomy__"]["handoff_reason_code"] == "no_safe_recovery"
+
+
+def test_saved_read_recheck_does_not_override_authorization_or_apply_to_writes():
+    from app import main
+    from app.models import RunStatus, StepStatus, WorkflowRun
+
+    protected = {"code": "permission_required", "action": "reconnect_account"}
+    run = WorkflowRun(status=RunStatus.waiting_for_action, plan_approved=True, prompt="Verify drafts",
+                      execution_context={"__aura_blocker__": protected})
+    step = SimpleNamespace(id="read", status=StepStatus.failed, tool_slug="wordpress-org",
+                           operation="wordpress-org.search-posts", output={"provider_result": receipt()})
+    assert main._run_blocker(run, [step], {}, []) == protected
+    run.execution_context = {"__aura_blocker__": {"action": "inspect_run", "retryable": False}}
+    step.operation = "wordpress-org.update-post"
+    assert main._run_blocker(run, [step], {}, [])["action"] == "inspect_run"
