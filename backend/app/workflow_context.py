@@ -7,7 +7,7 @@ from .schemas import StepCondition
 
 logger = logging.getLogger(__name__)
 
-REFERENCE = re.compile(r"\{\{\s*([a-zA-Z0-9_.\-\[\]'\" ]+?)\s*\}\}")
+REFERENCE = re.compile(r"\{\{\s*([a-zA-Z0-9_$.\-\[\]'\" ]+?)\s*\}\}")
 BRACKET_INDEX = re.compile(r"\[(\d+)\]")
 BRACKET_KEY = re.compile(r"\[['\"]([^'\"]+)['\"]\]")
 
@@ -24,6 +24,15 @@ def referenced_paths(value: Any) -> set[str]:
     if not isinstance(value, str):
         return set()
     return {normalize_reference_path(match.group(1)) for match in REFERENCE.finditer(value)}
+
+
+def contains_unresolved_template(value: Any) -> bool:
+    """Include malformed model templates that the safe path parser cannot read."""
+    if isinstance(value, dict):
+        return any(contains_unresolved_template(item) for item in value.values())
+    if isinstance(value, list):
+        return any(contains_unresolved_template(item) for item in value)
+    return isinstance(value, str) and "{{" in value
 
 
 def normalize_reference_path(path: str) -> str:
@@ -108,7 +117,10 @@ def resolve_value(value: Any, context: dict[str, Any]) -> Any:
             return ""
         return str(resolved)
 
-    return REFERENCE.sub(replace, value)
+    resolved = REFERENCE.sub(replace, value)
+    if contains_unresolved_template(resolved):
+        raise WorkflowContextError("Workflow reference syntax is unsupported or incomplete")
+    return resolved
 
 
 def _notion_context_value(value: Any) -> Any:

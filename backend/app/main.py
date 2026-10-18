@@ -6824,6 +6824,51 @@ async def dispatch_due_run(
         raise HTTPException(409, "Run cannot be dispatched")
     from .dispatch import dispatch_pending
 
+    preparation_refreshed = False
+    if run.status == RunStatus.awaiting_approval:
+        pending = (await session.execute(
+            select(RunStep, Approval)
+            .join(Approval, Approval.step_id == RunStep.id)
+            .where(
+                RunStep.run_id == run.id,
+                RunStep.status == StepStatus.awaiting_approval,
+                RunStep.consequential.is_(True),
+                Approval.run_id == run.id,
+                Approval.status == "pending",
+            )
+            .order_by(RunStep.position)
+        )).all()
+        for step, approval in pending:
+            preview = approval.preview or {}
+            if preview.get("status") != "ready" or not unfinished_action_content(
+                step.operation, preview.get("arguments") or {}
+            ):
+                continue
+            attempted = await session.scalar(select(StepAttempt.id).where(
+                StepAttempt.run_id == run.id,
+                StepAttempt.step_id == step.id,
+                StepAttempt.provider_dispatched.is_(True),
+            ).limit(1))
+            if attempted or "provider_result" in (step.output or {}):
+                raise HTTPException(409, "Prior action requires reconciliation before preparation can restart")
+            # A legacy preview may have called an unsupported template ready.
+            # Rebuild only this unsubmitted action; completed reads stay saved,
+            # and the resulting concrete payload still needs fresh approval.
+            approval.preview = {"status": "preparing"}
+            transition_run(
+                run, RunStatus.running, reason="unfinished_approval_preparation_refreshed",
+                actor=context.subject, phase="execution", supervisor_status="active",
+                error=None, blocker=None, metadata={"step_id": step.id},
+            )
+            session.add(AuditEvent(
+                workspace_id=context.workspace_id, run_id=run.id, actor=context.subject,
+                event_type="approval.preparation_refresh_requested",
+                payload={"step_id": step.id, "approval_id": approval.id},
+            ))
+            await session.commit()
+            preparation_refreshed = True
+            break
+
     published = await dispatch_pending(context.workspace_id, run_id=run.id)
     await session.refresh(run)
     next_intent = await session.scalar(
@@ -6841,6 +6886,7 @@ async def dispatch_due_run(
         "id": run.id,
         "status": run.status.value,
         "published": published,
+        "preparation_refreshed": preparation_refreshed,
         "next_attempt_at": next_intent.available_at.isoformat() if next_intent else None,
         "preflight_status": (run.execution_context or {}).get("__aura_preflight__", {}).get("status"),
         "preflight_blocker": (
