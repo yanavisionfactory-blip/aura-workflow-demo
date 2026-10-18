@@ -1,5 +1,6 @@
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
 
+/** @param {{ title: import("react").ReactNode, summary?: import("react").ReactNode, isFailure?: boolean, eyebrow?: import("react").ReactNode, heading?: "h1" | "h2", children?: import("react").ReactNode }} props */
 export function ResultsHeading({ title, summary, isFailure = false, eyebrow, heading: Heading = "h2", children }) {
   return (
     <div className="mb-7 flex items-start gap-4">
