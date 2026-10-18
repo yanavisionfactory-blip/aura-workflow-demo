@@ -2641,10 +2641,30 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             except WorkflowContextError as exc:
                 if step.status == StepStatus.awaiting_approval:
                     try:
+                        # Dynamic connectors have no native catalog contract.
+                        # Give the bounded resolver the verified connection's
+                        # schema before it prepares an external-action preview.
+                        preparation_tool = await session.scalar(
+                            select(ToolConnection).where(
+                                ToolConnection.workspace_id == workspace_id,
+                                ToolConnection.slug == step.tool_slug,
+                                ToolConnection.enabled.is_(True),
+                            )
+                        )
+                        preparation_manifest = await session.scalar(
+                            select(CapabilityManifest).where(
+                                CapabilityManifest.tool_id == preparation_tool.id,
+                                CapabilityManifest.status == "verified",
+                            )
+                        ) if preparation_tool else None
                         resolved_arguments = await materialize_action_arguments(
                             run.prompt,
                             plan_steps[step.position],
                             context,
+                            capability_manifest=(
+                                preparation_manifest.manifest
+                                if preparation_manifest else None
+                            ),
                         )
                         materialized_for_approval = True
                     except Exception as recovery_exc:
@@ -2824,6 +2844,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                                 run.prompt,
                                 plan_steps[step.position],
                                 context,
+                                capability_manifest=manifest,
                             )
                             resolved_arguments = normalize_planned_module_arguments(
                                 manifest, step.operation, resolved_arguments
