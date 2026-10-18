@@ -168,3 +168,20 @@ def test_unavailable_keyword_agent_reuses_real_source_and_discloses_no_fresh_cal
     assert support.arguments == {"documentId": "research-doc"}
     assert "no fresh Ubersuggest" in support.reason
     assert not preflight_plan(plan, inventory, manifests, set()).fixes
+
+
+def test_resume_reuses_completed_research_without_repeating_calls_or_writes(resolve_support):
+    inventory, manifests = catalog()
+    prompt = request().replace('"prior_report_document": "report-doc"',
+                               '"prior_report_document": "report-doc", "completed_research_document": "fresh-completed-doc"')
+    plan = asyncio.run(orchestrator._create_compiled_plan(prompt, inventory, set(), manifests))
+    operations = [step.operation for step in plan.steps]
+    assert not any(operation.startswith("google-ads.") for operation in operations)
+    assert "related_keyword_suggestions" not in operations
+    assert operations.count("google-docs.create-document") == 1  # Final report only.
+    research = next(step for step in plan.steps if step.key == "research_read")
+    assert research.arguments == {"documentId": "fresh-completed-doc"}
+    assert "do not repeat" in research.reason
+    assert plan.planning_artifacts["resumed_after_research"]
+    assert operations.count("wordpress-org.update-post") == 3
+    assert operations.count("rankmath.post_seo.update") == 3

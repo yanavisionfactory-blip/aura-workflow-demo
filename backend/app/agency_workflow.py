@@ -29,6 +29,7 @@ class AgencyRecipeConfig(BaseModel):
     intake_document: str = Field(pattern=r"^[A-Za-z0-9_-]+$")
     prior_research_document: str = Field(pattern=r"^[A-Za-z0-9_-]+$")
     prior_report_document: str = Field(pattern=r"^[A-Za-z0-9_-]+$")
+    completed_research_document: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]+$")
     account_id: str = Field(pattern=r"^\d+$")
     geo_target: str = Field(pattern=r"^geoTargetConstants/\d+$")
     language: str = Field(pattern=r"^languageConstants/\d+$")
@@ -88,7 +89,7 @@ async def agency_workflow_recipe(prompt, inventory, manifests):
     # The connected MCP service owns its operation names and input schema. Pick
     # an actual keyword-suggestion read, not a title generator or a made-up API.
     candidates = []
-    for item in inventory:
+    for item in ([] if config.completed_research_document else inventory):
         if "ubersuggest" not in (item["slug"] + " " + item.get("name", "")).lower():
             continue
         for cap in manifests.get(item["slug"], {}).get("capabilities", []):
@@ -196,11 +197,27 @@ async def agency_workflow_recipe(prompt, inventory, manifests):
         "Verify the existing Jira handoff now contains the saved output links and review actions.", after=["handoff_update"])
     add("final_report_verified", read_doc, {"documentId": "{{steps.report.documentId}}"},
         "Verify the final deliverable after team handoff and report executed, reused and outstanding work.", after=["handoff_verified"])
+    if config.completed_research_document:
+        completed = {"ads_accounts", "keyword_ideas", "keyword_support", "research", "research_read"}
+        steps = [step for step in steps if step["key"] not in completed]
+        for step in steps:
+            step["depends_on"] = [key for key in step["depends_on"] if key not in completed or key == "research_read"]
+        steps.insert(3, {
+            "key": "research_read", "agent": "Agency Workflow Agent", "tool_slug": owner(read_doc),
+            "operation": read_doc, "arguments": {"documentId": config.completed_research_document},
+            "reason": "Read and reuse the completed, verified live research. Keyword calls and the research write "
+            "already completed in the previous run; do not repeat them or claim new retrievals.",
+            "expected_output": "Verified saved research body and source links from the completed stages.",
+            "depends_on": ["intake"],
+        })
     plan = WorkflowPlan.model_validate({
-        "name": f"Agency SEO workflow — {config.client}",
-        "interpretation": "Run the selected agency recipe through live connected providers with full write review and saved-result readbacks.",
+        "name": f"Agency SEO workflow — {config.client}" + (" — Resume" if config.completed_research_document else ""),
+        "interpretation": ("Resume from the verified completed research without repeating successful keyword calls "
+                           "or research writes. " if config.completed_research_document else "")
+        + "Run the selected agency recipe through live connected providers with full write review and saved-result readbacks.",
         "steps": steps,
     })
     plan.planning_artifacts = {"planner_recovery_mode": "audited_agency_recipe",
-                               "recipe_version": 1, "source": "explicit_request_configuration"}
+                               "recipe_version": 1, "source": "explicit_request_configuration",
+                               "resumed_after_research": bool(config.completed_research_document)}
     return normalize_plan_graph(plan)
