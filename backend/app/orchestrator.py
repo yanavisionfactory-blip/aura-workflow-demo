@@ -991,6 +991,15 @@ async def _create_compiled_plan(
         + ". Show its resolved arguments for approval before dispatch."
         for effect in required_effects
     ]
+    from .audit_sources import AUDIT_SOURCE_MESSAGE, declared_audit_sources
+
+    if declared_audit_sources(requested_text):
+        repair_requirements.append(
+            "Preserve the user's declared audit input providers, including in fallback steps. "
+            "Document/task tools may read supplied exports and deliver the package, but are "
+            "not alternate SEO vendors. Omitting a disconnected provider does not authorize "
+            "a replacement source or a new crawl. " + AUDIT_SOURCE_MESSAGE
+        )
     if draft_only_email:
         repair_requirements.append(
             "The user asked for finished email DRAFTS, not delivery. For customer "
@@ -1098,6 +1107,8 @@ async def _create_compiled_plan(
 
 def planning_error_message(exc: Exception) -> str:
     """Return a user-facing planning failure without leaking provider payloads."""
+    from .audit_sources import AUDIT_SOURCE_MESSAGE, AuditSourceContractError
+
     # Recovery wrappers intentionally replace raw provider messages. Walk the
     # exception chain so operational categories such as quota exhaustion and
     # rate limiting are not lost when combined and staged planning both fail.
@@ -1106,6 +1117,8 @@ def planning_error_message(exc: Exception) -> str:
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
+        if isinstance(current, AuditSourceContractError):
+            return AUDIT_SOURCE_MESSAGE
         chain.append(str(current))
         current = current.__cause__ or current.__context__
     lowered = " ".join(chain).lower()
