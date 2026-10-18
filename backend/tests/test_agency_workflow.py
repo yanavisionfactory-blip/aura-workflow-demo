@@ -117,3 +117,25 @@ def test_recipe_rejects_missing_connectors_and_duplicate_targets(resolve_support
     duplicated = request().replace('"post_id": 12', '"post_id": 11')
     with pytest.raises(ValueError, match="distinct"):
         asyncio.run(agency_workflow_recipe(duplicated, inventory, manifests))
+
+
+def test_conservative_mcp_approval_is_preserved_instead_of_hiding_keyword_read(resolve_support):
+    inventory, manifests = catalog()
+    cap = manifests["agent-ubersuggest-test"]["capabilities"][1]
+    cap.update(permission_scope="write", requires_approval=True)
+    plan = asyncio.run(agency_workflow_recipe(request(), inventory, manifests))
+    orchestrator._normalize_planned_steps(plan, manifests)
+    support = next(step for step in plan.steps if step.key == "keyword_support")
+    assert support.operation == "related_keyword_suggestions"
+    assert support.consequential
+
+
+def test_unavailable_keyword_agent_reuses_real_source_and_discloses_no_fresh_call(resolve_support):
+    inventory, manifests = catalog()
+    inventory = [item for item in inventory if "ubersuggest" not in item["slug"]]
+    plan = asyncio.run(agency_workflow_recipe(request(), inventory, manifests))
+    support = next(step for step in plan.steps if step.key == "keyword_support")
+    assert support.operation == "google-docs.get-document"
+    assert support.arguments == {"documentId": "research-doc"}
+    assert "no fresh Ubersuggest" in support.reason
+    assert not preflight_plan(plan, inventory, manifests, set()).fixes

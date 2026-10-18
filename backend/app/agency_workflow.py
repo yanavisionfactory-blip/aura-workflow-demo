@@ -98,26 +98,30 @@ async def agency_workflow_recipe(prompt, inventory, manifests):
                 continue
             if any(term in name.lower() for term in ("title", "article", "delete", "create", "update")):
                 continue
-            if cap.get("permission_scope") in {"write", "destructive"} or cap.get("requires_approval"):
-                continue
+            # External MCP contracts can conservatively mark every operation
+            # for approval. Keep that review boundary instead of hiding an
+            # otherwise available keyword read from the recipe.
             score = sum(term in name.lower() for term in ("keyword", "suggest", "related", "idea"))
             candidates.append((score, name, item["slug"], cap))
-    if not candidates:
-        raise ValueError("Agency recipe needs a connected Ubersuggest keyword-suggestion read")
-    _, support_operation, support_slug, support_cap = min(candidates, key=lambda x: (-x[0], x[1]))
-    logger.info("Agency recipe keyword support operation=%s schema_fields=%s", support_operation,
-                sorted(support_cap.get("input_schema", {}).get("properties", {})))
     from .agent_runtime import materialize_action_arguments, normalize_plan_graph
 
-    support_args = await materialize_action_arguments(
-        "Prepare arguments for keyword suggestions for " + "; ".join(config.seed_keywords)
-        + ". Use US English. Use only supported targeting. Do not invent identifiers or results.",
-        {"tool_slug": support_slug, "operation": support_operation, "arguments": {},
-         "reason": "Supporting real US keyword suggestions; city targeting only if supported."},
-        {"steps": {}}, capability_manifest=manifests[support_slug],
-    )
-    add("keyword_support", support_operation, support_args,
-        "Retrieve real Ubersuggest supporting keyword suggestions; record actual geography.", after=["keyword_ideas"])
+    if candidates:
+        _, support_operation, support_slug, support_cap = min(candidates, key=lambda x: (-x[0], x[1]))
+        logger.info("Agency recipe keyword support operation=%s schema_fields=%s", support_operation,
+                    sorted(support_cap.get("input_schema", {}).get("properties", {})))
+        support_args = await materialize_action_arguments(
+            "Prepare arguments for keyword suggestions for " + "; ".join(config.seed_keywords)
+            + ". Use US English. Use only supported targeting. Do not invent identifiers or results.",
+            {"tool_slug": support_slug, "operation": support_operation, "arguments": {},
+             "reason": "Supporting real US keyword suggestions; city targeting only if supported."},
+            {"steps": {}}, capability_manifest=manifests[support_slug],
+        )
+        add("keyword_support", support_operation, support_args,
+            "Retrieve real Ubersuggest supporting keyword suggestions; record actual geography.", after=["keyword_ideas"])
+    else:
+        add("keyword_support", read_doc, {"documentId": config.prior_research_document},
+            "Reuse the prior real Ubersuggest findings from the research document. Explicitly disclose reuse "
+            "and that no fresh Ubersuggest operation was available; do not invent new provider results.", after=["keyword_ideas"])
     add("research", create_doc, {
         "title": f"{config.client} — Fresh keyword research",
         "content": "Content will be written from the completed keyword reads. Include up to 20 real ideas, "
