@@ -140,6 +140,12 @@ def test_excluded_provider_mentions_do_not_request_a_connection(prompt):
     assert explicit_disconnected_capabilities(prompt, inventory) == []
 
 
+def test_business_profile_display_name_and_catalog_share_an_exclusion_family():
+    from app.connection_families import capability_family
+
+    assert capability_family('Google Business Profile') == capability_family('google-my-business')
+
+
 def test_negative_provider_mention_does_not_hide_another_required_account():
     inventory = [
         {"slug": "linear", "name": "Linear", "connected": False},
