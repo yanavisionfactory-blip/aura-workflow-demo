@@ -2081,6 +2081,35 @@ async def review_recorded_result(session, run, step, snapshot, contract, result)
     ) + incomplete_evidence(step.operation, result, contract.get("required_evidence", []))
     if errors:
         return CriticDecision(action="escalate", reasons=errors)
+    if (step.operation == "wordpress-org.search-posts" and isinstance(result, dict)
+            and result.get("aura_transport") == "authenticated_wordpress_rest"):
+        from .wordpress_rest import WordPressRESTError, post_collection_evidence, post_evidence
+
+        try:
+            evidence = post_collection_evidence(result, contract.get("arguments", {}))
+            by_id = {item["id"]: item for item in evidence["posts"]}
+            planned = {item["key"]: item for item in (run.plan or {}).get("steps", [])}
+            for key in contract.get("depends_on", []):
+                source = planned.get(key, {})
+                if source.get("operation") != "wordpress-org.update-post":
+                    continue
+                accepted = ((run.execution_context or {}).get("steps", {}).get(key) or {}).get("ret")
+                expected = post_evidence(accepted)
+                observed = by_id.get(expected["id"])
+                if not observed or any(observed[field] != expected[field] for field in (
+                    "title", "status", "body_text_sha256",
+                )):
+                    raise WordPressRESTError("A target post does not match its accepted saved-write receipt")
+                observed["matches_accepted_write"] = True
+        except WordPressRESTError as exc:
+            return CriticDecision(action="escalate", reasons=[str(exc)])
+        step.output = {**step.output, "outcome_check": {
+            "status": "verified", "mode": "authenticated_wordpress_read",
+            "operation": step.operation, "derived_evidence": evidence,
+        }}
+        return CriticDecision(action="accept", reasons=[
+            "WordPress source identities, full body fields, search scope and applicable saved-write matches verified"
+        ])
     if step.operation == "gmail.threads.read":
         # This bounded read is its own receipt. Customer qualification and
         # drafting belong to the final response, never to a per-call agent

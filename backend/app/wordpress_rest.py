@@ -5,8 +5,10 @@ These routes use the standard API directly, preserving the existing account,
 operation contract, approval and dispatch boundaries.
 """
 
+import hashlib
 import re
 from html import unescape
+from html.parser import HTMLParser
 from urllib.parse import urlsplit
 
 import httpx
@@ -18,6 +20,60 @@ OPERATIONS = {"wordpress-org.search-posts", "wordpress-org.list-media-options", 
 
 class WordPressRESTError(ValueError):
     pass
+
+
+def _html_text(value):
+    class Text(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.parts = []
+
+        def handle_data(self, data):
+            self.parts.append(data)
+    parser = Text()
+    parser.feed(value)
+    return " ".join(" ".join(parser.parts).split())
+
+
+def post_evidence(post):
+    if not isinstance(post, dict) or not isinstance(post.get("id"), int) or post["id"] < 1:
+        raise WordPressRESTError("WordPress post identity is missing")
+    title, content = post.get("title"), post.get("content")
+    if not isinstance(title, dict) or not isinstance(content, dict):
+        raise WordPressRESTError("WordPress title or complete body fields are missing")
+    title = title.get("rendered", title.get("raw"))
+    content = content.get("rendered", content.get("raw"))
+    if not isinstance(title, str) or not isinstance(content, str) or not isinstance(post.get("status"), str):
+        raise WordPressRESTError("WordPress post fields are malformed")
+    text = _html_text(content)
+    return {"id": post["id"], "title": _html_text(title), "status": post["status"],
+            "word_count": sum(bool(re.search(r"\w", token)) for token in text.split()),
+            "body_text_sha256": hashlib.sha256(text.encode()).hexdigest(),
+            "body_field_present": True}
+
+
+def post_collection_evidence(result, arguments):
+    """Derive auditable source facts without altering the saved WP receipt."""
+    if not isinstance(result, dict) or result.get("aura_transport") != "authenticated_wordpress_rest" or not isinstance(result.get("ret"), list):
+        raise WordPressRESTError("An authenticated WordPress post collection is required")
+    posts = result["ret"]
+    evidence = [post_evidence(post) for post in posts]
+    if len({item["id"] for item in evidence}) != len(evidence):
+        raise WordPressRESTError("WordPress returned duplicate post identities")
+    statuses = arguments.get("statuses") or ["publish"]
+    terms = re.findall(r"\w+", str(arguments.get("search") or "").casefold())
+    for post, item in zip(posts, evidence, strict=True):
+        if item["status"] not in statuses:
+            raise WordPressRESTError("WordPress returned a post outside the requested status scope")
+        fields = [post.get(key) for key in ("title", "content", "excerpt")]
+        searchable = " ".join(_html_text(field.get("raw", field.get("rendered", "")))
+                              for field in fields if isinstance(field, dict)).casefold()
+        if any(term not in searchable for term in terms):
+            raise WordPressRESTError("WordPress returned a post outside the requested text scope")
+        item["query_terms_present_in_post_text"] = True
+    return {"source": "derived_from_actual_wordpress_post_fields", "posts": evidence,
+            "word_count_method": "HTML text; whitespace tokens containing letters or digits; title excluded",
+            "collection_scope": "Returned page only; target coverage is checked against accepted write receipts"}
 
 
 def _draft_arguments(arguments):
