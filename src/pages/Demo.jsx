@@ -50,6 +50,7 @@ import {
 import { hasDurablePlan, planningRequestPrompt, savedRunResumeView, sameExecutablePlan } from "@/lib/runtimePlan.mjs";
 import { operationStepTitle, weatherStepTitle } from "@/lib/planPresentation.mjs";
 import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
+import { savedRunResults } from "@/lib/savedRunResults.mjs";
 import { normalizeResultSuggestions, resultSuggestionsPrompt, RESULT_SUGGESTIONS_SCHEMA } from "@/lib/resultSuggestions.mjs";
 import { alignExecutionSteps } from "@/lib/executionSteps.mjs";
 import { jiraReceiptTasks } from "@/lib/jiraReceipt.mjs";
@@ -1219,6 +1220,23 @@ Write ONE clear, conversational sentence restating what they want — but offer 
     setHistoryOpen(false);
   };
 
+  const openSavedRunResults = async (savedRun) => {
+    const run = await getPythonRun(savedRun.backend_run_id);
+    const result = savedRunResults(run);
+    reset();
+    pythonRunIdRef.current = run.id;
+    pythonPlanRef.current = run.plan;
+    currentWorkflowIdRef.current = savedRun.workflow_id || null;
+    originalPromptRef.current = run.prompt || "";
+    setOriginalPrompt(run.prompt || "");
+    setInterpretation(run.plan?.interpretation || run.prompt || "");
+    setWorkflowName(run.plan?.name || savedRun.title || "");
+    setExecSteps(mapRuntimeSteps(run));
+    setResults(result);
+    setPhase("results");
+    setHistoryOpen(false);
+  };
+
   const cancelSavedRun = async (run = recoveryRun) => {
     if (!run || recoveryPendingRef.current) return;
     recoveryPendingRef.current = true;
@@ -1940,7 +1958,7 @@ Generate a results summary in plain, human-friendly language (not technical).
         </footer>
       </div>
 
-      <HistoryPanel open={historyOpen} onClose={() => setHistoryOpen(false)} onRerun={handleRerun} onEditRun={handleEditRun} onOpenRun={openSavedRunReview} />
+      <HistoryPanel open={historyOpen} onClose={() => setHistoryOpen(false)} onRerun={handleRerun} onEditRun={handleEditRun} onOpenRun={openSavedRunReview} onViewResults={openSavedRunResults} />
 
       <EditRunReviewModal
         open={editReviewOpen}

@@ -17,7 +17,7 @@ const outcomeIcons = {
   metric: BarChart3,
 };
 
-export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, onRerun, onEditRun, onOpenRun }) {
+export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, onRerun, onEditRun, onOpenRun, onViewResults }) {
   const [showSteps, setShowSteps] = useState(false);
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(run.title || "");
@@ -30,6 +30,21 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
   const [reviewStepId, setReviewStepId] = useState(null);
   const [retryStepId, setRetryStepId] = useState(null);
   const [reviewReady, setReviewReady] = useState(false);
+  const [resultsBusy, setResultsBusy] = useState(false);
+  const [resultsError, setResultsError] = useState("");
+
+  const viewResults = async () => {
+    if (resultsBusy) return;
+    setResultsBusy(true);
+    setResultsError("");
+    try {
+      await onViewResults(run);
+    } catch {
+      setResultsError("Couldn't open the saved results. Please try again. No workflow actions were repeated.");
+    } finally {
+      setResultsBusy(false);
+    }
+  };
 
   const requestRerun = (mode) => setRunAgainMode(mode);
 
@@ -313,6 +328,12 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
 
       {/* Actions */}
       <div className="p-4 border-t border-white/5">
+        {run.backend_run_id && onViewResults && <div className="mb-3 space-y-2">
+          <Button className="w-full" onClick={viewResults} disabled={resultsBusy}>
+            {resultsBusy ? "Opening saved results…" : "View results"}
+          </Button>
+          {resultsError && <p role="alert" className="text-xs text-amber-300">{resultsError}</p>}
+        </div>}
         {["running", "failed"].includes(run.status) && run.backend_run_id && (
           <div className="mb-3 space-y-2">
             <Button size="sm" variant="outline" className="w-full border-white/15"
