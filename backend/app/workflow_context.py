@@ -289,6 +289,14 @@ def step_context_value(
         value.setdefault("provider_result", evidence)
         if "ret" in result or "exports" in result:
             returned = _pipedream_result_object(result)
+            if operation in {"google-docs.create-document", "google-docs.get-document"}:
+                # Docs receipts identify the document with documentId, not id.
+                # Bind downstream readbacks to that exact returned identifier;
+                # keep the envelope and original provider evidence untouched.
+                doc = result.get("ret")
+                document_id = doc.get("documentId") if isinstance(doc, dict) else None
+                if isinstance(document_id, str) and re.fullmatch(r"[A-Za-z0-9_-]+", document_id):
+                    value.setdefault("documentId", document_id)
             if operation == "google-docs.get-document":
                 doc = result.get("ret")
                 if isinstance(doc, dict) and isinstance(doc.get("textContent"), str):
