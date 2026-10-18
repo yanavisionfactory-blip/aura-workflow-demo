@@ -5,6 +5,7 @@ import AccessRequestModal from "./AccessRequestModal";
 import ScheduleModal from "./ScheduleModal";
 import CreatorApprovalList from "./CreatorApprovalList";
 import ResultPreview from "./ResultPreview";
+import PrimaryResult from "./PrimaryResult";
 import { ResultsHeading, ResultsMetrics } from "./ResultsSummary";
 import { buildSummaryText } from "@/lib/auraSummary";
 import { resultMetrics, selectPrimaryOutcome, supportingReceipts } from "@/lib/resultPresentation.mjs";
@@ -19,6 +20,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   const receipts = useMemo(() => supportingReceipts(results, activity || [], primaryResult, results.resultPresentation), [activity, primaryResult, results]);
   const creatorsOutcome = (results.outcomes || []).find((outcome) => outcome.type === "creators" && outcome.items?.length > 0);
   const nextSteps = results.nextSteps || [];
+  const artifactDelivery = primaryResult.delivery || (primaryResult.artifact ? primaryResult : null);
   const summaryArgs = { title: results.title, summary: results.summary, metrics, outcomes: results.outcomes, activity, prompt, interpretation, nextSteps };
 
   const handleShare = async () => {
@@ -47,24 +49,18 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
       <ResultsHeading title={results.title || "Workflow complete"} summary={results.summary} isFailure={isFailure} />
       <ResultsMetrics metrics={metrics} />
 
-      <section className="mb-5 overflow-hidden rounded-3xl border border-primary/25 bg-gradient-to-br from-primary/[0.09] via-card/80 to-card/50 shadow-xl shadow-primary/[0.06]">
-        <div className="flex flex-wrap items-start justify-between gap-4 px-5 pb-4 pt-6 sm:px-7">
-          <div>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-primary">Your result</p>
-            <h3 className="text-xl font-semibold">{primaryResult.title || results.title || "Workflow result"}</h3>
-            {primaryResult.provider && <p className="mt-1.5 text-xs text-muted-foreground">{primaryResult.providerVerb || "Created in"} {primaryResult.provider}</p>}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {primaryResult.link && <a href={primaryResult.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white hover:bg-primary/90"><ExternalLink className="h-4 w-4" />{primaryResult.linkLabel || "Open result"}</a>}
-            {primaryResult.artifact?.link && <a href={primaryResult.artifact.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl border border-primary/30 px-4 py-2.5 text-sm font-medium text-primary hover:bg-primary/10"><ExternalLink className="h-4 w-4" />{primaryResult.artifact.linkLabel || "Open presentation"}</a>}
-          </div>
-        </div>
-        <div className="px-5 pb-6 sm:px-7"><ResultPreview result={primaryResult} results={results} /></div>
-        {primaryResult.artifact && <div className="flex items-center justify-between gap-3 border-t border-white/10 px-5 py-3 text-xs sm:px-7">
-          <span>Presentation · {primaryResult.artifact.title}</span>
-          <span className="text-emerald-400">{primaryResult.artifactDelivered ? "Attached and delivered" : "Created in Canva"}</span>
-        </div>}
-      </section>
+      <PrimaryResult
+        title={primaryResult.title || results.title || "Workflow result"}
+        provider={primaryResult.provider}
+        providerVerb={primaryResult.providerVerb}
+        actions={<>
+          {primaryResult.link && <a href={primaryResult.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white hover:bg-primary/90"><ExternalLink className="h-4 w-4" />{primaryResult.linkLabel || "Open result"}</a>}
+          {primaryResult.artifact?.link && <a href={primaryResult.artifact.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl border border-primary/30 px-4 py-2.5 text-sm font-medium text-primary hover:bg-primary/10"><ExternalLink className="h-4 w-4" />{primaryResult.artifact.linkLabel || "Open presentation"}</a>}
+        </>}
+        footer={artifactDelivery && <><span>Presentation · {primaryResult.artifact?.title || primaryResult.title}</span><span className="text-emerald-400">{artifactDelivery.artifactDelivered ? "Attached and delivered" : "Created in Canva"}</span></>}
+      >
+        <ResultPreview result={primaryResult} results={results} />
+      </PrimaryResult>
 
       {receipts.length > 0 && <details className="group mb-8 overflow-hidden rounded-2xl border border-white/10 bg-card/40">
         <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 marker:hidden [&::-webkit-details-marker]:hidden">

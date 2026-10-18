@@ -243,16 +243,34 @@ test("an explicit empty supporting contract does not recreate fallback receipts"
 
 test("the results UI emphasizes the artifact and tucks supporting tools away", () => {
   const source = readFileSync(new URL("../src/components/aura/ResultsView.jsx", import.meta.url), "utf8");
-  assert.equal(source.includes("Your result"), true);
+  const card = readFileSync(new URL("../src/components/aura/PrimaryResult.jsx", import.meta.url), "utf8");
+  assert.equal(card.includes("Your result"), true);
   assert.equal(source.includes("<ResultPreview result={primaryResult} results={results}"), true);
   assert.equal(source.includes("<details className=\"group mb-8"), true);
   assert.equal(source.includes("Results from other apps"), true);
-  assert.equal(source.indexOf("{metrics.length > 0") < source.indexOf("Your result"), true);
+  assert.equal(source.indexOf("<ResultsMetrics") < source.indexOf("<PrimaryResult"), true);
   assert.equal(source.indexOf("Suggested next") < source.indexOf("What would you like to do next?"), true);
   assert.equal(source.includes("Attached and delivered"), true);
   assert.equal(source.includes("View run details"), false);
   assert.equal(source.includes("Output receipts"), false);
   assert.equal(source.includes("Design ID"), false);
+});
+
+test("a finished Canva presentation is the visual result and email delivery remains secondary", () => {
+  const delivery = { kind: "email", provider: "Gmail", subject: "Your story", link: "https://mail.google.com/mail/u/0/#sent/message-1", artifactDelivered: true,
+    artifact: { kind: "presentation", title: "The fairy tale", provider: "Canva", link: "https://www.canva.com/design/design-123/edit" } };
+  const primary = selectPrimaryOutcome({ primaryResult: delivery });
+  assert.equal(primary.kind, "presentation");
+  assert.equal(primary.title, "The fairy tale");
+  assert.equal(primary.delivery, delivery);
+  const receipts = supportingReceipts({}, [
+    { status: "completed", stepKey: "design", tool: "Canva", action: "Create the story", output: { operation: "canva.presentation.create", provider_result: { designs: [{ id: "design-123" }] } } },
+    { status: "completed", stepKey: "send", tool: "Gmail", action: "Send the presentation", liveOutput: "Completed", output: { operation: "gmail.send", provider_result: { result_url: delivery.link } } },
+  ], primary, { supporting_step_keys: ["design"] });
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0].tool, "Gmail");
+  assert.equal(receipts[0].title, "Send the presentation");
+  assert.equal(receipts[0].link, delivery.link);
 });
 
 test("finished Canva work shows the exact resolved slide text and receipt-backed metrics", () => {
