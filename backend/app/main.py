@@ -7011,7 +7011,7 @@ async def list_dead_letters(
     ]
 
 
-UI_RECORD_TYPES = {"workflow", "workflow_run", "schedule", "access_request", "creator"}
+UI_RECORD_TYPES = {"workflow", "workflow_run", "schedule", "access_request", "creator", "delivery"}
 
 
 def _record_view(record: WorkspaceRecord) -> dict:

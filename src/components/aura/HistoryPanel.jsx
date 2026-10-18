@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { Check, GitBranch, Layers, Loader2, X } from "lucide-react";
 import { aura } from "@/api/auraClient";
@@ -144,6 +145,7 @@ async function reconcileDurableHistory(initialWorkflows, initialRuns) {
 }
 
 export default function HistoryPanel({ open, onClose, onRerun, onEditRun, onOpenRun, onViewResults }) {
+  const navigate = useNavigate();
   const [workflows, setWorkflows] = useState([]);
   const [runs, setRuns] = useState([]);
   const [schedules, setSchedules] = useState([]);
@@ -399,7 +401,7 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun, onOpen
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-1 border-b border-white/6 px-4 py-2">
+            <div className="grid grid-cols-3 gap-1 border-b border-white/6 px-4 py-2">
               <button
                 type="button"
                 onClick={() => setActiveTab("workflows")}
@@ -418,6 +420,7 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun, onOpen
               >
                 <GitBranch className="h-3.5 w-3.5" /> Processes
               </button>
+              <button type="button" onClick={() => { onClose(); navigate("/results"); }} className="rounded-lg px-3 py-2 text-xs text-muted-foreground hover:bg-white/5">Results</button>
             </div>
 
             <div className="flex-1 overflow-y-auto">
