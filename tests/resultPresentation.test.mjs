@@ -9,6 +9,7 @@ import {
   resultMetrics,
   selectPrimaryOutcome,
   supportingReceipts,
+  visualResultChoices,
 } from "../src/lib/resultPresentation.mjs";
 
 test("multiple Canva designs and completed exports stay reachable beside the main creative", () => {
@@ -41,6 +42,10 @@ test("read-only campaign verification shows the real reused creative without cla
   const activity = outputs.map((output) => ({ status: "completed", stepKey: output.step_key, tool: "Canva", output }));
   assert.deepEqual(resultMetrics([], activity), [{ value: "2", label: "existing creatives reviewed" }]);
   assert.equal(supportingReceipts({}, activity, primary, { supporting_step_keys: [] }).length, 1);
+  const choices = visualResultChoices(activity);
+  assert.deepEqual(choices.map((choice) => choice.key), ["square", "landscape"]);
+  assert.equal(choices[1].result.designId, "landscape");
+  assert.equal(visualResultChoices(activity.map((step) => ({ ...step, status: "failed" }))).length, 0);
 });
 
 test("saved WordPress articles use verified returned bodies instead of old planned content", () => {
