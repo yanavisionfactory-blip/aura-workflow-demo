@@ -16,11 +16,14 @@ def saved():
     return arguments, result
 
 
-async def test_exact_saved_fields_accept_existing_extra_source_metadata_without_replaying_write(monkeypatch):
+@pytest.mark.parametrize("native_keys", [False, True])
+async def test_exact_saved_fields_accept_existing_extra_source_metadata_without_replaying_write(monkeypatch, native_keys):
     unexpected = AsyncMock(side_effect=AssertionError("Do not replay or rejudge verified saved fields"))
     monkeypatch.setattr(orchestrator, "check_provider_outcome", unexpected)
     monkeypatch.setattr(orchestrator, "critique_step", unexpected)
     arguments, result = saved()
+    if native_keys:
+        result["saved_fields"] = {"rank_math_" + key: value for key, value in result["saved_fields"].items()}
     original = deepcopy(result)
     step = SimpleNamespace(tool_slug="rankmath", operation="rankmath.post_seo.update",
                            output={"provider_result": result})
@@ -30,6 +33,15 @@ async def test_exact_saved_fields_accept_existing_extra_source_metadata_without_
     assert step.output["outcome_check"]["status"] == "verified"
     assert result == original
     unexpected.assert_not_called()
+
+
+async def test_mixed_native_and_short_saved_field_names_do_not_verify():
+    arguments, result = saved()
+    result["saved_fields"]["rank_math_title"] = result["saved_fields"].pop("title")
+    step = SimpleNamespace(tool_slug="rankmath", operation="rankmath.post_seo.update", output={})
+    decision = await orchestrator.review_recorded_result(None, None, step, None, {"arguments": arguments}, result)
+    assert decision.action == "escalate"
+    assert "outcome_check" not in step.output
 
 
 @pytest.mark.parametrize("bad", ["wrong_post", "published", "unverified", "missing_field", "changed_field", "extra_saved_field"])

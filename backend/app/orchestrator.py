@@ -2095,6 +2095,10 @@ async def review_recorded_result(session, run, step, snapshot, contract, result)
         arguments = contract.get("arguments", {})
         fields = ("title", "description", "focus_keyword")
         saved = result.get("saved_fields") if isinstance(result, dict) else None
+        # The installed bridge returns WordPress meta keys. Older adapters
+        # returned the short names. Accept exactly one complete known shape.
+        if isinstance(saved, dict) and set(saved) == {"rank_math_" + field for field in fields}:
+            saved = {field: saved["rank_math_" + field] for field in fields}
         if (isinstance(result, dict) and result.get("verified") is True
                 and type(result.get("post_id")) is int
                 and result["post_id"] == arguments.get("post_id")

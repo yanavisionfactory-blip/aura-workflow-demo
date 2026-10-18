@@ -27,6 +27,13 @@ class WordPressPluginError(ValueError):
     pass
 
 
+class WordPressHostLimitError(WordPressPluginError):
+    status_code = 429
+
+    def __init__(self):
+        super().__init__("The demonstration host reached its hourly usage limit. AURA will check again automatically; your saved work is preserved.")
+
+
 def provider_slug(value: str) -> str:
     return "rankmath" if value in {"rank-math", "rank-math-seo"} else value
 
@@ -238,6 +245,10 @@ async def _wordpress_request(parent, method: str, path: str, body: dict | None =
                 json=body,
                 headers={"Accept": "application/json"},
             )
+        if ("json" not in response.headers.get("content-type", "").casefold()
+                and "db limits reached:" in response.text[:2000].casefold()
+                and "max_connections_per_hour" in response.text[:2000].casefold()):
+            raise WordPressHostLimitError()
         if response.status_code == 404:
             raise WordPressPluginError(
                 "Install and activate AURA SEO Bridge on the connected WordPress site"

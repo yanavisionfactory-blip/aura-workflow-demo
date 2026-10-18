@@ -174,11 +174,13 @@ async def _connection_credentials(
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
     """Return credentials, verification and a human blocker when one is required."""
     if tool.config.get("managed_by") == "wordpress_plugin":
-        from .wordpress_plugins import WordPressPluginError, verify
+        from .wordpress_plugins import WordPressHostLimitError, WordPressPluginError, verify
         from .wordpress_plugins import manifest as plugin_manifest
 
         try:
             verification = await verify(session, tool)
+        except WordPressHostLimitError:
+            raise  # A host quota is temporary; the existing account stays valid.
         except (WordPressPluginError, PipedreamConnectError):
             return None, None, _blocker(
                 "connection_unusable", f"{tool.display_name} is unavailable on the connected WordPress site.",
@@ -462,10 +464,10 @@ async def _connection_credentials(
     return credentials, verification, None
 
 
-async def _schedule_retry(session, run, report: dict, message: str) -> PreflightOutcome:
+async def _schedule_retry(session, run, report: dict, message: str, *, minimum_delay=0) -> PreflightOutcome:
     state = recovery_mapping((run.execution_context or {}).get("__aura_preflight__"))
     attempt = recovery_counter(state.get("attempt")) + 1
-    delay = min(120, 5 * 2 ** min(attempt - 1, 5))
+    delay = max(minimum_delay, min(120, 5 * 2 ** min(attempt - 1, 5)))
     available_at = _now() + timedelta(seconds=delay)
     report.update(
         status="retrying",
@@ -718,6 +720,10 @@ async def preflight_approved_run(session, run, steps: list[Any]) -> PreflightOut
                 }
             )
     except Exception as exc:  # noqa: BLE001 - classification decides durable retry vs handoff
+        from .wordpress_plugins import WordPressHostLimitError
+
+        if isinstance(exc, WordPressHostLimitError):
+            return await _schedule_retry(session, run, report, str(exc), minimum_delay=300)
         failure = classify_failure(exc, read=True)
         if failure.retryable or str(exc) == "provider_temporarily_unavailable":
             return await _schedule_retry(

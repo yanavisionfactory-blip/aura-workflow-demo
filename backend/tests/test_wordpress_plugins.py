@@ -7,11 +7,20 @@ import pytest
 from jsonschema import ValidationError
 from sqlalchemy import select
 
-from app import main, orchestrator
+from app import execution_preflight, main, orchestrator
 from app import wordpress_plugins as wp
 from app.agent_runtime import deterministic_plan_fixes, normalize_plan_graph
 from app.config import Settings
-from app.models import CapabilityManifest, ToolConnection, ToolKind, Workspace
+from app.models import (
+    CapabilityManifest,
+    DispatchIntent,
+    RunStatus,
+    RunStep,
+    ToolConnection,
+    ToolKind,
+    WorkflowRun,
+    Workspace,
+)
 from app.pipedream_connect import PipedreamClient, PipedreamConnectError
 from app.schemas import WorkflowPlan
 
@@ -154,6 +163,53 @@ async def test_imagify_requires_verified_key_and_not_just_installed_plugin(wordp
     async with wordpress() as session:
         with pytest.raises(wp.WordPressPluginError, match="API key"):
             await wp.connect(session, "w", "imagify")
+
+
+async def test_host_limit_preserves_verified_connection_and_schedules_only_preflight(wordpress, monkeypatch):
+    monkeypatch.setattr(wp, "_wordpress_request", AsyncMock(return_value=bridge_status()))
+    async with wordpress() as session:
+        tool = await wp.connect(session, "w", "rankmath")
+        manifest = await session.scalar(select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id))
+        monkeypatch.setattr(wp, "verify", AsyncMock(side_effect=wp.WordPressHostLimitError()))
+        result = await main.test_connection(tool.id, main.TenantContext("w", "owner", "owner"), session)
+        assert result["status"] == "retrying" and result["verification"]["retryable"]
+        assert tool.enabled and manifest.status == "verified"
+        plan = WorkflowPlan.model_validate({"name": "Read saved SEO", "interpretation": "Verify existing metadata", "steps": [{
+            "key": "read", "agent": "SEO", "tool_slug": "rankmath", "operation": "rankmath.post_seo.get",
+            "arguments": {"post_id": 11}, "reason": "Read saved SEO", "expected_output": "Actual saved fields"}]})
+        run = WorkflowRun(id="quota-run", workspace_id="w", prompt="Read saved SEO", plan=plan.model_dump(),
+                          plan_approved=True, status=RunStatus.running, execution_context={})
+        step = RunStep(run_id=run.id, position=0, step_key="read", agent="SEO", tool_slug="rankmath",
+                       operation="rankmath.post_seo.get", arguments={"post_id": 11}, idempotency_key="quota-read")
+        session.add_all([run, step])
+        await session.commit()
+        provider = AsyncMock()
+        monkeypatch.setattr(execution_preflight.ProviderExecutor, "execute", provider)
+        outcome = await execution_preflight.preflight_approved_run(session, run, [step])
+        assert outcome.status == "retrying" and run.status == RunStatus.running
+        assert "__aura_blocker__" not in run.execution_context
+        assert tool.enabled and manifest.status == "verified"
+        intent = await session.scalar(select(DispatchIntent).where(DispatchIntent.run_id == run.id))
+        assert (intent.available_at.replace(tzinfo=UTC) - datetime.now(UTC)).total_seconds() >= 295
+        assert "hourly usage limit" in run.execution_context["__aura_preflight__"]["message"]
+        provider.assert_not_called()
+
+
+@pytest.mark.parametrize("code", [200, 500])
+async def test_host_hourly_limit_is_sanitized_and_recognized_even_in_html(monkeypatch, code):
+    broker = SimpleNamespace(wordpress_account_credentials=AsyncMock(return_value={
+        "url": "https://demo.example", "username": "demo", "application_password": "private-secret"}))
+    monkeypatch.setattr(wp, "pipedream_client", lambda: broker)
+    monkeypatch.setattr(wp, "validate_public_endpoint", lambda url: None)
+    original = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda request: httpx.Response(code,
+        text="App: db limits reached: max_connections_per_hour private-upstream-details"))
+    monkeypatch.setattr(wp.httpx, "AsyncClient", lambda **kw: original(transport=transport, **kw))
+    parent = SimpleNamespace(config={"external_user_id": "owner", "account_id": "account"}, external_connection_id=None)
+    with pytest.raises(wp.WordPressHostLimitError) as failure:
+        await wp._wordpress_request(parent, "GET", "/status")
+    assert failure.value.status_code == 429
+    assert "private" not in str(failure.value)
 
 
 async def test_parent_is_workspace_bound_and_revocation_blocks_execution(wordpress, monkeypatch):

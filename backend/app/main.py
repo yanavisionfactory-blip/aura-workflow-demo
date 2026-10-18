@@ -3777,6 +3777,12 @@ async def test_connection(
     if tool.config.get("managed_by") == "wordpress_plugin":
         try:
             result = await wordpress_plugins.verify(session, tool)
+        except wordpress_plugins.WordPressHostLimitError as exc:
+            # A temporary host quota must not revoke a previously verified
+            # grant or send the user through an unnecessary account reconnect.
+            return {"id": tool.id, "status": "retrying", "verification": {
+                "ok": False, "reason": str(exc), "retryable": True,
+            }}
         except (wordpress_plugins.WordPressPluginError, PipedreamConnectError) as exc:
             result = {"ok": False, "reason": str(exc), "retryable": False}
         manifest.verification = result
