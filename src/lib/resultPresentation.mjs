@@ -188,7 +188,14 @@ export function providerForOutcome(outcome = {}) {
 }
 
 export function selectPrimaryOutcome(results = {}) {
-  if (results.primaryResult) return results.primaryResult;
+  if (results.primaryResult) {
+    // Delivery is a supporting action. Keep the finished presentation visible
+    // even when the execution summary records email as its final step.
+    if (results.primaryResult.artifact?.kind === "presentation") {
+      return { ...results.primaryResult.artifact, delivery: results.primaryResult };
+    }
+    return results.primaryResult;
+  }
   const outcomes = (results.outcomes || []).filter((outcome) => !outcome.attention);
   if (!outcomes.length) {
     return {
@@ -220,7 +227,9 @@ export function supportingReceipts(results = {}, activity = [], primary = null, 
   const supportingKeys = new Set(presentation?.supporting_step_keys || []);
   const completed = activity
     .filter((step) => step.status === "completed")
-    .filter((step) => !hasCompiledSelection || supportingKeys.has(step.stepKey || step.key))
+    .filter((step) => !hasCompiledSelection || supportingKeys.has(step.stepKey || step.key)
+      || (primary?.delivery && step.output?.operation === "gmail.send"))
+    .filter((step) => !primary?.delivery || step.output?.operation !== "canva.presentation.create")
     .filter((step) => hasCompiledSelection
       || !primaryProvider
       || String(step.tool || "").toLowerCase() !== primaryProvider)
@@ -235,16 +244,23 @@ export function supportingReceipts(results = {}, activity = [], primary = null, 
         || (designId ? `https://www.canva.com/design/${encodeURIComponent(designId)}/edit` : null)
         || (isDocumentCreate(operation) ? documentUrl(providerResult) : null)
         || (operation === "mailchimp.audiences.list" ? mailchimpAudienceLink(providerResult) : null);
-      const tool = step.tool || "AURA";
+      const tool = operation === "gmail.send" ? "Gmail" : step.tool || "AURA";
       return {
         key: `${step.stepKey || step.key || tool}:${step.action || step.liveOutput || "completed"}`,
         tool,
-        title: cleanReceiptText(step.liveOutput) || cleanReceiptText(step.action) || "Completed",
+        title: /^(?:completed|done|success(?:ful)?)\.?$/i.test(cleanReceiptText(step.liveOutput))
+          ? cleanReceiptText(step.action) || "Completed"
+          : cleanReceiptText(step.liveOutput) || cleanReceiptText(step.action) || "Completed",
         link,
         linkLabel: link ? `View in ${tool}` : null,
         preview: operation === "mailchimp.audiences.list" ? audiencePreview(providerResult) : [],
       };
     });
+
+  if (primary?.delivery && !completed.some((receipt) => receipt.tool.toLowerCase() === "gmail")) {
+    completed.push({ key: "presentation-delivery", tool: "Gmail", title: primary.delivery.subject || "Email sent",
+      link: safeHttpsUrl(primary.delivery.link), linkLabel: "View in Gmail", preview: [] });
+  }
 
   if (hasCompiledSelection || completed.length) {
     return completed.filter((receipt, index, all) =>

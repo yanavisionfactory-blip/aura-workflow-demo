@@ -662,7 +662,7 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
     && Object.keys(args.fields || {}).every((key) => ["description", "summary", "labels"].includes(key));
   const documentTitleKey = ["title", "name", "summary"].find((key) => Object.hasOwn(args, key));
   const documentBodyKey = ["body", "content", "description", "children"].find((key) => Object.hasOwn(args, key));
-  const [editing, setEditing] = useState(() => richPresentation || richDocument || richJiraBatch);
+  const [editing, setEditing] = useState(() => richPresentation || richDocument || richJiraBatch || richArticle);
   const updateArguments = (nextArguments) => onUpdate(index, {
     arguments: nextArguments,
     resolvedArguments: nextArguments,
