@@ -342,6 +342,35 @@ def test_google_docs_read_exposes_provider_confirmed_text_for_later_draft():
     )
 
 
+@pytest.mark.parametrize("operation", ["google-docs.create-document", "google-docs.get-document"])
+def test_google_docs_receipt_binds_downstream_readback_to_the_returned_document(operation):
+    receipt = {"id": "transport-id", "ret": {"documentId": "doc-created_1", "title": "Results"}}
+    context = {"steps": {"step3": step_context_value(receipt, operation)}}
+
+    assert resolve_value({"documentId": "{{steps.step3.documentId}}"}, context) == {
+        "documentId": "doc-created_1",
+    }
+    assert context["steps"]["step3"]["id"] == "transport-id"
+    assert context["steps"]["step3"]["provider_result"] == receipt
+    assert "documentId" not in receipt
+
+
+@pytest.mark.parametrize("returned", [None, {}, {"documentId": ""}, {"documentId": 123},
+                                    {"documentId": "https://example.com/doc"},
+                                    [{"documentId": "one"}, {"documentId": "two"}]])
+def test_google_docs_readback_never_guesses_a_missing_or_ambiguous_document(returned):
+    value = step_context_value({"id": "transport-id", "ret": returned},
+                               "google-docs.create-document")
+    with pytest.raises(WorkflowContextError):
+        resolve_value("{{steps.create.documentId}}", {"steps": {"create": value}})
+
+
+def test_document_receipt_alias_is_not_applied_to_unrelated_operations():
+    value = step_context_value({"ret": {"documentId": "not-a-doc-result"}}, "other.create")
+    with pytest.raises(WorkflowContextError):
+        resolve_value("{{steps.create.documentId}}", {"steps": {"create": value}})
+
+
 def test_missing_resource_id_never_falls_back_to_an_unrelated_id():
     import pytest
 
