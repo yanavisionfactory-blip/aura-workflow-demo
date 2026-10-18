@@ -446,10 +446,15 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
     && !/\{\{[^}]+\}\}/.test(docBody)
     ? { title: docArguments.title || context.title || "Document", body: docBody }
     : null;
+  const operation = String(linked?.operation || "");
+  const providerVerb = /[.-]update(?:[.-]|$)/.test(operation) ? "Updated in"
+    : /[.-](?:get|read|search|list)(?:[.-]|$)/.test(operation) ? "Checked in"
+    : /[.-]create(?:[.-]|$)/.test(operation) ? "Created in" : "Result from";
   return {
     title: docPreview?.title || context.title || "Workflow result",
     detail: readableResultText(context.deliverable || context.summary || "AURA completed the workflow."),
     provider,
+    providerVerb,
     kind: docPreview ? "document" : "result",
     preview: docPreview,
     link,
