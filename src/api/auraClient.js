@@ -6,6 +6,7 @@ const TYPE_MAP = {
   Schedule: "schedule",
   AccessRequest: "access_request",
   Creator: "creator",
+  Delivery: "delivery",
 };
 
 function matches(record, filter = {}) {

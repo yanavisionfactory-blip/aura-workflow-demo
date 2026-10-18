@@ -19,6 +19,7 @@ def test_all_frontend_record_types_are_workspace_scoped() -> None:
         "schedule",
         "access_request",
         "creator",
+        "delivery",
     }
     assert "workspace_id" in WorkspaceRecord.__table__.columns
     assert "workspace_records" in DIRECT_TENANT_TABLES
@@ -42,11 +43,12 @@ def test_production_checks_require_legacy_tokens_off(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
-async def test_workspace_record_cannot_be_read_from_another_workspace() -> None:
+@pytest.mark.parametrize("record_type", ["workflow", "delivery"])
+async def test_workspace_record_cannot_be_read_from_another_workspace(record_type) -> None:
     record = WorkspaceRecord(
         id="workflow-1",
         workspace_id="workspace-a",
-        record_type="workflow",
+        record_type=record_type,
         data={"name": "Private workflow"},
     )
 
@@ -56,7 +58,7 @@ async def test_workspace_record_cannot_be_read_from_another_workspace() -> None:
 
     with pytest.raises(HTTPException) as error:
         await get_workspace_record(
-            "workflow",
+            record_type,
             "workflow-1",
             TenantContext(
                 workspace_id="workspace-b",
