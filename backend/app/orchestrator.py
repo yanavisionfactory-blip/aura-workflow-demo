@@ -1189,7 +1189,20 @@ def explicit_disconnected_capabilities(prompt: str, inventory: list[dict]) -> li
             # (displayed as Gmail). Exact app grants are checked by preflight.
             aliases.discard("google")
             aliases.add("google workspace")
-        if any(alias and f" {alias} " in text for alias in aliases):
+        # A constraint such as "No Slack or email messages" is not a request
+        # to connect Slack. Keep genuine positive mentions actionable.
+        negative_prefix = re.compile(
+            r"\b(?:no|without|exclude|excluding|omit|skip|never use|"
+            r"do not (?:use|connect|include)|don t (?:use|connect|include)) "
+            r"(?:(?:any|new|additional|the|a|an) )*$"
+        )
+        if any(
+            alias and any(
+                not negative_prefix.search(text[:match.start()].rstrip() + " ")
+                for match in re.finditer(rf"(?<!\w){re.escape(alias)}(?!\w)", text)
+            )
+            for alias in aliases
+        ):
             missing.append(family)
             seen_families.add(family)
     return missing
@@ -1907,9 +1920,12 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 run.id,
                 type(exc).__name__,
             )
-            missing = explicit_disconnected_capabilities(
-                run.prompt, requirement_inventory
-            )
+            failure_category = planning_failure_category(exc)
+            # A failed model call cannot establish that connecting a catalog
+            # app would help. In particular, do not hide exhausted AI credits
+            # behind an unrelated account-authorization prompt.
+            missing = ([] if failure_category == "operator_quota" else
+                       explicit_disconnected_capabilities(run.prompt, requirement_inventory))
             missing = [item for item in missing if capability_family(item) not in excluded_families]
             if missing:
                 for capability in missing:
@@ -1967,7 +1983,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 await session.commit()
                 return
             if (get_settings().planner_mode == "llm"
-                    and planning_failure_category(exc) != "operator_quota"):
+                    and failure_category != "operator_quota"):
                 # A direct model response that failed deterministic validation
                 # must not enter the agent-style supervisor retry loop. Leave
                 # the visible proposal intact and offer an explicit retry.
