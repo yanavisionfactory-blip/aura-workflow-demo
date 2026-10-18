@@ -2081,6 +2081,31 @@ async def review_recorded_result(session, run, step, snapshot, contract, result)
     ) + incomplete_evidence(step.operation, result, contract.get("required_evidence", []))
     if errors:
         return CriticDecision(action="escalate", reasons=errors)
+    if getattr(step, "tool_slug", "") == "rankmath" and step.operation == "rankmath.post_seo.update":
+        # The first-party bridge saves only these three approved fields and
+        # reads each back before returning this receipt. Other RankMath fields
+        # are existing source data, not additional writes or generated claims.
+        arguments = contract.get("arguments", {})
+        fields = ("title", "description", "focus_keyword")
+        saved = result.get("saved_fields") if isinstance(result, dict) else None
+        if (isinstance(result, dict) and result.get("verified") is True
+                and type(result.get("post_id")) is int
+                and result["post_id"] == arguments.get("post_id")
+                and result.get("post_status") in {"draft", "pending", "private"}
+                and isinstance(saved, dict) and set(saved) == set(fields)
+                and all(isinstance(arguments.get(field), str)
+                        and saved[field] == arguments[field] for field in fields)):
+            step.output = {**step.output, "outcome_check": {
+                "status": "verified", "mode": "rankmath_bridge_saved_fields",
+                "operation": step.operation, "resource_id": str(result["post_id"]),
+                "observed": {"post_id": result["post_id"], "saved_fields": dict(saved)},
+            }}
+            return CriticDecision(action="accept", reasons=[
+                "The bridge read back all three approved RankMath fields on the exact unpublished post"
+            ])
+        return CriticDecision(action="escalate", reasons=[
+            "RankMath saved-field receipt does not verify the exact approved post and metadata"
+        ])
     if (step.operation == "wordpress-org.search-posts" and isinstance(result, dict)
             and result.get("aura_transport") == "authenticated_wordpress_rest"):
         from .wordpress_rest import WordPressRESTError, post_collection_evidence, post_evidence
