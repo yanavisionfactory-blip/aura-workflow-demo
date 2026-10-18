@@ -24,6 +24,11 @@ _EMPTY_PROSE = re.compile(
     r"(?:^|\n)\s*(?:\.{3,}|…)\s*(?=$|\n)",
     re.IGNORECASE,
 )
+_COMPOSITION_RECEIPT = re.compile(
+    r"\[\s*(?:prepared|generated|composed)\s+(?:the\s+)?(?:exact\s+)?(?:complete\s+)?"
+    r"[^\]]{0,500}\b(?:revision|article|body|content)\b[^\]]{0,500}\]",
+    re.IGNORECASE,
+)
 _RECIPIENT_PLACEHOLDER = re.compile(
     r"^(?:(?:your|my|the)\s+)?connected\s+(?:gmail|email)\s+address$|"
     r"^(?:the\s+)?recipient(?:'s)?\s+email(?:\s+address)?$",
@@ -63,7 +68,8 @@ def unfinished_action_content(operation: str, arguments: dict) -> bool:
         isinstance(arguments.get(field), str)
         and (_UNFINISHED_CONTENT.search(arguments[field])
              or _PROMISED_CONTENT.search(arguments[field])
-             or _EMPTY_PROSE.search(arguments[field]))
+             or _EMPTY_PROSE.search(arguments[field])
+             or _COMPOSITION_RECEIPT.search(arguments[field]))
         for field in fields
     )
 

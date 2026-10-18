@@ -51,3 +51,8 @@ def test_nested_handoff_and_metadata_must_be_finished_before_review():
     with pytest.raises(ValueError, match="fields.description"):
         validate_composed_content(step, {"fields": {}})
     validate_composed_content(step, {"fields": {"description": jira_description("Finished report")}})
+
+
+def test_a_claim_that_content_was_prepared_cannot_replace_the_actual_article():
+    body = '<h1>Plano guide</h1><p>[Prepared exact complete 604-word Plano revision from the Google Doc section in semantic HTML.]</p>'
+    assert unfinished_action_content("wordpress-org.update-post", {"content": body})
