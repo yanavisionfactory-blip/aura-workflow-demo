@@ -3540,7 +3540,20 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         release_id = (active_tool.config or {}).get(
                             "connector_release_id"
                         )
-                        if (
+                        if active_tool.config.get("managed_by") == "wordpress_plugin":
+                            from .wordpress_plugins import execute as execute_wordpress_plugin
+                            from .wordpress_plugins import manifest as wordpress_plugin_manifest
+
+                            arguments, capability = _prepare_provider_arguments(
+                                wordpress_plugin_manifest(active_tool.slug), operation, arguments
+                            )
+                            confirm_provider_arguments(arguments)
+                            await mark_provider_dispatched()
+                            result = await asyncio.wait_for(
+                                execute_wordpress_plugin(session, active_tool, operation, arguments),
+                                timeout=execution_timeout,
+                            )
+                        elif (
                             active_tool.config.get("managed_by") == "pipedream"
                             and broker_pack_id
                         ):

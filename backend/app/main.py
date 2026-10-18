@@ -20,6 +20,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from . import wordpress_plugins
 from .agent_runtime import is_governed_derivative_step
 from .approval_readiness import unfinished_action_content
 from .approval_review import (
@@ -1418,6 +1419,7 @@ async def managed_connector_status(
                 "connectable": backend is not None,
             }
         )
+    native_catalog.extend(await wordpress_plugins.catalog(session, context.workspace_id))
     dynamic_catalog = [
         {
             **release_descriptor(release),
@@ -1593,10 +1595,15 @@ async def search_connector_broker_apps(
             [
                 str(item.get("provider") or ""),
                 str(item.get("display_name") or ""),
+                *[str(value) for value in item.get("aliases") or []],
                 *[str(value) for value in item.get("categories") or []],
             ]
         ).casefold()
         return query in haystack
+
+    for item in await wordpress_plugins.catalog(session, context.workspace_id):
+        if matches(item):
+            entries[item["provider"]] = item
 
     for slug, definition in PROVIDERS.items():
         native_backend = "nango" if nango.configured else None
@@ -2476,6 +2483,27 @@ async def create_connector_broker_session(
 ) -> dict:
     """Select the best connector plane and return only a short-lived browser grant."""
     provider = requested_marketplace_entry(provider)["provider"]
+    provider = wordpress_plugins.provider_slug(provider)
+    if provider in wordpress_plugins.PROVIDERS:
+        try:
+            tool = await wordpress_plugins.connect(
+                session, context.workspace_id, provider, connection_id
+            )
+        except (wordpress_plugins.WordPressPluginError, PipedreamConnectError) as exc:
+            raise HTTPException(409, str(exc)) from None
+        resumed = await _satisfy_matching_connection_requirements(session, context, tool)
+        session.add(AuditEvent(
+            workspace_id=context.workspace_id, actor=context.subject,
+            event_type="connector.wordpress_plugin_connected",
+            payload={"provider": provider, "tool_id": tool.id},
+        ))
+        await session.commit()
+        if resumed:
+            await dispatch_pending(context.workspace_id)
+        return {"backend": "wordpress_plugin", "provider": provider,
+            "already_connected": True, "connected": True,
+            "connection_id": tool.id, "tool_connection_id": tool.id,
+            "resumed_run_ids": sorted(resumed)}
     nango = managed_connector_client()
     selected_tool = None
     if connection_id:
@@ -3746,6 +3774,20 @@ async def test_connection(
     )
     if not manifest:
         raise HTTPException(409, "Connection has no discovered capability manifest")
+    if tool.config.get("managed_by") == "wordpress_plugin":
+        try:
+            result = await wordpress_plugins.verify(session, tool)
+        except (wordpress_plugins.WordPressPluginError, PipedreamConnectError) as exc:
+            result = {"ok": False, "reason": str(exc), "retryable": False}
+        manifest.verification = result
+        manifest.status = "verified" if result.get("ok") else "degraded"
+        manifest.verified_at = datetime.now(UTC)
+        tool.enabled = bool(result.get("ok"))
+        if result.get("ok"):
+            manifest.manifest = wordpress_plugins.manifest(tool.slug)
+            tool.allowed_operations = [item["name"] for item in manifest.manifest["capabilities"]]
+        await session.commit()
+        return {"id": tool.id, "status": manifest.status, "verification": result}
     if tool.config.get("managed_by") == "pipedream":
         pack_id = (tool.config or {}).get("capability_pack_id")
         pack = await session.get(BrokerCapabilityPack, pack_id) if pack_id else None
@@ -3944,6 +3986,13 @@ async def disconnect_connection(
             _pipedream_tool_vendor_app(tool),
         )
         shared = [item for item in family if _pipedream_account_id(item) == account_id]
+        parent_ids = {item.id for item in shared or [tool]}
+        plugin_connections = (await session.scalars(select(ToolConnection).where(
+            ToolConnection.workspace_id == context.workspace_id,
+        ))).all()
+        shared.extend(item for item in plugin_connections
+            if (item.config or {}).get("managed_by") == "wordpress_plugin"
+            and item.config.get("parent_connection_id") in parent_ids)
         try:
             if not account_id:
                 raise PipedreamConnectError("Account reference is missing", retryable=False)

@@ -173,6 +173,24 @@ async def _connection_credentials(
     manifest: CapabilityManifest,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
     """Return credentials, verification and a human blocker when one is required."""
+    if tool.config.get("managed_by") == "wordpress_plugin":
+        from .wordpress_plugins import WordPressPluginError, verify
+        from .wordpress_plugins import manifest as plugin_manifest
+
+        try:
+            verification = await verify(session, tool)
+        except (WordPressPluginError, PipedreamConnectError):
+            return None, None, _blocker(
+                "connection_unusable", f"{tool.display_name} is unavailable on the connected WordPress site.",
+                action="reconnect_account", tool_slug=tool.slug, connection_id=tool.id,
+            )
+        manifest.manifest = plugin_manifest(tool.slug)
+        manifest.verification = verification
+        manifest.verified_at = _now()
+        manifest.status = "verified"
+        tool.allowed_operations = allowed_operations(manifest.manifest)
+        tool.enabled = True
+        return {}, verification, None
     if tool.config.get("managed_by") == "aura":
         # AURA Intelligence is an in-process, connection-free catalog. Its live
         # probe is the currently imported runtime manifest rather than an HTTP
