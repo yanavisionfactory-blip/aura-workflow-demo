@@ -284,6 +284,11 @@ def step_context_value(
         value = {"output": result, "result": result, "provider_result": result}
     else:
         value = dict(result)
+        if (operation == "wordpress-org.search-posts"
+                and result.get("aura_transport") == "authenticated_wordpress_rest"):
+            from .wordpress_rest import post_collection_evidence
+
+            value["__aura_derived_post_evidence__"] = post_collection_evidence(result, arguments or {})
         value.setdefault("output", result)
         value.setdefault("result", result)
         value.setdefault("provider_result", evidence)
