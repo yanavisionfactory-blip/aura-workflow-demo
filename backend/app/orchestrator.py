@@ -933,13 +933,17 @@ async def _create_compiled_plan(
     # first-draft templates match the original request and would silently
     # discard a later instruction (for example, changing one to two slides).
     reviewed_revision = "The user reviewed the proposed workflow and requested this change:" in prompt
-    audited_plan = None if reviewed_revision or get_settings().planner_mode == "llm" else (
-        pilot_template(prompt, inventory)
-        or mailchimp_canva_pilot_template(prompt, inventory)
-        or creator_outreach_template(prompt, inventory)
-        or weather_presentation_template(prompt, inventory)
-        or notion_to_jira_template(prompt, inventory)
-    )
+    from .agency_workflow import agency_workflow_recipe
+
+    audited_plan = await agency_workflow_recipe(prompt, inventory, manifests_by_slug)
+    if audited_plan is None:
+        audited_plan = None if reviewed_revision or get_settings().planner_mode == "llm" else (
+            pilot_template(prompt, inventory)
+            or mailchimp_canva_pilot_template(prompt, inventory)
+            or creator_outreach_template(prompt, inventory)
+            or weather_presentation_template(prompt, inventory)
+            or notion_to_jira_template(prompt, inventory)
+        )
     if audited_plan is not None:
         reject_excluded_steps(audited_plan)
         _normalize_planned_steps(audited_plan, manifests_by_slug)
