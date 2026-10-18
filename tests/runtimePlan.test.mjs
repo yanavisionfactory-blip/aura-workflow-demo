@@ -77,3 +77,13 @@ test("a requested plan change includes the reviewed actions and dependencies", (
   assert.match(prompt, /"depends_on":\["read"\]/);
   assert.match(prompt, /do not repeat the previous plan unchanged/);
 });
+
+test("revisions preserve the executable provider instead of its display label", () => {
+  for (const provider of [{ tool_slug: "google" }, { toolSlug: "google" }]) {
+    const prompt = planningRequestPrompt("Save a review draft", "Omit LinkedIn", [
+      { tool: "Google Docs", ...provider, operation: "docs.create", consequential: true },
+    ]);
+    assert.match(prompt, /"tool":"google","operation":"docs.create"/);
+    assert.doesNotMatch(prompt, /"tool":"Google Docs"/);
+  }
+});

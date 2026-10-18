@@ -232,6 +232,37 @@ def test_complete_requirements_include_every_explicit_missing_provider() -> None
     ) == ["linear", "slack"]
 
 
+def test_compiled_export_review_does_not_require_accounts_named_only_as_topics():
+    inventory = [
+        {"slug": "google", "name": "Google Drive", "connected": True,
+         "allowed_operations": ["drive.search"]},
+        {"slug": "google-docs", "name": "Google Docs", "connected": True,
+         "allowed_operations": ["google-docs.create-document"]},
+        {"slug": "google-my-business", "name": "Google Business Profile", "connected": False},
+        {"slug": "linkedin", "name": "LinkedIn", "connected": False},
+    ]
+    prompt = "Review supplied Google Business Profile and LinkedIn exports in a Google Doc."
+    plan = WorkflowPlan(name="Review", interpretation=prompt, steps=[
+        PlanStep(key="sources", agent="reader", tool_slug="google", operation="drive.search",
+                 reason="Find supplied reports", expected_output="Source files"),
+        PlanStep(key="draft", agent="writer", tool_slug="google-docs",
+                 operation="google-docs.create-document", reason="Save review draft",
+                 expected_output="Draft", consequential=True),
+    ])
+    assert complete_connection_requirements(prompt, [], inventory) == ["google-my-business", "linkedin"]
+    assert complete_connection_requirements(
+        prompt, ["linkedin"], inventory, compiled_plan=plan,
+    ) == []
+    plan.steps.insert(1, PlanStep(
+        key="live", agent="reader", tool_slug="linkedin", operation="linkedin.get-report",
+        reason="Read live results", expected_output="Report",
+        fallback_tool_slug="google-my-business", fallback_operation="google-my-business.get-report",
+    ))
+    assert complete_connection_requirements(
+        prompt, [], inventory, compiled_plan=plan,
+    ) == ["google-my-business", "linkedin"]
+
+
 def test_complete_requirements_collapse_routes_and_reuse_connected_family() -> None:
     disconnected = [
         {

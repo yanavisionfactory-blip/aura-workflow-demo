@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight, ExternalLink, MailCheck, Presentation } from
 import BreakdownTable from "./BreakdownTable";
 import ArticleResultPreview from "./ArticleResultPreview";
 import ReactMarkdown from "react-markdown";
+import { documentMarkdownOptions } from "@/lib/documentMarkdown.mjs";
 import CampaignDocumentPreview from "./CampaignDocumentPreview";
 import { campaignCopySections } from "@/lib/campaignCopySections.mjs";
 import { readableResultText } from "@/lib/resultPresentation.mjs";
@@ -108,10 +109,17 @@ export default function ResultPreview({ result, results }) {
   }
   const campaign = result.kind === "document" && result.preview && campaignCopySections(result.preview.body);
   if (campaign) return <CampaignDocumentPreview preview={result.preview} groups={campaign} />;
-  if (result.kind === "document" && result.preview) return (
+  if (["document", "report"].includes(result.kind) && result.preview) return (
     <div className="mx-auto max-w-3xl rounded-2xl border border-white/10 bg-[#f8fafc] px-6 py-8 text-[#1e293b] shadow-lg sm:px-12 sm:py-12">
       <h4 className="mb-6 text-2xl font-semibold">{result.preview.title}</h4>
-      <div className="aura-article-preview text-sm leading-7"><ReactMarkdown>{result.preview.body}</ReactMarkdown></div>
+      <div className="aura-article-preview text-sm leading-7"><ReactMarkdown {...documentMarkdownOptions}>{result.preview.body}</ReactMarkdown></div>
+      {result.kind === "report" && result.preview.sources?.length > 0 && <details className="mt-6 border-t border-slate-200 pt-4">
+        <summary className="cursor-pointer font-semibold">Supplied source inputs ({result.preview.sources.length})</summary>
+        {result.preview.sources.map((source) => <section key={source.id} className="mt-4 rounded-xl bg-slate-100 p-4">
+          <h5 className="font-semibold">[{source.id}] {source.title}</h5>
+          <p className="mt-2 whitespace-pre-wrap text-xs leading-6">{source.content}</p>
+        </section>)}
+      </details>}
     </div>
   );
   if (results.breakdown) return <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#0c1422]"><BreakdownTable breakdown={results.breakdown} /></div>;

@@ -20,6 +20,14 @@ PAGE = {"type": "object", "required": ["id", "properties"], "properties": {
     "id": TEXT, "object": {"const": "page"}, "url": TEXT, "properties": OBJECT,
     "parent": OBJECT, "archived": {"type": "boolean"}, "in_trash": {"type": "boolean"}}}
 KNOWN = {
+    "report.compose": ({
+        "type": "object", "required": ["title", "summary", "body", "status", "synthetic", "sources"],
+        "properties": {
+            "title": TEXT, "summary": TEXT, "body": {"type": "string", "minLength": 100},
+            "status": {"const": "draft"}, "synthetic": {"type": "boolean"},
+            "sources": {"type": "array", "minItems": 1, "items": OBJECT},
+        },
+    }, ["report_body", "supplied_source_evidence"]),
     "notion.search": ({**COLLECTION, "properties": {**COLLECTION["properties"],
         "results": {"type": "array", "items": {"type": "object", "required": ["id"],
             "properties": {"id": TEXT, "properties": OBJECT, "url": TEXT}}}}}, ["resource_metadata"]),

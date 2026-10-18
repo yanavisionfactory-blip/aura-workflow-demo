@@ -206,6 +206,12 @@ def intent_bounded_tool_inventory(
             if "weather.forecast" in (item.get("allowed_operations") or [])
         )
 
+    if "report.compose" in original or re.search(
+        r"\b(?:report|review|analysis)\b.{0,100}\b(?:in|inside) aura\b", original,
+    ):
+        selected.update(index for index, item in enumerate(inventory)
+                        if "report.compose" in item.get("allowed_operations", []))
+
     # A connected, released Google Docs connector can create the complete
     # document body. Do not hide it merely because a legacy Google Workspace
     # connection advertises docs.create: that grant may lack Drive write access.

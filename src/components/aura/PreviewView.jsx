@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { aura } from "@/api/auraClient";
 import { downloadEmailEml, downloadTextFile, safeName } from "@/lib/auraDownload";
 import ReactMarkdown from "react-markdown";
+import { documentMarkdownOptions } from "@/lib/documentMarkdown.mjs";
 import { applyPresentationCopy, dynamicReferences, presentationCopySchema } from "@/lib/canvaCopyEdit.mjs";
 import { applyEmailCopy, emailCopySchema } from "@/lib/emailCopyEdit.mjs";
 import { fallbackReviewContract, mergeLegacyPreviewIntoArguments, requiresPreparedActionReview, setArgumentAtPath, unresolvedActionValues, validateReviewArguments } from "@/lib/approvalReview.mjs";
@@ -312,7 +313,7 @@ function EditableDocument({ preview, onPreviewChange, editing, structuredBody = 
           />
         </div>
         <div className="pt-2 mt-1 border-t border-white/5">
-          {!editing && !structuredBody ? <div className="aura-article-preview max-h-[28rem] overflow-y-auto rounded-xl bg-slate-50 p-6 text-sm leading-7 text-slate-700"><ReactMarkdown>{preview.docBody || ""}</ReactMarkdown></div> : <textarea
+          {!editing && !structuredBody ? <div className="aura-article-preview max-h-[28rem] overflow-y-auto rounded-xl bg-slate-50 p-6 text-sm leading-7 text-slate-700"><ReactMarkdown {...documentMarkdownOptions}>{preview.docBody || ""}</ReactMarkdown></div> : <textarea
             value={preview.docBody || ""}
             onChange={(e) => onPreviewChange({ docBody: e.target.value })}
             readOnly={!editing || structuredBody}
