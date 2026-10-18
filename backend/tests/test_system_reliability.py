@@ -74,7 +74,13 @@ def test_dynamic_connector_scope_outranks_unfamiliar_or_misleading_names():
     )
 
 
-def _valid_schema_value(schema):
+def _valid_schema_value(schema, root=None):
+    root = schema if root is None else root
+    if "$ref" in schema:
+        target = root
+        for part in schema["$ref"].removeprefix("#/").split("/"):
+            target = target[part]
+        return _valid_schema_value(target, root)
     if "const" in schema:
         return schema["const"]
     if schema.get("enum"):
@@ -85,12 +91,12 @@ def _valid_schema_value(schema):
     if schema_type == "object":
         properties = schema.get("properties", {})
         return {
-            name: _valid_schema_value(properties.get(name, {}))
+            name: _valid_schema_value(properties.get(name, {}), root)
             for name in schema.get("required", [])
         }
     if schema_type == "array":
         return [
-            _valid_schema_value(schema.get("items", {}))
+            _valid_schema_value(schema.get("items", {}), root)
             for _ in range(int(schema.get("minItems", 0)))
         ]
     if schema_type == "integer":

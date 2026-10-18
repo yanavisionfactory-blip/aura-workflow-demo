@@ -473,6 +473,23 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
   let explicitPrimary = presentation?.primary_step_key
     ? completed.find((output) => output.step_key === presentation.primary_step_key)
     : null;
+  const report = [...completed].reverse().find((output) => output.operation === "report.compose"
+    && output.critic?.action === "accept" && output.outcome_check?.status === "verified"
+    && output.provider_result?.status === "draft"
+    && typeof output.provider_result?.body === "string" && output.provider_result.body.trim());
+  if (report && (!explicitPrimary || explicitPrimary === report)) {
+    const saved = report.provider_result;
+    return {
+      title: saved.title || context.title, kind: "report", provider: "AURA", providerVerb: "Saved in",
+      completionTitle: "Review draft ready in AURA",
+      completionSummary: saved.synthetic
+        ? "Fictional client review saved in AURA. All client data is synthetic."
+        : saved.summary,
+      detail: saved.summary,
+      preview: { title: saved.title, body: saved.body, sources: saved.sources || [] },
+      link: null, downloadUrl: null,
+    };
+  }
   // The last verification step confirms completion; the created document is
   // still the deliverable. Only replace a read tied to this run's saved output.
   if (isDocumentRead(explicitPrimary?.operation)) {

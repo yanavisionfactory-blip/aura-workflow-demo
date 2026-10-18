@@ -941,8 +941,11 @@ async def _create_compiled_plan(
     # discard a later instruction (for example, changing one to two slides).
     reviewed_revision = "The user reviewed the proposed workflow and requested this change:" in prompt
     from .agency_workflow import agency_workflow_recipe
+    from .reports import report_workflow_recipe
 
-    audited_plan = await agency_workflow_recipe(prompt, inventory, manifests_by_slug)
+    audited_plan = report_workflow_recipe(prompt, inventory)
+    if audited_plan is None:
+        audited_plan = await agency_workflow_recipe(prompt, inventory, manifests_by_slug)
     if audited_plan is None:
         audited_plan = None if reviewed_revision or get_settings().planner_mode == "llm" else (
             pilot_template(prompt, inventory)

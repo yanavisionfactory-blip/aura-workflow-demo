@@ -587,6 +587,7 @@ class ProviderExecutor:
             "jira.issues.create_from_blocks": self._jira_issues_create_from_blocks,
             "jira.issue.update": self._jira_issue_update,
             "weather.forecast": self._weather_forecast,
+            "report.compose": self._report_compose,
             "web.search": self._web_search,
             "web.page.read": self._web_page_read,
             "creator.tiktok.screen": self._creator_tiktok_screen,
@@ -1188,6 +1189,11 @@ class ProviderExecutor:
             "title": result.get("title"),
             "body": "\n".join(contents).rstrip("\n"),
         }
+
+    async def _report_compose(self, a: dict) -> dict:
+        from .reports import compose_report
+
+        return await compose_report(a)
 
     async def _weather_forecast(self, a: dict) -> dict:
         location = str(a.get("location") or "").strip()

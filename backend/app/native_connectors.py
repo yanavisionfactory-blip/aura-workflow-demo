@@ -13,6 +13,7 @@ from typing import Any
 from .file_delivery import ATTACHMENTS_SCHEMA
 from .policy import operation_scope
 from .presentation_content import PRESENTATION_SCHEMA
+from .reports import ReportRequest
 
 
 class NativeConnectorError(ValueError):
@@ -61,10 +62,19 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         "catalog_version": 1,
         "provider_type": "api_key",
         "name": "AURA Intelligence",
-        "description": "Built-in, connection-free access to safe public information.",
+        "description": "Built-in reports from supplied evidence and safe public information.",
         "base_url": "provider-managed",
         "identity": {"provider": "aura"},
         "modules": [
+            {
+                **_module(
+                    "report.compose", "search",
+                    "Analyze supplied evidence and compose a complete sourced Markdown report "
+                    "saved in AURA's workflow results. No external app, file or message is created. "
+                    "Use synthetic=true for fictional demo inputs.",
+                ),
+                "input_schema": ReportRequest.model_json_schema(),
+            },
             _module(
                 "web.search",
                 "search",
