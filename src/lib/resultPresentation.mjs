@@ -357,6 +357,24 @@ export function supportingReceipts(results = {}, activity = [], primary = null, 
     }));
 }
 
+export function visualResultChoices(activity = [], context = {}) {
+  const choices = [];
+  for (const step of activity.filter((item) => item.status === "completed")) {
+    const output = step.output || {};
+    if (!["canva.presentation.create", "canva.design.get"].includes(output.operation)) continue;
+    const key = step.stepKey || step.key || output.step_key;
+    if (!key) continue;
+    const result = primaryResultFromOutputs([{ ...output, step_key: key }], context,
+      { primary_step_key: key, artifact_step_key: key });
+    if (result.kind !== "presentation" || !result.designId || choices.some((item) => item.result.designId === result.designId)) continue;
+    const thumbnail = canvaDesign(output.provider_result || {})?.thumbnail || {};
+    const shape = output.resolved_arguments?.canvas || (thumbnail.width && thumbnail.height
+      ? thumbnail.width > thumbnail.height ? "landscape" : thumbnail.width === thumbnail.height ? "square" : "portrait" : "creative");
+    choices.push({ key, label: `${result.title} — ${shape}`, result });
+  }
+  return choices;
+}
+
 const canvaDesignId = (result = {}) => {
   if (result.design?.id) return result.design.id;
   const designs = result.job?.result?.designs || result.result?.designs || result.designs || [];

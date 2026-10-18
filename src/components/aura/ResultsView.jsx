@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { Activity, AlertTriangle, ArrowRight, CalendarClock, Check, CheckCircle2, ChevronDown, Clock, ExternalLink, FileDown, Plus, RefreshCw, Share2, Zap } from "lucide-react";
 import AccessRequestModal from "./AccessRequestModal";
@@ -9,14 +9,17 @@ import ResultPreview from "./ResultPreview";
 import PrimaryResult from "./PrimaryResult";
 import { ResultsHeading, ResultsMetrics } from "./ResultsSummary";
 import { buildSummaryText } from "@/lib/auraSummary";
-import { resultMetrics, selectPrimaryOutcome, supportingReceipts } from "@/lib/resultPresentation.mjs";
+import { resultMetrics, selectPrimaryOutcome, supportingReceipts, visualResultChoices } from "@/lib/resultPresentation.mjs";
 
 export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, workflowPrompt, activity, prompt, interpretation, backendRunId, historyWorkflowId, scheduleTitle }) {
   const isFailure = results.status === "failed" || results.status === "needs_attention";
   const [showModal, setShowModal] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
-  const primaryResult = useMemo(() => selectPrimaryOutcome(results), [results]);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const visualChoices = useMemo(() => visualResultChoices(activity || [], { title: results.title, summary: results.summary }), [activity, results]);
+  const selectedVisual = visualChoices.find((choice) => choice.key === searchParams.get("main"));
+  const primaryResult = selectedVisual?.result || selectPrimaryOutcome(results);
   const metrics = useMemo(() => isFailure ? [] : resultMetrics(results.metrics || [], activity || []), [results.metrics, activity, isFailure]);
   const receipts = useMemo(() => supportingReceipts(results, activity || [], primaryResult, results.resultPresentation), [activity, primaryResult, results]);
   const creatorsOutcome = (results.outcomes || []).find((outcome) => outcome.type === "creators" && outcome.items?.length > 0);
@@ -49,6 +52,18 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mx-auto w-full max-w-5xl pb-8">
       <ResultsHeading title={results.title || "Workflow complete"} summary={results.summary} isFailure={isFailure} />
       <ResultsMetrics metrics={metrics} />
+
+      {visualChoices.length > 0 && <label className="mb-5 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+        Main result
+        <select aria-label="Main result" value={selectedVisual?.key || ""} onChange={(event) => {
+          const next = new URLSearchParams(searchParams);
+          if (event.target.value) next.set("main", event.target.value); else next.delete("main");
+          setSearchParams(next, { replace: true });
+        }} className="max-w-full rounded-xl border border-white/10 bg-card px-3 py-2 text-foreground">
+          <option value="">Workflow summary</option>
+          {visualChoices.map((choice) => <option key={choice.key} value={choice.key}>{choice.label}</option>)}
+        </select>
+      </label>}
 
       <PrimaryResult
         title={primaryResult.title || results.title || "Workflow result"}
