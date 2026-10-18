@@ -23,6 +23,24 @@ test("saved WordPress articles use verified returned bodies instead of old plann
   assert.notEqual(primaryResultFromOutputs([{ ...output, outcome_check: { status: "pending" } }]).kind, "articles");
 });
 
+test("read-only WordPress reviews show actual full drafts and never claim new saves", () => {
+  const output = { operation: "wordpress-org.search-posts", resolved_arguments: { search: "Guide", statuses: ["draft"] },
+    outcome_check: { status: "verified" }, critic: { action: "accept" }, provider_result: { ret: [
+      { id: 1, status: "draft", title: { raw: "Dallas guide" }, content: { raw: "<p>Full existing article.</p>" } },
+      { id: 2, status: "publish", title: { raw: "Published guide" }, content: { raw: "<p>Published content.</p>" } },
+    ] } };
+  const result = primaryResultFromOutputs([output, output]);
+  assert.equal(result.kind, "articles");
+  assert.equal(result.articles.length, 1);
+  assert.equal(result.articles[0].body, "Full existing article.");
+  assert.equal(result.articles[0].reused, true);
+  assert.match(result.completionSummary, /Saved content reused/);
+  assert.doesNotMatch(result.completionTitle, /saved/i);
+  assert.deepEqual(resultMetrics([], [{ status: "completed", output }]), [{ value: "1", label: "existing draft articles reviewed" }]);
+  assert.notEqual(primaryResultFromOutputs([{ ...output, outcome_check: { status: "pending" } }]).kind, "articles");
+  assert.notEqual(primaryResultFromOutputs([{ ...output, resolved_arguments: { statuses: ["publish"] } }]).kind, "articles");
+});
+
 test("workflow transport is not rendered as a deliverable", () => {
   assert.equal(readableResultText('[{"operation":"wordpress-org.search-posts","arguments":{"search":"108"}}]'), "Review the saved app results below.");
   assert.equal(readableResultText("Saved drafts are ready for review."), "Saved drafts are ready for review.");

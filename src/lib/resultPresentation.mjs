@@ -106,6 +106,26 @@ const completedOutputs = (activity = []) => activity
   .filter((step) => step.status === "completed" && step.output?.provider_result)
   .map((step) => step.output);
 
+function verifiedDraftArticles(outputs) {
+  const verified = outputs.filter((output) => output.outcome_check?.status === "verified" && output.critic?.action === "accept");
+  const writes = verified.filter((output) => output.operation === "wordpress-org.update-post");
+  const sources = writes.length ? writes : verified.filter((output) => output.operation === "wordpress-org.search-posts"
+    && output.resolved_arguments?.statuses?.includes("draft"));
+  const posts = new Map();
+  for (const output of sources) {
+    const returned = output.provider_result?.ret || output.provider_result;
+    for (const post of Array.isArray(returned) ? returned : [returned]) {
+      if (!post || !Number.isInteger(post.id) || post.status !== "draft"
+          || (writes.length && String(post.id) !== String(output.resolved_arguments?.post))) continue;
+      const body = typeof post.content === "string" ? post.content : post.content?.raw || post.content?.rendered;
+      const title = typeof post.title === "string" ? post.title : post.title?.raw || post.title?.rendered;
+      if (typeof body !== "string" || !body.trim() || typeof title !== "string" || !title.trim()) continue;
+      posts.set(post.id, { title: articleMarkdown(title), body: articleMarkdown(body), words: articleWordCount(body), reused: !writes.length });
+    }
+  }
+  return [...posts.values()];
+}
+
 // Use provider receipts for missing metrics. Never infer time saved or imply
 // that the size of a paginated response is the size of the whole audience.
 export function resultMetrics(metrics = [], activity = []) {
@@ -119,6 +139,10 @@ export function resultMetrics(metrics = [], activity = []) {
   const document = outputs.find((output) => ["docs.create", "google-docs.create-document"].includes(output.operation));
   const jiraBatch = outputs.find((output) => output.operation === "jira.issues.create_from_blocks");
   const result = [];
+  const reviewedArticles = verifiedDraftArticles(outputs);
+  if (reviewedArticles.length && reviewedArticles.every((article) => article.reused)) {
+    result.push({ value: String(reviewedArticles.length), label: "existing draft articles reviewed" });
+  }
   if (jiraBatch) {
     const count = jiraReceiptTasks(jiraBatch.provider_result).length;
     if (count) result.push({ value: String(count), label: count === 1 ? "Jira task created" : "Jira tasks created" });
@@ -368,17 +392,14 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
   const explicitPrimary = presentation?.primary_step_key
     ? completed.find((output) => output.step_key === presentation.primary_step_key)
     : null;
-  const articles = completed.filter((output) => output.operation === "wordpress-org.update-post"
-    && output.outcome_check?.status === "verified" && output.critic?.action === "accept")
-    .map((output) => {
-      const post = output.provider_result?.ret || output.provider_result;
-      if (post?.status !== "draft" || String(post.id) !== String(output.resolved_arguments?.post)) return null;
-      const body = typeof post.content === "string" ? post.content : post.content?.raw || post.content?.rendered;
-      const title = typeof post.title === "string" ? post.title : post.title?.raw || post.title?.rendered;
-      return typeof body === "string" && body.trim() && typeof title === "string" && title.trim()
-        ? { title: articleMarkdown(title), body: articleMarkdown(body), words: articleWordCount(body) } : null;
-    }).filter(Boolean);
+  const articles = verifiedDraftArticles(completed);
   if (articles.length && (!explicitPrimary || explicitPrimary.operation?.startsWith("wordpress-org."))) {
+    if (articles.every((article) => article.reused)) return {
+      title: "Existing unpublished articles reviewed", kind: "articles", provider: "WordPress", providerVerb: "Reused from",
+      completionTitle: "Existing article drafts verified",
+      completionSummary: `${articles.length} existing ${articles.length === 1 ? "article reviewed" : "articles reviewed"} in WordPress. Saved content reused; every article remains unpublished.`,
+      detail: "Full existing draft bodies were read from WordPress for review.", articles,
+    };
     return { title: "Unpublished articles saved", kind: "articles", provider: "WordPress", providerVerb: "Saved in",
       completionTitle: "Unpublished articles saved", completionSummary: `${articles.length} ${articles.length === 1 ? "article saved" : "articles saved"} as drafts in WordPress.`,
       detail: "Complete saved content is available below. Every article remains unpublished.", articles };
