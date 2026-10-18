@@ -241,6 +241,28 @@ def test_legacy_blank_verifier_corrections_offer_saved_review_only(fixes, retrya
     assert blocker.get("step_id") is None
 
 
+@pytest.mark.parametrize("fix,retryable", [
+    ("Final response synthesis is unavailable; review the preserved receipts and retry synthesis.", True),
+    ("Missing article body", False),
+])
+def test_synthesis_outage_retries_saved_review_without_overriding_content_failure(fix, retryable):
+    from app.main import _run_blocker
+    from app.models import RunStep, StepStatus
+
+    run = WorkflowRun(
+        status=RunStatus.waiting_for_action, prompt="Review existing drafts",
+        plan_approved=True,
+        result={"verification": {
+            "status": "unverified", "reasons": ["Final response did not pass validation"],
+            "required_fixes": [fix],
+        }},
+        execution_context={"__aura_autonomy__": {"handoff_reason_code": "final_result_unverified"}},
+    )
+    blocker = _run_blocker(run, [RunStep(step_key="read", status=StepStatus.completed)], {}, [])
+    assert blocker["retryable"] is retryable
+    assert blocker["action"] == ("retry_final_review" if retryable else "inspect_run")
+
+
 def test_exhausted_run_is_visible_as_stopped_when_no_retry_is_scheduled():
     run = WorkflowRun(
         status=RunStatus.waiting_for_action, prompt="Read Monday events",

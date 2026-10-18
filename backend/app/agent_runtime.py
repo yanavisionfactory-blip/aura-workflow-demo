@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 import re
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
@@ -49,6 +50,8 @@ from .workflow_context import (
     referenced_paths,
     referenced_step_keys,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ConnectionRequiredError(RuntimeError):
@@ -1716,6 +1719,7 @@ async def synthesize_result(prompt: str, accepted_artifacts: list[dict],
             )
             return UnifiedDeliverable.model_validate(result)
         except Exception as exc:  # noqa: BLE001 - preserve successful work during AI outages
+            logger.warning("Final synthesis unavailable attempt=%s error_type=%s", attempt + 1, type(exc).__name__)
             if _stop_model_retry(exc):
                 break
             if attempt < 2:
