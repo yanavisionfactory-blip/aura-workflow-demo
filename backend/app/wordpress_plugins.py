@@ -277,7 +277,6 @@ async def verify(session, tool: ToolConnection) -> dict:
 
 
 async def connect(session, workspace_id: str, provider: str, connection_id: str | None = None):
-    parent = await wordpress_parent(session, workspace_id)
     tool = await session.scalar(
         select(ToolConnection).where(
             ToolConnection.workspace_id == workspace_id, ToolConnection.slug == provider
@@ -289,6 +288,8 @@ async def connect(session, workspace_id: str, provider: str, connection_id: str 
         raise WordPressPluginError("This plugin already uses another connection")
     if tool and tool.config.get("parent_connection_id"):
         parent = await wordpress_parent(session, workspace_id, tool.config["parent_connection_id"])
+    else:
+        parent = await wordpress_parent(session, workspace_id)
     probe = ToolConnection(
         workspace_id=workspace_id, slug=provider, config={"parent_connection_id": parent.id}
     )
