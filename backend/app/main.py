@@ -6048,6 +6048,10 @@ async def approve_plan(
             available_manifests[tool.slug] = manifest
             available_by_slug[tool.slug] = {
                 "slug": tool.slug,
+                "name": tool.display_name,
+                "canonical_provider": (tool.config or {}).get("canonical_provider")
+                or (tool.config or {}).get("vendor_app")
+                or tool.slug,
                 "allowed_operations": [
                     item["name"] for item in manifest.get("capabilities", [])
                 ],
