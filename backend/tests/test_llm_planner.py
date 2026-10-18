@@ -550,7 +550,7 @@ async def test_direct_planner_rejects_unavailable_operation_without_agent_fallba
                                       "allowed_operations": ["weather.forecast"]}],
             set(), {"aura": native_manifest("aura")},
         )
-    assert calls.await_count == 1
+    assert calls.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -574,7 +574,33 @@ async def test_direct_candidate_passes_existing_compiler_and_approval_preflight(
 
 
 @pytest.mark.asyncio
-async def test_direct_planner_rejects_omitted_requested_action_without_regenerating(monkeypatch):
+async def test_direct_compiler_corrects_an_undeclared_action_before_review(monkeypatch):
+    monkeypatch.setattr(get_settings(), "planner_mode", "llm")
+    valid = WorkflowPlan(name="Read issue", interpretation="Read Jira issue", steps=[
+        PlanStep(key="issue", agent="Jira", tool_slug="jira", operation="jira.issue.get",
+                 arguments={"issue_id_or_key": "DEMO-1"}, reason="Read the issue",
+                 expected_output="Issue"),
+    ])
+    invalid = valid.model_copy(deep=True)
+    invalid.steps[0].operation = "jira"
+    calls = AsyncMock(side_effect=[invalid, valid])
+    provider = AsyncMock()
+    monkeypatch.setattr(llm_planner, "create_llm_plan", calls)
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", provider)
+    result = await orchestrator._create_compiled_plan(
+        "Read Jira issue DEMO-1", [{"slug": "jira", "name": "Jira", "connected": True,
+                                   "allowed_operations": ["jira.issue.get"]}],
+        set(), {"jira": native_manifest("jira")},
+    )
+    assert result is valid
+    assert calls.await_count == 2
+    assert any("not declared" in message for message in calls.await_args_list[1].args[4])
+    assert result.planning_artifacts["compiled_contracts"]
+    provider.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_direct_planner_rejects_omitted_action_after_one_correction(monkeypatch):
     monkeypatch.setattr(get_settings(), "planner_mode", "llm")
     incomplete = WorkflowPlan(name="Notice", interpretation="Send a Slack message", steps=[
         PlanStep(key="channels", agent="slack", tool_slug="slack",
@@ -589,7 +615,7 @@ async def test_direct_planner_rejects_omitted_requested_action_without_regenerat
         await orchestrator._create_compiled_plan(
             "Send a Slack message", inventory, set(), {"slack": native_manifest("slack")},
         )
-    assert calls.await_count == 1
+    assert calls.await_count == 2
     assert any("slack.post" in requirement for requirement in calls.await_args.args[4])
 
 
@@ -611,11 +637,11 @@ async def test_canva_slide_creation_is_required_before_a_plan_can_start(monkeypa
               "allowed_operations": [item["name"] for item in manifest["capabilities"]]}],
             set(), {"canva": manifest},
         )
-    assert calls.await_count == 1
+    assert calls.await_count == 2
 
 
 @pytest.mark.asyncio
-async def test_direct_planner_does_not_correct_failed_plan(monkeypatch):
+async def test_direct_planner_stops_after_one_failed_correction(monkeypatch):
     monkeypatch.setattr(get_settings(), "planner_mode", "llm")
     incomplete = WorkflowPlan(name="Notice", interpretation="Send a Slack message", steps=[
         PlanStep(key="channels", agent="slack", tool_slug="slack",
@@ -631,4 +657,4 @@ async def test_direct_planner_does_not_correct_failed_plan(monkeypatch):
               "allowed_operations": ["slack.channels.list", "slack.post"]}],
             set(), {"slack": native_manifest("slack")},
         )
-    assert calls.await_count == 1
+    assert calls.await_count == 2

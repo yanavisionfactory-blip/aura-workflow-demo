@@ -986,16 +986,17 @@ async def _create_compiled_plan(
             "conversations in the final result. "
             "Do not add gmail.send or any provider write to transmit an email."
         )
-    # In direct mode the LLM response is the only plan. A validation failure
-    # must be surfaced for an explicit retry, never silently replace the plan.
+    # A candidate is never executable until the full deterministic preflight
+    # passes. Give malformed candidates one bounded correction before review;
+    # this does not execute tools, change grants or bypass approval.
     direct_planning = get_settings().planner_mode == "llm"
-    for attempt in range(1 if direct_planning else 2):
+    for attempt in range(2):
         if direct_planning:
             from .llm_planner import create_llm_plan
 
             plan = await create_llm_plan(
                 prompt, inventory, available_input_names, requested_tool_names,
-                repair_requirements, required_effects,
+                list(repair_requirements), required_effects,
             )
         else:
             plan = await create_plan(
@@ -1055,11 +1056,12 @@ async def _create_compiled_plan(
             if preflight.fixes:
                 raise ValueError("Plan failed preflight: " + "; ".join(preflight.fixes))
             plan.planning_artifacts["compiled_contracts"] = preflight.contracts
+            plan.planning_artifacts["contract_repair_attempts"] = attempt
             if supervisor_strategy in {"repair_plan", "compact_replan"}:
                 plan.planning_artifacts["supervisor_recovery_strategy"] = supervisor_strategy
             return plan
         except (NativeConnectorError, ValueError) as exc:
-            if direct_planning or attempt == 1:
+            if attempt == 1:
                 raise
             repair_requirements.append(str(exc))
             reason = str(exc)

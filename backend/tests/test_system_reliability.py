@@ -407,9 +407,26 @@ def test_unavailable_structural_guarantees_remain_rejected_or_require_readback()
     ("Find customers I haven't followed up with this week and draft a personalized check-in email for each one", set()),
     ("Draft a follow-up email to customers via Gmail", set()),
     ("Draft a follow up with customers via Gmail", set()),
+    ("Use the completed intake; do not wait for a client response or send email.", set()),
+    ("Never contact the client or send an email.", set()),
+    ("Do not wait for a client response or send email. Email me the final summary.", {"gmail.send"}),
 ])
 def test_explicit_email_delivery_is_a_required_external_action(prompt_text, required):
     assert requested_external_operations(prompt_text) == required
+
+
+def test_coordinated_no_send_rule_rejects_a_model_added_delivery():
+    prompt = "Use the completed intake; do not wait for a client response or send email."
+    plan = WorkflowPlan(name="Intake", interpretation="Use completed brief", steps=[
+        PlanStep(key="send", agent="Gmail", tool_slug="google", operation="gmail.send",
+                 arguments={"to": "reviewer@example.com", "body": "Demo"},
+                 reason="Unrequested delivery", expected_output="Receipt", consequential=True),
+    ])
+    manifest = native_manifest("google")
+    inventory = [{"slug": "google", "name": "Google Workspace",
+                  "allowed_operations": ["gmail.send"]}]
+    with pytest.raises(ValueError, match="drafts only"):
+        validate_requested_operations(prompt, plan, {"gmail.send"}, inventory, {"google": manifest})
 
 
 def test_draft_only_customer_request_cannot_send_even_when_old_plan_contains_send():
@@ -567,6 +584,8 @@ def test_review_before_sending_requires_email_action_with_real_catalog():
     ("Read Slack messages and summarize them", None),
     ("Draft an email but do not send it", None),
     ("Draft a personalized email to each customer via Gmail", None),
+    ("Use the completed intake; do not wait for a client response or send email.", None),
+    ("Never contact the client or send an email.", None),
 ])
 def test_explicit_provider_effects_survive_replanning_across_apps(prompt_text, effect):
     slugs = ("google", "slack", "jira")
