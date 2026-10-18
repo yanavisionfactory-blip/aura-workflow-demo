@@ -21,6 +21,10 @@ export const AGENT_METHODS = Object.freeze([
 
 const clean = (value) => String(value || "").trim().replace(/\s+/g, " ");
 
+export function semrushApiKeySource(source) {
+  return String(source || "").trim().replace(/\/+$/, "") === "https://mcp.semrush.com/v2/mcp";
+}
+
 export function agentAutoconnectPayload(draft = {}) {
   const source = String(draft.source || "").trim();
   if (source.length < 2) {
@@ -29,7 +33,14 @@ export function agentAutoconnectPayload(draft = {}) {
   if (/\p{Cc}/u.test(source)) {
     throw new Error("That agent link contains unsupported characters.");
   }
-  return { source };
+  const credential = String(draft.credential || "").trim();
+  if (credential && !semrushApiKeySource(source)) {
+    throw new Error("API-key setup is supported only for the official Semrush MCP endpoint.");
+  }
+  if (credential && (credential.length > 8000 || /\p{Cc}/u.test(credential))) {
+    throw new Error("Enter a valid Semrush API key.");
+  }
+  return { source, ...(credential ? { credential } : {}) };
 }
 
 export function agentConnectionPayload(draft = {}) {

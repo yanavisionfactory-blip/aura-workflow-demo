@@ -11,6 +11,20 @@ connection only after consent, token exchange and live MCP tool discovery.
 | Sitebulb Cloud | `https://mcp.sitebulb.com/cloud` | Sitebulb sign-in, selected workspace and existing completed crawl; scope `mcp:read`. |
 | Sitebulb Desktop | `https://mcp.sitebulb.com/desktop` | Sitebulb sign-in and licensed, running, online Desktop machine; scope `mcp:read`. |
 
+Semrush also supports an API key when OAuth client registration is unavailable.
+After entering the official Semrush endpoint, use the optional password field
+in AURA's agent form. The backend pins the endpoint and sends the documented
+`Authorization: Apikey …` header; it encrypts the key and requires live tool
+discovery before enabling the connection. A key is never accepted for another
+autoconnect URL, stored in browser persistence, or returned in the connection
+response. An account with appropriate MCP/API access is still required.
+
+A vendor may reject a custom OAuth callback even when discovery succeeds.
+Registration errors show the vendor's bounded error message rather than just
+an HTTP status. Do not reuse another application's callback or client ID to
+work around a vendor allowlist. Use the vendor's approved setup, a documented
+alternative such as Semrush API-key authentication, or supplied exports.
+
 Vendor metadata must match the reviewed resource and issuer. Authorization,
 registration and token hosts are restricted per provider. PKCE, signed state,
 tenant membership and one-use callback checks also apply to these routes.

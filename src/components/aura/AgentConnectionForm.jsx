@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 
 import { autoconnectAgent } from "@/lib/auraApi";
-import { agentAutoconnectPayload } from "@/lib/agentConnections.mjs";
+import { agentAutoconnectPayload, semrushApiKeySource } from "@/lib/agentConnections.mjs";
 
 const DISCOVERY_STEPS = [
   "Finding the agent…",
@@ -28,6 +28,7 @@ function safeAuthorizationUrl(value) {
 
 export default function AgentConnectionForm({ onConnected = null }) {
   const [source, setSource] = useState("");
+  const [credential, setCredential] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [phase, setPhase] = useState(0);
   const [error, setError] = useState("");
@@ -57,7 +58,8 @@ export default function AgentConnectionForm({ onConnected = null }) {
     setAuthorizationUrl("");
     setConnectedAgent(null);
     try {
-      const result = await autoconnectAgent(agentAutoconnectPayload({ source }));
+      const result = await autoconnectAgent(agentAutoconnectPayload({ source, credential }));
+      setCredential("");
       setConnectedAgent(result);
       window.dispatchEvent(new CustomEvent("aura:agent-connected", { detail: result }));
       await onConnected?.(result);
@@ -104,6 +106,7 @@ export default function AgentConnectionForm({ onConnected = null }) {
           value={source}
           onChange={(event) => {
             setSource(event.target.value);
+            setCredential("");
             setConnectedAgent(null);
             setError("");
             setAuthorizationUrl("");
@@ -116,6 +119,26 @@ export default function AgentConnectionForm({ onConnected = null }) {
           Use the link from the agent’s Share or Connect page.
         </span>
       </label>
+
+      {semrushApiKeySource(source) && (
+        <label className="block space-y-1.5 text-xs">
+          <span className="font-medium">Semrush API key (optional)</span>
+          <input
+            type="password"
+            value={credential}
+            onChange={(event) => setCredential(event.target.value)}
+            maxLength={8000}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="Enter your Semrush API key securely"
+            className="w-full rounded-xl border border-white/10 bg-card px-3 py-2.5 outline-none focus:border-primary/50"
+          />
+          <span className="block text-[10px] leading-relaxed text-muted-foreground/70">
+            Use a key with MCP access if OAuth setup is unavailable. AURA stores it encrypted
+            and sends it only to Semrush. Leave blank to try OAuth. Never paste a key in chat.
+          </span>
+        </label>
+      )}
 
       <div className="space-y-2 rounded-xl border border-white/8 bg-white/[0.025] p-3">
         {[
@@ -178,7 +201,7 @@ export default function AgentConnectionForm({ onConnected = null }) {
         className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-2.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
       >
         {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Bot className="h-4 w-4" />}
-        {connecting ? DISCOVERY_STEPS[phase] : connectedAgent ? "Connected" : "Let AURA connect it"}
+        {connecting ? DISCOVERY_STEPS[phase] : connectedAgent ? "Connected" : credential ? "Verify Semrush key" : "Let AURA connect it"}
       </button>
     </form>
   );

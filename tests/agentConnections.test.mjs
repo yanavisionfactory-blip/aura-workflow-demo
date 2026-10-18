@@ -7,6 +7,7 @@ import {
   agentAutoconnectPayload,
   agentConnectionPayload,
   agentPromptHints,
+  semrushApiKeySource,
 } from "../src/lib/agentConnections.mjs";
 
 test("offers A2A, MCP, and AURA Agent API connections", () => {
@@ -19,6 +20,17 @@ test("turns one human-facing agent link into an autoconnect request", () => {
     { source: "https://agent.example.com/share" },
   );
   assert.throws(() => agentAutoconnectPayload({ source: " " }), /sharing link/);
+});
+
+test("accepts a key only for the exact reviewed Semrush endpoint", () => {
+  assert.equal(semrushApiKeySource("https://mcp.semrush.com/v2/mcp"), true);
+  for (const source of ["https://mcp.semrush.com.evil.test/v2/mcp", "http://mcp.semrush.com/v2/mcp",
+    "https://mcp.semrush.com/v2/mcp?key=x", "https://mcp.sitebulb.com/cloud"]) {
+    assert.equal(semrushApiKeySource(source), false);
+    assert.throws(() => agentAutoconnectPayload({source, credential: "test-key"}), /only for/);
+  }
+  assert.deepEqual(agentAutoconnectPayload({source: "https://mcp.semrush.com/v2/mcp", credential: " test-key "}),
+    {source: "https://mcp.semrush.com/v2/mcp", credential: "test-key"});
 });
 
 test("normalizes a bounded agent connection payload", () => {

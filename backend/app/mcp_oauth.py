@@ -53,6 +53,15 @@ def mcp_service(provider: str) -> dict:
     return MCP_SERVICES[provider]
 
 
+def semrush_api_credentials(secret: str) -> dict:
+    secret = secret.strip()
+    if not secret or len(secret) > 8000 or any(ord(char) < 32 for char in secret):
+        raise ConnectorError("Enter a valid Semrush API key")
+    # Semrush documents this exact header; never take a destination or header
+    # name from a credential field or permit the key in a URL.
+    return {"api_key": secret, "header": "Authorization", "prefix": "Apikey"}
+
+
 def managed_mcp_provider(source: str) -> str | None:
     for provider, service in MCP_SERVICES.items():
         if source.rstrip("/") == service["endpoint"]:
@@ -84,8 +93,24 @@ def pkce_challenge(verifier: str) -> str:
 
 
 async def _json(client: httpx.AsyncClient, method: str, url: str, *,
-                provider: str = "ubersuggest", resource: bool = False, **kwargs) -> dict:
+                provider: str = "ubersuggest", resource: bool = False,
+                registration: bool = False, **kwargs) -> dict:
     response = await client.request(method, _service_url(url, provider, resource=resource), **kwargs)
+    if response.is_error and registration:
+        # Public-client registration has no user token in its request. Expose
+        # only a bounded error message, never the complete registration body
+        # (which may carry a registration access token on successful responses).
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        reason = next((body.get(key) for key in ("error_description", "message", "error")
+                       if isinstance(body, dict) and isinstance(body.get(key), str)), "")
+        reason = " ".join(reason.split())[:500] or "The provider did not accept the client setup."
+        raise ConnectorError(
+            f"{mcp_service(provider)['name']} rejected AURA's OAuth registration "
+            f"(HTTP {response.status_code}): {reason}"
+        )
     response.raise_for_status()
     result = response.json()
     if not isinstance(result, dict):
@@ -134,6 +159,7 @@ async def prepare_authorization(credentials: dict, state: str, callback_url: str
             registration = await _json(
                 client, "POST", registration_url,
                 provider=provider,
+                registration=True,
                 json={
                     "client_name": "AURA",
                     "redirect_uris": [callback_url],
