@@ -1,7 +1,15 @@
 from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, Field, HttpUrl, StringConstraints, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    HttpUrl,
+    SecretStr,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 # Include supporting reads and write verification within the same finite bound.
 MAX_WORKFLOW_STEPS = 40
@@ -78,6 +86,7 @@ class AgentConnectionIntent(BaseModel):
     """A human-facing request; AURA derives the technical connection contract."""
 
     source: str = Field(min_length=2, max_length=2_000)
+    credential: SecretStr | None = Field(default=None, repr=False)
 
     @field_validator("source", mode="before")
     @classmethod

@@ -38,6 +38,8 @@ def oauth_server(monkeypatch):
         elif request.url.path == "/.well-known/oauth-authorization-server":
             data = metadata
         elif request.url.path == "/register":
+            if metadata.get("registration_error"):
+                return httpx.Response(400, json=metadata["registration_error"])
             data = {"client_id": "aura-test-client"}
         elif request.url.path == "/token":
             data = {"access_token": "provider-access", "refresh_token": "provider-refresh", "expires_in": 3600}
@@ -86,6 +88,17 @@ async def test_unexpected_oauth_metadata_never_receives_registration(oauth_serve
     with pytest.raises(ValueError):
         await mcp_oauth.prepare_authorization({}, "state", CALLBACK)
     assert not any(request.method == "POST" for request in requests)
+
+
+async def test_registration_failure_reports_vendor_reason_without_registration_credentials(oauth_server):
+    metadata, _ = oauth_server
+    metadata["registration_error"] = {
+        "message": "redirect URI is not allowed", "registration_access_token": "must-not-be-shown",
+    }
+    with pytest.raises(ValueError) as caught:
+        await mcp_oauth.prepare_authorization({}, "state", CALLBACK)
+    assert "HTTP 400" in str(caught.value) and "redirect URI is not allowed" in str(caught.value)
+    assert "must-not-be-shown" not in str(caught.value)
 
 
 @pytest.mark.parametrize("source", [
@@ -326,3 +339,74 @@ async def test_callback_cannot_switch_a_pending_request_to_another_reviewed_prov
 ])
 def test_new_routes_reject_lookalikes_and_secret_bearing_urls(source):
     assert mcp_oauth.managed_mcp_provider(source) is None
+
+
+@pytest.mark.parametrize("source", [
+    "https://mcp.semrush.com.evil.example/v2/mcp", "https://user@mcp.semrush.com/v2/mcp",
+    "https://mcp.semrush.com/v2/mcp?key=test-key", "https://mcp.sitebulb.com/cloud",
+    "https://unrelated.example/mcp",
+])
+async def test_secret_intent_rejects_unreviewed_destinations(source, monkeypatch):
+    discover = AsyncMock()
+    monkeypatch.setattr(main, "_discover_agent_intent", discover)
+    with pytest.raises(HTTPException) as caught:
+        await main.autoconnect_agent(
+            main.AgentConnectionIntent(source=source, credential="test-key"),
+            main.TenantContext("workspace", "owner", "owner"), None,
+        )
+    assert caught.value.status_code == 422
+    assert "test-key" not in str(caught.value.detail)
+    discover.assert_not_awaited()
+
+
+async def test_semrush_key_uses_documented_header_and_masked_intent(monkeypatch):
+    endpoint = mcp_oauth.mcp_service("semrush")["endpoint"]
+    intent = main.AgentConnectionIntent(source=endpoint, credential="test-key")
+    assert "test-key" not in repr(intent) and "test-key" not in intent.model_dump_json()
+    discover = AsyncMock(return_value={**manifest(), "name": "Semrush", "base_url": endpoint})
+    monkeypatch.setattr(main, "discover_provider", discover)
+    payload = main._mcp_payload(mcp_oauth.semrush_api_credentials("test-key"), "semrush")
+    _, credentials, _ = await main._discover_agent_payload(payload)
+    assert credentials == {"api_key": "test-key", "header": "Authorization", "prefix": "Apikey"}
+    assert discover.await_args.args[1] == endpoint
+    assert discover.await_args.args[2] == credentials
+
+
+async def test_semrush_key_connects_only_after_live_verification_and_reuses_existing_key(database, managed_auth):
+    prepare, exchange, verify = managed_auth
+    endpoint = mcp_oauth.mcp_service("semrush")["endpoint"]
+    verify.return_value = {**manifest(), "name": "Semrush", "base_url": endpoint}
+    async with database() as session:
+        session.add(Workspace(id="workspace", name="Pilot"))
+        await session.commit()
+        context = main.TenantContext("workspace", "owner", "owner")
+        result = await main.autoconnect_agent(
+            main.AgentConnectionIntent(source=endpoint, credential="test-key"), context, session,
+        )
+        assert result["enabled"] and result["status"] == "verified"
+        assert "test-key" not in json.dumps(result)
+        tool = await session.scalar(select(ToolConnection))
+        assert tool.config["authentication"] == "api_key"
+        assert tool.config["canonical_provider"] == "semrush"
+        assert "test-key" not in tool.encrypted_credentials
+        assert CredentialVault().decrypt(tool.encrypted_credentials)["prefix"] == "Apikey"
+        await main.autoconnect_agent(main.AgentConnectionIntent(source=endpoint), context, session)
+        assert verify.await_count == 2
+        prepare.assert_not_awaited()
+        exchange.assert_not_awaited()
+
+
+async def test_unverified_key_creates_no_connection(database, managed_auth):
+    _, _, verify = managed_auth
+    verify.side_effect = main.ConnectorError("Semrush access was not verified")
+    async with database() as session:
+        session.add(Workspace(id="workspace", name="Pilot"))
+        await session.commit()
+        with pytest.raises(HTTPException) as caught:
+            await main.autoconnect_agent(
+                main.AgentConnectionIntent(source=mcp_oauth.mcp_service("semrush")["endpoint"],
+                                           credential="test-key"),
+                main.TenantContext("workspace", "owner", "owner"), session,
+            )
+        assert caught.value.status_code == 422 and "test-key" not in str(caught.value.detail)
+        assert await session.scalar(select(ToolConnection)) is None

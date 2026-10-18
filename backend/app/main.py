@@ -65,6 +65,7 @@ from .mcp_oauth import (
 from .mcp_oauth import (
     managed_mcp_provider,
     mcp_service,
+    semrush_api_credentials,
 )
 from .mcp_oauth import (
     prepare_authorization as prepare_mcp_authorization,
@@ -706,6 +707,8 @@ async def _discover_agent_payload(payload: AgentConnectionCreate) -> tuple[dict,
     endpoint = str(payload.endpoint)
     manifest_url = str(payload.manifest_url) if payload.manifest_url else None
     credentials = agent_credentials(payload.authentication, payload.credential)
+    if payload.authentication == "api_key" and managed_mcp_provider(endpoint) == "semrush":
+        credentials = semrush_api_credentials(payload.credential)
     config = {
         "managed_by": "agent_gateway",
         "agent_protocol": payload.protocol,
@@ -1081,7 +1084,17 @@ async def autoconnect_agent(
     try:
         source = _agent_source_url(intent.source)
         provider = managed_mcp_provider(source)
+        if intent.credential is not None and provider != "semrush":
+            raise ConnectorError("API-key setup is available only for the official Semrush MCP endpoint")
         if provider:
+            if intent.credential is not None:
+                credentials = semrush_api_credentials(intent.credential.get_secret_value())
+                manifest = await _verify_managed_mcp(credentials, provider)
+                result = await _persist_agent_connection(
+                    _mcp_payload(credentials, provider), manifest, credentials, ToolKind.mcp,
+                    context, session, connection_config={"canonical_provider": "semrush"},
+                )
+                return {**result, "connected_by": "aura_autodiscovery"}
             result = await _managed_mcp_connection(context, session, provider=provider)
             if result.get("authorization_url"):
                 raise HTTPException(409, detail={
@@ -1116,10 +1129,11 @@ async def autoconnect_agent(
 
 def _mcp_payload(credentials: dict, provider: str = "ubersuggest") -> AgentConnectionCreate:
     service = mcp_service(provider)
+    api_key = provider == "semrush" and bool(credentials.get("api_key"))
     return AgentConnectionCreate(
         protocol="mcp", name=service["name"], owner=service["owner"],
-        endpoint=service["endpoint"], authentication="bearer",
-        credential=credentials["access_token"],
+        endpoint=service["endpoint"], authentication="api_key" if api_key else "bearer",
+        credential=credentials["api_key"] if api_key else credentials["access_token"],
         data_access=[f"{service['name']} research and audit data"],
         data_retention="provider-defined", max_runtime_seconds=30, max_cost_usd=5,
     )
@@ -1162,6 +1176,12 @@ async def _managed_mcp_connection(
     credentials = CredentialVault().decrypt(tool.encrypted_credentials) if tool else {}
     if tool and (tool.config or {}).get("managed_by") != "agent_gateway":
         raise ConnectorError(f"Manage the existing {service['name']} connection before adding another route")
+    if credentials.get("api_key") and provider == "semrush" and not force_authorization:
+        manifest = await _verify_managed_mcp(credentials, provider)
+        return await _persist_agent_connection(
+            _mcp_payload(credentials, provider), manifest, credentials, ToolKind.mcp,
+            context, session, connection_config={"canonical_provider": "semrush"},
+        )
     if credentials.get("access_token") and not force_authorization:
         try:
             credentials, changed = await refresh_oauth_credentials(
