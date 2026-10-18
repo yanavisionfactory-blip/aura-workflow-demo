@@ -167,3 +167,24 @@ def test_transport_bytes_do_not_trigger_source_reader_calls(monkeypatch):
         "body": {"data": base64.urlsafe_b64encode(b"x" * 400000).decode()}}]}
     result = asyncio.run(agent_runtime._prepare_action_evidence(payload, "accepted_artifacts"))
     assert "binary_evidence" in result["accepted_artifacts"][0]["body"]
+
+
+def test_chunk_reader_interns_repeated_receipts_without_losing_late_unique_facts(monkeypatch):
+    seen = []
+    async def run(agent, payload, **kwargs):
+        assert agent.name == "Evidence Reader"
+        seen.append(payload)
+        return {"relevant_evidence": "Read every supplied source record and alias",
+                "source_limitations": [], "unprocessed_source_paths": []}
+    monkeypatch.setattr(agent_runtime, "_run", run)
+    body = "Complete saved article. " * 5000
+    context = {"steps": {f"read_{i}": {"body": body, "unique_fact": f"source-{i}"}
+                         for i in range(10)}}
+    with pytest.raises(ModelInputTooLarge):
+        evidence_chunks(context)
+    result = asyncio.run(agent_runtime._prepare_action_evidence(
+        {"original_request": "Review all saved sources", "accepted_execution_context": context}))
+    combined = "\n".join(call["source_fragment"] for call in seen)
+    assert "source-9" in combined and "__aura_evidence_ref__" in combined
+    assert result["accepted_execution_context"]["processed_chunks"] == len(seen)
+    assert context["steps"]["read_9"]["body"] == body
