@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import { Activity, AlertTriangle, ArrowRight, CalendarClock, Check, CheckCircle2, ChevronDown, Clock, ExternalLink, FileDown, Plus, RefreshCw, Share2, Zap } from "lucide-react";
 import AccessRequestModal from "./AccessRequestModal";
@@ -100,6 +101,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
       </section>
 
       <div className="mt-5 flex flex-wrap items-center gap-5 border-t border-white/10 pt-5 text-xs text-muted-foreground">
+        {backendRunId && <Link to={`/runs/${encodeURIComponent(backendRunId)}`} className="inline-flex items-center gap-1.5 hover:text-foreground"><ExternalLink className="h-3 w-3" />Open saved results</Link>}
         {activity?.length > 0 && <details className="group relative"><summary className="flex cursor-pointer list-none items-center gap-1.5 hover:text-foreground [&::-webkit-details-marker]:hidden"><Activity className="h-4 w-4" />Activity<ChevronDown className="h-3 w-3 group-open:rotate-180" /></summary><ol className="absolute bottom-full left-0 z-10 mb-2 max-h-56 w-72 overflow-y-auto rounded-xl border border-white/10 bg-[#121725] p-3 shadow-xl">{activity.map((step, index) => <li key={step.id || index} className="flex items-start gap-2 py-1.5 text-xs">{step.status === "completed" ? <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-emerald-400" /> : ["failed", "blocked"].includes(step.status) ? <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-400" /> : <Clock className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />}<span>{step.action || step.tool || "Completed"}</span></li>)}</ol></details>}
         <button type="button" onClick={handleShare} className="inline-flex items-center gap-1.5 hover:text-foreground">{copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Share2 className="h-4 w-4" />}{copied ? "Copied" : "Share"}</button>
         {primaryResult.downloadUrl

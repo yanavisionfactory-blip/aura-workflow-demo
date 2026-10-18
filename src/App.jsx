@@ -9,6 +9,7 @@ import PageNotFound from "@/lib/PageNotFound";
 import { queryClientInstance } from "@/lib/query-client";
 import Demo from "@/pages/Demo";
 import DeliveryResults from "@/pages/DeliveryResults";
+import SavedRunResults from "@/pages/SavedRunResults";
 
 function UpdateNotice() {
   const [available, setAvailable] = useState(false);
@@ -84,6 +85,7 @@ function ProductRoutes() {
         <Route path="/" element={<Demo />} />
         <Route path="/results" element={<DeliveryResults />} />
         <Route path="/results/:deliveryId" element={<DeliveryResults />} />
+        <Route path="/runs/:runId" element={<SavedRunResults />} />
         <Route path="*" element={<PageNotFound />} />
       </Routes>
       {workspaceError && (

@@ -1,5 +1,6 @@
 import { jiraReceiptTasks } from "./jiraReceipt.mjs";
 import { articleMarkdown, articleWordCount } from "./actionContent.mjs";
+import { campaignCopySections } from "./campaignCopySections.mjs";
 
 export function readableResultText(value, fallback = "Review the saved app results below.") {
   if (typeof value !== "string") return fallback;
@@ -136,7 +137,17 @@ export function resultMetrics(metrics = [], activity = []) {
     && canvaDesignId(output.provider_result || {}));
   const audiences = outputs.find((output) => output.operation === "mailchimp.audiences.list");
   const email = outputs.find((output) => output.operation === "gmail.send");
-  const document = outputs.find((output) => ["docs.create", "google-docs.create-document"].includes(output.operation));
+  const documents = new Set(outputs.filter((output) => isDocumentCreate(output.operation))
+    .map((output) => documentUrl(output.provider_result)).filter(Boolean));
+  const savedBodies = outputs.filter((output) => isDocumentCreate(output.operation) && documentUrl(output.provider_result))
+    .map((output) => output.resolved_arguments?.body ?? output.resolved_arguments?.content ?? "");
+  const campaign = savedBodies.map(campaignCopySections).find(Boolean);
+  if (campaign) {
+    const reviews = savedBodies.reduce((n, body) => n + (body.match(/^\d+\. .+— Status: (?:Pending|Needs input)\b/gm) || []).length, 0);
+    return [{ value: String(campaign.reduce((n, group) => n + group.sections.length, 0)), label: "draft campaign concepts" },
+      { value: String(documents.size), label: documents.size === 1 ? "document created" : "documents created" },
+      ...(reviews ? [{ value: String(reviews), label: "open review actions" }] : [])];
+  }
   const jiraBatch = outputs.find((output) => output.operation === "jira.issues.create_from_blocks");
   const result = [];
   const reviewedArticles = verifiedDraftArticles(outputs);
@@ -148,7 +159,7 @@ export function resultMetrics(metrics = [], activity = []) {
     if (count) result.push({ value: String(count), label: count === 1 ? "Jira task created" : "Jira tasks created" });
   }
   if (email) result.push({ value: "1", label: "email sent" });
-  if (document) result.push({ value: "1", label: "document created" });
+  if (documents.size) result.push({ value: String(documents.size), label: documents.size === 1 ? "document created" : "documents created" });
   if (canva) {
     const count = presentNumber(canva.provider_result.page_count);
     if (count && count > 0) result.push({ value: String(count), label: count === 1 ? "slide created" : "slides created" });
@@ -266,15 +277,17 @@ export function supportingReceipts(results = {}, activity = [], primary = null, 
         : null;
       const link = safeHttpsUrl(providerResult.result_url)
         || (designId ? `https://www.canva.com/design/${encodeURIComponent(designId)}/edit` : null)
-        || (isDocumentCreate(operation) ? documentUrl(providerResult) : null)
+        || (isDocumentCreate(operation) || isDocumentRead(operation) ? documentUrl(providerResult) : null)
         || (operation === "mailchimp.audiences.list" ? mailchimpAudienceLink(providerResult) : null);
       const tool = operation === "gmail.send" ? "Gmail" : step.tool || "AURA";
+      const savedTitle = isDocumentCreate(operation) || isDocumentRead(operation)
+        ? providerResult.ret?.title || providerResult.ret?.name || providerResult.title || providerResult.name : null;
       return {
         key: `${step.stepKey || step.key || tool}:${step.action || step.liveOutput || "completed"}`,
         tool,
-        title: /^(?:completed|done|success(?:ful)?)\.?$/i.test(cleanReceiptText(step.liveOutput))
+        title: savedTitle || (/^(?:completed|done|success(?:ful)?)\.?$/i.test(cleanReceiptText(step.liveOutput))
           ? cleanReceiptText(step.action) || "Completed"
-          : cleanReceiptText(step.liveOutput) || cleanReceiptText(step.action) || "Completed",
+          : cleanReceiptText(step.liveOutput) || cleanReceiptText(step.action) || "Completed"),
         link,
         linkLabel: link ? `View in ${tool}` : null,
         preview: operation === "mailchimp.audiences.list" ? audiencePreview(providerResult) : [],
@@ -287,8 +300,8 @@ export function supportingReceipts(results = {}, activity = [], primary = null, 
   }
 
   if (hasCompiledSelection || completed.length) {
-    return completed.filter((receipt, index, all) =>
-      all.findIndex((candidate) => candidate.key === receipt.key) === index
+    return completed.filter((receipt, index, all) => (!primary?.link || receipt.link !== primary.link)
+      && all.findIndex((candidate) => candidate.key === receipt.key || (receipt.link && candidate.link === receipt.link)) === index
     );
   }
 
@@ -322,10 +335,13 @@ const canvaThumbnailUrl = (value) => {
 };
 
 const isDocumentCreate = (operation) => ["docs.create", "google-docs.create-document"].includes(operation);
+const isDocumentRead = (operation) => ["docs.get", "google-docs.get-document"].includes(operation);
+
+const documentId = (result = {}) => [result.ret?.documentId, result.ret?.id, result.documentId, result.id]
+  .find((value) => typeof value === "string" && /^[a-zA-Z0-9_-]+$/.test(value));
 
 const documentUrl = (result = {}) => {
-  const id = [result.id, result.documentId, result.ret?.documentId, result.ret?.id]
-    .find((value) => typeof value === "string" && /^[a-zA-Z0-9_-]+$/.test(value));
+  const id = documentId(result);
   return safeHttpsUrl(result.webViewLink) || safeHttpsUrl(result.ret?.webViewLink)
     || safeHttpsUrl(result.ret?.url)
     || (id ? `https://docs.google.com/document/d/${encodeURIComponent(id)}/edit` : null);
@@ -389,9 +405,23 @@ const outputScore = (output = {}, contextTitle = "") => {
 
 export function primaryResultFromOutputs(outputs = [], context = {}, presentation = null) {
   const completed = outputs.filter((output) => output && typeof output === "object");
-  const explicitPrimary = presentation?.primary_step_key
+  let explicitPrimary = presentation?.primary_step_key
     ? completed.find((output) => output.step_key === presentation.primary_step_key)
     : null;
+  // The last verification step confirms completion; the created document is
+  // still the deliverable. Only replace a read tied to this run's saved output.
+  if (isDocumentRead(explicitPrimary?.operation)) {
+    const readId = documentId(explicitPrimary.provider_result)
+      || explicitPrimary.resolved_arguments?.document_id || explicitPrimary.resolved_arguments?.documentId;
+    const documents = completed.filter((output) => isDocumentCreate(output.operation)
+      && documentUrl(output.provider_result)
+      && typeof (output.resolved_arguments?.body ?? output.resolved_arguments?.content) === "string");
+    if (readId && documents.some((output) => documentId(output.provider_result) === readId)) {
+      const wanted = titleTokens(context.title);
+      const relevance = (output) => [...titleTokens(output.resolved_arguments.title)].filter((word) => wanted.has(word)).length;
+      explicitPrimary = [...documents].sort((a, b) => relevance(b) - relevance(a))[0];
+    }
+  }
   const articles = verifiedDraftArticles(completed);
   // A read-back of the handoff accompanies the content; it is not the content
   // artifact itself. Keep verified complete drafts visible before that receipt.

@@ -53,7 +53,7 @@ export default function PlanStep({ step, index, isLast, provided, onChange, onDe
 
   const title = step.title || step.action;
   const iWill = step.iWill || (step.action ? step.action[0].toLowerCase() + step.action.slice(1) : "");
-  const flow = (step.flow || []).map((f) => ({ ...f, label: normLabel(f.label) }))
+  const flow = (step.flow || []).map((f) => ({ ...f, label: normLabel(f.label), value: String(f.value || "").replace(/\bdocument_?id\b/gi, "document reference").replace(/\bURL\b/g, "link").replace(/\breadback\b/gi, "verification") }))
     .filter((field) => step.riskLevel === "modify" || field.label === "Uses");
   const needsApproval = step.riskLevel === "modify";
 
