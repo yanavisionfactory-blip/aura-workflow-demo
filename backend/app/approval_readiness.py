@@ -2,7 +2,7 @@
 
 import re
 
-from .workflow_context import referenced_paths
+from .workflow_context import contains_unresolved_template, referenced_paths
 
 _UNFINISHED_CONTENT = re.compile(
     r"\b(?:will be (?:generated|written|drafted|filled|summarized)|"
@@ -34,6 +34,11 @@ def self_address_recipient(operation: str, arguments: dict) -> bool:
 
 def unfinished_action_content(operation: str, arguments: dict) -> bool:
     """A promise to compose content later must never become a sendable draft."""
+    # Grouped approvals can deliberately retain a governed future attachment
+    # reference. Content itself must already be concrete for human review.
+    if any(contains_unresolved_template(arguments.get(field))
+           for field in ("body", "content", "text", "message", "description")):
+        return True
     if operation == "gmail.send":
         if not str(arguments.get("body") or "").strip():
             return True
