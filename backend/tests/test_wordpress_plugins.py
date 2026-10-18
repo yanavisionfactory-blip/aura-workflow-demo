@@ -7,11 +7,28 @@ import pytest
 from jsonschema import ValidationError
 from sqlalchemy import select
 
-from app import main
+from app import main, orchestrator
 from app import wordpress_plugins as wp
 from app.config import Settings
 from app.models import CapabilityManifest, ToolConnection, ToolKind, Workspace
 from app.pipedream_connect import PipedreamClient, PipedreamConnectError
+from app.schemas import WorkflowPlan
+
+
+def test_fixed_plugin_reads_run_without_repeated_write_reviews():
+    manifests = {provider: wp.manifest(provider) for provider in wp.PROVIDERS}
+    steps = [{"key": f"step_{index}", "agent": "SEO", "tool_slug": provider,
+              "operation": cap["name"], "arguments": {key: 11 for key in cap["input_schema"]["required"]},
+              "reason": "Check the demonstration", "expected_output": "Actual provider result", "consequential": True}
+             for index, (provider, cap) in enumerate((provider, cap) for provider, manifest in manifests.items()
+                                                    for cap in manifest["capabilities"])]
+    for step in steps:
+        if step["operation"] == "rankmath.post_seo.update":
+            step["arguments"].update(title="Demo", description="Demo description", focus_keyword="demo")
+    plan = WorkflowPlan.model_validate({"name": "SEO checks", "interpretation": "Check and save", "steps": steps})
+    orchestrator._normalize_planned_steps(plan, manifests)
+    for step in plan.steps:
+        assert step.consequential is (step.operation in {"rankmath.post_seo.update", "imagify.media.optimize"})
 
 
 @pytest.fixture

@@ -534,6 +534,12 @@ def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict]) -> None:
             ),
             None,
         )
+        if (manifest.get("provider_type") == "wordpress_plugin" and capability
+                and capability.get("permission_scope") == "read"
+                and capability.get("requires_approval") is False):
+            # These fixed first-party bridge reads cannot change the site.
+            # A planner's blanket write label must not interrupt each check.
+            planned_step.consequential = False
         if (
             capability
             and (capability.get("requires_approval") or capability.get("permission_scope") in {"write", "destructive"})
