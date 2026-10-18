@@ -38,6 +38,11 @@ _ALIASES = {
     "canva": ("canva",),
 }
 _NEGATION = re.compile(r"\b(?:do not|don't|never|without|no)\s+$", re.IGNORECASE)
+_NEGATED_DELIVERY = re.compile(
+    r"\b(?:do not|don't|never|without)\s+"
+    r"(?:[^.!?;\n]{0,160}?\s+(?:or|nor)\s+)?(?:send|email|mail|deliver)\b",
+    re.IGNORECASE,
+)
 _SOURCE = re.compile(r"\b(?:from|using|about|regarding)\s+$", re.IGNORECASE)
 _REVIEW_MARKER = "\n\nThe user reviewed the proposed workflow and requested this change:"
 _STEP_ADD = re.compile(
@@ -83,7 +88,10 @@ def draft_only_email_request(prompt: str) -> bool:
     instruction = user_request_text(prompt)
     if requested_external_operations(instruction):
         return False
-    return bool(re.search(
+    return bool((
+        _NEGATED_DELIVERY.search(instruction)
+        and re.search(r"\b(?:emails?|e-mails?|gmail)\b", instruction, re.IGNORECASE)
+    ) or re.search(
         r"\b(?:draft|compose|write|prepare)\b.{0,120}\b(?:emails?|e-mails?)\b",
         instruction, re.IGNORECASE | re.DOTALL,
     ) or (
@@ -106,7 +114,7 @@ def requested_external_operations(prompt: str) -> set[str]:
     if reviewed_delivery:
         return {"gmail.send"}
     for clause in re.split(r"[.!?;\n]+", prompt.casefold()):
-        if re.search(r"\b(?:do not|don't|never|without)\s+(?:send|email|mail|deliver)\b", clause):
+        if _NEGATED_DELIVERY.search(clause):
             continue
         if (re.search(r"\b(?:draft|compose|write|prepare)\b.{0,120}"
                       r"\b(?:emails?|e-mails?|follow[\s-]?ups?)\b", clause)
@@ -223,6 +231,10 @@ def requested_effects(prompt: str, inventory: list[dict], manifests: dict) -> li
                 if not _operation_matches(kind, module):
                     continue
                 family = _family(slug, operation)
+                if family == "gmail" and kind == "send" and _NEGATED_DELIVERY.search(clause):
+                    # Negation also covers coordinated verbs: "do not wait
+                    # for a response or send email" must not require delivery.
+                    continue
                 if family == "calendar" and not _CALENDAR_EVENT_TARGET.match(tail):
                     # "Create a briefing from Calendar" describes a source,
                     # even when Calendar appears later in the same sentence.
