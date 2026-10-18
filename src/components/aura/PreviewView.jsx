@@ -3,7 +3,8 @@ import { motion } from "framer-motion";
 import { Eye, Mail, Database, ArrowLeft, Play, List, FileDown, FileText, Pencil, ListChecks, Check, ChevronDown, Plus, Trash2, Paperclip, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { aura } from "@/api/auraClient";
-import { downloadEmailEml, safeName } from "@/lib/auraDownload";
+import { downloadEmailEml, downloadTextFile, safeName } from "@/lib/auraDownload";
+import ReactMarkdown from "react-markdown";
 import { applyPresentationCopy, dynamicReferences, presentationCopySchema } from "@/lib/canvaCopyEdit.mjs";
 import { applyEmailCopy, emailCopySchema } from "@/lib/emailCopyEdit.mjs";
 import { fallbackReviewContract, mergeLegacyPreviewIntoArguments, requiresPreparedActionReview, setArgumentAtPath, unresolvedActionValues, validateReviewArguments } from "@/lib/approvalReview.mjs";
@@ -294,10 +295,10 @@ function EditableDocument({ preview, onPreviewChange, editing, structuredBody = 
         <FileText className="w-3.5 h-3.5 text-accent" />
         <span className="text-xs font-medium">Document</span>
         <button
-          onClick={() => downloadEmailEml(`aura-doc-${safeName(preview.docTitle || "draft")}.eml`, { to: "", subject: preview.docTitle || "", body: preview.docBody || "" })}
+          onClick={() => downloadTextFile(`aura-doc-${safeName(preview.docTitle || "draft")}.txt`, preview.docBody || "")}
           className="ml-auto flex items-center gap-1 text-[10px] px-2 py-1 rounded-full border border-white/10 text-muted-foreground hover:text-foreground hover:border-white/20 transition-colors"
         >
-          <FileDown className="w-3 h-3" /> .eml
+          <FileDown className="w-3 h-3" /> Download draft
         </button>
       </div>
       <div className="p-4 space-y-2">
@@ -311,13 +312,13 @@ function EditableDocument({ preview, onPreviewChange, editing, structuredBody = 
           />
         </div>
         <div className="pt-2 mt-1 border-t border-white/5">
-          <textarea
+          {!editing && !structuredBody ? <div className="aura-article-preview max-h-[28rem] overflow-y-auto rounded-xl bg-slate-50 p-6 text-sm leading-7 text-slate-700"><ReactMarkdown>{preview.docBody || ""}</ReactMarkdown></div> : <textarea
             value={preview.docBody || ""}
             onChange={(e) => onPreviewChange({ docBody: e.target.value })}
             readOnly={!editing || structuredBody}
             rows={10}
             className="w-full bg-transparent outline-none text-xs font-sans text-muted-foreground leading-relaxed resize-y border-0"
-          />
+          />}
         </div>
         {preview.note && <p className="text-[11px] text-muted-foreground/60 italic pt-1">{preview.note}</p>}
       </div>
@@ -373,6 +374,7 @@ function SchemaArgumentsEditor({ contract, args, editing, onArgumentsChange, onF
   const excluded = new Set(excludeKeys);
   const fields = (contract.fields || []).filter((field) => (
     !excluded.has(field.key)
+    && !(!field.required && /^(?:folder_id|folderId)$/.test(field.key) && !args?.[field.key])
     && (editing || field.required || Object.hasOwn(args || {}, field.key))
   ));
   if (!fields.length) return null;

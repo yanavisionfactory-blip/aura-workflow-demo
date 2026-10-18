@@ -2,6 +2,9 @@ import { useState } from "react";
 import { ChevronLeft, ChevronRight, ExternalLink, MailCheck, Presentation } from "lucide-react";
 import BreakdownTable from "./BreakdownTable";
 import ArticleResultPreview from "./ArticleResultPreview";
+import ReactMarkdown from "react-markdown";
+import CampaignDocumentPreview from "./CampaignDocumentPreview";
+import { campaignCopySections } from "@/lib/campaignCopySections.mjs";
 import { readableResultText } from "@/lib/resultPresentation.mjs";
 
 const readableDetail = (value = "") => readableResultText(value)
@@ -103,10 +106,12 @@ export default function ResultPreview({ result, results }) {
       </div>
     );
   }
+  const campaign = result.kind === "document" && result.preview && campaignCopySections(result.preview.body);
+  if (campaign) return <CampaignDocumentPreview preview={result.preview} groups={campaign} />;
   if (result.kind === "document" && result.preview) return (
     <div className="mx-auto max-w-3xl rounded-2xl border border-white/10 bg-[#f8fafc] px-6 py-8 text-[#1e293b] shadow-lg sm:px-12 sm:py-12">
       <h4 className="mb-6 text-2xl font-semibold">{result.preview.title}</h4>
-      <div className="whitespace-pre-wrap text-sm leading-7">{result.preview.body}</div>
+      <div className="aura-article-preview text-sm leading-7"><ReactMarkdown>{result.preview.body}</ReactMarkdown></div>
     </div>
   );
   if (results.breakdown) return <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#0c1422]"><BreakdownTable breakdown={results.breakdown} /></div>;
