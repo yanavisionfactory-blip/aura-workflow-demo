@@ -1760,6 +1760,14 @@ async def materialize_action_arguments(
     )
 
     operation = str(step.get("operation", ""))
+    from .approval_readiness import unfinished_action_content
+
+    planned_arguments = step.get("arguments") or {}
+    composed_fields = {
+        field for field in ("body", "content", "text", "message", "description")
+        if field in planned_arguments
+        and unfinished_action_content(operation, {field: planned_arguments[field]})
+    }
     manifest = current_capability_manifest(
         str(step.get("tool_slug", "")), capability_manifest
     )
@@ -1816,7 +1824,16 @@ async def materialize_action_arguments(
                 resolved = normalize_planned_module_arguments(
                     manifest, operation, resolved
                 )
-            from .approval_readiness import unfinished_action_content
+            missing_content = [field for field in composed_fields
+                               if not isinstance(resolved.get(field), str) or not resolved[field].strip()]
+            if missing_content:
+                raise ValueError("Composed action omitted requested content fields: " + ", ".join(sorted(missing_content)))
+            if operation == "wordpress-org.update-post" and "content" in composed_fields:
+                allowed_fields = set(planned_arguments) | {"title"}
+                unrelated = set(resolved) - allowed_fields
+                if any(resolved[field] not in (None, "") for field in unrelated):
+                    raise ValueError("Content composition must omit unrelated optional WordPress fields")
+                resolved = {field: value for field, value in resolved.items() if field in allowed_fields}
             if unfinished_action_content(operation, resolved):
                 raise ValueError("The action must contain finished content, not a placeholder")
             return resolved

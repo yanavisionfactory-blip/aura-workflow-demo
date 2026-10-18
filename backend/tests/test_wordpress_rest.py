@@ -48,6 +48,20 @@ async def test_update_checks_existing_post_and_never_publishes(broker, monkeypat
     assert result["ret"]["status"] == "draft"
 
 
+async def test_blank_optional_media_does_not_change_route_or_invent_attachment(broker, monkeypatch):
+    import json
+    calls = []
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json={"id": 11, "status": "draft"})
+    transport(monkeypatch, handler)
+    arguments = {"post": "11", "status": "draft", "content": "Complete body", "media": "", "author": ""}
+    assert wp.handles("wordpress-org", "wordpress-org.update-post", arguments)
+    await wp.execute(broker, "owner", "account", "wordpress-org.update-post", arguments)
+    assert json.loads(calls[1].content) == {"status": "draft", "content": "Complete body"}
+    assert not wp.handles("wordpress-org", "wordpress-org.update-post", {**arguments, "media": "42"})
+
+
 async def test_published_post_is_not_changed(broker, monkeypatch):
     calls = []
     def handler(request):

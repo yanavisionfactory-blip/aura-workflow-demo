@@ -20,10 +20,19 @@ class WordPressRESTError(ValueError):
     pass
 
 
+def _draft_arguments(arguments):
+    # A blank optional opaque reference is absent, not an invented attachment
+    # or author ID. Explicit nonempty references remain outside this draft-only
+    # adapter and continue through the vendor route.
+    return {key: value for key, value in arguments.items()
+            if not (key in {"media", "author"} and value in (None, ""))}
+
+
 def handles(provider, operation, arguments):
     if provider != "wordpress-org" or operation not in OPERATIONS:
         return False
     # Keep every other vendor action and publishing flow on its declared route.
+    arguments = _draft_arguments(arguments)
     return operation != "wordpress-org.update-post" or (
         arguments.get("status") == "draft"
         and set(arguments) <= {"post", "status", "title", "content", "excerpt"}
@@ -33,6 +42,8 @@ def handles(provider, operation, arguments):
 async def execute(broker, external_user_id, account_id, operation, arguments):
     if not handles("wordpress-org", operation, arguments):
         raise WordPressRESTError("This WordPress REST operation is not supported")
+    if operation == "wordpress-org.update-post":
+        arguments = _draft_arguments(arguments)
     credentials = await broker.wordpress_account_credentials(external_user_id, account_id)
     site = str(credentials.get("url") or "").strip().rstrip("/")
     if site and "://" not in site:
