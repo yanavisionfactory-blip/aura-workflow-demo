@@ -3,6 +3,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, HttpUrl, StringConstraints, field_validator, model_validator
 
+# Include supporting reads and write verification within the same finite bound.
+MAX_WORKFLOW_STEPS = 40
+
 
 class ConnectionResume(BaseModel):
     connection_id: str | None = None
@@ -441,7 +444,7 @@ class PlanStep(BaseModel):
     fallback_tool_slug: str | None = None
     fallback_operation: str | None = None
     reduced_scope_arguments: dict[str, Any] | None = None
-    depends_on: list[str] = Field(default_factory=list, max_length=20)
+    depends_on: list[str] = Field(default_factory=list, max_length=MAX_WORKFLOW_STEPS)
     dependency_mode: Literal["all_succeeded", "all_settled"] = "all_succeeded"
     condition: StepCondition | None = None
     output_variables: dict[str, Any] = Field(default_factory=dict)
@@ -488,7 +491,7 @@ class ResultContract(BaseModel):
         default=None,
         pattern=r"^[a-z][a-z0-9_]{0,119}$",
     )
-    supporting_step_keys: list[str] = Field(default_factory=list, max_length=20)
+    supporting_step_keys: list[str] = Field(default_factory=list, max_length=MAX_WORKFLOW_STEPS)
     metric_sources: list[ResultMetricSource] = Field(default_factory=list, max_length=3)
 
 
@@ -606,7 +609,7 @@ class RecoveryDiagnosis(BaseModel):
 class WorkflowPlan(BaseModel):
     name: str
     interpretation: str
-    steps: list[PlanStep] = Field(min_length=1, max_length=20)
+    steps: list[PlanStep] = Field(min_length=1, max_length=MAX_WORKFLOW_STEPS)
     result_contract: ResultContract | None = None
     planning_artifacts: dict[str, Any] = Field(default_factory=dict)
 

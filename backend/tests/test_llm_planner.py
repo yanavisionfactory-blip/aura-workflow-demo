@@ -1,4 +1,4 @@
-"""The direct planner makes one model call and never bypasses preflight."""
+"""Direct planning repairs serialization once and never bypasses preflight."""
 
 import json
 from types import SimpleNamespace
@@ -13,6 +13,130 @@ from app.native_connectors import NativeConnectorError, native_manifest
 from app.plan_preflight import preflight_plan
 from app.request_contracts import requested_effects
 from app.schemas import PlanStep, WorkflowPlan
+
+
+@pytest.fixture
+def malformed_plan_client(monkeypatch):
+    compact = CompactWorkflowPlan.model_validate({
+        "name": "Draft review", "interpretation": "Read and update a draft", "steps": [
+            {"key": "read", "agent": "WordPress", "tool_slug": "wordpress",
+             "operation": "post.get", "arguments_json": '{"post_id":107}',
+             "reason": "Read draft", "expected_output": "Draft", "consequential": False,
+             "depends_on": [], "required_evidence": []},
+            {"key": "save", "agent": "WordPress", "tool_slug": "wordpress",
+             "operation": "post.update", "arguments_json": '{"post_id":107, title:"Demo"}',
+             "reason": "Update draft", "expected_output": "Saved draft", "consequential": True,
+             "depends_on": ["read"], "required_evidence": []},
+        ],
+    })
+    parse = AsyncMock()
+
+    class Client:
+        def __init__(self, **_kwargs):
+            self.responses = SimpleNamespace(parse=parse)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(llm_planner, "AsyncOpenAI", Client)
+    monkeypatch.setattr(llm_planner, "get_settings", lambda: SimpleNamespace(
+        openai_api_key="test", openai_model="test-model", model_call_timeout_seconds=30,
+    ))
+    return compact, parse
+
+
+@pytest.mark.asyncio
+async def test_malformed_arguments_get_one_scoped_serialization_repair(malformed_plan_client):
+    compact, parse = malformed_plan_client
+    repair = llm_planner.PlanJSONRepairs(repairs=[llm_planner.ArgumentJSONRepair(
+        step_key="save", arguments_json='{"post_id":107,"title":"Demo"}',
+    )])
+    parse.side_effect = [SimpleNamespace(output_parsed=compact), SimpleNamespace(output_parsed=repair)]
+    schema = {"type": "object", "properties": {"post_id": {"type": "integer"}}}
+    result = await llm_planner.create_llm_plan("Update my draft", [{
+        "slug": "wordpress", "connected": True,
+        "allowed_operations": ["post.get", "post.update"],
+        "operation_contracts": [{"name": "post.update", "input_schema": schema}],
+    }], set())
+    assert parse.await_count == 2
+    second = parse.await_args_list[1].kwargs
+    assert second["text_format"] is llm_planner.PlanJSONRepairs
+    assert json.loads(second["input"])["malformed_arguments"] == [{
+        "step_key": "save", "arguments_json": compact.steps[1].arguments_json,
+        "input_schema": schema,
+    }]
+    assert result.steps[0].arguments == {"post_id": 107}
+    assert result.steps[1].arguments == {"post_id": 107, "title": "Demo"}
+    assert result.steps[1].depends_on == ["read"]
+    assert result.steps[1].consequential is True
+    assert result.steps[1].operation == "post.update"
+    assert compact.steps[1].arguments_json == '{"post_id":107, title:"Demo"}'
+    assert result.planning_artifacts["argument_json_repaired_steps"] == ["save"]
+    assert "preflight_evaluation" not in result.planning_artifacts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repairs", [
+    [],
+    [{"step_key": "other", "arguments_json": "{}"}],
+    [{"step_key": "save", "arguments_json": "{}"},
+     {"step_key": "save", "arguments_json": "{}"}],
+    [{"step_key": "save", "arguments_json": "{bad}"}],
+    [{"step_key": "save", "arguments_json": "[]"}],
+])
+async def test_invalid_repairs_stop_after_one_attempt(malformed_plan_client, repairs):
+    compact, parse = malformed_plan_client
+    parse.side_effect = [SimpleNamespace(output_parsed=compact), SimpleNamespace(
+        output_parsed=llm_planner.PlanJSONRepairs.model_validate({"repairs": repairs}),
+    )]
+    with pytest.raises((ValueError, TypeError)):
+        await llm_planner.create_llm_plan("Update my draft", [], set())
+    assert parse.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_json_repair_cannot_bypass_normal_schema_validation(malformed_plan_client):
+    compact, parse = malformed_plan_client
+    parse.side_effect = [SimpleNamespace(output_parsed=compact), SimpleNamespace(
+        output_parsed=llm_planner.PlanJSONRepairs.model_validate({"repairs": [{
+            "step_key": "save", "arguments_json": '{"unexpected":"still invalid"}',
+        }]}),
+    )]
+    plan = await llm_planner.create_llm_plan("Update my draft", [], set())
+    manifest = {"capabilities": [{
+        "name": "post.get", "permission_scope": "read", "input_schema": {"type": "object"},
+    }, {
+        "name": "post.update", "permission_scope": "write", "input_schema": {
+            "type": "object", "required": ["post_id"],
+            "properties": {"post_id": {"type": "integer"}}, "additionalProperties": False,
+        },
+    }]}
+    evaluation = preflight_plan(plan, [{
+        "slug": "wordpress", "connected": True,
+        "allowed_operations": ["post.get", "post.update"],
+    }], {"wordpress": manifest}, set())
+    assert evaluation.fixes
+
+
+def test_long_workflow_keeps_supporting_reads_with_a_shared_finite_bound():
+    assert CompactWorkflowPlan.model_json_schema()["properties"]["steps"]["maxItems"] == 40
+    assert WorkflowPlan.model_json_schema()["properties"]["steps"]["maxItems"] == 40
+    steps = [{
+        "key": f"read_{index}", "agent": "weather", "tool_slug": "aura",
+        "operation": "weather.forecast", "arguments_json": '{"location":"Berlin"}',
+        "reason": "Read", "expected_output": "Forecast", "consequential": False,
+        "depends_on": [f"read_{prior}" for prior in range(index)], "required_evidence": [],
+    } for index in range(40)]
+    compact = CompactWorkflowPlan(name="Agency", interpretation="Full workflow", steps=steps)
+    expanded = llm_planner._expand_compact_plan(compact)
+    assert len(expanded.steps) == 40
+    assert len(expanded.result_contract.supporting_step_keys) == 39
+    assert len(expanded.steps[-1].depends_on) == 39
+    with pytest.raises(ValueError):
+        CompactWorkflowPlan(name="Too long", interpretation="Bounded", steps=steps + [steps[0]])
 
 
 def test_planner_schema_only_describes_a_plan():
