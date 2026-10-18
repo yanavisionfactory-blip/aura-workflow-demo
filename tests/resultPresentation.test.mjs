@@ -29,6 +29,15 @@ test("workflow transport is not rendered as a deliverable", () => {
   assert.equal(readableResultText('[{"keyword":"AC repair Dallas","volume":20}]'), '[{"keyword":"AC repair Dallas","volume":20}]');
 });
 
+test("an existing Jira task update is labelled as an update", () => {
+  const result = primaryResultFromOutputs([{ operation: "jira.issue.update", provider_result: {
+    result_url: "https://example.atlassian.net/browse/DEMO-1" } }]);
+  assert.equal(result.providerVerb, "Updated in");
+  const readback = primaryResultFromOutputs([{ operation: "jira.issue.get", provider_result: {
+    result_url: "https://example.atlassian.net/browse/DEMO-1" } }]);
+  assert.equal(readback.providerVerb, "Checked in");
+});
+
 test("process counters do not masquerade as meaningful result metrics", () => {
   assert.deepEqual(meaningfulMetrics([
     { value: "4", label: "steps completed" },

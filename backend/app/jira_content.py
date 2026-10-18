@@ -4,12 +4,7 @@ import json
 from copy import deepcopy
 
 
-def jira_description(value):
-    if not isinstance(value, str):
-        return deepcopy(value)
-    # A provider read may have serialized its ADF document. Decode only a real
-    # Jira document; ordinary JSON examples remain ordinary prose. Preserve an
-    # append after that document as new paragraphs instead of double-encoding it.
+def _document_string(value):
     document, tail = None, value
     try:
         parsed, end = json.JSONDecoder().raw_decode(value.lstrip())
@@ -18,8 +13,34 @@ def jira_description(value):
             document, tail = parsed, value.lstrip()[end:].strip()
     except (ValueError, TypeError):
         pass
-    paragraphs = [{"type": "paragraph", "content": [{"type": "text", "text": line}]}
-                  for line in tail.splitlines() if line.strip()]
-    if document is not None:
-        return {**document, "content": [*document["content"], *paragraphs]}
-    return {"type": "doc", "version": 1, "content": paragraphs}
+    return document, tail
+
+
+def jira_description(value, *, _depth=0):
+    # Providers and composers can wrap a serialized document in another ADF
+    # paragraph. Unpack transport envelopes, preserving real nodes and prose.
+    if isinstance(value, str):
+        document, tail = _document_string(value)
+        paragraphs = [{"type": "paragraph", "content": [{"type": "text", "text": line}]}
+                      for line in tail.splitlines() if line.strip()]
+        document = {**document, "content": [*document["content"], *paragraphs]} if document else {
+            "type": "doc", "version": 1, "content": paragraphs}
+    else:
+        document = deepcopy(value)
+    if not (isinstance(document, dict) and document.get("type") == "doc"
+            and document.get("version") == 1 and isinstance(document.get("content"), list)):
+        return document
+    content = []
+    for node in document["content"]:
+        parts = node.get("content") if isinstance(node, dict) else None
+        if (isinstance(node, dict) and node.get("type") == "paragraph"
+                and isinstance(parts, list) and len(parts) == 1
+                and isinstance(parts[0], dict)
+                and parts[0].get("type") == "text" and isinstance(parts[0].get("text"), str)
+                and _document_string(parts[0]["text"])[0] is not None):
+            if _depth >= 8:
+                raise ValueError("Prepare readable handoff prose instead of nested document envelopes")
+            content.extend(jira_description(parts[0]["text"], _depth=_depth + 1)["content"])
+        else:
+            content.append(node)
+    return {**document, "content": content}

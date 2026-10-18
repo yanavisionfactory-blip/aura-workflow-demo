@@ -56,3 +56,23 @@ def test_nested_handoff_and_metadata_must_be_finished_before_review():
 def test_a_claim_that_content_was_prepared_cannot_replace_the_actual_article():
     body = '<h1>Plano guide</h1><p>[Prepared exact complete 604-word Plano revision from the Google Doc section in semantic HTML.]</p>'
     assert unfinished_action_content("wordpress-org.update-post", {"content": body})
+
+
+def test_nested_serialized_jira_history_is_real_prose_before_review_and_write():
+    history = jira_description("Existing verified work")
+    history["content"][0]["content"][0]["marks"] = [{"type": "strong"}]
+    wrapped = {"type": "doc", "version": 1, "content": [{"type": "paragraph", "content": [{
+        "type": "text", "text": json.dumps(history) + "\nFinal handoff: saved drafts"}]}]}
+    before = json.dumps(wrapped)
+    result = canonical_action_arguments("jira.issue.update", {"fields": {"description": wrapped}}, {})
+    document = result["fields"]["description"]
+    assert document["content"][0] == history["content"][0]
+    assert document["content"][1]["content"][0]["text"] == "Final handoff: saved drafts"
+    assert jira_description(document) == document
+    assert json.dumps(wrapped) == before
+
+
+def test_jira_json_code_examples_are_not_unpacked_as_document_transport():
+    example = {"type": "doc", "version": 1, "content": [{"type": "codeBlock", "content": [{
+        "type": "text", "text": json.dumps(jira_description("A code example"))}]}]}
+    assert jira_description(example) == example
