@@ -8,7 +8,7 @@ export default function TopBar({ onHistoryOpen, onBack, backLabel = "Back" }) {
       initial={{ opacity: 0, y: -10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5 }}
-      className="flex items-center justify-between px-6 py-4 border-b border-white/5"
+      className="flex flex-wrap items-center justify-between gap-3 border-b border-white/5 px-4 py-4 sm:px-6"
     >
       <div className="flex items-center gap-3">
         {onBack && (

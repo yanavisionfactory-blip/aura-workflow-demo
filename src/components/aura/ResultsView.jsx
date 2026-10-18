@@ -5,6 +5,7 @@ import AccessRequestModal from "./AccessRequestModal";
 import ScheduleModal from "./ScheduleModal";
 import CreatorApprovalList from "./CreatorApprovalList";
 import ResultPreview from "./ResultPreview";
+import { ResultsHeading, ResultsMetrics } from "./ResultsSummary";
 import { buildSummaryText } from "@/lib/auraSummary";
 import { resultMetrics, selectPrimaryOutcome, supportingReceipts } from "@/lib/resultPresentation.mjs";
 
@@ -43,22 +44,8 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mx-auto w-full max-w-5xl pb-8">
-      <div className="mb-7 flex items-start gap-4">
-        <div className={`shrink-0 rounded-2xl border p-3 ${isFailure ? "border-amber-400/20 bg-amber-400/10" : "border-emerald-400/20 bg-emerald-400/10"}`}>
-          {isFailure ? <AlertTriangle className="h-7 w-7 text-amber-400" /> : <CheckCircle2 className="h-7 w-7 text-emerald-400" />}
-        </div>
-        <div className="min-w-0">
-          <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">{results.title || "Workflow complete"}</h2>
-          {results.summary && <p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted-foreground">{results.summary}</p>}
-        </div>
-      </div>
-
-      {metrics.length > 0 && <div className="mb-7 grid gap-3 sm:grid-cols-3">
-        {metrics.map((metric, index) => <div key={`${metric.label}:${index}`} className="rounded-2xl border border-white/10 bg-card/60 px-5 py-4">
-          <p className="text-3xl font-semibold tracking-tight text-foreground">{metric.value}</p>
-          <p className="mt-1 text-xs text-muted-foreground">{metric.label}</p>
-        </div>)}
-      </div>}
+      <ResultsHeading title={results.title || "Workflow complete"} summary={results.summary} isFailure={isFailure} />
+      <ResultsMetrics metrics={metrics} />
 
       <section className="mb-5 overflow-hidden rounded-3xl border border-primary/25 bg-gradient-to-br from-primary/[0.09] via-card/80 to-card/50 shadow-xl shadow-primary/[0.06]">
         <div className="flex flex-wrap items-start justify-between gap-4 px-5 pb-4 pt-6 sm:px-7">
