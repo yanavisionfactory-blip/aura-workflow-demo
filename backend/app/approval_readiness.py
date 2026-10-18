@@ -19,6 +19,11 @@ _PROMISED_CONTENT = re.compile(
     r"be\s+(?:generated|written|composed|filled))\b",
     re.IGNORECASE,
 )
+_EMPTY_PROSE = re.compile(
+    r"<(?P<tag>p|li|div|td)\b[^>]*>\s*(?:\.{3,}|…)\s*</(?P=tag)\s*>|"
+    r"(?:^|\n)\s*(?:\.{3,}|…)\s*(?=$|\n)",
+    re.IGNORECASE,
+)
 _RECIPIENT_PLACEHOLDER = re.compile(
     r"^(?:(?:your|my|the)\s+)?connected\s+(?:gmail|email)\s+address$|"
     r"^(?:the\s+)?recipient(?:'s)?\s+email(?:\s+address)?$",
@@ -46,7 +51,9 @@ def unfinished_action_content(operation: str, arguments: dict) -> bool:
             return True
     return any(
         isinstance(arguments.get(field), str)
-        and (_UNFINISHED_CONTENT.search(arguments[field]) or _PROMISED_CONTENT.search(arguments[field]))
+        and (_UNFINISHED_CONTENT.search(arguments[field])
+             or _PROMISED_CONTENT.search(arguments[field])
+             or _EMPTY_PROSE.search(arguments[field]))
         for field in ("body", "content", "text", "message", "description")
     )
 
