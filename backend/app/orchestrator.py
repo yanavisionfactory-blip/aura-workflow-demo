@@ -84,7 +84,7 @@ from .run_supervisor import (
     recover_planning_failure,
     transition_run,
 )
-from .schemas import CriticDecision, OutcomeVerification, PlanStep, WorkflowPlan
+from .schemas import MAX_WORKFLOW_STEPS, CriticDecision, OutcomeVerification, PlanStep, WorkflowPlan
 from .security import CredentialVault
 from .universal_connectors import (
     ConnectorError,
@@ -659,7 +659,7 @@ def _ensure_document_body_readback(plan, manifests_by_slug: dict[str, dict]) -> 
             None,
         )
         if readback is None:
-            if len(plan.steps) >= 20:
+            if len(plan.steps) >= MAX_WORKFLOW_STEPS:
                 raise NativeConnectorError("The document readback exceeds the workflow step limit")
             key = f"{doc.key[:100]}_readback"
             if any(step.key == key for step in plan.steps):
