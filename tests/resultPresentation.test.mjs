@@ -28,6 +28,21 @@ test("multiple Canva designs and completed exports stay reachable beside the mai
   assert.equal(receipts[0].title, "Square creative");
 });
 
+test("read-only campaign verification shows the real reused creative without claiming creation", () => {
+  const outputs = ["square", "landscape"].map((id) => ({ step_key: id, operation: "canva.design.get", provider_result: {
+    design: { id, title: id + " creative", urls: { edit_url: `https://www.canva.com/design/${id}/edit` },
+      thumbnail: { url: `https://media.canva.com/${id}.png` } } } }));
+  const primary = primaryResultFromOutputs(outputs, { title: "Campaign package verified" }, { primary_step_key: "landscape", artifact_step_key: "landscape" });
+  assert.equal(primary.kind, "presentation");
+  assert.equal(primary.designId, "landscape");
+  assert.equal(primary.providerVerb, "Reused from");
+  assert.equal(primary.thumbnailUrl, "https://media.canva.com/landscape.png");
+  assert.doesNotMatch(primary.completionSummary, /created|sent|published/i);
+  const activity = outputs.map((output) => ({ status: "completed", stepKey: output.step_key, tool: "Canva", output }));
+  assert.deepEqual(resultMetrics([], activity), [{ value: "2", label: "existing creatives reviewed" }]);
+  assert.equal(supportingReceipts({}, activity, primary, { supporting_step_keys: [] }).length, 1);
+});
+
 test("saved WordPress articles use verified returned bodies instead of old planned content", () => {
   const output = { operation: "wordpress-org.update-post", critic: { action: "accept" }, outcome_check: { status: "verified" },
     resolved_arguments: { post: "108", content: "old preparation note" }, provider_result: { ret: {
