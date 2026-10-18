@@ -3,11 +3,12 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { Activity, AlertCircle, ArrowRight, Check, CheckCircle2, ChevronDown, Download, ExternalLink, Loader2, ShieldCheck, Upload } from "lucide-react";
 import PrimaryResult from "@/components/aura/PrimaryResult";
 import ArticleResultPreview from "@/components/aura/ArticleResultPreview";
+import DeliverySourceLinks from "@/components/aura/DeliverySourceLinks";
 import WorkspaceShell from "@/components/aura/WorkspaceShell";
 import { ResultsHeading, ResultsMetrics } from "@/components/aura/ResultsSummary";
 import { aura } from "@/api/auraClient";
 import { articleMarkdown } from "@/lib/actionContent.mjs";
-import { deliveryLink, deliveryMetrics, deliverySections, parseDeliveryBundle } from "@/lib/workflowDelivery.mjs";
+import { deliveryLink, deliveryMetrics, deliverySections, deliveryToolLinks, parseDeliveryBundle } from "@/lib/workflowDelivery.mjs";
 
 const stamp = (value) => value ? new Date(value).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }) + " UTC" : "Recorded in source";
 const card = "rounded-2xl border border-white/10 bg-card/60";
@@ -47,7 +48,7 @@ function DeliveryEvidence({ data, section }) {
   </>;
 }
 
-function DeliveryView({ data, onSave, saving, error }) {
+function DeliveryView({ data, onSave, onSourceSave = null, saving, error }) {
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState("");
   const stages = [["Intake", "Brief completed"], ["Research", `${data.keywords.rows.length} real ideas`], ["Content", `${data.articles.length} drafts verified`], ["On-page SEO", "Saved fields verified"], ["Image checks", "Checked · see limitation"], ["Handoff", "Task verified"]];
@@ -71,13 +72,13 @@ function DeliveryView({ data, onSave, saving, error }) {
     </div>
     <section aria-label="Results from other apps" className="mb-6">
       <h2 className="mb-3 text-sm font-semibold">Results from other apps</h2>
-      <div className="space-y-3">{supporting.map((item) => <details key={item.section} className={`${card} group overflow-hidden`}>
+      <div className="space-y-3">{supporting.map((item) => <div key={item.section} className={`${card} overflow-hidden`}><details className="group">
         <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-3 px-5 py-4 [&::-webkit-details-marker]:hidden">
           <span className="min-w-0"><span className="block text-[10px] font-semibold text-primary">{item.tool}</span><span className="mt-1 block text-sm font-medium">{item.title}</span><span className="mt-1 block text-[11px] text-muted-foreground">{item.detail}</span></span>
-          <span className="inline-flex items-center gap-2 rounded-lg border border-primary/25 px-3 py-1.5 text-xs text-primary">View results<ChevronDown className="h-3 w-3 transition-transform group-open:rotate-180" /></span>
+          <span className="inline-flex items-center gap-2 rounded-lg border border-primary/25 px-3 py-1.5 text-xs text-primary">View in AURA<ChevronDown className="h-3 w-3 transition-transform group-open:rotate-180" /></span>
         </summary>
         <div className="space-y-4 border-t border-white/10 p-4 sm:p-5"><DeliveryEvidence data={data} section={item.section} /></div>
-      </details>)}</div>
+      </details>{deliveryToolLinks(data, item.section).length > 0 && <div className="flex flex-wrap gap-x-5 gap-y-3 border-t border-white/5 px-5 py-3">{deliveryToolLinks(data, item.section).map((link) => <OutLink href={link.url} key={link.label}>{link.label}</OutLink>)}</div>}</div>)}</div>
     </section>
     <details className="group overflow-hidden rounded-2xl border border-white/10 bg-card/40">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4 text-xs font-medium [&::-webkit-details-marker]:hidden"><span className="flex items-center gap-2"><Activity className="h-4 w-4 text-primary" />Workflow activity</span><ChevronDown className="h-3.5 w-3.5 text-muted-foreground transition-transform group-open:rotate-180" /></summary>
@@ -87,6 +88,7 @@ function DeliveryView({ data, onSave, saving, error }) {
       <span>Prepared in AURA · {stamp(data.preparedAt)}</span>
       {onSave ? <button type="button" onClick={onSave} disabled={saving} className="rounded-xl bg-primary px-4 py-2.5 font-semibold text-white disabled:opacity-50">{saving ? "Saving review pack…" : "Save review pack"}</button> : <button type="button" disabled={downloading} onClick={async () => { setDownloading(true); setDownloadError(""); try { await downloadReview(data); } catch { setDownloadError("The download couldn't finish. Please try again."); } finally { setDownloading(false); } }} className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 hover:bg-white/5 disabled:opacity-50">{downloading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}Download review</button>}
     </div>
+    {onSourceSave && <DeliverySourceLinks values={data.sourceLinks} onSave={onSourceSave} />}
   </main>;
 }
 
@@ -107,11 +109,18 @@ export default function DeliveryResults() {
     return () => { current = false; };
   }, [deliveryId, creating]);
   const save = async () => { if (!data || saving) return; setSaving(true); setError(""); try { const saved = await aura.entities.Delivery.create(data); navigate(`/results/${saved.id}`, { replace: true }); } catch { setError("The review pack couldn't be saved yet. Your preview is intact. Please try again."); } finally { setSaving(false); } };
+  const saveSources = async (sourceLinks) => {
+    await aura.entities.Delivery.update(deliveryId, { sourceLinks });
+    const saved = await aura.entities.Delivery.get(deliveryId);
+    const verified = parseDeliveryBundle(JSON.stringify(saved));
+    if (JSON.stringify(verified.sourceLinks) !== JSON.stringify(sourceLinks)) throw new Error("Links not yet verified");
+    setData(verified);
+  };
   return <WorkspaceShell
     onBack={() => navigate(deliveryId ? "/results" : "/")}
     backLabel={deliveryId ? "Results" : "Back"}
     onHistoryOpen={() => navigate("/", { state: { openHistory: true } })}
   >
-    {loading ? <main className="grid flex-1 place-items-center px-4 py-16" aria-live="polite"><div className="text-center"><Loader2 className="mx-auto h-6 w-6 animate-spin text-primary" /><p className="mt-4 text-sm text-muted-foreground">Opening your verified results…</p></div></main> : data ? <DeliveryView data={data} onSave={creating ? save : null} saving={saving} error={error} /> : <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8 md:py-12"><div className="flex flex-wrap items-center justify-between gap-4"><div><p className="text-xs uppercase tracking-[0.2em] text-primary">AURA</p><h1 className="mt-3 text-3xl font-semibold">{creating ? "Prepare a review pack" : "Workflow results"}</h1></div>{!creating && <Link to="/results/new" className="rounded-xl bg-primary px-4 py-3 text-xs font-semibold">Prepare results</Link>}</div>{error && <p role="alert" className="mt-5 text-sm text-amber-200">{error}</p>}{creating ? <section className={`${card} mt-8 p-8`}><Upload className="h-7 w-7 text-primary" /><h2 className="mt-5 text-lg font-medium">Bring the verified outputs together</h2><p className="mt-3 max-w-xl text-sm leading-7 text-muted-foreground">Choose an AURA results file containing the completed brief, keyword evidence, full drafts, saved SEO values and handoff. You’ll review everything before saving.</p><input ref={input} type="file" accept=".json,application/json" className="hidden" aria-label="Verified results file" onChange={async (event) => { setError(""); try { const file = event.target.files?.[0]; if (file) setData(parseDeliveryBundle(await file.text())); } catch (problem) { setError(problem.message); } event.target.value = ""; }} /><button onClick={() => input.current?.click()} className="mt-6 rounded-xl bg-primary px-5 py-3 text-sm font-medium">Choose verified results</button></section> : <div className="mt-8 space-y-3">{records.map((record) => <Link key={record.id} to={`/results/${record.id}`} className={`${card} flex items-center justify-between gap-4 p-6 hover:border-primary/30`}><span><span className="text-[10px] uppercase tracking-wider text-primary">{record.agency || "Agency review"}</span><span className="mt-2 block text-lg font-medium">{record.title}</span><span className="mt-2 block text-xs text-muted-foreground">{record.client} · {stamp(record.preparedAt)}</span></span><ArrowRight className="h-5 w-5 text-primary" /></Link>)}{!records.length && <p className="text-sm text-muted-foreground">Your completed review packs will appear here.</p>}</div>}</main>}
+    {loading ? <main className="grid flex-1 place-items-center px-4 py-16" aria-live="polite"><div className="text-center"><Loader2 className="mx-auto h-6 w-6 animate-spin text-primary" /><p className="mt-4 text-sm text-muted-foreground">Opening your verified results…</p></div></main> : data ? <DeliveryView data={data} onSave={creating ? save : null} onSourceSave={creating ? null : saveSources} saving={saving} error={error} /> : <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8 md:py-12"><div className="flex flex-wrap items-center justify-between gap-4"><div><p className="text-xs uppercase tracking-[0.2em] text-primary">AURA</p><h1 className="mt-3 text-3xl font-semibold">{creating ? "Prepare a review pack" : "Workflow results"}</h1></div>{!creating && <Link to="/results/new" className="rounded-xl bg-primary px-4 py-3 text-xs font-semibold">Prepare results</Link>}</div>{error && <p role="alert" className="mt-5 text-sm text-amber-200">{error}</p>}{creating ? <section className={`${card} mt-8 p-8`}><Upload className="h-7 w-7 text-primary" /><h2 className="mt-5 text-lg font-medium">Bring the verified outputs together</h2><p className="mt-3 max-w-xl text-sm leading-7 text-muted-foreground">Choose an AURA results file containing the completed brief, keyword evidence, full drafts, saved SEO values and handoff. You’ll review everything before saving.</p><input ref={input} type="file" accept=".json,application/json" className="hidden" aria-label="Verified results file" onChange={async (event) => { setError(""); try { const file = event.target.files?.[0]; if (file) setData(parseDeliveryBundle(await file.text())); } catch (problem) { setError(problem.message); } event.target.value = ""; }} /><button onClick={() => input.current?.click()} className="mt-6 rounded-xl bg-primary px-5 py-3 text-sm font-medium">Choose verified results</button></section> : <div className="mt-8 space-y-3">{records.map((record) => <Link key={record.id} to={`/results/${record.id}`} className={`${card} flex items-center justify-between gap-4 p-6 hover:border-primary/30`}><span><span className="text-[10px] uppercase tracking-wider text-primary">{record.agency || "Agency review"}</span><span className="mt-2 block text-lg font-medium">{record.title}</span><span className="mt-2 block text-xs text-muted-foreground">{record.client} · {stamp(record.preparedAt)}</span></span><ArrowRight className="h-5 w-5 text-primary" /></Link>)}{!records.length && <p className="text-sm text-muted-foreground">Your completed review packs will appear here.</p>}</div>}</main>}
   </WorkspaceShell>;
 }

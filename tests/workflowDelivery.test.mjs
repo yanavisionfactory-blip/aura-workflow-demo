@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { deliveryLink, deliveryMetrics, deliverySections, parseDeliveryBundle } from "../src/lib/workflowDelivery.mjs";
+import { deliveryLink, deliveryMetrics, deliverySections, deliverySourceLinks, deliveryToolLinks, parseDeliveryBundle } from "../src/lib/workflowDelivery.mjs";
 
 const bundle = () => ({ schemaVersion: 1, title: "SEO review pack", client: "Fictional client", brief: { goal: "Prepare content", audience: "Homeowners", services: [], areas: [] },
   articles: [{ location: "Example", title: "Service guide", body: "Complete article prose. ".repeat(150), words: 450, status: "draft", verification: { at: "2026-10-18T15:00:00Z", source: "WordPress editor" }, seo: { title: "Example guide", description: "Demonstration description", focusKeyword: "example service", verifiedAt: "2026-10-18T15:00:00Z" } }],
@@ -30,4 +30,19 @@ test("delivery import requires full unpublished bodies and verified saved SEO fi
 test("delivery links cannot execute code or carry credentials and access tokens", () => {
   for (const value of ["javascript:alert(1)", "http://example.com", "https://user:secret@example.com", "https://example.com?access_token=secret"]) assert.equal(deliveryLink(value), null);
   assert.equal(deliveryLink("https://example.com/wp-admin/post.php?post=107&action=edit"), "https://example.com/wp-admin/post.php?post=107&action=edit");
+});
+
+test("tool actions point to saved outputs and never invent missing research destinations", () => {
+  const data = bundle();
+  data.articles[0].link = "https://example.com/wp-admin/post.php?post=1&action=edit";
+  assert.deepEqual(deliveryToolLinks(data, "Keyword evidence"), []);
+  data.sourceLinks = { intake: "https://docs.google.com/document/d/intake/edit", research: "https://docs.google.com/document/d/research/edit", report: "https://docs.google.com/document/d/report/edit" };
+  const parsed = parseDeliveryBundle(JSON.stringify(data));
+  assert.deepEqual(parsed.sourceLinks, data.sourceLinks);
+  assert.equal(deliveryToolLinks(parsed, "Intake")[0].url, data.sourceLinks.intake);
+  assert.equal(deliveryToolLinks(parsed, "Keyword evidence")[0].label, "Open research in Google Docs");
+  assert.equal(deliveryToolLinks(parsed, "SEO & checks")[0].url, data.articles[0].link);
+  assert.equal(deliveryToolLinks(parsed, "Handoff")[0].url, data.handoff.link);
+  assert.throws(() => deliverySourceLinks({ research: "https://example.com/not-a-document" }), /existing Google Docs/);
+  assert.throws(() => deliverySourceLinks({ intake: "https://docs.google.com/document/d/intake/edit?access_token=secret" }), /existing Google Docs/);
 });

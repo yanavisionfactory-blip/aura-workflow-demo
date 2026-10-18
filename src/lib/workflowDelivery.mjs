@@ -9,6 +9,29 @@ export function deliveryLink(value) {
   } catch { return null; }
 }
 
+export function deliverySourceLinks(values = {}) {
+  const links = {};
+  for (const key of ["intake", "research", "report"]) {
+    if (!values[key]?.trim()) continue;
+    const safe = deliveryLink(values[key].trim());
+    if (!safe || new URL(safe).hostname !== "docs.google.com" || !/^\/document\/d\/[^/]+(?:\/edit)?\/?$/.test(new URL(safe).pathname)) {
+      throw new Error("Use the existing Google Docs document link for each saved document.");
+    }
+    links[key] = safe;
+  }
+  return links;
+}
+
+export function deliveryToolLinks(data, section) {
+  const sources = deliverySourceLinks(data.sourceLinks);
+  const links = section === "Intake" ? [{ label: "Open in Google Docs", url: sources.intake }]
+    : section === "Keyword evidence" ? [{ label: "Open research in Google Docs", url: sources.research }]
+    : section === "SEO & checks" ? data.articles.map((article) => ({ label: `${article.location} SEO in WordPress`, url: article.link }))
+    : section === "Handoff" ? [{ label: "Open in Jira", url: data.handoff.link }, { label: "Open final report in Google Docs", url: sources.report }]
+    : [];
+  return links.filter((link) => deliveryLink(link.url)).map((link) => ({ ...link, url: deliveryLink(link.url) }));
+}
+
 export function parseDeliveryBundle(text) {
   if (typeof text !== "string" || text.length > 500000) throw new Error("Choose a results file smaller than 500 KB.");
   let data;
@@ -30,9 +53,10 @@ export function parseDeliveryBundle(text) {
   if (data.keywords.rows.some((row) => !row.keyword || !Number.isInteger(row.volume) || row.volume < 0)) throw new Error("Keyword volumes must be the returned nonnegative monthly search estimates.");
   if (!data.images?.outcome || !data.images?.checkedAt) throw new Error("Include the actual image-check outcome, including any unexecuted optimization.");
   if (!data.handoff?.summary || !deliveryLink(data.handoff?.link)) throw new Error("Include the verified handoff and its destination.");
+  if (data.sourceLinks) data.sourceLinks = deliverySourceLinks(data.sourceLinks);
   // Store only the delivery schema. An import cannot create an executed run,
   // alter provider receipts, enable a connection, or inject execution options.
-  return Object.fromEntries(["schemaVersion", "title", "client", "agency", "summary", "preparedAt", "brief", "intake", "keywords", "articles", "onPage", "images", "measurements", "handoff", "execution", "feedback"].map((key) => [key, data[key]]));
+  return Object.fromEntries(["schemaVersion", "title", "client", "agency", "summary", "preparedAt", "brief", "intake", "keywords", "articles", "onPage", "images", "measurements", "handoff", "execution", "feedback", "sourceLinks"].map((key) => [key, data[key]]));
 }
 
 export function deliveryMetrics(data) {
