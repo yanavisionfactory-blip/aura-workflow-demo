@@ -423,11 +423,17 @@ def step_context_value(
 
 
 def canonical_action_arguments(operation: str, arguments: dict, context: dict) -> dict:
-    """Bind job-backed resource inputs to their completed provider result.
+    """Normalize action transport and bind resources to completed provider results.
 
     A job ID and the resource it created are distinct identities. Repair only
     an exact receipt match from this run; never substitute an unrelated design.
     """
+    if operation == "jira.issue.update" and isinstance(arguments.get("fields"), dict):
+        from .jira_content import jira_description
+        fields = dict(arguments["fields"])
+        if "description" in fields:
+            fields["description"] = jira_description(fields["description"])
+        return {**arguments, "fields": fields}
     if operation != "canva.export.create":
         return arguments
     requested = arguments.get("design_id")

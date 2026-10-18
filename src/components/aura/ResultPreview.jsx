@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { ChevronLeft, ChevronRight, ExternalLink, MailCheck, Presentation } from "lucide-react";
 import BreakdownTable from "./BreakdownTable";
+import ReactMarkdown from "react-markdown";
+import { readableResultText } from "@/lib/resultPresentation.mjs";
 
-const readableDetail = (value = "") => String(value)
+const readableDetail = (value = "") => readableResultText(value)
   .split(/\n/)
   .map((line) => line.trim())
   .filter((line) => line && !/(?:https?:\/\/|\b(?:design id|edit url|view url|file id)\s*:|\{\{[^}]+\}\})/i.test(line))
@@ -73,6 +75,10 @@ function ThumbnailOnly({ result }) {
 }
 
 export default function ResultPreview({ result, results }) {
+  if (result.kind === "articles") return <div className="space-y-4">{result.articles.map((article, index) => <details key={index} open={index === 0} className="rounded-2xl border border-white/10 bg-[#0c1422] p-5">
+    <summary className="cursor-pointer font-medium">{article.title}<span className="ml-3 text-xs text-emerald-300">Draft · {article.words} words</span></summary>
+    <article className="aura-article-preview mt-5 text-sm leading-7"><ReactMarkdown>{article.body}</ReactMarkdown></article>
+  </details>)}</div>;
   if (result.kind === "jira_tasks") return <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#0c1422]">
     <div className="border-b border-white/10 px-5 py-4 text-sm font-semibold">Tasks created in Jira</div>
     <div className="divide-y divide-white/10">{result.tasks.map((task) => <div key={task.key} className="flex items-center gap-3 px-5 py-4">

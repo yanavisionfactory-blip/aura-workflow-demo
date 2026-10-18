@@ -28,6 +28,10 @@ def canonical_plan_hash(plan: dict) -> str:
 
 def operation_scope(operation: str) -> str:
     normalized = operation.lower()
+    if normalized in {"wordpress-org.search-posts", "wordpress-org.list-media-options", "imagify.media.preview"}:
+        return "read"
+    if normalized == "imagify.media.optimize":
+        return "write"
     if normalized == "agent.task.run":
         # A remote agent receives approved workspace context. Treat that
         # disclosure as consequential even when it can only return artifacts.

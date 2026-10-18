@@ -6334,6 +6334,15 @@ async def decide_approval(
             raise HTTPException(409, str(exc)) from exc
         if unfinished_action_content(step.operation, canonical):
             raise HTTPException(422, "This action must contain its finished content before submitting")
+        from .composed_content import validate_composed_content
+
+        try:
+            if step.operation == "wordpress-org.update-post":
+                original_steps = (run.plan or {}).get("steps", [])
+                original_step = original_steps[step.position] if step.position < len(original_steps) else {}
+                validate_composed_content(original_step, canonical)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
         if canonical != proposed:
             # Existing pending previews may predate a reference-resolution fix.
             # Refresh for review; do not approve a different argument silently.

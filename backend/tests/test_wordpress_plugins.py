@@ -7,11 +7,33 @@ import pytest
 from jsonschema import ValidationError
 from sqlalchemy import select
 
-from app import main
+from app import main, orchestrator
 from app import wordpress_plugins as wp
+from app.agent_runtime import deterministic_plan_fixes, normalize_plan_graph
 from app.config import Settings
 from app.models import CapabilityManifest, ToolConnection, ToolKind, Workspace
 from app.pipedream_connect import PipedreamClient, PipedreamConnectError
+from app.schemas import WorkflowPlan
+
+
+def test_fixed_plugin_reads_run_without_repeated_write_reviews():
+    manifests = {provider: wp.manifest(provider) for provider in wp.PROVIDERS}
+    steps = [{"key": f"step_{index}", "agent": "SEO", "tool_slug": provider,
+              "operation": cap["name"], "arguments": {key: 11 for key in cap["input_schema"]["required"]},
+              "reason": "Check the demonstration", "expected_output": "Actual provider result", "consequential": True}
+             for index, (provider, cap) in enumerate((provider, cap) for provider, manifest in manifests.items()
+                                                    for cap in manifest["capabilities"])]
+    for step in steps:
+        if step["operation"] == "rankmath.post_seo.update":
+            step["arguments"].update(title="Demo", description="Demo description", focus_keyword="demo")
+    plan = WorkflowPlan.model_validate({"name": "SEO checks", "interpretation": "Check and save", "steps": steps})
+    normalize_plan_graph(plan)
+    orchestrator._normalize_planned_steps(plan, manifests)
+    for step in plan.steps:
+        assert step.consequential is (step.operation in {"rankmath.post_seo.update", "imagify.media.optimize"})
+    inventory = [{"slug": slug, "allowed_operations": [cap["name"] for cap in manifest["capabilities"]]}
+                 for slug, manifest in manifests.items()]
+    assert not deterministic_plan_fixes(plan, inventory)
 
 
 @pytest.fixture
@@ -56,7 +78,7 @@ def bridge_status():
                 "version": "1.0.280" if provider == "rankmath" else "2.3.4",
                 "api_key_configured": True,
                 "api_key_valid": True,
-                "operations": [x["name"] for x in wp.manifest(provider)["capabilities"]],
+                "operations": [x["name"] for x in wp.manifest(provider)["capabilities"] if x["name"] != "imagify.media.preview"],
             }
             for provider in wp.PROVIDERS
         },
@@ -105,6 +127,24 @@ async def test_unavailable_bridge_never_creates_a_verified_connection(wordpress,
             await session.scalar(select(ToolConnection).where(ToolConnection.slug == "rankmath"))
             is None
         )
+
+
+async def test_imagify_preview_uses_existing_bridge_without_optimizing(wordpress, monkeypatch):
+    request = AsyncMock(return_value=bridge_status())
+    monkeypatch.setattr(wp, "_wordpress_request", request)
+    async with wordpress() as session:
+        tool = await wp.connect(session, "w", "imagify")
+        cap = next(item for item in wp.manifest("imagify")["capabilities"] if item["name"] == "imagify.media.preview")
+        assert cap["permission_scope"] == "read"
+        assert cap["requires_approval"] is False
+        request.return_value = {"status": "confirmation_required", "media_id": 92, "original_bytes": 218000}
+        result = await wp.execute(session, tool, "imagify.media.preview", {"media_id": 92})
+        assert result["status"] == "confirmation_required"
+        assert request.call_args.args[1:] == ("POST", "/imagify/imagify.media.optimize", {"media_id": 92, "confirm": False})
+        request.reset_mock()
+        with pytest.raises(ValidationError):
+            await wp.execute(session, tool, "imagify.media.preview", {"media_id": 92, "confirm": True})
+        request.assert_not_called()
 
 
 async def test_imagify_requires_verified_key_and_not_just_installed_plugin(wordpress, monkeypatch):

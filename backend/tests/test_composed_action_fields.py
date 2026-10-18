@@ -33,14 +33,14 @@ async def test_composition_cannot_drop_optional_requested_body(monkeypatch, oper
 
 async def test_wordpress_composition_omits_unrequested_empty_identifiers(monkeypatch):
     async def run(*args, **kwargs):
-        return {"arguments": {"post": "11", "status": "draft", "content": "Complete article.", "media": ""}}
+        return {"arguments": {"post": "11", "status": "draft", "title": "Reviewed title", "content": "Complete article.", "media": ""}}
     monkeypatch.setattr(agent_runtime, "_run", run)
     result = await agent_runtime.materialize_action_arguments(
         "Compose the draft", {"tool_slug": "wordpress-org", "operation": "wordpress-org.update-post",
         "arguments": {"post": "11", "status": "draft", "content": "Content will be written from research."}},
         {"steps": {}}, capability_manifest={"capabilities": [{
             "name": "wordpress-org.update-post", "input_schema": {"type": "object", "additionalProperties": False,
-            "properties": {key: {"type": "string"} for key in ("post", "status", "content", "media")}},
+            "properties": {key: {"type": "string"} for key in ("post", "status", "title", "content", "media")}},
         }]},
     )
-    assert result == {"post": "11", "status": "draft", "content": "Complete article."}
+    assert result == {"post": "11", "status": "draft", "title": "Reviewed title", "content": "Complete article."}

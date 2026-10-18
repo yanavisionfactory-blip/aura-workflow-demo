@@ -11,6 +11,7 @@ import { connectTool, getToolConnection, hydrateConnections } from "@/lib/connec
 import { testPythonConnection } from "@/lib/auraApi";
 import { isVerifiedConnection, planConnectionKey, planConnectionRoute } from "@/lib/connectionSelection.mjs";
 import { planningConnectionsEnabled } from "@/lib/planningFlow.mjs";
+import { removeStepInstruction } from "@/lib/planPresentation.mjs";
 const resolveTool = (raw) => {
   if (!raw || typeof raw !== "string") return null;
   const key = raw.trim().toLowerCase();
@@ -339,7 +340,7 @@ export default function PlanView({
   const deleteStep = (i) => {
     if (onRevisePlan) {
       const target = steps[i];
-      onRevisePlan(`Remove “${target?.title || target?.action || `step ${i + 1}`}” from the plan.`);
+      onRevisePlan(removeStepInstruction(target, i));
       return;
     }
     setSteps((prev) => prev.filter((_, idx) => idx !== i));

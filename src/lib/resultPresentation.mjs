@@ -1,4 +1,16 @@
 import { jiraReceiptTasks } from "./jiraReceipt.mjs";
+import { articleMarkdown, articleWordCount } from "./actionContent.mjs";
+
+export function readableResultText(value, fallback = "Review the saved app results below.") {
+  if (typeof value !== "string") return fallback;
+  try {
+    const parsed = JSON.parse(value);
+    const records = Array.isArray(parsed) ? parsed : parsed?.steps || [parsed];
+    if (Array.isArray(records) && records.some((item) => item && typeof item === "object"
+      && typeof item.operation === "string" && (item.arguments || item.tool_slug || item.depends_on))) return fallback;
+  } catch { /* Normal deliverable prose stays readable as written. */ }
+  return value;
+}
 
 const PROVIDERS = [
   "Canva",
@@ -340,6 +352,21 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
   const explicitPrimary = presentation?.primary_step_key
     ? completed.find((output) => output.step_key === presentation.primary_step_key)
     : null;
+  const articles = completed.filter((output) => output.operation === "wordpress-org.update-post"
+    && output.outcome_check?.status === "verified" && output.critic?.action === "accept")
+    .map((output) => {
+      const post = output.provider_result?.ret || output.provider_result;
+      if (post?.status !== "draft" || String(post.id) !== String(output.resolved_arguments?.post)) return null;
+      const body = typeof post.content === "string" ? post.content : post.content?.raw || post.content?.rendered;
+      const title = typeof post.title === "string" ? post.title : post.title?.raw || post.title?.rendered;
+      return typeof body === "string" && body.trim() && typeof title === "string" && title.trim()
+        ? { title: articleMarkdown(title), body: articleMarkdown(body), words: articleWordCount(body) } : null;
+    }).filter(Boolean);
+  if (articles.length && (!explicitPrimary || explicitPrimary.operation?.startsWith("wordpress-org."))) {
+    return { title: "Unpublished articles saved", kind: "articles", provider: "WordPress", providerVerb: "Saved in",
+      completionTitle: "Unpublished articles saved", completionSummary: `${articles.length} ${articles.length === 1 ? "article saved" : "articles saved"} as drafts in WordPress.`,
+      detail: "Complete saved content is available below. Every article remains unpublished.", articles };
+  }
   const gmail = explicitPrimary
     ? (explicitPrimary.operation === "gmail.send" ? explicitPrimary : null)
     : [...completed].reverse().find((output) => output.operation === "gmail.send");
@@ -421,7 +448,7 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
     : null;
   return {
     title: docPreview?.title || context.title || "Workflow result",
-    detail: context.deliverable || context.summary || "AURA completed the workflow.",
+    detail: readableResultText(context.deliverable || context.summary || "AURA completed the workflow."),
     provider,
     kind: docPreview ? "document" : "result",
     preview: docPreview,

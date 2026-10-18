@@ -24,6 +24,11 @@ _EMPTY_PROSE = re.compile(
     r"(?:^|\n)\s*(?:\.{3,}|…)\s*(?=$|\n)",
     re.IGNORECASE,
 )
+_COMPOSITION_RECEIPT = re.compile(
+    r"\[\s*(?:prepared|generated|composed)\s+(?:the\s+)?(?:exact\s+)?(?:complete\s+)?"
+    r"[^\]]{0,500}\b(?:revision|article|body|content)\b[^\]]{0,500}\]",
+    re.IGNORECASE,
+)
 _RECIPIENT_PLACEHOLDER = re.compile(
     r"^(?:(?:your|my|the)\s+)?connected\s+(?:gmail|email)\s+address$|"
     r"^(?:the\s+)?recipient(?:'s)?\s+email(?:\s+address)?$",
@@ -41,9 +46,19 @@ def unfinished_action_content(operation: str, arguments: dict) -> bool:
     """A promise to compose content later must never become a sendable draft."""
     # Grouped approvals can deliberately retain a governed future attachment
     # reference. Content itself must already be concrete for human review.
-    if any(contains_unresolved_template(arguments.get(field))
-           for field in ("body", "content", "text", "message", "description")):
+    fields = ("body", "content", "text", "message", "description", "title", "focus_keyword", "summary")
+    if isinstance(arguments.get("fields"), dict) and unfinished_action_content("", arguments["fields"]):
         return True
+    if any(contains_unresolved_template(arguments.get(field)) for field in fields):
+        return True
+    # Jira stores prose in document nodes. Check those text nodes as well as
+    # the plain-string form without treating transport fields as prose.
+    for field in fields:
+        value = arguments.get(field)
+        if isinstance(value, dict) and unfinished_action_content("", value):
+            return True
+        if isinstance(value, list) and any(isinstance(node, dict) and unfinished_action_content("", node) for node in value):
+            return True
     if operation == "gmail.send":
         if not str(arguments.get("body") or "").strip():
             return True
@@ -53,8 +68,9 @@ def unfinished_action_content(operation: str, arguments: dict) -> bool:
         isinstance(arguments.get(field), str)
         and (_UNFINISHED_CONTENT.search(arguments[field])
              or _PROMISED_CONTENT.search(arguments[field])
-             or _EMPTY_PROSE.search(arguments[field]))
-        for field in ("body", "content", "text", "message", "description")
+             or _EMPTY_PROSE.search(arguments[field])
+             or _COMPOSITION_RECEIPT.search(arguments[field]))
+        for field in fields
     )
 
 

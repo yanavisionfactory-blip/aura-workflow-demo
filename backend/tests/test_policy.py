@@ -2,6 +2,7 @@ from app.policy import (
     DEFAULT_POLICY,
     canonical_plan_hash,
     evaluate_plan_policy,
+    operation_scope,
     runtime_policy_check,
 )
 from app.schemas import PlanStep, WorkflowPlan
@@ -28,6 +29,14 @@ def test_plan_hash_is_stable_for_key_order() -> None:
     assert canonical_plan_hash({"b": 2, "a": 1}) == canonical_plan_hash(
         {"a": 1, "b": 2}
     )
+
+
+def test_wordpress_reads_do_not_inherit_write_scope_from_the_resource_noun():
+    assert operation_scope("wordpress-org.search-posts") == "read"
+    assert operation_scope("wordpress-org.list-media-options") == "read"
+    assert operation_scope("imagify.media.preview") == "read"
+    assert operation_scope("wordpress-org.update-post") == "write"
+    assert operation_scope("imagify.media.optimize") == "write"
 
 
 def test_destructive_plan_requires_explicit_approval() -> None:
