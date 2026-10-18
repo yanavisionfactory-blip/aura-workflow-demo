@@ -5467,7 +5467,13 @@ def _run_blocker(
                 and bool(corrections)
                 and all(isinstance(item, str) and not item.strip() for item in corrections)
             )
-            review_retryable = blank_corrections or any(
+            synthesis_unavailable = (
+                reasons == ["Final response did not pass validation"]
+                and corrections == [
+                    "Final response synthesis is unavailable; review the preserved receipts and retry synthesis."
+                ]
+            )
+            review_retryable = blank_corrections or synthesis_unavailable or any(
                 reason in {
                     "Final evidence preparation unavailable",
                     "Outcome verification is temporarily unavailable",
