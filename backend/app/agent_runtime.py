@@ -24,6 +24,7 @@ from .model_inputs import (
 )
 from .policy import operation_scope
 from .schemas import (
+    MAX_WORKFLOW_STEPS,
     AutonomousRecoveryDecision,
     AutonomousRecoveryOption,
     CriticDecision,
@@ -92,7 +93,7 @@ class CompactWorkflowPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str
     interpretation: str
-    steps: list[CompactPlanStep] = Field(min_length=1, max_length=20)
+    steps: list[CompactPlanStep] = Field(min_length=1, max_length=MAX_WORKFLOW_STEPS)
 
 
 def _expand_compact_plan(compact: CompactWorkflowPlan) -> WorkflowPlan:

@@ -603,10 +603,15 @@ class RecoveryDiagnosis(BaseModel):
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
+# Multi-app workflows need supporting reads and write verification in addition
+# to the visible business stages. Keep a finite bound without dropping evidence.
+MAX_WORKFLOW_STEPS = 40
+
+
 class WorkflowPlan(BaseModel):
     name: str
     interpretation: str
-    steps: list[PlanStep] = Field(min_length=1, max_length=20)
+    steps: list[PlanStep] = Field(min_length=1, max_length=MAX_WORKFLOW_STEPS)
     result_contract: ResultContract | None = None
     planning_artifacts: dict[str, Any] = Field(default_factory=dict)
 
