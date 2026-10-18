@@ -5,10 +5,29 @@ import { readFileSync } from "node:fs";
 import {
   meaningfulMetrics,
   primaryResultFromOutputs,
+  readableResultText,
   resultMetrics,
   selectPrimaryOutcome,
   supportingReceipts,
 } from "../src/lib/resultPresentation.mjs";
+
+test("saved WordPress articles use verified returned bodies instead of old planned content", () => {
+  const output = { operation: "wordpress-org.update-post", critic: { action: "accept" }, outcome_check: { status: "verified" },
+    resolved_arguments: { post: "108", content: "old preparation note" }, provider_result: { ret: {
+      id: 108, status: "draft", title: { raw: "Plano guide" }, content: { raw: "<p>Complete saved article.</p>" } } } };
+  const result = primaryResultFromOutputs([output], { deliverable: JSON.stringify([{ operation: "wordpress-org.update-post", arguments: {} }]) });
+  assert.equal(result.kind, "articles");
+  assert.equal(result.articles[0].body, "Complete saved article.");
+  assert.equal(result.articles[0].words, 3);
+  assert.doesNotMatch(JSON.stringify(result), /preparation|arguments/);
+  assert.notEqual(primaryResultFromOutputs([{ ...output, outcome_check: { status: "pending" } }]).kind, "articles");
+});
+
+test("workflow transport is not rendered as a deliverable", () => {
+  assert.equal(readableResultText('[{"operation":"wordpress-org.search-posts","arguments":{"search":"108"}}]'), "Review the saved app results below.");
+  assert.equal(readableResultText("Saved drafts are ready for review."), "Saved drafts are ready for review.");
+  assert.equal(readableResultText('[{"keyword":"AC repair Dallas","volume":20}]'), '[{"keyword":"AC repair Dallas","volume":20}]');
+});
 
 test("process counters do not masquerade as meaningful result metrics", () => {
   assert.deepEqual(meaningfulMetrics([
