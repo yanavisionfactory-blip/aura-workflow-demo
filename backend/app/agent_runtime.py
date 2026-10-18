@@ -1742,6 +1742,8 @@ async def materialize_action_arguments(
     prompt: str,
     step: dict,
     execution_context: dict,
+    *,
+    capability_manifest: dict | None = None,
 ) -> dict:
     """Resolve planner-created semantic placeholders before asking for approval.
 
@@ -1757,7 +1759,9 @@ async def materialize_action_arguments(
     )
 
     operation = str(step.get("operation", ""))
-    manifest = current_capability_manifest(str(step.get("tool_slug", "")), None)
+    manifest = current_capability_manifest(
+        str(step.get("tool_slug", "")), capability_manifest
+    )
     capability = next(
         (
             item

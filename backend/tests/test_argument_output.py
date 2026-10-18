@@ -85,3 +85,50 @@ def test_materializer_passes_the_operation_contract_to_the_model(monkeypatch):
         {"tool_slug": "canva", "operation": "canva.presentation.create"}, {"steps": {}}))
     assert result["title"] == "Roadmap"
     assert "subtitle" not in result
+
+
+@pytest.mark.parametrize("always_invalid", [False, True])
+def test_dynamic_connector_materializer_retries_metadata_against_verified_contract(
+    monkeypatch, always_invalid
+):
+    contract = {
+        "type": "object", "additionalProperties": False,
+        "required": ["title", "body"],
+        "properties": {"title": {"type": "string"}, "body": {"type": "string"}},
+    }
+    manifest = {"provider_type": "pipedream", "capabilities": [{
+        "name": "google-docs.create-document", "input_schema": contract,
+    }]}
+    attempts = []
+
+    async def run(agent, payload, **kwargs):
+        assert isinstance(agent.output_type, ArgumentOutputSchema)
+        assert agent.output_type.contract == contract
+        assert payload["required_argument_contract"] == contract
+        assert "2400" in str(payload["accepted_execution_context"])
+        attempts.append(dict(payload))
+        arguments = {"title": "Research", "body": "The provider returned 2,400 searches."}
+        if len(attempts) == 1 or always_invalid:
+            arguments.update({"depends_on": ["research"], "consequential": True})
+        return {"arguments": arguments}
+
+    async def no_sleep(_delay):
+        pass
+
+    monkeypatch.setattr(agent_runtime, "_run", run)
+    monkeypatch.setattr(agent_runtime.asyncio, "sleep", no_sleep)
+    pending = agent_runtime.materialize_action_arguments(
+        "Save the actual research", {
+            "tool_slug": "google-docs", "operation": "google-docs.create-document",
+        }, {"steps": {"research": {"provider_result": {"searches": 2400}}}},
+        capability_manifest=manifest,
+    )
+    if always_invalid:
+        with pytest.raises(RuntimeError, match="Approval argument recovery exhausted"):
+            asyncio.run(pending)
+        assert len(attempts) == 3
+    else:
+        result = asyncio.run(pending)
+        assert result == {"title": "Research", "body": "The provider returned 2,400 searches."}
+        assert len(attempts) == 2
+    assert "unknown inputs" in attempts[1]["argument_validation_error"]

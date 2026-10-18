@@ -515,6 +515,71 @@ async def test_older_plan_only_approval_is_prepared_for_final_review(runtime, mo
         assert (await session.scalars(select(StepAttempt))).all() == []
 
 
+@pytest.mark.parametrize("body", [
+    "{{steps.research.$return_value}}",
+    "Summary will be generated from the retrieved research",
+])
+async def test_approval_preparation_supplies_verified_dynamic_contract(
+    runtime, monkeypatch, body
+):
+    arguments = {"title": "Research", "body": body}
+    async with runtime() as session:
+        record = await session.get(CapabilityManifest, "manifest")
+        record.manifest = {"provider_type": "pipedream", "capabilities": [{
+            **record.manifest["capabilities"][0],
+            "input_schema": {
+                "type": "object", "additionalProperties": False,
+                "required": ["title", "body"],
+                "properties": {"title": {"type": "string"}, "body": {"type": "string"}},
+            },
+        }]}
+        expected_manifest = record.manifest
+        run = await session.get(WorkflowRun, "run")
+        run.plan = {**run.plan, "steps": [{**run.plan["steps"][0], "arguments": arguments}]}
+        digest = canonical_plan_hash(run.plan)
+        version = await session.get(PlanVersion, "version")
+        version.plan = run.plan
+        version.plan_hash = digest
+        (await session.get(ApprovalSnapshot, "snapshot")).plan_hash = digest
+        run.execution_context = {
+            "__aura_preflight__": {
+                "version": 2, "plan_hash": digest, "status": "passed",
+                "completed_at": datetime.now(UTC).isoformat(),
+            },
+            "steps": {"research": {"provider_result": {"searches": 2400}}},
+        }
+        step = await session.get(RunStep, "step")
+        step.arguments = arguments
+        step.status = StepStatus.awaiting_approval
+        approval = await session.get(Approval, "approval")
+        approval.status = "pending"
+        approval.preview = {"status": "preparing"}
+        await session.commit()
+
+    received = []
+
+    async def materialize(prompt, step, context, *, capability_manifest):
+        assert capability_manifest == expected_manifest
+        assert context["steps"]["research"]["provider_result"] == {"searches": 2400}
+        received.append(step["key"])
+        return {"title": "Research", "body": "The provider returned 2,400 searches."}
+
+    async def forbidden(*_args, **_kwargs):
+        pytest.fail("Preparing a new approval must not dispatch a provider action")
+
+    monkeypatch.setattr(orchestrator, "materialize_action_arguments", materialize)
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", forbidden)
+    await orchestrator._execute_run("run", "w")
+    async with runtime() as session:
+        saved = await session.get(WorkflowRun, "run")
+        assert saved.status == RunStatus.awaiting_approval, (saved.error, saved.result, received)
+        approval = await session.get(Approval, "approval")
+        assert approval.status == "pending"
+        assert approval.preview["arguments"]["body"] == "The provider returned 2,400 searches."
+        assert (await session.scalars(select(StepAttempt))).all() == []
+    assert received == ["write"]
+
+
 async def test_manifest_declared_write_is_never_retried_by_operation_name(
     runtime, monkeypatch
 ):
