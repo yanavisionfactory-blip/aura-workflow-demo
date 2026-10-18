@@ -139,6 +139,14 @@ export function resultMetrics(metrics = [], activity = []) {
   const email = outputs.find((output) => output.operation === "gmail.send");
   const documents = new Set(outputs.filter((output) => isDocumentCreate(output.operation))
     .map((output) => documentUrl(output.provider_result)).filter(Boolean));
+  const reviewedDesigns = new Set(outputs.filter((output) => output.operation === "canva.design.get")
+    .map((output) => canvaDesignId(output.provider_result)).filter(Boolean));
+  if (reviewedDesigns.size && !canva && !documents.size && !email) {
+    const reviewedDocs = new Set(outputs.filter((output) => isDocumentRead(output.operation))
+      .map((output) => documentUrl(output.provider_result)).filter(Boolean));
+    return [{ value: String(reviewedDesigns.size), label: "existing creatives reviewed" },
+      ...(reviewedDocs.size ? [{ value: String(reviewedDocs.size), label: "existing documents checked" }] : [])];
+  }
   const savedBodies = outputs.filter((output) => isDocumentCreate(output.operation) && documentUrl(output.provider_result))
     .map((output) => output.resolved_arguments?.body ?? output.resolved_arguments?.content ?? "");
   const campaign = savedBodies.map(campaignCopySections).find(Boolean);
@@ -300,9 +308,15 @@ export function supportingReceipts(results = {}, activity = [], primary = null, 
     const operation = step.output?.operation;
     const result = step.output?.provider_result || {};
     const job = result.job || result;
+    if (operation === "canva.design.get" && result.design?.id && result.design.id !== primary?.designId) {
+      const link = safeHttpsUrl(result.design.urls?.edit_url);
+      if (link) completed.push({ key: `canva-design:${result.design.id}`, tool: "Canva",
+        title: result.design.title || "Existing Canva creative", link, linkLabel: "Edit in Canva", preview: [] });
+    }
     if (job.status !== "success") continue;
     if (operation === "canva.import.get") {
       for (const design of job.result?.designs || []) {
+        if (design.id === primary?.designId) continue;
         const link = safeHttpsUrl(design.urls?.edit_url);
         if (link) completed.push({ key: `canva-design:${design.id}`, tool: "Canva",
           title: design.title || "Saved Canva design", link,
@@ -344,11 +358,13 @@ export function supportingReceipts(results = {}, activity = [], primary = null, 
 }
 
 const canvaDesignId = (result = {}) => {
+  if (result.design?.id) return result.design.id;
   const designs = result.job?.result?.designs || result.result?.designs || result.designs || [];
   return designs.find((design) => design?.id)?.id || null;
 };
 
 const canvaDesign = (result = {}) => {
+  if (result.design?.id) return result.design;
   const designs = result.job?.result?.designs || result.result?.designs || result.designs || [];
   return designs.find((design) => design?.id) || null;
 };
@@ -390,18 +406,23 @@ const canvaDownloadUrl = (outputs = []) => {
 };
 
 const canvaArtifactFromOutputs = (outputs = [], context = {}, stepKey = null) => {
-  const canva = outputs.find((output) => output.operation === "canva.presentation.create"
+  const canva = outputs.find((output) => ["canva.presentation.create", "canva.design.get"].includes(output.operation)
     && (!stepKey || output.step_key === stepKey));
   if (!canva) return null;
   const result = canva.provider_result || {};
   const design = canvaDesign(result);
   const designId = design?.id;
+  const reused = canva.operation === "canva.design.get";
   const link = safeHttpsUrl(result.result_url)
     || safeHttpsUrl(design?.urls?.edit_url)
     || (designId ? `https://www.canva.com/design/${encodeURIComponent(designId)}/edit` : null);
   return {
-    title: slideContent(canva.resolved_arguments)?.title || context.artifactTitle || context.title || "Canva presentation",
+    title: slideContent(canva.resolved_arguments)?.title || design?.title || context.artifactTitle || context.title || "Canva presentation",
     provider: "Canva",
+    providerVerb: reused ? "Reused from" : "Created in",
+    ...(reused ? { completionTitle: context.title || "Existing campaign creative verified",
+      completionSummary: context.summary || "Existing Canva creative checked. Saved content reused." } : {}),
+    designId,
     kind: "presentation",
     preview: designId ? slideContent(canva.resolved_arguments) : null,
     thumbnailUrl: designId ? canvaThumbnailUrl(design?.thumbnail?.url) : null,
@@ -522,7 +543,7 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
       linkLabel: "Open in Jira",
     };
   }
-  if (artifact && (!explicitPrimary || explicitPrimary.operation === "canva.presentation.create")) {
+  if (artifact && (!explicitPrimary || ["canva.presentation.create", "canva.design.get"].includes(explicitPrimary.operation))) {
     return {
       ...artifact,
       detail: context.deliverable || context.summary || "Your presentation is ready.",
