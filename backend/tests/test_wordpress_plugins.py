@@ -8,6 +8,7 @@ from jsonschema import ValidationError
 from sqlalchemy import select
 
 from app import main, orchestrator
+from app.agent_runtime import deterministic_plan_fixes, normalize_plan_graph
 from app import wordpress_plugins as wp
 from app.config import Settings
 from app.models import CapabilityManifest, ToolConnection, ToolKind, Workspace
@@ -26,9 +27,13 @@ def test_fixed_plugin_reads_run_without_repeated_write_reviews():
         if step["operation"] == "rankmath.post_seo.update":
             step["arguments"].update(title="Demo", description="Demo description", focus_keyword="demo")
     plan = WorkflowPlan.model_validate({"name": "SEO checks", "interpretation": "Check and save", "steps": steps})
+    normalize_plan_graph(plan)
     orchestrator._normalize_planned_steps(plan, manifests)
     for step in plan.steps:
         assert step.consequential is (step.operation in {"rankmath.post_seo.update", "imagify.media.optimize"})
+    inventory = [{"slug": slug, "allowed_operations": [cap["name"] for cap in manifest["capabilities"]]}
+                 for slug, manifest in manifests.items()]
+    assert not deterministic_plan_fixes(plan, inventory)
 
 
 @pytest.fixture

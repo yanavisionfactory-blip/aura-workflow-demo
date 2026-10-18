@@ -824,7 +824,6 @@ def deterministic_plan_fixes(
         if len(candidates) == 1:
             step.tool_slug = candidates[0]
 
-    write_markers = ("send", "create", "update", "delete", "post", "schedule", "purchase", "append", "destroy", "purge", "revoke")
     fixes: list[str] = []
     variable_producers: dict[str, str] = {}
     for index, step in enumerate(plan.steps, start=1):
@@ -872,9 +871,8 @@ def deterministic_plan_fixes(
                 f"Step {index} operation {step.operation!r} is not allow-listed for "
                 f"{step.tool_slug!r}"
             )
-        operation = step.operation.lower()
         if (
-            any(marker in operation for marker in write_markers)
+            operation_scope(step.operation) != "read"
             and not step.consequential
             and not is_governed_derivative_step(plan, step)
         ):
@@ -1035,7 +1033,6 @@ def normalize_plan_graph(plan: WorkflowPlan) -> WorkflowPlan:
     """
     known: set[str] = set()
     variable_producers: dict[str, str] = {}
-    write_markers = ("send", "create", "update", "delete", "post", "schedule", "purchase", "append", "destroy", "purge", "revoke")
     for step in plan.steps:
         step.arguments = qualify_prior_step_references(step.arguments, known)
         step.reduced_scope_arguments = qualify_prior_step_references(step.reduced_scope_arguments, known)
@@ -1062,7 +1059,7 @@ def normalize_plan_graph(plan: WorkflowPlan) -> WorkflowPlan:
         inferred = [key for key in referenced if key in known and key not in step.depends_on]
         if inferred:
             step.depends_on = [*step.depends_on, *sorted(inferred)]
-        if any(marker in step.operation.lower() for marker in write_markers):
+        if operation_scope(step.operation) != "read":
             step.consequential = True
         known.add(step.key)
         variable_producers.update({name: step.key for name in step.output_variables})
