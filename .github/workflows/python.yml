@@ -5,12 +5,14 @@ on:
     branches: [main]
     paths:
       - "backend/**"
+      - "integrations/wordpress/**"
       - "docker-compose.yml"
       - ".github/workflows/python.yml"
   pull_request:
     branches: [main]
     paths:
       - "backend/**"
+      - "integrations/wordpress/**"
       - "docker-compose.yml"
 
 permissions:
@@ -50,6 +52,10 @@ jobs:
         run: python -m compileall -q app
       - name: Lint
         run: ruff check app tests
+      - name: Validate WordPress plugin bridge
+        run: |
+          php -l ../integrations/wordpress/aura-seo-bridge/aura-seo-bridge.php
+          php ../integrations/wordpress/tests/bridge-test.php
       - name: Test
         run: pytest -q --junitxml=release-evaluation.xml
       - name: Evaluate isolated execution load

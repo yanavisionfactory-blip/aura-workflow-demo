@@ -544,6 +544,32 @@ class PipedreamClient:
             "source": "pipedream_connection_probe",
         }
 
+    async def wordpress_account_credentials(
+        self, external_user_id: str, account_id: str
+    ) -> dict[str, str]:
+        """Use an existing WordPress grant server-side; never expose it to the UI.
+
+        Check ownership before calling the project-level account endpoint. The
+        provider is fixed so this cannot become a generic credential-export API.
+        """
+        verification = await self.verify_account(external_user_id, "wordpress_org", account_id)
+        if not verification.get("ok"):
+            raise PipedreamConnectError("The WordPress account is not authorized", retryable=False)
+        result = await self._request(
+            "GET",
+            f"/v1/connect/{quote(self.settings.pipedream_project_id, safe='')}/accounts/{quote(account_id, safe='')}",
+            params={"include_credentials": "true"},
+        )
+        account = result.get("data", result) if isinstance(result, dict) else {}
+        app = account.get("app") if isinstance(account.get("app"), dict) else {}
+        if str(account.get("id") or "") != account_id or _slug(app.get("name_slug") or app.get("name")) != "wordpress-org":
+            raise PipedreamConnectError("The WordPress account could not be verified", retryable=False)
+        credentials = account.get("credentials")
+        if not isinstance(credentials, dict):
+            raise PipedreamConnectError("WordPress credentials are unavailable", retryable=False)
+        return {key: credentials[key] for key in ("url", "username", "application_password")
+            if isinstance(credentials.get(key), str)}
+
     async def list_actions(self, provider: str) -> list[dict[str, Any]]:
         actions: list[dict[str, Any]] = []
         after: str | None = None
