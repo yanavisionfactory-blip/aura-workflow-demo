@@ -6334,15 +6334,6 @@ async def decide_approval(
             raise HTTPException(409, str(exc)) from exc
         if unfinished_action_content(step.operation, canonical):
             raise HTTPException(422, "This action must contain its finished content before submitting")
-        from .composed_content import validate_composed_content
-
-        try:
-            if step.operation == "wordpress-org.update-post":
-                original_steps = (run.plan or {}).get("steps", [])
-                original_step = original_steps[step.position] if step.position < len(original_steps) else {}
-                validate_composed_content(original_step, canonical)
-        except ValueError as exc:
-            raise HTTPException(422, str(exc)) from exc
         if canonical != proposed:
             # Existing pending previews may predate a reference-resolution fix.
             # Refresh for review; do not approve a different argument silently.
@@ -6902,13 +6893,18 @@ async def dispatch_due_run(
     from .dispatch import dispatch_pending
 
     preparation_refreshed = False
-    if run.status == RunStatus.awaiting_approval:
+    stored_blocker = (run.execution_context or {}).get("__aura_blocker__") or {}
+    restart_preparation = run.status in {RunStatus.waiting_for_action, RunStatus.failed} and (
+        not stored_blocker or stored_blocker.get("action") == "inspect_run"
+    )
+    if run.status == RunStatus.awaiting_approval or restart_preparation:
         pending = (await session.execute(
             select(RunStep, Approval)
             .join(Approval, Approval.step_id == RunStep.id)
             .where(
                 RunStep.run_id == run.id,
-                RunStep.status == StepStatus.awaiting_approval,
+                RunStep.status.in_([StepStatus.awaiting_approval, StepStatus.failed]
+                                  if restart_preparation else [StepStatus.awaiting_approval]),
                 RunStep.consequential.is_(True),
                 Approval.run_id == run.id,
                 Approval.status == "pending",
@@ -6917,9 +6913,10 @@ async def dispatch_due_run(
         )).all()
         for step, approval in pending:
             preview = approval.preview or {}
-            if preview.get("status") != "ready" or not unfinished_action_content(
-                step.operation, preview.get("arguments") or {}
-            ):
+            unfinished = unfinished_action_content(
+                step.operation, preview.get("arguments") or step.arguments or {}
+            )
+            if not unfinished or (preview.get("status") != "ready" and not restart_preparation):
                 continue
             attempted = await session.scalar(select(StepAttempt.id).where(
                 StepAttempt.run_id == run.id,
@@ -6932,6 +6929,21 @@ async def dispatch_due_run(
             # Rebuild only this unsubmitted action; completed reads stay saved,
             # and the resulting concrete payload still needs fresh approval.
             approval.preview = {"status": "preparing"}
+            step.status = StepStatus.awaiting_approval
+            step.error = None
+            if restart_preparation:
+                execution_context = dict(run.execution_context or {})
+                autonomy = dict(execution_context.get("__aura_autonomy__") or {})
+                autonomy.pop("handoff_reason_code", None)
+                autonomy["next_attempt_at"] = None
+                execution_context["__aura_autonomy__"] = autonomy
+                # This explicit check restarts drafting only. No provider
+                # dispatch exists, and the resulting payload still requires
+                # the original pending approval before it can execute.
+                recovery = dict(execution_context.get("__aura_recovery__") or {})
+                recovery.pop(step.id, None)
+                execution_context["__aura_recovery__"] = recovery
+                run.execution_context = execution_context
             transition_run(
                 run, RunStatus.running, reason="unfinished_approval_preparation_refreshed",
                 actor=context.subject, phase="execution", supervisor_status="active",
