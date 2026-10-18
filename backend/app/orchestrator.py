@@ -1259,11 +1259,31 @@ def complete_connection_requirements(
     prompt: str,
     planner_reported: list[str],
     inventory: list[dict],
+    *,
+    compiled_plan: WorkflowPlan | None = None,
 ) -> list[str]:
-    """Combine deterministic prompt providers with the planner's exact matches."""
+    """Infer accounts before compilation; use actual calls after preflight.
+
+    A platform named as a report topic is not necessarily a source connection:
+    supplied exports can cover it. Exact operation grants, including readbacks,
+    remain enforced by preflight even when a topic is absent from the plan.
+    """
     explicit = explicit_disconnected_capabilities(prompt, inventory)
     planned = actionable_connection_capabilities(planner_reported, inventory)
-    return list(dict.fromkeys([*explicit, *planned]))
+    missing = list(dict.fromkeys([*explicit, *planned]))
+    if compiled_plan is None:
+        return missing
+    used_families = set()
+    for step in compiled_plan.steps:
+        for slug, operation in (
+            (step.tool_slug, step.operation),
+            (step.fallback_tool_slug, step.fallback_operation),
+        ):
+            if slug:
+                used_families.add(_connection_family({"slug": slug}))
+            if operation:
+                used_families.add(_connection_family({"slug": operation.split(".", 1)[0]}))
+    return [family for family in missing if family in used_families]
 
 
 def _required_permissions(capability: str, inventory: list[dict]) -> list[str]:
@@ -1715,7 +1735,9 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             reported_missing = list(plan.planning_artifacts.get("connection_requirements", []))
             missing = (
                 reported_missing if run.prompt.startswith(PILOT_PREFIX)
-                else complete_connection_requirements(run.prompt, reported_missing, requirement_inventory)
+                else complete_connection_requirements(
+                    run.prompt, reported_missing, requirement_inventory, compiled_plan=plan,
+                )
             )
             # A catalog connector may be proposed for review, but Start must
             # never be offered until every real operation and verification read

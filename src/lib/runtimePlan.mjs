@@ -66,7 +66,7 @@ export function planningRequestPrompt(confirmedIntent, revisionInstruction = "",
   const steps = Array.isArray(reviewedSteps) ? reviewedSteps.map((step, index) => ({
     position: index + 1,
     key: step.key,
-    tool: step.tool || step.tool_slug,
+    tool: step.tool_slug || step.toolSlug || step.tool,
     operation: step.operation,
     title: step.title,
     action: step.action || step.reason,
