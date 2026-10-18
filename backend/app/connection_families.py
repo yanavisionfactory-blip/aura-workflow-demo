@@ -12,7 +12,10 @@ GOOGLE_APP_FAMILIES = {
 
 # Nango versions the Slack OAuth adapter, not the customer account. Keep the
 # execution route intact while asking for only one Slack authorization.
-PROVIDER_FAMILIES = {"slack-v2": "slack", "rank-math": "rankmath", "rank-math-seo": "rankmath"}
+PROVIDER_FAMILIES = {
+    "slack-v2": "slack", "rank-math": "rankmath", "rank-math-seo": "rankmath",
+    "google-business-profile": "google-my-business",
+}
 
 
 def capability_family(value: object) -> str:
