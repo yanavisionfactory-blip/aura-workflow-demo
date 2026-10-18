@@ -406,18 +406,20 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         "name": "Canva", "description": "Find, create, organize, and export Canva designs.",
         "base_url": "provider-managed", "identity": {"provider": "canva"},
         "modules": [
-            _module("canva.presentation.create", "action", "Create a populated one-slide roadmap or timeline by importing structured content into Canva. Supply grounded phases, titles and items. Returns a job; after verified completion use job.result.designs[0].id for export. Never use blank design.create for a content-filled presentation.", required=("title", "phases"), properties=PRESENTATION_SCHEMA['properties']),
+            _module("canva.presentation.create", "action", "Create populated, editable Canva content by importing structured content. For a campaign asset use layout=creative, canvas=square or landscape, title=business name, subtitle=locations, and exactly one phase: period=disclosure, title=headline, items=[service line, call to action]. For decks use layout=slides; for roadmaps use timeline. Returns an import job; read canva.import.get until completed, then use job.result.designs[0].id for export. Never substitute blank design.create for populated content.", required=("title", "phases"), properties=PRESENTATION_SCHEMA['properties']),
             _module("canva.import.get", "search", "Read a saved Canva import job; completed results contain job.result.designs.", required=("import_id",), properties={"import_id": _TEXT}),
             _module("canva.designs.list", "search", "Find Canva designs.", properties={"query": _TEXT, "continuation": _TEXT, "ownership": {"type": "string", "enum": ["any", "owned", "shared"]}}),
             _module("canva.design.get", "search", "Read Canva design metadata.", required=("design_id",), properties={"design_id": _TEXT}),
-            _module("canva.design.create", "action", "Create an approved Canva design.", required=("design_type",), properties={"design_type": {"type": "object"}, "title": _TEXT, "asset_id": _TEXT}),
+            _module("canva.design.create", "action", "Create a blank or asset-backed Canva design. This does not compose campaign copy or layout. For populated campaign creative, slides or roadmaps use canva.presentation.create.", required=("design_type",), properties={"design_type": {"type": "object"}, "title": _TEXT, "asset_id": _TEXT}),
             _module("canva.folder.items.list", "search", "List items in a Canva folder.", required=("folder_id",), properties={"folder_id": _TEXT, "continuation": _TEXT, "limit": {**_POSITIVE_INTEGER, "maximum": 100}}),
             _module(
                 "canva.export.create",
                 "action",
                 "Render an approved Canva design into the delivery format selected in the workflow.",
                 required=("design_id", "format"),
-                properties={"design_id": _TEXT, "format": {"type": "string", "enum": ["pdf", "jpg", "png", "gif", "pptx", "mp4", "csv", "html_bundle", "html_standalone"]}},
+                properties={"design_id": _TEXT, "format": {"type": "string", "enum": ["pdf", "jpg", "png", "gif", "pptx", "mp4", "csv", "html_bundle", "html_standalone"]},
+                            "width": {"type": "integer", "minimum": 40, "maximum": 25000, "description": "Optional PNG/JPG/GIF export width in pixels; preserve aspect ratio."},
+                            "height": {"type": "integer", "minimum": 40, "maximum": 25000, "description": "Optional PNG/JPG/GIF export height in pixels; preserve aspect ratio."}},
                 permission_scope="write",
                 # Export is a deterministic derivative of an already approved
                 # design, not a second user-facing content decision.

@@ -1626,6 +1626,10 @@ class ProviderExecutor:
 
     async def _canva_export_create(self, a: dict) -> dict:
         payload = {"design_id": a["design_id"], "format": {"type": a["format"]}}
+        if a['format'] in {'png', 'jpg', 'gif'}:
+            for dimension in ('width', 'height'):
+                if a.get(dimension) is not None:
+                    payload['format'][dimension] = a[dimension]
         # A successful import job already returns Canva's canonical design id.
         # Do not probe the design-metadata endpoint before exporting: that read
         # requires a separate permission and can reject an otherwise authorized

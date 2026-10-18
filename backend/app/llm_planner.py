@@ -272,6 +272,11 @@ async def create_llm_plan(
         "Place each requested external action in steps with its supporting reads "
         "and dependencies. For a populated Canva slide or presentation, "
         "use canva.presentation.create rather than a blank design or export. "
+        "For populated Canva social or indoor-screen creatives use the same operation "
+        "with layout=creative and canvas=square or landscape. Supply exactly one phase "
+        "with period=disclosure, title=headline and items=[service line, CTA], "
+        "plus title=business name and optional subtitle=locations. Read the import job "
+        "before exporting its real design id; canva.design.create creates a blank shell. "
         "For revisions, honor the latest change and remove replaced providers."
     )
     async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=1) as client:
