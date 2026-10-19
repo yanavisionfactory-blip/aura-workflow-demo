@@ -47,7 +47,7 @@ import {
   shouldStartFreshPlanningRun,
   unavailablePlanningState,
 } from "@/lib/planningFlow.mjs";
-import { hasDurablePlan, planningRequestPrompt, savedRunResumeView, sameExecutablePlan } from "@/lib/runtimePlan.mjs";
+import { hasDurablePlan, planningRequestPrompt, savedRunResumeView, sameExecutablePlan, shouldRestoreRememberedRun } from "@/lib/runtimePlan.mjs";
 import { operationStepTitle, weatherStepTitle } from "@/lib/planPresentation.mjs";
 import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
 import { savedRunResults } from "@/lib/savedRunResults.mjs";
@@ -323,9 +323,16 @@ export default function Demo() {
   useEffect(() => {
     const remembered = rememberedActivePythonRun();
     if (!remembered) return undefined;
+    const generation = pythonPollGenerationRef.current;
     let mounted = true;
     getPythonRun(remembered).then((run) => {
-      if (!mounted || originalPromptRef.current) return;
+      if (!mounted || !shouldRestoreRememberedRun({
+        rememberedRunId: remembered,
+        currentRememberedRunId: rememberedActivePythonRun(),
+        startedAtGeneration: generation,
+        currentGeneration: pythonPollGenerationRef.current,
+        hasCurrentIntent: Boolean(originalPromptRef.current),
+      })) return;
       const resumeView = savedRunResumeView(run);
       if (!resumeView) return;
       const intent = String(run.prompt || run.plan?.interpretation || "")
@@ -504,6 +511,12 @@ export default function Demo() {
   const reset = useCallback(() => {
     clearTimeouts();
     pythonPollGenerationRef.current += 1;
+    // Stop selecting the old run locally without cancelling any durable work.
+    const previousRunId = pythonRunIdRef.current || rememberedActivePythonRun();
+    if (previousRunId) forgetActivePythonRun(previousRunId);
+    originalPromptRef.current = "";
+    attachedResourcesRef.current = null;
+    reviewedPlanRef.current = null;
     runRequestKeyRef.current = null;
     lastPlanningIntentRef.current = "";
     pendingPlanRevisionRef.current = null;
@@ -521,6 +534,8 @@ export default function Demo() {
     pythonPlanRef.current = null;
     setPhase("input");
     setOriginalPrompt("");
+    setPlanLoading(false);
+    setInterpretationLoading(false);
     setInterpretation("");
     setPlan(null);
     setResults(null);

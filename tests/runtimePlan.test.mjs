@@ -1,7 +1,38 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { hasDurablePlan, planningRequestPrompt, restorablePlanningRun, savedRunResumeView, sameExecutablePlan, unmatchedWriteTools } from "../src/lib/runtimePlan.mjs";
+import { hasDurablePlan, planningRequestPrompt, restorablePlanningRun, savedRunResumeView, sameExecutablePlan, shouldRestoreRememberedRun, unmatchedWriteTools } from "../src/lib/runtimePlan.mjs";
+
+test("a delayed remembered-run response cannot replace a new workflow", async () => {
+  let finishRead;
+  const read = new Promise((resolve) => { finishRead = resolve; });
+  let selectedRun = "old-planning-run";
+  let generation = 0;
+  let view = "input";
+  const startedAtGeneration = generation;
+  const restore = read.then(() => {
+    if (shouldRestoreRememberedRun({
+      rememberedRunId: "old-planning-run", currentRememberedRunId: selectedRun,
+      startedAtGeneration, currentGeneration: generation,
+    })) view = "old-plan";
+  });
+  // New workflow clears the client selection and invalidates pending reads.
+  generation += 1;
+  selectedRun = null;
+  finishRead();
+  await restore;
+  assert.equal(view, "input");
+});
+
+test("refresh still restores the same selected run before a new intent", () => {
+  const selection = { rememberedRunId: "saved-run", currentRememberedRunId: "saved-run",
+    startedAtGeneration: 3, currentGeneration: 3 };
+  assert.equal(shouldRestoreRememberedRun(selection), true);
+  assert.equal(shouldRestoreRememberedRun({ ...selection, hasCurrentIntent: true }), false);
+  assert.equal(shouldRestoreRememberedRun({ ...selection, currentRememberedRunId: "different-run" }), false);
+  assert.equal(shouldRestoreRememberedRun({ ...selection, currentGeneration: 4 }), false);
+  assert.equal(shouldRestoreRememberedRun({}), false);
+});
 
 test("execution requires both a durable run id and executable backend steps", () => {
   assert.equal(hasDurablePlan("run-1", { steps: [{ operation: "sheets.read" }] }), true);

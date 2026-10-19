@@ -2,6 +2,21 @@ export function hasDurablePlan(runId, backendPlan) {
   return Boolean(runId && backendPlan?.steps?.length);
 }
 
+// A remembered-run read can finish after the user has started a new workflow.
+// Only restore the same client selection that was current when the read began.
+export function shouldRestoreRememberedRun({
+  rememberedRunId,
+  currentRememberedRunId,
+  startedAtGeneration,
+  currentGeneration,
+  hasCurrentIntent = false,
+} = {}) {
+  return Boolean(rememberedRunId)
+    && rememberedRunId === currentRememberedRunId
+    && startedAtGeneration === currentGeneration
+    && !hasCurrentIntent;
+}
+
 export function restorablePlanningRun(run = {}) {
   if (run.plan_approved) return false;
   if (run.status === "awaiting_approval") return Boolean(run.plan?.steps?.length);
