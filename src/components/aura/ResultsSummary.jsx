@@ -1,9 +1,9 @@
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
 
-/** @param {{ title: import("react").ReactNode, summary?: import("react").ReactNode, isFailure?: boolean, eyebrow?: import("react").ReactNode, heading?: "h1" | "h2", children?: import("react").ReactNode }} props */
-export function ResultsHeading({ title, summary, isFailure = false, eyebrow, heading: Heading = "h2", children }) {
+/** @param {{ title: import("react").ReactNode, summary?: import("react").ReactNode, isFailure?: boolean, eyebrow?: import("react").ReactNode, heading?: "h1" | "h2", centered?: boolean, children?: import("react").ReactNode }} props */
+export function ResultsHeading({ title, summary, isFailure = false, eyebrow, heading: Heading = "h2", centered = false, children }) {
   return (
-    <div className="mb-7 flex items-start gap-4">
+    <div className={`mb-7 flex gap-4 ${centered ? "flex-col items-center text-center" : "items-start"}`}>
       <div className={`shrink-0 rounded-2xl border p-3 ${isFailure ? "border-amber-400/20 bg-amber-400/10" : "border-emerald-400/20 bg-emerald-400/10"}`}>
         {isFailure ? <AlertTriangle className="h-7 w-7 text-amber-400" /> : <CheckCircle2 className="h-7 w-7 text-emerald-400" />}
       </div>

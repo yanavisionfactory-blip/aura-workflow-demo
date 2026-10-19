@@ -25,6 +25,16 @@ an HTTP status. Do not reuse another application's callback or client ID to
 work around a vendor allowlist. Use the vendor's approved setup, a documented
 alternative such as Semrush API-key authentication, or supplied exports.
 
+Sitebulb currently rejects AURA's callback domain during public-client
+registration, before sign-in. AURA displays the exact callback and official
+support link under **Provider setup requirements**. Sitebulb must approve this
+callback before AURA can complete OAuth; retrying or changing the client name
+cannot grant that approval. No account credentials are requested at this stage.
+
+The existing Ahrefs embedded actions use API v3. A successful OAuth connection
+and three discovered actions do not establish plan entitlement. Preserve the
+actual API response when a research request returns `Insufficient plan`.
+
 Vendor metadata must match the reviewed resource and issuer. Authorization,
 registration and token hosts are restricted per provider. PKCE, signed state,
 tenant membership and one-use callback checks also apply to these routes.

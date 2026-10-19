@@ -47,6 +47,40 @@ MCP_SERVICES = {
 }
 
 
+class MCPRegistrationRejected(ConnectorError):
+    """Public client-setup failure, before any user credential is requested."""
+
+    def __init__(self, provider: str, status: int, reason: str):
+        self.provider = provider
+        self.status = status
+        self.reason = reason
+        super().__init__(f"{mcp_service(provider)['name']} rejected AURA's OAuth registration "
+                         f"(HTTP {status}): {reason}")
+
+    def public_detail(self, callback_url: str) -> dict:
+        sitebulb_allowlist = self.provider.startswith("sitebulb-") and (
+            "not a supported ai client provider domain" in self.reason.lower()
+        )
+        detail = {
+            "code": "provider_registration_rejected",
+            "provider": mcp_service(self.provider)["name"],
+            "message": str(self),
+            "provider_http_status": self.status,
+            "endpoint": mcp_service(self.provider)["endpoint"],
+            "callback_url": callback_url,
+            "resolution": "The provider must accept AURA's client registration before sign-in can begin.",
+        }
+        if sitebulb_allowlist:
+            detail.update(
+                requires_provider_approval=True,
+                resolution=("Ask Sitebulb to approve AURA's callback domain for OAuth. "
+                            "After approval, retry this connection and choose the workspace or "
+                            "Desktop machine containing the completed client audit."),
+                support_url="https://sitebulb.com/support/",
+            )
+        return detail
+
+
 def mcp_service(provider: str) -> dict:
     if provider not in MCP_SERVICES:
         raise ConnectorError("This MCP service has no reviewed authorization route")
@@ -107,10 +141,7 @@ async def _json(client: httpx.AsyncClient, method: str, url: str, *,
         reason = next((body.get(key) for key in ("error_description", "message", "error")
                        if isinstance(body, dict) and isinstance(body.get(key), str)), "")
         reason = " ".join(reason.split())[:500] or "The provider did not accept the client setup."
-        raise ConnectorError(
-            f"{mcp_service(provider)['name']} rejected AURA's OAuth registration "
-            f"(HTTP {response.status_code}): {reason}"
-        )
+        raise MCPRegistrationRejected(provider, response.status_code, reason)
     response.raise_for_status()
     result = response.json()
     if not isinstance(result, dict):

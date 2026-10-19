@@ -33,6 +33,7 @@ export default function AgentConnectionForm({ onConnected = null }) {
   const [phase, setPhase] = useState(0);
   const [error, setError] = useState("");
   const [authorizationUrl, setAuthorizationUrl] = useState("");
+  const [registrationIssue, setRegistrationIssue] = useState(null);
   const [connectedAgent, setConnectedAgent] = useState(null);
 
   useEffect(() => {
@@ -56,6 +57,7 @@ export default function AgentConnectionForm({ onConnected = null }) {
     setConnecting(true);
     setError("");
     setAuthorizationUrl("");
+    setRegistrationIssue(null);
     setConnectedAgent(null);
     try {
       const result = await autoconnectAgent(agentAutoconnectPayload({ source, credential }));
@@ -65,6 +67,7 @@ export default function AgentConnectionForm({ onConnected = null }) {
       await onConnected?.(result);
     } catch (cause) {
       const detail = cause?.details?.detail;
+      if (detail?.code === "provider_registration_rejected") setRegistrationIssue(detail);
       if (detail?.code === "agent_authorization_required") {
         setAuthorizationUrl(safeAuthorizationUrl(detail.authorization_url || source));
         setError(
@@ -110,6 +113,7 @@ export default function AgentConnectionForm({ onConnected = null }) {
             setConnectedAgent(null);
             setError("");
             setAuthorizationUrl("");
+            setRegistrationIssue(null);
           }}
           placeholder="https://your-agent.com"
           autoComplete="url"
@@ -158,6 +162,14 @@ export default function AgentConnectionForm({ onConnected = null }) {
       {error && (
         <div className="rounded-xl border border-amber-400/20 bg-amber-400/5 p-3">
           <p className="text-xs leading-relaxed text-amber-200">{error}</p>
+          {registrationIssue && <div aria-label="Provider setup requirements" className="mt-3 space-y-3 border-t border-amber-400/15 pt-3 text-[11px] leading-relaxed">
+            <p className="font-semibold text-amber-200">{registrationIssue.requires_provider_approval ? "Sitebulb approval required" : "Provider setup required"}</p>
+            <p className="text-muted-foreground">{registrationIssue.resolution}</p>
+            <div><p className="font-medium text-muted-foreground">AURA callback to approve</p><code className="mt-1 block break-all rounded bg-black/20 p-2 text-primary">{registrationIssue.callback_url}</code></div>
+            <div><p className="font-medium text-muted-foreground">Requested service</p><code className="block break-all text-muted-foreground">{registrationIssue.endpoint}</code></div>
+            {registrationIssue.support_url === "https://sitebulb.com/support/" && <a href={registrationIssue.support_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-primary hover:underline">Open Sitebulb support<ExternalLink className="h-3 w-3" /></a>}
+            <p className="text-muted-foreground">No Sitebulb account credentials have been requested and no verified connection has been created.</p>
+          </div>}
           {authorizationUrl && (
             <a
               href={authorizationUrl}

@@ -60,12 +60,13 @@ from .managed_connectors import (
     managed_connector_client,
 )
 from .mcp_oauth import (
-    exchange_code as exchange_mcp_oauth_code,
-)
-from .mcp_oauth import (
+    MCPRegistrationRejected,
     managed_mcp_provider,
     mcp_service,
     semrush_api_credentials,
+)
+from .mcp_oauth import (
+    exchange_code as exchange_mcp_oauth_code,
 )
 from .mcp_oauth import (
     prepare_authorization as prepare_mcp_authorization,
@@ -1104,6 +1105,10 @@ async def autoconnect_agent(
                 })
             return {**result, "connected_by": "aura_autodiscovery"}
         payload, manifest, credentials, kind = await _discover_agent_intent(intent)
+    except MCPRegistrationRejected as exc:
+        raise HTTPException(409, detail=exc.public_detail(
+            oauth_route_callback_url(settings, "mcp-agent"),
+        )) from exc
     except AgentAuthorizationRequired as exc:
         raise HTTPException(
             409,
