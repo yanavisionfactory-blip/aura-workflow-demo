@@ -7,6 +7,7 @@ import ScheduleModal from "./ScheduleModal";
 import CreatorApprovalList from "./CreatorApprovalList";
 import ResultPreview from "./ResultPreview";
 import PrimaryResult from "./PrimaryResult";
+import ToolEvidence from "./ToolEvidence";
 import { ResultsHeading, ResultsMetrics } from "./ResultsSummary";
 import { buildSummaryText } from "@/lib/auraSummary";
 import { resultMetrics, selectPrimaryOutcome, supportingReceipts, visualResultChoices } from "@/lib/resultPresentation.mjs";
@@ -52,6 +53,8 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mx-auto w-full max-w-5xl pb-8">
       <ResultsHeading title={results.title || "Workflow complete"} summary={results.summary} isFailure={isFailure} />
       <ResultsMetrics metrics={metrics} />
+
+      <ToolEvidence activity={activity || []} />
 
       {visualChoices.length > 0 && <label className="mb-5 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
         Main result

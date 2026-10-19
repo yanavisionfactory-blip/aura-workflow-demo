@@ -22,6 +22,8 @@ export default function SavedRunResults() {
   const activity = (run?.steps || []).map((step) => {
     const tool = names[step.tool_slug] || step.tool_slug || "AURA";
     return { id: step.id, stepKey: step.key, tool, status: step.status,
+      operation: step.operation, arguments: step.arguments, error: step.error,
+      started_at: step.started_at, completed_at: step.completed_at,
       action: operationStepTitle(step, tool) || step.reason || "Saved action", output: step.output, liveOutput: step.status === "completed" ? "Completed" : "" };
   });
   return <WorkspaceShell onBack={() => navigate("/")} onHistoryOpen={() => navigate("/", { state: { openHistory: true } })}>
