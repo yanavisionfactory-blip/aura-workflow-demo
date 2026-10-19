@@ -37,3 +37,7 @@ Pull requests run the frontend tests and build, the complete Python test suite, 
 ## Tenant boundary
 
 Every persisted customer record carries a `workspace_id`. API authorization verifies Clerk organization membership, and PostgreSQL row-level security enforces the same workspace boundary in the database.
+
+## SEO audit preview
+
+A saved Screaming Frog export analysis can be opened at `/runs/:runId/demo/seo-audit` to preview the standard audit result with simulated Semrush, Ahrefs and Sitebulb outputs. The preview reads the original crawl through the authenticated workspace API and resolves example targets to the uploaded CSV rows. Vendor metrics, fictional `.example` referring/competitor domains, scenario hints and recommendations are labelled as simulated. It never calls providers, persists a successful run, creates destination records or modifies a website. The original saved result and provider failure receipts are unchanged.

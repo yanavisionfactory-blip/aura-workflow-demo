@@ -4,6 +4,8 @@ import { Activity, AlertTriangle, ArrowRight, CheckCircle2, ChevronDown, Externa
 import { ResultsHeading, ResultsMetrics } from "./ResultsSummary";
 import { getPythonRun } from "@/lib/auraApi";
 import { crawlInventory, crawlResult, mappedBacklog, providerOutcome, providerResultLink, runEvidence, seoAuditGroups } from "@/lib/seoAuditResult.mjs";
+import { seoAuditDemoRoute } from "@/lib/seoAuditDemo.mjs";
+import SimulatedSeoToolOutput from "./SimulatedSeoToolOutput";
 
 const panel = "rounded-2xl border border-white/10 bg-[#0c1726]";
 const muted = "text-xs text-slate-400";
@@ -43,11 +45,11 @@ function ActionReceipt({ action }) {
   </details>;
 }
 
-export default function SeoAuditResult({ manifest }) {
-  const [loaded, setLoaded] = useState({});
-  const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState("Affected URLs");
-  const [resultOpen, setResultOpen] = useState(false);
+export default function SeoAuditResult({ manifest, demo = null }) {
+  const [loaded, setLoaded] = useState(demo ? { crawl: { run: demo.sourceRun } } : {});
+  const [loading, setLoading] = useState(!demo);
+  const [tab, setTab] = useState(demo ? "Overview" : "Affected URLs");
+  const [resultOpen, setResultOpen] = useState(Boolean(demo));
   const [selectedTool, setSelectedTool] = useState("crawl");
   const [selectedIssue, setSelectedIssue] = useState("T01");
   const [search, setSearch] = useState("");
@@ -56,6 +58,7 @@ export default function SeoAuditResult({ manifest }) {
   // Each source run is a read-only, workspace-authorized request. Opening this
   // result never resumes the source runs or repeats provider calls.
   useEffect(() => {
+    if (demo) { setLoaded({ crawl: { run: demo.sourceRun } }); setLoading(false); return undefined; }
     let active = true;
     setLoading(true); setLoaded({});
     Promise.all(manifest.references.map(async (reference) => {
@@ -64,7 +67,7 @@ export default function SeoAuditResult({ manifest }) {
       catch { return [reference.key, { error: "Saved output unavailable in this workspace." }]; }
     })).then((entries) => { if (active) { setLoaded(Object.fromEntries(entries)); setLoading(false); } });
     return () => { active = false; };
-  }, [manifest]);
+  }, [manifest, demo]);
   const crawl = useMemo(() => crawlResult(loaded.crawl?.run), [loaded]);
   const inventory = useMemo(() => crawlInventory(loaded.crawl?.run, decode), [loaded]);
   const backlog = useMemo(() => mappedBacklog(manifest.backlog, inventory), [manifest, inventory]);
@@ -75,7 +78,8 @@ export default function SeoAuditResult({ manifest }) {
       : providerOutcome(saved?.run, reference.name);
     return { ...reference, ...outcome, error: saved?.error, run: saved?.run };
   });
-  tools.push({ key: "sitebulb", name: "Sitebulb", state: "unavailable", label: "No output supplied", message: manifest.sourceNotes.sitebulb || "No saved Sitebulb output supplied.", actions: [] });
+  if (demo) tools.push(...demo.tools);
+  else tools.push({ key: "sitebulb", name: "Sitebulb", state: "unavailable", label: "No output supplied", message: manifest.sourceNotes.sitebulb || "No saved Sitebulb output supplied.", actions: [] });
   const issue = crawl?.issues?.find((item) => item.id === selectedIssue) || crawl?.issues?.[0];
   const tool = tools.find((item) => item.key === selectedTool) || tools[0];
   const openTool = (key) => { setSelectedTool(key); setTab("Tool activity"); setResultOpen(true); };
@@ -83,9 +87,11 @@ export default function SeoAuditResult({ manifest }) {
   const ready = tools.filter((item) => item.state === "returned").length;
   const first = backlog.find((item) => item.priority === "P1");
   return <section aria-label="Main workflow result" className="space-y-6 text-slate-100">
-    <ResultsHeading centered isFailure={!loading && ready < 4}
-      title={loading ? "Opening SEO audit review…" : ready === 4 ? "SEO audit review prepared" : "SEO audit review needs access"}
-      summary={crawl ? `${crawl.website} · ${ready} of 4 sources returned audit data. The review and proposed backlog are saved in AURA.` : "Opening the saved source outputs and implementation backlog."} />
+    {demo && <div role="note" aria-label="Demo data disclosure" className="rounded-xl border border-violet-400/30 bg-violet-400/10 px-4 py-3 text-xs leading-6 text-violet-200"><strong>DEMO · Real Screaming Frog data + 3 simulated tools.</strong> Semrush, Ahrefs and Sitebulb values are realistic examples created for this preview. No provider calls, documents, tickets or site changes are made.</div>}
+    <ResultsHeading centered isFailure={!demo && !loading && ready < 4}
+      title={demo ? "SEO audit demo prepared" : loading ? "Opening SEO audit review…" : ready === 4 ? "SEO audit review prepared" : "SEO audit review needs access"}
+      summary={crawl ? demo ? `${crawl.website} · Real crawl evidence combined with a labelled research scenario. Open each tool to inspect its output.` : `${crawl.website} · ${ready} of 4 sources returned audit data. The review and proposed backlog are saved in AURA.` : "Opening the saved source outputs and implementation backlog."} />
+    {!demo && crawl && seoAuditDemoRoute(loaded.crawl?.run?.id) && <p className="text-center text-xs"><Link className="text-primary hover:underline" to={seoAuditDemoRoute(loaded.crawl.run.id)}>Preview with simulated Semrush, Ahrefs and Sitebulb outputs</Link></p>}
     <ResultsMetrics metrics={[
       { value: counts?.url_records ?? "—", label: "crawl URL records imported" },
       { value: counts?.canonical_conflicts ?? "—", label: "canonical conflicts observed" },
@@ -94,21 +100,21 @@ export default function SeoAuditResult({ manifest }) {
     {loading && <p role="status" className="flex items-center gap-2 text-sm text-primary"><Loader2 className="h-4 w-4 animate-spin" />Loading saved tool outcomes…</p>}
     <section aria-label="What happened">
       <h3 className="mb-3 text-sm font-semibold">What happened</h3>
-      <div className="space-y-2">{tools.map((item) => <div key={item.key} className={`flex flex-wrap items-center gap-3 rounded-xl border p-4 ${item.state === "returned" ? "border-white/10 bg-card/40" : "border-amber-400/20 bg-amber-400/[0.04]"}`}>
-        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${item.state === "returned" ? "bg-primary/10 text-primary" : "bg-amber-400/10 text-amber-300"}`}>{item.state === "returned" ? <FileSearch className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}</span>
-        <div className="min-w-0 flex-1"><p className="text-sm font-medium">{item.key === "crawl" && crawl ? `${counts.url_records} Screaming Frog URL records imported` : `${item.name} · ${item.label.toLowerCase()}`}</p><p className="mt-1 text-[11px] leading-5 text-muted-foreground">{item.key === "crawl" ? "Supplied exports analysed in AURA; source files and CSV rows retained." : item.key === "sitebulb" ? "OAuth registration rejected by Sitebulb; a completed audit is still needed." : item.error || item.message}</p></div>
+      <div className="space-y-2">{tools.map((item) => <div key={item.key} className={`flex flex-wrap items-center gap-3 rounded-xl border p-4 ${item.simulated ? "border-violet-400/20 bg-violet-400/[0.04]" : item.state === "returned" ? "border-white/10 bg-card/40" : "border-amber-400/20 bg-amber-400/[0.04]"}`}>
+        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${item.simulated ? "bg-violet-400/10 text-violet-300" : item.state === "returned" ? "bg-primary/10 text-primary" : "bg-amber-400/10 text-amber-300"}`}>{item.state === "returned" || item.simulated ? <FileSearch className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}</span>
+        <div className="min-w-0 flex-1"><p className="text-sm font-medium">{item.key === "crawl" && crawl ? `${counts.url_records} Screaming Frog URL records imported` : `${item.name} · ${item.label.toLowerCase()}`}</p><p className="mt-1 text-[11px] leading-5 text-muted-foreground">{item.key === "crawl" ? "REAL · Supplied exports analysed in AURA; source files and CSV rows retained." : item.simulated ? `SIMULATED · ${item.message}` : item.key === "sitebulb" ? "OAuth registration rejected by Sitebulb; a completed audit is still needed." : item.error || item.message}</p></div>
         {providerResultLink(item.run) && <a href={providerResultLink(item.run)} target="_blank" rel="noopener noreferrer" className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-primary/25 px-3 py-1.5 text-[11px] text-primary">Open in {item.name}<ExternalLink className="h-3 w-3" /></a>}
-        <button type="button" onClick={() => openTool(item.key)} aria-label={`View ${item.name} ${item.state === "returned" ? "output" : "issue"}`} className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] ${item.state === "returned" ? "border-primary/25 text-primary" : "border-amber-400/25 text-amber-300"}`}>{item.state === "returned" ? "View output" : "View issue"}<ArrowRight className="h-3 w-3" /></button>
+        <button type="button" onClick={() => openTool(item.key)} aria-label={`View ${item.name} ${item.simulated ? "simulated output" : item.state === "returned" ? "output" : "issue"}`} className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] ${item.state === "returned" || item.simulated ? "border-primary/25 text-primary" : "border-amber-400/25 text-amber-300"}`}>{item.simulated ? "View demo output" : item.state === "returned" ? "View output" : "View issue"}<ArrowRight className="h-3 w-3" /></button>
       </div>)}
       <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-card/40 p-4"><span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><FileSearch className="h-4 w-4" /></span><div className="flex-1"><p className="text-sm font-medium">{backlog.length} implementation items prepared</p><p className="mt-1 text-[11px] text-muted-foreground">Affected URLs, evidence, fixes, effort, dependencies and expert checks.</p></div><button type="button" onClick={() => { setGroup(""); setPriority(""); setTab("Backlog"); setResultOpen(true); }} className="shrink-0 rounded-full border border-primary/25 px-3 py-1.5 text-[11px] text-primary">View backlog</button></div>
       </div>
     </section>
     <section aria-label="Tools used" className="rounded-xl border border-white/10 bg-card/40 p-4">
       <div className="flex items-center justify-between gap-3"><h3 className="text-sm font-semibold">Tools used</h3><button type="button" onClick={() => openTool(selectedTool)} className="inline-flex items-center gap-1.5 rounded-full border border-primary/25 px-3 py-1.5 text-[11px] text-primary"><Activity className="h-3 w-3" />View activity</button></div>
-      <div className="mt-3 flex flex-wrap gap-2">{tools.map((item) => <button key={item.key} type="button" onClick={() => openTool(item.key)} className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 text-[11px]">{item.state === "returned" ? <CheckCircle2 className="h-3 w-3 text-emerald-300" /> : <AlertTriangle className="h-3 w-3 text-amber-300" />}{item.name}</button>)}</div>
+      <div className="mt-3 flex flex-wrap gap-2">{tools.map((item) => <button key={item.key} type="button" onClick={() => openTool(item.key)} className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 text-[11px]">{item.state === "returned" ? <CheckCircle2 className="h-3 w-3 text-emerald-300" /> : <AlertTriangle className="h-3 w-3 text-amber-300" />}{item.name}{item.simulated && <span className="text-[9px] uppercase text-violet-300">Demo</span>}</button>)}</div>
     </section>
     <details open={resultOpen} onToggle={(event) => setResultOpen(event.currentTarget.open)} className="group rounded-2xl border border-white/10 bg-card/20">
-      <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-4 text-sm font-semibold [&::-webkit-details-marker]:hidden"><FileSearch className="h-4 w-4 text-primary" />Results <span className="text-xs font-normal text-muted-foreground">— the actual output</span><ChevronDown className="ml-auto h-4 w-4 text-muted-foreground group-open:rotate-180" /></summary>
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-4 text-sm font-semibold [&::-webkit-details-marker]:hidden"><FileSearch className="h-4 w-4 text-primary" />Results <span className="text-xs font-normal text-muted-foreground">{demo ? "— real crawl + simulated research" : "— the actual output"}</span><ChevronDown className="ml-auto h-4 w-4 text-muted-foreground group-open:rotate-180" /></summary>
       <div className="px-4 pb-5">
         <div className="mb-5 flex gap-1 overflow-x-auto border-b border-white/10" role="tablist" aria-label="Audit result views">{["Affected URLs", "Backlog", "Overview", "Tool activity", "Sources & intake"].map((name) => <button key={name} id={`audit-tab-${name.replaceAll(" ", "-")}`} type="button" role="tab" aria-selected={tab === name} aria-controls="audit-view" onClick={() => setTab(name)} className={`shrink-0 border-b-2 px-3 py-3 text-xs font-medium ${tab === name ? "border-primary text-primary" : "border-transparent text-slate-400 hover:text-white"}`}>{name}</button>)}</div>
     <div id="audit-view" role="tabpanel" aria-labelledby={`audit-tab-${tab.replaceAll(" ", "-")}`} className="space-y-5">
@@ -127,18 +133,19 @@ export default function SeoAuditResult({ manifest }) {
       </>}
       {tab === "Backlog" && <><div className="flex flex-wrap items-center gap-2" role="group" aria-label="Backlog groups">{["", ...seoAuditGroups].map((name) => <button type="button" key={name} aria-pressed={group === name} onClick={() => setGroup(name)} className={`rounded-full border px-3 py-1.5 text-xs ${group === name ? "border-primary/50 bg-primary/10 text-primary" : "border-white/10 text-slate-400"}`}>{name || "All groups"}</button>)}<select aria-label="Backlog priority" value={priority} onChange={(event) => setPriority(event.target.value)} className="rounded-lg border border-white/10 bg-[#0c1726] px-3 py-2 text-xs"><option value="">All priorities</option>{["P1", "P2", "P3"].map((value) => <option key={value}>{value}</option>)}</select></div><p className={muted}>Proposed implementation work · provisional effort · no tasks created or site changes made</p><div className="space-y-2">{backlog.filter((item) => (!group || item.group.toLowerCase() === group.toLowerCase()) && (!priority || item.priority === priority)).map((item) => <details key={item.id} className={`group ${panel}`}><summary className="flex cursor-pointer list-none items-start gap-3 p-4 [&::-webkit-details-marker]:hidden"><span className={`rounded-lg px-2 py-1 text-xs font-semibold ${item.priority === "P1" ? "bg-amber-400/15 text-amber-300" : "bg-white/5 text-slate-400"}`}>{item.priority}</span><span className="flex-1"><span className="text-sm font-medium">{item.id} · {item.title}</span><span className="mt-1 block text-[11px] text-slate-400">{item.group} · {item.kind} · {item.affected.length} scoped URLs</span></span><ChevronDown className="h-4 w-4 shrink-0 text-slate-500 group-open:rotate-180" /></summary><div className="space-y-4 border-t border-white/10 p-4">{[["Evidence", item.evidence], ["Proposed fix", item.fix], ["Effort", item.effort], ["Dependencies", item.dependencies], ["Priority reasoning", item.reasoning], ["Expert review", item.expert_review], ["Acceptance check", item.acceptance]].map(([name, value]) => <div key={name}><p className="text-[11px] font-semibold text-primary">{name}</p><p className="mt-1 text-xs leading-6 text-slate-300">{listText(value)}</p></div>)}<UrlTable key={item.id} rows={item.affected} /></div></details>)}</div></>}
       {tab === "Tool activity" && <>
-        <div className="flex flex-wrap gap-2" role="group" aria-label="Choose tool output">{tools.map((item) => <button key={item.key} type="button" aria-pressed={tool.key === item.key} onClick={() => setSelectedTool(item.key)} className={`rounded-xl border px-3 py-2 text-xs ${tool.key === item.key ? "border-primary/50 bg-primary/10 text-primary" : "border-white/10 text-slate-400"}`}>{item.name}</button>)}</div>
-        <div className={`${panel} p-5`}><div className="flex flex-wrap items-center justify-between gap-3"><h3 className="font-semibold">{tool.name} output</h3><Badge good={tool.state === "returned"}>{tool.label}</Badge></div><div className="mt-4 flex items-start gap-3">{tool.state === "returned" ? <FileSearch className="mt-1 h-5 w-5 shrink-0 text-emerald-300" /> : <AlertTriangle className="mt-1 h-5 w-5 shrink-0 text-amber-300" />}<div>{tool.code && <p className="mb-1 font-mono text-sm text-amber-200">{tool.code}</p>}<p className="text-sm leading-6 text-slate-300">{tool.error || tool.message}</p>{tool.state !== "returned" && <p className="mt-2 text-xs text-slate-500">{tool.key === "sitebulb" || tool.key === "crawl" ? "No technical audit findings are available from this outcome." : "No keyword, visibility or backlink metrics are available from this outcome."}</p>}</div></div>
-          <div className="mt-5 flex flex-wrap items-center gap-4 border-t border-white/10 pt-4">{tool.runId && <Link to={`/runs/${tool.runId}`} target="_blank" className="inline-flex items-center gap-1.5 text-xs text-primary">Open saved action <ExternalLink className="h-3 w-3" /></Link>}{providerResultLink(tool.run) ? <a href={providerResultLink(tool.run)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-xs text-primary">Open result in {tool.name}<ExternalLink className="h-3 w-3" /></a> : <span className={muted}>{tool.key === "crawl" ? "Desktop export · evidence displayed in AURA" : "No provider report URL returned"}</span>}</div>
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Choose tool output">{tools.map((item) => <button key={item.key} type="button" aria-pressed={tool.key === item.key} onClick={() => setSelectedTool(item.key)} className={`rounded-xl border px-3 py-2 text-xs ${tool.key === item.key ? "border-primary/50 bg-primary/10 text-primary" : "border-white/10 text-slate-400"}`}>{item.name}{item.simulated && <span className="text-[9px] uppercase text-violet-300">Demo</span>}</button>)}</div>
+        <div className={`${panel} p-5`}><div className="flex flex-wrap items-center justify-between gap-3"><h3 className="font-semibold">{tool.name} output</h3><Badge good={tool.state === "returned"}>{tool.label}</Badge></div><div className="mt-4 flex items-start gap-3">{tool.state === "returned" ? <FileSearch className="mt-1 h-5 w-5 shrink-0 text-emerald-300" /> : <AlertTriangle className="mt-1 h-5 w-5 shrink-0 text-amber-300" />}<div>{tool.code && <p className="mb-1 font-mono text-sm text-amber-200">{tool.code}</p>}<p className="text-sm leading-6 text-slate-300">{tool.error || tool.message}</p>{!tool.simulated && tool.state !== "returned" && <p className="mt-2 text-xs text-slate-500">{tool.key === "sitebulb" || tool.key === "crawl" ? "No technical audit findings are available from this outcome." : "No keyword, visibility or backlink metrics are available from this outcome."}</p>}</div></div>
+          <div className="mt-5 flex flex-wrap items-center gap-4 border-t border-white/10 pt-4">{tool.runId && <Link to={`/runs/${tool.runId}`} target="_blank" className="inline-flex items-center gap-1.5 text-xs text-primary">Open saved action <ExternalLink className="h-3 w-3" /></Link>}{providerResultLink(tool.run) ? <a href={providerResultLink(tool.run)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-xs text-primary">Open result in {tool.name}<ExternalLink className="h-3 w-3" /></a> : <span className={muted}>{tool.simulated ? "Simulated preview · no vendor report exists" : tool.key === "crawl" ? "Desktop export · evidence displayed in AURA" : "No provider report URL returned"}</span>}</div>
         </div>
         {tool.key === "crawl" && crawl && <div className="space-y-3">{crawl.issues.map((item) => <button key={item.id} type="button" onClick={() => { setSelectedIssue(item.id); setTab("Affected URLs"); }} className={`flex w-full items-center gap-3 ${panel} p-4 text-left`}><Link2 className="h-4 w-4 shrink-0 text-primary" /><span className="flex-1 text-xs">{item.id} · {item.title}</span><span className={muted}>{item.affected.length} URLs</span><ArrowRight className="h-3 w-3" /></button>)}</div>}
+        {tool.simulated && <SimulatedSeoToolOutput tool={tool} website={crawl?.website} scenarioDate={demo.scenarioDate} />}
         <div className="space-y-2">{tool.actions.map((action) => <ActionReceipt key={action.id} action={action} />)}</div>
-        {!tool.actions.length && <p className={muted}>No executed action receipt is available. The status above is from the supplied source packet.</p>}
+        {!tool.simulated && !tool.actions.length && <p className={muted}>No executed action receipt is available. The status above is from the supplied source packet.</p>}
       </>}
       {tab === "Sources & intake" && <>
         <div className={`${panel} p-5`}><h3 className="text-sm font-semibold">Crawl dates and source files</h3><p className="mt-3 text-xs text-slate-300">{crawl?.crawl_period?.first_raw || "Not supplied"} → {crawl?.crawl_period?.last_raw || "Not supplied"}</p><p className="mt-1 text-xs text-slate-500">Timezone: {crawl?.crawl_period?.timezone || "Not supplied"} · Export created: {crawl?.crawl_period?.export_created_at || "Not supplied"} · Settings unconfirmed</p><div className="mt-4 space-y-3">{(crawl?.files || []).map((file, index) => <details key={`${file.filename}-${index}`} className="rounded-xl border border-white/10 p-3"><summary className="cursor-pointer text-xs"><span className="font-medium">{file.filename}</span><span className="ml-3 text-slate-400">{file.rows} rows · {Array.isArray(file.columns) ? file.columns.length : file.columns} columns{file.duplicate_of ? " · duplicate bytes" : ""}</span></summary><p className="mt-3 break-all font-mono text-[10px] text-slate-500">SHA256 {file.sha256}</p>{file.duplicate_of && <p className="mt-2 text-xs text-amber-200">Duplicate of {file.duplicate_of}. Not independent crawl evidence.</p>}</details>)}</div></div>
         <div className={`${panel} p-5`}><h3 className="text-sm font-semibold">Client, goals and destinations</h3><p className="mt-3 text-xs leading-6 text-slate-300">{manifest.sourceNotes.intake}</p></div>
-        <div className={`${panel} p-5`}><h3 className="text-sm font-semibold">Contradictions and checks</h3><ul className="mt-3 space-y-2 text-xs leading-6 text-slate-400">{[...(crawl?.warnings || []), ...(crawl?.unverified_checks || [])].map((warning, index) => <li key={index} className="flex gap-2"><AlertTriangle className="mt-1 h-3 w-3 shrink-0 text-amber-300" /><span>{listText(warning)}</span></li>)}</ul></div>
+        <div className={`${panel} p-5`}><h3 className="text-sm font-semibold">Contradictions and checks</h3><ul className="mt-3 space-y-2 text-xs leading-6 text-slate-400">{[...(demo?.checks || []), ...(crawl?.warnings || []), ...(crawl?.unverified_checks || [])].map((warning, index) => <li key={index} className="flex gap-2"><AlertTriangle className="mt-1 h-3 w-3 shrink-0 text-amber-300" /><span>{listText(warning)}</span></li>)}</ul></div>
       </>}
     </div>
       </div>
