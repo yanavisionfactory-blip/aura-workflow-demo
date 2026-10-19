@@ -11,6 +11,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
 from .config import get_settings
+from .mcp_restrictions import restrict_mcp_manifest
 from .openapi_importer import OpenAPIImportError, compile_openapi
 
 
@@ -368,6 +369,7 @@ async def discover_provider(kind: str, base_url: str, credentials: dict, config:
                 ],
             }
             manifest = normalize_manifest(raw, kind, base_url)
+            manifest = restrict_mcp_manifest(manifest, base_url)
             if config.get("agent_protocol") == "mcp":
                 return _agent_manifest_metadata(
                     manifest,

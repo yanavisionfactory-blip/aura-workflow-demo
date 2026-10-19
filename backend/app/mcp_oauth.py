@@ -44,6 +44,19 @@ MCP_SERVICES = {
         "issuer": "https://auth.sitebulb.com", "auth_origins": ["https://auth.sitebulb.com"],
         "scopes": ["mcp:read"], "required_scope": "mcp:read", "canonical_provider": "sitebulb",
     },
+    "supermetrics": {
+        "name": "Supermetrics", "owner": "Supermetrics",
+        "endpoint": "https://mcp.supermetrics.com/mcp",
+        "resource": "https://mcp.supermetrics.com/",
+        "resource_metadata_url": "https://mcp.supermetrics.com/.well-known/oauth-protected-resource",
+        "issuer": "https://api.supermetrics.com",
+        "auth_origins": ["https://api.supermetrics.com"],
+        "scopes": [
+            "team_read", "user_read", "ds_logins_read", "ds_accounts_read",
+            "ds_queries_run", "ds_login_links_read", "business_context_read", "offline_access",
+        ],
+        "required_scope": "ds_accounts_read", "canonical_provider": "supermetrics",
+    },
 }
 
 
@@ -155,13 +168,17 @@ async def prepare_authorization(credentials: dict, state: str, callback_url: str
     service = mcp_service(provider)
     endpoint = service["endpoint"]
     parsed = urlsplit(endpoint)
-    resource_url = f"https://{parsed.netloc}/.well-known/oauth-protected-resource{parsed.path}"
+    resource_id = service.get("resource", endpoint)
+    resource_url = service.get(
+        "resource_metadata_url",
+        f"https://{parsed.netloc}/.well-known/oauth-protected-resource{parsed.path}",
+    )
     async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
         resource = await _json(
             client, "GET", resource_url, provider=provider, resource=True,
         )
         if (
-            resource.get("resource") != endpoint
+            resource.get("resource") != resource_id
             or service["issuer"].rstrip("/") not in {
                 str(issuer).rstrip("/") for issuer in resource.get("authorization_servers", [])
             }
@@ -216,7 +233,7 @@ async def prepare_authorization(credentials: dict, state: str, callback_url: str
             "authorization_url": authorization_url,
             "token_url": token_url,
             "token_auth_method": "none",
-            "token_params": {"resource": endpoint},
+            "token_params": {"resource": resource_id},
             "scopes": scopes,
         }
         params = {
@@ -227,7 +244,7 @@ async def prepare_authorization(credentials: dict, state: str, callback_url: str
             "state": state,
             "code_challenge": pkce_challenge(verifier),
             "code_challenge_method": "S256",
-            "resource": endpoint,
+            "resource": resource_id,
         }
         return f"{authorization_url}?{urlencode(params)}", credentials, config
 
@@ -248,7 +265,7 @@ async def exchange_code(credentials: dict, config: dict, code: str, verifier: st
                 "redirect_uri": credentials["registered_redirect_uri"],
                 "code": code,
                 "code_verifier": verifier,
-                "resource": service["endpoint"],
+                "resource": service.get("resource", service["endpoint"]),
             },
         )
     if not isinstance(result.get("access_token"), str) or not result["access_token"]:

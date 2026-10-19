@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   AGENT_METHODS,
   agentAutoconnectPayload,
+  agentConnectionPreset,
   agentConnectionPayload,
   agentPromptHints,
   semrushApiKeySource,
@@ -12,6 +13,13 @@ import {
 
 test("offers A2A, MCP, and AURA Agent API connections", () => {
   assert.deepEqual(AGENT_METHODS.map((method) => method.id), ["a2a", "mcp", "aura"]);
+});
+
+test("connection links prefill only the reviewed Supermetrics endpoint", () => {
+  assert.deepEqual(agentConnectionPreset("?connect=supermetrics&source=https://untrusted.test"),
+    { source: "https://mcp.supermetrics.com/mcp" });
+  assert.equal(agentConnectionPreset("?connect=https://untrusted.test"), null);
+  assert.equal(agentConnectionPreset(""), null);
 });
 
 test("turns one human-facing agent link into an autoconnect request", () => {
