@@ -10,8 +10,8 @@ import { promptToolChoices, promptToolHints } from "@/lib/promptToolHints.mjs";
 
 const EXAMPLE_ICONS = [FileBarChart, Mail, ListChecks, RefreshCw];
 
-export default function CommandInput({ onSubmit, disabled, examples, onPickExample }) {
-  const [value, setValue] = useState("");
+export default function CommandInput({ onSubmit, disabled, examples, onPickExample, initialValue = "" }) {
+  const [value, setValue] = useState(initialValue);
   const [isFocused, setIsFocused] = useState(false);
   const [manualTools, setManualTools] = useState([]);
   const [removedTools, setRemovedTools] = useState([]);

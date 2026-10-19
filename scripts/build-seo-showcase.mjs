@@ -27,5 +27,5 @@ const snapshot = anonymous({
 });
 const serialized = JSON.stringify(snapshot, null, 2);
 if (serialized.includes(hostname) || serialized.includes(run.id) || serialized.includes("data:text/csv")) throw new Error("Private source material leaked into the public snapshot");
-fs.writeFileSync(new URL("../public/showcase/seo-audit/data.mjs", import.meta.url), `// Anonymized real crawl + explicitly simulated research. No backend or customer CSV attachments.\nexport default ${serialized};\n`);
+fs.writeFileSync(new URL("../src/showcase/seo-audit/data.mjs", import.meta.url), `// Anonymized real crawl + explicitly simulated research. No backend or customer CSV attachments.\nexport default ${serialized};\n`);
 console.log(JSON.stringify({ records: crawl.counts.url_records, conflicts: crawl.counts.canonical_conflicts, backlog: snapshot.backlog.length, anonymized: true }));

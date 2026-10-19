@@ -755,7 +755,7 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
   );
 }
 
-export default function PreviewView({ preview, steps, prepared = false, onApprove, onBack, error = "" }) {
+export default function PreviewView({ preview, steps, prepared = false, onApprove, onBack, error = "", readOnlySummary = null, approvalLabel = "", reviewDescription = "" }) {
   const initial = steps && steps.length ? steps : preview?.steps || [];
   const [editSteps, setEditSteps] = useState(() => JSON.parse(JSON.stringify(initial)));
   const [showBackground, setShowBackground] = useState(false);
@@ -801,7 +801,7 @@ export default function PreviewView({ preview, steps, prepared = false, onApprov
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -20 }}
       transition={{ duration: 0.4 }}
-      className="mx-auto w-full max-w-5xl"
+      className={`mx-auto w-full ${readOnlySummary ? "max-w-2xl" : "max-w-5xl"}`}
     >
       {/* Header */}
       <div className="mb-2 flex items-center gap-4">
@@ -810,16 +810,24 @@ export default function PreviewView({ preview, steps, prepared = false, onApprov
         </div>
         <div>
           <h2 className="text-2xl font-semibold text-foreground">{prepared ? "Review the finished action" : "Review before running"}</h2>
-          <p className="mt-1 text-sm text-muted-foreground">{prepared ? "The needed information is ready. Check the exact values AURA will submit." : "Check the complete actions below. Actions that need more information will be reviewed when they are ready."}</p>
+          <p className="mt-1 text-sm text-muted-foreground">{reviewDescription || (prepared ? "The needed information is ready. Check the exact values AURA will submit." : "Check the complete actions below. Actions that need more information will be reviewed when they are ready.")}</p>
         </div>
       </div>
 
-      <div className="mt-6 flex flex-wrap items-center gap-3 text-sm">
+      {!readOnlySummary && <div className="mt-6 flex flex-wrap items-center gap-3 text-sm">
         <span className="rounded-full bg-violet-500/15 px-4 py-2 text-violet-200">{reviewSteps.length} {reviewSteps.length === 1 ? "change needs" : "changes need"} approval</span>
         <span className="text-muted-foreground">{prepared ? "This action will only run after you approve it." : "These actions will only run after you approve them."}</span>
-      </div>
+      </div>}
 
-      {backgroundSteps.length > 0 && (
+      {readOnlySummary && <div className="mt-6 space-y-4">
+        {readOnlySummary}
+        <section className="rounded-xl border border-white/10 bg-card/50 p-5" aria-label="What will happen">
+          <h3 className="mb-4 text-sm font-semibold">What will happen</h3>
+          <div className="space-y-4">{editSteps.map((step, index) => <div key={index} className="flex gap-3"><span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs text-primary">{index + 1}</span><div><p className="text-xs text-muted-foreground">{step.tool} <span className="ml-2 text-emerald-300">Read-only</span></p><p className="mt-1 text-sm">{step.action}</p><p className="mt-1 text-xs leading-5 text-muted-foreground">{step.output}</p></div></div>)}</div>
+        </section>
+      </div>}
+
+      {!readOnlySummary && backgroundSteps.length > 0 && (
         <div className="mt-4">
           <button
             type="button"
@@ -884,10 +892,10 @@ export default function PreviewView({ preview, steps, prepared = false, onApprov
               ...step,
               preview: previewForStep(step) || step.preview,
             })))}
-            className="gap-1.5 border-0 bg-gradient-to-r from-violet-500 to-violet-600 text-white hover:from-violet-600 hover:to-violet-700"
+            className={`gap-1.5 border-0 bg-gradient-to-r text-white ${readOnlySummary ? "from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700" : "from-violet-500 to-violet-600 hover:from-violet-600 hover:to-violet-700"}`}
           >
             <Play className="w-3.5 h-3.5" />
-            {approvalBlocked ? "Complete required values" : prepared ? "Approve & continue" : "Approve & run"}
+            {approvalBlocked ? "Complete required values" : approvalLabel || (prepared ? "Approve & continue" : "Approve & run")}
           </Button>
         </motion.div>
       </div>

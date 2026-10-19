@@ -45,7 +45,7 @@ const LABEL_MAP = {
 };
 const normLabel = (l) => LABEL_MAP[l] || l;
 
-export default function PlanStep({ step, index, isLast, provided, onChange, onDelete, onRequestChange, forceEdit, onEditConsumed }) {
+export default function PlanStep({ step, index, isLast, provided, onChange, onDelete, onRequestChange, forceEdit, onEditConsumed, readOnly = false }) {
   const [changing, setChanging] = useState(false);
   const [changeText, setChangeText] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -127,16 +127,16 @@ Return the REVISED step with all fields updated to reflect the change. Keep the 
         {/* Number / drag handle */}
         <div
           {...provided.dragHandleProps}
-          title="Drag to reorder"
+          title={readOnly ? `Step ${index + 1}` : "Drag to reorder"}
           className="group/handle relative z-10 flex-shrink-0 w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center cursor-grab active:cursor-grabbing hover:bg-primary/20 transition-colors"
         >
-          <GripVertical className="w-4 h-4 text-primary/70 group-hover/handle:hidden transition-colors" />
-          <span className="hidden group-hover/handle:flex items-center gap-0.5 text-[9px] font-medium text-primary">
+          {readOnly ? <span className="text-sm font-mono text-primary">{index + 1}</span> : <GripVertical className="w-4 h-4 text-primary/70 group-hover/handle:hidden transition-colors" />}
+          {!readOnly && <span className="hidden group-hover/handle:flex items-center gap-0.5 text-[9px] font-medium text-primary">
             <Move className="w-3 h-3" /> Move
-          </span>
-          <span className="absolute -top-1 -right-1 text-[9px] font-mono font-bold text-primary bg-background rounded-full px-1 border border-primary/20 group-hover/handle:opacity-0 transition-opacity">
+          </span>}
+          {!readOnly && <span className="absolute -top-1 -right-1 text-[9px] font-mono font-bold text-primary bg-background rounded-full px-1 border border-primary/20 group-hover/handle:opacity-0 transition-opacity">
             {index + 1}
-          </span>
+          </span>}
         </div>
 
         {/* Card */}
@@ -145,14 +145,14 @@ Return the REVISED step with all fields updated to reflect the change. Keep the 
             {/* Title + Change */}
             <div className="flex items-start justify-between gap-3 mb-1.5">
               <h4 className="text-sm font-semibold leading-snug">{title}</h4>
-              <div className="flex items-center gap-1.5 flex-shrink-0">
+              {!readOnly && <div className="flex items-center gap-1.5 flex-shrink-0">
                 <button
                   onClick={() => setChanging((c) => !c)}
                   className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full border border-white/10 text-muted-foreground hover:text-foreground hover:border-white/20 transition-colors"
                 >
                   <Pencil className="w-3 h-3" /> Change
                 </button>
-              </div>
+              </div>}
             </div>
 
             {/* I'll ... */}

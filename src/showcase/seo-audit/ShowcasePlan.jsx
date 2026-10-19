@@ -1,0 +1,13 @@
+import { Brain, ArrowRight, ShieldCheck } from 'lucide-react';
+import PlanStep from '@/components/aura/PlanStep';
+import { workflowSteps } from './scenario.mjs';
+
+const provided = { draggableProps: {}, dragHandleProps: {}, innerRef: () => {} };
+
+export default function ShowcasePlan({ onReview }) {
+  return <section className="mx-auto w-full max-w-2xl">
+    <div className="mb-6"><div className="mb-1.5 flex items-center gap-2"><div className="rounded-lg border border-primary/20 bg-primary/10 p-1.5"><Brain className="h-4 w-4 text-primary"/></div><h2 className="text-lg font-semibold">Here's how AURA plans to complete your task</h2></div><p className="ml-9 text-xs leading-relaxed text-muted-foreground">This interactive demo follows one prepared SEO scenario. Inspect the sources and review the proposed output before playback.</p></div>
+    {workflowSteps.map((step, index) => <PlanStep key={step.tool} step={step} index={index} isLast={index === workflowSteps.length - 1} provided={provided} readOnly/>)}
+    <div className="mt-5 rounded-xl border border-white/10 bg-card/50 p-4"><div className="mb-3 flex items-start gap-2 text-xs leading-6 text-muted-foreground"><ShieldCheck className="mt-1 h-4 w-4 shrink-0 text-emerald-300"/><span>All steps are read-only. Reporting and task destinations remain unconfirmed. No website, document or ticket changes will be made.</span></div><div className="flex justify-end"><button type="button" onClick={onReview} className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-emerald-500 to-emerald-600 px-4 py-2 text-sm font-medium text-white">Review before running<ArrowRight className="h-4 w-4"/></button></div></div>
+  </section>;
+}
