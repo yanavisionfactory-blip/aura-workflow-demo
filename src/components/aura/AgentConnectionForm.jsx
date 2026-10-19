@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Bot,
   Check,
+  Copy,
   ExternalLink,
   Loader2,
   ShieldCheck,
@@ -10,6 +11,7 @@ import {
 
 import { autoconnectAgent } from "@/lib/auraApi";
 import { agentAutoconnectPayload, semrushApiKeySource } from "@/lib/agentConnections.mjs";
+import { sitebulbApprovalRequest } from "@/lib/providerSetupRequest.mjs";
 
 const DISCOVERY_STEPS = [
   "Finding the agent…",
@@ -24,6 +26,24 @@ function safeAuthorizationUrl(value) {
   } catch {
     return "";
   }
+}
+
+function ProviderApprovalRequest({ detail }) {
+  const [copyStatus, setCopyStatus] = useState("");
+  const request = sitebulbApprovalRequest(detail);
+  if (!request) return null;
+  const contents = `To: ${request.to}\nSubject: ${request.subject}\n\n${request.body}`;
+  return <div className="space-y-2">
+    <details className="rounded-lg border border-amber-400/15 p-2.5">
+      <summary className="cursor-pointer font-medium text-primary">Review Sitebulb support request</summary>
+      <pre className="mt-3 whitespace-pre-wrap break-words font-sans text-[11px] leading-5 text-muted-foreground">{contents}</pre>
+    </details>
+    <button type="button" onClick={async () => {
+      try { await navigator.clipboard.writeText(contents); setCopyStatus("Support request copied. Nothing was sent."); }
+      catch { setCopyStatus("Copy is unavailable. You can select the request above."); }
+    }} className="inline-flex items-center gap-1.5 rounded-lg border border-primary/25 px-3 py-2 text-primary"><Copy className="h-3 w-3" />Copy support request</button>
+    {copyStatus && <p role="status" className="text-muted-foreground">{copyStatus}</p>}
+  </div>;
 }
 
 export default function AgentConnectionForm({ onConnected = null }) {
@@ -168,6 +188,7 @@ export default function AgentConnectionForm({ onConnected = null }) {
             <div><p className="font-medium text-muted-foreground">AURA callback to approve</p><code className="mt-1 block break-all rounded bg-black/20 p-2 text-primary">{registrationIssue.callback_url}</code></div>
             <div><p className="font-medium text-muted-foreground">Requested service</p><code className="block break-all text-muted-foreground">{registrationIssue.endpoint}</code></div>
             {registrationIssue.support_url === "https://sitebulb.com/support/" && <a href={registrationIssue.support_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-primary hover:underline">Open Sitebulb support<ExternalLink className="h-3 w-3" /></a>}
+            <ProviderApprovalRequest detail={registrationIssue} />
             <p className="text-muted-foreground">No Sitebulb account credentials have been requested and no verified connection has been created.</p>
           </div>}
           {authorizationUrl && (
