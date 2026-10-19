@@ -1062,6 +1062,9 @@ Write ONE clear, conversational sentence restating what they want — but offer 
               : "Checking the saved response from the app."
               : "",
         output: step?.output,
+        operation: step?.operation || planned.operation,
+        arguments: step?.arguments || planned.arguments,
+        error: step?.error,
         jiraTasks: step?.operation === "jira.issues.create_from_blocks"
           ? jiraReceiptTasks(step.output?.provider_result) : [],
       };
