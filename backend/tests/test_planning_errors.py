@@ -476,6 +476,53 @@ def test_connector_contract_mismatch_is_replanned_before_reaching_user(monkeypat
     assert "unknown inputs" in calls[1][0]
 
 
+@pytest.mark.parametrize("prompt", [
+    "Prepare a Classic Roofing campaign report in AURA. Historical results only, no forecast.",
+    "Prepare a sales forecast for Columbia in AURA from the supplied figures.",
+    "Составь прогноз продаж в AURA по предоставленным данным.",
+])
+def test_business_report_does_not_require_an_unrequested_weather_read(monkeypatch, prompt):
+    candidate = WorkflowPlan(name="Campaign review", interpretation="Review supplied evidence", steps=[
+        PlanStep(key="report", agent="analyst", tool_slug="aura", operation="report.compose",
+                 arguments={"title": "Campaign review", "instructions": "Review the supplied brief",
+                            "sources": [{"id": "brief", "title": "Client brief", "content": "Roofing services"}]},
+                 reason="Prepare the requested review", expected_output="Complete sourced review")
+    ])
+    calls = []
+
+    async def fake_create_plan(*_args, **kwargs):
+        calls.append(kwargs.get("planner_repair_requirements"))
+        return candidate
+
+    monkeypatch.setattr(orchestrator, "create_plan", fake_create_plan)
+    result = asyncio.run(orchestrator._create_compiled_plan(
+        prompt, [{"slug": "aura", "allowed_operations": ["report.compose", "weather.forecast"]}],
+        set(), {"aura": native_manifest("aura")},
+    ))
+    assert [step.operation for step in result.steps] == ["report.compose"]
+    assert len(calls) == 1
+
+
+def test_explicit_weather_forecast_still_requires_its_public_source(monkeypatch):
+    candidate = WorkflowPlan(name="Weather review", interpretation="Review weather", steps=[
+        PlanStep(key="report", agent="analyst", tool_slug="aura", operation="report.compose",
+                 arguments={"title": "Weather", "instructions": "Prepare a weather review",
+                            "sources": [{"id": "brief", "title": "Brief", "content": "Munich"}]},
+                 reason="Prepare the requested review", expected_output="Complete review")
+    ])
+
+    async def fake_create_plan(*_args, **_kwargs):
+        return candidate
+
+    monkeypatch.setattr(orchestrator, "create_plan", fake_create_plan)
+    with pytest.raises(NativeConnectorError, match="Fetch the public forecast"):
+        asyncio.run(orchestrator._create_compiled_plan(
+            "Get the weather forecast for Munich tomorrow and prepare a report in AURA",
+            [{"slug": "aura", "allowed_operations": ["report.compose", "weather.forecast"]}],
+            set(), {"aura": native_manifest("aura")},
+        ))
+
+
 def test_connector_contract_validation_is_repaired_only_once(monkeypatch, caplog) -> None:
     calls = []
 
