@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'" />
+  <title>AURA — one SEO audit, from evidence to implementation</title>
+  <meta name="description" content="Explore one SEO audit workflow. A real anonymized crawl, clearly labelled sample research, a prioritized backlog, and a 66-second walkthrough. No sign-in." />
+  <link rel="icon" href="../../favicon.svg" />
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <main>
+    <header class="intro"><div><p class="eyebrow">A workflow prototype for feedback</p><h1>One SEO audit. From evidence to implementation.</h1><p class="sub">Try the workflow yourself, or watch the 66-second walkthrough. No account needed.</p></div><div class="actions"><button id="watch" class="primary">▶ Watch walkthrough</button><button id="play-tour">Start guided tour</button></div></header>
+    <div class="disclosure"><span class="dot real"></span><strong>Real Screaming Frog export</strong><span class="divider">+</span><span class="dot sample"></span><span>Simulated Semrush, Ahrefs &amp; Sitebulb outputs</span><span class="anon">Client anonymized · read-only</span></div>
+    <div class="screen-scroll"><div id="screen" class="screen" aria-label="Clickable AURA workflow"></div></div>
+    <section class="tour-controls" aria-label="Walkthrough controls"><div><span id="tour-number" class="tour-number">EXPLORE</span><p id="tour-title">Start with the brief, or jump to the result.</p></div><div class="tour-actions"><button id="tour-prev" aria-label="Previous walkthrough chapter">←</button><button id="tour-toggle">Play tour</button><button id="tour-next" aria-label="Next walkthrough chapter">→</button><button id="restart">Reset demo</button></div><div class="progress"><span id="progress"></span></div></section>
+    <p class="mobile-hint">On a small screen, swipe the workflow sideways to inspect the details.</p>
+    <footer><span>This is a static prototype. Nothing is sent to an account, tool or website.</span><button id="feedback">What would you change first? →</button></footer>
+    <p id="status" class="sr-only" role="status" aria-live="polite"></p>
+    <noscript>This interactive prototype needs JavaScript. <a href="./walkthrough.mp4">Watch the captioned MP4 walkthrough instead.</a></noscript>
+  </main>
+  <dialog id="detail"><div class="dialog-head"><h2 id="detail-title"></h2><button id="close-detail" aria-label="Close detail">✕</button></div><div id="detail-body"></div></dialog>
+  <dialog id="movie" class="movie"><div class="dialog-head"><h2>66-second walkthrough</h2><button id="close-movie" aria-label="Close video">✕</button></div><video id="video" controls playsinline preload="none" poster="./poster.png"><source src="./walkthrough.mp4" type="video/mp4" /><track kind="captions" src="./walkthrough.vtt" srclang="en" label="English" />Your browser cannot play this video. <a href="./walkthrough.mp4">Download the MP4.</a></video><p class="video-note">Captioned walkthrough of this static prototype. Real anonymized crawl evidence; three simulated tools. No live execution.</p><a class="download" href="./walkthrough.mp4" download="aura-seo-audit-walkthrough.mp4">Download walkthrough</a></dialog>
+  <script type="module" src="./app.mjs"></script>
+</body>
+</html>
