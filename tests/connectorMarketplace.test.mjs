@@ -115,3 +115,32 @@ test("action and MCP routes appear as one app with both execution paths", () => 
     ["notion", "notion-mcp-v2"],
   );
 });
+
+test("Meta search exposes the verified Pages route without satisfying Meta Ads", () => {
+  replaceToolCatalog({ marketplace: [
+    {
+      provider: "facebook-pages",
+      display_name: "Facebook Pages",
+      aliases: ["Meta", "Meta Pages", "Meta Facebook", "Meta Facebook Pages"],
+      availability: "available",
+      connectable: true,
+      connection_backend: "pipedream",
+      connection_strategy: "oauth",
+      setup_hint: "Provider consent",
+      capability_count: 9,
+    },
+    {
+      provider: "meta-ads",
+      display_name: "Meta Ads",
+      availability: "coming_soon",
+      connectable: false,
+    },
+  ] });
+
+  assert.deepEqual(searchMarketplace("Meta").map((tool) => tool.name), ["Facebook Pages", "Meta Ads"]);
+  assert.equal(catalogEntryFor("Meta")?.provider, "facebook-pages");
+  assert.equal(catalogEntryFor("Facebook Pages")?.connectionStrategy, "oauth");
+  assert.equal(catalogEntryFor("Meta Ads"), null);
+  assert.equal(searchMarketplace("Meta Ads")[0].connectable, false);
+  assert.match(searchMarketplace("Meta Pages")[0].desc, /9 verified capabilities/);
+});

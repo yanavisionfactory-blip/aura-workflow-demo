@@ -187,6 +187,69 @@ async def test_app_discovery_uses_the_connect_registry_for_catalog_and_actions()
     assert client._request.await_args_list[1].kwargs["params"]["has_actions"] == "true"
 
 
+@pytest.mark.parametrize("query", ["Meta", "meta pages", "Meta Facebook Pages"])
+async def test_meta_search_discovers_pages_without_relabelling_it_as_ads(query):
+    client = FakePipedream()
+    pages = {
+        **app_definition(),
+        "name_slug": "facebook_pages",
+        "name": "Facebook Pages",
+        "action_count": 9,
+    }
+    ads = {
+        **app_definition(),
+        "name_slug": "meta_ads",
+        "name": "Meta Ads",
+        "has_actions": False,
+    }
+
+    async def registry(method, path, *, params):
+        assert (method, path) == ("GET", "/v1/connect/apps")
+        if params["q"] == "Facebook Pages":
+            return {"data": [pages]}
+        return {"data": [] if params.get("has_actions") else [ads]}
+
+    client._request = AsyncMock(side_effect=registry)
+    apps = await client.list_apps(query)
+    assert [item["name_slug"] for item in apps] == ["facebook_pages", "meta_ads"]
+    assert {call.kwargs["params"]["q"] for call in client._request.await_args_list} == {
+        query, "Facebook Pages",
+    }
+    page_entry = marketplace_entry(apps[0], connectable=True)
+    assert page_entry["display_name"] == "Facebook Pages"
+    assert page_entry["provider"] == "facebook-pages"
+    assert page_entry["canonical_provider"] == "facebook-pages"
+    assert page_entry["routes"][0]["provider"] == "facebook-pages"
+    assert page_entry["capability_count"] == 9
+    assert "Meta" in page_entry["aliases"]
+    assert "Meta Ads" not in page_entry["aliases"]
+    assert marketplace_entry(apps[0], connectable=False)["connectable"] is False
+    assert marketplace_entry(apps[1], connectable=True)["connectable"] is False
+
+
+async def test_meta_search_keeps_pages_when_the_brand_lookup_fails():
+    client = FakePipedream()
+
+    async def registry(method, path, *, params):
+        if params["q"] == "Meta":
+            raise PipedreamConnectError("Unavailable")
+        return {"data": [{
+            **app_definition(), "name_slug": "facebook_pages", "name": "Facebook Pages",
+        }]}
+
+    client._request = AsyncMock(side_effect=registry)
+    assert (await client.list_apps("Meta"))[0]["name_slug"] == "facebook_pages"
+
+
+async def test_meta_ads_search_does_not_substitute_a_page_connection():
+    client = FakePipedream()
+    client._request = AsyncMock(return_value={"data": []})
+    assert await client.list_apps("Meta Ads") == []
+    assert [call.kwargs["params"]["q"] for call in client._request.await_args_list] == [
+        "Meta Ads", "Meta Ads",
+    ]
+
+
 async def test_get_app_uses_the_documented_connect_registry_route():
     client = FakePipedream()
     client._request = AsyncMock(return_value={"data": app_definition()})

@@ -55,6 +55,11 @@ _PROXY_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 # reviewed. The model never receives an arbitrary URL or path parameter.
 _CERTIFIED_PROXY_OPERATIONS: dict[str, tuple[dict[str, Any], ...]] = {}
 _RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
+# Product aliases help users find the provider's real connector. They must not
+# rename its account identity or imply that Pages grants access to Meta Ads.
+_APP_SEARCH_ALIASES = {
+    "facebook-pages": ("Meta", "Meta Pages", "Meta Facebook", "Meta Facebook Pages"),
+}
 
 
 class PipedreamConnectError(RuntimeError):
@@ -234,7 +239,12 @@ def marketplace_entry(app: dict[str, Any], *, connectable: bool) -> dict[str, An
         "provider": provider,
         "canonical_provider": canonical_provider,
         "display_name": display_name[:200],
-        "aliases": sorted({provider, canonical_provider, str(app.get("name") or "").strip()}),
+        "aliases": sorted({
+            provider,
+            canonical_provider,
+            str(app.get("name") or "").strip(),
+            *_APP_SEARCH_ALIASES.get(provider, ()),
+        }),
         "routes": [route],
         "categories": [str(item) for item in categories if item][:12],
         "auth_mode": "OAUTH2" if oauth else str(app.get("auth_type") or "UNKNOWN").upper(),
@@ -400,6 +410,53 @@ class PipedreamClient:
         *,
         sort_key: str = "name",
         sort_direction: str = "asc",
+    ) -> list[dict[str, Any]]:
+        queries = [query]
+        if any(
+            _slug(query) == _slug(alias)
+            for alias in _APP_SEARCH_ALIASES["facebook-pages"]
+        ):
+            queries.append("Facebook Pages")
+        results = await asyncio.gather(
+            *(
+                self._list_apps_query(
+                    candidate,
+                    limit,
+                    sort_key=sort_key,
+                    sort_direction=sort_direction,
+                )
+                for candidate in queries
+            ),
+            return_exceptions=True,
+        )
+        apps: dict[str, dict[str, Any]] = {}
+        for result in results:
+            if isinstance(result, BaseException):
+                if not isinstance(result, PipedreamConnectError):
+                    raise result
+                continue
+            for item in result:
+                apps[_vendor_app(item)] = item
+        if not apps and any(isinstance(result, PipedreamConnectError) for result in results):
+            raise next(result for result in results if isinstance(result, PipedreamConnectError))
+        key = sort_key if sort_key in {"name", "name_slug", "featured_weight"} else "name"
+        return sorted(
+            apps.values(),
+            key=lambda item: (
+                int(item.get(key) or 0)
+                if key == "featured_weight"
+                else str(item.get(key) or "").casefold()
+            ),
+            reverse=sort_direction == "desc",
+        )[: min(max(limit, 1), 100)]
+
+    async def _list_apps_query(
+        self,
+        query: str,
+        limit: int,
+        *,
+        sort_key: str,
+        sort_direction: str,
     ) -> list[dict[str, Any]]:
         """Return the broad registry plus a reliable public-action signal.
 
