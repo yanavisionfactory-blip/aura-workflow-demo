@@ -3,6 +3,9 @@ export function operationStepTitle(step = {}, tool = "the app") {
   const operation = String(step.operation || "");
   const verifying = /^(?:verify|confirm|check (?:the )?saved|read back)/i.test(step.reason || "");
   const titles = {
+    "get_report_schema": "Read the provider report schema",
+    "execute_report": "Run the provider report",
+    "seo.crawl.analyze": "Analyze the supplied Screaming Frog exports",
     "wordpress-org.update-post": "Save the unpublished article",
     "wordpress-org.search-posts": verifying ? "Verify the saved articles" : "Find existing articles",
     "wordpress-org.list-media-options": "Find existing images",

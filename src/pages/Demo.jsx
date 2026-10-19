@@ -322,7 +322,7 @@ export default function Demo() {
 
   useEffect(() => {
     if (location.state?.newWorkflow) return undefined;
-    const remembered = rememberedActivePythonRun();
+    const remembered = location.state?.resumeRunId || rememberedActivePythonRun();
     if (!remembered) return undefined;
     let mounted = true;
     getPythonRun(remembered).then((run) => {

@@ -4,6 +4,14 @@ const secretKey = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorizati
 export function redactEvidence(value, depth = 0) {
   if (depth > 30) return "[Nested response omitted]";
   if (typeof value === "string") {
+    for (const start of new Set([0, value.indexOf("{")])) {
+      if (start < 0) continue;
+      try {
+        const structured = JSON.parse(value.slice(start));
+        if (structured && typeof structured === "object") return value.slice(0, start)
+          + JSON.stringify(redactEvidence(structured, depth + 1));
+      } catch { /* Provider log strings need not be JSON. */ }
+    }
     return value.replace(/data:[^\s]*;base64,[A-Za-z0-9+/=]+/g, "[Uploaded file content]")
       .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
       .replace(/([?&](?:api_key|key|token|access_token|client_secret)=)[^&#\s]+/gi, "$1[redacted]");
@@ -37,7 +45,8 @@ export function toolEvidence(activity = []) {
     const output = step.output || {};
     const hasResponse = Object.hasOwn(output, "provider_result");
     const response = readableProviderResponse(output.provider_result);
-    const providerError = output.provider_result?.isError === true || output.provider_result?.is_error === true;
+    const providerError = output.provider_result?.isError === true || output.provider_result?.is_error === true
+      || Boolean(output.provider_result?.error);
     return {
       id: step.id || `${step.stepKey || step.key || "step"}-${index}`,
       tool: (output.operation || step.operation) === "seo.crawl.analyze"
