@@ -20,6 +20,13 @@ PAGE = {"type": "object", "required": ["id", "properties"], "properties": {
     "id": TEXT, "object": {"const": "page"}, "url": TEXT, "properties": OBJECT,
     "parent": OBJECT, "archived": {"type": "boolean"}, "in_trash": {"type": "boolean"}}}
 KNOWN = {
+    "seo.crawl.analyze": ({"type": "object", "required": ["source_tool", "mode", "files", "counts", "issues", "website_modified"],
+                           "properties": {"source_tool": {"const": "Screaming Frog"},
+                                          "mode": {"const": "supplied_export"},
+                                          "files": {"type": "array", "minItems": 1},
+                                          "counts": OBJECT, "issues": {"type": "array"},
+                                          "website_modified": {"const": False}}},
+                          ["crawl_evidence", "source_hashes"]),
     "report.compose": ({
         "type": "object", "required": ["title", "summary", "body", "status", "synthetic", "sources"],
         "properties": {

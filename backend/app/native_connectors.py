@@ -14,6 +14,7 @@ from .file_delivery import ATTACHMENTS_SCHEMA
 from .policy import operation_scope
 from .presentation_content import PRESENTATION_SCHEMA
 from .reports import ReportRequest
+from .seo_crawl import CrawlReviewRequest
 
 
 class NativeConnectorError(ValueError):
@@ -66,6 +67,12 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         "base_url": "provider-managed",
         "identity": {"provider": "aura"},
         "modules": [
+            {
+                **_module("seo.crawl.analyze", "search", "Parse user-uploaded Screaming Frog "
+                          "CSV exports and return deduplicated URL evidence, dates, source hashes "
+                          "and prioritized checks. Does not crawl or modify the website."),
+                "input_schema": CrawlReviewRequest.model_json_schema(),
+            },
             {
                 **_module(
                     "report.compose", "search",

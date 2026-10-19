@@ -6,6 +6,7 @@ JSON pointers into this input, rather than copied into the model window repeated
 import base64
 import hashlib
 import json
+from urllib.parse import unquote_to_bytes
 
 MAX_INPUT_BYTES = 96_000
 CHUNK_BYTES = 24_000
@@ -38,6 +39,22 @@ def semantic_evidence(value):
     if not isinstance(value, dict):
         return value
     result = {key: semantic_evidence(item) for key, item in value.items()}
+    upload = value.get("file_url")
+    if isinstance(upload, str) and upload.startswith("data:") and "," in upload:
+        metadata, encoded_upload = upload.split(",", 1)
+        try:
+            raw_upload = (base64.b64decode(encoded_upload, validate=True)
+                          if ";base64" in metadata.lower() else unquote_to_bytes(encoded_upload))
+        except ValueError:
+            return result
+        # Upload bytes remain in the durable run inputs. Provider/parser
+        # receipts carry the readable findings; a model must not infer contents
+        # from opaque base64. Never change the stored argument or source file.
+        result["file_url"] = "[User-supplied upload; original retained in run inputs]"
+        result["upload_evidence"] = {"sha256": hashlib.sha256(raw_upload).hexdigest(),
+                                     "size": len(raw_upload),
+                                     "mime_type": metadata[5:].split(";", 1)[0],
+                                     "meaning": "Transport metadata; not proof of file contents"}
     body = value.get("body")
     mime = value.get("mimeType")
     if isinstance(mime, str) and isinstance(body, dict) and isinstance(body.get("data"), str):

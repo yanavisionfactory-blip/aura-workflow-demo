@@ -22,3 +22,11 @@ test("saved inputs and nested responses redact secrets while retaining legitimat
   assert.equal(safe.nested[0].backlinks, 82);
   assert.equal(safe.nested[0].key, "T01");
 });
+
+test("connector debug JSON strings cannot reveal cookies or credentials", () => {
+  const response = { error: { message: "Insufficient plan" }, os: [{ msg: '[debug] err.response {"status":403,"headers":{"set-cookie":"SECRET","Authorization":"Bearer PRIVATE"},"data":{"error":"Insufficient plan"}}' }] };
+  const view = toolEvidence([{ tool: "Ahrefs", status: "completed", output: { provider_result: response } }])[0];
+  assert.equal(view.status, "provider_error");
+  assert.match(JSON.stringify(view.response), /Insufficient plan/);
+  assert.doesNotMatch(JSON.stringify(view.response), /SECRET|PRIVATE/);
+});

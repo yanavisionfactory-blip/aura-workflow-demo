@@ -942,8 +942,11 @@ async def _create_compiled_plan(
     reviewed_revision = "The user reviewed the proposed workflow and requested this change:" in prompt
     from .agency_workflow import agency_workflow_recipe
     from .reports import report_workflow_recipe
+    from .seo_crawl import crawl_review_recipe
 
     audited_plan = report_workflow_recipe(prompt, inventory)
+    if audited_plan is None:
+        audited_plan = crawl_review_recipe(prompt, inventory, available_input_names)
     if audited_plan is None:
         audited_plan = await agency_workflow_recipe(prompt, inventory, manifests_by_slug)
     if audited_plan is None:
