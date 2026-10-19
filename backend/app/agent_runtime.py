@@ -119,6 +119,39 @@ def _intent_words(value: str) -> str:
     return " " + re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip() + " "
 
 
+def requests_public_weather(prompt: str) -> bool:
+    """Distinguish weather requests from business forecasts and exclusions.
+
+    A source note such as "historical results only, no forecast" must not
+    require a weather lookup before a campaign report can be prepared.
+    """
+    for clause in re.split(r"[.!?;,\n]|\b(?:but|however)\b", prompt.casefold()):
+        words = re.findall(r"[\w']+", clause)
+        for index, word in enumerate(words):
+            meteorological = bool(re.fullmatch(
+                r"weather|temperature|rain|rainfall|precipitation|погод\w*|температур\w*|осадк\w*",
+                word,
+            ))
+            forecast = bool(re.fullmatch(r"forecasts?|прогноз\w*", word))
+            if not meteorological and not forecast:
+                continue
+            prefix = words[max(0, index - 8):index]
+            if set(prefix).intersection({"no", "not", "without", "don't", "never", "exclude", "без", "не"}):
+                continue
+            if forecast and not meteorological:
+                if any(re.fullmatch(
+                    r"campaign|performance|sales|revenue|budget|financial|leads|demand|продаж\w*|доход\w*|бюджет\w*",
+                    candidate,
+                ) for candidate in words):
+                    continue
+                # A bare forecast needs an explicit location cue; it must not
+                # turn every occurrence of "forecast" into a weather request.
+                if not any(candidate in {"in", "for", "в", "для"} for candidate in words[index + 1:index + 3]):
+                    continue
+            return True
+    return False
+
+
 def _inventory_aliases(item: dict) -> set[str]:
     aliases = {
         str(item.get("slug") or ""),
@@ -145,10 +178,7 @@ def intent_bounded_tool_inventory(
     text = _intent_words(prompt)
     original = prompt.casefold()
     wants_google_disk = bool(re.search(r"\bgoogle\s+disk\b", original))
-    wants_public_weather = bool(
-        {"weather", "forecast", "temperature", "rain"}.intersection(text.split())
-        or re.search(r"\b(?:погод\w*|прогноз\w*|температур\w*|осадк\w*)\b", original)
-    )
+    wants_public_weather = requests_public_weather(prompt)
     requested = {_intent_words(str(value)) for value in requested_tool_names if value}
     external_matches: set[int] = set()
     for index, item in enumerate(inventory):

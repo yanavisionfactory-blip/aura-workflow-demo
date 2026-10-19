@@ -19,6 +19,7 @@ from .agent_runtime import (
     materialize_action_arguments,
     prepare_execution_directive,
     prepare_final_review,
+    requests_public_weather,
     supervise_execution,
     synthesize_result,
     verify_outcome,
@@ -1038,7 +1039,8 @@ async def _create_compiled_plan(
             # A public forecast has a dedicated source. Never accept a plan
             # which substitutes a private document search for weather data.
             if (
-                ("forecast" in requested or "прогноз" in requested)
+                requests_public_weather(prompt)
+                and ("forecast" in requested or "прогноз" in requested)
                 and any("weather.forecast" in item.get("allowed_operations", []) for item in inventory)
                 and not any(step.operation == "weather.forecast" for step in plan.steps)
             ):
