@@ -21,6 +21,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   const visualChoices = useMemo(() => visualResultChoices(activity || [], { title: results.title, summary: results.summary }), [activity, results]);
   const selectedVisual = visualChoices.find((choice) => choice.key === searchParams.get("main"));
   const primaryResult = selectedVisual?.result || selectPrimaryOutcome(results);
+  const nativeAudit = primaryResult.kind === "seo_audit";
   const metrics = useMemo(() => isFailure ? [] : resultMetrics(results.metrics || [], activity || []), [results.metrics, activity, isFailure]);
   const receipts = useMemo(() => supportingReceipts(results, activity || [], primaryResult, results.resultPresentation), [activity, primaryResult, results]);
   const creatorsOutcome = (results.outcomes || []).find((outcome) => outcome.type === "creators" && outcome.items?.length > 0);
@@ -52,9 +53,9 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mx-auto w-full max-w-5xl pb-8">
       <ResultsHeading title={results.title || "Workflow complete"} summary={results.summary} isFailure={isFailure} />
-      <ResultsMetrics metrics={metrics} />
+      {!nativeAudit && <ResultsMetrics metrics={metrics} />}
 
-      {primaryResult.kind !== "report" && <ToolEvidence activity={activity || []} />}
+      {!nativeAudit && primaryResult.kind !== "report" && <ToolEvidence activity={activity || []} />}
 
       {visualChoices.length > 0 && <label className="mb-5 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
         Main result
@@ -83,7 +84,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
 
       {primaryResult.kind === "report" && <ToolEvidence activity={activity || []} />}
 
-      {receipts.length > 0 && <details className="group mb-8 overflow-hidden rounded-2xl border border-white/10 bg-card/40">
+      {!nativeAudit && receipts.length > 0 && <details className="group mb-8 overflow-hidden rounded-2xl border border-white/10 bg-card/40">
         <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 marker:hidden [&::-webkit-details-marker]:hidden">
           <span className="flex items-center gap-3 text-sm font-medium"><CheckCircle2 className="h-4 w-4 text-emerald-400" />Results from other apps <span className="rounded-full bg-white/10 px-2 py-0.5 text-xs text-muted-foreground">{receipts.length}</span></span>
           <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180" />

@@ -1,6 +1,7 @@
 import { jiraReceiptTasks } from "./jiraReceipt.mjs";
 import { articleMarkdown, articleWordCount } from "./actionContent.mjs";
 import { campaignCopySections } from "./campaignCopySections.mjs";
+import { seoAuditManifest } from "./seoAuditResult.mjs";
 
 export function readableResultText(value, fallback = "Review the saved app results below.") {
   if (typeof value !== "string") return fallback;
@@ -479,6 +480,13 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
     && typeof output.provider_result?.body === "string" && output.provider_result.body.trim());
   if (report && (!explicitPrimary || explicitPrimary === report)) {
     const saved = report.provider_result;
+    const audit = !saved.synthetic && seoAuditManifest(saved.sources || []);
+    if (audit) return {
+      title: "SEO audit", kind: "seo_audit", provider: "AURA", providerVerb: "Review in",
+      completionTitle: "SEO audit result",
+      completionSummary: "Inspect the findings, implementation backlog and actual outcomes from each tool.",
+      audit, link: null, downloadUrl: null,
+    };
     return {
       title: saved.title || context.title, kind: "report", provider: "AURA", providerVerb: "Saved in",
       completionTitle: "Review draft ready in AURA",
