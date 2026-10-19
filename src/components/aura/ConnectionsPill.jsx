@@ -344,10 +344,10 @@ export default function ConnectionsPill() {
                 <section>
                   <p className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Attached documents</p>
                   {documents.length ? documents.map((document) => (
-                    <div key={document.file_url} className="flex items-center gap-3 rounded-xl p-2.5 transition-colors hover:bg-white/5">
+                    <div key={`${document.name}:${document.file_url}`} className="flex items-center gap-3 rounded-xl p-2.5 transition-colors hover:bg-white/5">
                       <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/8 bg-secondary"><Paperclip className="h-4 w-4 text-primary" /></div>
                       <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{document.name}</p><p className="text-xs text-muted-foreground">Available to the next workflow</p></div>
-                      <button type="button" aria-label={`Remove ${document.name}`} onClick={() => removeDocument(document.file_url)} className="p-1.5 text-muted-foreground hover:text-red-400"><Trash2 className="h-3.5 w-3.5" /></button>
+                      <button type="button" aria-label={`Remove ${document.name}`} onClick={() => removeDocument(document.file_url, document.name)} className="p-1.5 text-muted-foreground hover:text-red-400"><Trash2 className="h-3.5 w-3.5" /></button>
                     </div>
                   )) : <p className="px-2 py-3 text-xs text-muted-foreground">No documents attached yet.</p>}
                 </section>
@@ -449,11 +449,11 @@ export default function ConnectionsPill() {
                   <input ref={fileRef} type="file" multiple className="hidden" onChange={handleFiles} />
                   <div className="mt-4 space-y-1">
                     {documents.map((document) => (
-                      <div key={document.file_url} className="flex items-center gap-3 rounded-xl bg-white/5 p-2.5">
+                      <div key={`${document.name}:${document.file_url}`} className="flex items-center gap-3 rounded-xl bg-white/5 p-2.5">
                         <Paperclip className="h-4 w-4 shrink-0 text-primary" />
                         <p className="min-w-0 flex-1 truncate text-sm">{document.name}</p>
                         <Check className="h-3.5 w-3.5 text-emerald-400" />
-                        <button type="button" aria-label={`Remove ${document.name}`} onClick={() => removeDocument(document.file_url)} className="p-1 text-muted-foreground hover:text-red-400"><X className="h-3.5 w-3.5" /></button>
+                        <button type="button" aria-label={`Remove ${document.name}`} onClick={() => removeDocument(document.file_url, document.name)} className="p-1 text-muted-foreground hover:text-red-400"><X className="h-3.5 w-3.5" /></button>
                       </div>
                     ))}
                   </div>

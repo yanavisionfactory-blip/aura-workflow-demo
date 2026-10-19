@@ -144,11 +144,11 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
               ))}
               {documents.map((d) => (
                 <motion.button
-                  key={d.file_url}
+                  key={`${d.name}:${d.file_url}`}
                   initial={{ opacity: 0, scale: 0.85 }}
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.85 }}
-                  onClick={() => removeDocument(d.file_url)}
+                  onClick={() => removeDocument(d.file_url, d.name)}
                   className="group flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-accent/8 text-accent/70 border border-accent/15 hover:bg-red-500/10 hover:border-red-400/20 hover:text-red-400/70 transition-all max-w-[180px]"
                 >
                   <Paperclip className="w-2.5 h-2.5 shrink-0" />
