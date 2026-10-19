@@ -588,6 +588,7 @@ class ProviderExecutor:
             "jira.issue.update": self._jira_issue_update,
             "weather.forecast": self._weather_forecast,
             "report.compose": self._report_compose,
+            "seo.crawl.analyze": self._seo_crawl_analyze,
             "web.search": self._web_search,
             "web.page.read": self._web_page_read,
             "creator.tiktok.screen": self._creator_tiktok_screen,
@@ -1194,6 +1195,11 @@ class ProviderExecutor:
         from .reports import compose_report
 
         return await compose_report(a)
+
+    async def _seo_crawl_analyze(self, a: dict) -> dict:
+        from .seo_crawl import analyze_crawl
+
+        return analyze_crawl(a)
 
     async def _weather_forecast(self, a: dict) -> dict:
         location = str(a.get("location") or "").strip()
@@ -2001,6 +2007,8 @@ class ProviderExecutor:
                 return {
                     "is_error": bool(result.isError),
                     "content": [item.model_dump(mode="json") for item in result.content],
+                    **({"structured_content": result.structuredContent}
+                       if getattr(result, "structuredContent", None) is not None else {}),
                 }
 
 

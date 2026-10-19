@@ -321,6 +321,7 @@ export default function Demo() {
   const omittedToolsRef = useRef([]);
 
   useEffect(() => {
+    if (location.state?.newWorkflow) return undefined;
     const remembered = rememberedActivePythonRun();
     if (!remembered) return undefined;
     let mounted = true;

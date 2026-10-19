@@ -1538,7 +1538,7 @@ async def create_plan(
 
 
 async def critique_step(step: dict, provider_result: object) -> CriticDecision:
-    payload = {"step_contract": step, "provider_result": provider_result}
+    payload = {"step_contract": semantic_evidence(step), "provider_result": provider_result}
     for attempt in range(3):
         try:
             payload = await _prepare_action_evidence(payload, "provider_result")

@@ -37,10 +37,11 @@ export function toolEvidence(activity = []) {
     const output = step.output || {};
     const hasResponse = Object.hasOwn(output, "provider_result");
     const response = readableProviderResponse(output.provider_result);
-    const providerError = output.provider_result?.isError === true;
+    const providerError = output.provider_result?.isError === true || output.provider_result?.is_error === true;
     return {
       id: step.id || `${step.stepKey || step.key || "step"}-${index}`,
-      tool: evidenceToolName(step.tool),
+      tool: (output.operation || step.operation) === "seo.crawl.analyze"
+        ? "Screaming Frog · export import" : evidenceToolName(step.tool),
       action: step.action || step.reason || "Provider action",
       operation: output.operation || step.operation || "",
       status: providerError ? "provider_error" : step.status || "pending",

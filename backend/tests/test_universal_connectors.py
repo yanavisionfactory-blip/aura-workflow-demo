@@ -327,6 +327,49 @@ async def test_mcp_agent_keeps_structured_tools_inside_agent_governance(monkeypa
     assert manifest["capabilities"][0]["metadata"]["external_agent"] is True
 
 
+@pytest.mark.parametrize("missing", [False, True])
+async def test_mcp_execution_verification_uses_protocol_not_unbounded_http_get(monkeypatch, missing):
+    calls = []
+
+    class Stream:
+        async def __aenter__(self):
+            return "read", "write", None
+
+        async def __aexit__(self, *_args):
+            pass
+
+    class Session:
+        def __init__(self, read, write):
+            assert (read, write) == ("read", "write")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def initialize(self):
+            calls.append("initialize")
+
+        async def list_tools(self):
+            calls.append("tools/list")
+            return SimpleNamespace(tools=[SimpleNamespace(name="other" if missing else "get_report_schema")])
+
+    def forbidden_http_get(*_args, **_kwargs):
+        raise AssertionError("MCP verification must not consume the GET event stream")
+
+    monkeypatch.setattr(universal_connectors, "_public_endpoint", lambda _url: None)
+    monkeypatch.setattr(universal_connectors, "streamablehttp_client", lambda *_a, **_k: Stream())
+    monkeypatch.setattr(universal_connectors, "ClientSession", Session)
+    monkeypatch.setattr(universal_connectors.httpx, "AsyncClient", forbidden_http_get)
+    result = await universal_connectors.verify_provider({
+        "provider_type": "mcp", "agent_protocol": "mcp", "base_url": "https://mcp.example/mcp",
+        "capabilities": [{"name": "get_report_schema"}],
+    }, {"api_key": "test-key"})
+    assert result["ok"] is (not missing)
+    assert calls == ["initialize", "tools/list"]
+
+
 async def test_planning_refreshes_browser_capabilities_without_reconnect(monkeypatch):
     tool = SimpleNamespace(
         id="tool-1",

@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { CheckCircle2, AlertTriangle, ChevronDown, Clock } from "lucide-react";
 import { toolEvidence } from "@/lib/toolEvidence.mjs";
 
-const labels = { completed: "Completed", failed: "Failed", blocked: "Blocked", provider_error: "Provider error", running: "Running", recovering: "Checking response", pending: "Not run", skipped: "Skipped" };
+const labels = { completed: "Completed", failed: "Failed", blocked: "Blocked", provider_error: "Provider error", running: "Running", recovering: "Checking response", pending: "Not run", skipped: "Skipped", awaiting_approval: "Awaiting review" };
 
 function EvidenceValue({ value, level = 0 }) {
   const [shown, setShown] = useState(20);

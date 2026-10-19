@@ -5702,6 +5702,8 @@ async def _run_view(session: AsyncSession, run: WorkflowRun) -> dict:
                 else None,
                 "output": s.output,
                 "error": s.error,
+                "started_at": s.started_at,
+                "completed_at": s.completed_at,
             }
             for s in steps
         ],

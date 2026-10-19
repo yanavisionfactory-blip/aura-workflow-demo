@@ -474,6 +474,20 @@ async def verify_provider(manifest: dict, credentials: dict) -> dict:
     started = datetime.now(UTC)
     base_url = manifest["base_url"]
     _public_endpoint(base_url)
+    if manifest.get("provider_type") == "mcp" or manifest.get("agent_protocol") == "mcp":
+        # A Streamable HTTP GET can be an intentionally unbounded event stream.
+        # Authenticate and verify the actual protocol, never consume that stream
+        # with httpx.get() as though it were a finite health document.
+        async with streamablehttp_client(base_url, headers=_headers(credentials)) as (
+            read, write, _,
+        ), ClientSession(read, write) as session:
+            await session.initialize()
+            available = await session.list_tools()
+        expected = {item["name"] for item in manifest.get("capabilities", [])}
+        actual = {tool.name for tool in available.tools}
+        return {"ok": bool(actual) and expected.issubset(actual), "status_code": 200,
+                "checked_at": started.isoformat(), "capability_count": len(actual),
+                "source": "authenticated_mcp_initialize_and_tools_list"}
     async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
         response = await client.get(base_url, headers=_headers(credentials))
     return {
