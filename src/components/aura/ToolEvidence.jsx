@@ -36,7 +36,7 @@ export default function ToolEvidence({ activity = [] }) {
     <h3 className="text-lg font-semibold">Results by tool</h3>
     <p className="mt-1 text-sm text-muted-foreground">Inspect the inputs, returned data and status of each saved workflow step. A connection alone is not a completed tool run.</p>
     <div className="my-4 flex flex-wrap gap-2" role="group" aria-label="Filter tool results">{["", ...tools].map((tool) => <button key={tool} type="button" aria-pressed={selected === tool} onClick={() => setSelected(tool)} className={`rounded-full border px-3 py-1.5 text-xs ${selected === tool ? "border-primary/60 bg-primary/15 text-primary" : "border-white/15 text-muted-foreground"}`}>{tool || "All tools"} ({tool ? records.filter((item) => item.tool === tool).length : records.length})</button>)}</div>
-    <div className="space-y-3">{visible.map((item) => <details key={item.id} open className="group rounded-xl border border-white/10 bg-[#0c1422]">
+    <div className="space-y-3">{visible.map((item) => <details key={item.id} open={item.operation !== "report.compose"} className="group rounded-xl border border-white/10 bg-[#0c1422]">
       <summary className="flex cursor-pointer list-none items-start gap-3 p-4 [&::-webkit-details-marker]:hidden">
         {item.status === "completed" ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" /> : ["failed", "blocked", "provider_error"].includes(item.status) ? <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" /> : <Clock className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />}
         <span className="min-w-0 flex-1"><span className="block text-xs font-semibold text-primary">{item.tool}</span><span className="mt-1 block text-sm font-medium">{item.action}</span></span>
