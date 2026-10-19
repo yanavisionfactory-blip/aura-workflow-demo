@@ -46,8 +46,8 @@ function ProviderApprovalRequest({ detail }) {
   </div>;
 }
 
-export default function AgentConnectionForm({ onConnected = null }) {
-  const [source, setSource] = useState("");
+export default function AgentConnectionForm({ onConnected = null, initialSource = "" }) {
+  const [source, setSource] = useState(initialSource);
   const [credential, setCredential] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [phase, setPhase] = useState(0);
@@ -120,6 +120,14 @@ export default function AgentConnectionForm({ onConnected = null }) {
           read its skills, and verify the connection automatically.
         </p>
       </div>
+
+      {source === "https://mcp.supermetrics.com/mcp" && (
+        <p className="rounded-lg border border-primary/20 p-3 text-xs leading-relaxed text-muted-foreground">
+          Connect Supermetrics to check advertising accounts, Pages, measurement assets and targeting.
+          This AURA connection supports research. Campaign creation, publishing and spend are disabled.
+          Choose the Supermetrics team containing your authorized accounts when you sign in.
+        </p>
+      )}
 
       <label className="block space-y-1.5 text-xs">
         <span className="font-medium">Agent website or sharing link</span>

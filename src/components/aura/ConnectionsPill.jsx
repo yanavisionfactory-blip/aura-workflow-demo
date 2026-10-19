@@ -18,6 +18,7 @@ import {
 
 import { aura } from "@/api/auraClient";
 import AgentConnectionForm from "./AgentConnectionForm";
+import { agentConnectionPreset } from "@/lib/agentConnections.mjs";
 import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
 import {
   connectTool,
@@ -43,11 +44,14 @@ import {
 const isAura = (name) => name === "AURA Intelligence";
 
 export default function ConnectionsPill() {
+  const [preset] = useState(() => agentConnectionPreset(
+    typeof window === "undefined" ? "" : window.location.search,
+  ));
   const [connected, setConnected] = useState(getAllConnections);
   const [documents, setDocuments] = useState(getAttachedDocuments);
-  const [workspaceOpen, setWorkspaceOpen] = useState(false);
-  const [connectOpen, setConnectOpen] = useState(false);
-  const [tab, setTab] = useState("apps");
+  const [workspaceOpen, setWorkspaceOpen] = useState(Boolean(preset));
+  const [connectOpen, setConnectOpen] = useState(Boolean(preset));
+  const [tab, setTab] = useState(preset ? "agents" : "apps");
   const [query, setQuery] = useState("");
   const [catalogRevision, setCatalogRevision] = useState(0);
   const [connecting, setConnecting] = useState(null);
@@ -435,7 +439,7 @@ export default function ConnectionsPill() {
                 </>
               ) : tab === "agents" ? (
                 <div className="flex-1 overflow-y-auto p-5">
-                  <AgentConnectionForm />
+                  <AgentConnectionForm initialSource={preset?.source || ""} />
                 </div>
               ) : (
                 <div className="flex-1 overflow-y-auto p-5">

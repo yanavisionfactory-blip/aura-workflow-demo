@@ -296,17 +296,18 @@ async def test_wrong_callback_provider_never_exchanges_code(database, managed_au
         exchange.assert_not_awaited()
 
 
-@pytest.mark.parametrize("provider", ["semrush", "sitebulb-cloud", "sitebulb-desktop"])
+@pytest.mark.parametrize("provider", ["semrush", "sitebulb-cloud", "sitebulb-desktop", "supermetrics"])
 async def test_reviewed_vendor_discovery_and_token_exchange_are_provider_bound(monkeypatch, provider):
     service = mcp_oauth.mcp_service(provider)
     endpoint = service["endpoint"]
+    resource_id = service.get("resource", endpoint)
     requests = []
     auth_origin = service["auth_origins"][-1]
 
     def handle(request):
         requests.append(request)
         if "oauth-protected-resource" in request.url.path:
-            data = {"resource": endpoint, "authorization_servers": [service["issuer"]]}
+            data = {"resource": resource_id, "authorization_servers": [service["issuer"]]}
         elif "oauth-authorization-server" in request.url.path:
             data = {"issuer": service["issuer"], "authorization_endpoint": auth_origin + "/authorize",
                     "registration_endpoint": auth_origin + "/register", "token_endpoint": auth_origin + "/token",
@@ -328,19 +329,25 @@ async def test_reviewed_vendor_discovery_and_token_exchange_are_provider_bound(m
     monkeypatch.setattr(mcp_oauth, "validate_public_endpoint", lambda url: None)
     url, credentials, config = await mcp_oauth.prepare_authorization({}, "state", CALLBACK, provider)
     query = parse_qs(urlsplit(url).query)
-    assert query["resource"] == [endpoint]
+    assert query["resource"] == [resource_id]
     assert set(query["scope"][0].split()) == set(service["scopes"])
     assert config["canonical_provider"] == service["canonical_provider"]
     assert mcp_oauth.managed_mcp_provider(endpoint) == provider
     await mcp_oauth.exchange_code(credentials, config, "code", "verifier")
-    assert parse_qs(requests[-1].content.decode())["resource"] == [endpoint]
+    assert parse_qs(requests[-1].content.decode())["resource"] == [resource_id]
+    if provider == "supermetrics":
+        assert str(requests[0].url) == service["resource_metadata_url"]
+        assert config["token_params"] == {"resource": resource_id}
+        assert not {"ds_platform_write", "business_context_write", "auth_create_account"}.intersection(
+            query["scope"][0].split()
+        )
     before = len(requests)
     with pytest.raises(ValueError):
         await mcp_oauth.exchange_code(credentials, {**config, "token_url": ORIGIN + "/token"}, "code", "verifier")
     assert len(requests) == before
 
 
-@pytest.mark.parametrize("provider", ["semrush", "sitebulb-cloud", "sitebulb-desktop"])
+@pytest.mark.parametrize("provider", ["semrush", "sitebulb-cloud", "sitebulb-desktop", "supermetrics"])
 async def test_new_service_requires_consent_and_live_verification(database, managed_auth, provider):
     prepare, exchange, verify = managed_auth
     service = mcp_oauth.mcp_service(provider)
