@@ -7,6 +7,7 @@ import { documentMarkdownOptions } from "@/lib/documentMarkdown.mjs";
 import CampaignDocumentPreview from "./CampaignDocumentPreview";
 import { campaignCopySections } from "@/lib/campaignCopySections.mjs";
 import { readableResultText } from "@/lib/resultPresentation.mjs";
+import SeoAuditResult from "./SeoAuditResult";
 
 const readableDetail = (value = "") => readableResultText(value)
   .split(/\n/)
@@ -79,6 +80,7 @@ function ThumbnailOnly({ result }) {
 }
 
 export default function ResultPreview({ result, results }) {
+  if (result.kind === "seo_audit") return <SeoAuditResult manifest={result.audit} />;
   if (result.kind === "articles") return <ArticleResultPreview articles={result.articles} />;
   if (result.kind === "jira_tasks") return <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#0c1422]">
     <div className="border-b border-white/10 px-5 py-4 text-sm font-semibold">Tasks created in Jira</div>
