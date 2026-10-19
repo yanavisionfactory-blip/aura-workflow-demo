@@ -219,7 +219,7 @@ export default function ResourceComposer({ open, onClose, onAddTool, onAddAgent,
               {pinnedDocs.length > 0 && (
                 <div className="mt-2 space-y-0.5">
                   {pinnedDocs.map((d) => (
-                    <div key={d.file_url} className="flex items-center gap-2 p-1.5 rounded-lg bg-white/5">
+                    <div key={`${d.name}:${d.file_url}`} className="flex items-center gap-2 p-1.5 rounded-lg bg-white/5">
                       <Paperclip className="w-3 h-3 text-primary shrink-0" />
                       <p className="text-[11px] truncate flex-1">{d.name}</p>
                       <Check className="w-3 h-3 text-emerald-400" />

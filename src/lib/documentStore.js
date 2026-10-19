@@ -32,14 +32,14 @@ export function getAttachedDocuments() {
 export function attachDocument(document) {
   if (!document?.file_url) return;
   documents = [
-    ...documents.filter((item) => item.file_url !== document.file_url),
+    ...documents.filter((item) => item.file_url !== document.file_url || item.name !== document.name),
     document,
   ];
   publish();
 }
 
-export function removeDocument(fileUrl) {
-  documents = documents.filter((item) => item.file_url !== fileUrl);
+export function removeDocument(fileUrl, name) {
+  documents = documents.filter((item) => item.file_url !== fileUrl || (name !== undefined && item.name !== name));
   publish();
 }
 
