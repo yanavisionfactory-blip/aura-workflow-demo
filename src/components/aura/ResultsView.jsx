@@ -54,7 +54,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
       <ResultsHeading title={results.title || "Workflow complete"} summary={results.summary} isFailure={isFailure} />
       <ResultsMetrics metrics={metrics} />
 
-      <ToolEvidence activity={activity || []} />
+      {primaryResult.kind !== "report" && <ToolEvidence activity={activity || []} />}
 
       {visualChoices.length > 0 && <label className="mb-5 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
         Main result
@@ -80,6 +80,8 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
       >
         <ResultPreview result={primaryResult} results={results} />
       </PrimaryResult>
+
+      {primaryResult.kind === "report" && <ToolEvidence activity={activity || []} />}
 
       {receipts.length > 0 && <details className="group mb-8 overflow-hidden rounded-2xl border border-white/10 bg-card/40">
         <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 marker:hidden [&::-webkit-details-marker]:hidden">
