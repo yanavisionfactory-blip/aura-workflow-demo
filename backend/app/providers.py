@@ -14,9 +14,11 @@ from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
 from mcp import ClientSession
+from mcp import types as mcp_types
 from mcp.client.streamable_http import streamablehttp_client
 
 from .config import Settings, get_settings
+from .mcp_results import mcp_result_evidence
 from .native_connectors import coerce_module_arguments
 from .reliability import AuthorizationRequired
 from .universal_connectors import capability_for
@@ -2000,16 +2002,19 @@ class ProviderExecutor:
         ), ClientSession(read, write) as session:
                 await session.initialize()
                 available = await session.list_tools()
-                names = {tool.name for tool in available.tools}
-                if a["tool_name"] not in names:
+                selected = next((tool for tool in available.tools if tool.name == a["tool_name"]), None)
+                if selected is None:
                     raise ValueError(f"MCP server does not expose {a['tool_name']!r}")
-                result = await session.call_tool(a["tool_name"], arguments=a.get("arguments", {}))
-                return {
-                    "is_error": bool(result.isError),
-                    "content": [item.model_dump(mode="json") for item in result.content],
-                    **({"structured_content": result.structuredContent}
-                       if getattr(result, "structuredContent", None) is not None else {}),
-                }
+                # Use the public typed request API so the original receipt is
+                # retained even when a server omits structuredContent. The
+                # adapter validates JSON text against the same declared schema;
+                # malformed outputs remain explicit provider errors.
+                result = await session.send_request(mcp_types.ClientRequest(
+                    mcp_types.CallToolRequest(params=mcp_types.CallToolRequestParams(
+                        name=a["tool_name"], arguments=a.get("arguments", {}),
+                    )),
+                ), mcp_types.CallToolResult)
+                return mcp_result_evidence(result, getattr(selected, "outputSchema", None))
 
 
 def idempotency_key(run_id: str, position: int, operation: str, arguments: dict) -> str:
