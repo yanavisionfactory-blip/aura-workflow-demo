@@ -101,6 +101,51 @@ async def test_registration_failure_reports_vendor_reason_without_registration_c
     assert "must-not-be-shown" not in str(caught.value)
 
 
+async def test_registration_error_is_actionable_without_exposing_registration_secrets(oauth_server):
+    metadata, requests = oauth_server
+    metadata["registration_error"] = {
+        "message": "Redirect URI domain is not a supported AI client provider domain.",
+        "registration_access_token": "private-registration-token",
+    }
+    with pytest.raises(mcp_oauth.MCPRegistrationRejected) as caught:
+        await mcp_oauth.prepare_authorization({}, "state", CALLBACK)
+    public = caught.value.public_detail(CALLBACK)
+    assert public["code"] == "provider_registration_rejected"
+    assert public["callback_url"] == CALLBACK
+    assert public["provider_http_status"] == 400
+    assert "private-registration-token" not in json.dumps(public)
+    assert not any(request.url.path == "/token" for request in requests)
+
+
+async def test_sitebulb_callback_rejection_never_enables_a_connection(database, managed_auth):
+    prepare, exchange, verify = managed_auth
+    prepare.side_effect = mcp_oauth.MCPRegistrationRejected(
+        "sitebulb-cloud", 400,
+        "Redirect URI domain is not a supported AI client provider domain.",
+    )
+    async with database() as session:
+        session.add(Workspace(id="workspace", name="Pilot"))
+        session.add(TenantMembership(workspace_id="workspace", subject="owner", role="owner"))
+        await session.commit()
+        with pytest.raises(HTTPException) as caught:
+            await main.autoconnect_agent(
+                main.AgentConnectionIntent(source="https://mcp.sitebulb.com/cloud"),
+                main.TenantContext("workspace", "owner", "owner"), session,
+            )
+        assert caught.value.status_code == 409
+        detail = caught.value.detail
+        assert detail["requires_provider_approval"] is True
+        assert detail["callback_url"] == CALLBACK
+        assert detail["endpoint"] == "https://mcp.sitebulb.com/cloud"
+        assert detail["support_url"] == "https://sitebulb.com/support/"
+        assert "access-secret" not in json.dumps(detail)
+        tool = await session.scalar(select(ToolConnection))
+        assert tool is None or not tool.enabled
+        assert await session.scalar(select(CapabilityManifest)) is None
+        exchange.assert_not_awaited()
+        verify.assert_not_awaited()
+
+
 @pytest.mark.parametrize("source", [
     "https://ubersuggest-mcp.neilpatelapi.com.evil.example/mcp",
     "https://user@ubersuggest-mcp.neilpatelapi.com/mcp",

@@ -51,8 +51,8 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   };
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mx-auto w-full max-w-5xl pb-8">
-      <ResultsHeading title={results.title || "Workflow complete"} summary={results.summary} isFailure={isFailure} />
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`mx-auto w-full pb-8 ${nativeAudit ? "max-w-3xl" : "max-w-5xl"}`}>
+      {!nativeAudit && <ResultsHeading title={results.title || "Workflow complete"} summary={results.summary} isFailure={isFailure} />}
       {!nativeAudit && <ResultsMetrics metrics={metrics} />}
 
       {!nativeAudit && primaryResult.kind !== "report" && <ToolEvidence activity={activity || []} />}
@@ -69,7 +69,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
         </select>
       </label>}
 
-      <PrimaryResult
+      {nativeAudit ? <ResultPreview result={primaryResult} results={results} /> : <PrimaryResult
         title={primaryResult.title || results.title || "Workflow result"}
         provider={primaryResult.provider}
         providerVerb={primaryResult.providerVerb}
@@ -80,7 +80,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
         footer={artifactDelivery && <><span>Presentation · {primaryResult.artifact?.title || primaryResult.title}</span><span className="text-emerald-400">{artifactDelivery.artifactDelivered ? "Attached and delivered" : "Created in Canva"}</span></>}
       >
         <ResultPreview result={primaryResult} results={results} />
-      </PrimaryResult>
+      </PrimaryResult>}
 
       {primaryResult.kind === "report" && <ToolEvidence activity={activity || []} />}
 
