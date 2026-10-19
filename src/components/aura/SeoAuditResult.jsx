@@ -45,16 +45,16 @@ function ActionReceipt({ action }) {
   </details>;
 }
 
-export default function SeoAuditResult({ manifest, demo = null }) {
+export default function SeoAuditResult({ manifest, demo = null, snapshot = null, focus = null }) {
   const [loaded, setLoaded] = useState(demo ? { crawl: { run: demo.sourceRun } } : {});
   const [loading, setLoading] = useState(!demo);
-  const [tab, setTab] = useState(demo ? "Overview" : "Affected URLs");
+  const [tab, setTab] = useState(focus?.tab || (demo ? "Overview" : "Affected URLs"));
   const [resultOpen, setResultOpen] = useState(Boolean(demo));
-  const [selectedTool, setSelectedTool] = useState("crawl");
+  const [selectedTool, setSelectedTool] = useState(focus?.tool || "crawl");
   const [selectedIssue, setSelectedIssue] = useState("T01");
   const [search, setSearch] = useState("");
-  const [group, setGroup] = useState("");
-  const [priority, setPriority] = useState("");
+  const [group, setGroup] = useState(focus?.group || "");
+  const [priority, setPriority] = useState(focus?.priority || "");
   // Each source run is a read-only, workspace-authorized request. Opening this
   // result never resumes the source runs or repeats provider calls.
   useEffect(() => {
@@ -68,10 +68,17 @@ export default function SeoAuditResult({ manifest, demo = null }) {
     })).then((entries) => { if (active) { setLoaded(Object.fromEntries(entries)); setLoading(false); } });
     return () => { active = false; };
   }, [manifest, demo]);
-  const crawl = useMemo(() => crawlResult(loaded.crawl?.run), [loaded]);
-  const inventory = useMemo(() => crawlInventory(loaded.crawl?.run, decode), [loaded]);
-  const backlog = useMemo(() => mappedBacklog(manifest.backlog, inventory), [manifest, inventory]);
-  const tools = manifest.references.map((reference) => {
+  useEffect(() => {
+    if (!focus) return;
+    if (focus.tab) { setTab(focus.tab); setResultOpen(true); }
+    if (focus.tool) setSelectedTool(focus.tool);
+    if (focus.group !== undefined) setGroup(focus.group);
+    if (focus.priority !== undefined) setPriority(focus.priority);
+  }, [focus]);
+  const crawl = useMemo(() => snapshot?.crawl || crawlResult(loaded.crawl?.run), [snapshot, loaded]);
+  const inventory = useMemo(() => snapshot?.inventory || crawlInventory(loaded.crawl?.run, decode), [snapshot, loaded]);
+  const backlog = useMemo(() => snapshot?.backlog || mappedBacklog(manifest.backlog, inventory), [snapshot, manifest, inventory]);
+  const tools = snapshot ? [{ key: "crawl", name: "Screaming Frog", state: "returned", label: "Export analysed", message: `${crawl.counts.url_records} URL records · anonymized supplied export`, actions: [] }] : manifest.references.map((reference) => {
     const saved = loaded[reference.key];
     const outcome = reference.key === "crawl"
       ? { state: crawl ? "returned" : "unavailable", label: crawl ? "Export analysed" : "Output unavailable", message: crawl ? `${crawl.counts.url_records} URL records · supplied export` : saved?.error || "Opening saved output…", actions: runEvidence(saved?.run, reference.name) }
@@ -82,7 +89,10 @@ export default function SeoAuditResult({ manifest, demo = null }) {
   else tools.push({ key: "sitebulb", name: "Sitebulb", state: "unavailable", label: "No output supplied", message: manifest.sourceNotes.sitebulb || "No saved Sitebulb output supplied.", actions: [] });
   const issue = crawl?.issues?.find((item) => item.id === selectedIssue) || crawl?.issues?.[0];
   const tool = tools.find((item) => item.key === selectedTool) || tools[0];
-  const openTool = (key) => { setSelectedTool(key); setTab("Tool activity"); setResultOpen(true); };
+  const openTool = (key) => {
+    setSelectedTool(key); setTab("Tool activity"); setResultOpen(true);
+    if (snapshot) window.setTimeout(() => document.getElementById("audit-view")?.scrollIntoView({ block: "start", behavior: "smooth" }), 100);
+  };
   const counts = crawl?.counts;
   const ready = tools.filter((item) => item.state === "returned").length;
   const first = backlog.find((item) => item.priority === "P1");
@@ -102,7 +112,7 @@ export default function SeoAuditResult({ manifest, demo = null }) {
       <h3 className="mb-3 text-sm font-semibold">What happened</h3>
       <div className="space-y-2">{tools.map((item) => <div key={item.key} className={`flex flex-wrap items-center gap-3 rounded-xl border p-4 ${item.simulated ? "border-violet-400/20 bg-violet-400/[0.04]" : item.state === "returned" ? "border-white/10 bg-card/40" : "border-amber-400/20 bg-amber-400/[0.04]"}`}>
         <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${item.simulated ? "bg-violet-400/10 text-violet-300" : item.state === "returned" ? "bg-primary/10 text-primary" : "bg-amber-400/10 text-amber-300"}`}>{item.state === "returned" || item.simulated ? <FileSearch className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}</span>
-        <div className="min-w-0 flex-1"><p className="text-sm font-medium">{item.key === "crawl" && crawl ? `${counts.url_records} Screaming Frog URL records imported` : `${item.name} · ${item.label.toLowerCase()}`}</p><p className="mt-1 text-[11px] leading-5 text-muted-foreground">{item.key === "crawl" ? "REAL · Supplied exports analysed in AURA; source files and CSV rows retained." : item.simulated ? `SIMULATED · ${item.message}` : item.key === "sitebulb" ? "OAuth registration rejected by Sitebulb; a completed audit is still needed." : item.error || item.message}</p></div>
+        <div className="min-w-0 flex-1"><p className="text-sm font-medium">{item.key === "crawl" && crawl ? `${counts.url_records} Screaming Frog URL records imported` : `${item.name} · ${item.label.toLowerCase()}`}</p><p className="mt-1 text-[11px] leading-5 text-muted-foreground">{item.key === "crawl" ? (snapshot ? "REAL · Anonymized export findings; CSV row references and file hashes preserved." : "REAL · Supplied exports analysed in AURA; source files and CSV rows retained.") : item.simulated ? `SIMULATED · ${item.message}` : item.key === "sitebulb" ? "OAuth registration rejected by Sitebulb; a completed audit is still needed." : item.error || item.message}</p></div>
         {providerResultLink(item.run) && <a href={providerResultLink(item.run)} target="_blank" rel="noopener noreferrer" className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-primary/25 px-3 py-1.5 text-[11px] text-primary">Open in {item.name}<ExternalLink className="h-3 w-3" /></a>}
         <button type="button" onClick={() => openTool(item.key)} aria-label={`View ${item.name} ${item.simulated ? "simulated output" : item.state === "returned" ? "output" : "issue"}`} className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] ${item.state === "returned" || item.simulated ? "border-primary/25 text-primary" : "border-amber-400/25 text-amber-300"}`}>{item.simulated ? "View demo output" : item.state === "returned" ? "View output" : "View issue"}<ArrowRight className="h-3 w-3" /></button>
       </div>)}
@@ -131,7 +141,7 @@ export default function SeoAuditResult({ manifest, demo = null }) {
         <div className="flex flex-wrap gap-2">{(crawl?.issues || []).map((item) => <button key={item.id} type="button" aria-pressed={issue?.id === item.id} onClick={() => { setSelectedIssue(item.id); setSearch(""); }} className={`rounded-xl border px-3 py-2 text-xs ${issue?.id === item.id ? "border-primary/50 bg-primary/10 text-primary" : "border-white/10 text-slate-400"}`}>{item.id} · {item.affected.length} URLs</button>)}</div>
         {issue ? <><div className={`${panel} p-5`}><div className="flex flex-wrap items-center gap-2"><Badge good={issue.state === "Observed"}>{issue.state}</Badge><span className={muted}>{issue.group} · {issue.priority}</span></div><h3 className="mt-3 font-semibold">{issue.title}</h3><p className="mt-2 text-sm text-slate-400">{issue.reasoning}</p><p className="mt-4 text-xs text-slate-300"><strong className="text-primary">Proposed fix</strong> · {listText(issue.fix)}</p><p className="mt-3 text-xs text-slate-400">Effort: {listText(issue.effort)} · Dependencies: {listText(issue.dependencies)}</p></div><label className="flex items-center gap-2 rounded-xl border border-white/10 px-3 py-2"><Search className="h-4 w-4 text-slate-500" /><input aria-label="Filter affected URLs" placeholder="Filter URLs or CSV rows" value={search} onChange={(event) => setSearch(event.target.value)} className="w-full bg-transparent text-sm outline-none" /></label><UrlTable key={issue.id} rows={issue.affected} search={search} /></> : <p className="text-sm text-slate-400">{loaded.crawl?.error || "No crawl findings available."}</p>}
       </>}
-      {tab === "Backlog" && <><div className="flex flex-wrap items-center gap-2" role="group" aria-label="Backlog groups">{["", ...seoAuditGroups].map((name) => <button type="button" key={name} aria-pressed={group === name} onClick={() => setGroup(name)} className={`rounded-full border px-3 py-1.5 text-xs ${group === name ? "border-primary/50 bg-primary/10 text-primary" : "border-white/10 text-slate-400"}`}>{name || "All groups"}</button>)}<select aria-label="Backlog priority" value={priority} onChange={(event) => setPriority(event.target.value)} className="rounded-lg border border-white/10 bg-[#0c1726] px-3 py-2 text-xs"><option value="">All priorities</option>{["P1", "P2", "P3"].map((value) => <option key={value}>{value}</option>)}</select></div><p className={muted}>Proposed implementation work · provisional effort · no tasks created or site changes made</p><div className="space-y-2">{backlog.filter((item) => (!group || item.group.toLowerCase() === group.toLowerCase()) && (!priority || item.priority === priority)).map((item) => <details key={item.id} className={`group ${panel}`}><summary className="flex cursor-pointer list-none items-start gap-3 p-4 [&::-webkit-details-marker]:hidden"><span className={`rounded-lg px-2 py-1 text-xs font-semibold ${item.priority === "P1" ? "bg-amber-400/15 text-amber-300" : "bg-white/5 text-slate-400"}`}>{item.priority}</span><span className="flex-1"><span className="text-sm font-medium">{item.id} · {item.title}</span><span className="mt-1 block text-[11px] text-slate-400">{item.group} · {item.kind} · {item.affected.length} scoped URLs</span></span><ChevronDown className="h-4 w-4 shrink-0 text-slate-500 group-open:rotate-180" /></summary><div className="space-y-4 border-t border-white/10 p-4">{[["Evidence", item.evidence], ["Proposed fix", item.fix], ["Effort", item.effort], ["Dependencies", item.dependencies], ["Priority reasoning", item.reasoning], ["Expert review", item.expert_review], ["Acceptance check", item.acceptance]].map(([name, value]) => <div key={name}><p className="text-[11px] font-semibold text-primary">{name}</p><p className="mt-1 text-xs leading-6 text-slate-300">{listText(value)}</p></div>)}<UrlTable key={item.id} rows={item.affected} /></div></details>)}</div></>}
+      {tab === "Backlog" && <><div className="flex flex-wrap items-center gap-2" role="group" aria-label="Backlog groups">{["", ...seoAuditGroups].map((name) => <button type="button" key={name} aria-pressed={group === name} onClick={() => setGroup(name)} className={`rounded-full border px-3 py-1.5 text-xs ${group === name ? "border-primary/50 bg-primary/10 text-primary" : "border-white/10 text-slate-400"}`}>{name || "All groups"}</button>)}<select aria-label="Backlog priority" value={priority} onChange={(event) => setPriority(event.target.value)} className="rounded-lg border border-white/10 bg-[#0c1726] px-3 py-2 text-xs"><option value="">All priorities</option>{["P1", "P2", "P3"].map((value) => <option key={value}>{value}</option>)}</select></div><p className={muted}>Proposed implementation work · provisional effort · no tasks created or site changes made</p><div className="space-y-2">{backlog.filter((item) => (!group || item.group.toLowerCase() === group.toLowerCase()) && (!priority || item.priority === priority)).map((item) => <details key={item.id} open={focus?.issue === item.id ? true : undefined} className={`group ${panel}`}><summary className="flex cursor-pointer list-none items-start gap-3 p-4 [&::-webkit-details-marker]:hidden"><span className={`rounded-lg px-2 py-1 text-xs font-semibold ${item.priority === "P1" ? "bg-amber-400/15 text-amber-300" : "bg-white/5 text-slate-400"}`}>{item.priority}</span><span className="flex-1"><span className="text-sm font-medium">{item.id} · {item.title}</span><span className="mt-1 block text-[11px] text-slate-400">{item.group} · {item.kind} · {item.affected.length} scoped URLs</span></span><ChevronDown className="h-4 w-4 shrink-0 text-slate-500 group-open:rotate-180" /></summary><div className="space-y-4 border-t border-white/10 p-4">{[["Evidence", item.evidence], ["Proposed fix", item.fix], ["Effort", item.effort], ["Dependencies", item.dependencies], ["Priority reasoning", item.reasoning], ["Expert review", item.expert_review], ["Acceptance check", item.acceptance]].map(([name, value]) => <div key={name}><p className="text-[11px] font-semibold text-primary">{name}</p><p className="mt-1 text-xs leading-6 text-slate-300">{listText(value)}</p></div>)}<UrlTable key={item.id} rows={item.affected} /></div></details>)}</div></>}
       {tab === "Tool activity" && <>
         <div className="flex flex-wrap gap-2" role="group" aria-label="Choose tool output">{tools.map((item) => <button key={item.key} type="button" aria-pressed={tool.key === item.key} onClick={() => setSelectedTool(item.key)} className={`rounded-xl border px-3 py-2 text-xs ${tool.key === item.key ? "border-primary/50 bg-primary/10 text-primary" : "border-white/10 text-slate-400"}`}>{item.name}{item.simulated && <span className="text-[9px] uppercase text-violet-300">Demo</span>}</button>)}</div>
         <div className={`${panel} p-5`}><div className="flex flex-wrap items-center justify-between gap-3"><h3 className="font-semibold">{tool.name} output</h3><Badge good={tool.state === "returned"}>{tool.label}</Badge></div><div className="mt-4 flex items-start gap-3">{tool.state === "returned" ? <FileSearch className="mt-1 h-5 w-5 shrink-0 text-emerald-300" /> : <AlertTriangle className="mt-1 h-5 w-5 shrink-0 text-amber-300" />}<div>{tool.code && <p className="mb-1 font-mono text-sm text-amber-200">{tool.code}</p>}<p className="text-sm leading-6 text-slate-300">{tool.error || tool.message}</p>{!tool.simulated && tool.state !== "returned" && <p className="mt-2 text-xs text-slate-500">{tool.key === "sitebulb" || tool.key === "crawl" ? "No technical audit findings are available from this outcome." : "No keyword, visibility or backlink metrics are available from this outcome."}</p>}</div></div>

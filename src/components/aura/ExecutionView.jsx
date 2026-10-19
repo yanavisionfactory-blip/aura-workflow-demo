@@ -4,7 +4,7 @@ import ExecutionStep from "./ExecutionStep";
 
 const STEP_DURATION = 2.6; // seconds per step (for ETA)
 
-export default function ExecutionView({ steps, currentStepIndex, isReal, verifying = false, onCancel, cancelBusy = false, cancelError = "" }) {
+export default function ExecutionView({ steps, currentStepIndex, isReal, verifying = false, onCancel, cancelBusy = false, cancelError = "", demo = false }) {
   const stepCount = steps.length;
   const completedCount = steps.filter((s) => s.status === "completed").length;
   const failed = steps.some((s) => s.status === "failed");
@@ -40,7 +40,7 @@ export default function ExecutionView({ steps, currentStepIndex, isReal, verifyi
             <h2 className="text-lg font-semibold">
               {failed ? "Workflow paused" : verifying ? "Checking the final result" : recovering
                 ? steps.some((step) => step.jiraTasks?.length) ? "Checking your Jira tasks" : "Checking your results"
-                : "Running your workflow"}
+                : demo ? "Playing the prepared workflow" : "Running your workflow"}
             </h2>
             <p className="text-xs text-muted-foreground">
               {stepCount
@@ -81,7 +81,7 @@ export default function ExecutionView({ steps, currentStepIndex, isReal, verifyi
       {!failed && (
         <div className="flex items-center justify-center gap-1.5 mt-4 text-[11px] text-muted-foreground/50">
           <Clock className="w-3 h-3" />
-          Safe to leave this page — we'll notify you when it's done or if something needs you
+          {demo ? "Local demo playback · no provider calls or external changes" : "Safe to leave this page — we'll notify you when it's done or if something needs you"}
         </div>
       )}
       {isReal && onCancel && (

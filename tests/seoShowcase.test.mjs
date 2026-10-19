@@ -1,85 +1,100 @@
-import test from "node:test";
-import assert from "node:assert/strict";
-import fs from "node:fs";
-import data from "../public/showcase/seo-audit/data.mjs";
-import { initialState, nextState, renderFrame, tour, originalPrompt } from "../public/showcase/seo-audit/view.mjs";
+import test, { before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+import { build } from 'vite';
+import data from '../src/showcase/seo-audit/data.mjs';
+import { originalPrompt } from '../src/showcase/seo-audit/scenario.mjs';
 
-test("public showcase keeps observed counts and source rows, but excludes credentials and private source attachments", () => {
-  assert.equal(data.anonymized, true);
-  assert.equal(data.backend, false);
+const repo = fileURLToPath(new URL('../', import.meta.url));
+let temporary;
+let render;
+before(async () => {
+  temporary = fs.mkdtempSync(path.join(repo, '.seo-render-'));
+  await build({
+    configFile: path.join(repo, 'vite.showcase.config.js'),
+    logLevel: 'silent',
+    build: { ssr: path.join(repo, 'tests/fixtures/seoShowcaseRender.jsx'), outDir: temporary, emptyOutDir: true, rollupOptions: { output: { entryFileNames: 'render.mjs' } } },
+    ssr: { noExternal: ['lucide-react'] },
+  });
+  ({ render } = await import(pathToFileURL(path.join(temporary, 'render.mjs'))));
+});
+after(() => { if (temporary) fs.rmSync(temporary, { recursive: true, force: true }); });
+
+test('anonymized snapshot retains observed counts, URL evidence and duplicate-export limits', () => {
   assert.equal(data.crawl.counts.url_records, 171);
   assert.equal(data.crawl.counts.canonical_conflicts, 82);
   assert.equal(data.crawl.counts.indexable_html, 4);
   assert.equal(data.crawl.counts.link_edge_rows, 0);
   assert.equal(data.backlog.length, 10);
-  assert.equal(data.crawl.issues.find((issue) => issue.id === "T01").affected.length, 82);
   assert.equal(data.crawl.files[1].duplicate_of, data.crawl.files[0].filename);
+  assert.equal(data.crawl.issues.find((issue) => issue.id === 'T01').affected.length, 82);
   const serialized = JSON.stringify(data);
   assert.doesNotMatch(serialized, /data:text\/csv|oauth_access_token|api_key|workspace_id|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/i);
   for (const row of data.crawl.issues.flatMap((issue) => issue.affected)) {
-    if (row.url) assert.equal(new URL(row.url).hostname, "client.example");
-    assert.ok(Number.isInteger(row.csv_row));
+    if (row.url) assert.equal(new URL(row.url).hostname, 'client.example');
+    assert.ok(row.csv_row);
   }
-  for (const tool of data.tools) { assert.equal(tool.simulated, true); assert.equal(tool.state, "simulated"); assert.deepEqual(tool.actions, []); }
 });
 
-test("one workflow can be explored through all tool outputs, URL pagination, groups and full backlog items", () => {
-  let state = { ...initialState };
-  state = nextState(state, "plan", data); assert.equal(state.phase, "plan");
-  state = nextState(state, "results", data); assert.equal(state.phase, "results");
-  for (const tool of ["crawl", "semrush", "ahrefs", "sitebulb"]) {
-    state = nextState(state, `tool:${tool}`, data);
-    assert.equal(state.tool, tool);
-    assert.match(renderFrame(data, state), /output/);
-  }
-  state = nextState(state, "tool:crawl", data);
-  const first = renderFrame(data, state);
-  state = nextState(state, "next-page", data);
-  assert.notEqual(renderFrame(data, state), first);
-  assert.match(renderFrame(data, state), /7–12 of 82 real findings/);
-  state = nextState(state, "group:Content", data);
-  assert.equal(state.group, "Content");
-  assert.ok(data.backlog.some((item) => item.id === state.task && item.group === "Content"));
-  state = nextState(state, "task:C01", data);
-  assert.match(renderFrame(data, state), /SIMULATED RECOMMENDATION/);
-  assert.match(renderFrame(data, { ...initialState, phase: "backlog" }), /REAL CRAWL EVIDENCE/);
-  assert.equal(nextState(state, "tool:javascript:alert(1)", data), state);
-  assert.equal(nextState(state, "task:missing", data), state);
+test('native workflow phases render the original task, review gate and honest playback', () => {
+  assert.match(render('input'), /What would you like/);
+  assert.match(render('input'), /Create plan/);
+  const confirmation = render('input', null, true);
+  assert.match(confirmation, /Semrush: keyword, competitor, ranking and backlink research/);
+  assert.match(confirmation, /Do not modify the website/);
+  assert.equal(originalPrompt.includes('Reporting and task-management destinations: confirm their names.'), true);
+  const plan = render('plan');
+  for (const tool of ['Screaming Frog', 'Semrush', 'Ahrefs', 'Sitebulb']) assert.ok(plan.includes(tool));
+  assert.doesNotMatch(plan, /Drag to reorder|Change the tool/);
+  const review = render('review');
+  assert.match(review, /Review before running/);
+  assert.match(review, /Source preview/);
+  assert.match(review, /Result preview/);
+  assert.match(review, /What will happen/);
+  assert.match(review, /Approve &amp; run demo/);
+  assert.match(review, /engagement with Mantas Auk unconfirmed/);
+  assert.doesNotMatch(review, /0 changes need approval/);
+  const execution = render('execution');
+  assert.match(execution, /Playing the prepared workflow/);
+  assert.match(execution, /No live connections or external writes/);
+  assert.doesNotMatch(execution, /notify you when/);
 });
 
-test("walkthrough uses the exact same screens and consistently discloses simulated research", () => {
-  assert.equal(tour.length * 6, 66);
-  for (const scene of tour) {
-    const svg = renderFrame(data, { ...initialState, ...scene.state }, { caption: scene.caption, chapter: "1 / 11", pointer: scene.pointer });
-    assert.match(svg, /STATIC PROTOTYPE/);
-    assert.match(svg, /1 real export · 3 simulated tools/);
-    assert.match(svg, /data-action=/);
-    assert.doesNotMatch(svg, /undefined|NaN|<script|<foreignObject/);
-    assert.ok(!scene.caption.includes("successfully connected"));
+test('native results expose every tool output and a URL-level implementation backlog', () => {
+  const result = render('results');
+  assert.match(result, /What happened/);
+  assert.match(result, /Tools used/);
+  assert.match(result, /171 Screaming Frog URL records imported/);
+  assert.match(result, /Implementation roadmap/);
+  for (const [tool, title] of [['semrush', 'Keyword positions'], ['ahrefs', 'Backlink sample'], ['sitebulb', 'Technical audit hints']]) {
+    const html = render('results', { tab: 'Tool activity', tool });
+    assert.ok(html.includes(title), `${tool} output should render ${title}`);
+    assert.match(html, /simulated output/i);
+    assert.match(html, /No provider request was made/);
   }
-  const semrush = renderFrame(data, { ...initialState, phase: "tool", tool: "semrush" });
-  assert.match(semrush, /SIMULATED OUTPUT/);
-  const sitebulb = renderFrame(data, { ...initialState, phase: "tool", tool: "sitebulb" });
-  assert.match(sitebulb, /HYPOTHETICAL/);
-  assert.match(sitebulb, /No Sitebulb crawl was performed/);
-  assert.ok(originalPrompt.startsWith("Prepare an SEO audit review package for one Mantas Auk client."));
-  assert.ok(originalPrompt.endsWith("Do not modify the website."));
+  const crawl = render('results', { tab: 'Tool activity', tool: 'crawl' });
+  assert.match(crawl, /Export analysed/);
+  assert.match(crawl, /82 URLs/);
+  const backlog = render('results', { tab: 'Backlog', priority: 'P1', issue: 'T01' });
+  for (const label of ['Evidence', 'Proposed fix', 'Effort', 'Dependencies', 'Priority reasoning', 'Expert review', 'Acceptance check', 'Affected URL']) assert.ok(backlog.includes(label));
+  assert.match(backlog, /CSV row/);
+  const intake = render('results', { tab: 'Sources & intake' });
+  assert.match(intake, /Contradictions and checks/);
+  assert.match(intake, /Not independent crawl evidence/);
+  assert.match(intake, /Google Docs and Jira/);
+  assert.doesNotMatch(result + backlog + intake, /href="\/runs\//);
 });
 
-test("standalone entry loads directly and forbids account or tool network requests", () => {
-  const base = new URL("../public/showcase/seo-audit/", import.meta.url);
-  const html = fs.readFileSync(new URL("index.html", base), "utf8");
-  const app = fs.readFileSync(new URL("app.mjs", base), "utf8");
-  assert.match(html, /connect-src 'none'/);
-  assert.match(html, /No account needed/);
-  assert.match(html, /src="\.\/walkthrough.mp4"/);
-  assert.match(html, /type="module" src="\.\/app.mjs"/);
-  assert.doesNotMatch(app, /\bfetch\s*\(|XMLHttpRequest|WebSocket|Clerk|auraApi|google-analytics|localStorage/);
-  assert.match(app, /navigator.clipboard.writeText/);
-  assert.match(app, /keydown/);
-  const video = fs.readFileSync(new URL("walkthrough.mp4", base));
-  assert.ok(video.includes(Buffer.from("ftyp")));
-  assert.ok(video.length > 100_000);
-  assert.deepEqual([...fs.readFileSync(new URL("poster.png", base)).subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
-  assert.match(fs.readFileSync(new URL("walkthrough.vtt", base), "utf8"), /00:01:00.000 --> 00:01:06.000/);
+test('feedback stays local and the static entry prohibits backend requests', () => {
+  const html = render('feedback');
+  assert.match(html, /Copy feedback/);
+  assert.match(html, /No email or form submission is made/);
+  assert.match(html, /give separate permission/);
+  assert.doesNotMatch(html, /<form|type="submit"/);
+  const entry = fs.readFileSync(path.join(repo, 'showcase/seo-audit/index.html'), 'utf8');
+  assert.match(entry, /connect-src 'none'/);
+  assert.match(entry, /src="\.\.\/\.\.\/src\/showcase\/seo-audit\/main.jsx"/);
+  assert.equal(fs.existsSync(path.join(repo, 'public/showcase/seo-audit/walkthrough.mp4')), false);
 });
