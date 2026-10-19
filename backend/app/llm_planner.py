@@ -3,11 +3,13 @@
 import json
 import re
 from time import perf_counter
+from typing import Literal
 
 from openai import AsyncOpenAI
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from .agent_runtime import (
+    CompactPlanStep,
     CompactWorkflowPlan,
     _expand_compact_plan,
     intent_bounded_tool_inventory,
@@ -17,7 +19,27 @@ from .agent_runtime import (
 from .config import get_settings
 from .model_inputs import ModelInputTooLarge, bounded_input
 from .reliability import bounded_model_call
-from .schemas import WorkflowPlan
+from .schemas import MAX_WORKFLOW_STEPS, WorkflowPlan
+
+
+def _catalog_plan_format(inventory: list[dict]) -> type[CompactWorkflowPlan]:
+    """Pin generated routes to catalog identities, including hashed MCP slugs.
+
+    A display name/canonical provider is not an executable connection identity.
+    This constrains generation only; preflight still checks operation/schema,
+    current grants, dependencies and consequential-action approval.
+    """
+    slugs = tuple(sorted({str(item['slug']) for item in inventory if item.get('slug')}))
+    if not slugs:
+        return CompactWorkflowPlan
+    step_type = create_model(
+        'CatalogPlanStep', __base__=CompactPlanStep,
+        tool_slug=(Literal[slugs], ...),
+    )
+    return create_model(
+        'CatalogWorkflowPlan', __base__=CompactWorkflowPlan,
+        steps=(list[step_type], Field(min_length=1, max_length=MAX_WORKFLOW_STEPS)),
+    )
 
 
 class ArgumentJSONRepair(BaseModel):
@@ -289,7 +311,7 @@ async def create_llm_plan(
                 model=settings.openai_model,
                 instructions=instructions,
                 input=payload,
-                text_format=CompactWorkflowPlan,
+                text_format=_catalog_plan_format(relevant),
                 store=False,
             ),
             settings.model_call_timeout_seconds,

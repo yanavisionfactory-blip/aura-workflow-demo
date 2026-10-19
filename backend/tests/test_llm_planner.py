@@ -145,6 +145,44 @@ def test_planner_schema_only_describes_a_plan():
     }
 
 
+def test_catalog_format_preserves_mcp_connection_identity_and_rejects_vendor_alias():
+    slug = 'agent-semrush-0123456789'
+    response_format = llm_planner._catalog_plan_format([
+        {'slug': slug, 'name': 'Semrush', 'canonical_provider': 'semrush'},
+        {'slug': 'aura', 'name': 'AURA'},
+    ])
+    schema = response_format.model_json_schema()
+    route_schema = schema['$defs']['CatalogPlanStep']['properties']['tool_slug']
+    assert set(route_schema['enum']) == {slug, 'aura'}
+    payload = {
+        'name': 'SEO research', 'interpretation': 'Read Semrush evidence', 'steps': [{
+            'key': 'read', 'agent': 'Semrush', 'tool_slug': slug,
+            'operation': 'mcp.get_report', 'arguments_json': '{}',
+            'reason': 'Read the approved source', 'expected_output': 'Source evidence',
+            'consequential': False, 'depends_on': [], 'required_evidence': [],
+        }],
+    }
+    assert response_format.model_validate(payload).steps[0].tool_slug == slug
+    payload['steps'][0]['tool_slug'] = 'semrush'
+    with pytest.raises(ValueError, match='tool_slug'):
+        response_format.model_validate(payload)
+
+
+@pytest.mark.asyncio
+async def test_live_planning_uses_catalog_scoped_route_format(malformed_plan_client):
+    compact, parse = malformed_plan_client
+    compact.steps = compact.steps[:1]
+    parse.return_value = SimpleNamespace(output_parsed=compact)
+    await llm_planner.create_llm_plan('Read my WordPress draft', [{
+        'slug': 'wordpress', 'name': 'WordPress', 'allowed_operations': ['post.get'],
+        'operation_contracts': [],
+    }], set())
+    response_format = parse.call_args.kwargs['text_format']
+    schema = response_format.model_json_schema()
+    assert schema['$defs']['CatalogPlanStep']['properties']['tool_slug']['const'] == 'wordpress'
+    assert schema['properties']['steps']['maxItems'] == 40
+
+
 @pytest.mark.asyncio
 async def test_large_catalog_is_packed_before_the_only_planning_call(monkeypatch):
     prompt = "Create a Google Drive file from my notes: " + "Project notes. " * 1100
@@ -292,7 +330,7 @@ async def test_direct_planner_uses_one_structured_call(monkeypatch):
                                  "allowed_operations": ["weather.forecast"]}], set(),
     )
     assert parse.await_count == 1
-    assert parse.await_args.kwargs["text_format"] is CompactWorkflowPlan
+    assert issubclass(parse.await_args.kwargs["text_format"], CompactWorkflowPlan)
     assert plan.steps[0].arguments == {"location": "Berlin"}
     assert plan.planning_artifacts["planner_recovery_mode"] == "direct_llm"
     assert "preflight_evaluation" not in plan.planning_artifacts
@@ -492,7 +530,7 @@ async def test_single_llm_response_includes_required_canva_creation(monkeypatch)
     async def parse(**kwargs):
         calls.append(kwargs)
         schema = kwargs["text_format"]
-        assert schema is CompactWorkflowPlan
+        assert issubclass(schema, CompactWorkflowPlan)
         return SimpleNamespace(output_parsed=schema.model_validate({
             "name": "One Canva slide",
             "interpretation": "Create one slide in Canva",
