@@ -23,6 +23,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   const selectedVisual = visualChoices.find((choice) => choice.key === searchParams.get("main"));
   const primaryResult = selectedVisual?.result || selectPrimaryOutcome(results);
   const nativeAudit = primaryResult.kind === "seo_audit";
+  const nativeResult = nativeAudit || primaryResult.kind === "weekly_review";
   const metrics = useMemo(() => isFailure ? [] : resultMetrics(results.metrics || [], activity || []), [results.metrics, activity, isFailure]);
   const receipts = useMemo(() => supportingReceipts(results, activity || [], primaryResult, results.resultPresentation), [activity, primaryResult, results]);
   const creatorsOutcome = (results.outcomes || []).find((outcome) => outcome.type === "creators" && outcome.items?.length > 0);
@@ -53,8 +54,8 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`mx-auto w-full pb-8 ${nativeAudit ? "max-w-3xl" : "max-w-5xl"}`}>
-      {!nativeAudit && <ResultsHeading centered title={results.title || "Workflow complete"} summary={results.summary} isFailure={isFailure} />}
-      {!nativeAudit && <ResultsMetrics metrics={metrics} />}
+      {!nativeResult && <ResultsHeading centered title={results.title || "Workflow complete"} summary={results.summary} isFailure={isFailure} />}
+      {!nativeResult && <ResultsMetrics metrics={metrics} />}
 
       {visualChoices.length > 0 && <label className="mb-5 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
         Main result
@@ -68,7 +69,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
         </select>
       </label>}
 
-      {nativeAudit ? <ResultPreview result={primaryResult} results={results} /> : <PrimaryResult
+      {nativeResult ? <ResultPreview result={primaryResult} results={results} /> : <PrimaryResult
         title={primaryResult.title || results.title || "Workflow result"}
         provider={primaryResult.provider}
         providerVerb={primaryResult.providerVerb}
@@ -81,7 +82,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
         <ResultPreview result={primaryResult} results={results} />
       </PrimaryResult>}
 
-      {!nativeAudit && receipts.length > 0 && <section aria-label="Supporting workflow actions" className="mb-6">
+      {!nativeResult && receipts.length > 0 && <section aria-label="Supporting workflow actions" className="mb-6">
         <h3 className="mb-3 text-sm font-semibold">What happened</h3>
         <div className="space-y-2">
           {receipts.map((receipt) => <div key={receipt.key} className="flex flex-wrap items-center gap-3 rounded-xl border border-white/10 bg-card/40 p-4">

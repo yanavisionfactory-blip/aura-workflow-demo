@@ -39,8 +39,8 @@ export function reviewModel(packet) {
   const emailPreviousRate = ratio(sum(kPrevious, 'uniqueClicks'), sum(kPrevious, 'delivered'));
   const findings = [
     { id: 'F1', source: 'google', experiment: 'E1', title: 'Non-brand acquisition became more expensive', current: ratio(gCurrent.spend, gCurrent.purchases), previous: ratio(gPrevious.spend, gPrevious.purchases), metric: 'Purchase-credit CPA', format: 'money', evidence: ['G-C-NONBRAND', 'G-P-NONBRAND', 'Q-C-GENERIC', 'Q-P-GENERIC'], interpretation: 'CPA doubled while the generic query share of non-brand spend increased. Query mix, auction prices and landing experience are possible explanations; this weekly comparison does not identify a cause.' },
-    { id: 'F2', source: 'meta', experiment: 'E2', title: 'The prospecting video needs a creative review', current: ratio(mCurrent.spend, mCurrent.purchases), previous: ratio(mPrevious.spend, mPrevious.purchases), metric: 'Attributed purchase CPA', format: 'money', evidence: ['M-C-VIDEO', 'M-P-VIDEO'], interpretation: 'Video CPA rose from $25 to $60; link CTR fell from 1.5% to 1.0%, while frequency rose from 2.86 to 4.00. This is consistent with creative wear-out, but audience or auction changes could also explain it.' },
-    { id: 'F3', source: 'klaviyo', experiment: 'E3', title: 'Campaign click rate fell as the audience mix changed', current: emailCurrentRate, previous: emailPreviousRate, metric: 'Per-message unique click rate', format: 'percent', evidence: ['K-C-ENGAGED', 'K-C-OTHER', 'K-P-ENGAGED', 'K-P-OTHER'], interpretation: 'Campaign click rate fell from 2.4% to 1.2%. The engaged share of deliveries also changed from 50.0% to 41.7%, so the overall decline cannot be attributed to the subject line. Compare segments before testing.' },
+    { id: 'F2', source: 'meta', experiment: 'E2', title: 'The prospecting video needs a creative review', current: ratio(mCurrent.spend, mCurrent.purchases), previous: ratio(mPrevious.spend, mPrevious.purchases), metric: 'Attributed purchase CPA', format: 'money', evidence: ['M-C-VIDEO', 'M-P-VIDEO'], interpretation: `Video CPA changed from ${dollars(ratio(mPrevious.spend, mPrevious.purchases))} to ${dollars(ratio(mCurrent.spend, mCurrent.purchases))}; link CTR changed from ${percent(ratio(mPrevious.clicks, mPrevious.impressions))} to ${percent(ratio(mCurrent.clicks, mCurrent.impressions))}, while frequency changed from ${number(ratio(mPrevious.impressions, mPrevious.reach))} to ${number(ratio(mCurrent.impressions, mCurrent.reach))}. Creative wear-out, audience and auction changes require expert review; the comparison does not establish a cause.` },
+    { id: 'F3', source: 'klaviyo', experiment: 'E3', title: 'Campaign click rate fell as the audience mix changed', current: emailCurrentRate, previous: emailPreviousRate, metric: 'Per-message unique click rate', format: 'percent', evidence: ['K-C-ENGAGED', 'K-C-OTHER', 'K-P-ENGAGED', 'K-P-OTHER'], interpretation: `Campaign click rate changed from ${percent(emailPreviousRate)} to ${percent(emailCurrentRate)}. Segment mix also changed, so the overall movement cannot be attributed to the subject line. Compare matched segments before testing.` },
   ].map((item) => ({ ...item, change: change(item.current, item.previous), material: Math.abs(change(item.current, item.previous) || 0) >= packet.materialityThreshold }));
   return { platforms, paidSpend, paidSpendPrevious, paidSpendChange: change(paidSpend, paidSpendPrevious), findings };
 }
@@ -54,7 +54,7 @@ export function validatePacket(packet) {
   if (Date.parse(packet.periods.current.from) - Date.parse(packet.periods.previous.to) !== 86400000) errors.push('Comparison periods must be consecutive.');
   if (packet.sources.length !== packet.scope.included.length || packet.sources.some((source) => !packet.scope.included.includes(source.key))) errors.push('A source falls outside the selected scope.');
   for (const source of packet.sources) {
-    if (source.provenance !== 'simulated') errors.push('This public demo accepts labelled simulated sources only.');
+    if (source.provenance !== 'simulated') errors.push('This synthetic-data workflow accepts labelled simulated sources only.');
     if (source.currency !== packet.currency || source.timezone !== packet.timezone || source.asOf !== packet.asOf) errors.push(`${source.name}: currency, timezone or extraction cutoff does not align.`);
     if (!source.attribution || !source.dateBasis || !source.revenueDefinition) errors.push(`${source.name}: metric definitions are incomplete.`);
     for (const row of [...source.rows, ...(source.searchTerms || [])]) {
@@ -101,4 +101,17 @@ export function sourceCsv(packet, key) {
     const record = { ...row, provenance: 'SIMULATED', source: source.name, period_start: packet.periods[row.period].from, period_end: packet.periods[row.period].to, timezone: source.timezone, currency: source.currency, asOf: source.asOf, attribution: source.attribution, dateBasis: source.dateBasis };
     return columns.map((column) => record[column]);
   })].map((row) => row.map(quote).join(',')).join('\r\n');
+}
+
+// Input preparation only: no output findings, experiments, copy or backlog are
+// sent. The backend computes and generates those during the actual run.
+export function syntheticWeeklyRequest(packet) {
+  const omitted = new Set(['sources', 'experiments', 'creatives', 'backlog', 'summary', 'execution']);
+  const config = Object.fromEntries(Object.entries(packet).filter(([key]) => !omitted.has(key)));
+  const sources = packet.sources.map((source) => ({
+    source_key: source.key, csv_text: sourceCsv(packet, source.key),
+    metadata: Object.fromEntries(Object.entries(source).filter(([key]) => !['rows', 'searchTerms', 'execution', 'inputCsv'].includes(key))),
+    periods: packet.periods,
+  }));
+  return 'AURA_WEEKLY_REVIEW_V1\n' + JSON.stringify({ config, sources });
 }

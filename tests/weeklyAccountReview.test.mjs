@@ -1,8 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import packet from '../src/showcase/weekly-account-review/data.mjs';
-import { checks, evidenceRows, ratio, reviewModel, sourceCsv, totals, validatePacket } from '../src/lib/weeklyAccountReview.mjs';
+import { checks, evidenceRows, ratio, reviewModel, sourceCsv, syntheticWeeklyRequest, totals, validatePacket } from '../src/lib/weeklyAccountReview.mjs';
 import { executionSteps, originalPrompt, workflowSteps } from '../src/showcase/weekly-account-review/scenario.mjs';
+
+test('real workflow inputs contain source bytes and brief, never prewritten outcome drafts', () => {
+  const prompt = syntheticWeeklyRequest(packet);
+  assert.ok(prompt.startsWith('AURA_WEEKLY_REVIEW_V1\n'));
+  const request = JSON.parse(prompt.slice(prompt.indexOf('\n') + 1));
+  assert.equal(request.sources.length, 3);
+  assert.equal(request.config.client.fictional, true);
+  for (const key of ['experiments', 'creatives', 'backlog', 'execution', 'summary']) assert.equal(key in request.config, false);
+  for (const source of request.sources) {
+    assert.equal('rows' in source.metadata, false);
+    assert.match(source.csv_text, /SIMULATED/);
+  }
+});
 
 test('weekly review calculates weighted platform metrics and never creates a blended revenue total', () => {
   assert.deepEqual(validatePacket(packet), []);
