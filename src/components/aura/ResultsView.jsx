@@ -53,8 +53,8 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   };
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`mx-auto w-full pb-8 ${nativeAudit ? "max-w-3xl" : "max-w-5xl"}`}>
-      {!nativeResult && <ResultsHeading centered title={results.title || "Workflow complete"} summary={results.summary} isFailure={isFailure} />}
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`mx-auto w-full pb-8 ${nativeAudit ? "max-w-3xl" : primaryResult.kind === "website_content" ? "max-w-6xl" : "max-w-5xl"}`}>
+      {!nativeResult && <ResultsHeading eyebrow="Workflow result" title={results.title || "Workflow complete"} summary={results.summary} isFailure={isFailure} />}
       {!nativeResult && <ResultsMetrics metrics={metrics} />}
 
       {visualChoices.length > 0 && <label className="mb-5 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
@@ -107,18 +107,18 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
       {!nativeAudit && primaryResult.kind !== "website_content" && <ToolEvidence activity={activity || []} activityRequest={activityRequest} />}
 
       {creatorsOutcome && <CreatorApprovalList items={creatorsOutcome.items} />}
-      {!isFailure && <section className="mb-6" aria-live="polite">
+      {!isFailure && (nextSteps.length > 0 || results.suggestionsLoading) && <section className="mb-6" aria-live="polite">
         <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold"><ArrowRight className="h-4 w-4 text-primary" />Suggested next</h3>
         {nextSteps.length > 0
           ? <div className="flex flex-wrap gap-2">{nextSteps.map((step, index) => <button key={index} type="button" onClick={() => onStartWorkflow(step)} className="rounded-full border border-primary/25 bg-primary/[0.05] px-4 py-2 text-xs text-primary hover:bg-primary/10">{step}</button>)}</div>
           : <p className="text-sm text-muted-foreground">{results.suggestionsLoading ? "Finding useful follow-ups…" : "No follow-up suggestions are available for this result."}</p>}
       </section>}
-      <section className="rounded-2xl border border-white/10 bg-card/40 p-5 sm:p-6">
-        <h3 className="font-semibold">What would you like to do next?</h3>
+      <section className="rounded-xl border border-white/10 bg-card/20 p-4 sm:p-5">
+        <h3 className="text-sm font-semibold">Continue this workflow</h3>
         <p className="mt-1 text-sm text-muted-foreground">{isFailure ? "Your completed work is saved. Try again or start a new workflow." : "Continue from this result or create something new."}</p>
         <div className="mt-5 grid gap-3 sm:grid-cols-3">
           <button type="button" onClick={() => onStartWorkflow(prompt)} className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium hover:bg-white/10"><RefreshCw className="h-4 w-4" />Run again</button>
-          {!isFailure && backendRunId && <button type="button" onClick={() => setShowSchedule(true)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-white hover:bg-primary/90"><CalendarClock className="h-4 w-4" />Schedule</button>}
+          {!isFailure && backendRunId && <button type="button" onClick={() => setShowSchedule(true)} className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium hover:bg-white/10"><CalendarClock className="h-4 w-4" />Schedule</button>}
           <button type="button" onClick={onNewWorkflow} className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium hover:bg-white/10"><Plus className="h-4 w-4" />New workflow</button>
         </div>
       </section>
