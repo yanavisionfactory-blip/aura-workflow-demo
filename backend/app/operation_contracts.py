@@ -20,6 +20,14 @@ PAGE = {"type": "object", "required": ["id", "properties"], "properties": {
     "id": TEXT, "object": {"const": "page"}, "url": TEXT, "properties": OBJECT,
     "parent": OBJECT, "archived": {"type": "boolean"}, "in_trash": {"type": "boolean"}}}
 KNOWN = {
+    "executive.source.analyze": ({"type": "object", "required": ["mode", "synthetic", "source_key", "comparison", "receipt", "rows", "external_writes"],
+        "properties": {"mode": {"const": "synthetic_export_execution"}, "synthetic": {"const": True},
+            "receipt": OBJECT, "comparison": OBJECT, "rows": {"type": "array", "minItems": 1},
+            "external_writes": {"const": False}}}, ["synthetic_source_evidence", "source_hashes", "computed_biweekly_metrics"]),
+    "executive.review.prepare": ({"type": "object", "required": ["kind", "synthetic", "status", "packet", "execution", "source_receipts", "external_writes"],
+        "properties": {"kind": {"const": "executive_review"}, "synthetic": {"const": True}, "status": {"const": "draft"},
+            "packet": OBJECT, "execution": OBJECT, "source_receipts": {"type": "array", "minItems": 10, "maxItems": 10},
+            "external_writes": {"const": False}}}, ["interactive_executive_review", "synthetic_source_evidence"]),
     "weekly.source.analyze": ({"type": "object", "required": ["mode", "synthetic", "source", "comparison", "receipt", "external_writes"],
         "properties": {"mode": {"const": "synthetic_export_execution"}, "synthetic": {"const": True},
             "source": OBJECT, "comparison": OBJECT, "receipt": OBJECT, "external_writes": {"const": False}}},

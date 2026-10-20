@@ -1,0 +1,11 @@
+id,provenance,period,metric,value,entity_id,event_id,event_at
+REP-C-001,SIMULATED,current,target_qualified_leads,40,,,2026-10-10T12:00:00-05:00
+REP-C-002,SIMULATED,current,target_booked,32,,,2026-10-10T12:00:00-05:00
+REP-C-003,SIMULATED,current,target_attended,24,,,2026-10-10T12:00:00-05:00
+REP-C-004,SIMULATED,current,target_customers,8,,,2026-10-10T12:00:00-05:00
+REP-C-005,SIMULATED,current,paid_budget,4500,,,2026-10-10T12:00:00-05:00
+REP-P-006,SIMULATED,previous,target_qualified_leads,30,,,2026-09-26T12:00:00-05:00
+REP-P-007,SIMULATED,previous,target_booked,26,,,2026-09-26T12:00:00-05:00
+REP-P-008,SIMULATED,previous,target_attended,20,,,2026-09-26T12:00:00-05:00
+REP-P-009,SIMULATED,previous,target_customers,7,,,2026-09-26T12:00:00-05:00
+REP-P-010,SIMULATED,previous,paid_budget,4300,,,2026-09-26T12:00:00-05:00

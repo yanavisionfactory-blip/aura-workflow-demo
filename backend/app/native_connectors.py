@@ -10,6 +10,8 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
 
+from .executive_review import PrepareRequest as ExecutivePrepareRequest
+from .executive_review import SourceRequest as ExecutiveSourceRequest
 from .file_delivery import ATTACHMENTS_SCHEMA
 from .policy import operation_scope
 from .presentation_content import PRESENTATION_SCHEMA
@@ -68,6 +70,10 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         "base_url": "provider-managed",
         "identity": {"provider": "aura"},
         "modules": [
+            {**_module("executive.source.analyze", "search", "Execute one explicitly simulated biweekly channel or business-system CSV processor in AURA; retain rows, definitions, calculations and hashes. Vendor reporting API not called."),
+             "input_schema": ExecutiveSourceRequest.model_json_schema()},
+            {**_module("executive.review.prepare", "search", "Recalculate ten simulated exports and use the model to prepare an interactive executive review, agenda and proposed action register on AURA's results page. No Google Doc or account writes."),
+             "input_schema": ExecutivePrepareRequest.model_json_schema()},
             {**_module("weekly.source.analyze", "search", "Process a labelled synthetic marketing CSV export inside AURA. Validate dates and definitions, calculate weekly metrics and retain source hashes. Does not call a vendor reporting API."),
              "input_schema": SourceRequest.model_json_schema()},
             {**_module("weekly.review.prepare", "search", "Use processed synthetic exports and a fictional brief to execute AURA model drafting and produce an interactive weekly review, three experiments, creative pairs and backlog. No vendor account writes."),

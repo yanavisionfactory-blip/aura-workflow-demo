@@ -596,6 +596,8 @@ class ProviderExecutor:
             "report.compose": self._report_compose,
             "weekly.source.analyze": self._weekly_source_analyze,
             "weekly.review.prepare": self._weekly_review_prepare,
+            "executive.source.analyze": self._executive_source_analyze,
+            "executive.review.prepare": self._executive_review_prepare,
             "seo.crawl.analyze": self._seo_crawl_analyze,
             "web.search": self._web_search,
             "web.page.read": self._web_page_read,
@@ -1207,6 +1209,14 @@ class ProviderExecutor:
     async def _weekly_source_analyze(self, a: dict) -> dict:
         from .weekly_review import analyze_source
         return analyze_source(a)
+
+    async def _executive_source_analyze(self, a: dict) -> dict:
+        from .executive_review import analyze_source
+        return analyze_source(a)
+
+    async def _executive_review_prepare(self, a: dict) -> dict:
+        from .executive_review import prepare_review
+        return await prepare_review(a)
 
     async def _weekly_review_prepare(self, a: dict) -> dict:
         from .weekly_review import prepare_review
