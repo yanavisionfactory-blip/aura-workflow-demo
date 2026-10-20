@@ -373,6 +373,22 @@ def test_google_docs_read_exposes_provider_confirmed_text_for_later_draft():
     assert resolve_value("{{steps.read.textContent}}", context) == (
         "First tab facts\n\nSecond tab facts"
     )
+    for field in ("body", "content"):
+        assert resolve_value("{{steps.read." + field + "}}", context) == (
+            "First tab facts\n\nSecond tab facts"
+        )
+    assert context["steps"]["read"]["provider_result"] == receipt
+    assert "body" not in receipt and "body" not in receipt["ret"]
+
+
+@pytest.mark.parametrize("returned", [{"documentId": "doc-one"},
+                                    {"documentId": "doc-one", "textContent": None},
+                                    {"documentId": "doc-one", "textContent": {"unknown": "shape"}}])
+def test_docs_body_alias_never_turns_metadata_into_source_content(returned):
+    value = step_context_value({"ret": returned}, "google-docs.get-document")
+    for field in ("body", "content", "textContent"):
+        with pytest.raises(WorkflowContextError):
+            resolve_value("{{steps.read." + field + "}}", {"steps": {"read": value}})
 
 
 @pytest.mark.parametrize("operation", ["google-docs.create-document", "google-docs.get-document"])

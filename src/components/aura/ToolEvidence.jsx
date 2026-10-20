@@ -26,7 +26,7 @@ function EvidenceValue({ value, level = 0 }) {
   return <dl className="space-y-3">{entries.map(([key, item]) => <div key={key} className="min-w-0 border-l border-white/10 pl-3"><dt className="mb-1 text-xs font-semibold text-[#a6c8ef]">{key}</dt><dd className="text-sm leading-6"><EvidenceValue value={item} level={level + 1} /></dd></div>)}</dl>;
 }
 
-export default function ToolEvidence({ activity = [], activityRequest = null }) {
+export default function ToolEvidence({ activity = [], activityRequest = null, initiallyOpen = false }) {
   const records = useMemo(() => toolEvidence(activity), [activity]);
   const tools = [...new Set(records.map((item) => item.tool))];
   const [selected, setSelected] = useState("");
@@ -50,7 +50,7 @@ export default function ToolEvidence({ activity = [], activityRequest = null }) 
   return <section aria-label="Results by tool" className="mb-8 rounded-2xl border border-primary/20 bg-card/60 p-5 sm:p-6">
     <h3 className="mb-3 text-sm font-semibold">Tools used</h3>
     <div className="mb-3 flex flex-wrap gap-2">{tools.map((tool) => <span key={tool} className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-muted-foreground">{tool}</span>)}</div>
-    <details ref={activityRef}>
+    <details ref={activityRef} open={initiallyOpen || undefined}>
     <summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-medium text-primary [&::-webkit-details-marker]:hidden">View activity<ChevronDown className="h-3 w-3" /></summary>
     <p className="mt-3 text-sm text-muted-foreground">Inspect the inputs, returned data and status of each saved workflow step. A connection alone is not a completed tool run.</p>
     <div className="my-4 flex flex-wrap gap-2" role="group" aria-label="Filter tool results">{["", ...tools].map((tool) => <button key={tool} type="button" aria-pressed={selected === tool} onClick={() => setSelected(tool)} className={`rounded-full border px-3 py-1.5 text-xs ${selected === tool ? "border-primary/60 bg-primary/15 text-primary" : "border-white/15 text-muted-foreground"}`}>{tool || "All tools"} ({tool ? records.filter((item) => item.tool === tool).length : records.length})</button>)}</div>
