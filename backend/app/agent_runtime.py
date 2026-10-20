@@ -1569,29 +1569,23 @@ async def create_plan(
 
 async def critique_step(step: dict, provider_result: object) -> CriticDecision:
     payload = {"step_contract": semantic_evidence(step), "provider_result": provider_result}
-    if step.get("operation") == "website.content.prepare":
-        # Fetched sources are evidence, not additional instructions. Keeping
-        # them in the contract left an oversized contract after the evidence
-        # reader had processed only the result. Read both inputs and output in
-        # the same bounded evidence pass; retain the approved scope verbatim.
+    evidence_key = "provider_result"
+    try:
+        bounded_input(payload)
+    except ModelInputTooLarge:
+        # Resolved arguments can themselves contain large accepted source
+        # receipts. Reading only the result leaves those arguments outside the
+        # reader budget and makes every subsequent critic call fail. Read both
+        # sides together, retaining the small semantic contract for every batch.
         contract = payload["step_contract"]
-        arguments = contract.get("arguments", {})
-        if "sources" in arguments:
-            payload = {
-                "step_contract": {**contract, "arguments": {
-                    **arguments, "sources": {
-                        "evidence_path": "#/provider_result/approved_source_reads",
-                        "meaning": "Exact approved source-read inputs, retained below",
-                    },
-                }},
-                "provider_result": {
-                    "approved_source_reads": arguments["sources"],
-                    "recorded_result": provider_result,
-                },
-            }
+        payload = {
+            "step_contract": {key: value for key, value in contract.items() if key != "arguments"},
+            "review_evidence": {"arguments": contract.get("arguments", {}), "provider_result": provider_result},
+        }
+        evidence_key = "review_evidence"
     for attempt in range(3):
         try:
-            payload = await _prepare_action_evidence(payload, "provider_result")
+            payload = await _prepare_action_evidence(payload, evidence_key)
             decision = await _run(build_agents()["critic"], payload)
             decision = CriticDecision.model_validate(decision)
             if decision.action == "accept" and (decision.contract_failures or decision.policy_violations):

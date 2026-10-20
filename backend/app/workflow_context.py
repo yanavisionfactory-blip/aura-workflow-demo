@@ -330,8 +330,14 @@ def step_context_value(
                         tab.get("textContent") for tab in tabs
                         if isinstance(tab, dict) and isinstance(tab.get("textContent"), str)
                     ] if isinstance(tabs, list) else []
-                    value.setdefault("textContent", "\n\n".join(tab_texts) if tab_texts
-                                     else doc["textContent"])
+                    text = "\n\n".join(tab_texts) if tab_texts else doc["textContent"]
+                    value.setdefault("textContent", text)
+                    # Planners use the same body/content names as the native
+                    # Docs reader. Derive them only from returned document
+                    # text, including every returned tab; never from metadata
+                    # or a transport summary. Preserve the original receipt.
+                    value.setdefault("body", text)
+                    value.setdefault("content", text)
                 logger.info(
                     "docs_receipt_text ret_type=%s text_present=%s tabs=%s",
                     type(doc).__name__,

@@ -219,7 +219,7 @@ async def test_large_website_source_contract_reaches_output_critic_without_losin
             return {"relevant_evidence": "Every supplied record was read; no external writes.",
                     "source_limitations": [], "unprocessed_source_paths": []}
         assert agent.name == "Tool Output Critic Agent"
-        assert payload["step_contract"]["arguments"]["client"] == "Example Learning"
+        assert payload["step_contract"]["expected_output"] == step["expected_output"]
         return {"action": "accept", "reasons": ["Source evidence and draft scope match"]}
 
     monkeypatch.setattr(agent_runtime, "_run", run)
@@ -230,6 +230,7 @@ async def test_large_website_source_contract_reaches_output_critic_without_losin
     fragments = "\n".join(payload["source_fragment"] for name, payload in calls if name == "Evidence Reader")
     assert all(f"final-fact-{i}" in fragments for i in range(8))
     assert "Complete proposed copy" in fragments
+    assert "Example Learning" in fragments and "https://client.example" in fragments
     assert step == before
 
 
