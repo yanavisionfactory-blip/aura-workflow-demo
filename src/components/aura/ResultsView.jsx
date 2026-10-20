@@ -17,6 +17,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   const [showModal, setShowModal] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
+  const [activityRequest, setActivityRequest] = useState(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const visualChoices = useMemo(() => visualResultChoices(activity || [], { title: results.title, summary: results.summary }), [activity, results]);
   const selectedVisual = visualChoices.find((choice) => choice.key === searchParams.get("main"));
@@ -52,10 +53,8 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`mx-auto w-full pb-8 ${nativeAudit ? "max-w-3xl" : "max-w-5xl"}`}>
-      {!nativeAudit && <ResultsHeading title={results.title || "Workflow complete"} summary={results.summary} isFailure={isFailure} />}
+      {!nativeAudit && <ResultsHeading centered title={results.title || "Workflow complete"} summary={results.summary} isFailure={isFailure} />}
       {!nativeAudit && <ResultsMetrics metrics={metrics} />}
-
-      {!nativeAudit && primaryResult.kind !== "report" && <ToolEvidence activity={activity || []} />}
 
       {visualChoices.length > 0 && <label className="mb-5 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
         Main result
@@ -82,27 +81,29 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
         <ResultPreview result={primaryResult} results={results} />
       </PrimaryResult>}
 
-      {primaryResult.kind === "report" && <ToolEvidence activity={activity || []} />}
-
-      {!nativeAudit && receipts.length > 0 && <details className="group mb-8 overflow-hidden rounded-2xl border border-white/10 bg-card/40">
-        <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 marker:hidden [&::-webkit-details-marker]:hidden">
-          <span className="flex items-center gap-3 text-sm font-medium"><CheckCircle2 className="h-4 w-4 text-emerald-400" />Results from other apps <span className="rounded-full bg-white/10 px-2 py-0.5 text-xs text-muted-foreground">{receipts.length}</span></span>
-          <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180" />
-        </summary>
-        <div className="grid gap-3 border-t border-white/10 p-4 sm:grid-cols-2">
-          {receipts.map((receipt) => <div key={receipt.key} className="rounded-xl border border-white/10 bg-[#0c1422] p-4">
-            <p className="text-xs font-semibold text-primary">{receipt.tool}</p>
-            <p className="mt-1 text-sm font-medium">{receipt.title}</p>
+      {!nativeAudit && receipts.length > 0 && <section aria-label="Supporting workflow actions" className="mb-6">
+        <h3 className="mb-3 text-sm font-semibold">What happened</h3>
+        <div className="space-y-2">
+          {receipts.map((receipt) => <div key={receipt.key} className="flex flex-wrap items-center gap-3 rounded-xl border border-white/10 bg-card/40 p-4">
+            <Activity className="h-5 w-5 shrink-0 text-primary" />
+            <div className="min-w-0 flex-1"><p className="text-sm font-medium">{receipt.title}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{receipt.tool}</p>
             {receipt.preview?.length > 0 && <div className="mt-3 space-y-2 border-t border-white/10 pt-3">
               {receipt.preview.map((audience, index) => <div key={index} className="flex items-start justify-between gap-3 text-xs">
                 <span className="break-words">{audience.name}</span>
                 {audience.contacts !== null && <span className="shrink-0 text-muted-foreground">{audience.contacts.toLocaleString("en-US")} contacts</span>}
               </div>)}
             </div>}
-            {receipt.link && <a href={receipt.link} target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline">{receipt.linkLabel || `Open ${receipt.tool}`}<ExternalLink className="h-3 w-3" /></a>}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {receipt.actionId && <button type="button" onClick={() => setActivityRequest({ id: receipt.actionId })} className="inline-flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground">View action</button>}
+              {receipt.link && <a href={receipt.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-full border border-primary/25 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10">{receipt.linkLabel || `Open ${receipt.tool}`}<ExternalLink className="h-3 w-3" /></a>}
+            </div>
           </div>)}
         </div>
-      </details>}
+      </section>}
+
+      {!nativeAudit && <ToolEvidence activity={activity || []} activityRequest={activityRequest} />}
 
       {creatorsOutcome && <CreatorApprovalList items={creatorsOutcome.items} />}
       {!isFailure && <section className="mb-6" aria-live="polite">

@@ -293,6 +293,7 @@ export function supportingReceipts(results = {}, activity = [], primary = null, 
         ? providerResult.ret?.title || providerResult.ret?.name || providerResult.title || providerResult.name : null;
       return {
         key: `${step.stepKey || step.key || tool}:${step.action || step.liveOutput || "completed"}`,
+        actionId: step.id || step.stepKey || step.key,
         tool,
         title: savedTitle || (/^(?:completed|done|success(?:ful)?)\.?$/i.test(cleanReceiptText(step.liveOutput))
           ? cleanReceiptText(step.action) || "Completed"
@@ -397,6 +398,24 @@ const canvaThumbnailUrl = (value) => {
 
 const isDocumentCreate = (operation) => ["docs.create", "google-docs.create-document"].includes(operation);
 const isDocumentRead = (operation) => ["docs.get", "google-docs.get-document"].includes(operation);
+
+// Use the saved provider body when available. Reading history never fetches a
+// document again, and a read-back of another resource cannot replace this one.
+function documentPreview(output, context = {}) {
+  if (!output || (!isDocumentRead(output.operation) && !isDocumentCreate(output.operation))) return null;
+  const receipt = output.provider_result || {};
+  if (receipt.error || receipt.isError || receipt.is_error) return null;
+  const doc = receipt.ret || receipt;
+  const tabs = Array.isArray(doc.tabs) ? doc.tabs
+    .map((tab) => typeof tab?.textContent === "string" ? tab.textContent : "")
+    .filter((text) => text.trim()) : [];
+  const returnedBody = tabs.length ? tabs.join("\n\n") : doc.textContent ?? doc.body;
+  const args = output.resolved_arguments || {};
+  const body = typeof returnedBody === "string" && returnedBody.trim() ? returnedBody
+    : isDocumentCreate(output.operation) ? args.body ?? args.content : null;
+  if (typeof body !== "string" || !body.trim() || /\{\{[^}]+\}\}/.test(body)) return null;
+  return { title: doc.title || doc.name || args.title || context.title || "Document", body };
+}
 
 const documentId = (result = {}) => [result.ret?.documentId, result.ret?.id, result.documentId, result.id]
   .find((value) => typeof value === "string" && /^[a-zA-Z0-9_-]+$/.test(value));
@@ -596,17 +615,16 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
 
   const linked = explicitPrimary || completed
     .filter((output) => safeHttpsUrl(output.provider_result?.result_url)
-      || (isDocumentCreate(output.operation) && documentUrl(output.provider_result)))
+      || ((isDocumentCreate(output.operation) || isDocumentRead(output.operation)) && documentUrl(output.provider_result)))
     .sort((left, right) => outputScore(right, context.title) - outputScore(left, context.title))[0];
   const link = safeHttpsUrl(linked?.provider_result?.result_url)
-    || (isDocumentCreate(linked?.operation) ? documentUrl(linked.provider_result) : null);
+    || ((isDocumentCreate(linked?.operation) || isDocumentRead(linked?.operation)) ? documentUrl(linked.provider_result) : null);
   const provider = linked ? providerForOutput(linked) : "";
-  const docArguments = isDocumentCreate(linked?.operation) ? linked.resolved_arguments : null;
-  const docBody = docArguments?.body ?? docArguments?.content;
-  const docPreview = typeof docBody === "string" && docBody.trim()
-    && !/\{\{[^}]+\}\}/.test(docBody)
-    ? { title: docArguments.title || context.title || "Document", body: docBody }
-    : null;
+  const linkedDocId = (isDocumentCreate(linked?.operation) || isDocumentRead(linked?.operation))
+    ? documentId(linked.provider_result) : null;
+  const readback = linkedDocId && [...completed].reverse().find((output) => isDocumentRead(output.operation)
+    && documentId(output.provider_result) === linkedDocId && documentPreview(output, context));
+  const docPreview = documentPreview(readback || linked, context);
   const operation = String(linked?.operation || "");
   const providerVerb = /[.-]update(?:[.-]|$)/.test(operation) ? "Updated in"
     : /[.-](?:get|read|search|list)(?:[.-]|$)/.test(operation) ? "Checked in"

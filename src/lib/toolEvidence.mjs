@@ -48,7 +48,7 @@ export function toolEvidence(activity = []) {
     const providerError = output.provider_result?.isError === true || output.provider_result?.is_error === true
       || Boolean(output.provider_result?.error);
     return {
-      id: step.id || `${step.stepKey || step.key || "step"}-${index}`,
+      id: step.id || step.stepKey || step.key || `step-${index}`,
       tool: (output.operation || step.operation) === "seo.crawl.analyze"
         ? "Screaming Frog · export import" : evidenceToolName(step.tool),
       action: step.action || step.reason || "Provider action",
