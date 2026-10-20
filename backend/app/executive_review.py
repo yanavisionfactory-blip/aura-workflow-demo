@@ -13,7 +13,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit
-from uuid import uuid4
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from openai import AsyncOpenAI
@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, create_model
 from .config import get_settings
 from .model_inputs import bounded_input
 from .reliability import bounded_model_call
-from .schemas import WorkflowPlan
+from .schemas import OutcomeVerification, UnifiedDeliverable, WorkflowPlan
 
 PREFIX = "AURA_EXECUTIVE_REVIEW_V1\n"
 NAMES = {
@@ -44,6 +44,13 @@ METRICS = {
     "reporting": {"target_qualified_leads", "target_booked", "target_attended", "target_customers", "paid_budget"},
 }
 RECORD_SOURCES = {"crm", "appointments"}
+AGENDA = [
+    {"minutes": "0–5", "topic": "Illustrative executive summary and target gaps", "decision": "Which scenario results need attention?"},
+    {"minutes": "5–13", "topic": "Paid, local and social outputs", "decision": "Review independent attribution and proposed channel actions."},
+    {"minutes": "13–20", "topic": "Leads, bookings, attendance and customers", "decision": "Check distinct records and follow-up hypotheses; no flow-based funnel rates."},
+    {"minutes": "20–25", "topic": "Previous review and team updates", "decision": "Review explicitly fictional status and dependencies."},
+    {"minutes": "25–30", "topic": "Proposed owners and deadlines", "decision": "Accept or revise the illustrative action register; confirm real stack before live use."},
+]
 
 
 class Strict(BaseModel):
@@ -395,16 +402,93 @@ async def prepare_review(arguments):
                  "model_attempts": attempts, "provider_api_called": False, "external_writes": False}
     packet = {"config": config, "periods": periods, "sources": sources, "performance": performance,
               "narrative": narrative.model_dump(), "execution": execution, "synthetic": True,
-              "agenda": [
-                  {"minutes": "0–5", "topic": "Illustrative executive summary and target gaps", "decision": "Which scenario results need attention?"},
-                  {"minutes": "5–13", "topic": "Paid, local and social outputs", "decision": "Review independent attribution and proposed channel actions."},
-                  {"minutes": "13–20", "topic": "Leads, bookings, attendance and customers", "decision": "Check distinct records and follow-up hypotheses; no flow-based funnel rates."},
-                  {"minutes": "20–25", "topic": "Previous review and team updates", "decision": "Review explicitly fictional status and dependencies."},
-                  {"minutes": "25–30", "topic": "Proposed owners and deadlines", "decision": "Accept or revise the illustrative action register; confirm real stack before live use."},
-              ]}
+              "agenda": AGENDA}
     return {"kind": "executive_review", "synthetic": True, "status": "draft", "packet": packet,
             "execution": execution, "summary": narrative.summary,
             "source_receipts": [source["receipt"] for source in sources], "external_writes": False}
+
+
+def verify_saved_completion(plan, outputs):
+    """Reconcile this closed draft recipe against all accepted persisted receipts.
+
+    The model's semantic step review must already have accepted the narrative.
+    Completion independently recomputes every source and target comparison from
+    the approved input bytes. It never changes a verdict, receipt or account.
+    """
+    expected_keys = {*NAMES, "review"}
+    steps = {step["key"]: step for step in plan["steps"]}
+    if len(plan["steps"]) != 11 or set(steps) != expected_keys or set(outputs) != expected_keys:
+        raise ValueError("The complete eleven-step executive recipe is required")
+    contract = plan.get("result_contract") or {}
+    if (contract.get("primary_step_key") != "review" or contract.get("completion_step_key") != "review"
+            or set(contract.get("supporting_step_keys", [])) != set(NAMES)):
+        raise ValueError("The approved result contract must select the executive draft and all ten sources")
+    for key, step in steps.items():
+        output = outputs[key]
+        operation = "executive.review.prepare" if key == "review" else "executive.source.analyze"
+        if (step["tool_slug"] != "aura" or step["operation"] != operation or step.get("consequential")
+                or step.get("optional") or step.get("condition") or output.get("tool") != "aura"
+                or output.get("step_key") != key or output.get("operation") != operation
+                or output.get("critic", {}).get("action") != "accept"
+                or output.get("critic", {}).get("contract_failures") or output.get("critic", {}).get("policy_violations")
+                or output.get("outcome_check", {}).get("status") != "verified"):
+            raise ValueError("Every required read-only step must already be accepted and verified")
+        UUID(output["step_id"])
+    ids = [output["step_id"] for output in outputs.values()]
+    if len(set(ids)) != 11:
+        raise ValueError("Execution step identities must be distinct")
+    sources = []
+    for key in NAMES:
+        expected = analyze_source(steps[key]["arguments"])
+        saved = outputs[key]["provider_result"]
+        receipt = saved["receipt"]
+        UUID(receipt["id"])
+        if datetime.fromisoformat(receipt["executed_at"]).tzinfo is None:
+            raise ValueError("Source execution timestamps must be timezone aware")
+        if ({field: value for field, value in receipt.items() if field not in {"id", "executed_at"}}
+                != {field: value for field, value in expected["receipt"].items() if field not in {"id", "executed_at"}}
+                or saved != {**expected, "receipt": receipt} or saved["source_key"] != key):
+            raise ValueError("Saved source evidence differs from the approved input bytes or recalculation")
+        sources.append(saved)
+    row_ids = [row["id"] for source in sources for row in source["rows"]]
+    receipt_ids = [source["receipt"]["id"] for source in sources]
+    if len(set(row_ids)) != len(row_ids) or len(set(receipt_ids)) != 10:
+        raise ValueError("Source row and receipt identities must be globally distinct")
+    result = outputs["review"]["provider_result"]
+    if (result.get("kind") != "executive_review" or result.get("status") != "draft"
+            or result.get("synthetic") is not True or result.get("external_writes") is not False):
+        raise ValueError("Only the explicitly simulated, unsent executive draft can use this completion check")
+    packet, config = result["packet"], steps["review"]["arguments"]["config"]
+    execution = packet["execution"]
+    if (packet.get("synthetic") is not True or config.get("synthetic") is not True or packet["config"] != config
+            or packet["sources"] != sources or result["source_receipts"] != [source["receipt"] for source in sources]
+            or packet["periods"] != sources[0]["periods"]
+            or any(source["periods"] != packet["periods"] for source in sources)
+            or any(source["metadata"][field] != sources[0]["metadata"][field]
+                   for source in sources for field in ("timezone", "currency", "as_of"))
+            or any(config[field] != sources[0]["metadata"][field] for field in ("timezone", "currency"))
+            or packet["performance"] != performance_rows(sources) or packet["agenda"] != AGENDA
+            or execution != result["execution"] or execution.get("mode") != "backend_executed_synthetic"
+            or execution.get("source_operations") != 10 or execution.get("model_call_executed") is not True
+            or execution.get("model_attempts") not in {1, 2} or not execution.get("model")
+            or execution.get("provider_api_called") is not False or execution.get("external_writes") is not False):
+        raise ValueError("The executive packet does not reconcile to the accepted sources and approved draft scope")
+    UUID(execution["id"])
+    completed_at = datetime.fromisoformat(execution["executed_at"])
+    if completed_at.tzinfo is None or any(datetime.fromisoformat(source["receipt"]["executed_at"]) > completed_at for source in sources):
+        raise ValueError("Draft generation must follow source execution")
+    narrative = Narrative.model_validate(packet["narrative"])
+    validate_narrative(narrative, sources, config["review_date"])
+    if result.get("summary") != narrative.summary:
+        raise ValueError("The saved summary must match the accepted narrative")
+    synthesis = UnifiedDeliverable(summary=narrative.summary,
+        deliverable="The illustrative executive review draft and ten independently processed source results are saved in AURA. All review data is simulated; no vendor reporting API or external write occurred.",
+        traceability=[{"step_id": outputs[key]["step_id"], "claim": f"Accepted {NAMES[key]} processing receipt reconciled to approved source bytes."} for key in NAMES]
+        + [{"step_id": outputs["review"]["step_id"], "claim": "Accepted executive draft, performance table, agenda and proposed actions reconciled to all ten source results."}],
+        next_steps=["Review the proposed actions and confirm actual client systems before any live-account work."])
+    verification = OutcomeVerification(status="verified", evidence_step_ids=ids,
+        reasons=["All eleven saved steps were accepted and verified. Source bytes, hashes, lifecycle deduplication, targets, formulas, narrative references, agenda and draft-only execution scope reconciled without replaying any action."])
+    return synthesis, verification
 
 
 def workflow_recipe(prompt, inventory):
