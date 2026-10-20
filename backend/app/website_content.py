@@ -412,11 +412,11 @@ def website_workflow_recipe(prompt, inventory):
                       "expected_output": "Matching file metadata or a successful empty result; no files changed.",
                       "consequential": False})
         discovery = {"tool": "Google Drive", "operation": drive_operation,
-                     "query": drive_arguments["query"], "response": "{{steps.asset_discovery}}"}
+                     "query": drive_arguments["query"], "response": "{{steps.asset_discovery.provider_result}}"}
     steps.append({"key": "content", "agent": "Website Content Editor", "tool_slug": "aura",
                   "operation": "website.content.prepare", "depends_on": [item["key"] for item in steps],
                   "arguments": {"client": request.client, "website": request.website,
-                                "sources": ["{{steps." + item.key + "}}" for item in request.sources],
+                                "sources": ["{{steps." + item.key + ".provider_result}}" for item in request.sources],
                                 "discovery": discovery},
                   "reason": "Generate five complete sourced page drafts, comparisons, pending approvals and developer handoff inside AURA. Preserve live pages.",
                   "expected_output": "Interactive page-by-page content package and structured export; no CMS drafts until content approval.",

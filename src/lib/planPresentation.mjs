@@ -1,6 +1,11 @@
 // Labels follow the actual operation, never incidental words in its reason.
 export function operationStepTitle(step = {}, tool = "the app") {
   const operation = String(step.operation || "");
+  if (operation === "website.source.inspect") {
+    const names = { agency: "Check the agency's client evidence", sitemap: "Read the existing sitemap", cms: "Confirm the selected website's CMS", page: "Read the existing website page" };
+    return names[step.arguments?.role] || "Read the website source";
+  }
+  if (operation === "website.content.prepare") return "Prepare the five-page content package in AURA";
   if (operation === "executive.source.analyze") {
     const names = { google_ads: "Google Ads", google_business_profile: "Google Business Profile", facebook: "Facebook", instagram: "Instagram", linkedin: "LinkedIn", x: "X / Twitter", crm: "CRM", appointments: "Appointment system", analytics: "Analytics", reporting: "Reporting and goals" };
     return `Process the simulated ${names[step.arguments?.source_key] || "executive review"} export`;
