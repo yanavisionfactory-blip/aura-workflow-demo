@@ -498,9 +498,9 @@ export default function ConnectionsPill() {
                 )}
                 {error && <p className="mt-4 rounded-lg border border-red-400/20 bg-red-400/5 p-2 text-xs text-red-400">{error}</p>}
               </div>
-              <div className={`grid gap-2 border-t border-white/8 p-4 ${managedConnection.is_agent ? "grid-cols-2" : "grid-cols-3"}`}>
+              <div className={`grid gap-2 border-t border-white/8 p-4 ${managedConnection.is_agent && !managedConnection.reconnect_supported ? "grid-cols-2" : "grid-cols-3"}`}>
                 <button type="button" onClick={() => runConnectionAction(managedConnection.uiName, "test")} disabled={connectionAction === managedConnection.uiName} className="flex items-center justify-center gap-1.5 rounded-lg border border-white/10 px-2 py-2.5 text-xs font-medium hover:bg-white/5"><Check className="h-3.5 w-3.5" />Test</button>
-                {!managedConnection.is_agent && <button type="button" onClick={() => runConnectionAction(managedConnection.uiName, "reconnect")} disabled={connectionAction === managedConnection.uiName} className="flex items-center justify-center gap-1.5 rounded-lg bg-primary px-2 py-2.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-40"><RefreshCw className="h-3.5 w-3.5" />Reconnect</button>}
+                {(!managedConnection.is_agent || managedConnection.reconnect_supported) && <button type="button" onClick={() => runConnectionAction(managedConnection.uiName, "reconnect")} disabled={connectionAction === managedConnection.uiName} className="flex items-center justify-center gap-1.5 rounded-lg bg-primary px-2 py-2.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-40"><RefreshCw className="h-3.5 w-3.5" />Reconnect</button>}
                 <button type="button" onClick={() => runConnectionAction(managedConnection.uiName, "disconnect")} disabled={connectionAction === managedConnection.uiName} className="flex items-center justify-center gap-1.5 rounded-lg border border-red-400/30 px-2 py-2.5 text-xs font-medium text-red-400 hover:bg-red-400/10"><Trash2 className="h-3.5 w-3.5" />Remove</button>
               </div>
             </motion.div>
