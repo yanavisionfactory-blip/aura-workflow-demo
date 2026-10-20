@@ -255,3 +255,27 @@ test("uncertain external effects never expose a replay button", () => {
   assert.equal(result.canRetry, false);
   assert.match(result.fix, /provider result/);
 });
+
+
+test('a repaired read-only website composition can continue its saved run without enabling writes', () => {
+  const blocked = {
+    status: 'waiting_for_action',
+    blocker: { code: 'no_safe_recovery', action: 'inspect_run', step_id: 'content', retryable: false },
+    steps: [{ id: 'source', status: 'completed', consequential: false },
+      { id: 'content', status: 'failed', operation: 'website.content.prepare', consequential: false }],
+  };
+  const retry = recoveryForRun(blocked);
+  assert.equal(retry.canRetry, true);
+  assert.equal(retry.stepId, 'content');
+  assert.equal(retry.buttonLabel, 'Retry content step');
+  assert.match(retry.fix, /Completed source reads remain saved/);
+  const saved = structuredClone(blocked);
+  saved.steps[1].output = { provider_result: { kind: 'website_content' } };
+  assert.equal(recoveryForRun(saved).buttonLabel, 'Recheck saved content');
+  assert.match(recoveryForRun(saved).fix, /generation will not repeat/);
+  for (const patch of [{ consequential: true }, { operation: 'wordpress-org.update-post' }]) {
+    const unsafe = structuredClone(blocked);
+    Object.assign(unsafe.steps[1], patch);
+    assert.equal(recoveryForRun(unsafe).canRetry, false);
+  }
+});

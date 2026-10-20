@@ -188,3 +188,46 @@ def test_chunk_reader_interns_repeated_receipts_without_losing_late_unique_facts
     assert "source-9" in combined and "__aura_evidence_ref__" in combined
     assert result["accepted_execution_context"]["processed_chunks"] == len(seen)
     assert context["steps"]["read_9"]["body"] == body
+
+
+def test_website_critic_can_review_saved_large_sources_without_repeating_generation(monkeypatch):
+    from copy import deepcopy
+
+    from app.workflow_context import step_context_value
+
+    sources = [step_context_value({"source": {"key": f"p{i}", "text": f"Page {i}. " * 4000,
+                                              "last_fact": f"LAST-SOURCE-{i}"},
+                                  "receipt": {"id": f"receipt-{i}"}}, "website.source.inspect")
+               for i in range(5)]
+    step = {"operation": "website.content.prepare", "arguments": {
+        "client": "Example Learning", "website": "https://client.example", "sources": sources}}
+    result = {"kind": "website_content", "status": "draft", "packet": {"pages": [{"h1": "Saved draft"}]}}
+    original = deepcopy((step, result))
+    seen = []
+
+    async def run(agent, payload, **kwargs):
+        # Exercise the real size boundary, rather than mocking away the failure.
+        bounded_input(payload)
+        seen.append((agent.name, payload))
+        if agent.name == "Evidence Reader":
+            return {"relevant_evidence": "All supplied records considered, including source limitations.",
+                    "source_limitations": [], "unprocessed_source_paths": []}
+        return {"action": "accept", "reasons": ["Saved copy checked against all source batches"]}
+
+    monkeypatch.setattr(agent_runtime, "_run", run)
+    verdict = asyncio.run(agent_runtime.critique_step(step, result))
+    assert verdict.action == "accept"
+    readers = [payload for name, payload in seen if name == "Evidence Reader"]
+    assert len(readers) > 1
+    assert "LAST-SOURCE-4" in "\n".join(item["source_fragment"] for item in readers)
+    assert all("Page 4. " not in json.dumps(item["action_step"]) for item in readers)
+    assert (step, result) == original  # durable provider output and exact arguments are untouched
+    assert sum(name != "Evidence Reader" for name, _ in seen) == 1
+
+
+def test_website_review_projection_keeps_exact_write_arguments_outside_summaries():
+    from app.model_inputs import step_review_payload
+    step = {"operation": "wordpress-org.update-post", "arguments": {
+        "sources": ["x" * 100000], "status": "draft", "post_id": 42}}
+    assert step_review_payload(step, {"id": 42}) == {
+        "step_contract": step, "provider_result": {"id": 42}}

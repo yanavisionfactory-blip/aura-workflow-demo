@@ -199,6 +199,17 @@ def test_publicly_named_platform_alternatives_do_not_request_four_connections():
     assert explicit_disconnected_capabilities("Platforms publicly named:\n- Shopify: online stores.\n\nRead Shopify products.", inventory) == ["shopify"]
 
 
+@pytest.mark.parametrize('body', [
+    'The homepage introduces a community-centered approach to learning.',
+    'The site guides visitors through a straightforward process.',
+    'The call to action keeps the next step simple.',
+])
+def test_editorial_page_descriptions_cannot_masquerade_as_revised_body(body):
+    page = SimpleNamespace(page_id='p1', h1='Personal tutoring', sections=[SimpleNamespace(heading='Learning support', body=body)])
+    with pytest.raises(ValueError, match='speak to the client audience'):
+        website.validate_draft(SimpleNamespace(pages=[page]), [{'key': 'p1'}], [])
+
+
 @pytest.mark.asyncio
 async def test_large_website_source_contract_reaches_output_critic_without_losing_inputs(monkeypatch):
     from app import agent_runtime
@@ -247,3 +258,23 @@ def test_editorial_instructions_are_not_visitor_copy(text):
 def test_visitor_facing_learning_advice_is_allowed():
     assert not website.EDITORIAL_COPY.search(
         "Start with a conversation about your learning goals. Your tutor can help you plan your next steps.")
+
+
+def test_generated_asset_and_cta_schema_allow_only_exact_observed_references():
+    from pydantic import ValidationError
+    image = 'https://cdn.example/student.jpg?width=960&webp=1'
+    target = 'https://client.example/contact/'
+    schema = website.source_bound_draft_schema([
+        {'role': 'page', 'images': [{'url': image}], 'links': [target]},
+        {'role': 'agency', 'images': [{'url': 'https://agency.example/logo.png'}],
+         'links': ['https://agency.example/contact/']},
+    ])
+    page_type = schema.model_fields['pages'].annotation.__args__[0]
+    asset_type = page_type.model_fields['assets'].annotation.__args__[0]
+    fields = {'requirement': 'Approved tutoring photo', 'alt_text': 'Student learning', 'crop': 'Landscape'}
+    assert asset_type(**fields, candidate_url=image).candidate_url == image
+    assert asset_type(**fields, candidate_url='').candidate_url == ''
+    for invented in [image.split('?')[0], 'https://agency.example/logo.png']:
+        with pytest.raises(ValidationError):
+            asset_type(**fields, candidate_url=invented)
+    assert page_type.model_fields['cta_target'].annotation.__args__ == (target,)

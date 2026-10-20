@@ -71,4 +71,5 @@ test('changes, pending approvals, structured handoff and actual receipts are ind
   const content = render(packet, { initialTab: 'Tool results', initialTool: 'content' });
   assert.match(content, /receipt-123/);
   assert.match(content, /Complete revised page body 0/);
+  assert.ok(content.indexOf('Select tool result') < content.indexOf('Revised copy · unpublished review draft'));
 });

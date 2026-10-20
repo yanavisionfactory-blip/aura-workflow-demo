@@ -102,6 +102,35 @@ def bounded_input(payload):
     return result
 
 
+def step_review_payload(step, provider_result):
+    """Keep website source evidence inside the part the reader can partition.
+
+    Content preparation is an internal, read-only composition operation. Its
+    resolved sources are evidence, not consequential action arguments. Leaving
+    them in the contract repeats the entire source corpus in every reader call
+    and can prevent review even when each evidence batch fits. Preserve every
+    source value in the evidence envelope and leave exact references in the
+    contract. Stored arguments and provider receipts are never changed. Other
+    operations, especially writes, retain their exact argument contract.
+    """
+    contract = semantic_evidence(step)
+    arguments = contract.get("arguments", {})
+    if step.get("operation") != "website.content.prepare" or not isinstance(arguments, dict):
+        return {"step_contract": contract, "provider_result": provider_result}
+    sources = arguments.get("sources")
+    if not isinstance(sources, list):
+        return {"step_contract": contract, "provider_result": provider_result}
+    references = [{"evidence_path": f"#/source_arguments/{index}"}
+                  for index in range(len(sources))]
+    contract = {**contract, "arguments": {**arguments, "sources": references}}
+    return {"step_contract": contract, "provider_result": {
+        "recorded_provider_result": provider_result,
+        "composition_arguments": {key: value for key, value in arguments.items() if key != "sources"},
+        "source_arguments": sources,
+        "source_kind": "Exact resolved source arguments; original receipts retained by executor",
+    }}
+
+
 def evidence_chunks(value):
     """Split at structural boundaries, with source paths and no incomplete JSON.
 

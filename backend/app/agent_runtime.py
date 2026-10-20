@@ -23,6 +23,7 @@ from .model_inputs import (
     is_input_limit,
     pack,
     semantic_evidence,
+    step_review_payload,
 )
 from .policy import operation_scope
 from .schemas import (
@@ -1568,21 +1569,23 @@ async def create_plan(
 
 
 async def critique_step(step: dict, provider_result: object) -> CriticDecision:
-    payload = {"step_contract": semantic_evidence(step), "provider_result": provider_result}
+    payload = step_review_payload(step, provider_result)
     evidence_key = "provider_result"
-    try:
-        bounded_input(payload)
-    except ModelInputTooLarge:
-        # Resolved arguments can themselves contain large accepted source
-        # receipts. Reading only the result leaves those arguments outside the
-        # reader budget and makes every subsequent critic call fail. Read both
-        # sides together, retaining the small semantic contract for every batch.
-        contract = payload["step_contract"]
-        payload = {
-            "step_contract": {key: value for key, value in contract.items() if key != "arguments"},
-            "review_evidence": {"arguments": contract.get("arguments", {}), "provider_result": provider_result},
-        }
-        evidence_key = "review_evidence"
+    if step.get("operation") != "website.content.prepare":
+        try:
+            bounded_input(payload)
+        except ModelInputTooLarge:
+            # Resolved arguments can themselves contain large accepted source
+            # receipts. Reading only the result leaves those arguments outside the
+            # reader budget and makes every subsequent critic call fail. Read both
+            # sides together, retaining the small semantic contract for every batch.
+            contract = payload["step_contract"]
+            payload = {
+                "step_contract": {key: value for key, value in contract.items() if key != "arguments"},
+                "review_evidence": {"arguments": contract.get("arguments", {}),
+                                    "provider_result": provider_result},
+            }
+            evidence_key = "review_evidence"
     for attempt in range(3):
         try:
             payload = await _prepare_action_evidence(payload, evidence_key)
@@ -1594,6 +1597,7 @@ async def critique_step(step: dict, provider_result: object) -> CriticDecision:
         except Exception as exc:  # noqa: BLE001 - model/transport failures are transient here
             logger.warning("Output review unavailable operation=%s attempt=%s error_type=%s",
                            step.get("operation"), attempt + 1, type(exc).__name__)
+
             if _stop_model_retry(exc):
                 break
             if attempt < 2:
@@ -1955,6 +1959,8 @@ async def _prepare_action_evidence(payload: dict, evidence_key: str = "accepted_
     agent = _agent("Evidence Reader", """Read one batch of complete source records from accepted workflow evidence.
     Extract all facts relevant to the original request and proposed action, including milestones,
     dates, exact identifiers, recipients, canonical timezone displays and completeness warnings.
+    For website content, preserve service claims, source-to-draft factual differences,
+    existing routes, CTA destinations, and unresolved brief, approval and asset-rights evidence.
     Preserve source paths, step_id values, critic decisions, verification status, and exact literal identifiers. Each record has a JSON-pointer source path and a value. An oversized string has
     offset and total_characters fields; its other segments are processed separately.
     Other batches cover the rest of the source: do not report them as omissions.
