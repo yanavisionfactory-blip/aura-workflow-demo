@@ -1569,9 +1569,23 @@ async def create_plan(
 
 async def critique_step(step: dict, provider_result: object) -> CriticDecision:
     payload = {"step_contract": semantic_evidence(step), "provider_result": provider_result}
+    evidence_key = "provider_result"
+    try:
+        bounded_input(payload)
+    except ModelInputTooLarge:
+        # Resolved arguments can themselves contain large accepted source
+        # receipts. Reading only the result leaves those arguments outside the
+        # reader budget and makes every subsequent critic call fail. Read both
+        # sides together, retaining the small semantic contract for every batch.
+        contract = payload["step_contract"]
+        payload = {
+            "step_contract": {key: value for key, value in contract.items() if key != "arguments"},
+            "review_evidence": {"arguments": contract.get("arguments", {}), "provider_result": provider_result},
+        }
+        evidence_key = "review_evidence"
     for attempt in range(3):
         try:
-            payload = await _prepare_action_evidence(payload, "provider_result")
+            payload = await _prepare_action_evidence(payload, evidence_key)
             decision = await _run(build_agents()["critic"], payload)
             decision = CriticDecision.model_validate(decision)
             if decision.action == "accept" and (decision.contract_failures or decision.policy_violations):
