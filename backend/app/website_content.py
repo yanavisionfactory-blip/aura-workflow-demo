@@ -532,6 +532,10 @@ async def prepare_content(arguments):
     prepared = []
     for page in draft.pages:
         item = page.model_dump()
+        if request.marketing_refresh:
+            for change in item["marketing_changes"]:
+                if "cta" in change["area"].casefold() or "call to action" in change["area"].casefold():
+                    change["after"] = f'Use "{page.cta_label}" linked to the existing inquiry destination: {page.cta_target}.'
         source = by_key[page.page_id]
         item.update(url=source["url"], source_id=source["key"],
                     sitemap_member=canonical(source["url"]) in sitemap,

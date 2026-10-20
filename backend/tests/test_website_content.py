@@ -332,6 +332,8 @@ async def test_complete_marketing_pages_bind_faqs_links_changes_and_pending_vers
     assert all(len(page["faqs"]) >= 3 and len(page["marketing_changes"]) >= 4 for page in packet["pages"])
     assert all(page["approval"]["status"] == "pending" and page["cms_draft"] is None for page in packet["pages"])
     assert packet["execution"]["model_attempts"] == 5
+    assert all(page["cta_label"] in change["after"] and page["cta_target"] in change["after"]
+               for page in packet["pages"] for change in page["marketing_changes"] if change["area"] == "CTA")
     assert packet["staging"]["delivery_mode"] == "cms_ready_html_and_metadata"
     assert "No project-management application" in packet["systems"][-1]["detail"]
     draft = website.MarketingDraft.model_validate({"summary": packet["summary"], "working_brief": packet["working_brief"],
