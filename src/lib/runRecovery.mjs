@@ -68,6 +68,15 @@ export function recoveryForRun(run = {}) {
     const finalReviewRetry = blocker.action === "retry_final_review" && blocker.retryable === true;
     const savedReadback = blocker.action === "recheck_saved_result"
       && blocker.retryable === true && Boolean(blocker.step_id);
+    const contentStep = steps[blockerIndex];
+    // An explicit operator retry may continue read-only composition after a
+    // deployed validation repair. The resume endpoint remains authoritative;
+    // saved provider results are rechecked there without replaying generation.
+    const websiteContentRetry = blocker.action === "inspect_run"
+      && ["no_safe_recovery", "recovery_budget_exhausted"].includes(blocker.code)
+      && contentStep?.operation === "website.content.prepare"
+      && contentStep.consequential === false && contentStep.status === "failed";
+    const savedWebsiteContent = websiteContentRetry && Boolean(contentStep.output?.provider_result);
     const incompleteCustomerRead = blocker.code === "final_result_unverified"
       && steps.length > 0
       && steps.every((step) => !step.consequential)
@@ -75,7 +84,7 @@ export function recoveryForRun(run = {}) {
       && steps.some((step) => step.operation === "gmail.get");
     return {
       index: blockerIndex >= 0 ? blockerIndex : null,
-      stepId: blocker.step_id || null,
+      stepId: blocker.step_id || (websiteContentRetry ? contentStep.id : null),
       blockerCode: blocker.code,
       blockerAction: blocker.action,
       toolSlug: blocker.tool_slug || null,
@@ -86,15 +95,21 @@ export function recoveryForRun(run = {}) {
       why: blocker.message || "AURA cannot safely continue this run without this decision.",
       fix: incompleteCustomerRead
         ? "Build a new plan that reads customer conversations and sent history, then review it before starting. This run only read messages; it sent nothing."
+        : websiteContentRetry
+        ? savedWebsiteContent
+          ? "Recheck the saved content result. Completed reads and generation will not repeat."
+          : "Retry only content preparation after correcting its validation issue. Completed source reads remain saved."
         : finalReviewRetry
         ? fixes.retry_final_review
         : blocker.code === "final_result_unverified"
         ? "Review the saved results, then provide the missing source details in a revised request. The completed steps will not run again automatically."
         : fixes[blocker.action] || "Resolve the exact blocker shown above, then return to this saved run.",
       canRestartReadPlan: incompleteCustomerRead,
-      canRetry: connectionAction || retryAction || savedReadback || finalReviewRetry,
+      canRetry: connectionAction || retryAction || savedReadback || finalReviewRetry || websiteContentRetry,
       canSkip: false,
-      buttonLabel: savedReadback
+      buttonLabel: websiteContentRetry
+        ? savedWebsiteContent ? "Recheck saved content" : "Retry content step"
+        : savedReadback
         ? "Recheck saved result"
         : finalReviewRetry
         ? "Verify saved result"
@@ -105,7 +120,9 @@ export function recoveryForRun(run = {}) {
         : blocker.action === "reconnect_account"
           ? "Reconnect account"
           : "Connect account",
-      subtitle: savedReadback
+      subtitle: websiteContentRetry
+        ? "Completed source reads are saved. This step prepares unapproved content and makes no CMS changes."
+        : savedReadback
         ? "The saved provider action will not be submitted again."
         : finalReviewRetry
         ? "All workflow steps finished. Final review uses the saved receipts."
