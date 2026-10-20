@@ -3,7 +3,6 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useLocation } from "react-router-dom";
 import { aura } from "@/api/auraClient";
 import { WORKFLOW_EXAMPLES } from "@/lib/demoData";
-import { CREATOR_APPROVALS_MOCK } from "@/lib/mockWorkflows";
 import WorkspaceShell from "@/components/aura/WorkspaceShell";
 import CommandInput from "@/components/aura/CommandInput";
 import PilotBuilder from "@/components/aura/PilotBuilder";
@@ -47,7 +46,7 @@ import {
   shouldStartFreshPlanningRun,
   unavailablePlanningState,
 } from "@/lib/planningFlow.mjs";
-import { hasDurablePlan, planningRequestPrompt, savedRunResumeView, sameExecutablePlan } from "@/lib/runtimePlan.mjs";
+import { hasDurablePlan, planningRequestPrompt, savedRunResumeView, sameExecutablePlan, shouldRestoreRememberedRun, workflowInputPrompt } from "@/lib/runtimePlan.mjs";
 import { operationStepTitle, weatherStepTitle } from "@/lib/planPresentation.mjs";
 import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
 import { savedRunResults } from "@/lib/savedRunResults.mjs";
@@ -289,6 +288,7 @@ const RESULTS_SCHEMA = {
 
 export default function Demo() {
   const location = useLocation();
+  const [inputPrompt, setInputPrompt] = useState(() => workflowInputPrompt(location));
   const [phase, setPhase] = useState("input");
   const [originalPrompt, setOriginalPrompt] = useState("");
   const [interpretation, setInterpretation] = useState("");
@@ -321,12 +321,19 @@ export default function Demo() {
   const omittedToolsRef = useRef([]);
 
   useEffect(() => {
-    if (location.state?.newWorkflow) return undefined;
+    if (location.state?.newWorkflow || inputPrompt) return undefined;
     const remembered = location.state?.resumeRunId || rememberedActivePythonRun();
     if (!remembered) return undefined;
+    const generation = pythonPollGenerationRef.current;
     let mounted = true;
     getPythonRun(remembered).then((run) => {
-      if (!mounted || originalPromptRef.current) return;
+      if (!mounted || !shouldRestoreRememberedRun({
+        rememberedRunId: remembered,
+        currentRememberedRunId: location.state?.resumeRunId || rememberedActivePythonRun(),
+        startedAtGeneration: generation,
+        currentGeneration: pythonPollGenerationRef.current,
+        hasCurrentIntent: Boolean(originalPromptRef.current),
+      })) return;
       const resumeView = savedRunResumeView(run);
       if (!resumeView) return;
       const intent = String(run.prompt || run.plan?.interpretation || "")
@@ -505,6 +512,12 @@ export default function Demo() {
   const reset = useCallback(() => {
     clearTimeouts();
     pythonPollGenerationRef.current += 1;
+    const previousRunId = pythonRunIdRef.current || rememberedActivePythonRun();
+    if (previousRunId) forgetActivePythonRun(previousRunId);
+    originalPromptRef.current = "";
+    attachedResourcesRef.current = null;
+    reviewedPlanRef.current = null;
+    setInputPrompt("");
     runRequestKeyRef.current = null;
     lastPlanningIntentRef.current = "";
     pendingPlanRevisionRef.current = null;
@@ -522,6 +535,8 @@ export default function Demo() {
     pythonPlanRef.current = null;
     setPhase("input");
     setOriginalPrompt("");
+    setPlanLoading(false);
+    setInterpretationLoading(false);
     setInterpretation("");
     setPlan(null);
     setResults(null);
@@ -557,6 +572,7 @@ export default function Demo() {
   // ---- Submit (input) ----
   const handleSubmit = useCallback((prompt, pinnedTools = [], resources = null, mock = null) => {
     clearTimeouts();
+    setInputPrompt("");
     requestNotifyPermission();
     setOriginalPrompt(prompt);
     originalPromptRef.current = prompt;
@@ -1709,44 +1725,6 @@ Generate a results summary in plain, human-friendly language (not technical).
     startPythonExecutionRef.current?.();
   };
 
-  useEffect(() => {
-    // Seed the "Weekly creator approvals" example as a saved workflow so it
-    // shows up in "My workflows" alongside anything the user actually runs.
-    const PROMPT = WORKFLOW_EXAMPLES.find((e) => e.id === "creator-approvals")?.prompt;
-    if (!PROMPT) return;
-    (async () => {
-      try {
-        const existing = await aura.entities.Workflow.filter({ prompt: PROMPT }, "-created_date", 1);
-        if (existing.length) return;
-        const m = CREATOR_APPROVALS_MOCK;
-        const now = new Date().toISOString();
-        const wf = await aura.entities.Workflow.create({
-          name: m.plan.workflowName || "Weekly creator approvals",
-          prompt: PROMPT,
-          interpretation: m.plan.interpretation,
-          steps: m.plan.steps,
-          last_run_status: "completed",
-          last_run_date: now,
-          last_summary: m.results.summary,
-          run_count: 1,
-        });
-        const run = await aura.entities.WorkflowRun.create({
-          prompt: PROMPT,
-          status: "completed",
-          workflow_id: wf.id,
-          title: m.plan.workflowName,
-          summary: m.results.summary,
-          metrics: m.results.metrics,
-          outcomes: m.results.outcomes,
-          steps: m.plan.steps,
-          duration_seconds: 11,
-        });
-        announceWorkflowHistoryChanged({ workflow: wf, run });
-      } catch (e) {
-        /* ignore */
-      }
-    })();
-  }, []);
 
   useEffect(() => {
     return () => {
@@ -1797,7 +1775,7 @@ Generate a results summary in plain, human-friendly language (not technical).
                     onBack={() => { setPilotOpen(false); setPilotDraft(null); }} />
                 ) : (
                   <>
-                    <CommandInput onSubmit={handleSubmit} examples={WORKFLOW_EXAMPLES} onPickExample={handlePickExample} />
+                    <CommandInput initialValue={inputPrompt} onSubmit={handleSubmit} examples={WORKFLOW_EXAMPLES} onPickExample={handlePickExample} />
                   </>
                 )}
               </motion.div>

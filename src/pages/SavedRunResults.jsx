@@ -5,6 +5,7 @@ import ResultsView from "@/components/aura/ResultsView";
 import { getPythonRun } from "@/lib/auraApi";
 import { savedRunResults } from "@/lib/savedRunResults.mjs";
 import { operationStepTitle } from "@/lib/planPresentation.mjs";
+import { savedRunActionLocation } from "@/lib/runtimePlan.mjs";
 
 export default function SavedRunResults() {
   const { runId } = useParams();
@@ -41,7 +42,11 @@ export default function SavedRunResults() {
         </div>}
       </section>}
       {run ? <ResultsView results={savedRunResults(run)} activity={activity} prompt={run.prompt} backendRunId={run.id}
-        onNewWorkflow={() => navigate("/", { state: { newWorkflow: true } })} onStartWorkflow={() => navigate("/", { state: { newWorkflow: true } })} />
+        onNewWorkflow={() => navigate("/", { state: { newWorkflow: true } })}
+        onStartWorkflow={(prompt) => {
+          const next = savedRunActionLocation(prompt);
+          navigate(next.pathname, { state: next.state });
+        }} />
         : <p role={error ? "alert" : "status"} className="py-14 text-center text-sm text-muted-foreground">{error || "Opening your saved workflow results…"}</p>}
     </main>
   </WorkspaceShell>;

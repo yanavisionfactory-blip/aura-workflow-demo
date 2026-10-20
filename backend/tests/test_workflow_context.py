@@ -144,6 +144,39 @@ def test_scalar_step_result_has_stable_whole_result_paths() -> None:
     assert resolve_value("{{steps.count.result}}", context) == 3
 
 
+def test_google_ads_account_options_bind_one_exact_account_without_mutating_receipt():
+    receipt = {"ret": [{"label": "customers/1234567890", "value": "1234567890"}]}
+    account = step_context_value(receipt, "google-ads.list-account-id-options")
+    context = {"steps": {"accounts": account}}
+    assert resolve_value("{{steps.accounts.accountId}}", context) == "1234567890"
+    assert resolve_value("{{steps.accounts.account_id}}", context) == "1234567890"
+    assert account["provider_result"] == receipt
+    assert "accountId" not in receipt
+
+
+@pytest.mark.parametrize("options", [
+    [],
+    [{"label": "customers/1234567890", "value": "1234567890"},
+     {"label": "customers/9876543210", "value": "9876543210"}],
+    [{"label": "customers/9876543210", "value": "1234567890"}],
+    [{"label": "customers/1234567890", "value": 1234567890}],
+    [{"label": "Research account", "value": "1234567890"}],
+    [{"label": "customers/123", "value": "123"}],
+    {"options": [{"label": "customers/1234567890", "value": "1234567890"}]},
+    ["1234567890"], None,
+])
+def test_google_ads_account_alias_does_not_guess_missing_or_ambiguous_accounts(options):
+    account = step_context_value({"ret": options}, "google-ads.list-account-id-options")
+    with pytest.raises(WorkflowContextError):
+        resolve_value("{{steps.accounts.accountId}}", {"steps": {"accounts": account}})
+
+
+def test_google_ads_account_alias_is_specific_to_the_returned_account_options():
+    receipt = {"ret": [{"label": "customers/1234567890", "value": "1234567890"}]}
+    for operation in (None, "google-ads.generate-keyword-ideas", "other.list-account-id-options"):
+        assert "accountId" not in step_context_value(receipt, operation)
+
+
 def test_step_result_exposes_operation_noun_as_a_summary_alias() -> None:
     provider_result = {"location": "Munich", "summary": "Sunny, 24 C"}
     context = {

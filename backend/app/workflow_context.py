@@ -189,6 +189,21 @@ def _pipedream_result_object(result: dict[str, Any]) -> dict[str, Any] | None:
     return single(result.get("exports"))
 
 
+def _unique_google_ads_account(result: dict[str, Any]) -> str | None:
+    """Bind one exact provider option; leave ambiguous accounts unresolved."""
+    options = result.get("ret")
+    if not isinstance(options, list) or len(options) != 1:
+        return None
+    option = options[0]
+    if not isinstance(option, dict):
+        return None
+    account_id = option.get("value")
+    if (not isinstance(account_id, str) or not re.fullmatch(r"\d{10}", account_id)
+            or option.get("label") != f"customers/{account_id}"):
+        return None
+    return account_id
+
+
 def _exact_folder_result(result: dict[str, Any], arguments: dict[str, Any] | None) -> dict[str, Any] | None:
     """Resolve a broad folder search only when one result has the requested name."""
     args = arguments if isinstance(arguments, dict) else {}
@@ -293,6 +308,11 @@ def step_context_value(
         value.setdefault("result", result)
         value.setdefault("provider_result", evidence)
         if "ret" in result or "exports" in result:
+            if operation == "google-ads.list-account-id-options":
+                account_id = _unique_google_ads_account(result)
+                if account_id:
+                    value.setdefault("accountId", account_id)
+                    value.setdefault("account_id", account_id)
             returned = _pipedream_result_object(result)
             if operation in {"google-docs.create-document", "google-docs.get-document"}:
                 # Docs receipts identify the document with documentId, not id.

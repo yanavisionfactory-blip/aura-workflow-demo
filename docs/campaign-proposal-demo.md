@@ -31,6 +31,14 @@ Sources for the connection implementation:
 
 ## Agency presentation sequence
 
+Task links may use `?prompt=` with URL-encoded plain text (up to 20,000 characters).
+They prefill the existing command input only. Opening a link does not create a run,
+call a provider, select an account, approve a plan, or change connection permissions.
+The user starts planning through the normal **Create plan** control and reviews the
+compiled plan before execution. **Run again** and suggested next actions from a saved
+result retain the task text. A new intent cannot be replaced by a late restore of
+an earlier run.
+
 1. Show the saved, unpublished Classic Roofing proposal and review tracker.
 2. Open AURA's saved Google Ads keyword-research receipt. Explain that the returned
    account is a research account until the client's actual account is verified.
