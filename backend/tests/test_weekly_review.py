@@ -123,6 +123,34 @@ async def test_changed_receipts_or_mixed_periods_cannot_reach_the_model(monkeypa
     model.assert_not_called()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repair_succeeds", [True, False])
+async def test_invalid_model_evidence_gets_one_bounded_repair_without_relaxing_checks(monkeypatch, repair_succeeds):
+    invalid = weekly.Narrative.model_validate(NARRATIVE)
+    invalid.backlog[0].evidence = ["INVENTED"]
+    valid = weekly.Narrative.model_validate(NARRATIVE)
+    parse = AsyncMock(side_effect=[SimpleNamespace(output_parsed=invalid),
+                                  SimpleNamespace(output_parsed=valid if repair_succeeds else invalid)])
+    class Client:
+        async def __aenter__(self):
+            return SimpleNamespace(responses=SimpleNamespace(parse=parse))
+        async def __aexit__(self, *_args):
+            return False
+    monkeypatch.setattr(weekly, "AsyncOpenAI", lambda **_kwargs: Client())
+    monkeypatch.setattr(weekly.get_settings(), "openai_api_key", "unit-test-only")
+    if repair_succeeds:
+        result = await weekly.prepare_review({"config": REQUEST["config"], "sources": processed()})
+        assert result["execution"]["model_attempts"] == 2
+        assert result["packet"]["backlog"][0]["evidence"] == NARRATIVE["backlog"][0]["evidence"]
+    else:
+        with pytest.raises(ValueError, match="INVENTED"):
+            await weekly.prepare_review({"config": REQUEST["config"], "sources": processed()})
+    assert parse.await_count == 2
+    repair_input = parse.await_args.kwargs["input"]
+    assert "INVENTED" in repair_input and "allowed_evidence_ids_by_source" in repair_input
+    assert all(call.kwargs["store"] is False and "tools" not in call.kwargs for call in parse.await_args_list)
+
+
 def test_unresolved_evidence_and_overlength_copy_are_rejected():
     narrative = weekly.Narrative.model_validate(NARRATIVE)
     narrative.experiments[0].evidence = ["INVENTED"]
