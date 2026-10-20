@@ -493,6 +493,17 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
   let explicitPrimary = presentation?.primary_step_key
     ? completed.find((output) => output.step_key === presentation.primary_step_key)
     : null;
+  const executive = [...completed].reverse().find((output) => output.operation === "executive.review.prepare"
+    && output.critic?.action === "accept" && output.outcome_check?.status === "verified"
+    && output.provider_result?.kind === "executive_review" && output.provider_result?.synthetic === true
+    && output.provider_result?.packet?.execution?.mode === "backend_executed_synthetic"
+    && output.provider_result?.packet?.sources?.length === 10);
+  if (executive && (!explicitPrimary || explicitPrimary === executive)) return {
+    kind: "executive_review", title: "Biweekly executive marketing review", provider: "AURA", providerVerb: "Executed in",
+    completionTitle: "Executive review executed in AURA",
+    completionSummary: "Ten simulated export processors and executive-review drafting completed. Inspect the review and separate tool receipts in AURA.",
+    packet: executive.provider_result.packet, link: null, downloadUrl: null,
+  };
   const website = [...completed].reverse().find((output) => output.operation === "website.content.prepare"
     && output.critic?.action === "accept" && output.outcome_check?.status === "verified"
     && output.provider_result?.kind === "website_content"

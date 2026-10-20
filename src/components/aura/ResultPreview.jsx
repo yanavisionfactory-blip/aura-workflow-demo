@@ -9,6 +9,7 @@ import { campaignCopySections } from "@/lib/campaignCopySections.mjs";
 import { readableResultText } from "@/lib/resultPresentation.mjs";
 import SeoAuditResult from "./SeoAuditResult";
 import WeeklyReviewResult from "./WeeklyReviewResult";
+import ExecutiveReviewResult from "./ExecutiveReviewResult";
 import WebsiteContentResult from "./WebsiteContentResult";
 
 const readableDetail = (value = "") => readableResultText(value)
@@ -82,6 +83,7 @@ function ThumbnailOnly({ result }) {
 }
 
 export default function ResultPreview({ result, results }) {
+  if (result.kind === "executive_review") return <ExecutiveReviewResult packet={result.packet} />;
   if (result.kind === "website_content") return <WebsiteContentResult packet={result.packet} />;
   if (result.kind === "weekly_review") return <WeeklyReviewResult packet={result.packet} />;
   if (result.kind === "seo_audit") return <SeoAuditResult manifest={result.audit} />;

@@ -1,0 +1,9 @@
+id,provenance,period,metric,value,entity_id,event_id,event_at
+ANA-C-001,SIMULATED,current,sessions,2400,,,2026-10-10T12:00:00-05:00
+ANA-C-002,SIMULATED,current,engaged_sessions,1560,,,2026-10-10T12:00:00-05:00
+ANA-C-003,SIMULATED,current,form_submit_events,70,,,2026-10-10T12:00:00-05:00
+ANA-C-004,SIMULATED,current,booking_click_events,45,,,2026-10-10T12:00:00-05:00
+ANA-P-005,SIMULATED,previous,sessions,2200,,,2026-09-26T12:00:00-05:00
+ANA-P-006,SIMULATED,previous,engaged_sessions,1430,,,2026-09-26T12:00:00-05:00
+ANA-P-007,SIMULATED,previous,form_submit_events,62,,,2026-09-26T12:00:00-05:00
+ANA-P-008,SIMULATED,previous,booking_click_events,35,,,2026-09-26T12:00:00-05:00

@@ -942,12 +942,15 @@ async def _create_compiled_plan(
     # discard a later instruction (for example, changing one to two slides).
     reviewed_revision = "The user reviewed the proposed workflow and requested this change:" in prompt
     from .agency_workflow import agency_workflow_recipe
+    from .executive_review import workflow_recipe as executive_workflow_recipe
     from .reports import report_workflow_recipe
     from .seo_crawl import crawl_review_recipe
     from .website_content import website_workflow_recipe
     from .weekly_review import weekly_workflow_recipe
 
     audited_plan = report_workflow_recipe(prompt, inventory)
+    if audited_plan is None:
+        audited_plan = executive_workflow_recipe(prompt, inventory)
     if audited_plan is None:
         audited_plan = website_workflow_recipe(prompt, inventory)
     if audited_plan is None:

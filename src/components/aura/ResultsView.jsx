@@ -23,7 +23,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   const selectedVisual = visualChoices.find((choice) => choice.key === searchParams.get("main"));
   const primaryResult = selectedVisual?.result || selectPrimaryOutcome(results);
   const nativeAudit = primaryResult.kind === "seo_audit";
-  const nativeResult = nativeAudit || ["weekly_review", "website_content"].includes(primaryResult.kind);
+  const nativeResult = nativeAudit || ["weekly_review", "executive_review", "website_content"].includes(primaryResult.kind);
   const metrics = useMemo(() => isFailure ? [] : resultMetrics(results.metrics || [], activity || []), [results.metrics, activity, isFailure]);
   const receipts = useMemo(() => supportingReceipts(results, activity || [], primaryResult, results.resultPresentation), [activity, primaryResult, results]);
   const creatorsOutcome = (results.outcomes || []).find((outcome) => outcome.type === "creators" && outcome.items?.length > 0);

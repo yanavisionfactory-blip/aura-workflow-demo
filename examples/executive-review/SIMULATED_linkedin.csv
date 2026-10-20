@@ -1,0 +1,17 @@
+id,provenance,period,metric,value,entity_id,event_id,event_at
+LI-C-001,SIMULATED,current,organic_posts,6,,,2026-10-10T12:00:00-05:00
+LI-C-002,SIMULATED,current,organic_impressions,9000,,,2026-10-10T12:00:00-05:00
+LI-C-003,SIMULATED,current,organic_engagements,360,,,2026-10-10T12:00:00-05:00
+LI-C-004,SIMULATED,current,organic_link_clicks,180,,,2026-10-10T12:00:00-05:00
+LI-C-005,SIMULATED,current,paid_impressions,12000,,,2026-10-10T12:00:00-05:00
+LI-C-006,SIMULATED,current,paid_clicks,180,,,2026-10-10T12:00:00-05:00
+LI-C-007,SIMULATED,current,spend,500,,,2026-10-10T12:00:00-05:00
+LI-C-008,SIMULATED,current,tracked_lead_credits,8,,,2026-10-10T12:00:00-05:00
+LI-P-009,SIMULATED,previous,organic_posts,6,,,2026-09-26T12:00:00-05:00
+LI-P-010,SIMULATED,previous,organic_impressions,8500,,,2026-09-26T12:00:00-05:00
+LI-P-011,SIMULATED,previous,organic_engagements,340,,,2026-09-26T12:00:00-05:00
+LI-P-012,SIMULATED,previous,organic_link_clicks,160,,,2026-09-26T12:00:00-05:00
+LI-P-013,SIMULATED,previous,paid_impressions,11000,,,2026-09-26T12:00:00-05:00
+LI-P-014,SIMULATED,previous,paid_clicks,165,,,2026-09-26T12:00:00-05:00
+LI-P-015,SIMULATED,previous,spend,450,,,2026-09-26T12:00:00-05:00
+LI-P-016,SIMULATED,previous,tracked_lead_credits,7,,,2026-09-26T12:00:00-05:00
