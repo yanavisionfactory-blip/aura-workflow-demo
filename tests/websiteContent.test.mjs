@@ -5,6 +5,8 @@ import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { build } from 'vite';
 import { primaryResultFromOutputs } from '../src/lib/resultPresentation.mjs';
+import { websiteContentFiles, websiteContentZip } from '../src/lib/websiteContentExport.mjs';
+import { unzipSync, strFromU8 } from 'fflate';
 
 const packet = {
   client: 'Example Learning', summary: 'Five complete drafts.', working_brief: 'Supportive voice.', brief_status: 'Client approval pending',
@@ -72,4 +74,37 @@ test('changes, pending approvals, structured handoff and actual receipts are ind
   assert.match(content, /receipt-123/);
   assert.match(content, /Complete revised page body 0/);
   assert.ok(content.indexOf('Select tool result') < content.indexOf('Revised copy · unpublished review draft'));
+});
+
+test('marketing review and CMS-ready archive retain every full page, FAQ, exact version and SEO field', () => {
+  const marketing = structuredClone(packet);
+  for (const page of marketing.pages) {
+    page.faqs = [{ question: 'Which program fits?', answer: 'Ask about your student’s current learning priorities.' }];
+    page.internal_links = [{ label: 'Academic support', url: 'https://client.example/academic/', reason: 'Compare the appropriate program.' }];
+    page.marketing_changes = [{ area: 'CTA', before: 'Learn more', after: 'Discuss tutoring', reason: 'Clarify the inquiry step.' }];
+  }
+  const files = websiteContentFiles(marketing);
+  assert.equal(Object.keys(files).length, 9);
+  const zip = unzipSync(websiteContentZip(marketing));
+  const metadata = JSON.parse(strFromU8(zip['metadata.json']));
+  assert.equal(metadata.pages.length, 5);
+  assert.equal(metadata.cms_drafts_created, 0);
+  for (let i = 0; i < 5; i++) {
+    const record = metadata.pages[i];
+    const html = strFromU8(zip[record.html_file]);
+    assert.ok(html.includes(marketing.pages[i].sections[0].body));
+    assert.match(html, /Questions parents ask/);
+    assert.match(html, /href="https:\/\/client.example\/contact\/"/);
+    assert.equal(record.content_version, marketing.pages[i].version);
+    assert.equal(record.page_title, marketing.pages[i].page_title);
+    assert.equal(record.meta_description, marketing.pages[i].meta_description);
+    assert.equal(record.approval.status, 'pending');
+  }
+  assert.match(files['review.html'], /Marketing reason/);
+  assert.match(render(marketing), /Parent FAQs/);
+  assert.match(render(marketing, { initialTab: 'Changes' }), /Clarify the inquiry step/);
+  marketing.pages[0].sections[0].body = '<script>alert("unsafe")</script>';
+  assert.ok(websiteContentFiles(marketing)['pages/01-page-0.html'].includes('&lt;script&gt;'));
+  marketing.pages[0].cta_target = 'javascript:alert(1)';
+  assert.throws(() => websiteContentFiles(marketing), /safe HTTPS/);
 });
