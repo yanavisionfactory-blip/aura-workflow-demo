@@ -16,7 +16,7 @@ from xml.etree import ElementTree
 
 import httpx
 from openai import AsyncOpenAI
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
 from .approval_readiness import unfinished_action_content
 from .config import get_settings
@@ -243,6 +243,28 @@ class Draft(Strict):
     pages: list[PageDraft] = Field(min_length=5, max_length=5)
 
 
+def source_bound_draft_schema(sources):
+    """Constrain generated references to exact observed values, including queries.
+
+    Long CDN URLs are easy to paraphrase accidentally. Structured output must
+    select an actual source value or explicitly leave the asset candidate empty.
+    Validation still checks the returned draft against the original receipts.
+    """
+    images = sorted({image["url"] for source in sources if source["role"] == "page"
+                     for image in source.get("images", [])})
+    links = sorted({link for source in sources if source["role"] == "page"
+                    for link in source.get("links", [])})
+    if not links:
+        raise ValueError("Selected pages require an observed CTA destination")
+    asset = create_model("ObservedWebsiteAsset", __base__=Asset,
+                         candidate_url=(Literal[tuple(["", *images])], ...))
+    page = create_model("ObservedWebsitePage", __base__=PageDraft,
+                        cta_target=(Literal[tuple(links)], ...),
+                        assets=(list[asset], Field(min_length=1, max_length=3)))
+    return create_model("ObservedWebsiteDraft", __base__=Draft,
+                        pages=(list[page], Field(min_length=5, max_length=5)))
+
+
 EDITORIAL_COPY = re.compile(
     r"\b(?:the |this |each )?(?:home\s?page|web\s?page|website|page|copy|tone|headline|section|cta)"
     r"\s+(?:should|must|needs? to)\b"
@@ -351,6 +373,7 @@ async def prepare_content(arguments):
     settings = get_settings()
     model_sources = [{**item, "text": item["text"][:8000], "headings": item["headings"][:15],
                       "links": item["links"][:40], "images": item["images"][:8]} for item in sources]
+    draft_schema = source_bound_draft_schema(model_sources)
     payload = {"client": request.client, "website": request.website, "sources": model_sources,
                "scope": "Five existing pages; public-source working draft; client approval pending"}
     instructions = (
@@ -384,7 +407,7 @@ async def prepare_content(arguments):
         for attempt in range(2):
             response = await bounded_model_call(lambda feedback=feedback: client.responses.parse(
                 model=settings.openai_model, reasoning={"effort": "low"}, store=False,
-                instructions=instructions + feedback, input=bounded_input(payload), text_format=Draft,
+                instructions=instructions + feedback, input=bounded_input(payload), text_format=draft_schema,
             ), settings.model_call_timeout_seconds)
             if response.output_parsed is None:
                 raise ValueError("AURA did not return the complete content package")

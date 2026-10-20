@@ -258,3 +258,23 @@ def test_editorial_instructions_are_not_visitor_copy(text):
 def test_visitor_facing_learning_advice_is_allowed():
     assert not website.EDITORIAL_COPY.search(
         "Start with a conversation about your learning goals. Your tutor can help you plan your next steps.")
+
+
+def test_generated_asset_and_cta_schema_allow_only_exact_observed_references():
+    from pydantic import ValidationError
+    image = 'https://cdn.example/student.jpg?width=960&webp=1'
+    target = 'https://client.example/contact/'
+    schema = website.source_bound_draft_schema([
+        {'role': 'page', 'images': [{'url': image}], 'links': [target]},
+        {'role': 'agency', 'images': [{'url': 'https://agency.example/logo.png'}],
+         'links': ['https://agency.example/contact/']},
+    ])
+    page_type = schema.model_fields['pages'].annotation.__args__[0]
+    asset_type = page_type.model_fields['assets'].annotation.__args__[0]
+    fields = {'requirement': 'Approved tutoring photo', 'alt_text': 'Student learning', 'crop': 'Landscape'}
+    assert asset_type(**fields, candidate_url=image).candidate_url == image
+    assert asset_type(**fields, candidate_url='').candidate_url == ''
+    for invented in [image.split('?')[0], 'https://agency.example/logo.png']:
+        with pytest.raises(ValidationError):
+            asset_type(**fields, candidate_url=invented)
+    assert page_type.model_fields['cta_target'].annotation.__args__ == (target,)
