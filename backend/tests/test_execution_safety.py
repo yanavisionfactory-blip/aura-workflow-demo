@@ -16,6 +16,7 @@ from app.orchestrator import (
     _has_empty_collection,
     _provider_result_is_malformed,
     _required_read_arguments,
+    _successful_empty_search,
 )
 from app.schemas import CriticDecision, PlanApproval
 
@@ -146,6 +147,24 @@ def test_empty_or_malformed_provider_payload_is_not_accepted():
     assert _provider_result_is_malformed({}) is True
     assert _provider_result_is_malformed({"results": []}) is False
     assert _provider_result_is_malformed({"status_code": 204}) is False
+
+
+def test_empty_client_search_is_final_but_unread_pages_are_not():
+    result = {"results": [], "has_more": False, "next_cursor": None}
+    assert _successful_empty_search("notion.search", {"query": "Kastner"}, result)
+    assert _successful_empty_search("notion.search", {"filter": {"value": "page", "property": "object"}}, result)
+    assert not _successful_empty_search("notion.search", {"query": "Kastner"},
+                                        {**result, "has_more": True, "next_cursor": "more"})
+    assert not _successful_empty_search("notion.search", {}, result)
+    assert not _successful_empty_search("crm.contacts.search", {"query": "Kastner"}, result)
+
+
+def test_notion_recovery_keeps_the_exact_client_query_and_object_filter():
+    from app.native_connectors import native_manifest
+    args = {"query": "Kastner", "filter": {"value": "page", "property": "object"},
+            "page_size": 100, "sort": "last_edited_time"}
+    assert _required_read_arguments(native_manifest("notion"), "notion.search", args) == {
+        "query": "Kastner", "filter": args["filter"]}
 
 
 def test_reduced_read_preserves_only_required_inputs():
