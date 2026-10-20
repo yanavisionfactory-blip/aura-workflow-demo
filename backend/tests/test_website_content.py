@@ -169,3 +169,14 @@ def test_publicly_named_platform_alternatives_do_not_request_four_connections():
     inventory = [{"slug": slug, "name": slug, "connected": False} for slug in ["shopify", "woocommerce"]]
     assert explicit_disconnected_capabilities("Platforms publicly named:\n\n- Shopify: online stores.\n- WooCommerce: WordPress stores.\n\nConfirm the selected client's CMS.", inventory) == []
     assert explicit_disconnected_capabilities("Platforms publicly named:\n- Shopify: online stores.\n\nRead Shopify products.", inventory) == ["shopify"]
+
+
+@pytest.mark.parametrize('body', [
+    'The homepage introduces a community-centered approach to learning.',
+    'The site guides visitors through a straightforward process.',
+    'The call to action keeps the next step simple.',
+])
+def test_editorial_page_descriptions_cannot_masquerade_as_revised_body(body):
+    page = SimpleNamespace(page_id='p1', h1='Personal tutoring', sections=[SimpleNamespace(body=body)])
+    with pytest.raises(ValueError, match='speak to the client audience'):
+        website.validate_draft(SimpleNamespace(pages=[page]), [{'key': 'p1'}], [])

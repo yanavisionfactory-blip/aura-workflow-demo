@@ -192,6 +192,7 @@ def test_chunk_reader_interns_repeated_receipts_without_losing_late_unique_facts
 
 def test_website_critic_can_review_saved_large_sources_without_repeating_generation(monkeypatch):
     from copy import deepcopy
+
     from app.workflow_context import step_context_value
 
     sources = [step_context_value({"source": {"key": f"p{i}", "text": f"Page {i}. " * 4000,
