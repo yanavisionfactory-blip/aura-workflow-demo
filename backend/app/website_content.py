@@ -257,7 +257,7 @@ def source_bound_draft_schema(sources):
     if not links:
         raise ValueError("Selected pages require an observed CTA destination")
     asset = create_model("ObservedWebsiteAsset", __base__=Asset,
-                         candidate_url=(Literal[tuple(["", *images])], ...))
+                         candidate_url=(Literal[("", *images)], ...))
     page = create_model("ObservedWebsitePage", __base__=PageDraft,
                         cta_target=(Literal[tuple(links)], ...),
                         assets=(list[asset], Field(min_length=1, max_length=3)))
