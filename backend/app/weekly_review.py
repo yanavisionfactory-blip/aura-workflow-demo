@@ -165,7 +165,7 @@ def analyze_source(arguments: dict) -> dict:
     if meta["currency"] != "USD":
         raise ValueError("This scenario requires USD; no currency conversion is inferred")
     ZoneInfo(meta["timezone"])
-    cutoff = datetime.fromisoformat(meta["asOf"].replace("Z", "+00:00"))
+    cutoff = datetime.fromisoformat(meta["asOf"])
     if cutoff.tzinfo is None or cutoff.astimezone(ZoneInfo(meta["timezone"])).date() <= date.fromisoformat(request.periods["current"]["to"]):
         raise ValueError("The extraction cutoff must follow the last complete reporting day")
     reader = csv.DictReader(io.StringIO(request.csv_text))
