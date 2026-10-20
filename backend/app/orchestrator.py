@@ -4411,6 +4411,16 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 status="unverified",
                 reasons=["Provider read-back could not confirm: " + ", ".join(outcome_failures)],
             )
+        elif (run.plan.get("planning_artifacts") or {}).get("planner_recovery_mode") == "synthetic_export_executive_review":
+            from .executive_review import verify_saved_completion
+
+            try:
+                synthesis, verification = verify_saved_completion(run.plan, outputs_by_step)
+            except (KeyError, TypeError, ValueError) as exc:
+                verification = OutcomeVerification(status="unverified", reasons=[str(exc)])
+            await audit(session, workspace_id, "run.executive_review_reconciled",
+                        {"status": verification.status, "evidence_step_ids": verification.evidence_step_ids},
+                        run.id, actor="outcome-verifier")
         else:
             review_started = time.perf_counter()
             try:

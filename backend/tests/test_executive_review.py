@@ -3,9 +3,11 @@ import hashlib
 import io
 import json
 from copy import deepcopy
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 
@@ -124,6 +126,7 @@ async def test_recipe_compiles_eleven_real_backend_operations_without_external_a
     assert len(plan.steps) == 11
     assert [step.operation for step in plan.steps] == ["executive.source.analyze"] * 10 + ["executive.review.prepare"]
     assert plan.result_contract.primary_step_key == "review"
+    assert plan.planning_artifacts["planner_recovery_mode"] == "synthetic_export_executive_review"
     assert all(step.tool_slug == "aura" and not step.consequential for step in plan.steps)
     checked = processed()
     resolved = resolve_value(plan.steps[-1].arguments, {"steps": {item["source_key"]: step_context_value(item) for item in checked}})
@@ -228,3 +231,70 @@ async def test_critic_reads_large_resolved_sources_and_result_without_dropping_a
         assert source["receipt"]["input_sha256"] in retained
     assert "#/arguments" in retained and "#/provider_result" in retained
     assert {"step": step, "result": result} == original
+
+
+@pytest.fixture
+def saved_executive_result():
+    sources = processed()
+    plan = review.workflow_recipe(review.PREFIX + '{"fixture":"goelzer_industries_v1"}',
+        [{"slug": "aura", "allowed_operations": ["executive.source.analyze", "executive.review.prepare"]}]).model_dump(mode="json")
+    execution = {"id": str(uuid4()), "executed_at": datetime.now(UTC).isoformat(), "mode": "backend_executed_synthetic",
+                 "source_operations": 10, "model_call_executed": True, "model": "test-model", "model_attempts": 1,
+                 "provider_api_called": False, "external_writes": False}
+    narrative = narrative_fixture(sources)
+    packet = {"config": deepcopy(REQUEST["config"]), "periods": deepcopy(sources[0]["periods"]),
+              "sources": deepcopy(sources), "performance": review.performance_rows(sources),
+              "agenda": deepcopy(review.AGENDA), "narrative": narrative, "execution": deepcopy(execution), "synthetic": True}
+    result = {"kind": "executive_review", "status": "draft", "synthetic": True, "external_writes": False,
+              "packet": packet, "execution": execution, "summary": narrative["summary"],
+              "source_receipts": deepcopy([source["receipt"] for source in sources])}
+    outputs = {}
+    for step in plan["steps"]:
+        outputs[step["key"]] = {"step_id": str(uuid4()), "step_key": step["key"], "tool": "aura",
+            "operation": step["operation"], "critic": {"action": "accept", "contract_failures": [], "policy_violations": []},
+            "outcome_check": {"status": "verified"}, "provider_result": result if step["key"] == "review" else
+            next(source for source in sources if source["source_key"] == step["key"])}
+    return plan, outputs
+
+
+def test_saved_completion_recalculates_the_accepted_closed_draft_without_model_or_provider_calls(saved_executive_result, monkeypatch):
+    plan, outputs = saved_executive_result
+    original = deepcopy((plan, outputs))
+    monkeypatch.setattr(review, "AsyncOpenAI", lambda **_kwargs: pytest.fail("Completion must not regenerate the draft"))
+    synthesis, verification = review.verify_saved_completion(plan, outputs)
+    assert verification.status == "verified"
+    assert set(verification.evidence_step_ids) == {value["step_id"] for value in outputs.values()}
+    assert len(synthesis.traceability) == 11
+    assert synthesis.summary == outputs["review"]["provider_result"]["summary"]
+    assert (plan, outputs) == original
+
+
+def test_saved_completion_tolerates_jsonb_object_key_order_without_changing_metric_rows(saved_executive_result):
+    plan, outputs = json.loads(json.dumps(saved_executive_result, sort_keys=True))
+    before = deepcopy(outputs["review"]["provider_result"]["packet"]["performance"])
+    _, verification = review.verify_saved_completion(plan, outputs)
+    assert verification.status == "verified"
+    assert outputs["review"]["provider_result"]["packet"]["performance"] == before
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda p, o: o.pop("instagram"),
+    lambda p, o: o["review"]["critic"].update(action="escalate"),
+    lambda p, o: o["crm"]["outcome_check"].update(status="unsupported"),
+    lambda p, o: o["review"]["critic"].update(policy_violations=["Unresolved evidence"]),
+    lambda p, o: o["google_ads"]["provider_result"]["receipt"].update(provider_api_called=True),
+    lambda p, o: o["crm"]["provider_result"]["receipt"].update(input_sha256="tampered"),
+    lambda p, o: o["review"]["provider_result"]["packet"]["performance"][0].update(current=9999),
+    lambda p, o: o["review"]["provider_result"]["packet"]["config"]["client"].update(name="Different client"),
+    lambda p, o: o["review"]["provider_result"]["packet"]["narrative"]["observations"][0].update(evidence=["INVENTED"]),
+    lambda p, o: o["review"]["provider_result"]["packet"]["agenda"][0].update(minutes="0–60"),
+    lambda p, o: p["steps"][0].update(tool_slug="google_ads", consequential=True),
+    lambda p, o: p["result_contract"].update(completion_step_key="google_ads"),
+    lambda p, o: o["review"]["provider_result"]["execution"].update(external_writes=True),
+    lambda p, o: p["steps"][0]["arguments"].update(csv_text=p["steps"][0]["arguments"]["csv_text"].replace(",3000,", ",3001,")),
+])
+def test_saved_completion_rejects_missing_unreviewed_changed_or_external_evidence(saved_executive_result, mutate):
+    plan, outputs = saved_executive_result
+    mutate(plan, outputs)
+    with pytest.raises((ValueError, KeyError, TypeError)):
+        review.verify_saved_completion(plan, outputs)
