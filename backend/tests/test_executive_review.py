@@ -9,7 +9,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app import agent_runtime
 from app import executive_review as review
+from app.model_inputs import MAX_INPUT_BYTES, bounded_input, encoded
 from app.native_connectors import native_manifest, native_operations
 from app.operation_contracts import output_errors
 from app.orchestrator import _create_compiled_plan
@@ -174,3 +176,40 @@ def test_narrative_rejects_untraceable_evidence_past_dates_and_dependency_cycles
         fixture = narrative_fixture(sources); mutate(fixture)
         with pytest.raises(ValueError):
             review.validate_narrative(review.Narrative.model_validate(fixture), sources, "2026-10-20")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("critic_action", ["accept", "escalate"])
+async def test_critic_reads_large_resolved_sources_and_result_without_dropping_arguments(monkeypatch, critic_action):
+    sources = processed()
+    result = {"packet": {"sources": sources, "performance": review.performance_rows(sources),
+                         "narrative": narrative_fixture(sources)}}
+    step = {"operation": "executive.review.prepare", "expected_output": "Evidence-grounded draft; no vendor writes",
+            "arguments": {"config": REQUEST["config"], "sources": sources}}
+    original = deepcopy({"step": step, "result": result})
+    assert len(encoded(step).encode()) > MAX_INPUT_BYTES
+    fragments, critic_calls = [], []
+
+    async def run(agent, payload, **_kwargs):
+        bounded_input(payload)
+        if agent.name == "Evidence Reader":
+            fragments.extend(json.loads(payload["source_fragment"]))
+            assert payload["action_step"]["operation"] == step["operation"]
+            return {"relevant_evidence": "Complete batch read for comparison against the step contract.",
+                    "source_limitations": [], "unprocessed_source_paths": []}
+        critic_calls.append(payload)
+        return {"action": critic_action, "reasons": ["Semantic comparison completed"],
+                "contract_failures": [], "policy_violations": []}
+
+    monkeypatch.setattr(agent_runtime, "_run", run)
+    decision = await agent_runtime.critique_step(step, result)
+    assert decision.action == critic_action
+    assert len(critic_calls) == 1
+    digest = critic_calls[0]["review_evidence"]
+    assert digest["processed_chunks"] == digest["total_chunks"] > 1
+    retained = encoded(fragments)
+    for source in sources:
+        assert json.dumps(source["input"]["csv_text"], ensure_ascii=False, separators=(",", ":")) in retained
+        assert source["receipt"]["input_sha256"] in retained
+    assert "#/arguments" in retained and "#/provider_result" in retained
+    assert {"step": step, "result": result} == original
