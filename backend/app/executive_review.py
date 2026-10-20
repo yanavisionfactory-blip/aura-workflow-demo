@@ -460,6 +460,12 @@ def verify_saved_completion(plan, outputs):
         raise ValueError("Only the explicitly simulated, unsent executive draft can use this completion check")
     packet, config = result["packet"], steps["review"]["arguments"]["config"]
     execution = packet["execution"]
+    # PostgreSQL JSONB may reorder object keys. Metric row presentation order
+    # is immaterial; every unique metric ID and its full values must reconcile.
+    performance = {row["id"]: row for row in packet["performance"]}
+    if (len(performance) != len(packet["performance"])
+            or performance != {row["id"]: row for row in performance_rows(sources)}):
+        raise ValueError("Saved performance does not match the recalculated source metrics and targets")
     if (packet.get("synthetic") is not True or config.get("synthetic") is not True or packet["config"] != config
             or packet["sources"] != sources or result["source_receipts"] != [source["receipt"] for source in sources]
             or packet["periods"] != sources[0]["periods"]
@@ -467,7 +473,7 @@ def verify_saved_completion(plan, outputs):
             or any(source["metadata"][field] != sources[0]["metadata"][field]
                    for source in sources for field in ("timezone", "currency", "as_of"))
             or any(config[field] != sources[0]["metadata"][field] for field in ("timezone", "currency"))
-            or packet["performance"] != performance_rows(sources) or packet["agenda"] != AGENDA
+            or packet["agenda"] != AGENDA
             or execution != result["execution"] or execution.get("mode") != "backend_executed_synthetic"
             or execution.get("source_operations") != 10 or execution.get("model_call_executed") is not True
             or execution.get("model_attempts") not in {1, 2} or not execution.get("model")

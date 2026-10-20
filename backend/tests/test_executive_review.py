@@ -269,6 +269,14 @@ def test_saved_completion_recalculates_the_accepted_closed_draft_without_model_o
     assert (plan, outputs) == original
 
 
+def test_saved_completion_tolerates_jsonb_object_key_order_without_changing_metric_rows(saved_executive_result):
+    plan, outputs = json.loads(json.dumps(saved_executive_result, sort_keys=True))
+    before = deepcopy(outputs["review"]["provider_result"]["packet"]["performance"])
+    _, verification = review.verify_saved_completion(plan, outputs)
+    assert verification.status == "verified"
+    assert outputs["review"]["provider_result"]["packet"]["performance"] == before
+
+
 @pytest.mark.parametrize("mutate", [
     lambda p, o: o.pop("instagram"),
     lambda p, o: o["review"]["critic"].update(action="escalate"),
