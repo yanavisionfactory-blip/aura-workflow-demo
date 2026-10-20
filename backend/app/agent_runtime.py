@@ -1569,6 +1569,26 @@ async def create_plan(
 
 async def critique_step(step: dict, provider_result: object) -> CriticDecision:
     payload = {"step_contract": semantic_evidence(step), "provider_result": provider_result}
+    if step.get("operation") == "website.content.prepare":
+        # Fetched sources are evidence, not additional instructions. Keeping
+        # them in the contract left an oversized contract after the evidence
+        # reader had processed only the result. Read both inputs and output in
+        # the same bounded evidence pass; retain the approved scope verbatim.
+        contract = payload["step_contract"]
+        arguments = contract.get("arguments", {})
+        if "sources" in arguments:
+            payload = {
+                "step_contract": {**contract, "arguments": {
+                    **arguments, "sources": {
+                        "evidence_path": "#/provider_result/approved_source_reads",
+                        "meaning": "Exact approved source-read inputs, retained below",
+                    },
+                }},
+                "provider_result": {
+                    "approved_source_reads": arguments["sources"],
+                    "recorded_result": provider_result,
+                },
+            }
     for attempt in range(3):
         try:
             payload = await _prepare_action_evidence(payload, "provider_result")
@@ -1578,6 +1598,8 @@ async def critique_step(step: dict, provider_result: object) -> CriticDecision:
                 decision.action = "escalate"
             return decision
         except Exception as exc:  # noqa: BLE001 - model/transport failures are transient here
+            logger.warning("Output review unavailable operation=%s attempt=%s error_type=%s",
+                           step.get("operation"), attempt + 1, type(exc).__name__)
             if _stop_model_retry(exc):
                 break
             if attempt < 2:
