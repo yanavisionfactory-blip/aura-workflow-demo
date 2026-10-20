@@ -125,6 +125,7 @@ def step_review_payload(step, provider_result):
     contract = {**contract, "arguments": {**arguments, "sources": references}}
     return {"step_contract": contract, "provider_result": {
         "recorded_provider_result": provider_result,
+        "composition_arguments": {key: value for key, value in arguments.items() if key != "sources"},
         "source_arguments": sources,
         "source_kind": "Exact resolved source arguments; original receipts retained by executor",
     }}

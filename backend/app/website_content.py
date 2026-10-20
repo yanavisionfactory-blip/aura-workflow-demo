@@ -243,13 +243,26 @@ class Draft(Strict):
     pages: list[PageDraft] = Field(min_length=5, max_length=5)
 
 
+EDITORIAL_COPY = re.compile(
+    r"\b(?:the |this |each )?(?:home\s?page|web\s?page|website|page|copy|tone|headline|section|cta)"
+    r"\s+(?:should|must|needs? to)\b"
+    r"|\b(?:keep|make) the (?:copy|tone|page|homepage|headline)\b"
+    r"|\b(?:close|end|open|begin) (?:the (?:page|section|copy) )?with "
+    r"(?:a |an |the )?(?:simple )?(?:invitation|cta|call to action|headline|paragraph)\b",
+    re.IGNORECASE,
+)
+
+
 def validate_draft(draft, pages, sources):
     if {page.page_id for page in draft.pages} != {page["key"] for page in pages}:
         raise ValueError("Generated pages must exactly match the five fetched page IDs")
     links = {link for source in sources for link in source.get("links", [])}
     images = {image["url"] for source in sources for image in source.get("images", [])}
     for page in draft.pages:
-        copy = " ".join([page.h1, *(section.body for section in page.sections)])
+        copy = " ".join([page.h1, *(text for section in page.sections
+                                     for text in (section.heading, section.body))])
+        if EDITORIAL_COPY.search(copy):
+            raise ValueError("Page copy must address website visitors, not instruct an editor how to write the page")
         if unfinished_action_content("", {"body": copy}):
             raise ValueError("Page copy must be complete prose, not a promise or placeholder")
         if re.search(r"\b(?:the|this) (?:homepage|webpage|page|site|call to action) "
@@ -265,6 +278,53 @@ def validate_draft(draft, pages, sources):
         if any(urlsplit(value).scheme not in {"", "https"}
                for value in [page.cta_target, *(asset.candidate_url for asset in page.assets)]):
             raise ValueError("Unsafe generated link")
+
+
+def validate_recorded_content(arguments, result):
+    """Recheck exact saved copy and provenance before semantic output review."""
+    request = ContentRequest.model_validate(arguments)
+    packet = result["packet"]
+    sources = []
+    for item in request.sources:
+        source, receipt = item["source"], item["receipt"]
+        if (item.get("kind") != "website_source" or receipt.get("method") != "GET"
+                or receipt.get("external_writes") is not False
+                or not hmac.compare_digest(str(item.get("signature", "")), source_signature(source, receipt))):
+            raise ValueError("Saved content requires unchanged signed source-read inputs")
+        sources.append(source)
+    WorkflowRequest(client=request.client, website=request.website, sources=[
+        {"key": item["key"], "role": item["role"], "url": item["requested_url"]}
+        for item in sources])
+    pages = [item for item in sources if item["role"] == "page"]
+    if packet.get("client") != request.client or packet.get("website") != request.website:
+        raise ValueError("Saved content must match the approved client and website")
+    draft = Draft.model_validate({
+        "summary": packet["summary"], "working_brief": packet["working_brief"],
+        "pages": [{**{key: page[key] for key in PageDraft.model_fields},
+                   "assets": [{key: asset[key] for key in Asset.model_fields} for asset in page["assets"]]}
+                  for page in packet["pages"]],
+    })
+    validate_draft(draft, pages, sources)
+    by_key = {item["key"]: item for item in pages}
+    for page in packet["pages"]:
+        if page.get("url") != by_key[page["page_id"]]["url"]:
+            raise ValueError("Saved page URL differs from the fetched existing page")
+        if page.get("approval") != {"status": "pending", "reviewer": None,
+                                    "reviewed_at": None, "evidence": None} or page.get("cms_draft") is not None:
+            raise ValueError("Content generation cannot claim approval or CMS drafts")
+        if any(asset.get("approval_status") != "pending" or asset.get("rights_status") != "unverified"
+               for asset in page["assets"]):
+            raise ValueError("Observed images must remain unapproved asset candidates")
+        versioned = {key: value for key, value in page.items() if key != "version"}
+        if page.get("version") != hashlib.sha256(json.dumps(versioned, sort_keys=True).encode()).hexdigest()[:12]:
+            raise ValueError("Saved page version no longer matches its exact content")
+    staging = packet.get("staging", {})
+    if (staging.get("status") != "awaiting_content_approval"
+            or staging.get("drafts_created") != 0 or staging.get("live_pages_modified") is not False
+            or result.get("external_writes") is not False
+            or packet.get("execution") != result.get("execution")
+            or result.get("execution", {}).get("model_call_executed") is not True):
+        raise ValueError("Saved content must retain its execution receipt and pending staging gate")
 
 
 async def prepare_content(arguments):
@@ -312,6 +372,11 @@ async def prepare_content(arguments):
         "Keep source-supported voice, audience and service boundaries; do not reuse testimonials. "
         "Do not write or claim CMS drafts, approval, connected-client access, messages or task creation. "
         "Return complete revised copy, not templates, nulls or promises."
+        " Every sections[].body is the exact finished text a student or parent would read on the website. "
+        "Address the visitor directly. Never describe what the page should say or instruct a writer, "
+        "designer or developer. Phrases such as 'The homepage should', 'Keep the copy', and "
+        "'Close with an invitation' are editorial notes, not page copy. Put implementation and "
+        "review instructions only in change_reason, review_notes or asset requirements."
     )
     async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=1) as client:
         draft = None
