@@ -295,12 +295,17 @@ def source_bound_draft_schema(sources, marketing_refresh=False):
     fields = {}
     if marketing_refresh:
         selected_origin = origin(next(source["url"] for source in sources if source["role"] == "page"))
+        inquiry_links = [link for link in links if origin(link) == selected_origin
+                         and re.search(r"(?:contact|register|book|inquir|schedul)", urlsplit(link).path, re.IGNORECASE)]
+        if not inquiry_links:
+            raise ValueError("Marketing pages require an observed inquiry, contact or booking destination")
+        fields["cta_target"] = (Literal[tuple(inquiry_links)], ...)
         internal = sorted({link for link in links if origin(link) == selected_origin})
         link_type = create_model("ObservedInternalLink", __base__=InternalLink,
                                  url=(Literal[tuple(internal)], ...))
         fields["internal_links"] = (list[link_type], Field(min_length=2, max_length=4))
+    fields.setdefault("cta_target", (Literal[tuple(links)], ...))
     page = create_model("ObservedWebsitePage", __base__=MarketingPageDraft if marketing_refresh else PageDraft,
-                        cta_target=(Literal[tuple(links)], ...),
                         assets=(list[asset], Field(min_length=1, max_length=3)), **fields)
     return create_model("ObservedWebsiteDraft", __base__=MarketingDraft if marketing_refresh else Draft,
                         pages=(list[page], Field(min_length=5, max_length=5)))
@@ -326,6 +331,14 @@ def validate_draft(draft, pages, sources, marketing_refresh=False):
                                      for text in (section.heading, section.body))])
         if marketing_refresh:
             copy += " " + " ".join(text for faq in page.faqs for text in (faq.question, faq.answer))
+            if re.search(r"\b(?:website|home\s?page|webpage|the site|the page|source evidence|site evidence|published as|published in)\b", copy, re.IGNORECASE):
+                raise ValueError("Marketing prose and FAQs must state services directly, without website or publishing narration")
+            if re.search(r"\b(?:parents|families|students|customers) (?:often )?(?:tell us|say|report|appreciate|choose us|love us|trust us)\b", copy, re.IGNORECASE):
+                raise ValueError("Marketing prose must not invent customer feedback or social proof; describe the service benefits directly")
+            if not re.search(r"(?:contact|register|book|inquir|schedul)", urlsplit(page.cta_target).path, re.IGNORECASE):
+                raise ValueError("The primary CTA must use an observed inquiry or booking destination, not a program information page")
+            if page.cta_label.strip().rstrip("!").casefold() in {"get started", "learn more", "book now", "register", "contact us", "find a program"}:
+                raise ValueError("Use a descriptive CTA about the requested support or specific program")
         if EDITORIAL_COPY.search(copy):
             raise ValueError("Page copy must address website visitors, not instruct an editor how to write the page")
         if unfinished_action_content("", {"body": copy}):
@@ -414,6 +427,8 @@ async def prepare_marketing(request, sources, pages, settings):
         "registration, booking or contact destination. Do not invent an endpoint or use a program information page as the inquiry CTA. "
         "Retain actual service formats and verified business details. Never invent prices, credentials, testimonials, guarantees, results, "
         "locations, schedules or policies. Do not conflate academic tutoring with executive function coaching or promise admission/score gains. "
+        "Never narrate the website or publishing: say 'We offer in-person tutoring', not 'Tutoring is published as in person'. "
+        "Do not invent customer feedback such as 'parents tell us'. Describe practical benefits directly. "
         "Answer FAQs only from evidence; for unpublished logistics invite parents to ask the team. Keep editorial notes out of website prose. "
         "Give 4–6 major marketing_changes covering unclear positioning/benefits, parent questions, program distinction, CTA, headings/SEO "
         "or internal links. Each has an accurate before description, concrete after wording and marketing reason. "
