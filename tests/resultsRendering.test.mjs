@@ -100,3 +100,22 @@ test("a supplied-evidence report renders its complete body without implying prov
   assert.match(html, /Supplied source inputs/);
   assert.match(html, /A connection alone is not a completed tool run/);
 });
+
+test("a completed campaign stays native in AURA with channel views and actual per-tool evidence", () => {
+  const campaignBody = ["Campaign brief", "Google Search drafts", "Facebook and Instagram drafts",
+    "Google Business Profile draft", "Indoor screen draft", "Asset checklist", "Approval tracker and implementation handoff"]
+    .map((heading) => `## ${heading}\n${"Saved draft copy with pending client approvals. ".repeat(4)}`).join("\n\n");
+  const html = render({ ...run, steps: [proposal, keywords,
+    { id: "compose", key: "compose", status: "completed", tool_slug: "AURA", output: {
+      operation: "report.compose", critic: { action: "accept" }, outcome_check: { status: "verified" },
+      provider_result: { status: "draft", title: "Unpublished campaign package", body: campaignBody,
+        summary: "Campaign prepared inside AURA.", synthetic: false, sources: [] },
+    } }], result: { result_presentation: { primary_step_key: "compose", metrics: [] } } });
+  const main = html.slice(html.indexOf('aria-label="Main workflow result"'), html.indexOf('aria-label="Supporting workflow actions"'));
+  assert.match(main, /aria-label="Campaign launch package"/);
+  for (const label of ["Google Ads", "Social ads", "Business Profile", "Indoor screens", "Assets", "Approvals and handoff", "Tool outputs"]) assert.ok(main.includes(label));
+  assert.match(main, /Saved draft copy with pending client approvals/);
+  assert.doesNotMatch(main, /Open in Google Docs|Checked in Google Docs/);
+  assert.match(html, /Read keyword ideas/);
+  assert.match(html, /A connection alone is not a completed tool run/);
+});

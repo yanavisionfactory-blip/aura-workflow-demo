@@ -35,9 +35,9 @@ export function readableProviderResponse(value) {
 }
 
 export function evidenceToolName(value = "AURA") {
-  const match = String(value).match(/^agent-(semrush|ahrefs|sitebulb|screaming-frog)-[a-f0-9]+$/i);
+  const match = String(value).match(/^agent-(semrush|ahrefs|sitebulb|screaming-frog|supermetrics)-[a-f0-9]+$/i);
   if (!match) return value;
-  return ({ semrush: "Semrush", ahrefs: "Ahrefs", sitebulb: "Sitebulb", "screaming-frog": "Screaming Frog" })[match[1].toLowerCase()];
+  return ({ semrush: "Semrush", ahrefs: "Ahrefs", sitebulb: "Sitebulb", "screaming-frog": "Screaming Frog", supermetrics: "Supermetrics" })[match[1].toLowerCase()];
 }
 
 export function toolEvidence(activity = []) {
