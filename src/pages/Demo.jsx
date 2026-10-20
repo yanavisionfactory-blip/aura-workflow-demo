@@ -3,7 +3,6 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useLocation } from "react-router-dom";
 import { aura } from "@/api/auraClient";
 import { WORKFLOW_EXAMPLES } from "@/lib/demoData";
-import { CREATOR_APPROVALS_MOCK } from "@/lib/mockWorkflows";
 import WorkspaceShell from "@/components/aura/WorkspaceShell";
 import CommandInput from "@/components/aura/CommandInput";
 import PilotBuilder from "@/components/aura/PilotBuilder";
@@ -1726,44 +1725,6 @@ Generate a results summary in plain, human-friendly language (not technical).
     startPythonExecutionRef.current?.();
   };
 
-  useEffect(() => {
-    // Seed the "Weekly creator approvals" example as a saved workflow so it
-    // shows up in "My workflows" alongside anything the user actually runs.
-    const PROMPT = WORKFLOW_EXAMPLES.find((e) => e.id === "creator-approvals")?.prompt;
-    if (!PROMPT) return;
-    (async () => {
-      try {
-        const existing = await aura.entities.Workflow.filter({ prompt: PROMPT }, "-created_date", 1);
-        if (existing.length) return;
-        const m = CREATOR_APPROVALS_MOCK;
-        const now = new Date().toISOString();
-        const wf = await aura.entities.Workflow.create({
-          name: m.plan.workflowName || "Weekly creator approvals",
-          prompt: PROMPT,
-          interpretation: m.plan.interpretation,
-          steps: m.plan.steps,
-          last_run_status: "completed",
-          last_run_date: now,
-          last_summary: m.results.summary,
-          run_count: 1,
-        });
-        const run = await aura.entities.WorkflowRun.create({
-          prompt: PROMPT,
-          status: "completed",
-          workflow_id: wf.id,
-          title: m.plan.workflowName,
-          summary: m.results.summary,
-          metrics: m.results.metrics,
-          outcomes: m.results.outcomes,
-          steps: m.plan.steps,
-          duration_seconds: 11,
-        });
-        announceWorkflowHistoryChanged({ workflow: wf, run });
-      } catch (e) {
-        /* ignore */
-      }
-    })();
-  }, []);
 
   useEffect(() => {
     return () => {
