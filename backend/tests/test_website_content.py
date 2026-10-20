@@ -332,6 +332,8 @@ async def test_complete_marketing_pages_bind_faqs_links_changes_and_pending_vers
     assert all(len(page["faqs"]) >= 3 and len(page["marketing_changes"]) >= 4 for page in packet["pages"])
     assert all(page["approval"]["status"] == "pending" and page["cms_draft"] is None for page in packet["pages"])
     assert packet["execution"]["model_attempts"] == 5
+    assert all(page["cta_label"] in change["after"] and page["cta_target"] in change["after"]
+               for page in packet["pages"] for change in page["marketing_changes"] if change["area"] == "CTA")
     assert packet["staging"]["delivery_mode"] == "cms_ready_html_and_metadata"
     assert "No project-management application" in packet["systems"][-1]["detail"]
     draft = website.MarketingDraft.model_validate({"summary": packet["summary"], "working_brief": packet["working_brief"],
@@ -342,3 +344,27 @@ async def test_complete_marketing_pages_bind_faqs_links_changes_and_pending_vers
     with pytest.raises(ValueError, match="Internal links"):
         website.validate_draft(draft, [item["source"] for item in arguments["sources"] if item["source"]["role"] == "page"],
                                [item["source"] for item in arguments["sources"]], True)
+
+
+@pytest.mark.parametrize('body, message', [
+    ('Our academic tutoring is published as in person.', 'publishing narration'),
+    ('The website helps families choose a program.', 'publishing narration'),
+    ('Parents often tell us they value this service.', 'social proof'),
+])
+def test_marketing_copy_rejects_narration_and_invented_parent_feedback(body, message):
+    page = SimpleNamespace(page_id='p1', h1='Personal learning support',
+        sections=[SimpleNamespace(heading='Support for your student', body=body)], faqs=[])
+    with pytest.raises(ValueError, match=message):
+        website.validate_draft(SimpleNamespace(pages=[page]), [{'key': 'p1'}], [], True)
+
+
+def test_marketing_cta_schema_excludes_program_information_pages():
+    evidence = [{'role': 'page', 'url': 'https://client.example/', 'images': [], 'links': [
+        'https://client.example/programs/', 'https://client.example/contact-us/',
+        'https://client.example/register/?step=academic', 'https://other.example/contact/']}]
+    schema = website.source_bound_draft_schema(evidence, True)
+    page_type = schema.model_fields['pages'].annotation.__args__[0]
+    assert set(page_type.model_fields['cta_target'].annotation.__args__) == {
+        'https://client.example/contact-us/', 'https://client.example/register/?step=academic'}
+    legacy = website.source_bound_draft_schema(evidence)
+    assert 'https://client.example/programs/' in legacy.model_fields['pages'].annotation.__args__[0].model_fields['cta_target'].annotation.__args__
