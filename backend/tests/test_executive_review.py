@@ -178,6 +178,21 @@ def test_narrative_rejects_untraceable_evidence_past_dates_and_dependency_cycles
             review.validate_narrative(review.Narrative.model_validate(fixture), sources, "2026-10-20")
 
 
+def test_generation_schema_limits_every_citation_to_the_current_run_source_rows():
+    sources = processed()
+    refs = {row["id"] for source in sources for row in source["rows"]}
+    schema = review.narrative_schema(refs)
+    fixture = narrative_fixture(sources)
+    parsed = schema.model_validate(fixture)
+    assert parsed.model_dump(mode="json") == fixture
+    assert set(schema.model_json_schema()["$defs"]["ExecutiveEvidenceId"]["enum"]) == refs
+    for section in ("observations", "hypotheses", "actions"):
+        invalid = deepcopy(fixture)
+        invalid[section][0]["evidence"] = ["TU1", "crm:qualified_leads", "INVENTED"]
+        with pytest.raises(ValueError):
+            schema.model_validate(invalid)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("critic_action", ["accept", "escalate"])
 async def test_critic_reads_large_resolved_sources_and_result_without_dropping_arguments(monkeypatch, critic_action):

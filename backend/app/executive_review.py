@@ -9,6 +9,7 @@ import io
 import json
 import math
 from datetime import UTC, date, datetime, timedelta
+from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit
@@ -16,7 +17,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from openai import AsyncOpenAI
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from .config import get_settings
 from .model_inputs import bounded_input
@@ -106,6 +107,19 @@ class Narrative(Strict):
     observations: list[Finding] = Field(min_length=3, max_length=5)
     hypotheses: list[Finding] = Field(min_length=2, max_length=4)
     actions: list[Action] = Field(min_length=8, max_length=10)
+
+
+def narrative_schema(evidence_ids):
+    """Constrain generated citations to this run's retained evidence, at decoding."""
+    citation = Enum("ExecutiveEvidenceId", {f"row_{index}": value for index, value in enumerate(sorted(set(evidence_ids)))}, type=str)
+    finding = create_model("ExecutiveGroundedFinding", __base__=Finding,
+                           evidence=(list[citation], Field(min_length=1)))
+    action = create_model("ExecutiveGroundedAction", __base__=Action,
+                          evidence=(list[citation], Field(min_length=1)))
+    return create_model("ExecutiveGroundedNarrative", __base__=Narrative,
+                        observations=(list[finding], Field(min_length=3, max_length=5)),
+                        hypotheses=(list[finding], Field(min_length=2, max_length=4)),
+                        actions=(list[action], Field(min_length=8, max_length=10)))
 
 
 def validate_periods(periods):
@@ -282,8 +296,9 @@ def validate_narrative(narrative, sources, review_date):
     if len(actions) != len(narrative.actions):
         raise ValueError("Action IDs must be unique")
     for item in [*narrative.observations, *narrative.hypotheses, *narrative.actions]:
-        if not set(item.evidence).issubset(references):
-            raise ValueError("Narrative evidence must resolve to exact source row IDs")
+        invalid = set(item.evidence) - references
+        if invalid:
+            raise ValueError("Narrative evidence must resolve to exact source row IDs; invalid: " + ", ".join(sorted(invalid)))
     for action in narrative.actions:
         if date.fromisoformat(action.due) <= date.fromisoformat(review_date):
             raise ValueError("Proposed action deadlines must follow the review date")
@@ -335,6 +350,7 @@ async def prepare_review(arguments):
                                                for field in ("timezone", "currency", "as_of")):
             raise ValueError("All sources must share periods, timezone, currency and extraction cutoff")
     performance = performance_rows(sources)
+    grounded_narrative = narrative_schema(evidence_ids)
     settings = get_settings()
     if not settings.openai_api_key:
         raise RuntimeError("AURA executive review generation is not configured")
@@ -360,11 +376,12 @@ async def prepare_review(arguments):
         async def generate(input_payload, prompt):
             response = await bounded_model_call(lambda: client.responses.parse(
                 model=settings.openai_model, reasoning={"effort": "low"}, store=False,
-                instructions=prompt, input=bounded_input(input_payload), text_format=Narrative,
+                instructions=prompt, input=bounded_input(input_payload), text_format=grounded_narrative,
             ), settings.model_call_timeout_seconds)
             if response.output_parsed is None:
                 raise ValueError("AURA returned no complete executive review")
-            return Narrative.model_validate(response.output_parsed)
+            parsed = response.output_parsed
+            return Narrative.model_validate(parsed.model_dump(mode="json") if isinstance(parsed, BaseModel) else parsed)
         narrative = await generate(payload, instructions)
         try:
             validate_narrative(narrative, sources, config["review_date"])
