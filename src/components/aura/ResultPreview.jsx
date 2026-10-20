@@ -11,6 +11,7 @@ import SeoAuditResult from "./SeoAuditResult";
 import WeeklyReviewResult from "./WeeklyReviewResult";
 import CampaignReportResult from "./CampaignReportResult";
 import { campaignReportGroups } from "@/lib/campaignReport.mjs";
+import WebsiteContentResult from "./WebsiteContentResult";
 
 const readableDetail = (value = "") => readableResultText(value)
   .split(/\n/)
@@ -85,6 +86,7 @@ function ThumbnailOnly({ result }) {
 export default function ResultPreview({ result, results, activity = [] }) {
   const campaignReport = result.kind === "report" && campaignReportGroups(result.preview?.body);
   if (campaignReport) return <CampaignReportResult preview={result.preview} campaign={campaignReport} activity={activity} />;
+  if (result.kind === "website_content") return <WebsiteContentResult packet={result.packet} />;
   if (result.kind === "weekly_review") return <WeeklyReviewResult packet={result.packet} />;
   if (result.kind === "seo_audit") return <SeoAuditResult manifest={result.audit} />;
   if (result.kind === "articles") return <ArticleResultPreview articles={result.articles} />;
