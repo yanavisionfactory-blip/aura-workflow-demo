@@ -39,7 +39,9 @@ def network(monkeypatch):
                               '<meta name="description" content="Current description"></head>'
                               '<body><h1>Current heading</h1><script>ignored secrets</script>'
                               '<p>Example Learning. Personalized academic tutoring in a supportive community.</p>'
-                              '<a href="/contact/">Contact us</a><img src="/image.jpg" alt="Tutor"></body></html>')
+                              '<a href="/contact/">Contact us</a>'
+                              + ''.join(f'<a href="/page-{i}/">Program {i}</a>' for i in range(1, 6))
+                              + '<img src="/image.jpg" alt="Tutor"></body></html>')
     real_client = httpx.AsyncClient
     monkeypatch.setattr(website, "validate_public_endpoint", lambda _: None)
     monkeypatch.setattr(website.httpx, "AsyncClient", lambda **kwargs: real_client(
@@ -278,3 +280,65 @@ def test_generated_asset_and_cta_schema_allow_only_exact_observed_references():
         with pytest.raises(ValidationError):
             asset_type(**fields, candidate_url=invented)
     assert page_type.model_fields['cta_target'].annotation.__args__ == (target,)
+
+
+def test_marketing_refresh_does_not_add_app_dependencies():
+    data = {**request(), "marketing_refresh": True}
+    plan = website.website_workflow_recipe(website.PREFIX + json.dumps(data), [
+        {"slug": "aura", "connected": True, "allowed_operations": native_operations("aura")},
+        {"slug": "google", "connected": True, "allowed_operations": native_operations("google")},
+    ])
+    assert len(plan.steps) == 9
+    assert {step.tool_slug for step in plan.steps} == {"aura"}
+    assert plan.steps[-1].arguments["marketing_refresh"] is True
+    assert not any(step.consequential for step in plan.steps)
+
+
+@pytest.mark.asyncio
+async def test_complete_marketing_pages_bind_faqs_links_changes_and_pending_versions(network, monkeypatch):
+    def page_for(schema):
+        page_id = schema.model_fields["page_id"].annotation.__args__[0]
+        index = int(page_id[1:])
+        return schema.model_validate({"page_id": page_id, "purpose": "Explain this program to parents.",
+            "h1": "Support that meets your student where they are",
+            "sections": [{"heading": f"Learning support {i}", "body":
+                "Your student can explore ideas with personal support in a welcoming learning environment. " * 5}
+                for i in range(4)],
+            "faqs": [{"question": f"What support can parents ask about {i}?", "answer":
+                "Speak with the team about your student's current learning priorities and the support that fits those needs."}
+                for i in range(3)],
+            "cta_label": "Ask about academic tutoring", "cta_target": "https://client.example/contact/",
+            "page_title": "Academic support | Example Learning", "meta_description": "Explore personalized academic support for your student.",
+            "assets": [{"requirement": "Approved learning photo", "candidate_url": "", "alt_text": "Tutor and student", "crop": "Landscape"}],
+            "change_reason": "Make the service and next inquiry step clearer.", "review_notes": ["Confirm image rights."],
+            "internal_links": [{"label": f"Explore program {i}", "url": f"https://client.example/page-{i}/", "reason": "Help parents compare services."}
+                for i in range(1, 6) if i != index][:2],
+            "marketing_changes": [{"area": name, "before": "Generic learning message.", "after": "Explain the student need and inquiry step.", "reason": "Help parents decide whether the service fits."}
+                for name in ["Positioning", "Benefits", "Parent questions", "CTA"]]})
+    parse = AsyncMock(side_effect=lambda **kwargs: SimpleNamespace(output_parsed=page_for(kwargs["text_format"])))
+    class Client:
+        async def __aenter__(self):
+            return SimpleNamespace(responses=SimpleNamespace(parse=parse))
+        async def __aexit__(self, *_args):
+            return False
+    monkeypatch.setattr(website, "AsyncOpenAI", lambda **_kwargs: Client())
+    data = request()
+    arguments = {"client": data["client"], "website": data["website"], "sources": await sources(), "marketing_refresh": True}
+    result = await website.prepare_content(arguments)
+    website.validate_recorded_content(arguments, result)
+    assert parse.await_count == 5
+    packet = result["packet"]
+    assert packet["version"] == 2
+    assert all(len(page["faqs"]) >= 3 and len(page["marketing_changes"]) >= 4 for page in packet["pages"])
+    assert all(page["approval"]["status"] == "pending" and page["cms_draft"] is None for page in packet["pages"])
+    assert packet["execution"]["model_attempts"] == 5
+    assert packet["staging"]["delivery_mode"] == "cms_ready_html_and_metadata"
+    assert "No project-management application" in packet["systems"][-1]["detail"]
+    draft = website.MarketingDraft.model_validate({"summary": packet["summary"], "working_brief": packet["working_brief"],
+        "pages": [{key: page[key] for key in website.MarketingPageDraft.model_fields if key != "assets"} | {
+            "assets": [{key: asset[key] for key in website.Asset.model_fields} for asset in page["assets"]]}
+            for page in packet["pages"]]})
+    draft.pages[0].internal_links[0].url = "https://other.example/invented/"
+    with pytest.raises(ValueError, match="Internal links"):
+        website.validate_draft(draft, [item["source"] for item in arguments["sources"] if item["source"]["role"] == "page"],
+                               [item["source"] for item in arguments["sources"]], True)
