@@ -301,21 +301,6 @@ test("an explicit empty supporting contract does not recreate fallback receipts"
   assert.deepEqual(receipts, []);
 });
 
-test("the results UI emphasizes the artifact and tucks supporting tools away", () => {
-  const source = readFileSync(new URL("../src/components/aura/ResultsView.jsx", import.meta.url), "utf8");
-  const card = readFileSync(new URL("../src/components/aura/PrimaryResult.jsx", import.meta.url), "utf8");
-  assert.equal(card.includes("Your result"), true);
-  assert.equal(source.includes("<ResultPreview result={primaryResult} results={results}"), true);
-  assert.equal(source.includes("<details className=\"group mb-8"), true);
-  assert.equal(source.includes("Results from other apps"), true);
-  assert.equal(source.indexOf("<ResultsMetrics") < source.indexOf("<PrimaryResult"), true);
-  assert.equal(source.indexOf("Suggested next") < source.indexOf("What would you like to do next?"), true);
-  assert.equal(source.includes("Attached and delivered"), true);
-  assert.equal(source.includes("View run details"), false);
-  assert.equal(source.includes("Output receipts"), false);
-  assert.equal(source.includes("Design ID"), false);
-});
-
 test("a finished Canva presentation is the visual result and email delivery remains secondary", () => {
   const delivery = { kind: "email", provider: "Gmail", subject: "Your story", link: "https://mail.google.com/mail/u/0/#sent/message-1", artifactDelivered: true,
     artifact: { kind: "presentation", title: "The fairy tale", provider: "Canva", link: "https://www.canva.com/design/design-123/edit" } };

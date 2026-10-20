@@ -20,6 +20,42 @@ test("document totals count separate saved resources and deduplicate repeated re
   assert.deepEqual(resultMetrics([], activity), [{ value: "2", label: "documents created" }]);
   assert.deepEqual(resultMetrics([], [{ status: "failed", output: main }]), []);
 });
+test("reopening a read-only Google Docs run shows all saved tabs and its source link", () => {
+  const body = "## Sourced campaign brief\nRoof repairs.\n[Source](https://example.com/roofing)";
+  const output = { step_key: "read", operation: "google-docs.get-document", provider_result: {
+    ret: { documentId: "proposal", title: "Roofing proposal", textContent: body,
+      tabs: [{ title: "Brief", textContent: body }, { title: "Handoff", textContent: "Final approval: pending." }] },
+  } };
+  const before = JSON.stringify(output);
+  const result = primaryResultFromOutputs([output], { summary: "Short summary only." });
+  assert.equal(result.kind, "document");
+  assert.equal(result.preview.body, `${body}\n\nFinal approval: pending.`);
+  assert.equal(result.preview.title, "Roofing proposal");
+  assert.equal(result.providerVerb, "Checked in");
+  assert.equal(result.link, "https://docs.google.com/document/d/proposal/edit");
+  assert.equal(JSON.stringify(output), before);
+});
+test("native Docs reads retain the returned body without inferring a new document write", () => {
+  const result = primaryResultFromOutputs([{ operation: "docs.get", provider_result: {
+    id: "proposal", title: "Saved proposal", body: "Complete existing proposal."
+  } }]);
+  assert.equal(result.preview.body, "Complete existing proposal.");
+  assert.equal(result.providerVerb, "Checked in");
+});
+test("a matching readback takes precedence over submitted copy, without mixing documents", () => {
+  const changed = { ...check, provider_result: { ret: { documentId: "doc-main", title: "Campaign launch package", textContent: "Edited and read-back body." } } };
+  const result = primaryResultFromOutputs([main, tracker, changed], {}, { primary_step_key: "main" });
+  assert.equal(result.preview.body, "Edited and read-back body.");
+  const other = primaryResultFromOutputs([main, { ...changed, provider_result: { ret: { documentId: "doc-tracker", textContent: "Different document." } } }], {}, { primary_step_key: "main" });
+  assert.equal(other.preview.body, main.resolved_arguments.content);
+});
+test("an empty, failed or unresolved read never fabricates a full document", () => {
+  for (const receipt of [{ documentId: "doc", textContent: "" }, { error: "denied", textContent: "Not accepted" }, { documentId: "doc", textContent: "{{steps.missing.body}}" }]) {
+    const result = primaryResultFromOutputs([{ operation: "google-docs.get-document", provider_result: receipt }]);
+    assert.equal(result.preview, null);
+    assert.equal(result.kind, "result");
+  }
+});
 test("supporting document links keep the tracker and omit duplicate primary readbacks", () => {
   const mainCheck = { ...check, step_key: "verify-main", provider_result: { ret: { documentId: "doc-main" } } };
   const receipts = supportingReceipts({}, [main, tracker, mainCheck].map((output) => ({ status: "completed", stepKey: output.step_key, tool: "Google Docs", action: "Saved document", output })),
