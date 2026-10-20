@@ -379,9 +379,13 @@ async def refresh_oauth_credentials(
     provider_slug: str,
     credentials: dict,
     config: dict | None = None,
+    *,
+    force: bool = False,
 ) -> tuple[dict, bool]:
     """Refresh shortly before expiry; returns credentials and whether they changed."""
-    if not credentials.get("refresh_token") or int(credentials.get("expires_at", 0)) > int(time.time()) + 90:
+    if not credentials.get("refresh_token") or (
+        not force and int(credentials.get("expires_at", 0)) > int(time.time()) + 90
+    ):
         return credentials, False
     provider = PROVIDERS.get(provider_slug)
     if not provider:
