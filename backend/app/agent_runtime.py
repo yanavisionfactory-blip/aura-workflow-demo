@@ -1592,6 +1592,8 @@ async def critique_step(step: dict, provider_result: object) -> CriticDecision:
                 decision.action = "escalate"
             return decision
         except Exception as exc:  # noqa: BLE001 - model/transport failures are transient here
+            logger.warning("Output review unavailable operation=%s attempt=%s error_type=%s",
+                           step.get("operation"), attempt + 1, type(exc).__name__)
             if _stop_model_retry(exc):
                 break
             if attempt < 2:

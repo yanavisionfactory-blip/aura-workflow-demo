@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -83,7 +84,8 @@ async def test_recipe_compiles_actual_reads_and_content_without_alternative_plat
 
 
 @pytest.mark.asyncio
-async def test_draft_generation_uses_fetched_sources_and_never_manufactures_approvals(network, monkeypatch):
+@pytest.mark.parametrize("editorial_first", [False, True])
+async def test_draft_generation_uses_fetched_sources_and_never_manufactures_approvals(network, monkeypatch, editorial_first):
     draft = website.Draft.model_validate({"summary": "Five reviewable pages.", "working_brief": "Inferred supportive voice.",
         "pages": [{"page_id": f"p{i}", "purpose": "Explain tutoring.", "h1": f"Tutoring {i}",
                    "sections": [{"heading": f"Section {j}", "body": "Full revised copy for review. " * 6} for j in range(3)],
@@ -93,7 +95,12 @@ async def test_draft_generation_uses_fetched_sources_and_never_manufactures_appr
                                "alt_text": "Tutor helping a student", "crop": "Landscape"}],
                    "change_reason": "Clarify the service.", "review_notes": ["Confirm brand and rights."]}
                   for i in range(1, 6)]})
-    parse = AsyncMock(return_value=SimpleNamespace(output_parsed=draft))
+    responses = [SimpleNamespace(output_parsed=draft)]
+    if editorial_first:
+        editorial = draft.model_copy(deep=True)
+        editorial.pages[0].sections[0].body = "The homepage should introduce the service. " * 10
+        responses.insert(0, SimpleNamespace(output_parsed=editorial))
+    parse = AsyncMock(side_effect=responses)
     class Client:
         async def __aenter__(self):
             return SimpleNamespace(responses=SimpleNamespace(parse=parse))
@@ -101,13 +108,17 @@ async def test_draft_generation_uses_fetched_sources_and_never_manufactures_appr
             return False
     monkeypatch.setattr(website, "AsyncOpenAI", lambda **_kwargs: Client())
     data = request()
+    approved_arguments = {"client": data["client"], "website": data["website"],
+                          "sources": await sources()}
     result = await ProviderExecutor({}, capability_manifest=native_manifest("aura")).execute(
-        "website.content.prepare", {"client": data["client"], "website": data["website"],
-                                    "sources": await sources()})
-    assert parse.await_count == 1
+        "website.content.prepare", approved_arguments)
+    assert parse.await_count == (2 if editorial_first else 1)
+    if editorial_first:
+        assert "Correct the prior validation failure" in parse.await_args.kwargs["instructions"]
     assert parse.await_args.kwargs["store"] is False
     assert not output_errors("website.content.prepare", result)
     packet = result["packet"]
+    website.validate_recorded_content(approved_arguments, result)
     assert packet["execution"]["model_call_executed"] is True
     assert len(packet["pages"]) == 5
     assert all(page["approval"]["status"] == "pending" and page["cms_draft"] is None
@@ -116,6 +127,23 @@ async def test_draft_generation_uses_fetched_sources_and_never_manufactures_appr
     assert packet["staging"]["drafts_created"] == 0
     assert packet["staging"]["live_pages_modified"] is False
     assert all("text" not in item["source"] for item in packet["sources"])
+    edited = deepcopy(result)
+    edited["packet"]["pages"][0]["sections"][0]["body"] = (
+        "The homepage should explain the tutoring service. " * 7)
+    from app.orchestrator import review_recorded_result
+    decision = await review_recorded_result(None, None,
+        SimpleNamespace(operation="website.content.prepare", output={}), None,
+        {"arguments": approved_arguments}, edited)
+    assert decision.action == "escalate"
+    assert "website visitors" in decision.reasons[0]
+    invented_approval = deepcopy(result)
+    invented_approval["packet"]["pages"][0]["approval"]["status"] = "approved"
+    with pytest.raises(ValueError, match="cannot claim approval"):
+        website.validate_recorded_content(approved_arguments, invented_approval)
+    changed_version = deepcopy(result)
+    changed_version["packet"]["pages"][0]["page_title"] = "Changed after generation"
+    with pytest.raises(ValueError, match="version"):
+        website.validate_recorded_content(approved_arguments, changed_version)
 
 
 @pytest.mark.asyncio
@@ -169,3 +197,53 @@ def test_publicly_named_platform_alternatives_do_not_request_four_connections():
     inventory = [{"slug": slug, "name": slug, "connected": False} for slug in ["shopify", "woocommerce"]]
     assert explicit_disconnected_capabilities("Platforms publicly named:\n\n- Shopify: online stores.\n- WooCommerce: WordPress stores.\n\nConfirm the selected client's CMS.", inventory) == []
     assert explicit_disconnected_capabilities("Platforms publicly named:\n- Shopify: online stores.\n\nRead Shopify products.", inventory) == ["shopify"]
+
+
+@pytest.mark.asyncio
+async def test_large_website_source_contract_reaches_output_critic_without_losing_inputs(monkeypatch):
+    from app import agent_runtime
+    from app.model_inputs import MAX_INPUT_BYTES, bounded_input, encoded
+
+    originals = [{"key": f"p{i}", "text": f"source-{i}: " + "source evidence " * 1200 + f" final-fact-{i}"}
+                 for i in range(8)]
+    step = {"operation": "website.content.prepare", "arguments": {
+        "client": "Example Learning", "website": "https://client.example", "sources": originals},
+        "expected_output": "Five visitor-facing page drafts; all approvals pending"}
+    before = deepcopy(step)
+    calls = []
+
+    async def run(agent, payload, **_kwargs):
+        bounded_input(payload)
+        calls.append((agent.name, payload))
+        if agent.name == "Evidence Reader":
+            return {"relevant_evidence": "Every supplied record was read; no external writes.",
+                    "source_limitations": [], "unprocessed_source_paths": []}
+        assert agent.name == "Tool Output Critic Agent"
+        assert payload["step_contract"]["expected_output"] == step["expected_output"]
+        return {"action": "accept", "reasons": ["Source evidence and draft scope match"]}
+
+    monkeypatch.setattr(agent_runtime, "_run", run)
+    assert len(encoded(step).encode()) > MAX_INPUT_BYTES
+    decision = await agent_runtime.critique_step(step, {"packet": {"pages": ["Complete proposed copy"]}})
+    assert decision.action == "accept"
+    assert any(name == "Tool Output Critic Agent" for name, _ in calls)
+    fragments = "\n".join(payload["source_fragment"] for name, payload in calls if name == "Evidence Reader")
+    assert all(f"final-fact-{i}" in fragments for i in range(8))
+    assert "Complete proposed copy" in fragments
+    assert "Example Learning" in fragments and "https://client.example" in fragments
+    assert step == before
+
+
+@pytest.mark.parametrize("text", [
+    "The homepage should clearly explain the tutoring service.",
+    "Each section must emphasize confidence.",
+    "Keep the copy focused on practical help.",
+    "Close with a simple invitation to explore services.",
+])
+def test_editorial_instructions_are_not_visitor_copy(text):
+    assert website.EDITORIAL_COPY.search(text)
+
+
+def test_visitor_facing_learning_advice_is_allowed():
+    assert not website.EDITORIAL_COPY.search(
+        "Start with a conversation about your learning goals. Your tutor can help you plan your next steps.")

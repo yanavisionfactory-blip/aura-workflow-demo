@@ -2147,6 +2147,13 @@ async def review_recorded_result(session, run, step, snapshot, contract, result)
     ) + incomplete_evidence(step.operation, result, contract.get("required_evidence", []))
     if errors:
         return CriticDecision(action="escalate", reasons=errors)
+    if step.operation == "website.content.prepare":
+        from .website_content import validate_recorded_content
+
+        try:
+            validate_recorded_content(contract.get("arguments", {}), result)
+        except (KeyError, TypeError, ValueError) as exc:
+            return CriticDecision(action="escalate", reasons=[str(exc)])
     if getattr(step, "tool_slug", "") == "rankmath" and step.operation == "rankmath.post_seo.update":
         # The first-party bridge saves only these three approved fields and
         # reads each back before returning this receipt. Other RankMath fields
