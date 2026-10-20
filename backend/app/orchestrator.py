@@ -340,6 +340,16 @@ def _provider_result_is_malformed(result: object) -> bool:
     return not isinstance(result, dict) or not result
 
 
+def _successful_empty_search(operation: str, arguments: dict, result: object) -> bool:
+    """An exhausted, scoped Notion search is evidence, not a reason to broaden."""
+    return bool(
+        operation == "notion.search"
+        and (arguments.get("query") or arguments.get("filter"))
+        and isinstance(result, dict) and result.get("results") == []
+        and not result.get("has_more") and not result.get("next_cursor")
+    )
+
+
 def _required_read_arguments(manifest: dict, operation: str, arguments: dict) -> dict | None:
     """Create a safe broad-read fallback while preserving all required inputs."""
     capability = next(
@@ -4015,6 +4025,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 not error
                 and result is not None
                 and _has_empty_collection(result)
+                and not _successful_empty_search(step.operation, resolved_arguments, result)
                 and approved_step.get("reduced_scope_arguments") is not None
             ):
                 error = "The narrow read returned no matching items"

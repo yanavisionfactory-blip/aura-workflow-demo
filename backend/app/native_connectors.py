@@ -361,10 +361,10 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         "identity": {"provider": "notion"},
         "modules": [
             _module("notion.search", "search", "Search page/data-source metadata, not page body content. Results contain IDs, URLs and properties. Use filter {value: page, property: object} when a downstream step needs a page. Pass results[0].id to notion.page.get or notion.blocks.children.list.", properties={
-                "query": _TEXT,
+                "query": {**_TEXT, "x-preserve-on-recovery": True},
                 "page_size": {**_POSITIVE_INTEGER, "maximum": 100},
                 "start_cursor": _TEXT,
-                "filter": {"type": "object"},
+                "filter": {"type": "object", "x-preserve-on-recovery": True},
                 "sort": {"type": "string", "enum": ["last_edited_time"]},
                 "direction": {"type": "string", "enum": ["ascending", "descending"]},
             }),
