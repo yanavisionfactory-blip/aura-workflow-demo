@@ -399,6 +399,40 @@ async def runtime(monkeypatch):
     await engine.dispose()
 
 
+async def test_mcp_oauth_refreshes_before_provider_dispatch(runtime, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from app.security import CredentialVault
+
+    vault = CredentialVault()
+    old = {"access_token": "expired-fixture", "refresh_token": "refresh-fixture", "expires_at": 0}
+    fresh = {"access_token": "fresh-fixture", "refresh_token": "rotated-fixture"}
+    async with runtime() as session:
+        tool = await session.get(ToolConnection, "tool")
+        tool.config = {"oauth_custom": True}
+        tool.encrypted_credentials = vault.encrypt(old)
+        await session.commit()
+    refresh = AsyncMock(return_value=(fresh, True))
+    received = []
+
+    async def execute(executor, operation, arguments):
+        received.append(executor.credentials)
+        return {"id": "record-1"}
+
+    async def review(*args):
+        return CriticDecision(action="accept")
+
+    monkeypatch.setattr(orchestrator, "refresh_oauth_credentials", refresh)
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", execute)
+    monkeypatch.setattr(orchestrator, "critique_step", review)
+    await orchestrator._execute_run("run", "w")
+    assert received == [fresh]
+    refresh.assert_awaited_once()
+    async with runtime() as session:
+        tool = await session.get(ToolConnection, "tool")
+        assert vault.decrypt(tool.encrypted_credentials) == fresh
+
+
 async def test_review_resume_after_write_does_not_replay_provider(runtime, monkeypatch):
     provider_calls = 0
     reviews = 0

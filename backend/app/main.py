@@ -146,6 +146,7 @@ from .policy import (
 )
 from .providers import (
     PROVIDERS,
+    ProviderExecutor,
     exchange_oauth_code,
     idempotency_key,
     oauth_authorization_url,
@@ -1154,6 +1155,32 @@ async def _verify_managed_mcp(credentials: dict, provider: str = "ubersuggest") 
         manifest, _, _ = await asyncio.wait_for(
             _discover_agent_payload(_mcp_payload(credentials, provider)), timeout=25
         )
+        if provider == "supermetrics":
+            # tools/list is public on this server. A catalog is not proof that
+            # the OAuth grant can read authenticated account metadata.
+            receipt = await asyncio.wait_for(
+                ProviderExecutor(
+                    credentials, mcp_service(provider)["endpoint"],
+                    provider_kind="mcp", capability_manifest=manifest,
+                    timeout_seconds=25,
+                ).execute("data_source_discovery", {"compress": True}),
+                timeout=25,
+            )
+            failed = receipt.get("is_error") or (
+                isinstance(receipt.get("structured_content"), dict)
+                and receipt["structured_content"].get("success") is False
+            )
+            if failed:
+                error_text = json.dumps(receipt, ensure_ascii=False).upper()
+                if any(code in error_text for code in (
+                    "ACCESS_TOKEN_INVALID", "INVALID_TOKEN", "UNAUTHENTICATED", "UNAUTHORIZED",
+                )):
+                    request = httpx.Request("POST", mcp_service(provider)["endpoint"])
+                    raise httpx.HTTPStatusError(
+                        "The MCP service requires valid authorization",
+                        request=request, response=httpx.Response(401, request=request),
+                    )
+                raise ConnectorError("The MCP authenticated read probe did not succeed")
         return manifest
     except ExceptionGroup as exc:
         pending = list(exc.exceptions)
@@ -1170,6 +1197,30 @@ async def _verify_managed_mcp(credentials: dict, provider: str = "ubersuggest") 
         if auth_failure:
             raise auth_failure from exc
         raise ConnectorError("The MCP service could not be verified; existing access was kept") from exc
+
+
+async def _verify_managed_mcp_with_refresh(tool, credentials: dict, provider: str):
+    """Renew the same grant once after a definitive authenticated-read rejection."""
+    async def renew(*, force=False):
+        nonlocal credentials
+        credentials, changed = await refresh_oauth_credentials(
+            settings, tool.slug, credentials, tool.config, **({"force": True} if force else {}),
+        )
+        if changed:
+            # Retain rotated refresh tokens even if the subsequent probe fails.
+            tool.encrypted_credentials = CredentialVault().encrypt(credentials)
+        return changed
+
+    await renew()
+    try:
+        manifest = await _verify_managed_mcp(credentials, provider)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code not in {401, 403} or not credentials.get("refresh_token"):
+            raise
+        if not await renew(force=True):
+            raise
+        manifest = await _verify_managed_mcp(credentials, provider)
+    return credentials, manifest
 
 
 async def _managed_mcp_connection(
@@ -1194,16 +1245,12 @@ async def _managed_mcp_connection(
         )
     if credentials.get("access_token") and not force_authorization:
         try:
-            credentials, changed = await refresh_oauth_credentials(
-                settings, tool.slug, credentials, tool.config,
-            )
-            if changed:
-                tool.encrypted_credentials = CredentialVault().encrypt(credentials)
-                await session.commit()
-            manifest = await _verify_managed_mcp(credentials, provider)
+            credentials, manifest = await _verify_managed_mcp_with_refresh(tool, credentials, provider)
+            await session.commit()
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code not in {400, 401, 403}:
                 raise
+            credentials = CredentialVault().decrypt(tool.encrypted_credentials)
         else:
             return await _persist_agent_connection(
                 _mcp_payload(credentials, provider), manifest, credentials, ToolKind.mcp,
@@ -3953,12 +4000,9 @@ async def test_connection(
         try:
             provider = managed_mcp_provider(tool.base_url)
             if provider and (tool.config or {}).get("mcp_oauth_provider") == provider:
-                credentials, changed = await refresh_oauth_credentials(
-                    settings, tool.slug, credentials, tool.config,
+                credentials, refreshed_manifest = await _verify_managed_mcp_with_refresh(
+                    tool, credentials, provider,
                 )
-                if changed:
-                    tool.encrypted_credentials = CredentialVault().encrypt(credentials)
-                refreshed_manifest = await _verify_managed_mcp(credentials, provider)
             else:
                 refreshed_manifest = await discover_provider(
                     tool.kind.value,

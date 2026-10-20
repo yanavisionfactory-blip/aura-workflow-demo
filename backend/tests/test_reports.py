@@ -5,7 +5,7 @@ import pytest
 
 from app import reports
 from app.agent_runtime import intent_bounded_tool_inventory
-from app.native_connectors import native_manifest, native_operations
+from app.native_connectors import coerce_module_arguments, native_manifest, native_operations
 from app.operation_contracts import output_errors
 from app.orchestrator import _create_compiled_plan
 from app.providers import ProviderExecutor
@@ -25,6 +25,24 @@ def test_report_packet_rejects_missing_evidence_and_duplicate_source_ids():
     with pytest.raises(ValueError, match="distinct"):
         ReportRequest.model_validate({**PACKET, "sources": PACKET["sources"] * 2})
     assert report_workflow_recipe("Summarize a report", []) is None
+
+
+def test_resolved_report_receipts_keep_full_error_evidence_in_string_sources():
+    import json
+
+    receipt = {"summary": "Call returned", "is_error": True,
+               "content": [{"type": "text", "text": "[ACCESS_TOKEN_INVALID]"}]}
+    request = {**PACKET, "sources": [{"id": "actual", "title": "Actual provider receipt", "content": receipt}]}
+    prepared = coerce_module_arguments(native_manifest("aura"), "report.compose", request)
+    assert json.loads(prepared["sources"][0]["content"]) == receipt
+    assert request["sources"][0]["content"] is receipt
+
+
+def test_report_receipt_coercion_does_not_truncate_oversized_evidence():
+    oversized = {**PACKET, "sources": [{"id": "actual", "title": "Actual receipt",
+                                       "content": {"text": "x" * 30001}}]}
+    with pytest.raises(ValueError):
+        coerce_module_arguments(native_manifest("aura"), "report.compose", oversized)
 
 
 def test_native_report_stays_available_when_source_text_mentions_external_platforms():

@@ -3807,7 +3807,10 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             else:
                                 credentials = vault.decrypt(active_tool.encrypted_credentials)
                             if (
-                                active_tool.kind.value == "oauth"
+                                (active_tool.kind.value == "oauth" or (
+                                    active_tool.kind.value == "mcp"
+                                    and active_tool.config.get("oauth_custom")
+                                ))
                                 and active_tool.config.get("managed_by")
                                 not in {"nango", "pipedream"}
                             ):

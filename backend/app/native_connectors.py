@@ -1007,6 +1007,12 @@ def coerce_module_arguments(
     )
     if not module:
         raise NativeConnectorError(f"Module {operation!r} is not declared")
+    if operation == "report.compose":
+        # ReportSource uses a local schema $ref. Validate resolved evidence
+        # with its model so structured receipts become complete JSON strings
+        # before the released string schema is checked. Do not summarize or
+        # truncate provider evidence to fit the source bound.
+        arguments = ReportRequest.model_validate(arguments).model_dump(mode="json", exclude_unset=True)
     properties = module.get("input_schema", {}).get("properties", {})
     coerced = {
         key: _coerce_value(properties.get(key, {}), value)
