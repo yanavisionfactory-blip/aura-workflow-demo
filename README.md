@@ -2,6 +2,40 @@
 
 AURA is a multi-tenant workflow automation application. The React frontend authenticates with Clerk and sends the current session token to the Python control plane. Workflows, runs, schedules, autonomous process cases, access requests, connection state, and orchestration records are stored by workspace.
 
+## Luce Media biweekly executive review
+
+The authenticated command `AURA_EXECUTIVE_REVIEW_V1` followed by
+`{"fixture":"goelzer_industries_v1"}` executes eleven persisted backend steps:
+ten independent CSV processors and executive-review model drafting. It uses
+Goelzer Industries as real public client context, based only on Luce Media's
+[public case study](https://lucemedia.net/commercial-printer-success-story/).
+Every metric, goal, lifecycle record, previous-review entry and team update is
+explicitly **fictional**, not that company's actual performance. Current
+engagement, client accounts and actual software products remain unconfirmed.
+
+The AURA results page is the main deliverable. It includes the executive summary,
+performance/target table, agenda, proposed action register and ten tool views:
+Google Ads, Google Business Profile, Facebook, Instagram, LinkedIn, X/Twitter,
+CRM, appointments, analytics, and reporting/goals. Each view retains CSV rows,
+definitions, input SHA-256, actual AURA execution receipt and computed totals.
+Only currency-aligned spend is aggregated. Leads, bookings, attendance and first
+customers stay distinct; platform lead credits are not deduplicated CRM outcomes.
+
+This is **real AURA export processing**, not vendor reporting API execution or
+static playback. It does not upload fabricated metrics into vendors, create a
+Google Doc, send messages, assign tasks, change campaigns or schedule meetings.
+The packet uses 5–18 October versus 21 September–4 October 2026, America/Chicago,
+USD, at one illustrative cutoff. Targets are explicit fortnight scenario inputs.
+Actual CRM/appointment/reporting vendors are not guessed from public services.
+
+The exact labelled exports are in `examples/executive-review/`; the compact
+command loads the same packaged input bytes from `backend/app/fixtures/` so a
+large CSV packet does not exceed the task field's limit. Regenerate both with
+`python3 scripts/build-executive-review-fixture.py`. Full inline packets are also
+accepted. Tests cover arithmetic, deduplication, comparable periods, provenance,
+target definitions, evidence resolution, compilation, real provider dispatch,
+native result selection and all ten rendered tool views.
+
 `main` is the single controlled release source for both the GitHub Pages frontend and the Railway Python control plane. Production changes must be reconciled and tested on a branch from `main`, then merged through one reviewed pull request.
 
 ## Frontend

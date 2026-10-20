@@ -1,0 +1,9 @@
+id,provenance,period,metric,value,entity_id,event_id,event_at
+GA-C-001,SIMULATED,current,impressions,24000,,,2026-10-10T12:00:00-05:00
+GA-C-002,SIMULATED,current,clicks,1200,,,2026-10-10T12:00:00-05:00
+GA-C-003,SIMULATED,current,spend,3000,,,2026-10-10T12:00:00-05:00
+GA-C-004,SIMULATED,current,tracked_lead_credits,48,,,2026-10-10T12:00:00-05:00
+GA-P-005,SIMULATED,previous,impressions,23000,,,2026-09-26T12:00:00-05:00
+GA-P-006,SIMULATED,previous,clicks,1150,,,2026-09-26T12:00:00-05:00
+GA-P-007,SIMULATED,previous,spend,2800,,,2026-09-26T12:00:00-05:00
+GA-P-008,SIMULATED,previous,tracked_lead_credits,45,,,2026-09-26T12:00:00-05:00

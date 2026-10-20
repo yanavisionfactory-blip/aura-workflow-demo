@@ -1,0 +1,11 @@
+id,provenance,period,metric,value,entity_id,event_id,event_at
+GBP-C-001,SIMULATED,current,profile_views,3200,,,2026-10-10T12:00:00-05:00
+GBP-C-002,SIMULATED,current,website_clicks,140,,,2026-10-10T12:00:00-05:00
+GBP-C-003,SIMULATED,current,call_clicks,42,,,2026-10-10T12:00:00-05:00
+GBP-C-004,SIMULATED,current,directions_requests,18,,,2026-10-10T12:00:00-05:00
+GBP-C-005,SIMULATED,current,reviews,5,,,2026-10-10T12:00:00-05:00
+GBP-P-006,SIMULATED,previous,profile_views,2900,,,2026-09-26T12:00:00-05:00
+GBP-P-007,SIMULATED,previous,website_clicks,125,,,2026-09-26T12:00:00-05:00
+GBP-P-008,SIMULATED,previous,call_clicks,39,,,2026-09-26T12:00:00-05:00
+GBP-P-009,SIMULATED,previous,directions_requests,15,,,2026-09-26T12:00:00-05:00
+GBP-P-010,SIMULATED,previous,reviews,4,,,2026-09-26T12:00:00-05:00

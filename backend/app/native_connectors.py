@@ -10,6 +10,8 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
 
+from .executive_review import PrepareRequest as ExecutivePrepareRequest
+from .executive_review import SourceRequest as ExecutiveSourceRequest
 from .file_delivery import ATTACHMENTS_SCHEMA
 from .policy import operation_scope
 from .presentation_content import PRESENTATION_SCHEMA
@@ -70,6 +72,10 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         "base_url": "provider-managed",
         "identity": {"provider": "aura"},
         "modules": [
+            {**_module("executive.source.analyze", "search", "Execute one explicitly simulated biweekly channel or business-system CSV processor in AURA; retain rows, definitions, calculations and hashes. Vendor reporting API not called."),
+             "input_schema": ExecutiveSourceRequest.model_json_schema()},
+            {**_module("executive.review.prepare", "search", "Recalculate ten simulated exports and use the model to prepare an interactive executive review, agenda and proposed action register on AURA's results page. No Google Doc or account writes."),
+             "input_schema": ExecutivePrepareRequest.model_json_schema()},
             {**_module("website.source.inspect", "search", "GET-only public website, CMS discovery, sitemap or brand source read with source hashes. Does not authenticate to or change a CMS."),
              "input_schema": WebsiteSourceRequest.model_json_schema()},
             {**_module("website.content.prepare", "search", "Generate a complete five-page website content package from actual signed source reads. Returns pages, changes, pending approvals, assets and developer handoff inside AURA; no CMS writes."),
