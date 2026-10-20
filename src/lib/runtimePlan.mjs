@@ -2,6 +2,26 @@ export function hasDurablePlan(runId, backendPlan) {
   return Boolean(runId && backendPlan?.steps?.length);
 }
 
+// Late reads of a previous selection must not replace a fresh user intent.
+export function shouldRestoreRememberedRun({ rememberedRunId, currentRememberedRunId,
+  startedAtGeneration, currentGeneration, hasCurrentIntent = false } = {}) {
+  return Boolean(rememberedRunId) && rememberedRunId === currentRememberedRunId
+    && startedAtGeneration === currentGeneration && !hasCurrentIntent;
+}
+
+// These values prefill the normal input only. They carry no run, account,
+// approval or execution state and must never dispatch a provider operation.
+export function workflowInputPrompt({ state, search = "" } = {}) {
+  const candidate = typeof state?.workflowPrompt === "string"
+    ? state.workflowPrompt : new URLSearchParams(search).get("prompt") || "";
+  return candidate.trim() && candidate.length <= 20000 ? candidate : "";
+}
+
+export function savedRunActionLocation(prompt) {
+  return { pathname: "/", state: { newWorkflow: true,
+    workflowPrompt: typeof prompt === "string" && prompt.length <= 20000 ? prompt : "" } };
+}
+
 export function restorablePlanningRun(run = {}) {
   if (run.plan_approved) return false;
   if (run.status === "awaiting_approval") return Boolean(run.plan?.steps?.length);

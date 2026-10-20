@@ -1,7 +1,48 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { hasDurablePlan, planningRequestPrompt, restorablePlanningRun, savedRunResumeView, sameExecutablePlan, unmatchedWriteTools } from "../src/lib/runtimePlan.mjs";
+import { hasDurablePlan, planningRequestPrompt, restorablePlanningRun, savedRunResumeView, sameExecutablePlan, unmatchedWriteTools, shouldRestoreRememberedRun, savedRunActionLocation, workflowInputPrompt } from "../src/lib/runtimePlan.mjs";
+
+test("a delayed remembered run cannot replace a newly selected workflow", async () => {
+  let finishRead;
+  const read = new Promise((resolve) => { finishRead = resolve; });
+  let selectedRun = "old-run";
+  let generation = 0;
+  let view = "input";
+  const startedAtGeneration = generation;
+  const restore = read.then(() => {
+    if (shouldRestoreRememberedRun({ rememberedRunId: "old-run", currentRememberedRunId: selectedRun,
+      startedAtGeneration, currentGeneration: generation })) view = "old-plan";
+  });
+  generation += 1;
+  selectedRun = null;
+  finishRead();
+  await restore;
+  assert.equal(view, "input");
+  const selection = { rememberedRunId: "saved", currentRememberedRunId: "saved",
+    startedAtGeneration: 2, currentGeneration: 2 };
+  assert.equal(shouldRestoreRememberedRun(selection), true);
+  assert.equal(shouldRestoreRememberedRun({ ...selection, hasCurrentIntent: true }), false);
+});
+
+test("Run again and suggested next retain their exact task in the normal input", () => {
+  const prompt = "Prepare a roofing proposal.\nKeep every placement unpublished.";
+  const next = savedRunActionLocation(prompt);
+  assert.equal(next.pathname, "/");
+  assert.equal(next.state.newWorkflow, true);
+  assert.equal(workflowInputPrompt({ state: next.state }), prompt);
+  assert.deepEqual(Object.keys(next.state).sort(), ["newWorkflow", "workflowPrompt"]);
+  assert.equal(workflowInputPrompt({ state: savedRunActionLocation(null).state }), "");
+});
+
+test("task links prefill only text and cannot carry approval or execution state", () => {
+  const prompt = "Review Classic Roofing & return a draft.\nDo not publish.";
+  const search = `?prompt=${encodeURIComponent(prompt)}&approve=true&run=existing&accountId=123`;
+  assert.equal(workflowInputPrompt({ search }), prompt);
+  assert.equal(workflowInputPrompt({ search: "?approve=true&run=existing" }), "");
+  assert.equal(workflowInputPrompt({ state: { workflowPrompt: "Reviewed text" }, search }), "Reviewed text");
+  assert.equal(workflowInputPrompt({ search: `?prompt=${"x".repeat(20001)}` }), "");
+});
 
 test("execution requires both a durable run id and executable backend steps", () => {
   assert.equal(hasDurablePlan("run-1", { steps: [{ operation: "sheets.read" }] }), true);

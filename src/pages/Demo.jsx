@@ -47,7 +47,7 @@ import {
   shouldStartFreshPlanningRun,
   unavailablePlanningState,
 } from "@/lib/planningFlow.mjs";
-import { hasDurablePlan, planningRequestPrompt, savedRunResumeView, sameExecutablePlan } from "@/lib/runtimePlan.mjs";
+import { hasDurablePlan, planningRequestPrompt, savedRunResumeView, sameExecutablePlan, shouldRestoreRememberedRun, workflowInputPrompt } from "@/lib/runtimePlan.mjs";
 import { operationStepTitle, weatherStepTitle } from "@/lib/planPresentation.mjs";
 import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
 import { savedRunResults } from "@/lib/savedRunResults.mjs";
@@ -289,6 +289,7 @@ const RESULTS_SCHEMA = {
 
 export default function Demo() {
   const location = useLocation();
+  const [inputPrompt, setInputPrompt] = useState(() => workflowInputPrompt(location));
   const [phase, setPhase] = useState("input");
   const [originalPrompt, setOriginalPrompt] = useState("");
   const [interpretation, setInterpretation] = useState("");
@@ -321,12 +322,19 @@ export default function Demo() {
   const omittedToolsRef = useRef([]);
 
   useEffect(() => {
-    if (location.state?.newWorkflow) return undefined;
+    if (location.state?.newWorkflow || inputPrompt) return undefined;
     const remembered = location.state?.resumeRunId || rememberedActivePythonRun();
     if (!remembered) return undefined;
+    const generation = pythonPollGenerationRef.current;
     let mounted = true;
     getPythonRun(remembered).then((run) => {
-      if (!mounted || originalPromptRef.current) return;
+      if (!mounted || !shouldRestoreRememberedRun({
+        rememberedRunId: remembered,
+        currentRememberedRunId: location.state?.resumeRunId || rememberedActivePythonRun(),
+        startedAtGeneration: generation,
+        currentGeneration: pythonPollGenerationRef.current,
+        hasCurrentIntent: Boolean(originalPromptRef.current),
+      })) return;
       const resumeView = savedRunResumeView(run);
       if (!resumeView) return;
       const intent = String(run.prompt || run.plan?.interpretation || "")
@@ -505,6 +513,12 @@ export default function Demo() {
   const reset = useCallback(() => {
     clearTimeouts();
     pythonPollGenerationRef.current += 1;
+    const previousRunId = pythonRunIdRef.current || rememberedActivePythonRun();
+    if (previousRunId) forgetActivePythonRun(previousRunId);
+    originalPromptRef.current = "";
+    attachedResourcesRef.current = null;
+    reviewedPlanRef.current = null;
+    setInputPrompt("");
     runRequestKeyRef.current = null;
     lastPlanningIntentRef.current = "";
     pendingPlanRevisionRef.current = null;
@@ -522,6 +536,8 @@ export default function Demo() {
     pythonPlanRef.current = null;
     setPhase("input");
     setOriginalPrompt("");
+    setPlanLoading(false);
+    setInterpretationLoading(false);
     setInterpretation("");
     setPlan(null);
     setResults(null);
@@ -557,6 +573,7 @@ export default function Demo() {
   // ---- Submit (input) ----
   const handleSubmit = useCallback((prompt, pinnedTools = [], resources = null, mock = null) => {
     clearTimeouts();
+    setInputPrompt("");
     requestNotifyPermission();
     setOriginalPrompt(prompt);
     originalPromptRef.current = prompt;
@@ -1797,7 +1814,7 @@ Generate a results summary in plain, human-friendly language (not technical).
                     onBack={() => { setPilotOpen(false); setPilotDraft(null); }} />
                 ) : (
                   <>
-                    <CommandInput onSubmit={handleSubmit} examples={WORKFLOW_EXAMPLES} onPickExample={handlePickExample} />
+                    <CommandInput initialValue={inputPrompt} onSubmit={handleSubmit} examples={WORKFLOW_EXAMPLES} onPickExample={handlePickExample} />
                   </>
                 )}
               </motion.div>
