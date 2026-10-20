@@ -945,11 +945,14 @@ async def _create_compiled_plan(
     from .executive_review import workflow_recipe as executive_workflow_recipe
     from .reports import report_workflow_recipe
     from .seo_crawl import crawl_review_recipe
+    from .website_content import website_workflow_recipe
     from .weekly_review import weekly_workflow_recipe
 
     audited_plan = report_workflow_recipe(prompt, inventory)
     if audited_plan is None:
         audited_plan = executive_workflow_recipe(prompt, inventory)
+    if audited_plan is None:
+        audited_plan = website_workflow_recipe(prompt, inventory)
     if audited_plan is None:
         audited_plan = weekly_workflow_recipe(prompt, inventory)
     if audited_plan is None:
@@ -1198,6 +1201,10 @@ def _connected_capability_families(inventory: list[dict]) -> set[str]:
 
 def explicit_disconnected_capabilities(prompt: str, inventory: list[dict]) -> list[str]:
     """Find every explicitly named, disconnected provider account family."""
+    # This intake section is a list of candidate CMS platforms, not four
+    # mandatory connected accounts. Actual planned operations still undergo
+    # normal grant preflight, including any explicit connect/read requests.
+    prompt = re.sub(r"(?im)^Platforms publicly named:[ \t]*\n(?:[ \t]*\n|[ \t]*[-*][^\n]*(?:\n|$))+", "", prompt)
     text = " " + re.sub(r"[^a-z0-9]+", " ", prompt.casefold()).strip() + " "
     connected_families = _connected_capability_families(inventory)
     missing: list[str] = []

@@ -594,6 +594,8 @@ class ProviderExecutor:
             "jira.issue.update": self._jira_issue_update,
             "weather.forecast": self._weather_forecast,
             "report.compose": self._report_compose,
+            "website.source.inspect": self._website_source_inspect,
+            "website.content.prepare": self._website_content_prepare,
             "weekly.source.analyze": self._weekly_source_analyze,
             "weekly.review.prepare": self._weekly_review_prepare,
             "executive.source.analyze": self._executive_source_analyze,
@@ -1206,6 +1208,14 @@ class ProviderExecutor:
 
         return await compose_report(a)
 
+    async def _website_source_inspect(self, a: dict) -> dict:
+        from .website_content import read_source
+        return await read_source(a)
+
+    async def _website_content_prepare(self, a: dict) -> dict:
+        from .website_content import prepare_content
+        return await prepare_content(a)
+
     async def _weekly_source_analyze(self, a: dict) -> dict:
         from .weekly_review import analyze_source
         return analyze_source(a)
@@ -1479,7 +1489,7 @@ class ProviderExecutor:
             "GET",
             "https://www.googleapis.com/drive/v3/files",
             params={
-                "q": f"name = '{escaped}' and trashed = false",
+                "q": f"name {'contains' if a.get('name_match') == 'contains' else '='} '{escaped}' and trashed = false",
                 "pageSize": min(int(a.get("page_size", 20)), 100),
                 "fields": (
                     "nextPageToken,files(id,name,mimeType,createdTime,modifiedTime,"
