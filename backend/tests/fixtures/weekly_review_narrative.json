@@ -1,0 +1,395 @@
+{
+  "summary": "Synthetic sample data shows acquisition costs increasing and campaign email click rate declining. This is a proposed review, with distinct attribution and no vendor API operations.",
+  "experiments": [
+    {
+      "id": "E1",
+      "source": "google",
+      "title": "Test a product-specific Search message",
+      "evidence": [
+        "G-C-NONBRAND",
+        "G-P-NONBRAND",
+        "Q-C-GENERIC",
+        "Q-P-GENERIC"
+      ],
+      "status": "proposed",
+      "hypothesis": "A product-specific message may qualify dinnerware intent more effectively than generic category copy and reduce purchase-credit CPA.",
+      "change": "Compare a broad collection-message draft with a product-specific headline/description bundle. The real control copy has not been supplied. Keep keywords, bid strategy, landing page, geography and total approved budget unchanged.",
+      "design": "Proposed randomized campaign experiment, with allocation and platform eligibility confirmed by the account owner. This is a creative-message bundle test; it cannot isolate an individual headline.",
+      "primary": "Google Ads Purchase-credit CPA under the existing 30-day click / data-driven definition.",
+      "guardrails": "Monitor CPC, purchase-credit volume, search-term relevance and product availability; no budget increase or automatic rollout.",
+      "decision": "Pre-register the sample size and uncertainty interval needed to evaluate a 20% CPA improvement. Run for at least two full weeks and allow the attribution window to mature; neither duration alone nor a raw point estimate establishes a winner.",
+      "feasibility": "Only 48 current-week non-brand purchase credits. Power, duration and conversion lag require analyst review; the available aggregate export cannot establish a statistically powered CPA test.",
+      "creative": "search-message",
+      "owner": "Paid search specialist",
+      "effort": "3–5 setup/QA hours after evidence and approval; no setup executed",
+      "dependencies": [
+        "B01",
+        "B02",
+        "B03"
+      ]
+    },
+    {
+      "id": "E2",
+      "source": "meta",
+      "title": "Test a fresh video-opening concept",
+      "evidence": [
+        "M-C-VIDEO",
+        "M-P-VIDEO"
+      ],
+      "status": "proposed",
+      "hypothesis": "A fresh opening concept may restore attention and acquisition efficiency in the existing prospecting audience.",
+      "change": "Test a product-close-up opening against a table-setting opening as two draft creative concepts. Keep audience, placements, optimization event, landing URL and total approved budget fixed.",
+      "design": "Proposed Meta A/B experiment with non-overlapping randomized audiences. Creative concepts include their opening message and visual treatment; results would apply to the bundle.",
+      "primary": "Meta-attributed purchase CPA under the existing 7-day click + 1-day view definition. Link CTR is a diagnostic metric.",
+      "guardrails": "Check attribution settings, frequency, unique reach, purchase volume and brand/product claims. No automatic budget shift or winner promotion.",
+      "decision": "Agree a power/sample plan using randomized users and purchase outcomes before activation. Review at least two full weeks, then allow conversions to mature. Repeated impressions are not independent users.",
+      "feasibility": "15 current-week video-attributed purchases is a small base. Frequency is 4.00; fatigue is a hypothesis, not a proven cause. Creative assets and a power review are still needed.",
+      "creative": "meta-concept",
+      "owner": "Paid social specialist + designer",
+      "effort": "4–6 concept/QA hours; final video assets not produced",
+      "dependencies": [
+        "B01",
+        "B02",
+        "B03"
+      ]
+    },
+    {
+      "id": "E3",
+      "source": "klaviyo",
+      "title": "Test subject-line relevance within one segment",
+      "evidence": [
+        "K-C-ENGAGED",
+        "K-P-ENGAGED",
+        "K-C-OTHER",
+        "K-P-OTHER"
+      ],
+      "status": "proposed",
+      "hypothesis": "A concrete table-setting subject line may improve clicks within the same engaged audience without relying on open-rate changes.",
+      "change": "Randomize two subject lines within the Engaged 30d email segment. Keep the sender, preheader, body, CTA, delivery time and eligibility/suppression rules identical.",
+      "design": "Proposed recipient-level A/B test. Analyse per-message unique click rate within the selected segment; do not compare differently sized or differently engaged segments as experimental arms.",
+      "primary": "Per-message unique clickers / delivered messages, using the same bot filtering in each arm.",
+      "guardrails": "Unsubscribe and spam complaint rates, consent, suppression, deliverability and placed-order attribution. No SMS, audience expansion or message send.",
+      "decision": "Set the minimum sample and detectable lift before sending. A single split of the current 5,000-profile engaged segment may be underpowered for a modest lift; do not declare a winner from opens or an early point estimate.",
+      "feasibility": "The campaign audience mix changed between weeks. Current engaged clicks are 120/5,000 (2.4%), versus 150/5,000 (3.0%). The planned test isolates subject line only; sample-size feasibility remains an expert check.",
+      "creative": "email-subject",
+      "owner": "Lifecycle marketing specialist",
+      "effort": "2–3 copy/segment QA hours after approval; no draft created in Klaviyo",
+      "dependencies": [
+        "B01",
+        "B02",
+        "B03"
+      ]
+    }
+  ],
+  "creatives": [
+    {
+      "id": "search-message",
+      "source": "google",
+      "experiment": "E1",
+      "title": "Google Search message drafts",
+      "destination": "https://northline-home.example/dinnerware",
+      "note": "Draft message bundles, not a complete uploaded RSA or a verified existing control. Original account copy was not supplied. Product facts, final asset count and platform policy review are required.",
+      "variants": [
+        {
+          "label": "A · Broad collection",
+          "headlines": [
+            "Make Room For Everyday Meals",
+            "Find Your Table Setting",
+            "Explore Northline Home"
+          ],
+          "descriptions": [
+            "Refresh your everyday table. Explore the latest collection at Northline Home.",
+            "Find the pieces for your next place setting in the Northline Home collection."
+          ],
+          "hook": "",
+          "visual": "",
+          "text": "",
+          "headline": "",
+          "cta": "",
+          "subject": ""
+        },
+        {
+          "label": "B · Product-specific",
+          "headlines": [
+            "Stoneware Dinnerware Sets",
+            "Build Your Everyday Table",
+            "Browse The Dinnerware Edit"
+          ],
+          "descriptions": [
+            "Start with the tableware. Explore stoneware sets in the Northline Home collection.",
+            "Find your next place setting. Browse the dinnerware collection online."
+          ],
+          "hook": "",
+          "visual": "",
+          "text": "",
+          "headline": "",
+          "cta": "",
+          "subject": ""
+        }
+      ],
+      "shared": {
+        "preheader": "",
+        "greeting": "",
+        "body": "",
+        "cta": ""
+      }
+    },
+    {
+      "id": "meta-concept",
+      "source": "meta",
+      "experiment": "E2",
+      "title": "Meta ad concept drafts",
+      "destination": "https://northline-home.example/dinnerware",
+      "note": "Text and storyboard previews only. No video, ad or campaign was created in Meta.",
+      "variants": [
+        {
+          "label": "A · Product close-up",
+          "headlines": [],
+          "descriptions": [],
+          "hook": "Start with one place setting.",
+          "visual": "Opening 0–2 seconds: close-up of one plate, bowl and cup; cut to the complete table.",
+          "text": "Everyday meals deserve a setting you enjoy. Explore the Northline Home dinnerware collection and find your next place setting.",
+          "headline": "Your next place setting",
+          "cta": "Shop now",
+          "subject": ""
+        },
+        {
+          "label": "B · Table-setting ritual",
+          "headlines": [],
+          "descriptions": [],
+          "hook": "Make room for an everyday moment.",
+          "visual": "Opening 0–2 seconds: hands setting a table before a simple meal; finish on the collection.",
+          "text": "Bring your table together, one place setting at a time. Browse the Northline Home dinnerware collection.",
+          "headline": "Set the table your way",
+          "cta": "Shop now",
+          "subject": ""
+        }
+      ],
+      "shared": {
+        "preheader": "",
+        "greeting": "",
+        "body": "",
+        "cta": ""
+      }
+    },
+    {
+      "id": "email-subject",
+      "source": "klaviyo",
+      "experiment": "E3",
+      "title": "Klaviyo email subject drafts",
+      "destination": "https://northline-home.example/dinnerware",
+      "note": "Only the subject changes between arms. The shared preheader, body and CTA below remain fixed. Sender address, consent and legal footer need client approval.",
+      "shared": {
+        "preheader": "Explore the Northline Home dinnerware collection.",
+        "greeting": "A place for everyday moments",
+        "body": "From a quiet breakfast to a table shared with friends, start with the pieces you reach for every day. Explore our dinnerware collection and find your next place setting.",
+        "cta": "Explore dinnerware"
+      },
+      "variants": [
+        {
+          "label": "A · Collection-led",
+          "headlines": [],
+          "descriptions": [],
+          "hook": "",
+          "visual": "",
+          "text": "",
+          "headline": "",
+          "cta": "",
+          "subject": "Your next everyday table setting"
+        },
+        {
+          "label": "B · Task-led",
+          "headlines": [],
+          "descriptions": [],
+          "hook": "",
+          "visual": "",
+          "text": "",
+          "headline": "",
+          "cta": "",
+          "subject": "Find your next dinnerware set"
+        }
+      ]
+    }
+  ],
+  "backlog": [
+    {
+      "id": "B01",
+      "source": "all",
+      "title": "Confirm the real client, brief and reporting setup",
+      "evidence": [
+        "G-C-BRAND",
+        "M-C-VIDEO",
+        "K-C-ENGAGED"
+      ],
+      "status": "proposed",
+      "priority": "P1",
+      "group": "Intake",
+      "fix": "Confirm agency/client relationship, platform scope, goals, approved exports, brand claims, timezone, currency and the selected Client Hub setup.",
+      "owner": "Account lead",
+      "effort": "1–2 review hours",
+      "dependencies": [],
+      "reasoning": "All current client details and metrics are scenario assumptions. Real review depends on approved inputs.",
+      "acceptance": "A named owner confirms the scope, brief, accounts and reporting destination; no external write is authorized by this demo."
+    },
+    {
+      "id": "B02",
+      "source": "all",
+      "title": "Reconcile measurement definitions and conversion maturity",
+      "evidence": [
+        "G-C-NONBRAND",
+        "M-C-VIDEO",
+        "K-C-ENGAGED"
+      ],
+      "status": "proposed",
+      "priority": "P1",
+      "group": "Measurement",
+      "fix": "Verify conversion actions, attribution windows, event vs interaction vs message-send date, MPP/bot settings and purchase-value/refund treatment. Schedule a separate approved re-extract after appropriate windows mature.",
+      "owner": "Marketing analyst",
+      "effort": "2–4 analysis hours",
+      "dependencies": [
+        "B01"
+      ],
+      "reasoning": "Aligned calendar periods do not make differently attributed revenue additive or final.",
+      "acceptance": "Metric dictionary and cutoff are approved; platform revenue remains separate; remaining lag and deduplication gaps are explicit."
+    },
+    {
+      "id": "B03",
+      "source": "all",
+      "title": "Approve sample sizes and experiment eligibility",
+      "evidence": [
+        "G-C-NONBRAND",
+        "M-C-VIDEO",
+        "K-C-ENGAGED"
+      ],
+      "status": "proposed",
+      "priority": "P1",
+      "group": "Experiment design",
+      "fix": "Define randomization, primary metrics, detectable effects, sample requirements and guardrails. Check actual platform support, traffic volume and unique-profile counts.",
+      "owner": "Experimentation analyst",
+      "effort": "2–4 design hours",
+      "dependencies": [
+        "B01",
+        "B02"
+      ],
+      "reasoning": "Weekly observations and small purchase bases cannot establish causality or a statistically significant winner.",
+      "acceptance": "A pre-registered decision rule and feasible sample/duration are accepted for each of E1–E3, or the test is deferred."
+    },
+    {
+      "id": "B04",
+      "source": "google",
+      "title": "Prepare Search experiment E1 for review",
+      "evidence": [
+        "G-C-NONBRAND",
+        "G-P-NONBRAND",
+        "Q-C-GENERIC",
+        "Q-P-GENERIC"
+      ],
+      "status": "proposed",
+      "priority": "P2",
+      "group": "Paid media",
+      "fix": "Review search-term intent and draft message bundles. Confirm existing landing page, product facts and unchanged budget before any separate activation decision.",
+      "owner": "Paid search specialist",
+      "effort": "3–5 hours",
+      "dependencies": [
+        "B01",
+        "B02",
+        "B03"
+      ],
+      "reasoning": "Non-brand CPA doubled and generic-query spend share increased; the message test is a hypothesis to evaluate.",
+      "acceptance": "E1 design, copy and evidence reviewed. No campaign launched, keyword changed or budget modified."
+    },
+    {
+      "id": "B05",
+      "source": "meta",
+      "title": "Prepare Meta concept test E2 for review",
+      "evidence": [
+        "M-C-VIDEO",
+        "M-P-VIDEO"
+      ],
+      "status": "proposed",
+      "priority": "P2",
+      "group": "Paid media",
+      "fix": "Review the two creative storyboards with the designer, then prepare the approved asset requirements and audience split for owner review.",
+      "owner": "Paid social specialist + designer",
+      "effort": "4–6 hours",
+      "dependencies": [
+        "B01",
+        "B02",
+        "B03"
+      ],
+      "reasoning": "Higher frequency and lower link CTR justify creative investigation; they do not prove fatigue.",
+      "acceptance": "E2 concept, randomization and measurement plan reviewed. No assets uploaded, ad launched or budget changed."
+    },
+    {
+      "id": "B06",
+      "source": "klaviyo",
+      "title": "Prepare subject-line test E3 for review",
+      "evidence": [
+        "K-C-ENGAGED",
+        "K-P-ENGAGED",
+        "K-C-OTHER",
+        "K-P-OTHER"
+      ],
+      "status": "proposed",
+      "priority": "P2",
+      "group": "Lifecycle",
+      "fix": "Verify the engaged audience and suppression rules, review both subject lines and keep the shared message body fixed. Confirm consent and sender/footer details.",
+      "owner": "Lifecycle specialist",
+      "effort": "2–3 hours",
+      "dependencies": [
+        "B01",
+        "B02",
+        "B03"
+      ],
+      "reasoning": "Segment mix changed, so the proposal randomizes within one segment and measures clicks instead of relying on opens.",
+      "acceptance": "E3 copy, sample feasibility and recipient eligibility reviewed. No email/SMS sent or automation edited."
+    },
+    {
+      "id": "B07",
+      "source": "all",
+      "title": "QA the draft weekly account review",
+      "evidence": [
+        "G-C-BRAND",
+        "G-C-NONBRAND",
+        "M-C-STATIC",
+        "K-C-CART"
+      ],
+      "status": "proposed",
+      "priority": "P2",
+      "group": "Reporting",
+      "fix": "Recompute every ratio from source counts, inspect row references and keep separate platform attribution cards. Check unsupported claims, creative length and scope exclusions.",
+      "owner": "Account lead + analyst",
+      "effort": "1–2 QA hours",
+      "dependencies": [
+        "B02",
+        "B04",
+        "B05",
+        "B06"
+      ],
+      "reasoning": "A checked review must distinguish observed changes, hypotheses, proposals and missing approvals.",
+      "acceptance": "All packet checks pass or carry an explicit expert-review note; exactly three proposals and no blended revenue claim."
+    },
+    {
+      "id": "B08",
+      "source": "all",
+      "title": "Confirm how the review would reach the client",
+      "evidence": [
+        "G-C-BRAND",
+        "M-C-VIDEO",
+        "K-C-ENGAGED"
+      ],
+      "status": "proposed",
+      "priority": "P3",
+      "group": "Reporting",
+      "fix": "Confirm the selected client’s reporting destination and permissions with the owner. Review the in-AURA Client Hub-style draft before any separately authorized delivery.",
+      "owner": "Account lead",
+      "effort": "30–60 review minutes",
+      "dependencies": [
+        "B01",
+        "B07"
+      ],
+      "reasoning": "SmartSites’ public Client Hub description does not verify the selected account’s actual reporting setup.",
+      "acceptance": "Destination and owner are recorded. This workflow sends no messages and creates no external report or task."
+    }
+  ]
+}

@@ -20,6 +20,14 @@ PAGE = {"type": "object", "required": ["id", "properties"], "properties": {
     "id": TEXT, "object": {"const": "page"}, "url": TEXT, "properties": OBJECT,
     "parent": OBJECT, "archived": {"type": "boolean"}, "in_trash": {"type": "boolean"}}}
 KNOWN = {
+    "weekly.source.analyze": ({"type": "object", "required": ["mode", "synthetic", "source", "comparison", "receipt", "external_writes"],
+        "properties": {"mode": {"const": "synthetic_export_execution"}, "synthetic": {"const": True},
+            "source": OBJECT, "comparison": OBJECT, "receipt": OBJECT, "external_writes": {"const": False}}},
+        ["synthetic_source_rows", "computed_weekly_metrics", "source_hashes"]),
+    "weekly.review.prepare": ({"type": "object", "required": ["kind", "synthetic", "status", "packet", "execution", "source_receipts", "external_writes"],
+        "properties": {"kind": {"const": "weekly_review"}, "synthetic": {"const": True}, "status": {"const": "draft"},
+            "packet": OBJECT, "execution": OBJECT, "source_receipts": {"type": "array", "minItems": 3, "maxItems": 3},
+            "external_writes": {"const": False}}}, ["interactive_weekly_review", "synthetic_source_evidence"]),
     "seo.crawl.analyze": ({"type": "object", "required": ["source_tool", "mode", "files", "counts", "issues", "website_modified"],
                            "properties": {"source_tool": {"const": "Screaming Frog"},
                                           "mode": {"const": "supplied_export"},

@@ -12,6 +12,24 @@ import {
   visualResultChoices,
 } from "../src/lib/resultPresentation.mjs";
 
+test("only accepted and verified weekly execution receipts become an interactive primary result", () => {
+  const output = { step_key: "review", operation: "weekly.review.prepare",
+    critic: { action: "accept" }, outcome_check: { status: "verified" },
+    provider_result: { kind: "weekly_review", synthetic: true,
+      packet: { execution: { mode: "backend_executed_synthetic" }, sources: [] } } };
+  const primary = primaryResultFromOutputs([output], {}, { primary_step_key: "review" });
+  assert.equal(primary.kind, "weekly_review");
+  assert.equal(primary.completionTitle, "Weekly review executed in AURA");
+  for (const mutate of [
+    (item) => { item.critic.action = "escalate"; },
+    (item) => { item.outcome_check.status = "unverified"; },
+    (item) => { item.provider_result.packet.execution.mode = "static_playback"; },
+  ]) {
+    const invalid = structuredClone(output); mutate(invalid);
+    assert.notEqual(primaryResultFromOutputs([invalid], {}, { primary_step_key: "review" }).kind, "weekly_review");
+  }
+});
+
 test("multiple Canva designs and completed exports stay reachable beside the main creative", () => {
   const activity = [
     { status: "completed", stepKey: "square", tool: "Canva", output: { operation: "canva.import.get", provider_result: {

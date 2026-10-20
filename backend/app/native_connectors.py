@@ -15,6 +15,7 @@ from .policy import operation_scope
 from .presentation_content import PRESENTATION_SCHEMA
 from .reports import ReportRequest
 from .seo_crawl import CrawlReviewRequest
+from .weekly_review import ReviewRequest, SourceRequest
 
 
 class NativeConnectorError(ValueError):
@@ -67,6 +68,10 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         "base_url": "provider-managed",
         "identity": {"provider": "aura"},
         "modules": [
+            {**_module("weekly.source.analyze", "search", "Process a labelled synthetic marketing CSV export inside AURA. Validate dates and definitions, calculate weekly metrics and retain source hashes. Does not call a vendor reporting API."),
+             "input_schema": SourceRequest.model_json_schema()},
+            {**_module("weekly.review.prepare", "search", "Use processed synthetic exports and a fictional brief to execute AURA model drafting and produce an interactive weekly review, three experiments, creative pairs and backlog. No vendor account writes."),
+             "input_schema": ReviewRequest.model_json_schema()},
             {
                 **_module("seo.crawl.analyze", "search", "Parse user-uploaded Screaming Frog "
                           "CSV exports and return deduplicated URL evidence, dates, source hashes "

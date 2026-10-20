@@ -1,0 +1,209 @@
+{
+  "config": {
+    "version": 1,
+    "mode": "simulated",
+    "agency": "SmartSites",
+    "client": {
+      "name": "Northline Home",
+      "website": "https://northline-home.example/",
+      "fictional": true,
+      "engagementConfirmed": false
+    },
+    "provenance": "simulated",
+    "currency": "USD",
+    "timezone": "America/Chicago",
+    "asOf": "2026-10-20T06:00:00Z",
+    "materialityThreshold": 0.2,
+    "periods": {
+      "current": {
+        "from": "2026-10-12",
+        "to": "2026-10-18",
+        "label": "12–18 Oct 2026"
+      },
+      "previous": {
+        "from": "2026-10-05",
+        "to": "2026-10-11",
+        "label": "5–11 Oct 2026"
+      }
+    },
+    "scope": {
+      "included": [
+        "google",
+        "meta",
+        "klaviyo"
+      ],
+      "excluded": [
+        "Microsoft Advertising",
+        "Amazon Ads",
+        "Mailchimp",
+        "HubSpot"
+      ],
+      "reason": "This one fictional engagement includes Google Ads, Meta Ads and Klaviyo email only. Agency-wide service lists do not establish an individual client’s scope. SMS, Microsoft Advertising, Amazon Ads, Mailchimp and HubSpot are excluded from this scenario; no results are invented for them."
+    },
+    "brief": {
+      "status": "Scenario assumptions · client approval required",
+      "business": "Fictional US homeware retailer selling tableware and home essentials online.",
+      "goals": [
+        "Improve first-order acquisition efficiency; scenario CPA review targets: non-brand Google Search ≤ $35 and Meta prospecting ≤ $35.",
+        "Improve email engagement and repeat-purchase relevance without assuming that attributed revenue is incremental.",
+        "Preserve brand voice and keep review, experimentation and implementation separate."
+      ],
+      "voice": "Warm, practical, calm US English. Product-specific benefits. Avoid urgency, invented discounts, unsupported sustainability claims and guaranteed outcomes.",
+      "constraints": [
+        "No live campaign launch, budget adjustment or message send.",
+        "No changes to website, ad accounts, automations or reporting destinations.",
+        "Product facts, inventory, sender details and any claims require real client review."
+      ]
+    },
+    "reporting": {
+      "candidate": "SmartSites Client Hub",
+      "confirmed": false,
+      "destinationUrl": null,
+      "note": "Agency-supported destination verified publicly; the fictional client has no verified Client Hub account, URL or permissions. AURA displays a draft review only."
+    },
+    "expertChecks": [
+      "The fictional client, scope, goals and brand brief are not approved client evidence.",
+      "Google and Meta report different attribution windows and date bases; Klaviyo uses message-send cohorts. No cross-platform revenue or order total is valid here.",
+      "The latest conversion windows are still open. A single cutoff aligns extraction timing, not cohort maturity; re-extract only under a separately approved read-only review.",
+      "Weekly changes above the 20% review threshold are materially flagged, not statistically significant or causal findings.",
+      "Revenue is platform-attributed gross value with tax, shipping and refund treatment unconfirmed. Profit, customer acquisition cost and incrementality are not established.",
+      "Campaign audience mix changed; Meta repeated impressions and overlapping reach do not provide independent experimental sample sizes.",
+      "No live account, asset, tracking, reporting destination or consent has been verified for this fictional brand. A live execution remains blocked on approved inputs."
+    ],
+    "references": [
+      {
+        "label": "SmartSites services and named platforms",
+        "url": "https://www.smartsites.com/digital-marketing-services/",
+        "use": "Agency-level services only; not proof of this client’s contract."
+      },
+      {
+        "label": "SmartSites platform partners",
+        "url": "https://www.smartsites.com/partners/",
+        "use": "Public platform references including HubSpot, Mailchimp and Klaviyo."
+      },
+      {
+        "label": "SmartSites email and automation services",
+        "url": "https://www.smartsites.com/email-marketing/",
+        "use": "Public email/SMS and automation offering; account scope remains unconfirmed."
+      },
+      {
+        "label": "SmartSites Client Hub description",
+        "url": "https://www.smartsites.com/",
+        "use": "Agency-supported reporting context; no client destination URL is inferred."
+      },
+      {
+        "label": "Google Search ad text limits",
+        "url": "https://support.google.com/google-ads/answer/12159014?hl=en",
+        "use": "Headline ≤30 characters and description ≤90 characters; not a full policy approval."
+      },
+      {
+        "label": "Klaviyo attribution model settings",
+        "url": "https://help.klaviyo.com/hc/en-us/articles/11118357030555",
+        "use": "Attribution is configurable; scenario settings are assumptions, not verified account defaults."
+      },
+      {
+        "label": "Klaviyo message attribution and send-date reporting",
+        "url": "https://help.klaviyo.com/hc/en-us/articles/1260804504250",
+        "use": "Message attribution reports can use send-date cohorts; event-date reports differ."
+      }
+    ]
+  },
+  "sources": [
+    {
+      "source_key": "google",
+      "csv_text": "\"provenance\",\"source\",\"recordType\",\"id\",\"period\",\"period_start\",\"period_end\",\"timezone\",\"currency\",\"asOf\",\"campaign\",\"channel\",\"segment\",\"impressions\",\"clicks\",\"spend\",\"purchases\",\"revenue\",\"reach\",\"delivered\",\"uniqueClicks\",\"unsubscribes\",\"attribution\",\"dateBasis\"\r\n\"SIMULATED\",\"Google Ads\",\"campaign_or_adset\",\"G-P-BRAND\",\"previous\",\"2026-10-05\",\"2026-10-11\",\"America/Chicago\",\"USD\",\"2026-10-20T06:00:00Z\",\"Brand Search\",\"\",\"\",\"12500\",\"1250\",\"500\",\"62\",\"6200\",\"\",\"\",\"\",\"\",\"Scenario account setting: data-driven attribution, 30-day click window, website Purchase conversion credit.\",\"Ad interaction date, account local calendar days\"\r\n\"SIMULATED\",\"Google Ads\",\"campaign_or_adset\",\"G-C-BRAND\",\"current\",\"2026-10-12\",\"2026-10-18\",\"America/Chicago\",\"USD\",\"2026-10-20T06:00:00Z\",\"Brand Search\",\"\",\"\",\"12000\",\"1200\",\"480\",\"60\",\"6000\",\"\",\"\",\"\",\"\",\"Scenario account setting: data-driven attribution, 30-day click window, website Purchase conversion credit.\",\"Ad interaction date, account local calendar days\"\r\n\"SIMULATED\",\"Google Ads\",\"campaign_or_adset\",\"G-P-NONBRAND\",\"previous\",\"2026-10-05\",\"2026-10-11\",\"America/Chicago\",\"USD\",\"2026-10-20T06:00:00Z\",\"Non-brand · Dinnerware\",\"\",\"\",\"80000\",\"2400\",\"1800\",\"72\",\"7200\",\"\",\"\",\"\",\"\",\"Scenario account setting: data-driven attribution, 30-day click window, website Purchase conversion credit.\",\"Ad interaction date, account local calendar days\"\r\n\"SIMULATED\",\"Google Ads\",\"campaign_or_adset\",\"G-C-NONBRAND\",\"current\",\"2026-10-12\",\"2026-10-18\",\"America/Chicago\",\"USD\",\"2026-10-20T06:00:00Z\",\"Non-brand · Dinnerware\",\"\",\"\",\"100000\",\"2400\",\"2400\",\"48\",\"4800\",\"\",\"\",\"\",\"\",\"Scenario account setting: data-driven attribution, 30-day click window, website Purchase conversion credit.\",\"Ad interaction date, account local calendar days\"\r\n\"SIMULATED\",\"Google Ads\",\"nonbrand_search_term_breakdown_do_not_add_to_campaigns\",\"Q-P-GENERIC\",\"previous\",\"2026-10-05\",\"2026-10-11\",\"America/Chicago\",\"USD\",\"2026-10-20T06:00:00Z\",\"cheap dinnerware · generic query\",\"\",\"\",\"25000\",\"500\",\"300\",\"10\",\"1000\",\"\",\"\",\"\",\"\",\"Scenario account setting: data-driven attribution, 30-day click window, website Purchase conversion credit.\",\"Ad interaction date, account local calendar days\"\r\n\"SIMULATED\",\"Google Ads\",\"nonbrand_search_term_breakdown_do_not_add_to_campaigns\",\"Q-C-GENERIC\",\"current\",\"2026-10-12\",\"2026-10-18\",\"America/Chicago\",\"USD\",\"2026-10-20T06:00:00Z\",\"cheap dinnerware · generic query\",\"\",\"\",\"60000\",\"1000\",\"900\",\"8\",\"800\",\"\",\"\",\"\",\"\",\"Scenario account setting: data-driven attribution, 30-day click window, website Purchase conversion credit.\",\"Ad interaction date, account local calendar days\"\r\n\"SIMULATED\",\"Google Ads\",\"nonbrand_search_term_breakdown_do_not_add_to_campaigns\",\"Q-P-PRODUCT\",\"previous\",\"2026-10-05\",\"2026-10-11\",\"America/Chicago\",\"USD\",\"2026-10-20T06:00:00Z\",\"stoneware dinnerware sets · product query\",\"\",\"\",\"55000\",\"1900\",\"1500\",\"62\",\"6200\",\"\",\"\",\"\",\"\",\"Scenario account setting: data-driven attribution, 30-day click window, website Purchase conversion credit.\",\"Ad interaction date, account local calendar days\"\r\n\"SIMULATED\",\"Google Ads\",\"nonbrand_search_term_breakdown_do_not_add_to_campaigns\",\"Q-C-PRODUCT\",\"current\",\"2026-10-12\",\"2026-10-18\",\"America/Chicago\",\"USD\",\"2026-10-20T06:00:00Z\",\"stoneware dinnerware sets · product query\",\"\",\"\",\"40000\",\"1400\",\"1500\",\"40\",\"4000\",\"\",\"\",\"\",\"\",\"Scenario account setting: data-driven attribution, 30-day click window, website Purchase conversion credit.\",\"Ad interaction date, account local calendar days\"",
+      "metadata": {
+        "key": "google",
+        "name": "Google Ads",
+        "provenance": "simulated",
+        "currency": "USD",
+        "timezone": "America/Chicago",
+        "asOf": "2026-10-20T06:00:00Z",
+        "kind": "paid",
+        "filename": "SIMULATED_google_ads.csv",
+        "report": "Campaign performance + search-term breakdown",
+        "dateBasis": "Ad interaction date, account local calendar days",
+        "attribution": "Scenario account setting: data-driven attribution, 30-day click window, website Purchase conversion credit.",
+        "conversionDefinition": "Primary website Purchase conversion credits; not deduplicated orders across platforms.",
+        "revenueDefinition": "Purchase conversion value in USD. Tax, shipping, refunds and margin treatment require confirmation.",
+        "caution": "Search-term rows are a breakdown of non-brand campaign rows; adding both tables would double count. Conversion windows are still open."
+      },
+      "periods": {
+        "current": {
+          "from": "2026-10-12",
+          "to": "2026-10-18",
+          "label": "12–18 Oct 2026"
+        },
+        "previous": {
+          "from": "2026-10-05",
+          "to": "2026-10-11",
+          "label": "5–11 Oct 2026"
+        }
+      }
+    },
+    {
+      "source_key": "meta",
+      "csv_text": "\"provenance\",\"source\",\"recordType\",\"id\",\"period\",\"period_start\",\"period_end\",\"timezone\",\"currency\",\"asOf\",\"campaign\",\"channel\",\"segment\",\"impressions\",\"clicks\",\"spend\",\"purchases\",\"revenue\",\"reach\",\"delivered\",\"uniqueClicks\",\"unsubscribes\",\"attribution\",\"dateBasis\"\r\n\"SIMULATED\",\"Meta Ads\",\"campaign_or_adset\",\"M-P-VIDEO\",\"previous\",\"2026-10-05\",\"2026-10-11\",\"America/Chicago\",\"USD\",\"2026-10-20T06:00:00Z\",\"Prospecting · Table-setting video\",\"\",\"\",\"100000\",\"1500\",\"700\",\"28\",\"2800\",\"35000\",\"\",\"\",\"\",\"Scenario account setting: 7-day click + 1-day view, website Purchase.\",\"Ad impression date, account local calendar days\"\r\n\"SIMULATED\",\"Meta Ads\",\"campaign_or_adset\",\"M-C-VIDEO\",\"current\",\"2026-10-12\",\"2026-10-18\",\"America/Chicago\",\"USD\",\"2026-10-20T06:00:00Z\",\"Prospecting · Table-setting video\",\"\",\"\",\"120000\",\"1200\",\"900\",\"15\",\"1500\",\"30000\",\"\",\"\",\"\",\"Scenario account setting: 7-day click + 1-day view, website Purchase.\",\"Ad impression date, account local calendar days\"\r\n\"SIMULATED\",\"Meta Ads\",\"campaign_or_adset\",\"M-P-STATIC\",\"previous\",\"2026-10-05\",\"2026-10-11\",\"America/Chicago\",\"USD\",\"2026-10-20T06:00:00Z\",\"Prospecting · Product still\",\"\",\"\",\"100000\",\"1500\",\"1000\",\"40\",\"4000\",\"50000\",\"\",\"\",\"\",\"Scenario account setting: 7-day click + 1-day view, website Purchase.\",\"Ad impression date, account local calendar days\"\r\n\"SIMULATED\",\"Meta Ads\",\"campaign_or_adset\",\"M-C-STATIC\",\"current\",\"2026-10-12\",\"2026-10-18\",\"America/Chicago\",\"USD\",\"2026-10-20T06:00:00Z\",\"Prospecting · Product still\",\"\",\"\",\"100000\",\"1600\",\"1050\",\"35\",\"3500\",\"50000\",\"\",\"\",\"\",\"Scenario account setting: 7-day click + 1-day view, website Purchase.\",\"Ad impression date, account local calendar days\"\r\n\"SIMULATED\",\"Meta Ads\",\"campaign_or_adset\",\"M-P-RETARGET\",\"previous\",\"2026-10-05\",\"2026-10-11\",\"America/Chicago\",\"USD\",\"2026-10-20T06:00:00Z\",\"Retargeting · Product viewers\",\"\",\"\",\"30000\",\"600\",\"300\",\"20\",\"2000\",\"10000\",\"\",\"\",\"\",\"Scenario account setting: 7-day click + 1-day view, website Purchase.\",\"Ad impression date, account local calendar days\"\r\n\"SIMULATED\",\"Meta Ads\",\"campaign_or_adset\",\"M-C-RETARGET\",\"current\",\"2026-10-12\",\"2026-10-18\",\"America/Chicago\",\"USD\",\"2026-10-20T06:00:00Z\",\"Retargeting · Product viewers\",\"\",\"\",\"30000\",\"600\",\"300\",\"20\",\"2000\",\"10000\",\"\",\"\",\"\",\"Scenario account setting: 7-day click + 1-day view, website Purchase.\",\"Ad impression date, account local calendar days\"",
+      "metadata": {
+        "key": "meta",
+        "name": "Meta Ads",
+        "provenance": "simulated",
+        "currency": "USD",
+        "timezone": "America/Chicago",
+        "asOf": "2026-10-20T06:00:00Z",
+        "kind": "paid",
+        "filename": "SIMULATED_meta_ads.csv",
+        "report": "Ad-set performance",
+        "dateBasis": "Ad impression date, account local calendar days",
+        "attribution": "Scenario account setting: 7-day click + 1-day view, website Purchase.",
+        "conversionDefinition": "Meta-attributed website purchases including eligible view-through credit.",
+        "revenueDefinition": "Meta-attributed website purchase value in USD; no cross-platform deduplication.",
+        "caution": "Clicks mean link clicks, not all clicks. Reach is unique within an ad-set/week and is not additive across rows. Purchase/link-click ratios are not labelled conversion rates because purchase credit includes views."
+      },
+      "periods": {
+        "current": {
+          "from": "2026-10-12",
+          "to": "2026-10-18",
+          "label": "12–18 Oct 2026"
+        },
+        "previous": {
+          "from": "2026-10-05",
+          "to": "2026-10-11",
+          "label": "5–11 Oct 2026"
+        }
+      }
+    },
+    {
+      "source_key": "klaviyo",
+      "csv_text": "\"provenance\",\"source\",\"recordType\",\"id\",\"period\",\"period_start\",\"period_end\",\"timezone\",\"currency\",\"asOf\",\"campaign\",\"channel\",\"segment\",\"impressions\",\"clicks\",\"spend\",\"purchases\",\"revenue\",\"reach\",\"delivered\",\"uniqueClicks\",\"unsubscribes\",\"attribution\",\"dateBasis\"\r\n\"SIMULATED\",\"Klaviyo\",\"message_cohort\",\"K-P-ENGAGED\",\"previous\",\"2026-10-05\",\"2026-10-11\",\"America/Chicago\",\"USD\",\"2026-10-20T06:00:00Z\",\"New arrivals\",\"Campaign\",\"Engaged 30d\",\"\",\"\",\"\",\"25\",\"2500\",\"\",\"5000\",\"150\",\"5\",\"Scenario account setting: 5-day click + 5-day open, with MPP opens and identified bot clicks excluded.\",\"Message-send cohort date, account local calendar days\"\r\n\"SIMULATED\",\"Klaviyo\",\"message_cohort\",\"K-C-ENGAGED\",\"current\",\"2026-10-12\",\"2026-10-18\",\"America/Chicago\",\"USD\",\"2026-10-20T06:00:00Z\",\"New arrivals\",\"Campaign\",\"Engaged 30d\",\"\",\"\",\"\",\"20\",\"2000\",\"\",\"5000\",\"120\",\"10\",\"Scenario account setting: 5-day click + 5-day open, with MPP opens and identified bot clicks excluded.\",\"Message-send cohort date, account local calendar days\"\r\n\"SIMULATED\",\"Klaviyo\",\"message_cohort\",\"K-P-OTHER\",\"previous\",\"2026-10-05\",\"2026-10-11\",\"America/Chicago\",\"USD\",\"2026-10-20T06:00:00Z\",\"New arrivals\",\"Campaign\",\"Other eligible subscribers\",\"\",\"\",\"\",\"15\",\"1500\",\"\",\"5000\",\"90\",\"15\",\"Scenario account setting: 5-day click + 5-day open, with MPP opens and identified bot clicks excluded.\",\"Message-send cohort date, account local calendar days\"\r\n\"SIMULATED\",\"Klaviyo\",\"message_cohort\",\"K-C-OTHER\",\"current\",\"2026-10-12\",\"2026-10-18\",\"America/Chicago\",\"USD\",\"2026-10-20T06:00:00Z\",\"New arrivals\",\"Campaign\",\"Other eligible subscribers\",\"\",\"\",\"\",\"4\",\"400\",\"\",\"7000\",\"24\",\"38\",\"Scenario account setting: 5-day click + 5-day open, with MPP opens and identified bot clicks excluded.\",\"Message-send cohort date, account local calendar days\"\r\n\"SIMULATED\",\"Klaviyo\",\"message_cohort\",\"K-P-WELCOME\",\"previous\",\"2026-10-05\",\"2026-10-11\",\"America/Chicago\",\"USD\",\"2026-10-20T06:00:00Z\",\"Welcome message\",\"Flow\",\"New subscribers\",\"\",\"\",\"\",\"48\",\"4800\",\"\",\"4000\",\"240\",\"8\",\"Scenario account setting: 5-day click + 5-day open, with MPP opens and identified bot clicks excluded.\",\"Message-send cohort date, account local calendar days\"\r\n\"SIMULATED\",\"Klaviyo\",\"message_cohort\",\"K-C-WELCOME\",\"current\",\"2026-10-12\",\"2026-10-18\",\"America/Chicago\",\"USD\",\"2026-10-20T06:00:00Z\",\"Welcome message\",\"Flow\",\"New subscribers\",\"\",\"\",\"\",\"40\",\"4000\",\"\",\"4000\",\"200\",\"8\",\"Scenario account setting: 5-day click + 5-day open, with MPP opens and identified bot clicks excluded.\",\"Message-send cohort date, account local calendar days\"\r\n\"SIMULATED\",\"Klaviyo\",\"message_cohort\",\"K-P-CART\",\"previous\",\"2026-10-05\",\"2026-10-11\",\"America/Chicago\",\"USD\",\"2026-10-20T06:00:00Z\",\"Cart reminder\",\"Flow\",\"Cart starters\",\"\",\"\",\"\",\"65\",\"6500\",\"\",\"2000\",\"260\",\"2\",\"Scenario account setting: 5-day click + 5-day open, with MPP opens and identified bot clicks excluded.\",\"Message-send cohort date, account local calendar days\"\r\n\"SIMULATED\",\"Klaviyo\",\"message_cohort\",\"K-C-CART\",\"current\",\"2026-10-12\",\"2026-10-18\",\"America/Chicago\",\"USD\",\"2026-10-20T06:00:00Z\",\"Cart reminder\",\"Flow\",\"Cart starters\",\"\",\"\",\"\",\"60\",\"6000\",\"\",\"2000\",\"240\",\"2\",\"Scenario account setting: 5-day click + 5-day open, with MPP opens and identified bot clicks excluded.\",\"Message-send cohort date, account local calendar days\"",
+      "metadata": {
+        "key": "klaviyo",
+        "name": "Klaviyo",
+        "provenance": "simulated",
+        "currency": "USD",
+        "timezone": "America/Chicago",
+        "asOf": "2026-10-20T06:00:00Z",
+        "kind": "email",
+        "filename": "SIMULATED_klaviyo.csv",
+        "report": "Email campaign segments + flow message cohorts",
+        "dateBasis": "Message-send cohort date, account local calendar days",
+        "attribution": "Scenario account setting: 5-day click + 5-day open, with MPP opens and identified bot clicks excluded.",
+        "conversionDefinition": "Placed Order message attribution, separated from ad-platform purchase credits.",
+        "revenueDefinition": "Klaviyo-attributed Placed Order value in USD, grouped by message-send cohort. Not incremental revenue.",
+        "caution": "Click rate uses per-message unique clickers / delivered messages. Summed campaign/flow clickers are not unique people. Opens are not used as the primary experiment metric. SMS is outside scope."
+      },
+      "periods": {
+        "current": {
+          "from": "2026-10-12",
+          "to": "2026-10-18",
+          "label": "12–18 Oct 2026"
+        },
+        "previous": {
+          "from": "2026-10-05",
+          "to": "2026-10-11",
+          "label": "5–11 Oct 2026"
+        }
+      }
+    }
+  ]
+}

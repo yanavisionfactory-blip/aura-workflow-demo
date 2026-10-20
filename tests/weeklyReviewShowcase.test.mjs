@@ -8,13 +8,38 @@ import packet from '../src/showcase/weekly-account-review/data.mjs';
 import { tour } from '../src/showcase/weekly-account-review/scenario.mjs';
 
 const repo = fileURLToPath(new URL('../', import.meta.url));
-let temporary, render, renderCreative;
+let temporary, render, renderCreative, renderExecuted;
 before(async () => {
   temporary = fs.mkdtempSync(path.join(repo, '.weekly-render-'));
   await build({ configFile: path.join(repo, 'vite.weekly.config.js'), logLevel: 'silent', build: { ssr: path.join(repo, 'tests/fixtures/weeklyReviewRender.jsx'), outDir: temporary, emptyOutDir: true, rollupOptions: { output: { entryFileNames: 'render.mjs' } } }, ssr: { noExternal: ['lucide-react'] } });
-  ({ render, renderCreative } = await import(pathToFileURL(path.join(temporary, 'render.mjs'))));
+  ({ render, renderCreative, renderExecuted } = await import(pathToFileURL(path.join(temporary, 'render.mjs'))));
 });
 after(() => { if (temporary) fs.rmSync(temporary, { recursive: true, force: true }); });
+
+test('executed weekly result exposes separate source results with actual processing receipts', () => {
+  const input = structuredClone(packet);
+  input.execution = { mode: 'backend_executed_synthetic', executed_at: '2026-10-20T08:00:00Z', model: 'test-model' };
+  input.summary = 'Backend-generated analysis for this synthetic run.';
+  for (const source of input.sources) source.execution = {
+    id: `receipt-${source.key}`, executed_at: '2026-10-20T08:00:00Z',
+    input_sha256: 'a'.repeat(64), input_rows: source.rows.length,
+    input_bytes: 500, main_rows: source.rows.length, breakdown_rows: 0,
+  };
+  const html = renderExecuted(input);
+  assert.match(html, /REAL AURA RUN/);
+  assert.match(html, /Results per tool/);
+  assert.match(html, /Backend-generated analysis/);
+  assert.doesNotMatch(html, /This prepared review makes no provider calls/);
+  for (const source of input.sources) {
+    assert.ok(html.includes(`View ${source.name} result`));
+    const result = renderExecuted(input, { tab: 'Tool activity', source: source.key });
+    assert.ok(result.includes(`${source.name} execution receipt`));
+    assert.ok(result.includes(`receipt-${source.key}`));
+    assert.match(result, /Input SHA-256/);
+    assert.match(result, /reporting API was not called/);
+    assert.ok(result.includes(source.rows[0].id));
+  }
+});
 
 test('weekly workflow renders the original brief, scope review and honest native playback', () => {
   const input = render('input');

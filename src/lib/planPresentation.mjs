@@ -1,6 +1,11 @@
 // Labels follow the actual operation, never incidental words in its reason.
 export function operationStepTitle(step = {}, tool = "the app") {
   const operation = String(step.operation || "");
+  if (operation === "weekly.source.analyze") {
+    const source = { google: "Google Ads", meta: "Meta Ads", klaviyo: "Klaviyo" }[step.arguments?.source_key] || "marketing";
+    return `Process the synthetic ${source} export`;
+  }
+  if (operation === "weekly.review.prepare") return "Prepare the weekly review and draft variants";
   const verifying = /^(?:verify|confirm|check (?:the )?saved|read back)/i.test(step.reason || "");
   const titles = {
     "get_report_schema": "Read the provider report schema",

@@ -944,8 +944,11 @@ async def _create_compiled_plan(
     from .agency_workflow import agency_workflow_recipe
     from .reports import report_workflow_recipe
     from .seo_crawl import crawl_review_recipe
+    from .weekly_review import weekly_workflow_recipe
 
     audited_plan = report_workflow_recipe(prompt, inventory)
+    if audited_plan is None:
+        audited_plan = weekly_workflow_recipe(prompt, inventory)
     if audited_plan is None:
         audited_plan = crawl_review_recipe(prompt, inventory, available_input_names)
     if audited_plan is None:

@@ -60,6 +60,29 @@ No approved SmartSites client exports, brand brief, account mapping or reporting
 
 The checked packet compares 12–18 October with 5–11 October 2026 in America/Chicago, USD, at one illustrative cutoff. It keeps each platform's attribution and date basis separate. Paid spend can be summed across Google and Meta; revenue, order credits and ROAS are never blended. Source tables retain stable sample row references, query breakdowns are not double counted, reach is not summed, and email click rates use weighted per-message denominators. Open conversion windows, audience-mix changes and unconfirmed value definitions stay visible.
 
+### Execute the synthetic-data review in AURA
+
+The authenticated runtime also accepts `AURA_WEEKLY_REVIEW_V1` followed by the JSON in
+`examples/weekly-review/request.json`. This is a real four-step backend workflow:
+three `weekly.source.analyze` CSV processors, followed by `weekly.review.prepare`,
+which recalculates the evidence and calls the configured model to generate three
+experiments, six creative variants and a prioritized backlog. No prewritten
+experiments, creative copy or backlog is included in that request.
+
+The saved result uses AURA's interactive weekly-review component, with independent
+Google Ads, Meta Ads and Klaviyo source views, retained CSV bytes, SHA-256 hashes,
+execution receipts, filters, evidence links and draft previews. The static showcase
+remains local playback. The authenticated run is identified by its backend receipts
+and model call, rather than by the presence of a connection badge.
+
+This export-processing route **does not call those vendors' reporting APIs or upload
+metrics to their accounts**. Its input metrics are explicitly simulated; its AURA
+execution is real. Google Ads test accounts do not serve ads and have empty serving
+metrics, so fabricated spend, impressions and conversions cannot be presented as
+vendor-generated performance. No campaigns, budgets, customer events, external tasks
+or messages are created by this workflow. Live vendor connectivity checks remain
+separate runs and must never be relabelled as successful synthetic-data processing.
+
 The result includes three evidence-supported experiment proposals, six draft creative variants (Search messages, Meta concepts and Klaviyo subjects), and eight backlog items with owners, effort, dependencies and acceptance checks. Weekly changes are descriptive materiality flags, not causal or statistically significant findings. Test power, assets, client approvals and the selected Client Hub setup remain review gates.
 
 The weekly build reuses local fixture adapters, excludes live account modules at build time and sets `connect-src 'none'`. Its CSV/JSON downloads, draft-copy control, feedback and optional browser tab recording stay local. It creates no campaigns, platform drafts, tasks, messages, website edits, budget changes or external reports. Public references substantiate agency services and metric conventions only; they do not substantiate simulated performance. Tests cover arithmetic, scope, metric alignment, evidence resolution, draft limits, every native phase and all guided result views. Supported-browser visual checks and tab recording are not verified by server rendering.
