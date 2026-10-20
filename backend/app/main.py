@@ -634,6 +634,11 @@ async def list_tools(
                 or canonical_provider_slug(tool.slug),
                 "execution_strategy": (tool.config or {}).get("execution_strategy"),
                 "is_agent": (tool.config or {}).get("managed_by") == "agent_gateway",
+                "reconnect_supported": tool.kind == ToolKind.oauth or bool(
+                    tool.kind == ToolKind.mcp
+                    and managed_mcp_provider(tool.base_url)
+                    and (tool.config or {}).get("mcp_oauth_provider") == managed_mcp_provider(tool.base_url)
+                ),
                 "agent_protocol": (tool.config or {}).get("agent_protocol"),
                 "agent_owner": (tool.config or {}).get("owner"),
                 "status": manifest.status
