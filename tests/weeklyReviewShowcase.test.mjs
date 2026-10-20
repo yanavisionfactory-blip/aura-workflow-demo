@@ -45,6 +45,7 @@ test('weekly result has one checked summary and exposes all three scoped platfor
     assert.ok(output.includes(`${source.name} sample output`));
     assert.ok(output.includes(source.rows[0].id));
     assert.match(output, /Download sample CSV/);
+    assert.match(output, /id="weekly-tool-rows"/);
     assert.match(output, /No live provider report exists/);
   }
 });
@@ -60,6 +61,7 @@ test('three experiment proposals and all six creative variants render with their
     assert.match(html, /Draft preview in AURA/);
     assert.ok(html.includes(creative.variants[index].subject || creative.variants[index].hook || creative.variants[index].headlines[0]));
     assert.match(html, /Copy draft text/);
+    assert.match(html, /id="weekly-creative-controls"/);
     assert.doesNotMatch(html, /type="submit"|href="https:\/\/northline-home.example/);
   }
 });

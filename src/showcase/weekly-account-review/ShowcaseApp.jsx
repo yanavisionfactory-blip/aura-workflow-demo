@@ -93,7 +93,8 @@ export default function ShowcaseApp({ initialPhase = 'input', initialTour = fals
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      const panel = phase === 'results' && focus ? document.getElementById('weekly-review-view') : null;
+      const anchor = focus?.tab === 'Tool activity' ? 'weekly-tool-rows' : focus?.tab === 'Creative drafts' ? 'weekly-creative-controls' : 'weekly-review-view';
+      const panel = phase === 'results' && focus ? document.getElementById(anchor) : null;
       if (panel) panel.scrollIntoView({ block: 'start', behavior: 'smooth' });
       else window.scrollTo({ top: 0, behavior: 'instant' });
     }, 250);
