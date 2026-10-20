@@ -15,6 +15,8 @@ from .policy import operation_scope
 from .presentation_content import PRESENTATION_SCHEMA
 from .reports import ReportRequest
 from .seo_crawl import CrawlReviewRequest
+from .website_content import ContentRequest
+from .website_content import SourceRequest as WebsiteSourceRequest
 from .weekly_review import ReviewRequest, SourceRequest
 
 
@@ -68,6 +70,10 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         "base_url": "provider-managed",
         "identity": {"provider": "aura"},
         "modules": [
+            {**_module("website.source.inspect", "search", "GET-only public website, CMS discovery, sitemap or brand source read with source hashes. Does not authenticate to or change a CMS."),
+             "input_schema": WebsiteSourceRequest.model_json_schema()},
+            {**_module("website.content.prepare", "search", "Generate a complete five-page website content package from actual signed source reads. Returns pages, changes, pending approvals, assets and developer handoff inside AURA; no CMS writes."),
+             "input_schema": ContentRequest.model_json_schema()},
             {**_module("weekly.source.analyze", "search", "Process a labelled synthetic marketing CSV export inside AURA. Validate dates and definitions, calculate weekly metrics and retain source hashes. Does not call a vendor reporting API."),
              "input_schema": SourceRequest.model_json_schema()},
             {**_module("weekly.review.prepare", "search", "Use processed synthetic exports and a fictional brief to execute AURA model drafting and produce an interactive weekly review, three experiments, creative pairs and backlog. No vendor account writes."),
@@ -285,6 +291,7 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                 properties={
                     "query": _TEXT,
                     "page_size": {**_POSITIVE_INTEGER, "maximum": 100},
+                    "name_match": {"type": "string", "enum": ["exact", "contains"]},
                 },
             ),
             _module(

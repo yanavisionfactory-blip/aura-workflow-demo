@@ -20,6 +20,14 @@ PAGE = {"type": "object", "required": ["id", "properties"], "properties": {
     "id": TEXT, "object": {"const": "page"}, "url": TEXT, "properties": OBJECT,
     "parent": OBJECT, "archived": {"type": "boolean"}, "in_trash": {"type": "boolean"}}}
 KNOWN = {
+    "website.source.inspect": ({"type": "object", "required": ["kind", "source", "receipt", "signature", "external_writes"],
+        "properties": {"kind": {"const": "website_source"}, "source": OBJECT,
+                       "receipt": OBJECT, "signature": TEXT, "external_writes": {"const": False}}},
+        ["public_website_source", "source_read_receipt"]),
+    "website.content.prepare": ({"type": "object", "required": ["kind", "status", "packet", "execution", "external_writes"],
+        "properties": {"kind": {"const": "website_content"}, "status": {"const": "draft"},
+                       "packet": OBJECT, "execution": OBJECT, "external_writes": {"const": False}}},
+        ["five_page_content", "pending_approval_tracker", "developer_handoff"]),
     "weekly.source.analyze": ({"type": "object", "required": ["mode", "synthetic", "source", "comparison", "receipt", "external_writes"],
         "properties": {"mode": {"const": "synthetic_export_execution"}, "synthetic": {"const": True},
             "source": OBJECT, "comparison": OBJECT, "receipt": OBJECT, "external_writes": {"const": False}}},

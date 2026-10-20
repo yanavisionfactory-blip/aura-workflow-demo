@@ -1,0 +1,46 @@
+{
+  "client": "Kastner Hill Learning",
+  "website": "https://www.kastnerhill.com",
+  "sources": [
+    {
+      "key": "agency",
+      "role": "agency",
+      "url": "https://lionssharedigital.com/"
+    },
+    {
+      "key": "sitemap",
+      "role": "sitemap",
+      "url": "https://www.kastnerhill.com/page-sitemap.xml"
+    },
+    {
+      "key": "cms",
+      "role": "cms",
+      "url": "https://www.kastnerhill.com/wp-json/"
+    },
+    {
+      "key": "p01",
+      "role": "page",
+      "url": "https://www.kastnerhill.com/"
+    },
+    {
+      "key": "p02",
+      "role": "page",
+      "url": "https://www.kastnerhill.com/sat-test-prep/"
+    },
+    {
+      "key": "p03",
+      "role": "page",
+      "url": "https://www.kastnerhill.com/academic-ap-tutoring/"
+    },
+    {
+      "key": "p04",
+      "role": "page",
+      "url": "https://www.kastnerhill.com/executive-function/"
+    },
+    {
+      "key": "p05",
+      "role": "page",
+      "url": "https://www.kastnerhill.com/college-admission-essay/"
+    }
+  ]
+}

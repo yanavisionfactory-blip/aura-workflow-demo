@@ -493,6 +493,18 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
   let explicitPrimary = presentation?.primary_step_key
     ? completed.find((output) => output.step_key === presentation.primary_step_key)
     : null;
+  const website = [...completed].reverse().find((output) => output.operation === "website.content.prepare"
+    && output.critic?.action === "accept" && output.outcome_check?.status === "verified"
+    && output.provider_result?.kind === "website_content"
+    && output.provider_result?.status === "draft"
+    && output.provider_result?.packet?.execution?.mode === "live_public_sources"
+    && output.provider_result?.packet?.pages?.length === 5);
+  if (website && (!explicitPrimary || explicitPrimary === website)) return {
+    kind: "website_content", title: "Five-page website content package", provider: "AURA",
+    completionTitle: "Five-page content package prepared",
+    completionSummary: website.provider_result.summary,
+    packet: website.provider_result.packet, link: null, downloadUrl: null,
+  };
   const weekly = [...completed].reverse().find((output) => output.operation === "weekly.review.prepare"
     && output.critic?.action === "accept" && output.outcome_check?.status === "verified"
     && output.provider_result?.kind === "weekly_review"
