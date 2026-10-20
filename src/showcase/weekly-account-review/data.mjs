@@ -1,0 +1,136 @@
+const paid = (id, period, campaign, impressions, clicks, spend, purchases, revenue, reach = null) => ({ id, period, campaign, impressions, clicks, spend, purchases, revenue, ...(reach === null ? {} : { reach }) });
+const email = (id, period, campaign, channel, segment, delivered, uniqueClicks, purchases, revenue, unsubscribes) => ({ id, period, campaign, channel, segment, delivered, uniqueClicks, purchases, revenue, unsubscribes });
+const common = { provenance: 'simulated', currency: 'USD', timezone: 'America/Chicago', asOf: '2026-10-20T06:00:00Z' };
+const source = (key, name, values) => ({ key, name, ...common, ...values });
+const proposal = (id, source, title, evidence, values) => ({ id, source, title, evidence, status: 'proposed', ...values });
+
+const data = {
+  version: 1,
+  mode: 'simulated',
+  agency: 'SmartSites',
+  client: { name: 'Northline Home', website: 'https://northline-home.example/', fictional: true, engagementConfirmed: false },
+  ...common,
+  currency: 'USD',
+  timezone: 'America/Chicago',
+  asOf: common.asOf,
+  materialityThreshold: 0.20,
+  periods: { current: { from: '2026-10-12', to: '2026-10-18', label: '12–18 Oct 2026' }, previous: { from: '2026-10-05', to: '2026-10-11', label: '5–11 Oct 2026' } },
+  scope: {
+    included: ['google', 'meta', 'klaviyo'],
+    excluded: ['Microsoft Advertising', 'Amazon Ads', 'Mailchimp', 'HubSpot'],
+    reason: 'This one fictional engagement includes Google Ads, Meta Ads and Klaviyo email only. Agency-wide service lists do not establish an individual client’s scope. SMS, Microsoft Advertising, Amazon Ads, Mailchimp and HubSpot are excluded from this scenario; no results are invented for them.',
+  },
+  brief: {
+    status: 'Scenario assumptions · client approval required',
+    business: 'Fictional US homeware retailer selling tableware and home essentials online.',
+    goals: ['Improve first-order acquisition efficiency; scenario CPA review targets: non-brand Google Search ≤ $35 and Meta prospecting ≤ $35.', 'Improve email engagement and repeat-purchase relevance without assuming that attributed revenue is incremental.', 'Preserve brand voice and keep review, experimentation and implementation separate.'],
+    voice: 'Warm, practical, calm US English. Product-specific benefits. Avoid urgency, invented discounts, unsupported sustainability claims and guaranteed outcomes.',
+    constraints: ['No live campaign launch, budget adjustment or message send.', 'No changes to website, ad accounts, automations or reporting destinations.', 'Product facts, inventory, sender details and any claims require real client review.'],
+  },
+  reporting: { candidate: 'SmartSites Client Hub', confirmed: false, destinationUrl: null, note: 'Agency-supported destination verified publicly; the fictional client has no verified Client Hub account, URL or permissions. AURA displays a draft review only.' },
+  sources: [
+    source('google', 'Google Ads', {
+      kind: 'paid', filename: 'SIMULATED_google_ads.csv', report: 'Campaign performance + search-term breakdown',
+      dateBasis: 'Ad interaction date, account local calendar days',
+      attribution: 'Scenario account setting: data-driven attribution, 30-day click window, website Purchase conversion credit.',
+      conversionDefinition: 'Primary website Purchase conversion credits; not deduplicated orders across platforms.',
+      revenueDefinition: 'Purchase conversion value in USD. Tax, shipping, refunds and margin treatment require confirmation.',
+      rows: [paid('G-P-BRAND', 'previous', 'Brand Search', 12500, 1250, 500, 62, 6200), paid('G-C-BRAND', 'current', 'Brand Search', 12000, 1200, 480, 60, 6000), paid('G-P-NONBRAND', 'previous', 'Non-brand · Dinnerware', 80000, 2400, 1800, 72, 7200), paid('G-C-NONBRAND', 'current', 'Non-brand · Dinnerware', 100000, 2400, 2400, 48, 4800)],
+      searchTerms: [paid('Q-P-GENERIC', 'previous', 'cheap dinnerware · generic query', 25000, 500, 300, 10, 1000), paid('Q-C-GENERIC', 'current', 'cheap dinnerware · generic query', 60000, 1000, 900, 8, 800), paid('Q-P-PRODUCT', 'previous', 'stoneware dinnerware sets · product query', 55000, 1900, 1500, 62, 6200), paid('Q-C-PRODUCT', 'current', 'stoneware dinnerware sets · product query', 40000, 1400, 1500, 40, 4000)],
+      caution: 'Search-term rows are a breakdown of non-brand campaign rows; adding both tables would double count. Conversion windows are still open.',
+    }),
+    source('meta', 'Meta Ads', {
+      kind: 'paid', filename: 'SIMULATED_meta_ads.csv', report: 'Ad-set performance',
+      dateBasis: 'Ad impression date, account local calendar days',
+      attribution: 'Scenario account setting: 7-day click + 1-day view, website Purchase.',
+      conversionDefinition: 'Meta-attributed website purchases including eligible view-through credit.',
+      revenueDefinition: 'Meta-attributed website purchase value in USD; no cross-platform deduplication.',
+      rows: [paid('M-P-VIDEO', 'previous', 'Prospecting · Table-setting video', 100000, 1500, 700, 28, 2800, 35000), paid('M-C-VIDEO', 'current', 'Prospecting · Table-setting video', 120000, 1200, 900, 15, 1500, 30000), paid('M-P-STATIC', 'previous', 'Prospecting · Product still', 100000, 1500, 1000, 40, 4000, 50000), paid('M-C-STATIC', 'current', 'Prospecting · Product still', 100000, 1600, 1050, 35, 3500, 50000), paid('M-P-RETARGET', 'previous', 'Retargeting · Product viewers', 30000, 600, 300, 20, 2000, 10000), paid('M-C-RETARGET', 'current', 'Retargeting · Product viewers', 30000, 600, 300, 20, 2000, 10000)],
+      caution: 'Clicks mean link clicks, not all clicks. Reach is unique within an ad-set/week and is not additive across rows. Purchase/link-click ratios are not labelled conversion rates because purchase credit includes views.',
+    }),
+    source('klaviyo', 'Klaviyo', {
+      kind: 'email', filename: 'SIMULATED_klaviyo.csv', report: 'Email campaign segments + flow message cohorts',
+      dateBasis: 'Message-send cohort date, account local calendar days',
+      attribution: 'Scenario account setting: 5-day click + 5-day open, with MPP opens and identified bot clicks excluded.',
+      conversionDefinition: 'Placed Order message attribution, separated from ad-platform purchase credits.',
+      revenueDefinition: 'Klaviyo-attributed Placed Order value in USD, grouped by message-send cohort. Not incremental revenue.',
+      rows: [email('K-P-ENGAGED', 'previous', 'New arrivals', 'Campaign', 'Engaged 30d', 5000, 150, 25, 2500, 5), email('K-C-ENGAGED', 'current', 'New arrivals', 'Campaign', 'Engaged 30d', 5000, 120, 20, 2000, 10), email('K-P-OTHER', 'previous', 'New arrivals', 'Campaign', 'Other eligible subscribers', 5000, 90, 15, 1500, 15), email('K-C-OTHER', 'current', 'New arrivals', 'Campaign', 'Other eligible subscribers', 7000, 24, 4, 400, 38), email('K-P-WELCOME', 'previous', 'Welcome message', 'Flow', 'New subscribers', 4000, 240, 48, 4800, 8), email('K-C-WELCOME', 'current', 'Welcome message', 'Flow', 'New subscribers', 4000, 200, 40, 4000, 8), email('K-P-CART', 'previous', 'Cart reminder', 'Flow', 'Cart starters', 2000, 260, 65, 6500, 2), email('K-C-CART', 'current', 'Cart reminder', 'Flow', 'Cart starters', 2000, 240, 60, 6000, 2)],
+      caution: 'Click rate uses per-message unique clickers / delivered messages. Summed campaign/flow clickers are not unique people. Opens are not used as the primary experiment metric. SMS is outside scope.',
+    }),
+  ],
+  experiments: [
+    proposal('E1', 'google', 'Test a product-specific Search message', ['G-C-NONBRAND', 'G-P-NONBRAND', 'Q-C-GENERIC', 'Q-P-GENERIC'], {
+      hypothesis: 'A product-specific message may qualify dinnerware intent more effectively than generic category copy and reduce purchase-credit CPA.',
+      change: 'Compare a broad collection-message draft with a product-specific headline/description bundle. The real control copy has not been supplied. Keep keywords, bid strategy, landing page, geography and total approved budget unchanged.',
+      design: 'Proposed randomized campaign experiment, with allocation and platform eligibility confirmed by the account owner. This is a creative-message bundle test; it cannot isolate an individual headline.',
+      primary: 'Google Ads Purchase-credit CPA under the existing 30-day click / data-driven definition.',
+      guardrails: 'Monitor CPC, purchase-credit volume, search-term relevance and product availability; no budget increase or automatic rollout.',
+      decision: 'Pre-register the sample size and uncertainty interval needed to evaluate a 20% CPA improvement. Run for at least two full weeks and allow the attribution window to mature; neither duration alone nor a raw point estimate establishes a winner.',
+      feasibility: 'Only 48 current-week non-brand purchase credits. Power, duration and conversion lag require analyst review; the available aggregate export cannot establish a statistically powered CPA test.',
+      creative: 'search-message', owner: 'Paid search specialist', effort: '3–5 setup/QA hours after evidence and approval; no setup executed', dependencies: ['B01', 'B02', 'B03'],
+    }),
+    proposal('E2', 'meta', 'Test a fresh video-opening concept', ['M-C-VIDEO', 'M-P-VIDEO'], {
+      hypothesis: 'A fresh opening concept may restore attention and acquisition efficiency in the existing prospecting audience.',
+      change: 'Test a product-close-up opening against a table-setting opening as two draft creative concepts. Keep audience, placements, optimization event, landing URL and total approved budget fixed.',
+      design: 'Proposed Meta A/B experiment with non-overlapping randomized audiences. Creative concepts include their opening message and visual treatment; results would apply to the bundle.',
+      primary: 'Meta-attributed purchase CPA under the existing 7-day click + 1-day view definition. Link CTR is a diagnostic metric.',
+      guardrails: 'Check attribution settings, frequency, unique reach, purchase volume and brand/product claims. No automatic budget shift or winner promotion.',
+      decision: 'Agree a power/sample plan using randomized users and purchase outcomes before activation. Review at least two full weeks, then allow conversions to mature. Repeated impressions are not independent users.',
+      feasibility: '15 current-week video-attributed purchases is a small base. Frequency is 4.00; fatigue is a hypothesis, not a proven cause. Creative assets and a power review are still needed.',
+      creative: 'meta-concept', owner: 'Paid social specialist + designer', effort: '4–6 concept/QA hours; final video assets not produced', dependencies: ['B01', 'B02', 'B03'],
+    }),
+    proposal('E3', 'klaviyo', 'Test subject-line relevance within one segment', ['K-C-ENGAGED', 'K-P-ENGAGED', 'K-C-OTHER', 'K-P-OTHER'], {
+      hypothesis: 'A concrete table-setting subject line may improve clicks within the same engaged audience without relying on open-rate changes.',
+      change: 'Randomize two subject lines within the Engaged 30d email segment. Keep the sender, preheader, body, CTA, delivery time and eligibility/suppression rules identical.',
+      design: 'Proposed recipient-level A/B test. Analyse per-message unique click rate within the selected segment; do not compare differently sized or differently engaged segments as experimental arms.',
+      primary: 'Per-message unique clickers / delivered messages, using the same bot filtering in each arm.',
+      guardrails: 'Unsubscribe and spam complaint rates, consent, suppression, deliverability and placed-order attribution. No SMS, audience expansion or message send.',
+      decision: 'Set the minimum sample and detectable lift before sending. A single split of the current 5,000-profile engaged segment may be underpowered for a modest lift; do not declare a winner from opens or an early point estimate.',
+      feasibility: 'The campaign audience mix changed between weeks. Current engaged clicks are 120/5,000 (2.4%), versus 150/5,000 (3.0%). The planned test isolates subject line only; sample-size feasibility remains an expert check.',
+      creative: 'email-subject', owner: 'Lifecycle marketing specialist', effort: '2–3 copy/segment QA hours after approval; no draft created in Klaviyo', dependencies: ['B01', 'B02', 'B03'],
+    }),
+  ],
+  creatives: [
+    { id: 'search-message', source: 'google', experiment: 'E1', title: 'Google Search message drafts', destination: 'https://northline-home.example/dinnerware', note: 'Draft message bundles, not a complete uploaded RSA or a verified existing control. Original account copy was not supplied. Product facts, final asset count and platform policy review are required.', variants: [
+      { label: 'A · Broad collection', headlines: ['Make Room For Everyday Meals', 'Find Your Table Setting', 'Explore Northline Home'], descriptions: ['Refresh your everyday table. Explore the latest collection at Northline Home.', 'Find the pieces for your next place setting in the Northline Home collection.'] },
+      { label: 'B · Product-specific', headlines: ['Stoneware Dinnerware Sets', 'Build Your Everyday Table', 'Browse The Dinnerware Edit'], descriptions: ['Start with the tableware. Explore stoneware sets in the Northline Home collection.', 'Find your next place setting. Browse the dinnerware collection online.'] },
+    ] },
+    { id: 'meta-concept', source: 'meta', experiment: 'E2', title: 'Meta ad concept drafts', destination: 'https://northline-home.example/dinnerware', note: 'Text and storyboard previews only. No video, ad or campaign was created in Meta.', variants: [
+      { label: 'A · Product close-up', hook: 'Start with one place setting.', visual: 'Opening 0–2 seconds: close-up of one plate, bowl and cup; cut to the complete table.', text: 'Everyday meals deserve a setting you enjoy. Explore the Northline Home dinnerware collection and find your next place setting.', headline: 'Your next place setting', cta: 'Shop now' },
+      { label: 'B · Table-setting ritual', hook: 'Make room for an everyday moment.', visual: 'Opening 0–2 seconds: hands setting a table before a simple meal; finish on the collection.', text: 'Bring your table together, one place setting at a time. Browse the Northline Home dinnerware collection.', headline: 'Set the table your way', cta: 'Shop now' },
+    ] },
+    { id: 'email-subject', source: 'klaviyo', experiment: 'E3', title: 'Klaviyo email subject drafts', destination: 'https://northline-home.example/dinnerware', note: 'Only the subject changes between arms. The shared preheader, body and CTA below remain fixed. Sender address, consent and legal footer need client approval.', shared: { preheader: 'Explore the Northline Home dinnerware collection.', greeting: 'A place for everyday moments', body: 'From a quiet breakfast to a table shared with friends, start with the pieces you reach for every day. Explore our dinnerware collection and find your next place setting.', cta: 'Explore dinnerware' }, variants: [
+      { label: 'A · Collection-led', subject: 'Your next everyday table setting' },
+      { label: 'B · Task-led', subject: 'Find your next dinnerware set' },
+    ] },
+  ],
+  backlog: [
+    proposal('B01', 'all', 'Confirm the real client, brief and reporting setup', ['G-C-BRAND', 'M-C-VIDEO', 'K-C-ENGAGED'], { priority: 'P1', group: 'Intake', fix: 'Confirm agency/client relationship, platform scope, goals, approved exports, brand claims, timezone, currency and the selected Client Hub setup.', owner: 'Account lead', effort: '1–2 review hours', dependencies: [], reasoning: 'All current client details and metrics are scenario assumptions. Real review depends on approved inputs.', acceptance: 'A named owner confirms the scope, brief, accounts and reporting destination; no external write is authorized by this demo.' }),
+    proposal('B02', 'all', 'Reconcile measurement definitions and conversion maturity', ['G-C-NONBRAND', 'M-C-VIDEO', 'K-C-ENGAGED'], { priority: 'P1', group: 'Measurement', fix: 'Verify conversion actions, attribution windows, event vs interaction vs message-send date, MPP/bot settings and purchase-value/refund treatment. Schedule a separate approved re-extract after appropriate windows mature.', owner: 'Marketing analyst', effort: '2–4 analysis hours', dependencies: ['B01'], reasoning: 'Aligned calendar periods do not make differently attributed revenue additive or final.', acceptance: 'Metric dictionary and cutoff are approved; platform revenue remains separate; remaining lag and deduplication gaps are explicit.' }),
+    proposal('B03', 'all', 'Approve sample sizes and experiment eligibility', ['G-C-NONBRAND', 'M-C-VIDEO', 'K-C-ENGAGED'], { priority: 'P1', group: 'Experiment design', fix: 'Define randomization, primary metrics, detectable effects, sample requirements and guardrails. Check actual platform support, traffic volume and unique-profile counts.', owner: 'Experimentation analyst', effort: '2–4 design hours', dependencies: ['B01', 'B02'], reasoning: 'Weekly observations and small purchase bases cannot establish causality or a statistically significant winner.', acceptance: 'A pre-registered decision rule and feasible sample/duration are accepted for each of E1–E3, or the test is deferred.' }),
+    proposal('B04', 'google', 'Prepare Search experiment E1 for review', ['G-C-NONBRAND', 'G-P-NONBRAND', 'Q-C-GENERIC', 'Q-P-GENERIC'], { priority: 'P2', group: 'Paid media', fix: 'Review search-term intent and draft message bundles. Confirm existing landing page, product facts and unchanged budget before any separate activation decision.', owner: 'Paid search specialist', effort: '3–5 hours', dependencies: ['B01', 'B02', 'B03'], reasoning: 'Non-brand CPA doubled and generic-query spend share increased; the message test is a hypothesis to evaluate.', acceptance: 'E1 design, copy and evidence reviewed. No campaign launched, keyword changed or budget modified.' }),
+    proposal('B05', 'meta', 'Prepare Meta concept test E2 for review', ['M-C-VIDEO', 'M-P-VIDEO'], { priority: 'P2', group: 'Paid media', fix: 'Review the two creative storyboards with the designer, then prepare the approved asset requirements and audience split for owner review.', owner: 'Paid social specialist + designer', effort: '4–6 hours', dependencies: ['B01', 'B02', 'B03'], reasoning: 'Higher frequency and lower link CTR justify creative investigation; they do not prove fatigue.', acceptance: 'E2 concept, randomization and measurement plan reviewed. No assets uploaded, ad launched or budget changed.' }),
+    proposal('B06', 'klaviyo', 'Prepare subject-line test E3 for review', ['K-C-ENGAGED', 'K-P-ENGAGED', 'K-C-OTHER', 'K-P-OTHER'], { priority: 'P2', group: 'Lifecycle', fix: 'Verify the engaged audience and suppression rules, review both subject lines and keep the shared message body fixed. Confirm consent and sender/footer details.', owner: 'Lifecycle specialist', effort: '2–3 hours', dependencies: ['B01', 'B02', 'B03'], reasoning: 'Segment mix changed, so the proposal randomizes within one segment and measures clicks instead of relying on opens.', acceptance: 'E3 copy, sample feasibility and recipient eligibility reviewed. No email/SMS sent or automation edited.' }),
+    proposal('B07', 'all', 'QA the draft weekly account review', ['G-C-BRAND', 'G-C-NONBRAND', 'M-C-STATIC', 'K-C-CART'], { priority: 'P2', group: 'Reporting', fix: 'Recompute every ratio from source counts, inspect row references and keep separate platform attribution cards. Check unsupported claims, creative length and scope exclusions.', owner: 'Account lead + analyst', effort: '1–2 QA hours', dependencies: ['B02', 'B04', 'B05', 'B06'], reasoning: 'A checked review must distinguish observed changes, hypotheses, proposals and missing approvals.', acceptance: 'All packet checks pass or carry an explicit expert-review note; exactly three proposals and no blended revenue claim.' }),
+    proposal('B08', 'all', 'Confirm how the review would reach the client', ['G-C-BRAND', 'M-C-VIDEO', 'K-C-ENGAGED'], { priority: 'P3', group: 'Reporting', fix: 'Confirm the selected client’s reporting destination and permissions with the owner. Review the in-AURA Client Hub-style draft before any separately authorized delivery.', owner: 'Account lead', effort: '30–60 review minutes', dependencies: ['B01', 'B07'], reasoning: 'SmartSites’ public Client Hub description does not verify the selected account’s actual reporting setup.', acceptance: 'Destination and owner are recorded. This workflow sends no messages and creates no external report or task.' }),
+  ],
+  expertChecks: [
+    'The fictional client, scope, goals and brand brief are not approved client evidence.',
+    'Google and Meta report different attribution windows and date bases; Klaviyo uses message-send cohorts. No cross-platform revenue or order total is valid here.',
+    'The latest conversion windows are still open. A single cutoff aligns extraction timing, not cohort maturity; re-extract only under a separately approved read-only review.',
+    'Weekly changes above the 20% review threshold are materially flagged, not statistically significant or causal findings.',
+    'Revenue is platform-attributed gross value with tax, shipping and refund treatment unconfirmed. Profit, customer acquisition cost and incrementality are not established.',
+    'Campaign audience mix changed; Meta repeated impressions and overlapping reach do not provide independent experimental sample sizes.',
+    'No live account, asset, tracking, reporting destination or consent has been verified for this fictional brand. A live execution remains blocked on approved inputs.',
+  ],
+  references: [
+    { label: 'SmartSites services and named platforms', url: 'https://www.smartsites.com/digital-marketing-services/', use: 'Agency-level services only; not proof of this client’s contract.' },
+    { label: 'SmartSites platform partners', url: 'https://www.smartsites.com/partners/', use: 'Public platform references including HubSpot, Mailchimp and Klaviyo.' },
+    { label: 'SmartSites email and automation services', url: 'https://www.smartsites.com/email-marketing/', use: 'Public email/SMS and automation offering; account scope remains unconfirmed.' },
+    { label: 'SmartSites Client Hub description', url: 'https://www.smartsites.com/', use: 'Agency-supported reporting context; no client destination URL is inferred.' },
+    { label: 'Google Search ad text limits', url: 'https://support.google.com/google-ads/answer/12159014?hl=en', use: 'Headline ≤30 characters and description ≤90 characters; not a full policy approval.' },
+    { label: 'Klaviyo attribution model settings', url: 'https://help.klaviyo.com/hc/en-us/articles/11118357030555', use: 'Attribution is configurable; scenario settings are assumptions, not verified account defaults.' },
+    { label: 'Klaviyo message attribution and send-date reporting', url: 'https://help.klaviyo.com/hc/en-us/articles/1260804504250', use: 'Message attribution reports can use send-date cohorts; event-date reports differ.' },
+  ],
+};
+export default data;
