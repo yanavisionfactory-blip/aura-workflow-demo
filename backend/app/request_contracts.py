@@ -362,8 +362,10 @@ def validate_requested_operations(
     inventory: list[dict] | None = None, manifests: dict | None = None,
 ) -> list[dict]:
     from .audit_sources import validate_audit_sources
+    from .proofing import validate_proofing_sources
 
     validate_audit_sources(user_request_text(prompt), plan, inventory or [])
+    validate_proofing_sources(user_request_text(prompt), plan, inventory or [], manifests or {})
     if draft_only_email_request(prompt) and any(
         is_gmail_delivery_step(step, manifests) for step in plan.steps
     ):

@@ -21,6 +21,16 @@ UBERSUGGEST_SCOPES = ["profile", "domain", "keywords", "serp", "utility"]
 # Reviewed vendor endpoints only. Never derive OAuth destinations from a pasted
 # URL or accept a different provider's authorization metadata.
 MCP_SERVICES = {
+    "frame-io": {
+        "name": "Frame.io", "owner": "Adobe", "endpoint": "https://mcp.frame.io/v1/mcp",
+        "auth_domains": ["frame.io", "adobelogin.com"], "discover_issuer": True,
+        "canonical_provider": "frameio", "data_access": "assets, reviewer comments and review metadata",
+    },
+    "pageproof": {
+        "name": "PageProof", "owner": "PageProof", "endpoint": "https://mcp.pageproof.com/mcp",
+        "auth_domains": ["pageproof.com"], "discover_issuer": True,
+        "canonical_provider": "pageproof", "data_access": "proof metadata only; excludes comment text and imagery",
+    },
     "ubersuggest": {
         "name": "Ubersuggest", "owner": "NP Digital", "endpoint": UBERSUGGEST_ENDPOINT,
         "issuer": UBERSUGGEST_ORIGIN + "/", "auth_origins": [UBERSUGGEST_ORIGIN],
@@ -100,6 +110,21 @@ def mcp_service(provider: str) -> dict:
     return MCP_SERVICES[provider]
 
 
+def proofing_catalog() -> list[dict]:
+    """Reviewed setup routes; capability schemas are discovered only after consent."""
+    return [{
+        "provider": provider + "-mcp", "display_name": MCP_SERVICES[provider]["name"],
+        "canonical_provider": MCP_SERVICES[provider]["canonical_provider"],
+        "aliases": [provider, MCP_SERVICES[provider]["name"],
+                    MCP_SERVICES[provider]["canonical_provider"]],
+        "source": "official_mcp", "connection_backend": "managed_mcp",
+        "connection_strategy": "oauth", "connectable": True, "availability": "available",
+        "capabilities": [], "capability_count": 0,
+        "setup_hint": ("Metadata only; attach comments export" if provider == "pageproof"
+                       else "Adobe consent; discover live tools"),
+    } for provider in ("frame-io", "pageproof")]
+
+
 def semrush_api_credentials(secret: str) -> dict:
     secret = secret.strip()
     if not secret or len(secret) > 8000 or any(ord(char) < 32 for char in secret):
@@ -121,18 +146,88 @@ def managed_mcp_provider(source: str) -> str | None:
 def _service_url(value: object, provider: str = "ubersuggest", *, resource: bool = False) -> str:
     value = str(value or "")
     parsed = urlsplit(value)
+    service = mcp_service(provider)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    allowed = origin in (
+        [f"https://{urlsplit(service['endpoint']).netloc}"]
+        if resource else service.get("auth_origins", [])
+    )
+    if not resource and service.get("discover_issuer"):
+        allowed = any(parsed.hostname == domain or str(parsed.hostname).endswith("." + domain)
+                      for domain in service["auth_domains"])
     if (
         parsed.scheme != "https"
-        or f"{parsed.scheme}://{parsed.netloc}" not in (
-            [f"https://{urlsplit(mcp_service(provider)['endpoint']).netloc}"]
-            if resource else mcp_service(provider)["auth_origins"]
-        )
+        or not allowed
+        or parsed.username or parsed.password or parsed.port not in {None, 443}
         or parsed.query
         or parsed.fragment
     ):
         raise ConnectorError("The MCP service returned an unexpected authorization endpoint")
     validate_public_endpoint(value)
     return value
+
+
+def _resource_identity(value: object, provider: str) -> str:
+    service = mcp_service(provider)
+    if not service.get("discover_issuer"):
+        expected = service.get("resource", service["endpoint"])
+        if value != expected:
+            raise ConnectorError("The MCP service's resource identity could not be verified")
+        return expected
+    endpoint = service["endpoint"]
+    origin = "https://" + urlsplit(endpoint).netloc
+    if not isinstance(value, str) or value not in {endpoint, origin, origin + "/"}:
+        raise ConnectorError("The MCP service's resource identity could not be verified")
+    return value
+
+
+async def _authorization_metadata(client, provider: str) -> tuple[str, str, dict, list[str]]:
+    service = mcp_service(provider)
+    parsed = urlsplit(service["endpoint"])
+    resource_url = service.get("resource_metadata_url",
+        f"https://{parsed.netloc}/.well-known/oauth-protected-resource{parsed.path}")
+    try:
+        resource = await _json(client, "GET", resource_url, provider=provider, resource=True)
+    except httpx.HTTPStatusError as exc:
+        if not service.get("discover_issuer") or exc.response.status_code != 404:
+            raise
+        # RFC 9728 defines both path-specific and origin metadata locations.
+        resource = await _json(client, "GET",
+            f"https://{parsed.netloc}/.well-known/oauth-protected-resource",
+            provider=provider, resource=True)
+    resource_id = _resource_identity(resource.get("resource"), provider)
+    issuers = resource.get("authorization_servers", [])
+    if service.get("discover_issuer"):
+        if not isinstance(issuers, list) or len(issuers) != 1:
+            raise ConnectorError("The MCP service must identify one reviewed authorization server")
+        issuer = _service_url(issuers[0], provider).rstrip("/")
+    else:
+        issuer = service["issuer"].rstrip("/")
+        if issuer not in {str(value).rstrip("/") for value in issuers}:
+            raise ConnectorError("The MCP service's resource identity could not be verified")
+    issuer_parts = urlsplit(issuer)
+    metadata_url = (f"https://{issuer_parts.netloc}/.well-known/oauth-authorization-server"
+                    + issuer_parts.path)
+    metadata = await _json(client, "GET", metadata_url, provider=provider)
+    if str(metadata.get("issuer") or "").rstrip("/") != issuer:
+        raise ConnectorError("The MCP service's authorization identity could not be verified")
+    offered = metadata.get("scopes_supported", [])
+    if not isinstance(offered, list):
+        raise ConnectorError("The MCP service returned invalid scope metadata")
+    if service.get("discover_issuer"):
+        scopes = resource.get("scopes_supported", offered)
+        if not isinstance(scopes, list) or any(
+            not isinstance(scope, str) or not scope or len(scope) > 200
+            or any(ord(char) < 33 or ord(char) > 126 for char in scope) for scope in scopes
+        ) or len(scopes) > 50:
+            raise ConnectorError("The MCP service returned invalid scope metadata")
+        if offered and not set(scopes).issubset(set(offered)):
+            raise ConnectorError("The MCP resource requested unsupported scopes")
+    else:
+        scopes = [scope for scope in service["scopes"] if scope in offered]
+        if service["required_scope"] not in scopes:
+            raise ConnectorError("The MCP service did not offer the required research access")
+    return issuer, resource_id, metadata, scopes
 
 
 def pkce_challenge(verifier: str) -> str:
@@ -166,44 +261,21 @@ async def prepare_authorization(credentials: dict, state: str, callback_url: str
                                 provider: str = "ubersuggest") -> tuple[str, dict, dict]:
     """Register a public client and return a consent URL, never a user token."""
     service = mcp_service(provider)
-    endpoint = service["endpoint"]
-    parsed = urlsplit(endpoint)
-    resource_id = service.get("resource", endpoint)
-    resource_url = service.get(
-        "resource_metadata_url",
-        f"https://{parsed.netloc}/.well-known/oauth-protected-resource{parsed.path}",
-    )
     async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
-        resource = await _json(
-            client, "GET", resource_url, provider=provider, resource=True,
-        )
+        issuer, resource_id, metadata, scopes = await _authorization_metadata(client, provider)
         if (
-            resource.get("resource") != resource_id
-            or service["issuer"].rstrip("/") not in {
-                str(issuer).rstrip("/") for issuer in resource.get("authorization_servers", [])
-            }
-        ):
-            raise ConnectorError("The MCP service's resource identity could not be verified")
-        metadata = await _json(
-            client, "GET", service["issuer"].rstrip("/") + "/.well-known/oauth-authorization-server",
-            provider=provider,
-        )
-        if (
-            str(metadata.get("issuer") or "").rstrip("/") != service["issuer"].rstrip("/")
-            or "S256" not in metadata.get("code_challenge_methods_supported", [])
+            "S256" not in metadata.get("code_challenge_methods_supported", [])
             or "none" not in metadata.get("token_endpoint_auth_methods_supported", [])
         ):
             raise ConnectorError("The MCP service does not support the required OAuth protection")
         authorization_url = _service_url(metadata.get("authorization_endpoint"), provider)
         token_url = _service_url(metadata.get("token_endpoint"), provider)
         registration_url = _service_url(metadata.get("registration_endpoint"), provider)
-        scopes = [scope for scope in service["scopes"] if scope in metadata.get("scopes_supported", [])]
-        if service["required_scope"] not in scopes:
-            raise ConnectorError("The MCP service did not offer the required research access")
         credentials = dict(credentials)
         # Client registrations belong to one redirect URI. Never reuse a client
         # after a deployment changes that URI.
-        if not credentials.get("client_id") or credentials.get("registered_redirect_uri") != callback_url:
+        if (not credentials.get("client_id") or credentials.get("registered_redirect_uri") != callback_url
+            or (service.get("discover_issuer") and credentials.get("registered_issuer") != issuer)):
             registration = await _json(
                 client, "POST", registration_url,
                 provider=provider,
@@ -219,7 +291,8 @@ async def prepare_authorization(credentials: dict, state: str, callback_url: str
             client_id = registration.get("client_id")
             if not isinstance(client_id, str) or not client_id or len(client_id) > 1000:
                 raise ConnectorError("The MCP service did not register an OAuth client")
-            credentials.update(client_id=client_id, registered_redirect_uri=callback_url)
+            credentials.update(client_id=client_id, registered_redirect_uri=callback_url,
+                               registered_issuer=issuer)
         verifier = secrets.token_urlsafe(48)
         credentials["mcp_oauth_pending"] = {
             "state_hash": hashlib.sha256(state.encode()).hexdigest(),
@@ -234,6 +307,7 @@ async def prepare_authorization(credentials: dict, state: str, callback_url: str
             "token_url": token_url,
             "token_auth_method": "none",
             "token_params": {"resource": resource_id},
+            "oauth_issuer": issuer,
             "scopes": scopes,
         }
         params = {
@@ -246,6 +320,8 @@ async def prepare_authorization(credentials: dict, state: str, callback_url: str
             "code_challenge_method": "S256",
             "resource": resource_id,
         }
+        if not scopes:
+            params.pop("scope")
         return f"{authorization_url}?{urlencode(params)}", credentials, config
 
 
@@ -265,7 +341,10 @@ async def exchange_code(credentials: dict, config: dict, code: str, verifier: st
                 "redirect_uri": credentials["registered_redirect_uri"],
                 "code": code,
                 "code_verifier": verifier,
-                "resource": service.get("resource", service["endpoint"]),
+                "resource": _resource_identity(
+                    (config.get("token_params") or {}).get("resource", service.get("resource", service["endpoint"])),
+                    provider,
+                ),
             },
         )
     if not isinstance(result.get("access_token"), str) or not result["access_token"]:

@@ -128,6 +128,14 @@ export default function AgentConnectionForm({ onConnected = null, initialSource 
           Choose the Supermetrics team containing your authorized accounts when you sign in.
         </p>
       )}
+      {source === "https://mcp.pageproof.com/mcp" && <p className="rounded-lg border border-primary/20 p-3 text-xs leading-relaxed text-muted-foreground">
+        PageProof provides proof metadata. To prepare a revision brief, attach a comments print-sheet PDF
+        and identify its proof and version. The connection does not provide comment text or proof imagery.
+      </p>}
+      {source === "https://mcp.frame.io/v1/mcp" && <p className="rounded-lg border border-primary/20 p-3 text-xs leading-relaxed text-muted-foreground">
+        Sign in with the Adobe identity linked to your Frame.io V4 account. AURA reads the selected
+        asset and comments; changes require review. Frame.io Legacy accounts are not supported by this route.
+      </p>}
 
       <label className="block space-y-1.5 text-xs">
         <span className="font-medium">Agent website or sharing link</span>

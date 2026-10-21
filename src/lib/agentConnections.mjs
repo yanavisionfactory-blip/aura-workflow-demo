@@ -22,8 +22,13 @@ export const AGENT_METHODS = Object.freeze([
 const clean = (value) => String(value || "").trim().replace(/\s+/g, " ");
 
 export function agentConnectionPreset(search = "") {
-  if (new URLSearchParams(search).get("connect") !== "supermetrics") return null;
-  return { source: "https://mcp.supermetrics.com/mcp" };
+  const sources = {
+    supermetrics: "https://mcp.supermetrics.com/mcp",
+    frameio: "https://mcp.frame.io/v1/mcp",
+    pageproof: "https://mcp.pageproof.com/mcp",
+  };
+  const source = sources[new URLSearchParams(search).get("connect")];
+  return source ? { source } : null;
 }
 
 export function semrushApiKeySource(source) {

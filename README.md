@@ -66,6 +66,11 @@ outline into an executable plan.
 
 ## Release validation
 
+For the Frame.io and PageProof content-approval pilot, see
+[`docs/content-approval.md`](docs/content-approval.md). It documents the direct
+connections, PageProof comments import, exact evidence requirements and live-run
+limitations.
+
 Pull requests run the frontend tests and build, the complete Python test suite, and the isolated execution load evaluation. GitHub Pages publishes the frontend after the pull request is merged to `main`; Railway should also deploy the `backend/` directory from `main`.
 
 ## Tenant boundary

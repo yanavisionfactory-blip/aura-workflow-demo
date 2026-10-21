@@ -243,6 +243,12 @@ def intent_bounded_tool_inventory(
         selected.update(index for index, item in enumerate(inventory)
                         if "report.compose" in item.get("allowed_operations", []))
 
+    from .proofing import requested_proofing_sources
+
+    if requested_proofing_sources(prompt):
+        selected.update(index for index, item in enumerate(inventory)
+                        if "proofing.feedback.import" in item.get("allowed_operations", []))
+
     # A connected, released Google Docs connector can create the complete
     # document body. Do not hide it merely because a legacy Google Workspace
     # connection advertises docs.create: that grant may lack Drive write access.

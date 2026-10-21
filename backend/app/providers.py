@@ -600,6 +600,7 @@ class ProviderExecutor:
             "jira.issue.update": self._jira_issue_update,
             "weather.forecast": self._weather_forecast,
             "report.compose": self._report_compose,
+            "proofing.feedback.import": self._proofing_feedback_import,
             "website.source.inspect": self._website_source_inspect,
             "website.content.prepare": self._website_content_prepare,
             "weekly.source.analyze": self._weekly_source_analyze,
@@ -1213,6 +1214,11 @@ class ProviderExecutor:
         from .reports import compose_report
 
         return await compose_report(a)
+
+    async def _proofing_feedback_import(self, a: dict) -> dict:
+        from .proofing import import_feedback
+
+        return await asyncio.to_thread(import_feedback, a)
 
     async def _website_source_inspect(self, a: dict) -> dict:
         from .website_content import read_source
@@ -2045,6 +2051,16 @@ class ProviderExecutor:
                 selected = next((tool for tool in available.tools if tool.name == a["tool_name"]), None)
                 if selected is None:
                     raise ValueError(f"MCP server does not expose {a['tool_name']!r}")
+                if self.base_url == "https://mcp.frame.io/v1/mcp" and a["tool_name"] != "mandatory_init":
+                    if not any(tool.name == "mandatory_init" for tool in available.tools):
+                        raise ValueError("Frame.io's mandatory initialization tool is unavailable")
+                    initialized = await session.send_request(mcp_types.ClientRequest(
+                        mcp_types.CallToolRequest(params=mcp_types.CallToolRequestParams(
+                            name="mandatory_init", arguments={},
+                        )),
+                    ), mcp_types.CallToolResult)
+                    if initialized.isError:
+                        raise ValueError("Frame.io initialization failed; no requested action was executed")
                 # Use the public typed request API so the original receipt is
                 # retained even when a server omits structuredContent. The
                 # adapter validates JSON text against the same declared schema;

@@ -20,6 +20,16 @@ PAGE = {"type": "object", "required": ["id", "properties"], "properties": {
     "id": TEXT, "object": {"const": "page"}, "url": TEXT, "properties": OBJECT,
     "parent": OBJECT, "archived": {"type": "boolean"}, "in_trash": {"type": "boolean"}}}
 KNOWN = {
+    "proofing.feedback.import": ({"type": "object", "required": [
+        "source_provider", "asset_id", "version_id", "source_sha256", "pages",
+        "input_mode", "vendor_api_called", "approval_status",
+    ], "properties": {
+        "source_provider": {"enum": ["frameio", "pageproof"]},
+        "asset_id": TEXT, "version_id": TEXT, "source_sha256": TEXT,
+        "pages": {"type": "array", "minItems": 1, "items": OBJECT},
+        "input_mode": {"const": "user_supplied_export"},
+        "vendor_api_called": {"const": False}, "approval_status": {"const": "not_verified"},
+    }}, ["reviewer_feedback_export", "source_hashes"]),
     "executive.source.analyze": ({"type": "object", "required": ["mode", "synthetic", "source_key", "comparison", "receipt", "rows", "external_writes"],
         "properties": {"mode": {"const": "synthetic_export_execution"}, "synthetic": {"const": True},
             "receipt": OBJECT, "comparison": OBJECT, "rows": {"type": "array", "minItems": 1},

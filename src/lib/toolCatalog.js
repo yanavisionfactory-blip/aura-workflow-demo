@@ -123,7 +123,7 @@ function normalize(item) {
   };
 }
 
-const backendPriority = { nango: 0, native: 1, pipedream: 2 };
+const backendPriority = { nango: 0, native: 1, managed_mcp: 1, pipedream: 2 };
 const executionPriority = { pipedream_action: 0, pipedream_proxy: 1, pipedream_mcp: 2 };
 
 function entryPriority(item) {
