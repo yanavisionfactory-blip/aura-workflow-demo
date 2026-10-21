@@ -63,6 +63,7 @@ from .mcp_oauth import (
     MCPRegistrationRejected,
     managed_mcp_provider,
     mcp_service,
+    pageproof_client_metadata,
     semrush_api_credentials,
 )
 from .mcp_oauth import (
@@ -1296,6 +1297,13 @@ def _mcp_auth_config(config: dict) -> dict:
         "token_auth_method", "token_params", "scopes",
         "oauth_issuer",
     ) if key in config}
+
+
+@app.get("/v1/oauth/mcp-client/pageproof")
+async def pageproof_oauth_client_metadata() -> dict:
+    # PageProof's authorization server fetches this public identity document.
+    # It contains no workspace identity, state, token or client secret.
+    return pageproof_client_metadata(oauth_route_callback_url(settings, "mcp-agent"))
 
 
 @app.get("/v1/oauth/mcp-agent/callback")

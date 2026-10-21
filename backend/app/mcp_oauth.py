@@ -17,6 +17,8 @@ from .universal_connectors import ConnectorError, validate_public_endpoint
 UBERSUGGEST_ORIGIN = "https://ubersuggest-mcp.neilpatelapi.com"
 UBERSUGGEST_ENDPOINT = f"{UBERSUGGEST_ORIGIN}/mcp"
 UBERSUGGEST_SCOPES = ["profile", "domain", "keywords", "serp", "utility"]
+PAGEPROOF_AUTH_ORIGIN = "https://auth-server-prod-d9bwdmangffpf2es.westus-01.azurewebsites.net"
+PAGEPROOF_CLIENT_METADATA_PATH = "/v1/oauth/mcp-client/pageproof"
 
 # Reviewed vendor endpoints only. Never derive OAuth destinations from a pasted
 # URL or accept a different provider's authorization metadata.
@@ -29,6 +31,9 @@ MCP_SERVICES = {
     "pageproof": {
         "name": "PageProof", "owner": "PageProof", "endpoint": "https://mcp.pageproof.com/mcp",
         "auth_domains": ["pageproof.com"], "discover_issuer": True,
+        # Advertised by PageProof's HTTPS protected-resource metadata. This is
+        # one exact tenant origin, never an allowlist of Azure-hosted services.
+        "auth_origins": [PAGEPROOF_AUTH_ORIGIN], "client_metadata_document": True,
         "canonical_provider": "pageproof", "data_access": "proof metadata only; excludes comment text and imagery",
     },
     "ubersuggest": {
@@ -153,8 +158,10 @@ def _service_url(value: object, provider: str = "ubersuggest", *, resource: bool
         if resource else service.get("auth_origins", [])
     )
     if not resource and service.get("discover_issuer"):
-        allowed = any(parsed.hostname == domain or str(parsed.hostname).endswith("." + domain)
-                      for domain in service["auth_domains"])
+        allowed = allowed or any(
+            parsed.hostname == domain or str(parsed.hostname).endswith("." + domain)
+            for domain in service["auth_domains"]
+        )
     if (
         parsed.scheme != "https"
         or not allowed
@@ -208,7 +215,13 @@ async def _authorization_metadata(client, provider: str) -> tuple[str, str, dict
     issuer_parts = urlsplit(issuer)
     metadata_url = (f"https://{issuer_parts.netloc}/.well-known/oauth-authorization-server"
                     + issuer_parts.path)
-    metadata = await _json(client, "GET", metadata_url, provider=provider)
+    try:
+        metadata = await _json(client, "GET", metadata_url, provider=provider)
+    except httpx.HTTPStatusError as exc:
+        if not service.get("discover_issuer") or exc.response.status_code != 404:
+            raise
+        metadata = await _json(client, "GET", issuer + "/.well-known/openid-configuration",
+                               provider=provider)
     if str(metadata.get("issuer") or "").rstrip("/") != issuer:
         raise ConnectorError("The MCP service's authorization identity could not be verified")
     offered = metadata.get("scopes_supported", [])
@@ -221,13 +234,30 @@ async def _authorization_metadata(client, provider: str) -> tuple[str, str, dict
             or any(ord(char) < 33 or ord(char) > 126 for char in scope) for scope in scopes
         ) or len(scopes) > 50:
             raise ConnectorError("The MCP service returned invalid scope metadata")
-        if offered and not set(scopes).issubset(set(offered)):
-            raise ConnectorError("The MCP resource requested unsupported scopes")
+        # Resource metadata is authoritative for the scopes this API needs.
+        # PageProof advertises its `mcp` scope here, rather than in the issuer's
+        # generic OIDC list. Never add scopes absent from either document.
     else:
         scopes = [scope for scope in service["scopes"] if scope in offered]
         if service["required_scope"] not in scopes:
             raise ConnectorError("The MCP service did not offer the required research access")
     return issuer, resource_id, metadata, scopes
+
+
+def pageproof_client_metadata(callback_url: str) -> dict:
+    """Public, secret-free identity for PageProof's advertised CIMD flow."""
+    parsed = urlsplit(callback_url)
+    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
+        or parsed.query or parsed.fragment or parsed.port not in {None, 443}):
+        raise ConnectorError("PageProof needs a public HTTPS AURA callback")
+    origin = f"https://{parsed.netloc}"
+    return {
+        "client_id": origin + PAGEPROOF_CLIENT_METADATA_PATH,
+        "client_name": "AURA", "client_uri": origin,
+        "redirect_uris": [callback_url], "application_type": "web",
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"], "token_endpoint_auth_method": "none",
+    }
 
 
 def pkce_challenge(verifier: str) -> str:
@@ -259,23 +289,39 @@ async def _json(client: httpx.AsyncClient, method: str, url: str, *,
 
 async def prepare_authorization(credentials: dict, state: str, callback_url: str,
                                 provider: str = "ubersuggest") -> tuple[str, dict, dict]:
-    """Register a public client and return a consent URL, never a user token."""
+    """Prepare the vendor's supported client flow and return consent, never a user token."""
     service = mcp_service(provider)
     async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
         issuer, resource_id, metadata, scopes = await _authorization_metadata(client, provider)
-        if (
-            "S256" not in metadata.get("code_challenge_methods_supported", [])
-            or "none" not in metadata.get("token_endpoint_auth_methods_supported", [])
-        ):
+        methods = metadata.get("token_endpoint_auth_methods_supported", [])
+        supported = ("none", "client_secret_post", "client_secret_basic") if service.get("discover_issuer") else ("none",)
+        token_method = next((method for method in supported if method in methods), None)
+        if "S256" not in metadata.get("code_challenge_methods_supported", []) or not token_method:
             raise ConnectorError("The MCP service does not support the required OAuth protection")
         authorization_url = _service_url(metadata.get("authorization_endpoint"), provider)
         token_url = _service_url(metadata.get("token_endpoint"), provider)
-        registration_url = _service_url(metadata.get("registration_endpoint"), provider)
         credentials = dict(credentials)
+        use_metadata = (service.get("client_metadata_document")
+                        and metadata.get("client_id_metadata_document_supported") is True)
+        if use_metadata:
+            if "none" not in methods:
+                raise ConnectorError("PageProof did not offer public client metadata authentication")
+            token_method = "none"
+            credentials.pop("client_secret", None)
+            credentials.update(
+                client_id=pageproof_client_metadata(callback_url)["client_id"],
+                registered_redirect_uri=callback_url, registered_issuer=issuer,
+                registered_token_auth_method=token_method,
+            )
         # Client registrations belong to one redirect URI. Never reuse a client
         # after a deployment changes that URI.
-        if (not credentials.get("client_id") or credentials.get("registered_redirect_uri") != callback_url
-            or (service.get("discover_issuer") and credentials.get("registered_issuer") != issuer)):
+        elif (not credentials.get("client_id") or credentials.get("registered_redirect_uri") != callback_url
+              or (service.get("discover_issuer") and credentials.get("registered_issuer") != issuer)
+              or credentials.get("registered_token_auth_method", "none") != token_method
+              or (token_method != "none" and not credentials.get("client_secret"))
+              or (credentials.get("client_secret_expires_at", 0)
+                  and int(credentials["client_secret_expires_at"]) <= int(time.time()))):
+            registration_url = _service_url(metadata.get("registration_endpoint"), provider)
             registration = await _json(
                 client, "POST", registration_url,
                 provider=provider,
@@ -285,14 +331,27 @@ async def prepare_authorization(credentials: dict, state: str, callback_url: str
                     "redirect_uris": [callback_url],
                     "grant_types": ["authorization_code", "refresh_token"],
                     "response_types": ["code"],
-                    "token_endpoint_auth_method": "none",
+                    "token_endpoint_auth_method": token_method,
+                    "application_type": "web",
                 },
             )
             client_id = registration.get("client_id")
             if not isinstance(client_id, str) or not client_id or len(client_id) > 1000:
                 raise ConnectorError("The MCP service did not register an OAuth client")
+            if registration.get("token_endpoint_auth_method", token_method) != token_method:
+                raise ConnectorError("The MCP service changed the registered authentication method")
+            credentials.pop("client_secret", None)
+            credentials.pop("client_secret_expires_at", None)
+            if token_method != "none":
+                secret = registration.get("client_secret")
+                if not isinstance(secret, str) or not secret or len(secret) > 8000:
+                    raise ConnectorError("The MCP service did not issue its required client credential")
+                # _managed_mcp_connection stores this only in CredentialVault.
+                credentials["client_secret"] = secret
+                if registration.get("client_secret_expires_at"):
+                    credentials["client_secret_expires_at"] = int(registration["client_secret_expires_at"])
             credentials.update(client_id=client_id, registered_redirect_uri=callback_url,
-                               registered_issuer=issuer)
+                               registered_issuer=issuer, registered_token_auth_method=token_method)
         verifier = secrets.token_urlsafe(48)
         credentials["mcp_oauth_pending"] = {
             "state_hash": hashlib.sha256(state.encode()).hexdigest(),
@@ -305,7 +364,7 @@ async def prepare_authorization(credentials: dict, state: str, callback_url: str
             "oauth_custom": True,
             "authorization_url": authorization_url,
             "token_url": token_url,
-            "token_auth_method": "none",
+            "token_auth_method": token_method,
             "token_params": {"resource": resource_id},
             "oauth_issuer": issuer,
             "scopes": scopes,
@@ -331,21 +390,31 @@ async def exchange_code(credentials: dict, config: dict, code: str, verifier: st
     provider = config.get("mcp_oauth_provider", "ubersuggest")
     service = mcp_service(provider)
     token_url = _service_url(config.get("token_url"), provider)
+    payload = {
+        "grant_type": "authorization_code", "client_id": credentials["client_id"],
+        "redirect_uri": credentials["registered_redirect_uri"], "code": code,
+        "code_verifier": verifier,
+        "resource": _resource_identity(
+            (config.get("token_params") or {}).get("resource", service.get("resource", service["endpoint"])),
+            provider,
+        ),
+    }
+    method = config.get("token_auth_method", "none")
+    if method != credentials.get("registered_token_auth_method", "none"):
+        raise ConnectorError("The MCP client authentication method could not be verified")
+    auth = None
+    if method in {"client_secret_post", "client_secret_basic"}:
+        if not credentials.get("client_secret"):
+            raise ConnectorError("The MCP client credential is missing; reconnect the service")
+        if method == "client_secret_post":
+            payload["client_secret"] = credentials["client_secret"]
+        else:
+            auth = (credentials["client_id"], credentials["client_secret"])
+    elif method != "none":
+        raise ConnectorError("The MCP client authentication method is not supported")
     async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
         result = await _json(
-            client, "POST", token_url,
-            provider=provider,
-            data={
-                "grant_type": "authorization_code",
-                "client_id": credentials["client_id"],
-                "redirect_uri": credentials["registered_redirect_uri"],
-                "code": code,
-                "code_verifier": verifier,
-                "resource": _resource_identity(
-                    (config.get("token_params") or {}).get("resource", service.get("resource", service["endpoint"])),
-                    provider,
-                ),
-            },
+            client, "POST", token_url, provider=provider, data=payload, auth=auth,
         )
     if not isinstance(result.get("access_token"), str) or not result["access_token"]:
         raise ConnectorError("The MCP service did not grant access")

@@ -46,6 +46,15 @@ alone is insufficient: an authenticated read probe must pass before a connection
 is enabled. Frame.io's `mandatory_init` runs before the selected operation in
 each new MCP session; writes and deletes retain consequential permissions.
 
+Live metadata verification on 21 October 2026 found that Frame.io requires a
+confidential registered client; its generated client secret stays encrypted on
+the server. PageProof advertises one exact Azure-hosted issuer, OIDC discovery
+and Client ID Metadata Documents instead of dynamic registration. AURA publishes
+its secret-free client identity at `/v1/oauth/mcp-client/pageproof`, with the
+configured callback URI. These flows retain PKCE and resource binding; other
+Azure origins are not accepted. Provider metadata and client-setup compatibility
+are separate from the user's consent and authenticated account verification.
+
 Tests use mocked vendor boundaries to cover metadata discovery, domain rejection,
 consent routing, authenticated probes and session initialization. They also
 exercise the actual native import dispatch and plan validation. A live vendor
