@@ -59,11 +59,20 @@ test("the marketing results summarize actual execution and keep each tool output
     const name={google:'Google Ads',meta:'Meta Ads',mailchimp:'Mailchimp',klaviyo:'Klaviyo'}[key];
     assert.ok(output.includes(`aria-label="${name} output"`));
     assert.doesNotMatch(output,/<h1/);
-    if(key==='meta') for(const text of ['Simulated weekly performance','Coffee detail static','Morning brew video','not saved in Meta','Source rows and execution receipt']) assert.ok(output.includes(text));
+    assert.ok(output.includes(`aria-label="${name} interface preview"`));
+    assert.match(output,/Interface imitation|Simulated interface/);
+    if(key==='meta') for(const text of ['Simulated weekly performance','Campaigns','Cost per purchase','Source rows and execution receipt']) assert.ok(output.includes(text));
     if(key==='klaviyo') for(const text of ['Abandoned checkout','Repeat-purchase replenishment','vendor API was not called','Source rows and execution receipt']) assert.ok(output.includes(text));
     if(key==='mailchimp') assert.match(output,/Audience unavailable/);
     if(key==='google') assert.match(output,/Account selection required/);
   }
+  const metaAds=renderToolWorkspace({simulations},steps,'meta','ads');
+  for(const text of ['Coffee detail static','Morning brew video','not saved in Meta','Primary text','Facebook Feed','Your First House Blend: 10% Off']) assert.ok(metaAds.includes(text),text);
+  const analytics=renderToolWorkspace({simulations},steps,'klaviyo','analytics');
+  for(const text of ['Flow performance','Attributed revenue','Checkout follow-up | 4 hours','5-day click / 1-day open']) assert.ok(analytics.includes(text),text);
+  const evidence=renderToolWorkspace({simulations},steps,'meta','evidence');
+  assert.match(evidence,/fixture_sha256/);
+  assert.match(evidence,/browser_simulated_tool_adapter/);
 });
 
 const body = `## Sourced campaign brief
