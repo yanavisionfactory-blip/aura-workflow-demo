@@ -1,5 +1,22 @@
 # Weekly account review from approved client exports
 
+## Seven-platform simulation
+
+Open `?weekly=1` and choose **Create seven-platform simulation plan** to use all
+seven named platforms with authored sample rows. Review the plan and start it
+in AURA. Seven `weekly.source.analyze` operations and one `weekly.review.prepare`
+operation produce independent hashes/receipts, separate attribution, three
+proposed experiments, six draft variants and a prioritized backlog.
+
+This mode sets `simulationOnly: true`, a fictional training account, unconfirmed
+real engagement/scope/reporting, and authorization for every simulated source.
+It rejects real exports and real approval claims. Source metadata must match
+the simulation-only mode. The existing approved-export route still permits
+simulations only for Meta and Amazon. Email demo inputs cover Klaviyo welcome,
+Mailchimp newsletter and HubSpot nurture cohorts; SMS is outside this route.
+The destination is the AURA result and local downloads. No vendor connection,
+fabricated vendor upload, campaign, budget change, external task or message occurs.
+
 The main AURA application offers **Prepare weekly account review** on the task
 screen. `?weekly=1` opens the same setup. This is an authenticated backend workflow,
 separate from the public fictional Northline showcase.

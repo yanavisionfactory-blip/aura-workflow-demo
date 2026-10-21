@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build } from 'vite';
-import { APPROVED_WEEKLY_PREFIX, approvedWeeklyRequest, approvedWeeklyMarkdown, weeklyCsvTemplate, weeklyPeriods, WEEKLY_PLATFORMS } from '../src/lib/weeklyReviewIntake.mjs';
+import { APPROVED_WEEKLY_PREFIX, allPlatformSimulationRequest, approvedWeeklyRequest, approvedWeeklyMarkdown, weeklyCsvTemplate, weeklyPeriods, WEEKLY_PLATFORMS } from '../src/lib/weeklyReviewIntake.mjs';
 import { totals } from '../src/lib/weeklyAccountReview.mjs';
 import { testWeeklyPacket } from './fixtures/approvedWeeklyPacket.mjs';
 import { primaryResultFromOutputs } from '../src/lib/resultPresentation.mjs';
@@ -146,4 +146,41 @@ test('mixed saved results and every download section retain simulation labels', 
   assert.match(markdown, /SIMULATED SCENARIOS INCLUDED/);
   assert.equal((markdown.match(/SIMULATION-BASED/g) || []).length, 12);
   assert.doesNotMatch(markdown, /approved by Unit test/);
+});
+
+test('seven-platform demo needs no client approval and cannot accept real-source substitutions', () => {
+  const request = allPlatformSimulationRequest(new Date('2026-10-20T12:00:00Z'));
+  const packet = JSON.parse(Buffer.from(request.resources.documents[0].file_url.split(',')[1], 'base64'));
+  const fixture = JSON.parse(fs.readFileSync(path.join(repo, 'backend/tests/fixtures/weekly_all_platforms_simulation.json')));
+  assert.deepEqual(packet, fixture);
+  assert.equal(packet.sources.length, 7);
+  assert.equal(packet.config.client.engagementConfirmed, false);
+  assert.equal(packet.config.scope.confirmed, false);
+  assert.equal(packet.config.periods.current.to, '2026-10-18');
+  for (const source of packet.sources) {
+    assert.equal(source.input_kind, 'simulated_scenario');
+    assert.equal(source.metadata.simulationOnly, true);
+    assert.equal(source.metadata.approvedBy, undefined);
+    assert.match(source.csv_text, /SIMULATED/);
+  }
+  packet.config.scope.simulated.pop();
+  assert.throws(() => approvedWeeklyRequest(packet.config, {}), /every source/);
+  packet.config.scope.simulated.push('hubspot');
+  packet.config.reporting.confirmed = true;
+  assert.throws(() => approvedWeeklyRequest(packet.config, {}), /cannot claim/);
+  assert.match(renderSetup(), /Create seven-platform simulation plan/);
+});
+
+test('simulation-only results never imply export approval or an external reporting blocker', () => {
+  const packet = testWeeklyPacket();
+  packet.simulationOnly = true; packet.provenance = 'simulated';
+  packet.execution.mode = 'backend_executed_synthetic';
+  packet.sources[0].provenance = 'simulated'; packet.sources[0].simulationNotice = 'SIMULATED';
+  for (const section of ['Summary', 'Experiments', 'Draft variants', 'Backlog', 'Sources']) {
+    const html = renderResult(packet, section);
+    assert.match(html, /SIMULATION ONLY/);
+    assert.doesNotMatch(html, /AURA processed approved|Export approval and client mapping are user-attested|HANDOFF BLOCKER/);
+  }
+  assert.match(approvedWeeklyMarkdown(packet), /SIMULATION ONLY/);
+  assert.doesNotMatch(approvedWeeklyMarkdown(packet), /Approved exports were processed/);
 });

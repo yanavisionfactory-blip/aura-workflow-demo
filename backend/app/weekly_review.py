@@ -34,7 +34,7 @@ NUMERIC = {"impressions", "clicks", "spend", "purchases", "revenue", "reach",
            "delivered", "uniqueClicks", "unsubscribes"}
 CONFIG_FIELDS = {"version", "agency", "client", "currency", "timezone", "asOf",
                  "materialityThreshold", "periods", "scope", "brief", "reporting",
-                 "expertChecks", "references"}
+                 "expertChecks", "references", "simulationOnly"}
 
 
 class StrictModel(BaseModel):
@@ -170,10 +170,10 @@ def analyze_source(arguments: dict) -> dict:
     normalized = approved or scenario
     if approved and meta.get("provenance", "approved_export") != "approved_export":
         raise ValueError("Simulated source metadata cannot become approved evidence")
-    if scenario and (request.source_key not in {"meta", "amazon"}
+    if scenario and ((request.source_key not in {"meta", "amazon"} and meta.get("simulationOnly") is not True)
                      or meta.get("provenance") != "simulated"
                      or meta.get("simulationAuthorized") is not True):
-        raise ValueError("Only explicitly authorized Meta Ads and Amazon Ads scenarios are supported")
+        raise ValueError("Only authorized Meta/Amazon scenarios or explicit simulation-only sources are supported")
     kind = "email" if request.source_key in EMAIL_SOURCES else "paid"
     required = ["filename", "report", "timezone", "currency", "asOf", "attribution",
                 "dateBasis", "conversionDefinition", "revenueDefinition", "caution"]
@@ -364,7 +364,8 @@ async def prepare_review(arguments: dict) -> dict:
     config = {key: deepcopy(value) for key, value in request.config.items() if key in CONFIG_FIELDS}
     approved = all(item.get("input", {}).get("input_kind") == "approved_export" for item in request.sources)
     scoped = approved or config.get("version") == 2
-    mixed = scoped and not approved
+    demo = config.get("simulationOnly") is True
+    mixed = scoped and not approved and not demo
     if not scoped and any(item.get("input", {}).get("input_kind") != "simulated" for item in request.sources):
         raise ValueError("Approved and simulated sources cannot be mixed in the legacy sample")
     if scoped:
@@ -512,8 +513,9 @@ def weekly_workflow_recipe(prompt: str, inventory: list[dict]) -> WorkflowPlan |
                   "expected_output": "Complete interactive weekly-review packet, per-source evidence, draft variants and implementation proposals.",
                   "consequential": False})
     includes_scenarios = any(item.input_kind == "simulated_scenario" for item in request.sources)
-    return WorkflowPlan.model_validate({"name": "Weekly account review — includes Meta/Amazon simulations" if includes_scenarios else "Weekly account review — approved client exports" if approved else "Weekly account review — real AURA run, synthetic exports",
-        "interpretation": ("Prepare the selected client review using only its scoped approved exports and explicitly labelled Meta/Amazon scenarios. Keep attribution separate and all experiments and copy as proposals inside AURA." if approved else "Execute the review in AURA using explicitly simulated Google Ads, Meta Ads and Klaviyo exports. No vendor metrics are uploaded or campaigns changed."),
+    demo = request.config.get("simulationOnly") is True
+    return WorkflowPlan.model_validate({"name": "Seven-platform weekly review — SIMULATION ONLY" if demo else "Weekly account review — includes Meta/Amazon simulations" if includes_scenarios else "Weekly account review — approved client exports" if approved else "Weekly account review — real AURA run, synthetic exports",
+        "interpretation": ("Execute all seven simulated platform sources through AURA, then produce a checked summary, three tests, six draft variants and backlog. Client scope, goals and brand brief are demo assumptions. No vendor API calls, uploads, budgets, campaigns or messages. Results stay in AURA." if demo else "Prepare the selected client review using only its scoped approved exports and explicitly labelled Meta/Amazon scenarios. Keep attribution separate and all experiments and copy as proposals inside AURA." if approved else "Execute the review in AURA using explicitly simulated Google Ads, Meta Ads and Klaviyo exports. No vendor metrics are uploaded or campaigns changed."),
         "steps": steps, "planning_artifacts": {"planner_recovery_mode": "approved_export_weekly_review" if approved else "synthetic_export_weekly_review"}})
 
 
@@ -522,12 +524,16 @@ def validate_approved_config(config: dict, sources: list[dict]):
     client, scope, brief = (config.get(key, {}) for key in ("client", "scope", "brief"))
     if not all(isinstance(value, dict) for value in (client, scope, brief)):
         raise ValueError("Client, scope and brief must be structured review inputs")
-    if (not client.get("name") or not client.get("id") or client.get("fictional") is not False
-        or client.get("engagementConfirmed") is not True):
+    demo = config.get("simulationOnly") is True
+    if demo and (client.get("fictional") is not True or client.get("engagementConfirmed") is not False
+                 or scope.get("confirmed") is not False or config.get("reporting", {}).get("confirmed") is not False):
+        raise ValueError("Simulation-only mode cannot claim verified client, scope or reporting approvals")
+    if (not client.get("name") or not client.get("id") or (not demo and (client.get("fictional") is not False
+        or client.get("engagementConfirmed") is not True))):
         raise ValueError("Select a real client and confirm its engagement")
     selected = scope.get("included", [])
     if (not selected or len(set(selected)) != len(selected)
-        or not set(selected).issubset(SOURCE_NAMES) or scope.get("confirmed") is not True
+        or not set(selected).issubset(SOURCE_NAMES) or (not demo and scope.get("confirmed") is not True)
         or not scope.get("approvalReference")):
         raise ValueError("Confirm the client scope and its approval reference")
     if any(not isinstance(brief.get(key), str) or not brief[key].strip()
@@ -541,14 +547,18 @@ def validate_approved_config(config: dict, sources: list[dict]):
         raise ValueError("Exactly one approved export per scoped platform is required")
     simulations = scope.get("simulated", [])
     if (not isinstance(simulations, list) or len(set(simulations)) != len(simulations)
-        or not set(simulations).issubset({"meta", "amazon"} & set(selected))
+        or not set(simulations).issubset((set(SOURCE_NAMES) if demo else {"meta", "amazon"}) & set(selected))
         or (simulations and scope.get("simulationConfirmed") is not True)):
         raise ValueError("Explicitly confirm only scoped Meta Ads / Amazon Ads simulations")
     if {item["source_key"] for item in sources if item.get("input_kind") == "simulated_scenario"} != set(simulations):
         raise ValueError("Simulated inputs must exactly match the authorized simulation scope")
+    if demo and set(simulations) != set(selected):
+        raise ValueError("Simulation-only mode requires every source to be simulated")
     all_ids = set()
     for item in sources:
         meta = item.get("metadata", {})
+        if (meta.get("simulationOnly") is True) != demo:
+            raise ValueError("Source simulation-only mode must match review mode")
         if item.get("input_kind") == "simulated_scenario":
             if item["source_key"] not in simulations or meta.get("simulationAuthorized") is not True:
                 raise ValueError("Simulated inputs require explicit Meta/Amazon scenario authorization in client scope")
@@ -579,7 +589,8 @@ def validate_approved_config(config: dict, sources: list[dict]):
         if url.scheme != "https" or not url.netloc or url.username or url.password:
             raise ValueError("Reporting destination must be an HTTPS URL without credentials")
     else:
-        reporting["status"] = "Unconfirmed — internal AURA draft only; confirm destination and access before handoff"
+        reporting["status"] = ("Internal AURA simulation result and local downloads only; no external destination requested"
+                               if demo else "Unconfirmed — internal AURA draft only; confirm destination and access before handoff")
 
 
 def resolve_weekly_attachment(prompt: str, inputs: dict | None) -> str | None:
