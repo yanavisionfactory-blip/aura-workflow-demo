@@ -456,7 +456,8 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
 
       {omittedTools.length > 0 && (
         <div className="mb-4 rounded-xl border border-amber-400/25 bg-amber-400/5 p-3 text-xs text-amber-100">
-          New plan without {omittedTools.join(", ")}. Any dependent steps and links must be removed.
+          New plan without calls to {omittedTools.join(", ")}. Supported drafts stay in scope;
+          unavailable account checks must be reported.
           Review the revised plan before starting it.
         </div>
       )}

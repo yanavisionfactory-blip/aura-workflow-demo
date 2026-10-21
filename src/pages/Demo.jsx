@@ -44,6 +44,7 @@ import {
   planningConnectionRequirements,
   planningDisposition,
   shouldStartFreshPlanningRun,
+  skippedToolRevision,
   unavailablePlanningState,
 } from "@/lib/planningFlow.mjs";
 import { hasDurablePlan, planningRequestPrompt, savedRunResumeView, sameExecutablePlan, shouldRestoreRememberedRun, workflowInputPrompt } from "@/lib/runtimePlan.mjs";
@@ -817,7 +818,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
     userSelectedToolsRef.current = userSelectedToolsRef.current.filter((tool) => tool !== toolName);
     return handleConfirm(
       interpretation,
-      `Omit ${toolName} and all steps or output content that depend on it. Deliver only the remaining useful outcomes. Never claim the omitted result exists; show the revised plan for approval.`,
+      skippedToolRevision(toolName),
     );
   }, [handleConfirm, interpretation]);
 

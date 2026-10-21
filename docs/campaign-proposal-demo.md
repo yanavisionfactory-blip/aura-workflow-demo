@@ -4,6 +4,25 @@ The campaign preparation outcome is a sourced proposal and implementation handof
 It does not require creating an advertising campaign. Never present a saved report,
 a connection test, or an external assistant's tool call as native AURA execution.
 
+## Public source fallback for unpublished drafts
+
+Skipping an unavailable channel omits its authenticated calls, not draft copy that
+can still be prepared from authorized public sources. Keep the original deliverables,
+public booking destination and publication limits; report unperformed listing,
+post-history and advertiser/creative checks separately. A connected personal account
+does not establish access to a client's account. Budget and calendar launch dates
+can remain pending while the complete draft package is prepared.
+
+The explicit `AURA_CAMPAIGN_V1` recipe accepts `web.page.read` and
+`website.source.inspect` alongside its existing provider reads. With only the built-in
+AURA connector, it can read the supplied public website, service and booking URLs,
+then pass their actual outputs into `report.compose` through step dependencies.
+The report remains in AURA; no additional storage app, channel write or schedule
+is required. Normal connection grants, source validation, preflight, plan review and
+runtime verification still apply. A read failure remains a failure, never a verified
+service or account check. Explicitly supplied historical evidence must retain its
+provenance rather than being relabelled as a fresh native read.
+
 ## Connect Meta research to AURA
 
 Open the app with `?connect=supermetrics`. It opens the connection form with the
