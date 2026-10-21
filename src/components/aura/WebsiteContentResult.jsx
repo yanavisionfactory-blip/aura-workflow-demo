@@ -126,8 +126,8 @@ export default function WebsiteContentResult({ packet, initialTab = 'Pages', ini
       </>}
     </section>
     <section aria-label="Tools used and previewed" className="mb-6 rounded-xl border border-white/10 bg-card/30 p-4"><h3 className="text-xs font-semibold">Tools used{simulation ? ' & simulated outputs' : ''}</h3><div className="mt-3 flex flex-wrap gap-2">{tools.map((item) => <button type="button" key={item.id} onClick={() => chooseTool(item.id)} className="rounded-lg border border-white/10 px-2.5 py-1.5 text-[11px] text-slate-300 hover:border-primary/40">{item.name}</button>)}</div></section>
-    <section ref={resultsRef} className="mb-6 overflow-hidden rounded-2xl border border-white/10 bg-[#101722]" aria-label="Results — the actual output">
-      <h3 className="sr-only">Results — the actual output</h3>
+    <section ref={resultsRef} className="mb-6 overflow-hidden rounded-2xl border border-white/10 bg-[#101722]" aria-label={simulation ? 'Results — content and simulated tool outputs' : 'Results — the actual output'}>
+      <h3 className="sr-only">{simulation ? 'Results — content and simulated tool outputs' : 'Results — the actual output'}</h3>
       <div role="tablist" aria-label="Content package views" className="flex gap-1 overflow-x-auto border-b border-white/10 px-3 pt-2 sm:px-5">{tabs.map((name) => <button key={name} role="tab" aria-selected={tab === name} onClick={() => setTab(name)} className={`shrink-0 border-b-2 px-3 py-3 text-xs font-medium transition-colors ${tab === name ? 'border-primary text-white' : 'border-transparent text-muted-foreground hover:text-white'}`}>{name}</button>)}</div>
       <div className={showPages ? 'grid min-w-0 md:grid-cols-[200px_minmax(0,1fr)]' : ''}>
         {showPages && <nav aria-label="Select a page" className="flex gap-2 overflow-x-auto border-b border-white/10 bg-black/10 p-3 md:block md:space-y-1 md:border-b-0 md:border-r md:p-4">

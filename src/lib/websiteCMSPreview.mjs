@@ -41,6 +41,7 @@ export function websiteCMSPreview(packet) {
           remote_id: null, remote_url: null, publish_state: 'unpublished',
           approval_status: 'pending', title: page.h1, purpose: page.purpose,
           body_html: pageHTML(page),
+          content_blocks: structuredClone(page.sections), faqs: structuredClone(page.faqs || []),
           seo: { page_title: page.page_title, meta_description: page.meta_description },
           cta: { label: page.cta_label, target: page.cta_target },
           asset_requirements: structuredClone(page.assets),
