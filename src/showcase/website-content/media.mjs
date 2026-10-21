@@ -1,2 +1,2 @@
-// Enabled when the captioned walkthrough assets are published with this demo.
-export const videoReady = false;
+// The Pages build renders these assets from the isolated demo before publishing.
+export const videoReady = true;

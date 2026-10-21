@@ -27,5 +27,7 @@ test('guided tour, input, review and playback remain explicit and offline',()=>{
  assert.match(render('?screen=review'),/Start prepared demo/);assert.match(render('?screen=execution'),/No live provider calls/);
  for(let i=0;i<tour.length;i++){const html=render(`?scene=${i}`);assert.ok(html.includes(tour[i].title));assert.match(html,/Guided walkthrough/);}
  const feedback=render('?screen=feedback');assert.match(feedback,/No email or form submission is made/);assert.doesNotMatch(feedback,/<form|type="submit"/);
+ assert.match(render('?screen=video'),/<video/);
+ assert.match(render('?screen=video'),/walkthrough.mp4/);
  const entry=fs.readFileSync(path.join(repo,'showcase/website-content/index.html'),'utf8');assert.match(entry,/connect-src 'none'/);
 });
