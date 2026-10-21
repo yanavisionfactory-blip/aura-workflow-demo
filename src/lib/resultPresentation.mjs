@@ -265,16 +265,17 @@ export function selectPrimaryOutcome(results = {}) {
   return { ...outcome, provider: providerForOutcome(outcome) };
 }
 
-export function supportingReceipts(results = {}, activity = [], primary = null, presentation = null) {
+export function supportingReceipts(results = {}, activity = [], primary = null, presentation = null, mainActionId = null) {
   const primaryProvider = String(primary?.provider || providerForOutcome(primary || {})).toLowerCase();
   const hasCompiledSelection = Array.isArray(presentation?.supporting_step_keys);
   const supportingKeys = new Set(presentation?.supporting_step_keys || []);
   const completed = activity
     .filter((step) => step.status === "completed")
+    .filter((step) => !mainActionId || (step.id || step.stepKey || step.key) !== mainActionId)
     .filter((step) => !hasCompiledSelection || supportingKeys.has(step.stepKey || step.key)
       || (primary?.delivery && step.output?.operation === "gmail.send"))
     .filter((step) => !primary?.delivery || step.output?.operation !== "canva.presentation.create")
-    .filter((step) => hasCompiledSelection
+    .filter((step) => mainActionId || hasCompiledSelection
       || !primaryProvider
       || String(step.tool || "").toLowerCase() !== primaryProvider)
     .map((step) => {
@@ -340,7 +341,7 @@ export function supportingReceipts(results = {}, activity = [], primary = null, 
       link: safeHttpsUrl(primary.delivery.link), linkLabel: "View in Gmail", preview: [] });
   }
 
-  if (hasCompiledSelection || completed.length) {
+  if (mainActionId || hasCompiledSelection || completed.length) {
     return completed.filter((receipt, index, all) => (!primary?.link || receipt.link !== primary.link)
       && (!primary?.downloadUrl || receipt.link !== primary.downloadUrl)
       && all.findIndex((candidate) => candidate.key === receipt.key || (receipt.link && candidate.link === receipt.link)) === index

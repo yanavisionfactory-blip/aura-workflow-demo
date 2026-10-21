@@ -4,7 +4,7 @@ import { toolEvidence } from "@/lib/toolEvidence.mjs";
 
 const labels = { completed: "Completed", failed: "Failed", blocked: "Blocked", provider_error: "Provider error", running: "Running", recovering: "Checking response", pending: "Not run", skipped: "Skipped", awaiting_approval: "Awaiting review" };
 
-function EvidenceValue({ value, level = 0 }) {
+export function EvidenceValue({ value, level = 0 }) {
   const [shown, setShown] = useState(20);
   if (value === null || value === undefined) return <span className="text-muted-foreground">No value returned</span>;
   if (typeof value !== "object") return <span className="whitespace-pre-wrap break-words">{String(value)}</span>;

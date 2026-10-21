@@ -7,26 +7,31 @@ import ScheduleModal from "./ScheduleModal";
 import CreatorApprovalList from "./CreatorApprovalList";
 import ResultPreview from "./ResultPreview";
 import PrimaryResult from "./PrimaryResult";
-import ToolEvidence from "./ToolEvidence";
+import ToolResultDialog, { MainToolOutput, ResultsByTool, ToolResultFrame } from "./ToolResultView";
 import { ResultsHeading, ResultsMetrics } from "./ResultsSummary";
 import { buildSummaryText } from "@/lib/auraSummary";
 import { resultMetrics, selectPrimaryOutcome, supportingReceipts, visualResultChoices } from "@/lib/resultPresentation.mjs";
+import { mainToolEntry, toolResultEntries, toolResultName } from "@/lib/toolResultViews.mjs";
 
 export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, workflowPrompt, activity, prompt, interpretation, backendRunId, historyWorkflowId, scheduleTitle }) {
   const isFailure = results.status === "failed" || results.status === "needs_attention";
   const [showModal, setShowModal] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
-  const [activityRequest, setActivityRequest] = useState(null);
+  const [toolView, setToolView] = useState(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const visualChoices = useMemo(() => visualResultChoices(activity || [], { title: results.title, summary: results.summary }), [activity, results]);
   const selectedVisual = visualChoices.find((choice) => choice.key === searchParams.get("main"));
   const primaryResult = selectedVisual?.result || selectPrimaryOutcome(results);
+  const toolEntries = useMemo(() => toolResultEntries(activity || []), [activity]);
+  const mainEntry = useMemo(() => mainToolEntry(toolEntries, primaryResult, results.resultPresentation), [toolEntries, primaryResult, results.resultPresentation]);
+  const hasMainOutput = Boolean((primaryResult.kind && primaryResult.kind !== "result") || primaryResult.provider || mainEntry?.hasResponse || results.breakdown || primaryResult.items?.length);
+  const openTool = (id) => setToolView({ id });
   const nativeAudit = primaryResult.kind === "seo_audit";
   const approvedWeekly = primaryResult.kind === "weekly_review" && (primaryResult.packet?.version === 2 || primaryResult.packet?.provenance === "approved_export");
   const nativeResult = nativeAudit || ["weekly_review", "executive_review", "website_content"].includes(primaryResult.kind);
   const metrics = useMemo(() => isFailure ? [] : resultMetrics(results.metrics || [], activity || []), [results.metrics, activity, isFailure]);
-  const receipts = useMemo(() => supportingReceipts(results, activity || [], primaryResult, results.resultPresentation), [activity, primaryResult, results]);
+  const receipts = useMemo(() => supportingReceipts(results, activity || [], primaryResult, results.resultPresentation, mainEntry?.id), [activity, primaryResult, results, mainEntry]);
   const creatorsOutcome = (results.outcomes || []).find((outcome) => outcome.type === "creators" && outcome.items?.length > 0);
   const nextSteps = primaryResult.kind === "website_content" ? [
     "Review the changes to each page.",
@@ -46,11 +51,12 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
     }
   };
   const handleDownload = () => {
-    const blob = new Blob([buildSummaryText(summaryArgs)], { type: "text/plain" });
+    const body = primaryResult.preview?.body;
+    const blob = new Blob([body || buildSummaryText(summaryArgs)], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `aura-summary-${(results.title || "workflow").replace(/\s+/g, "-").toLowerCase()}.txt`;
+    anchor.download = `aura-${body ? "output" : "summary"}-${(results.title || "workflow").replace(/\s+/g, "-").toLowerCase()}.txt`;
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
@@ -84,7 +90,9 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
         </>}
         footer={artifactDelivery && <><span>Presentation · {primaryResult.artifact?.title || primaryResult.title}</span><span className="text-emerald-400">{artifactDelivery.artifactDelivered ? "Attached and delivered" : "Created in Canva"}</span></>}
       >
-        <ResultPreview result={primaryResult} results={results} activity={activity} backendRunId={backendRunId} />
+        {hasMainOutput ? <ToolResultFrame tool={primaryResult.provider || mainEntry?.tool} title={primaryResult.title || results.title || "Main output"} synthetic={mainEntry?.synthetic} onExpand={() => openTool("main")}>
+          <MainToolOutput entry={mainEntry} result={primaryResult} results={results} activity={activity} backendRunId={backendRunId} />
+        </ToolResultFrame> : <ResultPreview result={primaryResult} results={results} />}
       </PrimaryResult>}
 
       {!nativeResult && receipts.length > 0 && <section aria-label="Supporting workflow actions" className="mb-6">
@@ -93,7 +101,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
           {receipts.map((receipt) => <div key={receipt.key} className="flex flex-wrap items-center gap-3 rounded-xl border border-white/10 bg-card/40 p-4">
             <Activity className="h-5 w-5 shrink-0 text-primary" />
             <div className="min-w-0 flex-1"><p className="text-sm font-medium">{receipt.title}</p>
-            <p className="mt-1 text-xs text-muted-foreground">{receipt.tool}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{toolResultName(receipt.tool)}</p>
             {receipt.preview?.length > 0 && <div className="mt-3 space-y-2 border-t border-white/10 pt-3">
               {receipt.preview.map((audience, index) => <div key={index} className="flex items-start justify-between gap-3 text-xs">
                 <span className="break-words">{audience.name}</span>
@@ -102,14 +110,14 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
             </div>}
             </div>
             <div className="flex flex-wrap gap-2">
-              {receipt.actionId && <button type="button" onClick={() => setActivityRequest({ id: receipt.actionId })} className="inline-flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground">View action</button>}
+              {receipt.actionId && <button type="button" aria-label={`View action: ${receipt.title}`} onClick={() => openTool(receipt.actionId)} className="inline-flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1.5 text-xs text-primary hover:bg-primary/10">View action</button>}
               {receipt.link && <a href={receipt.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-full border border-primary/25 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10">{receipt.linkLabel || `Open ${receipt.tool}`}<ExternalLink className="h-3 w-3" /></a>}
             </div>
           </div>)}
         </div>
       </section>}
 
-      {!nativeAudit && primaryResult.kind !== "website_content" && <ToolEvidence activity={activity || []} activityRequest={activityRequest} />}
+      {!nativeAudit && primaryResult.kind !== "website_content" && <ResultsByTool entries={toolEntries} onOpen={openTool} />}
 
       {creatorsOutcome && <CreatorApprovalList items={creatorsOutcome.items} />}
       {!isFailure && (nextSteps.length > 0 || results.suggestionsLoading) && <section className="mb-6" aria-live="polite">
@@ -134,11 +142,12 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
         <button type="button" onClick={handleShare} className="inline-flex items-center gap-1.5 hover:text-foreground">{copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Share2 className="h-4 w-4" />}{copied ? "Copied" : "Share"}</button>
         {primaryResult.downloadUrl
           ? <a href={primaryResult.downloadUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 hover:text-foreground"><FileDown className="h-4 w-4" />Download result</a>
-          : <button type="button" onClick={handleDownload} className="inline-flex items-center gap-1.5 hover:text-foreground"><FileDown className="h-4 w-4" />Download summary</button>}
+          : <button type="button" onClick={handleDownload} className="inline-flex items-center gap-1.5 hover:text-foreground"><FileDown className="h-4 w-4" />Download {primaryResult.preview?.body ? "output" : "summary"}</button>}
         {!isFailure && !backendRunId && <button type="button" onClick={() => setShowModal(true)} className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 font-semibold text-white"><Zap className="h-4 w-4" />Connect & run for real</button>}
       </div>
       {!backendRunId && <AccessRequestModal open={showModal} onClose={() => setShowModal(false)} workflowPrompt={workflowPrompt} />}
       <ScheduleModal open={showSchedule} onClose={() => setShowSchedule(false)} title={scheduleTitle || results.title} backendRunId={backendRunId} historyWorkflowId={historyWorkflowId} />
+      <ToolResultDialog request={toolView} onClose={() => setToolView(null)} entries={toolEntries} primary={primaryResult} mainEntry={mainEntry} hasMainOutput={hasMainOutput} results={results} activity={activity || []} backendRunId={backendRunId} />
     </motion.div>
   );
 }

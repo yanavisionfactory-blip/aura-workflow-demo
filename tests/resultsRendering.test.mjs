@@ -60,7 +60,7 @@ const run = { id: "saved-run", status: "completed", plan: { name: "Roofing campa
   } },
 };
 
-test("the existing results page displays the full proposal before supporting actions and activity", () => {
+test("the main output opens in a bounded tool view before supporting actions and tool buttons", () => {
   const html = render(run);
   const main = html.indexOf('aria-label="Main workflow result"');
   const actions = html.indexOf('aria-label="Supporting workflow actions"');
@@ -74,6 +74,10 @@ test("the existing results page displays the full proposal before supporting act
   assert.match(html, /View action/);
   assert.match(html, /Tools used/);
   assert.match(html, /View activity/);
+  assert.match(content, /Google Docs output preview/);
+  assert.match(content, /Open tool view/);
+  assert.match(content, /max-h-\[30rem\]/);
+  assert.match(html, /aria-label="View Google Ads results"/);
   assert.doesNotMatch(html.slice(tools), /<details[^>]*\bopen(?:=|[ >])/);
 });
 
@@ -84,9 +88,23 @@ test("a blocked run retains actual saved content and failed action evidence with
   assert.match(html, /incomplete/);
   assert.match(html, /has not completed/);
   assert.match(html, /Final review remains pending/);
-  assert.match(html, /Account access is missing/);
-  assert.match(html, /No provider response is saved/);
+  assert.match(html, /1 action needs/);
+  assert.match(html, /aria-label="View Google Ads results"/);
   assert.doesNotMatch(html, /Workflow complete<\/|Schedule<\/button>/);
+});
+
+test("a primary provider read shows its returned rows in the tool screen rather than the workflow summary", () => {
+  const html = render({ ...run, steps: [keywords], result: { result_presentation: { primary_step_key: "keywords" } } });
+  assert.match(html, /Google Ads output preview/);
+  assert.match(html, /roof repair/);
+  assert.match(html, /Open tool view/);
+  assert.doesNotMatch(html, /Google Docs output preview/);
+});
+
+test("an unavailable main output does not create an empty tool preview", () => {
+  const html = render({ ...run, status: "waiting_for_action", steps: [{ ...keywords, status: "blocked", output: undefined }], result: {} });
+  assert.doesNotMatch(html, /output preview|Open tool view/);
+  assert.match(html, /View Google Ads results/);
 });
 
 test("a supplied-evidence report renders its complete body without implying provider execution", () => {
@@ -98,7 +116,7 @@ test("a supplied-evidence report renders its complete body without implying prov
   assert.match(html, /Prepared from supplied evidence/);
   assert.match(html, /Final review remains pending/);
   assert.match(html, /Supplied source inputs/);
-  assert.match(html, /A connection alone is not a completed tool run/);
+  assert.match(html, /aria-label="View AURA Intelligence results"/);
 });
 
 test("a completed campaign stays native in AURA with channel views and actual per-tool evidence", () => {
@@ -117,7 +135,7 @@ test("a completed campaign stays native in AURA with channel views and actual pe
   assert.match(main, /Saved draft copy with pending client approvals/);
   assert.doesNotMatch(main, /Open in Google Docs|Checked in Google Docs/);
   assert.match(html, /Read keyword ideas/);
-  assert.match(html, /A connection alone is not a completed tool run/);
+  assert.match(html, /aria-label="View Google Ads results"/);
 });
 
 test("a scoped booking campaign shows saved GBP, Meta and Reel views without excluded channels", () => {
