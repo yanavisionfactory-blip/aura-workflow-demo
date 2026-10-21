@@ -1,0 +1,149 @@
+# Isolated Render deployment. Do not sync this configuration onto Railway.
+# Deploy from a separate deployment branch; keep production main unchanged.
+envVarGroups:
+  - name: aura-render-isolated-shared
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: FRONTEND_URL
+        value: https://yanavisionfactory-blip.github.io
+      - key: CLERK_AUTHORIZED_PARTIES
+        value: https://yanavisionfactory-blip.github.io
+      - key: ALLOW_LEGACY_WORKSPACE_TOKENS
+        value: "false"
+      - key: OPENAI_MODEL
+        value: gpt-5.4-mini
+      - key: RECOVERY_SCHEDULER_ENABLED
+        value: "true"
+      - key: NANGO_AUTO_PROVISION_INTEGRATIONS
+        value: "false"
+      - key: CONNECTOR_ENGINEER_ENABLED
+        value: "false"
+      - key: CONNECTOR_ENGINEER_ALLOW_WRITES
+        value: "false"
+      - key: CREDENTIAL_ENCRYPTION_KEY
+        generateValue: true
+      - key: SESSION_SIGNING_KEY
+        generateValue: true
+
+services:
+  - type: web
+    name: aura-render-isolated-api
+    runtime: docker
+    region: frankfurt
+    plan: 0.5c-512mb
+    repo: https://github.com/yanavisionfactory-blip/aura-workflow-demo
+    branch: aura-render-isolated
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: python -m app.render_runtime api
+    autoDeployTrigger: "off"
+    healthCheckPath: /health
+    maxShutdownDelaySeconds: 120
+    envVars:
+      - fromGroup: aura-render-isolated-shared
+      - key: DATABASE_URL
+        fromDatabase:
+          name: aura-render-isolated-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: aura-render-isolated-queue
+          property: connectionString
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: CLERK_JWT_KEY
+        sync: false
+      - key: CLERK_ISSUER
+        sync: false
+      - key: NANGO_API_KEY
+        sync: false
+      - key: PIPEDREAM_CLIENT_ID
+        sync: false
+      - key: PIPEDREAM_CLIENT_SECRET
+        sync: false
+      - key: PIPEDREAM_PROJECT_ID
+        sync: false
+
+  - type: worker
+    name: aura-render-isolated-worker
+    runtime: docker
+    region: frankfurt
+    plan: 0.5c-512mb
+    repo: https://github.com/yanavisionfactory-blip/aura-workflow-demo
+    branch: aura-render-isolated
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: python -m app.render_runtime worker
+    autoDeployTrigger: "off"
+    maxShutdownDelaySeconds: 120
+    envVars:
+      - fromGroup: aura-render-isolated-shared
+      - key: DATABASE_URL
+        fromDatabase:
+          name: aura-render-isolated-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: aura-render-isolated-queue
+          property: connectionString
+      - key: PUBLIC_URL
+        fromService:
+          type: web
+          name: aura-render-isolated-api
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: OPENAI_API_KEY
+        fromService:
+          type: web
+          name: aura-render-isolated-api
+          envVarKey: OPENAI_API_KEY
+      - key: CLERK_JWT_KEY
+        fromService:
+          type: web
+          name: aura-render-isolated-api
+          envVarKey: CLERK_JWT_KEY
+      - key: CLERK_ISSUER
+        fromService:
+          type: web
+          name: aura-render-isolated-api
+          envVarKey: CLERK_ISSUER
+      - key: NANGO_API_KEY
+        fromService:
+          type: web
+          name: aura-render-isolated-api
+          envVarKey: NANGO_API_KEY
+      - key: PIPEDREAM_CLIENT_ID
+        fromService:
+          type: web
+          name: aura-render-isolated-api
+          envVarKey: PIPEDREAM_CLIENT_ID
+      - key: PIPEDREAM_CLIENT_SECRET
+        fromService:
+          type: web
+          name: aura-render-isolated-api
+          envVarKey: PIPEDREAM_CLIENT_SECRET
+      - key: PIPEDREAM_PROJECT_ID
+        fromService:
+          type: web
+          name: aura-render-isolated-api
+          envVarKey: PIPEDREAM_PROJECT_ID
+
+  - type: keyvalue
+    name: aura-render-isolated-queue
+    region: frankfurt
+    plan: 256mb
+    maxmemoryPolicy: noeviction
+    persistenceMode: journal-snapshot
+    ipAllowList: []
+
+databases:
+  - name: aura-render-isolated-postgres
+    region: frankfurt
+    plan: 0.1c-256mb
+    postgresMajorVersion: "17"
+    databaseName: aura
+    user: aura
+    diskSizeGB: 1
+    ipAllowList: []
