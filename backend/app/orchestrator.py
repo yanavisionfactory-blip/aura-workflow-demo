@@ -161,12 +161,15 @@ def _planning_prompt_with_documents(prompt: str, inputs: dict | None) -> str:
         return prompt
     sections: list[str] = []
     remaining = 40_000
-    for document in documents[:8]:
+    for document_index, document in enumerate(documents[:8]):
         if not isinstance(document, dict):
             continue
         name = str(document.get("name") or "document")[:500]
         data_url = document.get("file_url")
         section = f"Attached document: {name}"
+        section += (f"\nUpload input reference: {{{{inputs.attached_documents.{document_index}.file_url}}}}"
+                    if "attached_documents" in (inputs or {})
+                    else f"\nUpload input reference: {{{{inputs.documents.{document_index}.file_url}}}}")
         if isinstance(data_url, str) and data_url.startswith("data:") and "," in data_url:
             metadata, encoded = data_url.split(",", 1)
             media_type = metadata[5:].split(";", 1)[0].lower()
@@ -1140,6 +1143,7 @@ async def _create_compiled_plan(
 def planning_error_message(exc: Exception) -> str:
     """Return a user-facing planning failure without leaking provider payloads."""
     from .audit_sources import AUDIT_SOURCE_MESSAGE, AuditSourceContractError
+    from .proofing import ProofingSourceError
 
     # Recovery wrappers intentionally replace raw provider messages. Walk the
     # exception chain so operational categories such as quota exhaustion and
@@ -1151,6 +1155,8 @@ def planning_error_message(exc: Exception) -> str:
         seen.add(id(current))
         if isinstance(current, AuditSourceContractError):
             return AUDIT_SOURCE_MESSAGE
+        if isinstance(current, ProofingSourceError):
+            return str(current)
         chain.append(str(current))
         current = current.__cause__ or current.__context__
     lowered = " ".join(chain).lower()

@@ -451,7 +451,7 @@ export async function authorizeConnectorBroker(
     return authorizeManagedConnector(provider, timeoutMs ?? 120000, reservedWindow, session);
   }
   if (session.backend === "native") {
-    return authorizeOAuth(provider, timeoutMs ?? 120000, reservedWindow, session);
+    return authorizeOAuth(session.provider || provider, timeoutMs ?? 120000, reservedWindow, session);
   }
   if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
   throw new Error("AURA could not select a secure connection route for this app.");

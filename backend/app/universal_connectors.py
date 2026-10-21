@@ -364,6 +364,9 @@ async def discover_provider(kind: str, base_url: str, credentials: dict, config:
                             tool.name, "read"
                         ),
                         "transport": {"tool_name": tool.name},
+                        "metadata": {"mcp_read_only": getattr(
+                            getattr(tool, "annotations", None), "readOnlyHint", False
+                        ) is True},
                     }
                     for tool in result.tools
                 ],
