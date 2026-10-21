@@ -63,7 +63,6 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: "easeOut" }} className="w-full max-w-3xl mx-auto">
       <ValueProp />
-      {enableWeeklyReviewSetup && <button type="button" onClick={() => setWeeklyOpen(true)} className="mb-5 flex items-center gap-2 rounded-xl border border-primary/30 bg-primary/5 px-4 py-3 text-sm text-primary"><FileBarChart className="h-4 w-4"/>Prepare weekly account review</button>}
 
       {/* Input box */}
       <div
