@@ -137,4 +137,3 @@ The weekly setup offers **Open seven-platform browser simulation**. This explici
 The result declares `browser_executed_simulation`, `model_call_executed: false`, `provider_api_called: false`, and `external_writes: false`. It does not create a backend workflow-history entry or claim vendor connections. The fixed sample corpus prevents authored drafts from being applied to unrelated input values. Other exports retain the backend input/approval route. Email scenarios exclude SMS.
 
 The completed result can be restored from local browser storage after evidence-hash, metric and reference checks. Download the Markdown review and JSON evidence packet for portability; saved browser data is not shared across devices. The query `?weekly=1&simulation=browser` opens this route. No campaigns, budgets, external tasks, client destinations or messages are changed.
-
