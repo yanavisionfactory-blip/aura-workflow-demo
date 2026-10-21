@@ -53,7 +53,7 @@ services:
           property: connectionString
       - key: OPENAI_API_KEY
         sync: false
-      - key: CLERK_JWT_KEY
+      - key: CLERK_JWKS_URL
         sync: false
       - key: CLERK_ISSUER
         sync: false
@@ -99,11 +99,11 @@ services:
           type: web
           name: aura-render-isolated-api
           envVarKey: OPENAI_API_KEY
-      - key: CLERK_JWT_KEY
+      - key: CLERK_JWKS_URL
         fromService:
           type: web
           name: aura-render-isolated-api
-          envVarKey: CLERK_JWT_KEY
+          envVarKey: CLERK_JWKS_URL
       - key: CLERK_ISSUER
         fromService:
           type: web
