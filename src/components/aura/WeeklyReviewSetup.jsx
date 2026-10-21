@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { ArrowLeft, Download, FileBarChart, Loader2 } from 'lucide-react';
 import { getAllConnections, subscribeConnections } from '@/lib/connectionsStore';
 import { allPlatformSimulationRequest, approvedWeeklyRequest, weeklyCsvTemplate, weeklyPeriods, WEEKLY_PLATFORMS } from '@/lib/weeklyReviewIntake.mjs';
+import BrowserWeeklySimulation from './BrowserWeeklySimulation';
 
 const fieldClass = 'mt-1 w-full rounded-lg border border-white/15 bg-background p-2.5 text-sm text-foreground';
 function TextField({ label, value, onChange, type = 'text', multiline = false }) {
@@ -15,6 +16,13 @@ function downloadTemplate(key) {
 }
 
 export default function WeeklyReviewSetup({ onSubmit, onBack }) {
+  const [browserSimulation, setBrowserSimulation] = useState(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('simulation') === 'browser');
+  const showBrowserSimulation = (open) => {
+    const url = new URL(window.location.href);
+    if (open) url.searchParams.set('simulation', 'browser'); else url.searchParams.delete('simulation');
+    window.history.replaceState(window.history.state, '', url);
+    setBrowserSimulation(open);
+  };
   const [connections, setConnections] = useState(getAllConnections);
   const [client, setClient] = useState({ name: '', id: '', fictional: false, engagementConfirmed: false });
   const [scope, setScope] = useState({ included: [], simulated: [], simulationConfirmed: false, confirmed: false, approvalReference: '' });
@@ -50,8 +58,10 @@ export default function WeeklyReviewSetup({ onSubmit, onBack }) {
       onSubmit(request.prompt, [], request.resources);
     } catch (cause) { setError(cause.message); }
   };
+  if (browserSimulation) return <BrowserWeeklySimulation onBack={() => showBrowserSimulation(false)}/>;
   return <form onSubmit={submit} className="mx-auto max-w-3xl space-y-6" aria-label="Weekly account review setup">
     <button type="button" onClick={onBack} className="inline-flex items-center gap-2 text-xs text-muted-foreground"><ArrowLeft className="h-4 w-4"/>Back to tasks</button>
+    <section className="space-y-3 rounded-2xl border border-primary/30 bg-primary/5 p-5"><h2 className="font-semibold">Complete the simulation in this browser</h2><p className="text-xs leading-6 text-muted-foreground">Process all seven authored sample exports and produce a checked review with three proposed tests, six drafts and a backlog. This explicit browser route works without the deployment connection and uses authored proposals, not a backend model call.</p><button type="button" className="rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-white" onClick={() => showBrowserSimulation(true)}>Open seven-platform browser simulation</button></section>
     <section className="space-y-3 rounded-2xl border border-amber-300/30 bg-amber-300/5 p-5"><h2 className="font-semibold">Run the complete simulation</h2><p className="text-xs leading-6 text-muted-foreground">Use authored sample data for Google Ads, Meta Ads, Microsoft Advertising, Amazon Ads, Klaviyo, Mailchimp and HubSpot. All account scope, goals, brand guidance and results are demo assumptions. Email sources cover message cohorts, segments and journeys, not SMS. This executes the review in AURA without connecting to or uploading data into vendors.</p><button type="button" className="rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-white" onClick={() => { try { const request = allPlatformSimulationRequest(); onSubmit(request.prompt, [], request.resources); } catch (cause) { setError(cause.message); } }}>Create seven-platform simulation plan</button><p className="text-xs text-amber-200">By selecting this option, you authorize the seven sample sources. Results stay in AURA; no campaign launches, budget changes, external tasks or messages.</p></section>
     <div><p className="text-xs text-primary">SmartSites · approved client inputs and optional simulations</p><h1 className="mt-2 text-2xl font-semibold">Prepare a weekly account review</h1><p className="mt-3 text-sm leading-6 text-muted-foreground">Select one client and only its contracted platforms. AURA will check the exports, calculate the comparison and draft three tests, six variants and a backlog for review.</p></div>
     <section className="space-y-4 rounded-2xl border border-white/10 bg-card/50 p-5"><h2 className="font-semibold">Client and reporting period</h2>

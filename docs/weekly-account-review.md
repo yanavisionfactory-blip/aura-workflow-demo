@@ -130,3 +130,11 @@ reporting status, attachment fidelity, dates, unknown values and provenance. Fro
 tests cover transport, templates, the input form, all native report sections,
 download completeness and saved-result routing. Test fixtures contain fabricated
 unit-test values and must never be passed off as actual client performance.
+# Seven-platform browser simulation
+
+The weekly setup offers **Open seven-platform browser simulation**. This explicit route processes the authored Google Ads, Meta Ads, Microsoft Advertising, Amazon Ads, Klaviyo, Mailchimp and HubSpot samples inside AURA's browser UI. It runs seven CSV processors and a final arithmetic/proposal validation step, with SHA-256 source receipts, 32 independent comparisons, three authored experiment proposals, six draft variants and nine proposed backlog items.
+
+The result declares `browser_executed_simulation`, `model_call_executed: false`, `provider_api_called: false`, and `external_writes: false`. It does not create a backend workflow-history entry or claim vendor connections. The fixed sample corpus prevents authored drafts from being applied to unrelated input values. Other exports retain the backend input/approval route. Email scenarios exclude SMS.
+
+The completed result can be restored from local browser storage after evidence-hash, metric and reference checks. Download the Markdown review and JSON evidence packet for portability; saved browser data is not shared across devices. The query `?weekly=1&simulation=browser` opens this route. No campaigns, budgets, external tasks, client destinations or messages are changed.
+
