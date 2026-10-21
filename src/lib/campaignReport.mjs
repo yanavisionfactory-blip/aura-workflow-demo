@@ -12,7 +12,14 @@ export function campaignReportGroups(body) {
     ["Assets", /asset|creative checklist|rights/i],
     ["Approvals and handoff", /approv|handoff|implementation|measurement|landing|manual/i],
   ].map(([name, pattern]) => ({ name, pattern, sections: [] }));
-  const headings = [...body.matchAll(/^## ([^\n]+)\n/gm)];
+  const topHeadings = [...body.matchAll(/^# ([^\n]+)\n/gm)];
+  // Reports may use H1 for each campaign section and H2 for its details.
+  // A single document-title H1 must not swallow normal H2 channel sections.
+  const topTitles = topHeadings.map((match) => match[1]);
+  const sectionLevelOne = topTitles.some((title) => /brief/i.test(title))
+    && topTitles.some((title) => /asset/i.test(title))
+    && topTitles.some((title) => /approv/i.test(title));
+  const headings = sectionLevelOne ? topHeadings : [...body.matchAll(/^## ([^\n]+)\n/gm)];
   if (!headings.length) return null;
   const intro = body.slice(0, headings[0].index).trim();
   headings.forEach((match, index) => {
