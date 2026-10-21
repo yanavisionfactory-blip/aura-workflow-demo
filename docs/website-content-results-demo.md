@@ -69,5 +69,10 @@ pending and all CMS records remain simulated.
 A restrictive Content Security Policy prohibits fetch/XHR/WebSocket calls.
 Account, OAuth and upload clients are excluded from the build graph. The static
 snapshot contains no private run, workspace or credential identifiers. Feedback
-is copy-only and local to the browser. The video uses captured interface views
+is copy-only and local to the browser. The video uses interface views rendered from the isolated static build
 and captions; it is prepared playback rather than proof of live integrations.
+
+The Pages release renders all 14 paused scenes in a fresh headless browser that
+allows only the local static server, then uses ffmpeg to create the MP4 and VTT.
+This build-time renderer is separate from user sessions and the live control
+plane. A review artifact preserves the MP4, captions and poster for download.
