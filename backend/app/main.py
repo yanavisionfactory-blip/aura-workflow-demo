@@ -1503,6 +1503,8 @@ async def managed_connector_status(
                 "connectable": backend is not None,
             }
         )
+    from . import shopify_client_credentials as shopify
+    native_catalog.append(shopify.catalog_entry())
     native_catalog.extend(await wordpress_plugins.catalog(session, context.workspace_id))
     dynamic_catalog = [
         {
@@ -1688,6 +1690,11 @@ async def search_connector_broker_apps(
     for item in await wordpress_plugins.catalog(session, context.workspace_id):
         if matches(item):
             entries[item["provider"]] = item
+
+    from . import shopify_client_credentials as shopify
+    shopify_entry = shopify.catalog_entry()
+    if matches(shopify_entry):
+        entries[shopify.SLUG] = shopify_entry
 
     for slug, definition in PROVIDERS.items():
         native_backend = "nango" if nango.configured else None
@@ -2568,6 +2575,13 @@ async def create_connector_broker_session(
     """Select the best connector plane and return only a short-lived browser grant."""
     provider = requested_marketplace_entry(provider)["provider"]
     provider = wordpress_plugins.provider_slug(provider)
+    from . import shopify_client_credentials as shopify
+    if provider == shopify.SLUG:
+        if connection_id:
+            selected = await session.get(ToolConnection, connection_id)
+            if not selected or selected.workspace_id != context.workspace_id or selected.slug != provider:
+                raise HTTPException(404, "Connection not found")
+        return {"backend": shopify.BACKEND, "provider": provider, "connection_id": connection_id}
     if provider in wordpress_plugins.PROVIDERS:
         try:
             tool = await wordpress_plugins.connect(
@@ -3844,6 +3858,69 @@ async def receive_webhook(
     return {"delivery_id": delivery.id, "run_id": run.id, "status": "queued"}
 
 
+@app.post("/v1/shopify/client-credentials/connect", status_code=201)
+async def connect_shopify_client_credentials(
+    request: Request,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    from . import shopify_client_credentials as shopify
+
+    if context.role not in {"owner", "admin"}:
+        raise HTTPException(403, "A workspace administrator must connect Shopify")
+    # Manual parsing ensures validation errors never echo submitted credentials.
+    body = await request.body()
+    if len(body) > 8000:
+        raise HTTPException(422, "The Shopify connection form is invalid")
+    try:
+        payload = shopify.ConnectRequest.model_validate_json(body)
+    except ValueError:
+        raise HTTPException(422, "Enter a valid shop ID, client ID and client secret") from None
+    tool = await session.scalar(select(ToolConnection).where(
+        ToolConnection.workspace_id == context.workspace_id, ToolConnection.slug == shopify.SLUG))
+    if payload.connection_id and (not tool or tool.id != payload.connection_id):
+        raise HTTPException(404, "Connection not found")
+    if tool and (tool.config or {}).get("managed_by") != shopify.BACKEND:
+        raise HTTPException(409, "Manage the existing Shopify connection before changing its connection method")
+    if tool and (tool.config or {}).get("shop") != payload.shop:
+        raise HTTPException(409, "Remove the existing Shopify store connection before connecting a different store")
+    credentials = {"shop": payload.shop, "client_id": payload.client_id.get_secret_value(),
+                   "client_secret": payload.client_secret.get_secret_value()}
+    try:
+        verification = await shopify.verify(credentials)
+    except shopify.ShopifyConnectionError as exc:
+        raise HTTPException(409, str(exc)) from None
+    contract = shopify.manifest(verification["granted_scopes"])
+    if not tool:
+        tool = ToolConnection(workspace_id=context.workspace_id, slug=shopify.SLUG,
+                              display_name="Shopify (Client Credentials)", kind=ToolKind.api_key)
+        session.add(tool)
+        await session.flush()
+    tool.base_url = f"https://{payload.shop}.myshopify.com"
+    tool.config = {"managed_by": shopify.BACKEND, "canonical_provider": shopify.SLUG,
+                   "shop": payload.shop, "read_only": True}
+    tool.encrypted_credentials = CredentialVault().encrypt(credentials)
+    tool.external_account_id = verification["identity"]["id"]
+    tool.allowed_operations = [item["name"] for item in contract["capabilities"]]
+    tool.enabled = True
+    record = await session.scalar(select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id))
+    if not record:
+        record = CapabilityManifest(workspace_id=context.workspace_id, tool_id=tool.id,
+                                    provider_type=shopify.BACKEND)
+        session.add(record)
+    record.status, record.manifest, record.verification = "verified", contract, verification
+    record.verified_at = datetime.now(UTC)
+    session.add(AuditEvent(workspace_id=context.workspace_id, actor=context.subject,
+                          event_type="connector.shopify_verified",
+                          payload={"tool_id": tool.id, "store": payload.shop,
+                                   "allowed_operations": tool.allowed_operations, "read_only": True}))
+    resumed = await _satisfy_matching_connection_requirements(session, context, tool)
+    await session.commit()
+    if resumed:
+        await dispatch_pending(context.workspace_id)
+    return {"id": tool.id, "status": "verified", "verification": verification}
+
+
 @app.post("/v1/connections/{connection_id}/test")
 async def test_connection(
     connection_id: str,
@@ -3858,6 +3935,21 @@ async def test_connection(
     )
     if not manifest:
         raise HTTPException(409, "Connection has no discovered capability manifest")
+    from . import shopify_client_credentials as shopify
+    if tool.config.get("managed_by") == shopify.BACKEND:
+        try:
+            result = await shopify.verify(CredentialVault().decrypt(tool.encrypted_credentials))
+        except shopify.ShopifyConnectionError as exc:
+            result = {"ok": False, "reason": str(exc)}
+        manifest.verification = result
+        manifest.status = "verified" if result.get("ok") else "degraded"
+        manifest.verified_at = datetime.now(UTC)
+        tool.enabled = bool(result.get("ok"))
+        if result.get("ok"):
+            manifest.manifest = shopify.manifest(result["granted_scopes"])
+            tool.allowed_operations = [item["name"] for item in manifest.manifest["capabilities"]]
+        await session.commit()
+        return {"id": tool.id, "status": manifest.status, "verification": result}
     if tool.config.get("managed_by") == "wordpress_plugin":
         try:
             result = await wordpress_plugins.verify(session, tool)

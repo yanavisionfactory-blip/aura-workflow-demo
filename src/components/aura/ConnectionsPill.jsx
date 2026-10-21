@@ -489,6 +489,8 @@ export default function ConnectionsPill() {
                   <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-400/15"><Check className="h-4 w-4 text-emerald-400" /></div>
                   <div><p className="text-xs font-medium text-emerald-400">Connected and verified</p><p className="mt-0.5 text-[11px] text-muted-foreground">AURA checks permissions for each plan before Start.</p></div>
                 </div>
+                {managedConnection.identity?.domain && <p className="mt-2 text-sm">Verified store: <span className="font-medium">{managedConnection.identity.domain}</span></p>}
+                {managedConnection.verification?.read_only && <p className="mt-2 text-xs text-muted-foreground">Read-only connection · {managedConnection.verification.pages_readable ? "Content page reads authorized" : "Content page scope not granted"}</p>}
                 {managedConnection.is_agent && (
                   <div className="mt-4 rounded-xl border border-white/8 bg-white/5 p-3 text-[11px] text-muted-foreground">
                     <p><span className="text-foreground">Protocol:</span> {String(managedConnection.agent_protocol || "agent").toUpperCase()}</p>
