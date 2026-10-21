@@ -1,5 +1,41 @@
 # Website content results and public demonstration
 
+## Execute the workflow with simulated data
+
+Choose **Run website-content simulation · four CMS tools** in AURA's task screen,
+or **Run full simulation** in the public website-content demo. The public route
+is `?screen=simulate`; the workspace route is `?website=1&simulation=browser`.
+This executes the local simulation pipeline, unlike the existing prepared tour.
+
+The 12 steps process five labelled website snapshots, their sitemap, an authored
+brand brief, a sample image manifest and four separately scoped system roles;
+assemble the authored sample copy and comparisons; pause for explicit demo
+approval; execute four isolated CMS adapters; and verify the developer handoff.
+The adapters create 20 separate unpublished test records and perform 20 full
+readbacks. WordPress and WooCommerce use WordPress page shapes, Shopify uses
+unpublished pages and search metafields, and BigCommerce uses hidden web pages.
+These are local test adapters, not vendor SDK/API compatibility certification.
+All five protected published-page fixtures per destination must stay unchanged.
+
+Copy, metadata, CTA and image requirements must match the reviewed package.
+Approval is bound to content and sample-asset hashes. Changed inputs, page
+versions, publish state, readback content, receipt records or protected live
+fixtures prevent completion or restoration. No provider/model call or real CMS
+write runs. Actual client copy approval, image rights and client system/account
+confirmation remain pending separately; demo approval never changes those fields.
+
+Results still lead with the content package and exactly one set of tool outcomes.
+Tool screens show the verified local records in readable form. The browser saves
+each run under its ID and rechecks it on reload. Its result link works only in a
+browser retaining that run; the public simulation start link works for everyone.
+This route does not create backend workflow-history entries. The developer ZIP
+includes all content, metadata, simulated native records and operation receipts.
+
+`scripts/check-website-simulation.mjs` tests a fresh isolated browser against the
+local public build, with all non-local requests blocked. It verifies the approval
+gate, all four tool screens, readbacks, persistence and the ZIP, and captures
+screenshots in the `aura-website-simulation-checks` Pages-build artifact.
+
 The main five-page content package leads Results. Its four tabs are Pages,
 Changes, Approvals and Developer handoff. The pages show the complete revised
 copy, search listing, button destination and image instructions. Approval rows

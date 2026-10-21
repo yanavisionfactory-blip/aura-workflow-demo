@@ -31,3 +31,12 @@ test('guided tour, input, review and playback remain explicit and offline',()=>{
  assert.match(render('?screen=video'),/walkthrough.mp4/);
  const entry=fs.readFileSync(path.join(repo,'showcase/website-content/index.html'),'utf8');assert.match(entry,/connect-src 'none'/);
 });
+test('the public demo also offers an executable simulation instead of only prepared playback',()=>{
+ assert.match(render('?screen=results'),/Run full simulation/);
+ const html=render('?screen=simulate');
+ assert.match(html,/Runnable website workflow simulation/);
+ assert.match(html,/Website simulation execution steps/);
+ assert.match(html,/four local CMS adapters/);
+ assert.match(html,/Approve the sample package/);
+ assert.doesNotMatch(html,/<pre|type="submit"/);
+});
