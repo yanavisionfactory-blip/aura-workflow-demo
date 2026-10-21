@@ -37,3 +37,13 @@ test("channel asset requirements stay separate from channel draft copy", () => {
   assert.equal(parsed.groups.find((group) => group.name === "Assets").sections.length, 2);
   assert.equal(parsed.groups.find((group) => group.name === "Social ads").sections.length, 1);
 });
+
+test("top-level campaign sections keep their subheadings in the correct channel", () => {
+  const parsed = campaignReportGroups(headings.map((title) => `# ${title}\n## Detail for this section\n${"Saved complete draft. ".repeat(5)}`).join("\n\n"));
+  assert.equal(parsed.groups.length, 7);
+  assert.equal(parsed.groups.find((group) => group.name === "Indoor screens").sections[0].title, "Indoor screen draft");
+  assert.ok(parsed.groups.every((group) => group.sections[0].body.includes("## Detail for this section")));
+  const titled = campaignReportGroups("# Campaign package\n\n" + body);
+  assert.equal(titled.groups.length, 7);
+  assert.equal(titled.intro, "# Campaign package");
+});
