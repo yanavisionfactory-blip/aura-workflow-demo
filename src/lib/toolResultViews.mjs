@@ -5,6 +5,7 @@ const names = {
   aura: "AURA Intelligence", "aura intelligence": "AURA Intelligence",
   google: "Google Workspace", "google-ads": "Google Ads", "meta-ads": "Meta Ads",
   googleads: "Google Ads", metaads: "Meta Ads",
+  "meta-ads-simulated": "Meta Ads · Simulated", "klaviyo-simulated": "Klaviyo · Simulated",
   "google-docs": "Google Docs", docs: "Google Docs", "google-sheets": "Google Sheets",
   sheets: "Google Sheets", "google-drive": "Google Drive", drive: "Google Drive",
   gmail: "Gmail", mailchimp: "Mailchimp", klaviyo: "Klaviyo", canva: "Canva",

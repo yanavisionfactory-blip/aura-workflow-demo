@@ -1,0 +1,388 @@
+{
+  "brief": {
+    "client": "Maple & Ember Coffee",
+    "status": "Fictional client; synthetic scenario facts and approvals",
+    "objective": "Turn relevant paid traffic into first orders, recover eligible checkouts and encourage a second purchase.",
+    "theme": "Meet your morning coffee",
+    "products": [
+      "House Blend: 12 oz, $18, 100% arabica, medium roast, whole bean, cocoa and toasted-nut tasting notes",
+      "House Blend Duo: two 12 oz bags, $34, one-time purchase"
+    ],
+    "offer": "WELCOME10: 10% off an eligible first US order. Valid October 1–November 1, 2026. Once per customer; no stacking; excludes shipping, tax and gift cards.",
+    "retention_offer": "RESTOCK10: 10% off eligible product subtotal of at least $30. Exactly one prior order fulfilled at least 28 days ago, with no later order. Valid October 19–November 1, 2026. Once per customer; no stacking.",
+    "offer_end": "2026-11-01T23:59:59-05:00",
+    "shipping": "Contiguous US only. $5.95 shipping; free only when product subtotal after discounts is at least $50.",
+    "destination": "https://maple-ember.example/products/house-blend",
+    "destination_status": "Reserved .example simulation destination; structurally checked, no live HTTP validation.",
+    "audience_ownership": "Mailchimp owns consented zero-order prospects without an active checkout. Klaviyo owns checkout and customer lifecycle. Purchase exits prospect messages; checkout takes priority; global suppression and revoked consent override all sends.",
+    "native_limit": "Native Google Ads and Mailchimp reads check available accounts/audiences only. A verified same-client mapping is still required for performance queries. No native draft is created.",
+    "google_drafts": [
+      {
+        "id": "PROPOSED_GOOGLE_G1",
+        "title": "Meet your morning coffee",
+        "status": "Proposed Search copy from the synthetic brief; not saved in Google Ads",
+        "headlines": [
+          "Meet Your Morning Coffee",
+          "House Blend, Whole Bean",
+          "10% Off Your First Order"
+        ],
+        "descriptions": [
+          "Medium-roast whole beans with cocoa and toasted nut notes. Explore House Blend.",
+          "Use WELCOME10 for 10% off your first eligible US order. One use. No stacking."
+        ],
+        "cta": "Explore House Blend",
+        "url": "https://maple-ember.example/products/house-blend?utm_source=google&utm_medium=cpc&utm_campaign=morning_coffee_202610&utm_content=g1"
+      },
+      {
+        "id": "PROPOSED_GOOGLE_G2",
+        "title": "Your daily brew",
+        "status": "Proposed Search copy from the synthetic brief; not saved in Google Ads",
+        "headlines": [
+          "Coffee For Your Daily Brew",
+          "Try Maple & Ember Coffee",
+          "Your First Order: 10% Off"
+        ],
+        "descriptions": [
+          "House Blend: 12 oz of whole-bean, 100% arabica coffee. $18 before any discount.",
+          "Try House Blend with WELCOME10. Eligible first-time US customers save 10%."
+        ],
+        "cta": "Explore House Blend",
+        "url": "https://maple-ember.example/products/house-blend?utm_source=google&utm_medium=cpc&utm_campaign=morning_coffee_202610&utm_content=g2"
+      }
+    ],
+    "mailchimp_drafts": [
+      {
+        "id": "PROPOSED_MAILCHIMP_INVITE",
+        "title": "First-purchase invitation",
+        "status": "Proposed email from the synthetic brief; not saved or sent in Mailchimp",
+        "subject_options": [
+          "Meet your morning coffee — save 10%",
+          "Your first House Blend, 10% off"
+        ],
+        "preheader": "Whole-bean coffee for your daily brew.",
+        "body": "Meet House Blend: medium-roast whole beans with cocoa and toasted-nut tasting notes. Explore the 12 oz bag for $18 before discount. As an eligible first-time US customer, save 10% with WELCOME10. Find your next morning coffee.",
+        "cta": "Explore House Blend",
+        "url": "https://maple-ember.example/products/house-blend?utm_source=mailchimp&utm_medium=email&utm_campaign=morning_coffee_202610&utm_content=prospect_invite",
+        "eligibility": "Permissioned contiguous-US subscribers with zero lifetime orders and an email click within 60 days. Exclude purchasers, active checkout within 7 days, complaints, bounces, global suppression and recent competing promotions. Refresh eligibility before implementation.",
+        "suppression": "Klaviyo owns checkout and post-purchase cohorts. Exit this campaign on checkout or purchase; unknown/revoked consent overrides all eligibility. Verify cross-platform synchronization, sender/footer and unsubscribe/preferences links. Review existing invitation and brewing-guide schedules; proposed 72-hour promotional cap."
+      }
+    ],
+    "native_proposals_note": "These are unsaved proposals from the synthetic client brief. Native discovery responses are shown separately. Verify the same-client account/audience, products/offers, conversion definition, tracking, consent, copy and test design before building inside the platform."
+  },
+  "periods": {
+    "previous": {
+      "from": "2026-10-05",
+      "to": "2026-10-11"
+    },
+    "current": {
+      "from": "2026-10-12",
+      "to": "2026-10-18"
+    }
+  },
+  "meta": {
+    "tool": "Meta Ads",
+    "account_id": "SIM_META_MAPLE_EMBER",
+    "attribution": "7-day click / 1-day view, interaction week. Platform purchase credits and revenue stay separate from all other platforms.",
+    "rows": [
+      {
+        "id": "META_1_1",
+        "period": "previous",
+        "campaign": "Prospecting | House Blend static",
+        "spend": 500,
+        "purchases": 10,
+        "revenue": 700,
+        "impressions": 25000,
+        "link_clicks": 500,
+        "reach": 12500,
+        "frequency": 2
+      },
+      {
+        "id": "META_1_2",
+        "period": "previous",
+        "campaign": "Prospecting | Morning brew video",
+        "spend": 400,
+        "purchases": 16,
+        "revenue": 1080,
+        "impressions": 20000,
+        "link_clicks": 600,
+        "reach": 16000,
+        "frequency": 1.25
+      },
+      {
+        "id": "META_1_3",
+        "period": "previous",
+        "campaign": "Prospecting | Coffee discovery",
+        "spend": 450,
+        "purchases": 19,
+        "revenue": 1260,
+        "impressions": 30000,
+        "link_clicks": 640,
+        "reach": 19000,
+        "frequency": 1.5789
+      },
+      {
+        "id": "META_1_4",
+        "period": "previous",
+        "campaign": "Retargeting | Product interest",
+        "spend": 350,
+        "purchases": 10,
+        "revenue": 660,
+        "impressions": 18000,
+        "link_clicks": 280,
+        "reach": 6000,
+        "frequency": 3
+      },
+      {
+        "id": "META_2_1",
+        "period": "current",
+        "campaign": "Prospecting | House Blend static",
+        "spend": 550,
+        "purchases": 6,
+        "revenue": 420,
+        "impressions": 40000,
+        "link_clicks": 400,
+        "reach": 10000,
+        "frequency": 4
+      },
+      {
+        "id": "META_2_2",
+        "period": "current",
+        "campaign": "Prospecting | Morning brew video",
+        "spend": 400,
+        "purchases": 13,
+        "revenue": 910,
+        "impressions": 25000,
+        "link_clicks": 550,
+        "reach": 17500,
+        "frequency": 1.4286
+      },
+      {
+        "id": "META_2_3",
+        "period": "current",
+        "campaign": "Prospecting | Coffee discovery",
+        "spend": 650,
+        "purchases": 22,
+        "revenue": 1495,
+        "impressions": 41000,
+        "link_clicks": 740,
+        "reach": 22000,
+        "frequency": 1.8636
+      },
+      {
+        "id": "META_2_4",
+        "period": "current",
+        "campaign": "Retargeting | Product interest",
+        "spend": 500,
+        "purchases": 14,
+        "revenue": 900,
+        "impressions": 24000,
+        "link_clicks": 330,
+        "reach": 6500,
+        "frequency": 3.6923
+      }
+    ],
+    "findings": [
+      {
+        "evidence": [
+          "META_1_1",
+          "META_2_1"
+        ],
+        "finding": "Static purchase CPA rose from $50 to $91.67; row-level frequency rose from 2 to 4. This supports a creative test, without proving fatigue."
+      },
+      {
+        "evidence": [
+          "META_2_2"
+        ],
+        "finding": "Morning brew video: $400 / 13 purchase credits = $30.77 CPA. The observed comparison is not a randomized result."
+      }
+    ],
+    "drafts": [
+      {
+        "id": "SIM_META_M1",
+        "title": "Coffee detail static",
+        "status": "Proposed creative; not saved in Meta",
+        "primary_text": "Meet House Blend: medium-roast, whole-bean coffee with cocoa and toasted-nut notes. First eligible US order? Save 10% with WELCOME10.",
+        "headline": "Your First House Blend: 10% Off",
+        "cta": "Shop Now",
+        "concept": "Approved product bag beside beans and a brewed cup. Readable offer and terms. Product-image rights still need approval.",
+        "url": "https://maple-ember.example/products/house-blend?utm_source=facebook&utm_medium=paid_social&utm_campaign=morning_coffee_202610&utm_content=m1"
+      },
+      {
+        "id": "SIM_META_M2",
+        "title": "Morning brew video",
+        "status": "Proposed creative; not saved in Meta",
+        "primary_text": "Meet your morning coffee. Explore our 12 oz House Blend: 100% arabica whole beans. Save 10% on an eligible first US order with WELCOME10.",
+        "headline": "Meet Your Morning Coffee",
+        "cta": "Shop Now",
+        "concept": "10–15 seconds: grinding, brewing, cup detail, offer end card. Use approved footage and captions; placement fit needs native QA.",
+        "url": "https://maple-ember.example/products/house-blend?utm_source=facebook&utm_medium=paid_social&utm_campaign=morning_coffee_202610&utm_content=m2"
+      }
+    ],
+    "test": {
+      "platform": "Meta Ads",
+      "action": "Randomized 50/50 M1 vs M2 creative test; Sales/Purchase; identical offer, audience, landing page and bidding. Proposed five-day $500 ceiling from existing allocation, pending budget approval.",
+      "audience": "Consented-match exclusions where available: known purchasers, active checkouts within 7 days, global suppression and Mailchimp test recipients. Contiguous-US adults; verify match coverage.",
+      "learning": "Whether creative concept improves purchase efficiency on the same prospecting audience.",
+      "approval": "Account selection, approved assets and rights, copy, audience/exclusions, placement fit, purchase definition, budget source, test duration/sample and stop rules. No deployment approved."
+    }
+  },
+  "klaviyo": {
+    "tool": "Klaviyo",
+    "account_id": "SIM_KLAVIYO_MAPLE_EMBER",
+    "attribution": "5-day click / 1-day open, send week. Orders and revenue are Klaviyo-attributed and must not be added to Meta or Mailchimp credits.",
+    "rows": [
+      {
+        "id": "EMAIL_1_KL_CHECKOUT",
+        "period": "previous",
+        "campaign": "Checkout follow-up | 4 hours",
+        "delivered": 410,
+        "clicks": 100,
+        "orders": 30,
+        "revenue": 1950,
+        "unsubscribes": 1
+      },
+      {
+        "id": "EMAIL_1_KL_POSTPURCHASE",
+        "period": "previous",
+        "campaign": "Post-purchase brew guide | 7 days",
+        "delivered": 196,
+        "clicks": 21,
+        "orders": 8,
+        "revenue": 480,
+        "unsubscribes": 1
+      },
+      {
+        "id": "EMAIL_1_KL_REPLENISH",
+        "period": "previous",
+        "campaign": "Replenishment | draft",
+        "delivered": 0,
+        "clicks": 0,
+        "orders": 0,
+        "revenue": 0,
+        "unsubscribes": 0
+      },
+      {
+        "id": "EMAIL_2_KL_CHECKOUT",
+        "period": "current",
+        "campaign": "Checkout follow-up | 4 hours",
+        "delivered": 420,
+        "clicks": 74,
+        "orders": 24,
+        "revenue": 1560,
+        "unsubscribes": 3
+      },
+      {
+        "id": "EMAIL_2_KL_POSTPURCHASE",
+        "period": "current",
+        "campaign": "Post-purchase brew guide | 7 days",
+        "delivered": 206,
+        "clicks": 20,
+        "orders": 6,
+        "revenue": 360,
+        "unsubscribes": 1
+      },
+      {
+        "id": "EMAIL_2_KL_REPLENISH",
+        "period": "current",
+        "campaign": "Replenishment | draft",
+        "delivered": 0,
+        "clicks": 0,
+        "orders": 0,
+        "revenue": 0,
+        "unsubscribes": 0
+      }
+    ],
+    "findings": [
+      {
+        "evidence": [
+          "EMAIL_1_KL_CHECKOUT",
+          "EMAIL_2_KL_CHECKOUT"
+        ],
+        "finding": "Checkout orders/delivered fell from 30/410 (7.317%) to 24/420 (5.714%). This is a message-level rate, not a checkout-cohort conversion rate."
+      },
+      {
+        "evidence": [
+          "EMAIL_2_KL_REPLENISH"
+        ],
+        "finding": "Replenishment has zero sends and remains a draft. No historical lift or conversion rate exists."
+      }
+    ],
+    "drafts": [
+      {
+        "id": "SIM_KL_CHECKOUT",
+        "title": "Abandoned checkout",
+        "status": "Simulated draft; no native flow or message created",
+        "subject_options": [
+          "Ready to finish your coffee order?",
+          "Your next morning brew is waiting"
+        ],
+        "preheader": "Return to your checkout when you're ready.",
+        "body": "Ready for your next morning brew? Return to your saved checkout. If this is your first eligible US order, use WELCOME10 for 10% off eligible coffee products by November 1. One use per customer; no stacking.",
+        "cta": "Return to checkout",
+        "url": "https://maple-ember.example/checkout?utm_source=klaviyo&utm_medium=email&utm_campaign=morning_coffee_202610&utm_content=checkout_4h",
+        "trigger": "Simulated Started Checkout event → 4 hours. Replace/test the existing first message; never add a parallel recovery flow.",
+        "eligibility": "Consented contiguous-US subscribers, zero lifetime orders, valid offer and no Placed Order after checkout. Re-evaluate at send.",
+        "suppression": "Exit on purchase, revoked/unknown consent, global suppression, complaint or bounce. Exclude this cohort from Mailchimp. Proposed 72-hour promotional cap. Actual checkout URL property, restoration and suppression sync require verification."
+      },
+      {
+        "id": "SIM_KL_REPLENISH",
+        "title": "Repeat-purchase replenishment",
+        "status": "Simulated draft; no native flow or message created",
+        "subject_options": [
+          "Ready for your next House Blend?",
+          "A returning-customer offer, if you qualify"
+        ],
+        "preheader": "Explore the House Blend Duo.",
+        "body": "Thinking about your next bag? House Blend Duo contains two 12 oz bags for $34 before discount. Eligible US customers with exactly one prior order fulfilled at least 28 days ago and no later order can save 10% with RESTOCK10 on $30 or more in eligible coffee products. Offer ends November 1.",
+        "cta": "Explore House Blend Duo",
+        "url": "https://maple-ember.example/products/house-blend-duo?utm_source=klaviyo&utm_medium=email&utm_campaign=morning_coffee_202610&utm_content=replenish_28d",
+        "trigger": "Simulated Fulfilled Order event → 28 days. Flow remains DRAFT.",
+        "eligibility": "Consented contiguous-US subscribers; exactly one order fulfilled at least 28 days ago and no later order; offer still valid. $30 eligible subtotal enforced at redemption. Snapshot audience: 173 synthetic profiles, not guaranteed send volume.",
+        "suppression": "Exit on new order, refund, revoked/unknown consent, complaint, bounce or global suppression. Avoid the existing 7-day post-purchase guide and Mailchimp campaigns; proposed 72-hour promotion cap. Include unsubscribe/preferences links and approved sender/footer before implementation."
+      }
+    ],
+    "routing_checks": [
+      {
+        "profile": "SIM_P001",
+        "consent": true,
+        "orders": 0,
+        "checkout": false,
+        "route": "Mailchimp prospect; exclude Klaviyo checkout"
+      },
+      {
+        "profile": "SIM_P002",
+        "consent": true,
+        "orders": 0,
+        "checkout": true,
+        "route": "Klaviyo checkout; exclude Mailchimp"
+      },
+      {
+        "profile": "SIM_P003",
+        "consent": true,
+        "orders": 1,
+        "fulfilled_days_ago": 30,
+        "route": "Klaviyo replenishment if offer remains valid"
+      },
+      {
+        "profile": "SIM_P004",
+        "consent": false,
+        "orders": 0,
+        "checkout": true,
+        "route": "Suppress across both email platforms"
+      },
+      {
+        "profile": "SIM_P005",
+        "consent": true,
+        "orders": 2,
+        "checkout": false,
+        "route": "Exclude WELCOME10 and RESTOCK10"
+      }
+    ],
+    "test": {
+      "platform": "Klaviyo",
+      "action": "After real event and routing QA: separately test the replacement checkout message and a randomized replenishment holdout. Keep cohorts distinct.",
+      "learning": "Whether checkout copy improves recovery, and whether eligible replenishment messages add incremental repeat orders.",
+      "approval": "Event payloads and deduplication, consent and cross-platform suppression, sender/footer, subject/copy, valid offer, exit rules, timing, sample size and holdout. No activation approved."
+    }
+  }
+}

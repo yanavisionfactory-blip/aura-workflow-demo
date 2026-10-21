@@ -1,6 +1,7 @@
 import { jiraReceiptTasks } from "./jiraReceipt.mjs";
 import { articleMarkdown, articleWordCount } from "./actionContent.mjs";
 import { campaignCopySections } from "./campaignCopySections.mjs";
+import { marketingToolResult } from "./marketingToolResults.mjs";
 import { seoAuditManifest } from "./seoAuditResult.mjs";
 
 export function readableResultText(value, fallback = "Review the saved app results below.") {
@@ -491,6 +492,8 @@ const outputScore = (output = {}, contextTitle = "") => {
 
 export function primaryResultFromOutputs(outputs = [], context = {}, presentation = null) {
   const completed = outputs.filter((output) => output && typeof output === "object");
+  const marketing = marketingToolResult(completed);
+  if (marketing) return marketing;
   let explicitPrimary = presentation?.primary_step_key
     ? completed.find((output) => output.step_key === presentation.primary_step_key)
     : null;
