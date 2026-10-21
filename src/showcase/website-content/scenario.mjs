@@ -8,10 +8,10 @@ Deliver a page-by-page change comparison, approval tracker and developer handoff
 const step = (tool, title, action, output) => ({tool,title,action,output,iWill:action[0].toLowerCase()+action.slice(1),riskLevel:'read',flow:[{label:'Uses',value:tool}]});
 export const workflowSteps = [
   step('Existing website & sitemap','Confirm the five pages','Review the saved public-site and sitemap evidence','Five existing page routes retained. This demo uses a saved snapshot, not live requests.'),
-  step('WordPress','Confirm the CMS separately','Review historical public WordPress discovery','Public CMS evidence is distinct from authenticated draft access.'),
+  step('WordPress','Confirm the CMS separately','Check the saved evidence that the website uses WordPress','The website uses WordPress; the correct client account still needs confirmation.'),
   step('Source files & approvals','Check the working brief and assets','Show missing client-tool and asset confirmations','Approved brief, asset rights, approver and project tool remain unconfirmed.'),
   step('AURA content package','Prepare the main result','Open the five complete review drafts','Purpose, headings, full copy, CTA, SEO and asset requirements are ready to inspect.'),
-  step('AURA review','Compare and hand off','Inspect changes, pending approvals and developer instructions','Five exact source content-version references; structured handoff; zero live changes.'),
+  step('AURA review','Compare and hand off','Inspect changes, pending approvals and developer instructions','Five pages with clear review steps, a developer handoff and no live changes.'),
   step('WordPress · simulated','Preview the WordPress handoff','Explore five unpublished page previews','Local admin simulation only; no remote record or connection.'),
   step('Shopify · simulated','Preview alternative CMS outputs','Explore Shopify, WooCommerce and BigCommerce screens','Separate, clearly labelled tool screens; no provider calls or commerce changes.'),
 ];
@@ -23,12 +23,12 @@ export const tour = [
   {phase:'results',title:'Read the main result first',caption:'The five-page package comes first. Select a page to inspect its purpose, complete copy, CTA, SEO and asset requirements.',seconds:10},
   {phase:'results',focus:{tab:'Changes',page:'p02'},title:'Compare the proposed changes',caption:'Review current source excerpts beside revised headings, titles and meta descriptions. Source excerpts are historical, not a live crawl.',seconds:8},
   {phase:'results',focus:{tab:'Approvals'},title:'Keep approval explicit',caption:'All five drafts await copy and asset approval. No reviewer decision is implied by running or viewing this demo.',seconds:8},
-  {phase:'results',focus:{tab:'Developer handoff'},title:'Hand off structured files',caption:'Download HTML and metadata. Actual staging requires approval and a verified client connection; live records stay unchanged.',seconds:8},
-  {phase:'results',focus:{section:'tools'},title:'Then inspect results by tool',caption:'Tool outputs follow the main package. Open a named CMS screen to explore the proposed handoff.',seconds:8},
+  {phase:'results',focus:{tab:'Developer handoff'},title:'Hand off structured files',caption:'Download the website files for your developer. Approve the copy and images before creating real unpublished drafts.',seconds:8},
+  {phase:'results',focus:{section:'tools'},title:'Then inspect results by tool',caption:'One set of simulated outcomes follows the main package. Each explains the tool’s part of your task and what it prepared.',seconds:8},
   {phase:'tool',tool:'wordpress',title:'View in WordPress',caption:'The simulated WordPress admin contains five unpublished page previews from the same content package.',seconds:7},
-  {phase:'tool',tool:'shopify',page:'p02',title:'View in Shopify',caption:'Open the simulated Shopify page editor. Content, SEO and assets remain linked to the same draft version.',seconds:8},
+  {phase:'tool',tool:'shopify',page:'p02',title:'View in Shopify',caption:'Open the simulated Shopify page editor. See the page text, search listing and image instructions in one readable draft.',seconds:8},
   {phase:'tool',tool:'woocommerce',title:'View in WooCommerce',caption:'WooCommerce content is handed off as WordPress pages. This preview changes no products, orders, payments or checkout.',seconds:7},
-  {phase:'tool',tool:'bigcommerce',title:'View in BigCommerce',caption:'The BigCommerce simulation shows the alternative unpublished Web Pages handoff, with no connected account.',seconds:7},
+  {phase:'tool',tool:'bigcommerce',title:'View in BigCommerce',caption:'The BigCommerce simulation shows which storefront pages were prepared, what each includes and what needs your review.',seconds:7},
   {phase:'feedback',title:'Ask for a practitioner’s assessment',caption:'Review the practical value, limitations and requirements for a live pilot. Feedback stays local until you choose to share it.',seconds:8},
 ];
 export const validPhases = new Set(['input','plan','review','execution','results','tool','feedback','video']);

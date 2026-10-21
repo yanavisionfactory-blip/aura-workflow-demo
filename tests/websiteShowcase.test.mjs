@@ -16,11 +16,11 @@ test('website demo preserves five complete copy drafts, historical evidence and 
  assert.doesNotMatch(JSON.stringify(data),/workspace_id|client_secret|shpss_|oauth_access_token|4903a714|8e0194b8/);
 });
 test('main result appears before per-tool entries with public links for all four CMS screens',()=>{
- const html=render();assert.ok(html.indexOf('p01 revised page')<html.indexOf('Results by tool'));
- for(const provider of ['wordpress','shopify','woocommerce','bigcommerce']){assert.ok(html.includes(`?screen=tool&amp;tool=${provider}`));const screen=render(`?screen=tool&tool=${provider}`);assert.match(screen,/simulated tool screen/);assert.match(screen,/5 drafts/);for(const p of data.pages)assert.ok(screen.includes(p.version));}
+ const html=render();assert.ok(html.indexOf('Home revised page')<html.indexOf('Results by tool'));
+ for(const provider of ['wordpress','shopify','woocommerce','bigcommerce']){assert.ok(html.includes(`?screen=tool&amp;tool=${provider}`));const screen=render(`?screen=tool&tool=${provider}`);assert.match(screen,/simulated tool screen/);assert.match(screen,/5 drafts/);for(const p of data.pages)assert.ok(!screen.includes(p.version));assert.match(screen,/Part of your task/);}
  assert.doesNotMatch(html,/href="\/runs\//);assert.equal(toolHref('unknown-preview'),null);
- assert.match(render('?screen=results&tab=Approvals'),/Unassigned/);
- assert.match(render('?screen=results&tab=Developer%20handoff'),/create separate unpublished records/);
+ assert.match(render('?screen=results&tab=Approvals'),/Choose a reviewer/);
+ assert.match(render('?screen=results&tab=Developer%20handoff'),/create separate unpublished drafts/);
 });
 test('guided tour, input, review and playback remain explicit and offline',()=>{
  assert.match(render('?screen=input'),/Create plan/);assert.match(render('?screen=plan'),/Review before running/);

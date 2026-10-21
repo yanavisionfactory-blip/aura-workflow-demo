@@ -2,16 +2,16 @@ import { pageHTML } from './websiteContentExport.mjs';
 
 const providers = [
   { id: 'wordpress-preview', name: 'WordPress', scope: 'Selected client CMS',
-    artifact: 'unpublished_page_preview', summary: 'Five unpublished page payloads prepared',
+    artifact: 'unpublished_page_preview', summary: 'Five website page drafts ready to review',
     detail: 'Draft bodies, original routes, SEO fields and asset requirements for the selected WordPress client.' },
   { id: 'shopify-preview', name: 'Shopify', scope: 'Alternative CMS demonstration',
-    artifact: 'unpublished_page_preview', summary: 'Five unpublished store page payloads prepared',
+    artifact: 'unpublished_page_preview', summary: 'Five store content pages ready to review',
     detail: 'The saved review content mapped to Shopify page previews. No Shopify authorization or API write is implied.' },
   { id: 'woocommerce-preview', name: 'WooCommerce', scope: 'WordPress commerce handoff',
-    artifact: 'wordpress_page_handoff', summary: 'Five WordPress content routes mapped',
+    artifact: 'wordpress_page_handoff', summary: 'Five WordPress content pages ready to review',
     detail: 'WooCommerce runs within WordPress. These are WordPress content-page handoffs; no products, orders or checkout settings are changed.' },
   { id: 'bigcommerce-preview', name: 'BigCommerce', scope: 'Alternative CMS demonstration',
-    artifact: 'unpublished_page_preview', summary: 'Five unpublished store page payloads prepared',
+    artifact: 'unpublished_page_preview', summary: 'Five store content pages ready to review',
     detail: 'The same content mapped to BigCommerce page previews. A store destination and verified connection are still required for live staging.' },
 ];
 

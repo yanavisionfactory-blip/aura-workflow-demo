@@ -6,6 +6,7 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 import { build } from 'vite';
 import { primaryResultFromOutputs } from '../src/lib/resultPresentation.mjs';
 import { websiteContentFiles, websiteContentZip } from '../src/lib/websiteContentExport.mjs';
+import { websiteToolOutcome } from '../src/lib/websiteToolOutcomes.mjs';
 import { cmsToolScreenPath, websiteCMSPreview } from '../src/lib/websiteCMSPreview.mjs';
 import { unzipSync, strFromU8 } from 'fflate';
 
@@ -45,36 +46,40 @@ test('main result is selected only from an accepted, verified website content ou
   assert.notEqual(primaryResultFromOutputs([{ ...output, critic: { action: 'escalate' } }]).kind, 'website_content');
 });
 
-test('all five full page drafts and per-tool output entry points are rendered', () => {
+test('the complete main package leads a single set of readable simulated outcomes', () => {
   const html = render(packet);
-  assert.match(html, /Results — the actual output/);
-  assert.match(html, /View AURA content package result/);
-  assert.match(html, /View WordPress result/);
-  assert.match(html, /View Existing website &amp; sitemap result/);
+  assert.match(html, /Main content result/);
+  assert.ok(html.indexOf('Page 0 revised page') < html.indexOf('Results by tool'));
+  assert.equal((html.match(/aria-label="Simulated tool outcomes"/g) || []).length, 1);
+  for (const provider of ['WordPress', 'Shopify', 'WooCommerce', 'BigCommerce']) {
+    assert.equal((html.match(new RegExp(`>View in ${provider}<`, 'g')) || []).length, 1);
+    assert.ok(html.includes(websiteToolOutcome(provider).part));
+    assert.ok(html.includes(websiteToolOutcome(provider).result));
+  }
+  assert.doesNotMatch(html, /Tool results|Tools used|What happened|Preview simulated CMS outputs|Hide simulated outputs|<pre|SHA-256|HTTP 200|receipt-123|Content version/);
   for (const page of packet.pages) {
     const result = render(packet, { initialPage: page.page_id });
     assert.ok(result.includes(page.sections[0].body));
     assert.ok(result.includes(page.page_title));
     assert.ok(result.includes(page.meta_description));
-    assert.match(result, /Asset requirements/);
+    assert.match(result, /Images to prepare/);
+    assert.ok(!result.includes(page.version));
   }
 });
 
-test('changes, pending approvals, structured handoff and actual receipts are independently inspectable', () => {
+test('review and developer handoff use page names and plain-language actions without changing stored evidence', () => {
   assert.match(render(packet, { initialTab: 'Changes' }), /Old title/);
   const approvals = render(packet, { initialTab: 'Approvals' });
-  assert.match(approvals, /Unassigned/);
-  assert.match(approvals, /Not created/);
-  assert.doesNotMatch(approvals, /Approve &amp; publish/);
-  assert.match(render(packet, { initialTab: 'Developer handoff' }), /Create separate unpublished/);
-  const cms = render(packet, { initialTab: 'Tool results', initialTool: 'cms' });
-  assert.match(cms, /HTTP 200/);
-  assert.match(cms, /SHA-256/);
-  assert.match(cms, /not authenticated draft access/);
-  const content = render(packet, { initialTab: 'Tool results', initialTool: 'content' });
-  assert.match(content, /receipt-123/);
-  assert.match(content, /Complete revised page body 0/);
-  assert.ok(content.indexOf('Select tool result') < content.indexOf('Revised copy · unpublished review draft'));
+  assert.match(approvals, /Choose a reviewer/);
+  assert.match(approvals, /Review copy and images/);
+  assert.doesNotMatch(approvals, /Approve &amp; publish|version-0|receipt-123/);
+  assert.match(render(packet, { initialTab: 'Developer handoff' }), /create separate unpublished drafts after approval/);
+  const legacy = render(packet, { initialTab: 'Tool results', initialTool: 'cms' });
+  assert.match(legacy, /Main content result/);
+  assert.doesNotMatch(legacy, /HTTP 200|SHA-256|receipt-123|<pre/);
+  const stored = JSON.parse(websiteContentFiles(packet)['metadata.json']);
+  assert.equal(stored.pages[0].content_version, packet.pages[0].version);
+  assert.equal(stored.cms_drafts_created, 0);
 });
 
 test('marketing review and CMS-ready archive retain every full page, FAQ, exact version and SEO field', () => {
@@ -145,31 +150,17 @@ test('CMS simulations preserve all five exact versions and never become provider
   assert.equal(websiteContentFiles(packet)['metadata.json'].includes('"cms_drafts_created": 0'), true);
 });
 
-test('screenshot-style per-tool rows expose full simulated outputs with honest status', () => {
-  const real = render(packet);
-  assert.match(real, /What happened/);
-  assert.ok(real.indexOf("P1 revised page") < real.indexOf("Results by tool"));
-  assert.match(real, /Tools used/);
-  assert.match(real, /Shopify simulation preview/);
-  assert.match(real, /View in Shopify/);
-  assert.match(real, /href="\/runs\/test-run\/tools\/shopify"/);
-  assert.match(real, /no Shopify account connected or records created/);
-  const simulated = render(packet, { initialSimulation: true });
-  for (const provider of ['WordPress', 'Shopify', 'WooCommerce', 'BigCommerce']) {
-    assert.ok(simulated.includes(`View in ${provider}`));
-    assert.ok(simulated.includes(`href="/runs/test-run/tools/${provider.toLowerCase()}"`));
-  }
-  assert.match(simulated, /Simulation mode/);
-  assert.match(simulated, /No CMS API calls, records, approvals or live changes were made/);
+test('only simulated CMS outcomes are offered, with readable fallbacks when no tool route exists', () => {
+  const html = render(packet);
+  assert.equal(html, render(packet, { initialSimulation: true }));
+  assert.match(html, /Simulated previews only/);
+  assert.match(html, /alternative destinations for this task/);
   for (const tool of websiteCMSPreview(packet).tools) {
-    const html = render(packet, { initialSimulation: true, initialTab: 'Tool results', initialTool: tool.id });
-    assert.ok(html.includes(`${tool.name} simulated output`));
-    assert.match(html, /Simulated tool output/);
-    assert.match(html, /0 CMS records created/);
-    for (const page of packet.pages) {
-      assert.ok(html.includes(page.version));
-      assert.ok(html.includes(page.sections[0].body));
-    }
+    assert.ok(html.includes(`href="/runs/test-run/tools/${tool.name.toLowerCase()}"`));
+    const fallback = render(packet, { runId: null, initialTool: tool.id });
+    assert.ok(fallback.includes(`${tool.name} simulated outcome`));
+    assert.ok(fallback.includes(packet.pages[0].sections[0].body));
+    assert.doesNotMatch(fallback, /<pre|Complete HTML body|Structured .* output|body_html|remote_id|schema_version/);
   }
 });
 
@@ -186,13 +177,16 @@ test('view-in-tool links open isolated named tool screens rather than an AURA ou
     assert.ok(list.includes(`Simulated ${tool.name} screen`));
     assert.match(list, /Back to AURA results/);
     assert.match(list, /Search draft pages/);
-    for (const page of packet.pages) assert.ok(list.includes(page.content_version || page.version));
+    assert.ok(list.includes(websiteToolOutcome(tool.name).part));
+    for (const page of packet.pages) assert.ok(!list.includes(page.version));
     const editor = renderTool(tool, { initialPageId: packet.pages[0].page_id });
     assert.match(editor, /Page editor sections/);
     assert.match(editor, /Preview page/);
     assert.ok(editor.includes(packet.pages[0].sections[0].body));
-    assert.ok(editor.includes(packet.pages[0].version));
-    assert.match(editor, /Content approval pending/);
+    assert.ok(!editor.includes(packet.pages[0].version));
+    assert.match(editor, /Part of your task/);
+    assert.match(editor, /Search listing/);
+    assert.match(editor, /Copy and images await approval/);
     assert.doesNotMatch(editor, /type="password"|name="client_secret"|>Publish<|CMS records created successfully/);
   }
 });
