@@ -48,7 +48,7 @@ export async function connectTool(toolName, opts = {}) {
     });
     const authorizationProvider = existing?.slug || provider;
     const backend = existing?.connection_backend || requestedRoute?.connectionBackend || entry.connectionBackend;
-    if (!["pipedream", "wordpress_plugin"].includes(backend)) authorizationWindow = reserveAuthorizationWindow(authorizationProvider);
+    if (!["pipedream", "wordpress_plugin", "shopify_client_credentials"].includes(backend)) authorizationWindow = reserveAuthorizationWindow(authorizationProvider);
     const result = await authorizeConnectorBroker(authorizationProvider, {
       connection: existing,
       timeoutMs: 600000,
@@ -90,7 +90,7 @@ export async function hydrateConnections({ force = false } = {}) {
 
     const tools = await listPythonTools();
     const health = await Promise.all(tools.map(async (tool) => {
-      if (!tool.enabled || (tool.kind !== "oauth" && tool.connection_backend !== "wordpress_plugin")) return { tool, connected: Boolean(tool.enabled) };
+      if (!tool.enabled || (tool.kind !== "oauth" && !["wordpress_plugin", "shopify_client_credentials"].includes(tool.connection_backend))) return { tool, connected: Boolean(tool.enabled) };
       try {
         const result = await testPythonConnection(tool.id);
         return { tool, connected: isVerifiedConnection(result) };
@@ -153,7 +153,7 @@ export async function reconnectTool(toolName, connectionId = null) {
     // absent from the current one-click marketplace catalog.
     const provider = tool.slug || providerForTool(toolName);
     if (!provider) throw new Error(`${toolName} has no reconnectable provider.`);
-    if (tool.connection_backend !== "pipedream") {
+    if (!["pipedream", "shopify_client_credentials"].includes(tool.connection_backend)) {
       authorizationWindow = reserveAuthorizationWindow(provider, true);
     }
     const result = await authorizeConnectorBroker(provider, {

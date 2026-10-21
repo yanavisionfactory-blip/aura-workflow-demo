@@ -114,3 +114,20 @@ bash scripts/smoke-production.sh https://<api-domain>
 ```
 
 Before launch, create two Clerk organizations and verify that workflows, history, schedules, access requests, and connections created in one organization return `404` or `403` from the other.
+
+## Shopify client credentials
+
+In AURA's app marketplace, choose **Shopify (Client Credentials)** for a Shopify
+Dev Dashboard app installed on a store in the same Shopify organization. Enter
+the store's `myshopify.com` subdomain, client ID and client secret in the protected
+connection form. AURA exchanges the credentials with Shopify, verifies the exact
+store identity and reads the app's granted scopes before saving the connection.
+Credentials are encrypted with the existing CredentialVault; neither credentials
+nor temporary tokens appear in workflow arguments, receipts or audit payloads.
+
+This route exposes store identity and, when `read_content` or
+`read_online_store_pages` (or their write equivalents) is granted, paginated page
+reads. Its executable operations are read-only. It does not stage or publish CMS
+drafts. Tokens are minted server-side for each invocation so their 24-hour expiry
+does not require users to copy a new token. Existing OAuth and broker connections
+retain their own routes.

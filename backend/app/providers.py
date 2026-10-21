@@ -530,6 +530,12 @@ class ProviderExecutor:
             arguments = coerce_module_arguments(
                 self.capability_manifest, operation, arguments
             )
+        from . import shopify_client_credentials as shopify
+        if operation in {shopify.IDENTITY_OPERATION, shopify.PAGES_OPERATION}:
+            capability_for(self.capability_manifest, operation)
+            if self.capability_manifest.get("provider_type") != shopify.BACKEND:
+                raise ValueError("Shopify requires its own verified connection")
+            return await shopify.execute(self.credentials, operation, arguments)
         handlers = {
             "gmail.list": self._gmail_list,
             "gmail.threads.read": self._gmail_threads_read,

@@ -1,4 +1,5 @@
 import { createFrontendClient } from "@pipedream/sdk/browser";
+import { shopifyCredentialDialog } from "@/lib/shopifyCredentialDialog";
 
 const API_URL = (import.meta.env.VITE_AURA_API_URL || "").replace(/\/$/, "");
 const WORKSPACE_KEY = "aura_python_workspace_id";
@@ -435,6 +436,16 @@ export async function authorizeConnectorBroker(
     // Match the broker grant's default lifetime: account sign-in and multiple
     // verification factors routinely take longer than the old two-minute wait.
     return authorizePipedreamConnector(provider, session, timeoutMs ?? 15 * 60 * 1000);
+  }
+  if (session.backend === "shopify_client_credentials") {
+    if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
+    const result = await shopifyCredentialDialog((payload) => request(
+      "/v1/shopify/client-credentials/connect", { method: "POST", body: JSON.stringify(payload), timeoutMs: 70000 },
+    ), session);
+    const tools = await listPythonTools();
+    const tool = tools.find((item) => item.id === result.id);
+    if (!tool || result.status !== "verified") throw new Error("Shopify access could not be verified.");
+    return { connected: true, managed: true, backend: session.backend, tool };
   }
   if (session.backend === "nango") {
     return authorizeManagedConnector(provider, timeoutMs ?? 120000, reservedWindow, session);
