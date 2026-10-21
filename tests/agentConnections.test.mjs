@@ -15,11 +15,14 @@ test("offers A2A, MCP, and AURA Agent API connections", () => {
   assert.deepEqual(AGENT_METHODS.map((method) => method.id), ["a2a", "mcp", "aura"]);
 });
 
-test("connection links prefill only the reviewed Supermetrics endpoint", () => {
+test("connection links prefill only reviewed vendor endpoints", () => {
   assert.deepEqual(agentConnectionPreset("?connect=supermetrics&source=https://untrusted.test"),
     { source: "https://mcp.supermetrics.com/mcp" });
   assert.equal(agentConnectionPreset("?connect=https://untrusted.test"), null);
   assert.equal(agentConnectionPreset(""), null);
+  assert.deepEqual(agentConnectionPreset("?connect=frameio"), { source: "https://mcp.frame.io/v1/mcp" });
+  assert.deepEqual(agentConnectionPreset("?connect=pageproof&source=https://untrusted.test"),
+    { source: "https://mcp.pageproof.com/mcp" });
 });
 
 test("turns one human-facing agent link into an autoconnect request", () => {

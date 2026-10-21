@@ -1145,7 +1145,7 @@ def _mcp_payload(credentials: dict, provider: str = "ubersuggest") -> AgentConne
         protocol="mcp", name=service["name"], owner=service["owner"],
         endpoint=service["endpoint"], authentication="api_key" if api_key else "bearer",
         credential=credentials["api_key"] if api_key else credentials["access_token"],
-        data_access=[f"{service['name']} research and audit data"],
+        data_access=[f"{service['name']} {service.get('data_access', 'research and audit data')}"],
         data_retention="provider-defined", max_runtime_seconds=30, max_cost_usd=5,
     )
 
@@ -1155,7 +1155,18 @@ async def _verify_managed_mcp(credentials: dict, provider: str = "ubersuggest") 
         manifest, _, _ = await asyncio.wait_for(
             _discover_agent_payload(_mcp_payload(credentials, provider)), timeout=25
         )
+        probe_operation, probe_arguments = None, {}
         if provider == "supermetrics":
+            probe_operation, probe_arguments = "data_source_discovery", {"compress": True}
+        elif provider == "frame-io":
+            probe_operation = "mandatory_init"
+        elif provider == "pageproof":
+            probe_operation = next((item["name"] for item in manifest.get("capabilities", [])
+                if item.get("permission_scope") == "read"
+                and not item.get("input_schema", {}).get("required")), None)
+            if not probe_operation:
+                raise ConnectorError("PageProof needs a default read-only metadata probe before access can be verified")
+        if probe_operation:
             # tools/list is public on this server. A catalog is not proof that
             # the OAuth grant can read authenticated account metadata.
             receipt = await asyncio.wait_for(
@@ -1163,7 +1174,7 @@ async def _verify_managed_mcp(credentials: dict, provider: str = "ubersuggest") 
                     credentials, mcp_service(provider)["endpoint"],
                     provider_kind="mcp", capability_manifest=manifest,
                     timeout_seconds=25,
-                ).execute("data_source_discovery", {"compress": True}),
+                ).execute(probe_operation, probe_arguments),
                 timeout=25,
             )
             failed = receipt.get("is_error") or (
@@ -1283,6 +1294,7 @@ def _mcp_auth_config(config: dict) -> dict:
     return {key: config[key] for key in (
         "canonical_provider", "mcp_oauth_provider", "oauth_custom", "authorization_url", "token_url",
         "token_auth_method", "token_params", "scopes",
+        "oauth_issuer",
     ) if key in config}
 
 
@@ -1384,7 +1396,7 @@ def _canonical_marketplace_entries(items: list[dict]) -> list[dict]:
         }
         grouped.setdefault(canonical_provider_slug(display_name), []).append(item)
 
-    backend_priority = {"nango": 0, "native": 1, "pipedream": 2, None: 9}
+    backend_priority = {"nango": 0, "native": 1, "managed_mcp": 1, "pipedream": 2, None: 9}
     execution_priority = {
         "pipedream_action": 0,
         "pipedream_proxy": 1,
@@ -1505,6 +1517,8 @@ async def managed_connector_status(
         )
     from . import shopify_client_credentials as shopify
     native_catalog.append(shopify.catalog_entry())
+    from .mcp_oauth import proofing_catalog
+    native_catalog.extend(proofing_catalog())
     native_catalog.extend(await wordpress_plugins.catalog(session, context.workspace_id))
     dynamic_catalog = [
         {
@@ -2575,6 +2589,24 @@ async def create_connector_broker_session(
     """Select the best connector plane and return only a short-lived browser grant."""
     provider = requested_marketplace_entry(provider)["provider"]
     provider = wordpress_plugins.provider_slug(provider)
+    if provider in {"frame-io-mcp", "pageproof-mcp"}:
+        managed_provider = provider.removesuffix("-mcp")
+        endpoint = mcp_service(managed_provider)["endpoint"]
+        if connection_id:
+            selected = await session.get(ToolConnection, connection_id)
+            if not selected or selected.workspace_id != context.workspace_id or selected.base_url != endpoint:
+                raise HTTPException(404, "Connection not found")
+        try:
+            result = await _managed_mcp_connection(context, session, provider=managed_provider)
+        except MCPRegistrationRejected as exc:
+            raise HTTPException(409, exc.public_detail(oauth_route_callback_url(settings, "mcp-agent"))) from exc
+        except (ConnectorError, httpx.HTTPError, ValueError, TimeoutError) as exc:
+            raise HTTPException(409, "The proofing service could not verify its connection setup. Existing access was kept.") from exc
+        if result.get("enabled"):
+            return {"backend": "native", "provider": result["slug"], "already_connected": True,
+                    "connection_id": result["id"]}
+        tool = await session.get(ToolConnection, result["connection_id"])
+        return {**result, "backend": "native", "provider": tool.slug}
     from . import shopify_client_credentials as shopify
     if provider == shopify.SLUG:
         if connection_id:

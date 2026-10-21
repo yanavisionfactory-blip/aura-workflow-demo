@@ -15,6 +15,7 @@ from .executive_review import SourceRequest as ExecutiveSourceRequest
 from .file_delivery import ATTACHMENTS_SCHEMA
 from .policy import operation_scope
 from .presentation_content import PRESENTATION_SCHEMA
+from .proofing import FeedbackImportRequest
 from .reports import ReportRequest
 from .seo_crawl import CrawlReviewRequest
 from .website_content import ContentRequest
@@ -72,6 +73,8 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         "base_url": "provider-managed",
         "identity": {"provider": "aura"},
         "modules": [
+            {**_module("proofing.feedback.import", "search", "Read an attached Frame.io or PageProof comments export (searchable PDF, text, CSV or JSON) for one exact asset/version. Retains pages and SHA-256; this is user-supplied evidence, not a vendor API call or current approval status."),
+             "input_schema": FeedbackImportRequest.model_json_schema()},
             {**_module("executive.source.analyze", "search", "Execute one explicitly simulated biweekly channel or business-system CSV processor in AURA; retain rows, definitions, calculations and hashes. Vendor reporting API not called."),
              "input_schema": ExecutiveSourceRequest.model_json_schema()},
             {**_module("executive.review.prepare", "search", "Recalculate ten simulated exports and use the model to prepare an interactive executive review, agenda and proposed action register on AURA's results page. No Google Doc or account writes."),

@@ -2,6 +2,18 @@
 
 from copy import deepcopy
 
+FRAMEIO_ENDPOINT = "https://mcp.frame.io/v1/mcp"
+PAGEPROOF_ENDPOINT = "https://mcp.pageproof.com/mcp"
+FRAMEIO_READ_TOOLS = frozenset({
+    "mandatory_init", "read_context", "search_assets", "read_assets", "list_recently_deleted",
+    "read_comments", "list_metadata_fields", "read_shares", "read_members", "get_upload_status",
+    "read_audit_logs",
+})
+FRAMEIO_WRITE_TOOLS = frozenset({
+    "manage_assets", "manage_versions", "change_structure", "restore_assets", "write_comments",
+    "change_metadata", "manage_shares", "manage_reviewers", "manage_members", "upload_media",
+})
+
 SUPERMETRICS_ENDPOINT = "https://mcp.supermetrics.com/mcp"
 SUPERMETRICS_READ_TOOLS = frozenset({
     "supermetrics_guide", "data_source_discovery", "accounts_discovery",
@@ -11,6 +23,34 @@ SUPERMETRICS_READ_TOOLS = frozenset({
 
 
 def restrict_mcp_manifest(manifest: dict, endpoint: str) -> dict:
+    if endpoint in {FRAMEIO_ENDPOINT, PAGEPROOF_ENDPOINT}:
+        result = deepcopy(manifest)
+        capabilities = []
+        for item in result.get("capabilities", []):
+            name = item.get("name")
+            if not name or item.get("transport", {}).get("tool_name") != name:
+                continue
+            if endpoint == FRAMEIO_ENDPOINT:
+                if name in FRAMEIO_READ_TOOLS:
+                    scope = "read"
+                elif name in FRAMEIO_WRITE_TOOLS:
+                    scope = "write"
+                elif name == "delete_resources":
+                    scope = "destructive"
+                else:
+                    continue
+            else:
+                if item.get("metadata", {}).get("mcp_read_only") is not True:
+                    continue
+                scope = "read"
+                item["description"] += " PageProof metadata only; no comment text or proof imagery."
+            item.update(permission_scope=scope, requires_approval=scope != "read",
+                        module_type="search" if scope == "read" else "action")
+            capabilities.append(item)
+        if not capabilities:
+            raise ValueError("The proofing service did not expose reviewed tools")
+        result["capabilities"] = capabilities
+        return result
     if endpoint != SUPERMETRICS_ENDPOINT:
         return manifest
     result = deepcopy(manifest)
