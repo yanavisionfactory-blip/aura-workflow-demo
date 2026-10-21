@@ -5,6 +5,10 @@ Open a completed five-page website content run in AURA. The Results page has
 Full pages, comparisons, pending approvals, developer handoff and source receipts
 remain inspectable.
 
+The standard Results view also shows a **Shopify · Simulated** preview card with
+a **View in Shopify** action. It opens the five saved drafts in the simulated
+Shopify admin without requiring the all-CMS toggle or a special query string.
+
 Choose **Preview simulated CMS outputs** to show the requested end-to-end CMS
 handoff demonstration. The URL retains `cmsPreview=simulated` so the same view
 can be reopened and shared with someone who has access to the saved run.

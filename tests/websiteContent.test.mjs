@@ -149,7 +149,10 @@ test('screenshot-style per-tool rows expose full simulated outputs with honest s
   const real = render(packet);
   assert.match(real, /What happened/);
   assert.match(real, /Tools used/);
-  assert.doesNotMatch(real, /View in Shopify/);
+  assert.match(real, /Shopify simulation preview/);
+  assert.match(real, /View in Shopify/);
+  assert.match(real, /href="\/runs\/test-run\/tools\/shopify"/);
+  assert.match(real, /no Shopify account connected or records created/);
   const simulated = render(packet, { initialSimulation: true });
   for (const provider of ['WordPress', 'Shopify', 'WooCommerce', 'BigCommerce']) {
     assert.ok(simulated.includes(`View in ${provider}`));
