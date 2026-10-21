@@ -2632,12 +2632,12 @@ async def create_connector_broker_session(
             session=session,
         )
         return {**result, "backend": "native", "provider": provider}
-    # Mailchimp requires an exact registered redirect URI. The Mailchimp app
-    # registered for AURA returns to AURA's installation callback, whereas a
+    # Mailchimp and HubSpot require an exact registered redirect URI. Apps
+    # registered for AURA return to AURA's provider callback, whereas a
     # Nango session expects Nango's callback and state. Never mix the two OAuth
     # flows when the registered AURA app is available. Existing Nango accounts
     # stay pinned to Nango above/below and are not silently migrated.
-    if not selected_tool and provider == "mailchimp":
+    if not selected_tool and provider in {"mailchimp", "hubspot"}:
         definition = PROVIDERS[provider]
         if (
             getattr(settings, definition.client_id_attr)

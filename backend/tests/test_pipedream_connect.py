@@ -805,10 +805,16 @@ async def test_broker_preserves_existing_native_account_without_explicit_id(monk
     managed_session.assert_not_awaited()
 
 
-async def test_mailchimp_broker_uses_its_registered_native_callback(monkeypatch):
+@pytest.mark.parametrize("provider,callback", [
+    ("mailchimp", "installation"),
+    ("hubspot", "hubspot"),
+])
+async def test_registered_app_broker_uses_its_native_callback(monkeypatch, provider, callback):
     config = settings(
-        mailchimp_client_id="registered-mailchimp-app",
-        mailchimp_client_secret="registered-mailchimp-secret",
+        **{
+            f"{provider}_client_id": "registered-provider-app",
+            f"{provider}_client_secret": "registered-provider-secret",
+        },
         public_url="https://api.aura.example",
     )
     monkeypatch.setattr(main, "settings", config)
@@ -820,23 +826,26 @@ async def test_mailchimp_broker_uses_its_registered_native_callback(monkeypatch)
     context = main.TenantContext("workspace-1", "user-1", "owner")
 
     result = await main.create_connector_broker_session(
-        "mailchimp", context=context, session=session,
+        provider, context=context, session=session,
     )
 
     assert result["backend"] == "native"
     params = parse_qs(urlsplit(result["authorization_url"]).query)
     assert params["redirect_uri"] == [
-        "https://api.aura.example/v1/oauth/installation/callback"
+        f"https://api.aura.example/v1/oauth/{callback}/callback"
     ]
-    assert params["client_id"] == ["registered-mailchimp-app"]
-    assert security.decode_oauth_state(params["state"][0])["provider"] == "mailchimp"
+    assert params["client_id"] == ["registered-provider-app"]
+    assert security.decode_oauth_state(params["state"][0])["provider"] == provider
     managed_session.assert_not_awaited()
 
 
-async def test_mailchimp_existing_nango_account_stays_on_nango(monkeypatch):
+@pytest.mark.parametrize("provider", ["mailchimp", "hubspot"])
+async def test_registered_app_existing_nango_account_stays_on_nango(monkeypatch, provider):
     monkeypatch.setattr(main, "settings", settings(
-        mailchimp_client_id="registered-mailchimp-app",
-        mailchimp_client_secret="registered-mailchimp-secret",
+        **{
+            f"{provider}_client_id": "registered-provider-app",
+            f"{provider}_client_secret": "registered-provider-secret",
+        },
     ))
     monkeypatch.setattr(main, "managed_connector_client", lambda: SimpleNamespace(configured=True))
     managed_session = AsyncMock(return_value={"connect_link": "https://connect.example"})
@@ -847,9 +856,30 @@ async def test_mailchimp_existing_nango_account_stays_on_nango(monkeypatch):
     session = SimpleNamespace(scalar=AsyncMock(return_value=existing))
 
     result = await main.create_connector_broker_session(
-        "mailchimp",
+        provider,
         context=main.TenantContext("workspace-1", "user-1", "owner"),
         session=session,
+    )
+
+    assert result["backend"] == "nango"
+    managed_session.assert_awaited_once()
+    native_session.assert_not_awaited()
+
+
+@pytest.mark.parametrize("missing", ["client_id", "client_secret"])
+async def test_hubspot_without_complete_native_app_keeps_managed_route(monkeypatch, missing):
+    credentials = {"hubspot_client_id": "registered-app", "hubspot_client_secret": "secret"}
+    credentials[f"hubspot_{missing}"] = ""
+    monkeypatch.setattr(main, "settings", settings(**credentials))
+    monkeypatch.setattr(main, "managed_connector_client", lambda: SimpleNamespace(configured=True))
+    managed_session = AsyncMock(return_value={"connect_link": "https://connect.example"})
+    monkeypatch.setattr(main, "create_managed_connector_session", managed_session)
+    native_session = AsyncMock()
+    monkeypatch.setattr(main, "oauth_start", native_session)
+    session = SimpleNamespace(scalar=AsyncMock(return_value=None))
+
+    result = await main.create_connector_broker_session(
+        "hubspot", context=main.TenantContext("workspace-1", "user-1", "owner"), session=session,
     )
 
     assert result["backend"] == "nango"
