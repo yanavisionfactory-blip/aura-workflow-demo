@@ -1,0 +1,68 @@
+[
+  {
+    "source_key": "meta",
+    "input_kind": "simulated_scenario",
+    "periods": {
+      "current": {
+        "from": "2026-10-12",
+        "to": "2026-10-18",
+        "label": "2026-10-12 – 2026-10-18"
+      },
+      "previous": {
+        "from": "2026-10-05",
+        "to": "2026-10-11",
+        "label": "2026-10-05 – 2026-10-11"
+      }
+    },
+    "csv_text": "provenance,source,id,period,campaign,impressions,clicks,spend,conversions,revenue\r\nSIMULATED,Meta Ads,SIM-meta-previous,previous,SIMULATED Meta Ads scenario,100000,1500,1800,60,6000\r\nSIMULATED,Meta Ads,SIM-meta-current,current,SIMULATED Meta Ads scenario,105000,1260,1890,45,4500",
+    "metadata": {
+      "provenance": "simulated",
+      "simulationAuthorized": true,
+      "filename": "SIMULATED_meta_ads.csv",
+      "report": "Authored scenario for workflow simulation",
+      "timezone": "America/Chicago",
+      "currency": "USD",
+      "asOf": "2026-10-20T06:00:00Z",
+      "attribution": "SIMULATED assumption: 7-day click / 1-day view",
+      "dateBasis": "SIMULATED assumption: interaction date",
+      "clickDefinition": "SIMULATED assumption: paid link clicks",
+      "conversionDefinition": "SIMULATED purchase credits; no actual customer outcomes",
+      "revenueDefinition": "SIMULATED attributed gross value; no actual client revenue",
+      "simulationNotice": "SIMULATED — authored sample values, not a connected account, approved export or client result. Replace with verified evidence before implementation.",
+      "caution": "Attribution settings and values are scenario assumptions. Validate actual account definitions and mature attribution windows before use. No real account was queried."
+    }
+  },
+  {
+    "source_key": "amazon",
+    "input_kind": "simulated_scenario",
+    "periods": {
+      "current": {
+        "from": "2026-10-12",
+        "to": "2026-10-18",
+        "label": "2026-10-12 – 2026-10-18"
+      },
+      "previous": {
+        "from": "2026-10-05",
+        "to": "2026-10-11",
+        "label": "2026-10-05 – 2026-10-11"
+      }
+    },
+    "csv_text": "provenance,source,id,period,campaign,impressions,clicks,spend,conversions,revenue\r\nSIMULATED,Amazon Ads,SIM-amazon-previous,previous,SIMULATED Amazon Ads scenario,80000,800,1200,80,4800\r\nSIMULATED,Amazon Ads,SIM-amazon-current,current,SIMULATED Amazon Ads scenario,88000,880,1320,66,3960",
+    "metadata": {
+      "provenance": "simulated",
+      "simulationAuthorized": true,
+      "filename": "SIMULATED_amazon_ads.csv",
+      "report": "Authored scenario for workflow simulation",
+      "timezone": "America/Chicago",
+      "currency": "USD",
+      "asOf": "2026-10-20T06:00:00Z",
+      "attribution": "SIMULATED assumption: 14-day click",
+      "dateBasis": "SIMULATED assumption: interaction date",
+      "clickDefinition": "SIMULATED assumption: paid link clicks",
+      "conversionDefinition": "SIMULATED purchase credits; no actual customer outcomes",
+      "revenueDefinition": "SIMULATED attributed gross value; no actual client revenue",
+      "simulationNotice": "SIMULATED — authored sample values, not a connected account, approved export or client result. Replace with verified evidence before implementation.",
+      "caution": "Attribution settings and values are scenario assumptions. Validate actual account definitions and mature attribution windows before use. No real account was queried."
+    }
+  }
+]

@@ -1,10 +1,10 @@
-export const ratio = (a, b) => b > 0 ? a / b : null;
-export const change = (current, previous) => previous > 0 ? current / previous - 1 : null;
+export const ratio = (a, b) => a != null && b > 0 ? a / b : null;
+export const change = (current, previous) => current != null && previous > 0 ? current / previous - 1 : null;
 export const dollars = (n) => n === null || n === undefined ? '—' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(n);
 export const number = (n) => n === null || n === undefined ? '—' : new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(n);
 export const percent = (n, digits = 1) => n === null || n === undefined ? '—' : `${(n * 100).toFixed(digits)}%`;
 export const delta = (n) => n === null ? 'No comparable baseline' : `${n > 0 ? '+' : ''}${percent(n)}`;
-const sum = (rows, field) => rows.reduce((total, row) => total + (row[field] || 0), 0);
+const sum = (rows, field) => rows.some((row) => row[field] == null) ? null : rows.reduce((total, row) => total + row[field], 0);
 
 export function totals(source, period) {
   const rows = source.rows.filter((row) => row.period === period);
