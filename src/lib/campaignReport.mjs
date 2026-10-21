@@ -7,6 +7,8 @@ export function campaignReportGroups(body) {
     ["Social ads", /social|facebook|instagram|meta|linkedin/i],
     ["Business Profile", /business profile|\bgbp\b/i],
     ["Indoor screens", /screen|signage/i],
+    ["Reel", /\breels?\b|storyboard|15.second/i],
+    ["Booking and source checks", /vagaro|booking destination|service verification|account (?:access|checks)|source checks/i],
     ["Assets", /asset|creative checklist|rights/i],
     ["Approvals and handoff", /approv|handoff|implementation|measurement|landing|manual/i],
   ].map(([name, pattern]) => ({ name, pattern, sections: [] }));
@@ -17,12 +19,18 @@ export function campaignReportGroups(body) {
     const section = { title: match[1].trim(), body: body.slice(match.index,
       headings[index + 1]?.index ?? body.length).trim() };
     // Asset requirements for a channel belong to Assets, not to ad copy.
-    const matchGroup = groups.slice(5).find((group) => group.pattern.test(section.title))
+    const matchGroup = groups.slice(7).find((group) => group.pattern.test(section.title))
+      || groups.slice(5, 7).find((group) => group.pattern.test(section.title))
       || groups.slice(1, 5).find((group) => group.pattern.test(section.title)) || groups[0];
     matchGroup.sections.push(section);
   });
-  // Require the complete multichannel launch shape. Other reports retain their
-  // existing renderer, and incomplete drafts cannot imply missing deliverables.
-  if (!groups.every((group) => group.sections.some((section) => section.body.length > 60))) return null;
-  return { intro, groups: groups.map(({ name, sections }) => ({ name, sections })) };
+  // A campaign can legitimately exclude Search or screens. Navigation reflects
+  // saved content, not a claim that every possible channel was requested or run.
+  // Keep ordinary reports in their existing renderer and require the core
+  // campaign brief, asset review, approval/handoff and at least one channel.
+  const populated = (group) => group.sections.some((section) => section.body.length > 60);
+  if (![groups[0], groups[7], groups[8]].every(populated)
+      || !groups.slice(1, 6).some(populated)) return null;
+  return { intro, groups: groups.filter((group) => group.sections.length)
+    .map(({ name, sections }) => ({ name, sections })) };
 }

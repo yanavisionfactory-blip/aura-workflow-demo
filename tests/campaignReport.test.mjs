@@ -15,10 +15,21 @@ test("complete native campaign reports expose all saved sections without alterin
   assert.ok(parsed.groups.every((group) => group.sections[0].body.includes("Complete saved source and draft copy.")));
 });
 
-test("missing channels and ordinary reports do not become completed campaign packages", () => {
+test("ordinary reports and missing core review sections retain the generic renderer", () => {
   assert.equal(campaignReportGroups("## Executive summary\nOrdinary review."), null);
-  assert.equal(campaignReportGroups(body.replace(/## Indoor screen draft[\s\S]*?(?=## Asset)/, "")), null);
+  assert.equal(campaignReportGroups(body.replace(/## Asset checklist[\s\S]*?(?=## Approval)/, "")), null);
   assert.equal(campaignReportGroups(null), null);
+});
+
+test("local booking packages expose their actual channels without inventing Search or screens", () => {
+  const titles = ["Campaign brief", "Google Business Profile posts", "Meta ad variations",
+    "15-second Reel storyboard", "Vagaro booking destination and source checks", "Asset checklist", "Approval table", "Implementation handoff"];
+  const sections = titles.map((title, index) => `## ${title}\nSaved content ${index}. ${"Draft for client review. ".repeat(4)}`);
+  const parsed = campaignReportGroups(sections.join("\n\n"));
+  assert.deepEqual(parsed.groups.map((group) => group.name), ["Brief", "Social ads", "Business Profile", "Reel",
+    "Booking and source checks", "Assets", "Approvals and handoff"]);
+  assert.deepEqual(parsed.groups.flatMap((group) => group.sections).map((section) => section.body).sort(), sections.map((section) => section.trim()).sort());
+  assert.equal(parsed.groups.find((group) => group.name === "Approvals and handoff").sections.length, 2);
 });
 
 test("channel asset requirements stay separate from channel draft copy", () => {
