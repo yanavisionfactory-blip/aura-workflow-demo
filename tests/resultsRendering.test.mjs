@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { build } from "vite";
+import { executeMarketingSimulation } from "../src/lib/marketingToolSimulation.mjs";
 
 const repo = fileURLToPath(new URL("../", import.meta.url));
 let temporary;
@@ -35,6 +36,24 @@ before(async () => {
   ({ render } = await import(pathToFileURL(path.join(temporary, "render.mjs"))));
 });
 after(() => { if (temporary) fs.rmSync(temporary, { recursive: true, force: true }); });
+
+test("the marketing workspace shows four tool views and friendly simulated assets without an AURA report", async () => {
+  const simulations = await Promise.all(["meta", "klaviyo"].map(tool => executeMarketingSimulation(tool, {simulate:true, scenario:"maple_ember_v1"})));
+  const steps = [
+    {id:"g",tool_slug:"google-ads",operation:"google-ads.list-account-id-options",status:"completed",output:{operation:"google-ads.list-account-id-options",provider_result:{options:[]}}},
+    {id:"m",tool_slug:"mailchimp",operation:"mailchimp.audiences.list",status:"failed",error:"Audience unavailable"},
+    ...simulations.map((packet,index)=>({id:`sim-${index}`,tool_slug:index ? "klaviyo-simulated" : "meta-ads-simulated",operation:packet.receipt.operation,status:"completed",output:{operation:packet.receipt.operation,provider_result:packet}})),
+  ];
+  const html = render({id:"hybrid",status:"completed",plan:{name:"Hybrid marketing review"},steps});
+  assert.match(html,/aria-label="Marketing workflow tool results"/);
+  for (const tool of ["Google Ads", "Meta Ads", "Mailchimp", "Klaviyo"]) assert.ok(html.includes(tool));
+  assert.match(html,/Meta Ads · Simulated tool adapter/);
+  assert.match(html,/Simulated weekly performance/);
+  assert.match(html,/Coffee detail static/);
+  assert.match(html,/Morning brew video/);
+  assert.match(html,/not saved in Meta/);
+  assert.doesNotMatch(html,/AURA Intelligence output preview|report\.compose|weekly\.source\.analyze/);
+});
 
 const body = `## Sourced campaign brief
 Roof repairs and replacements. [Business source](https://example.com/roofing)

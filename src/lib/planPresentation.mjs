@@ -1,6 +1,8 @@
 // Labels follow the actual operation, never incidental words in its reason.
 export function operationStepTitle(step = {}, tool = "the app") {
   const operation = String(step.operation || "");
+  if (operation === "meta-ads-simulated.review.get") return "Run the Meta Ads simulation";
+  if (operation === "klaviyo-simulated.lifecycle.get") return "Run the Klaviyo simulation";
   if (operation === "website.source.inspect") {
     const names = { agency: "Check the agency's client evidence", sitemap: "Read the existing sitemap", cms: "Confirm the selected website's CMS", page: "Read the existing website page" };
     return names[step.arguments?.role] || "Read the website source";

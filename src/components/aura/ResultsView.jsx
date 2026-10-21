@@ -29,7 +29,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   const openTool = (id) => setToolView({ id });
   const nativeAudit = primaryResult.kind === "seo_audit";
   const approvedWeekly = primaryResult.kind === "weekly_review" && (primaryResult.packet?.version === 2 || primaryResult.packet?.provenance === "approved_export");
-  const nativeResult = nativeAudit || ["weekly_review", "executive_review", "website_content"].includes(primaryResult.kind);
+  const nativeResult = nativeAudit || ["weekly_review", "executive_review", "website_content", "marketing_tools"].includes(primaryResult.kind);
   const metrics = useMemo(() => isFailure ? [] : resultMetrics(results.metrics || [], activity || []), [results.metrics, activity, isFailure]);
   const receipts = useMemo(() => supportingReceipts(results, activity || [], primaryResult, results.resultPresentation, mainEntry?.id), [activity, primaryResult, results, mainEntry]);
   const creatorsOutcome = (results.outcomes || []).find((outcome) => outcome.type === "creators" && outcome.items?.length > 0);
