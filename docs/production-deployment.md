@@ -114,7 +114,8 @@ bash scripts/smoke-production.sh https://<api-domain>
 ```
 
 Before launch, create two Clerk organizations and verify that workflows, history, schedules, access requests, and connections created in one organization return `404` or `403` from the other.
-# Shopify client credentials
+
+## Shopify client credentials
 
 In AURA's app marketplace, choose **Shopify (Client Credentials)** for a Shopify
 Dev Dashboard app installed on a store in the same Shopify organization. Enter
