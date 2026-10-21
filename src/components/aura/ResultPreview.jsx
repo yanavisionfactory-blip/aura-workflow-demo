@@ -84,11 +84,11 @@ function ThumbnailOnly({ result }) {
     : <div className="flex min-h-44 items-center justify-center rounded-2xl border border-white/10 bg-[#101c2c] px-6 text-center text-sm text-[#b7c7d9]">Your presentation is ready. Open it in Canva to see the finished design.</div>;
 }
 
-export default function ResultPreview({ result, results, activity = [] }) {
+export default function ResultPreview({ result, results, activity = [], backendRunId }) {
   const campaignReport = result.kind === "report" && campaignReportGroups(result.preview?.body);
   if (campaignReport) return <CampaignReportResult preview={result.preview} campaign={campaignReport} activity={activity} />;
   if (result.kind === "executive_review") return <ExecutiveReviewResult packet={result.packet} />;
-  if (result.kind === "website_content") return <WebsiteContentResult packet={result.packet} />;
+  if (result.kind === "website_content") return <WebsiteContentResult packet={result.packet} runId={backendRunId} />;
   if (result.kind === "weekly_review") return <WeeklyReviewResult packet={result.packet} />;
   if (result.kind === "seo_audit") return <SeoAuditResult manifest={result.audit} />;
   if (result.kind === "articles") return <ArticleResultPreview articles={result.articles} />;

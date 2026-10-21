@@ -69,7 +69,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
         </select>
       </label>}
 
-      {nativeResult ? <ResultPreview result={primaryResult} results={results} activity={activity} /> : <PrimaryResult
+      {nativeResult ? <ResultPreview result={primaryResult} results={results} activity={activity} backendRunId={backendRunId} /> : <PrimaryResult
         title={primaryResult.title || results.title || "Workflow result"}
         provider={primaryResult.provider}
         providerVerb={primaryResult.providerVerb}
@@ -79,7 +79,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
         </>}
         footer={artifactDelivery && <><span>Presentation · {primaryResult.artifact?.title || primaryResult.title}</span><span className="text-emerald-400">{artifactDelivery.artifactDelivered ? "Attached and delivered" : "Created in Canva"}</span></>}
       >
-        <ResultPreview result={primaryResult} results={results} activity={activity} />
+        <ResultPreview result={primaryResult} results={results} activity={activity} backendRunId={backendRunId} />
       </PrimaryResult>}
 
       {!nativeResult && receipts.length > 0 && <section aria-label="Supporting workflow actions" className="mb-6">
