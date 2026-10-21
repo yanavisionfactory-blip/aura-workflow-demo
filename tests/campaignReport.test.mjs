@@ -47,3 +47,14 @@ test("top-level campaign sections keep their subheadings in the correct channel"
   assert.equal(titled.groups.length, 7);
   assert.equal(titled.intro, "# Campaign package");
 });
+
+test("application handoffs stay with their channel and project tasks have a separate view", () => {
+  const titles = ["Campaign brief", "Google Ads preparation", "Google Business Profile post", "Meta advertising",
+    "Indoor screen handoff", "Asset checklist", "Approval bundle", "Project handoff"];
+  const sections = titles.map((title) => `# ${title}\n## Saved details\n${"Unpublished preparation with pending access. ".repeat(4)}`);
+  const parsed = campaignReportGroups(sections.join("\n\n"));
+  assert.deepEqual(parsed.groups.map((group) => group.name), ["Brief", "Google Ads", "Social ads", "Business Profile",
+    "Indoor screens", "Assets", "Approvals", "Project management"]);
+  assert.equal(parsed.groups.find((group) => group.name === "Indoor screens").sections[0].title, "Indoor screen handoff");
+  assert.deepEqual(parsed.groups.flatMap((group) => group.sections).map((section) => section.body).sort(), sections.map((section) => section.trim()).sort());
+});

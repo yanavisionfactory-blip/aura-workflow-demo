@@ -24,6 +24,17 @@ report. Search and indoor screens are not required for a local GBP/Meta campaign
 Reel and booking/source sections have independent views. These views reorganize
 accepted content without creating channel receipts or changing draft status.
 
+Each tool view also shows its saved delivery-summary row and matching original
+execution steps. Explicit `native_source_run` / `source_run_id` UUID references
+(or the legacy phrase `native [source] run UUID`) can link earlier source checks.
+The frontend reads those runs through the existing workspace-authorized API;
+it never resumes them, repeats provider calls, or converts authored source text
+into execution receipts. Unavailable source runs and missing platform actions
+remain visible. The Tool outputs view contains the full application table and
+current/earlier receipts with their original run links. Separate project-handoff
+sections receive a Project management view alongside Approvals. No Google Doc
+is required for this native results delivery.
+
 ## Connect Meta research to AURA
 
 Open the app with `?connect=supermetrics`. It opens the connection form with the

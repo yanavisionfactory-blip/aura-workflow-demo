@@ -3,7 +3,7 @@ export function campaignReportGroups(body) {
   if (typeof body !== "string") return null;
   const groups = [
     ["Brief", /brief|objective|budget|channel plan|scope|source|execution|consistency/i],
-    ["Google Ads", /search|responsive|\brsa\b|keyword|negative/i],
+    ["Google Ads", /google ads|search|responsive|\brsa\b|keyword|negative/i],
     ["Social ads", /social|facebook|instagram|meta|linkedin/i],
     ["Business Profile", /business profile|\bgbp\b/i],
     ["Indoor screens", /screen|signage/i],
@@ -26,9 +26,11 @@ export function campaignReportGroups(body) {
     const section = { title: match[1].trim(), body: body.slice(match.index,
       headings[index + 1]?.index ?? body.length).trim() };
     // Asset requirements for a channel belong to Assets, not to ad copy.
-    const matchGroup = groups.slice(7).find((group) => group.pattern.test(section.title))
+    const matchGroup = groups.slice(7, 8).find((group) => group.pattern.test(section.title))
+      || ( /approv/i.test(section.title) ? groups[8] : null )
       || groups.slice(5, 7).find((group) => group.pattern.test(section.title))
-      || groups.slice(1, 5).find((group) => group.pattern.test(section.title)) || groups[0];
+      || groups.slice(1, 5).find((group) => group.pattern.test(section.title))
+      || (groups[8].pattern.test(section.title) ? groups[8] : groups[0]);
     matchGroup.sections.push(section);
   });
   // A campaign can legitimately exclude Search or screens. Navigation reflects
@@ -38,6 +40,12 @@ export function campaignReportGroups(body) {
   const populated = (group) => group.sections.some((section) => section.body.length > 60);
   if (![groups[0], groups[7], groups[8]].every(populated)
       || !groups.slice(1, 6).some(populated)) return null;
+  const handoff = groups[8].sections.filter((section) => /project[ -](?:management|handoff)|\bjira\b/i.test(section.title));
+  if (handoff.length && groups[8].sections.some((section) => /approv/i.test(section.title) && !handoff.includes(section))) {
+    groups[8].name = "Approvals";
+    groups[8].sections = groups[8].sections.filter((section) => !handoff.includes(section));
+    groups.push({ name: "Project management", sections: handoff });
+  }
   return { intro, groups: groups.filter((group) => group.sections.length)
     .map(({ name, sections }) => ({ name, sections })) };
 }
