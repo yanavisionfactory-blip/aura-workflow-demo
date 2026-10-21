@@ -40,6 +40,36 @@ def test_campaign_recipe_binds_exact_reads_and_receipts_to_native_report():
     assert plan.result_contract.primary_step_key == "campaign_report"
 
 
+def test_public_campaign_fallback_runs_native_reads_without_channel_accounts():
+    request = {
+        "title": "Unpublished local booking campaign",
+        "instructions": "Prepare both GBP posts, both Meta variations and the Reel; no publication.",
+        "sources": [{"id": "brief", "title": "User brief", "content": "Budget and dates are launch sign-off only."}],
+        "reads": [
+            {"key": "site", "operation": "web.page.read",
+             "arguments": {"url": "https://example.org/"}, "title": "Public website"},
+            {"key": "services", "operation": "website.source.inspect",
+             "arguments": {"key": "services", "role": "page", "url": "https://example.org/services"},
+             "title": "Published services"},
+        ],
+    }
+    inventory = [{"slug": "aura", "connected": True, "allowed_operations": [
+        "web.page.read", "website.source.inspect", "report.compose",
+    ]}]
+    plan = recipe(request, inventory)
+    assert [step.operation for step in plan.steps] == [
+        "web.page.read", "website.source.inspect", "report.compose",
+    ]
+    assert all(step.tool_slug == "aura" and not step.consequential for step in plan.steps)
+    assert plan.steps[-1].depends_on == ["site", "services"]
+    assert plan.steps[-1].arguments["instructions"] == request["instructions"]
+    assert plan.steps[-1].arguments["sources"][1:] == [
+        {"id": "site", "title": "Public website", "content": "{{steps.site.output}}"},
+        {"id": "services", "title": "Published services", "content": "{{steps.services.output}}"},
+    ]
+    assert plan.result_contract.primary_step_key == "campaign_report"
+
+
 @pytest.mark.parametrize("operation", ["google-ads.create-campaign", "facebook-pages.create-post", "unknown.get"])
 def test_campaign_recipe_rejects_writes_and_unsupported_operations(operation):
     with pytest.raises(ValueError):

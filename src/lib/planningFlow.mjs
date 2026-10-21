@@ -42,6 +42,17 @@ export function shouldStartFreshPlanningRun({
   return normalizedWords(nextIntent) !== normalizedWords(activeIntent);
 }
 
+export function skippedToolRevision(toolName) {
+  return `Do not call ${toolName}. Preserve the original requested deliverables and constraints. `
+    + "Keep drafts that can be prepared from authorized inputs or public sources the user permits; "
+    + "a channel mentioned in draft copy does not require an authenticated channel connection. "
+    + "Remove provider calls and references to unavailable provider outputs, not independently "
+    + "supportable content or public booking links. Explicitly report account checks that were not "
+    + "performed and any outcomes that still require this tool. Never invent verification, assets "
+    + "or provider results. Do not add external storage, project-management applications or writes "
+    + "the user did not request. Return native AURA results when allowed. Show the revised plan for approval.";
+}
+
 export function promptConnectionRequirements(prompt = "", catalog = [], connections = {}) {
   const text = ` ${normalizedWords(prompt)} `;
   if (!text.trim()) return [];

@@ -13,6 +13,7 @@ from .schemas import WorkflowPlan
 
 CAMPAIGN_PREFIX = "AURA_CAMPAIGN_V1\n"
 ReadOperation = Literal[
+    "web.page.read", "website.source.inspect",
     "google-docs.get-document", "google-drive.list-files",
     "google-ads.list-account-id-options", "google-ads.generate-keyword-ideas",
     "facebook-pages.list-posts",

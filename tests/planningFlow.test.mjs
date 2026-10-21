@@ -9,8 +9,25 @@ import {
   planningDisposition,
   promptConnectionRequirements,
   shouldStartFreshPlanningRun,
+  skippedToolRevision,
   unavailablePlanningState,
 } from "../src/lib/planningFlow.mjs";
+import { planningRequestPrompt } from "../src/lib/runtimePlan.mjs";
+
+test("skipping an inaccessible channel retains the requested drafts and public destination", () => {
+  const intent = "Prepare two unpublished Google Business Profile posts and two Meta ads. "
+    + "If accounts are inaccessible use public sources. CTA Book Your Appointment; "
+    + "https://www.vagaro.com/theworkmassage/services . No new storage app, scheduling or spend.";
+  const prompt = planningRequestPrompt(intent, skippedToolRevision("Google Business Profile"), []);
+  assert.ok(prompt.startsWith(intent));
+  assert.match(prompt, /Do not call Google Business Profile/);
+  assert.match(prompt, /Preserve the original requested deliverables and constraints/);
+  assert.match(prompt, /not independently supportable content or public booking links/);
+  assert.match(prompt, /account checks that were not performed/);
+  assert.doesNotMatch(prompt, /all steps or output content that depend on it/);
+  const source = readFileSync(new URL("../src/pages/Demo.jsx", import.meta.url), "utf8");
+  assert.match(source, /skippedToolRevision\(toolName\)/);
+});
 
 test("a rejected Start request stays on the reviewable plan", () => {
   assert.deepEqual(
