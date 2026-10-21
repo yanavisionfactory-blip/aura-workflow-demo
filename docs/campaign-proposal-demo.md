@@ -4,6 +4,26 @@ The campaign preparation outcome is a sourced proposal and implementation handof
 It does not require creating an advertising campaign. Never present a saved report,
 a connection test, or an external assistant's tool call as native AURA execution.
 
+## Public-source campaign preparation
+
+The explicit `AURA_CAMPAIGN_V1` packet supports released, GET-only
+`website.source.inspect`, `web.page.read` and `web.search` operations as well as
+the existing connected research reads. Include the complete client brief as a
+separate source and preserve its exact CTA, destination and location in the
+composition instructions. The recipe passes full read outputs to `report.compose`;
+a source signature or receipt hash alone cannot support business facts or copy.
+
+When authorized GBP or Meta Ads accounts are unavailable, public reads support
+drafting only. They do not verify managed listings, existing private posts,
+advertiser identity or approved creative. Keep those gaps explicit. A booking-page
+read never creates an appointment, and a client-rendered service list may remain
+unavailable even when the business identity and destination are readable.
+
+The native campaign result groups only sections actually present in the saved
+report. Search and indoor screens are not required for a local GBP/Meta campaign;
+Reel and booking/source sections have independent views. These views reorganize
+accepted content without creating channel receipts or changing draft status.
+
 ## Connect Meta research to AURA
 
 Open the app with `?connect=supermetrics`. It opens the connection form with the

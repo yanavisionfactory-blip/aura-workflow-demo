@@ -119,3 +119,18 @@ test("a completed campaign stays native in AURA with channel views and actual pe
   assert.match(html, /Read keyword ideas/);
   assert.match(html, /A connection alone is not a completed tool run/);
 });
+
+test("a scoped booking campaign shows saved GBP, Meta and Reel views without excluded channels", () => {
+  const campaignBody = ["Campaign brief", "Google Business Profile posts", "Meta ad variations", "15-second Reel",
+    "Vagaro booking destination", "Asset checklist", "Approval table", "Implementation handoff"]
+    .map((heading) => `## ${heading}\n${"Unpublished copy with client approval pending. ".repeat(4)}`).join("\n\n");
+  const html = render({ ...run, steps: [{ id: "compose", key: "compose", status: "completed", tool_slug: "AURA", output: {
+    operation: "report.compose", critic: { action: "accept" }, outcome_check: { status: "verified" },
+    provider_result: { status: "draft", title: "Local booking campaign", body: campaignBody,
+      summary: "Unpublished review package.", synthetic: false, sources: [] },
+  } }], result: { result_presentation: { primary_step_key: "compose", metrics: [] } } });
+  const main = html.slice(html.indexOf('aria-label="Main workflow result"'), html.indexOf('aria-label="Supporting workflow actions"'));
+  for (const label of ["Social ads", "Business Profile", "Reel", "Booking and source checks", "Assets", "Approvals and handoff", "Tool outputs"]) assert.ok(main.includes(label));
+  assert.doesNotMatch(main, /Google Ads|Indoor screens|Open in Google Docs/);
+  assert.match(main, /Complete saved report and source evidence/);
+});

@@ -16,6 +16,7 @@ ReadOperation = Literal[
     "google-docs.get-document", "google-drive.list-files",
     "google-ads.list-account-id-options", "google-ads.generate-keyword-ideas",
     "facebook-pages.list-posts",
+    "website.source.inspect", "web.page.read", "web.search",
 ]
 
 

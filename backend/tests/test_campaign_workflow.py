@@ -56,3 +56,22 @@ def test_campaign_recipe_requires_released_connected_owner_and_valid_graph():
     with pytest.raises(ValueError, match="distinct"):
         recipe({**REQUEST, "sources": [{"id": "brief", "title": "Collision", "content": "text"}]})
     assert campaign_workflow_recipe("Prepare a campaign", INVENTORY) is None
+
+
+def test_public_campaign_recipe_preserves_client_brief_and_full_source_receipts():
+    operations = ["website.source.inspect", "web.page.read", "web.search"]
+    request = {
+        "title": "Local booking review", "instructions": "Use the exact client CTA and booking URL; keep all drafts unpublished.",
+        "sources": [{"id": "client_brief", "title": "User supplied brief", "content": "Exact CTA, full address and booking URL supplied by client."}],
+        "reads": [{"key": f"source_{index}", "operation": operation,
+                   "arguments": {"url": "https://example.com/"} if operation != "web.search" else {"query": "business"},
+                   "title": f"Read {operation}"} for index, operation in enumerate(operations)],
+    }
+    inventory = [{"slug": "aura", "connected": True, "allowed_operations": operations + ["report.compose"]}]
+    plan = recipe(request, inventory)
+    report = plan.steps[-1]
+    assert report.arguments["sources"][0] == request["sources"][0]
+    assert report.arguments["instructions"] == request["instructions"]
+    assert [source["content"] for source in report.arguments["sources"][1:]] == [
+        "{{steps.source_0.output}}", "{{steps.source_1.output}}", "{{steps.source_2.output}}"]
+    assert all(step.tool_slug == "aura" and not step.consequential for step in plan.steps)
