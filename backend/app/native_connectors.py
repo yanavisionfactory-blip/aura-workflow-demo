@@ -80,9 +80,9 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
              "input_schema": WebsiteSourceRequest.model_json_schema()},
             {**_module("website.content.prepare", "search", "Generate a complete five-page website content package from actual signed source reads. Returns pages, changes, pending approvals, assets and developer handoff inside AURA; no CMS writes."),
              "input_schema": ContentRequest.model_json_schema()},
-            {**_module("weekly.source.analyze", "search", "Process a labelled synthetic marketing CSV export inside AURA. Validate dates and definitions, calculate weekly metrics and retain source hashes. Does not call a vendor reporting API."),
+            {**_module("weekly.source.analyze", "search", "Process a labelled simulated or user-approved marketing CSV export inside AURA. Validate dates and definitions, calculate weekly metrics and retain source hashes. Does not call a vendor reporting API."),
              "input_schema": SourceRequest.model_json_schema()},
-            {**_module("weekly.review.prepare", "search", "Use processed synthetic exports and a fictional brief to execute AURA model drafting and produce an interactive weekly review, three experiments, creative pairs and backlog. No vendor account writes."),
+            {**_module("weekly.review.prepare", "search", "Use processed scoped exports and an approved client brief (or a clearly fictional sample) to execute AURA model drafting and produce an interactive weekly review, three experiments, creative pairs and backlog. No vendor account writes."),
              "input_schema": ReviewRequest.model_json_schema()},
             {
                 **_module("seo.crawl.analyze", "search", "Parse user-uploaded Screaming Frog "

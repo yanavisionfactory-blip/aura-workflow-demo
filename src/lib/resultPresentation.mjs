@@ -519,12 +519,16 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
   const weekly = [...completed].reverse().find((output) => output.operation === "weekly.review.prepare"
     && output.critic?.action === "accept" && output.outcome_check?.status === "verified"
     && output.provider_result?.kind === "weekly_review"
-    && output.provider_result?.synthetic === true
-    && output.provider_result?.packet?.execution?.mode === "backend_executed_synthetic");
+    && ((output.provider_result?.synthetic === true && output.provider_result?.packet?.execution?.mode === "backend_executed_synthetic")
+      || (output.provider_result?.synthetic === false && output.provider_result?.packet?.provenance === "approved_export"
+        && output.provider_result?.packet?.execution?.mode === "backend_executed_approved_exports")
+      || (output.provider_result?.synthetic === true && output.provider_result?.packet?.version === 2
+        && output.provider_result?.packet?.provenance === "mixed_evidence"
+        && output.provider_result?.packet?.execution?.mode === "backend_executed_mixed_evidence")));
   if (weekly && (!explicitPrimary || explicitPrimary === weekly)) return {
     kind: "weekly_review", title: "Weekly account review", provider: "AURA", providerVerb: "Executed in",
     completionTitle: "Weekly review executed in AURA",
-    completionSummary: "Three synthetic export processors and AURA model drafting completed. Inspect the separate source results, experiments, draft variants and backlog.",
+    completionSummary: weekly.provider_result.summary || "Source processors and AURA model drafting completed. Inspect separate source results, experiments, draft variants and backlog.",
     packet: weekly.provider_result.packet, link: null, downloadUrl: null,
   };
   const report = [...completed].reverse().find((output) => output.operation === "report.compose"

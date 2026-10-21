@@ -120,3 +120,17 @@ separate runs and must never be relabelled as successful synthetic-data processi
 The result includes three evidence-supported experiment proposals, six draft creative variants (Search messages, Meta concepts and Klaviyo subjects), and eight backlog items with owners, effort, dependencies and acceptance checks. Weekly changes are descriptive materiality flags, not causal or statistically significant findings. Test power, assets, client approvals and the selected Client Hub setup remain review gates.
 
 The weekly build reuses local fixture adapters, excludes live account modules at build time and sets `connect-src 'none'`. Its CSV/JSON downloads, draft-copy control, feedback and optional browser tab recording stay local. It creates no campaigns, platform drafts, tasks, messages, website edits, budget changes or external reports. Public references substantiate agency services and metric conventions only; they do not substantiate simulated performance. Tests cover arithmetic, scope, metric alignment, evidence resolution, draft limits, every native phase and all guided result views. Supported-browser visual checks and tab recording are not verified by server rendering.
+
+## Approved client weekly reviews
+
+The task screen now includes **Prepare weekly account review** (`?weekly=1`).
+Select the actual client, approved scope, goals/brand brief and reporting setup;
+provide normalized, approved exports only for included platforms. Meta Ads and Amazon Ads can instead use explicitly authorized, labelled simulations; they do not become live connections or actual client results. The authenticated
+V2 workflow supports any subset of Google Ads, Meta Ads, Microsoft Advertising,
+Amazon Ads, Klaviyo, Mailchimp and HubSpot marketing email cohorts. It prepares
+three evidence-linked experiment proposals, six draft variants and a backlog,
+keeping outcome/value attribution separate and an unconfirmed destination visible.
+It performs no vendor reporting API calls or external writes. Workspace connections
+are shown separately from client/account/export approval. See
+[the runbook and export contract](docs/weekly-account-review.md) for limits and
+required inputs. The public Northline showcase remains explicitly fictional.

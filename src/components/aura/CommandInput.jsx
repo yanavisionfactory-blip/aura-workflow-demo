@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ArrowRight, Sparkles, X, Plus, Check, FileBarChart, Mail, ListChecks, RefreshCw, Paperclip } from "lucide-react";
 import ValueProp from "./ValueProp";
+import WeeklyReviewSetup from "./WeeklyReviewSetup";
 import ResourceComposer from "./ResourceComposer";
 import { base44 } from "@/api/base44Client";
 import { attachDocument, getAttachedDocuments, removeDocument, subscribeDocuments } from "@/lib/documentStore";
@@ -10,8 +11,9 @@ import { promptToolChoices, promptToolHints } from "@/lib/promptToolHints.mjs";
 
 const EXAMPLE_ICONS = [FileBarChart, Mail, ListChecks, RefreshCw];
 
-export default function CommandInput({ onSubmit, disabled, examples, onPickExample, initialValue = "" }) {
+export default function CommandInput({ onSubmit, disabled, examples, onPickExample, initialValue = "", enableWeeklyReviewSetup = true }) {
   const [value, setValue] = useState(initialValue);
+  const [weeklyOpen, setWeeklyOpen] = useState(() => enableWeeklyReviewSetup && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("weekly") === "1");
   const [isFocused, setIsFocused] = useState(false);
   const [manualTools, setManualTools] = useState([]);
   const [removedTools, setRemovedTools] = useState([]);
@@ -56,9 +58,12 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
     }
   };
 
+  if (weeklyOpen) return <WeeklyReviewSetup onSubmit={onSubmit} onBack={() => setWeeklyOpen(false)} />;
+
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: "easeOut" }} className="w-full max-w-3xl mx-auto">
       <ValueProp />
+      {enableWeeklyReviewSetup && <button type="button" onClick={() => setWeeklyOpen(true)} className="mb-5 flex items-center gap-2 rounded-xl border border-primary/30 bg-primary/5 px-4 py-3 text-sm text-primary"><FileBarChart className="h-4 w-4"/>Prepare weekly account review</button>}
 
       {/* Input box */}
       <div
