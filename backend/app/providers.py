@@ -557,6 +557,10 @@ class ProviderExecutor:
             "hubspot.company.get": self._hubspot_company_get,
             "mailchimp.member.get": self._mailchimp_member_get,
             "mailchimp.campaign.get": self._mailchimp_campaign_get,
+            "mailchimp.audience.get": self._mailchimp_audience_get,
+            "mailchimp.campaign.draft.create": self._mailchimp_campaign_draft_create,
+            "mailchimp.campaign.content.set": self._mailchimp_campaign_content_set,
+            "mailchimp.campaign.content.get": self._mailchimp_campaign_content_get,
             "airtable.list": self._airtable_list,
             "airtable.create": self._airtable_create,
             "notion.search": self._notion_search,
@@ -1747,6 +1751,47 @@ class ProviderExecutor:
             "campaigns",
             json={"type": a["type"], "recipients": a["recipients"], "settings": a["settings"]},
         )
+
+    async def _mailchimp_audience_get(self, a: dict) -> dict:
+        audience = await self._mailchimp_request(
+            "GET", f"lists/{quote(a['list_id'], safe='')}"
+        )
+        if (audience.get("id") != a["list_id"]
+                or audience.get("name") != a["expected_name"]):
+            raise ValueError("Mailchimp audience ID or name differs from the selected client audience")
+        return audience
+
+    async def _mailchimp_campaign_draft_create(self, a: dict) -> dict:
+        from .campaign_drafts import DraftCampaignFields
+        fields = DraftCampaignFields.model_validate(a)
+        await self._mailchimp_audience_get({
+            "list_id": fields.audience_id, "expected_name": fields.audience_name,
+        })
+        return await self._mailchimp_request("POST", "campaigns", json={
+            "type": "regular", "recipients": {"list_id": fields.audience_id},
+            "settings": {"title": fields.title, "subject_line": fields.subject,
+                         "preview_text": fields.preview_text, "from_name": fields.from_name,
+                         "reply_to": fields.reply_to},
+        })
+
+    async def _mailchimp_campaign_content_set(self, a: dict) -> dict:
+        from .campaign_drafts import CampaignContentFields
+        fields = CampaignContentFields.model_validate(a)
+        state = await self._mailchimp_campaign_get({"campaign_id": fields.campaign_id})
+        if (state.get("id") != fields.campaign_id or state.get("status") != "save"
+                or state.get("recipients", {}).get("list_id") != fields.expected_list_id):
+            raise ValueError("Save content only to the selected audience's unsent Mailchimp draft")
+        return await self._mailchimp_request(
+            "PUT", f"campaigns/{quote(fields.campaign_id, safe='')}/content",
+            json={"html": fields.html, "plain_text": fields.plain_text},
+        )
+
+    async def _mailchimp_campaign_content_get(self, a: dict) -> dict:
+        content = await self._mailchimp_request(
+            "GET", f"campaigns/{quote(a['campaign_id'], safe='')}/content"
+        )
+        # The content endpoint has no id field; correlate its exact requested resource.
+        return {**content, "_aura_requested_campaign_id": a["campaign_id"]}
 
     async def _mailchimp_campaign_send(self, a: dict) -> dict:
         return await self._mailchimp_request(

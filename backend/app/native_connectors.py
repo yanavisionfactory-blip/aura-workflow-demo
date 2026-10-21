@@ -10,6 +10,7 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
 
+from .campaign_drafts import CampaignContentFields, DraftCampaignFields
 from .executive_review import PrepareRequest as ExecutivePrepareRequest
 from .executive_review import SourceRequest as ExecutiveSourceRequest
 from .file_delivery import ATTACHMENTS_SCHEMA
@@ -388,7 +389,7 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         ],
     },
     "mailchimp": {
-        "schema_version": "1.1",
+        "schema_version": "1.2",
         "catalog_version": 1,
         "provider_type": "oauth",
         "name": "Mailchimp",
@@ -396,6 +397,22 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         "base_url": "provider-managed",
         "identity": {"provider": "mailchimp"},
         "modules": [
+            _module("mailchimp.audience.get", "search", "Verify one exact audience ID and name.",
+                    required=("list_id", "expected_name"), properties={
+                        "list_id": _TEXT, "expected_name": _TEXT,
+                    }),
+            _module("mailchimp.campaign.draft.create", "action",
+                    "Create a regular unsent draft for the exact named client audience. Never sends or schedules.",
+                    required=tuple(DraftCampaignFields.model_json_schema()["required"]),
+                    properties=DraftCampaignFields.model_json_schema()["properties"],
+                    permission_scope="write"),
+            _module("mailchimp.campaign.content.set", "action",
+                    "Save full HTML and plain text only on an unsent draft in the expected audience. Verify both content and draft state.",
+                    required=tuple(CampaignContentFields.model_json_schema()["required"]),
+                    properties=CampaignContentFields.model_json_schema()["properties"],
+                    permission_scope="write"),
+            _module("mailchimp.campaign.content.get", "search", "Read saved campaign HTML and plain text.",
+                    required=("campaign_id",), properties={"campaign_id": _TEXT}),
             _module("mailchimp.audiences.list", "search", "List audiences.", properties={
                 "count": {**_POSITIVE_INTEGER, "maximum": 1000}
             }),

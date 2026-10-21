@@ -28,6 +28,8 @@ def canonical_plan_hash(plan: dict) -> str:
 
 def operation_scope(operation: str) -> str:
     normalized = operation.lower()
+    if normalized == "mailchimp.campaign.content.set":
+        return "write"
     if normalized in {"wordpress-org.search-posts", "wordpress-org.list-media-options", "imagify.media.preview"}:
         return "read"
     if normalized == "imagify.media.optimize":

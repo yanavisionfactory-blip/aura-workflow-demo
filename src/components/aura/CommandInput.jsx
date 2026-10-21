@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { ArrowRight, Sparkles, X, Plus, Check, FileBarChart, Mail, ListChecks, RefreshCw, Paperclip } from "lucide-react";
 import ValueProp from "./ValueProp";
 import WeeklyReviewSetup from "./WeeklyReviewSetup";
+import CampaignDraftSetup from "./CampaignDraftSetup";
 import ResourceComposer from "./ResourceComposer";
 import { base44 } from "@/api/base44Client";
 import { attachDocument, getAttachedDocuments, removeDocument, subscribeDocuments } from "@/lib/documentStore";
@@ -14,6 +15,7 @@ const EXAMPLE_ICONS = [FileBarChart, Mail, ListChecks, RefreshCw];
 export default function CommandInput({ onSubmit, disabled, examples, onPickExample, initialValue = "", enableWeeklyReviewSetup = true }) {
   const [value, setValue] = useState(initialValue);
   const [weeklyOpen, setWeeklyOpen] = useState(() => enableWeeklyReviewSetup && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("weekly") === "1");
+  const [campaignOpen, setCampaignOpen] = useState(() => enableWeeklyReviewSetup && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("campaignDraft") === "1");
   const [isFocused, setIsFocused] = useState(false);
   const [manualTools, setManualTools] = useState([]);
   const [removedTools, setRemovedTools] = useState([]);
@@ -59,10 +61,14 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
   };
 
   if (weeklyOpen) return <WeeklyReviewSetup onSubmit={onSubmit} onBack={() => setWeeklyOpen(false)} />;
+  if (campaignOpen) return <CampaignDraftSetup onSubmit={onSubmit} onBack={() => setCampaignOpen(false)} />;
 
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: "easeOut" }} className="w-full max-w-3xl mx-auto">
       <ValueProp />
+      {enableWeeklyReviewSetup && <button type="button" disabled={disabled} onClick={() => setCampaignOpen(true)} className="mb-4 flex w-full items-center justify-between gap-3 rounded-2xl border border-primary/25 bg-primary/5 px-5 py-4 text-left hover:bg-primary/10 disabled:opacity-50">
+        <span><span className="block text-sm font-semibold">Prepare a campaign in your tools</span><span className="mt-1 block text-xs text-muted-foreground">Save an unsent Mailchimp email and an optional Canva graphic</span></span><ArrowRight className="h-4 w-4 shrink-0 text-primary" />
+      </button>}
 
       {/* Input box */}
       <div

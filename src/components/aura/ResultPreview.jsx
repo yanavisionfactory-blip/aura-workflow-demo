@@ -14,6 +14,7 @@ import CampaignReportResult from "./CampaignReportResult";
 import { campaignReportGroups } from "@/lib/campaignReport.mjs";
 import ExecutiveReviewResult from "./ExecutiveReviewResult";
 import WebsiteContentResult from "./WebsiteContentResult";
+import CampaignDraftResult from "./CampaignDraftResult";
 
 const readableDetail = (value = "") => readableResultText(value)
   .split(/\n/)
@@ -86,6 +87,7 @@ function ThumbnailOnly({ result }) {
 }
 
 export default function ResultPreview({ result, results, activity = [], backendRunId }) {
+  if (result.kind === "campaign_draft") return <CampaignDraftResult result={result} />;
   const campaignReport = result.kind === "report" && campaignReportGroups(result.preview?.body);
   if (campaignReport) return <CampaignReportResult preview={result.preview} campaign={campaignReport} activity={activity} />;
   if (result.kind === "executive_review") return <ExecutiveReviewResult packet={result.packet} />;

@@ -83,13 +83,19 @@ def test_native_google_snapshot_cannot_advertise_gmail_reads_from_send_only_cons
 
 
 def test_all_native_writes_require_readback_access_before_plan_approval():
+    from app.extended_outcomes import required_reads
     from app.outcome_checks import READBACK_OPERATIONS
     for operation, read in READBACK_OPERATIONS.items():
         step = PlanStep(agent="test", tool_slug="provider", operation=operation,
             reason="Test", expected_output="Receipt", consequential=True)
         plan = WorkflowPlan(name="Test", interpretation="Test", steps=[step])
         assert verification_permission_fixes(plan, [{"slug": "provider", "allowed_operations": [operation]}])
-        assert verification_permission_fixes(plan, [{"slug": "provider", "allowed_operations": [operation, read]}]) == []
+        reads = required_reads(operation, {})
+        assert read in reads
+        assert verification_permission_fixes(plan, [{"slug": "provider", "allowed_operations": [operation, *reads]}]) == []
+        for required in reads:
+            granted = [operation, *(reads - {required})]
+            assert verification_permission_fixes(plan, [{"slug": "provider", "allowed_operations": granted}])
 
 
 def test_body_and_fallback_verification_permissions_are_checked():

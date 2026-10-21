@@ -128,6 +128,17 @@ The weekly build reuses local fixture adapters, excludes live account modules at
 
 ## Approved client weekly reviews
 
+For work directly in connected tools, choose **Prepare a campaign in your tools**
+on the task screen (`?campaignDraft=1`). The campaign-production workflow verifies
+an exact Mailchimp audience, creates an unsent regular campaign, saves its full
+HTML/plain-text content, and verifies settings, audience and unsent state by
+reading the actual resources back. Optional Canva work creates an editable
+graphic. Each external write requires normal AURA review; no send, scheduling,
+live-ad or budget action is included. This route requires the client's existing
+Mailchimp account and never substitutes it for another contracted email platform.
+See [the campaign draft workflow](docs/campaign-draft-workflow.md) for scope,
+recovery and live-validation limits.
+
 The task screen now includes **Prepare weekly account review** (`?weekly=1`).
 Select the actual client, approved scope, goals/brand brief and reporting setup;
 provide normalized, approved exports only for included platforms. Meta Ads and Amazon Ads can instead use explicitly authorized, labelled simulations; they do not become live connections or actual client results. The authenticated

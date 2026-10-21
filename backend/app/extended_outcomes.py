@@ -10,6 +10,8 @@ EXTRA_READBACK = {
     "hubspot.contact.update": "hubspot.contact.get", "hubspot.company.update": "hubspot.company.get",
     "mailchimp.member.upsert": "mailchimp.member.get",
     "mailchimp.campaign.create": "mailchimp.campaign.get", "mailchimp.campaign.send": "mailchimp.campaign.get",
+    "mailchimp.campaign.draft.create": "mailchimp.campaign.get",
+    "mailchimp.campaign.content.set": "mailchimp.campaign.content.get",
     "canva.design.create": "canva.design.get", "canva.export.create": "canva.export.get",
     "canva.presentation.create": "canva.import.get",
     "tiktok.video.upload.init": "tiktok.post.status.get", "tiktok.video.publish.init": "tiktok.post.status.get",
@@ -98,6 +100,21 @@ def build_extended(operation, a, receipt):
             raise ValueError("Member receipt changed resource")
         return OutcomeCheck(read, {"list_id": a["list_id"], "subscriber_hash": rid}, rid,
             {"list_id": a["list_id"], "email_address": email, "merge_fields": a.get("merge_fields", {}), "status": receipt["status"]})
+    if operation == "mailchimp.campaign.draft.create":
+        return OutcomeCheck(read, {"campaign_id": rid}, rid, {
+            "type": "regular", "status": "save", "recipients": {"list_id": a["audience_id"]},
+            "settings": {"title": a["title"], "subject_line": a["subject"],
+                         "preview_text": a["preview_text"], "from_name": a["from_name"],
+                         "reply_to": a["reply_to"]},
+        })
+    if operation == "mailchimp.campaign.content.set":
+        rid = a["campaign_id"]
+        content = OutcomeCheck(read, {"campaign_id": rid}, rid,
+                               {"html": a["html"], "plain_text": a["plain_text"]},
+                               "mailchimp_content")
+        state = OutcomeCheck("mailchimp.campaign.get", {"campaign_id": rid}, rid,
+                             {"status": "save", "recipients": {"list_id": a["expected_list_id"]}})
+        return replace(content, kind="compound", checks=(state, content))
     if operation.startswith("mailchimp.campaign."):
         rid = rid or a.get("campaign_id", "")
         expected = {"status": "sent"} if operation.endswith("send") else {key: a[key] for key in ("type", "recipients", "settings")}
@@ -188,6 +205,10 @@ def evaluate_extended(check, observed):
             return result('pending' if job.get('status') == 'in_progress' else 'failed', 'Import job has not completed')
         designs = job.get('result', {}).get('designs', [])
         matched = len(designs) == 1 and bool(designs[0].get('id')) and designs[0].get('title') == check.expected['title']
+    elif check.kind == "mailchimp_content":
+        if observed.get("_aura_requested_campaign_id") != check.resource_id:
+            return result("failed", "Campaign content read-back differs from the saved campaign")
+        matched = _matches(check.expected, observed)
     elif check.kind == "canva_export":
         job = observed.get("job", {})
         if not _same_id(check.resource_id, job.get("id")):
@@ -228,4 +249,6 @@ def required_reads(operation, arguments):
     required = {read} if read else set()
     if operation == "notion.page.create" and arguments.get("children"):
         required.add("notion.blocks.children.list")
+    if operation == "mailchimp.campaign.content.set":
+        required.add("mailchimp.campaign.get")
     return required

@@ -2,6 +2,7 @@ import { jiraReceiptTasks } from "./jiraReceipt.mjs";
 import { articleMarkdown, articleWordCount } from "./actionContent.mjs";
 import { campaignCopySections } from "./campaignCopySections.mjs";
 import { seoAuditManifest } from "./seoAuditResult.mjs";
+import { savedCampaignDraft } from "./campaignDrafts.mjs";
 
 export function readableResultText(value, fallback = "Review the saved app results below.") {
   if (typeof value !== "string") return fallback;
@@ -493,6 +494,8 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
   let explicitPrimary = presentation?.primary_step_key
     ? completed.find((output) => output.step_key === presentation.primary_step_key)
     : null;
+  const campaignDraft = savedCampaignDraft(completed, presentation?.primary_step_key || null);
+  if (campaignDraft) return { ...campaignDraft, graphic: canvaArtifactFromOutputs(completed, context) };
   const executive = [...completed].reverse().find((output) => output.operation === "executive.review.prepare"
     && output.critic?.action === "accept" && output.outcome_check?.status === "verified"
     && output.provider_result?.kind === "executive_review" && output.provider_result?.synthetic === true

@@ -367,6 +367,15 @@ KNOWN.update({
     "mailchimp.member.upsert": (IDENTIFIED, ["write_receipt"]),
     "mailchimp.campaigns.list": (envelope("campaigns", IDENTIFIED), ["campaign_metadata"]),
     "mailchimp.campaign.create": (IDENTIFIED, ["write_receipt"]),
+    "mailchimp.audience.get": ({"type": "object", "required": ["id", "name"],
+                                "properties": {"id": TEXT, "name": TEXT}}, ["audience_metadata"]),
+    "mailchimp.campaign.draft.create": ({"type": "object", "required": ["id", "status"],
+                                         "properties": {"id": TEXT, "status": {"const": "save"}}}, ["write_receipt"]),
+    "mailchimp.campaign.content.set": ({"type": "object", "required": ["html", "plain_text"],
+                                       "properties": {"html": TEXT, "plain_text": TEXT}}, ["write_receipt"]),
+    "mailchimp.campaign.content.get": ({"type": "object", "required": ["html", "plain_text", "_aura_requested_campaign_id"],
+                                       "properties": {"html": TEXT, "plain_text": TEXT,
+                                                      "_aura_requested_campaign_id": TEXT}}, ["campaign_content"]),
     "mailchimp.campaign.send": ({"type": "object", "required": ["status_code"], "properties": {"status_code": {"const": 204}}}, ["dispatch_receipt"]),
     "mailchimp.reports.list": (envelope("reports", IDENTIFIED), ["campaign_metrics"]),
     "canva.designs.list": (envelope("items", IDENTIFIED), ["design_metadata"]),
@@ -489,7 +498,10 @@ def enrich_operation(module: dict) -> dict:
     contract = {"version": 2, "verification_version": 2, "output_validation": "typed" if typed else "provisional",
         "output_schema": deepcopy(schema),
         "provides": evidence, "readback_operation": readback_operation,
-        "readback_operations": [readback_operation] + (["notion.blocks.children.list"] if operation == "notion.page.create" else []) if readback_operation else [],
+        "readback_operations": [readback_operation] + (
+            ["notion.blocks.children.list"] if operation == "notion.page.create"
+            else ["mailchimp.campaign.get"] if operation == "mailchimp.campaign.content.set"
+            else []) if readback_operation else [],
         "retry": {"max_attempts": 3 if read else 1,
             "retry_categories": ["timeout", "rate_limited", "provider_unavailable"] if read else [],
             "uncertain_write": "reconcile_before_retry"},
