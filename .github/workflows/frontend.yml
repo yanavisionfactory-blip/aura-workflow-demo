@@ -27,6 +27,7 @@ jobs:
           npx playwright install --with-deps chromium
           node scripts/check-website-simulation.mjs
       - name: Keep website simulation proof
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: aura-website-simulation-checks

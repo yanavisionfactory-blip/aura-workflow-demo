@@ -71,7 +71,8 @@ try {
   const run = JSON.parse(strFromU8(files['simulation-evidence.json']));
   assert.equal(run.completed_steps, 12); assert.equal(run.simulated_records_created, 20); assert.equal(run.verified_readbacks, 20);
   assert.equal(run.tools.reduce((count, tool) => count + tool.operations.length, 0), 40);
-  assert.equal(external.length, 0); assert.equal(errors.length, 0);
+  assert.equal(external.length, 0, `Unexpected non-local requests: ${JSON.stringify(external)}`);
+  assert.equal(errors.length, 0, `Browser errors: ${JSON.stringify(errors)}`);
   await fs.writeFile(path.join(proof, 'checks.json'), JSON.stringify({ passed: true, completed_steps: 12, simulated_drafts: 20, verified_readbacks: 20, cms_operations: 40, actual_provider_requests: external.length, page_errors: errors, reload_restored: true, developer_zip_checked: true, simulation_id: run.id }, null, 2));
   console.log('PASS: 12 steps, 4 CMS adapters, 20 drafts, 20 readbacks, approval gate, reload, developer ZIP, zero external calls.');
   await context.close();

@@ -8,7 +8,12 @@ export default defineConfig({
   base: './',
   publicDir: fileURLToPath(new URL('./showcase/website-content/public', import.meta.url)),
   resolve: { alias: [...showcaseAliases, { find: '@', replacement: fileURLToPath(new URL('./src', import.meta.url)) }] },
-  plugins: [react(), {
+  plugins: [{
+    name: 'offline-demo-fonts', enforce: 'pre',
+    transform(source, id) {
+      if (id.endsWith('/src/index.css')) return source.replace(/^@import url\('https:\/\/fonts\.googleapis\.com[^\n]+\n/m, '');
+    },
+  }, react(), {
     name: 'exclude-live-account-clients',
     generateBundle(_options, bundle) {
       for (const item of Object.values(bundle)) {
