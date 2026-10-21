@@ -1,78 +1,57 @@
-# Website content results and CMS preview
+# Website content results and public demonstration
 
-Open a completed five-page website content run in AURA. The Results page has
-"What happened" rows and an action for each recorded output.
-Full pages, comparisons, pending approvals, developer handoff and source receipts
-remain inspectable.
+The main five-page content package leads Results. Its four tabs are Pages,
+Changes, Approvals and Developer handoff. The pages show the complete revised
+copy, search listing, button destination and image instructions. Approval rows
+use readable page names and concrete next steps. Developer files remain
+available as a ZIP, with exact content versions and source evidence preserved
+inside that handoff.
 
-The standard Results view also shows a **Shopify · Simulated** preview card with
-a **View in Shopify** action. It opens the five saved drafts in the simulated
-Shopify admin without requiring the all-CMS toggle or a special query string.
+## One set of simulated tool outcomes
 
-Choose **Preview simulated CMS outputs** to show the requested end-to-end CMS
-handoff demonstration. The URL retains `cmsPreview=simulated` so the same view
-can be reopened and shared with someone who has access to the saved run.
+A single Results by tool section follows the main result. It is always visible,
+with no simulation toggle, earlier source-tool result list, duplicate tool chips
+or separate raw-output tab. Each of the four cards explains:
 
-The preview creates four local output envelopes from the exact saved content:
+- The tool's part of the task.
+- What its simulated outcome contains.
+- What the user should review next.
+- A named View in WordPress, Shopify, WooCommerce or BigCommerce action.
 
-- WordPress: five unpublished page previews for the selected client CMS.
-- Shopify: five unpublished page previews for an alternative CMS demonstration.
-- WooCommerce: five WordPress page handoffs, without product or order mutations.
-- BigCommerce: five unpublished page previews for an alternative CMS demonstration.
+AURA prepared the content package. The four CMS previews are alternative
+handoffs for those same five pages, rather than four claims of independent copy
+generation. Every card and tool screen is visibly simulated. Opening them does
+not connect a CMS, create a record, approve content or modify a live page.
 
-**View in WordPress**, **View in Shopify**, **View in WooCommerce** and **View in
-BigCommerce** open separate simulated admin screens at
-`/runs/:runId/tools/:toolSlug`. Each screen uses its tool's navigation and colors,
-shows all five draft pages, and provides a page editor, SEO and asset tabs, search
-and an unpublished page preview. The simulation label stays visible. Back to AURA
-results returns to the same package and simulation view.
+The tool screens use readable page names, review statuses, search listings,
+button text and image instructions. They also explain their contribution to the
+task. Internal page IDs, version hashes, execution receipts, raw JSON and HTML
+are not displayed in these user flows. Programmatic evidence stays in the
+saved packet and developer download; it is not discarded or rewritten.
 
-The screens load the same authenticated, tenant-scoped saved run as Results.
-They do not contact a CMS or collect credentials. Invalid tool routes and
-inaccessible runs cannot create a tool screen or bypass workspace access.
+## Separate public walkthrough
 
-Every envelope and page identifies itself as simulated, preserves the source
-page URL and exact content version, retains pending approval, and has null remote
-IDs and URLs. The preview makes no network calls and adds no execution receipts
-or connection claims to the saved workflow. Actual source reads and model output
-stay separate. Download the simulation JSON using **Download simulated tool
-outputs**; the standard CMS-ready archive continues to report zero CMS records.
-
-Live staging still requires the selected client's verified CMS connection and
-approval of the exact content and assets. Opening the demonstration never
-satisfies either requirement.
-
-Validation: `npm test`, `npm run lint`, `npm run build`.
-
-## Main-result order and separate public walkthrough
-
-The Results view opens with the five-page content package, page comparison,
-approval tracker and developer handoff. Results by tool follow that primary
-panel. **Explore results by tool** jumps down to those entries.
-
-The separate static build at `showcase/website-content/` reuses the AURA command,
-plan, review, execution, results and simulated-admin components. It is accessible
-without sign-in and never loads private saved runs. Entry points:
+The static build at `showcase/website-content/` reuses AURA's task, plan, review,
+prepared execution, main result and simulated CMS screen components without
+sign-in or access to private runs.
 
 - `?tour=1`: guided walkthrough with captions, Pause, Back and Next.
-- `?screen=results`: main result first, then per-tool previews.
-- `?screen=video`: captioned MP4 walkthrough and download.
-- `?scene=0` through `?scene=13`: paused walkthrough scenes for capture and QA.
+- `?screen=results`: the main result followed by the single tool-outcome section.
+- `?screen=video`: captioned MP4 and download.
+- `?scene=0` through `?scene=13`: paused scenes for capture and QA.
 
-The historical public-site example uses Kastner Hill Learning. Revised body copy
-and source content-version references come from the saved preparation package.
-Source headings and asset instructions are selected or summarized; images are
-not reproduced. No agency/client endorsement, approved brief, approved assets or
-confirmed client storage/approval/project tools are implied. All approvals stay
-pending and all CMS records remain simulated.
+The historical example uses public Kastner Hill Learning website material and
+the saved revised page copy. Source headings and asset instructions are
+selected or summarized; images are not reproduced. Approved brief, image
+permissions, named reviewer, asset storage and project tools remain separate
+confirmations. The demonstration implies no agency/client endorsement.
 
-A restrictive Content Security Policy prohibits fetch/XHR/WebSocket calls.
-Account, OAuth and upload clients are excluded from the build graph. The static
-snapshot contains no private run, workspace or credential identifiers. Feedback
-is copy-only and local to the browser. The video uses interface views rendered from the isolated static build
-and captions; it is prepared playback rather than proof of live integrations.
+The public build excludes account clients and prohibits API connections through
+CSP. It contains no private run or credential identifiers. Feedback stays local.
+The Pages build renders the 14 scenes in a fresh build-time browser that permits
+only its local static server, then uses ffmpeg to publish a 113-second MP4,
+VTT captions and poster. This prepared video is not evidence of live integrations.
 
-The Pages release renders all 14 paused scenes in a fresh headless browser that
-allows only the local static server, then uses ffmpeg to create the MP4 and VTT.
-This build-time renderer is separate from user sessions and the live control
-plane. A review artifact preserves the MP4, captions and poster for download.
+Validation: `npm test`, `npm run lint`, `npm run build`, plus the generated-video
+build and browser checks for one outcome section, named tool navigation and
+absence of raw technical output in rendered views.

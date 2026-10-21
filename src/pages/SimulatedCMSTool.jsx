@@ -10,7 +10,7 @@ export default function SimulatedCMSTool() {
   const [run, setRun] = useState(null);
   const [error, setError] = useState('');
   const valid = Boolean(cmsToolScreenPath(runId, `${toolSlug}-preview`));
-  const backHref = `/runs/${encodeURIComponent(runId)}?cmsPreview=simulated`;
+  const backHref = `/runs/${encodeURIComponent(runId)}`;
   useEffect(() => {
     let active = true;
     setRun(null); setError('');
