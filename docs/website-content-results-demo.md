@@ -43,3 +43,31 @@ approval of the exact content and assets. Opening the demonstration never
 satisfies either requirement.
 
 Validation: `npm test`, `npm run lint`, `npm run build`.
+
+## Main-result order and separate public walkthrough
+
+The Results view opens with the five-page content package, page comparison,
+approval tracker and developer handoff. Results by tool follow that primary
+panel. **Explore results by tool** jumps down to those entries.
+
+The separate static build at `showcase/website-content/` reuses the AURA command,
+plan, review, execution, results and simulated-admin components. It is accessible
+without sign-in and never loads private saved runs. Entry points:
+
+- `?tour=1`: guided walkthrough with captions, Pause, Back and Next.
+- `?screen=results`: main result first, then per-tool previews.
+- `?screen=video`: captioned MP4 walkthrough and download.
+- `?scene=0` through `?scene=13`: paused walkthrough scenes for capture and QA.
+
+The historical public-site example uses Kastner Hill Learning. Revised body copy
+and source content-version references come from the saved preparation package.
+Source headings and asset instructions are selected or summarized; images are
+not reproduced. No agency/client endorsement, approved brief, approved assets or
+confirmed client storage/approval/project tools are implied. All approvals stay
+pending and all CMS records remain simulated.
+
+A restrictive Content Security Policy prohibits fetch/XHR/WebSocket calls.
+Account, OAuth and upload clients are excluded from the build graph. The static
+snapshot contains no private run, workspace or credential identifiers. Feedback
+is copy-only and local to the browser. The video uses captured interface views
+and captions; it is prepared playback rather than proof of live integrations.

@@ -1,0 +1,12 @@
+.showcase-main { min-height: calc(100vh - 176px); }
+.showcase-input { display: flex; align-items: center; padding-block: 5rem; }
+.showcase-tour { backdrop-filter: blur(18px); }
+.showcase-main:has(+ .showcase-tour), body:has(.showcase-tour) .showcase-main { padding-bottom: 11rem; }
+.showcase-modal { background: #101a2c; }
+@media (max-width: 640px) {
+  .showcase-input { padding-block: 2.5rem; }
+  .showcase-tour { bottom: 0; border-radius: 1rem 1rem 0 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
