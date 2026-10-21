@@ -30,7 +30,7 @@ def approved_request(keys=("google",)):
     for key in keys:
         meta = deepcopy(REQUEST["sources"][2 if key in weekly.EMAIL_SOURCES else 0]["metadata"])
         meta.update(accountId=f"test-{key}", approvedBy="Unit test", approvalReference="test-only",
-                    provenance="approved_export", filename="unit-test.csv")
+                    provenance="approved_export", filename="unit-test.csv", clickDefinition="Test-only per-message unique clicks or specified paid link clicks")
         fields = (["delivered", "uniqueClicks", "conversions", "revenue", "unsubscribes"]
                   if key in weekly.EMAIL_SOURCES else ["impressions", "clicks", "spend", "conversions", "revenue"])
         buffer = io.StringIO()
@@ -76,7 +76,7 @@ def test_every_named_platform_can_process_approved_exports_and_unknown_value_sta
         assert result["comparison"]["current"][metric] is None
 
 
-@pytest.mark.parametrize("field", ["accountId", "approvedBy", "approvalReference"])
+@pytest.mark.parametrize("field", ["accountId", "approvedBy", "approvalReference", "clickDefinition"])
 def test_missing_export_approval_and_account_mapping_cannot_run(field):
     request = approved_request()
     request["sources"][0]["metadata"].pop(field)

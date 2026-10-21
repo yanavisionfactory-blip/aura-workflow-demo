@@ -38,14 +38,14 @@ export function approvedWeeklyRequest(config, sourceInputs) {
   if (!config.brief.goals.trim() || !config.brief.brand.trim() || !config.brief.approvalReference.trim()) throw new Error('Provide approved goals, brand guidance and the brief reference.');
   const sources = selected.map((key) => {
     const input = sourceInputs[key] || {}, platform = WEEKLY_PLATFORMS.find((item) => item.key === key);
-    const required = ['accountId', 'approvedBy', 'approvalReference', 'dateBasis', 'attribution', 'conversionDefinition', 'revenueDefinition'];
+    const required = ['accountId', 'approvedBy', 'approvalReference', 'dateBasis', 'attribution', 'conversionDefinition', 'revenueDefinition', 'clickDefinition'];
     if (!input.csv_text?.trim() || required.some((field) => !input[field]?.trim())) throw new Error(`${platform.name}: upload an approved CSV and complete its account and metric definitions.`);
     if (new TextEncoder().encode(input.csv_text).length > 200000) throw new Error(`${platform.name}: aggregate the export to weekly campaign or message cohorts below 200 KB.`);
     return { source_key: key, input_kind: 'approved_export', csv_text: input.csv_text, periods: config.periods,
       metadata: { ...Object.fromEntries(required.map((field) => [field, input[field].trim()])),
         provenance: 'approved_export', filename: input.filename, report: 'Approved weekly campaign / message cohort export',
         timezone: config.timezone, currency: config.currency, asOf: config.asOf,
-        caution: input.caution || 'Attribution may restate. Outcomes and value remain separate from other platforms; no causal or statistical significance is established.' } };
+        caution: input.caution || (platform.kind === 'email' ? 'Clicks are unique per message; totals are not unique people across messages. ' : '') + 'Attribution may restate. Outcomes and value remain separate from other platforms; no causal or statistical significance is established.' } };
   });
   const reporting = config.reporting;
   if (reporting.confirmed && ['destination', 'destinationUrl', 'confirmedBy', 'approvalReference'].some((field) => !reporting[field]?.trim())) throw new Error('Complete the selected account’s reporting confirmation or leave it unconfirmed.');
@@ -86,6 +86,6 @@ export function approvedWeeklyMarkdown(packet) {
   lines.push('', '## Implementation backlog');
   for (const item of packet.backlog) lines.push('', `### ${item.id} — ${item.priority} — ${item.title}`, `Proposed owner: ${item.owner}; effort: ${item.effort}`, item.fix, `Reasoning: ${item.reasoning}`, `Acceptance: ${item.acceptance}`, `Dependencies: ${item.dependencies.join(', ') || 'None'}`, `Evidence: ${item.evidence.join(', ')}`, 'Status: proposed');
   lines.push('', '## Source register');
-  for (const source of packet.sources) lines.push('', `### ${source.name}`, `Account: ${source.accountId}`, `Export: ${source.filename}; approved by ${source.approvedBy}; reference ${source.approvalReference}`, `Attribution: ${source.attribution}`, `Date basis: ${source.dateBasis}`, `Outcome: ${source.conversionDefinition}`, `Value: ${source.revenueDefinition}`, `Caution: ${source.caution}`, `SHA-256: ${source.execution.input_sha256}`, `Evidence IDs: ${source.rows.map((row) => row.id).join(', ')}`);
+  for (const source of packet.sources) lines.push('', `### ${source.name}`, `Account: ${source.accountId}`, `Export: ${source.filename}; approved by ${source.approvedBy}; reference ${source.approvalReference}`, `Attribution: ${source.attribution}`, `Date basis: ${source.dateBasis}`, `Clicks: ${source.clickDefinition}`, `Outcome: ${source.conversionDefinition}`, `Value: ${source.revenueDefinition}`, `Caution: ${source.caution}`, `SHA-256: ${source.execution.input_sha256}`, `Evidence IDs: ${source.rows.map((row) => row.id).join(', ')}`);
   return lines.join('\n');
 }

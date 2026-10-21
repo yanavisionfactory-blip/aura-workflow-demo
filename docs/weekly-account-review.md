@@ -14,7 +14,7 @@ separate from the public fictional Northline showcase.
    inconsistent source snapshots; changing a label does not align the data.
 3. For each selected platform, identify the exact client account, export approver
    and approval reference. Specify attribution model/window/filters, date basis,
-   conversion event and value definition. Scope/approval references are the
+   click definition/bot filters, conversion event and value definition. Scope/approval references are the
    submitting user's attestations, not independently verified by AURA.
 4. Download each blank CSV template, normalize an approved export into it and
    select the completed file. Never fill gaps with demo metrics. Use stable,

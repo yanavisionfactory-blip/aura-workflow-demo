@@ -176,8 +176,8 @@ def analyze_source(arguments: dict) -> dict:
     if not re.fullmatch(r"[A-Z]{3}", meta["currency"]):
         raise ValueError("Use a three-letter currency code; no FX conversion is performed")
     if approved and any(not isinstance(meta.get(key), str) or not meta[key].strip()
-                        for key in ("accountId", "approvedBy", "approvalReference")):
-        raise ValueError("Approved exports require account ID, approver and approval reference")
+                        for key in ("accountId", "approvedBy", "approvalReference", "clickDefinition")):
+        raise ValueError("Approved exports require account ID, approver, approval reference and click definition")
     ZoneInfo(meta["timezone"])
     cutoff = datetime.fromisoformat(meta["asOf"])
     if approved and cutoff.tzinfo is not None and cutoff > datetime.now(UTC) + timedelta(minutes=5):
@@ -226,7 +226,7 @@ def analyze_source(arguments: dict) -> dict:
         seen.add(row_id)
         window = request.periods[period]
         expected = {"period_start": window["from"], "period_end": window["to"],
-                    **{key: meta[key] for key in ("timezone", "currency", "asOf", "attribution", "dateBasis")}}
+                    **{key: meta[key] for key in ("timezone", "currency", "asOf", "attribution", "dateBasis", *(["clickDefinition"] if approved else []))}}
         if any(raw.get(key) != value for key, value in expected.items() if not approved or key in raw):
             raise ValueError("Row dates, units, cutoff or metric definitions do not align")
         row = {key: raw[key] for key in ("id", "period", "campaign", "channel", "segment") if raw.get(key)}
@@ -262,7 +262,7 @@ def analyze_source(arguments: dict) -> dict:
                              for key, value in comparison["previous"].items()}
     source = {key: meta[key] for key in required}
     if approved:
-        source.update({key: meta[key] for key in ("accountId", "approvedBy", "approvalReference")})
+        source.update({key: meta[key] for key in ("accountId", "approvedBy", "approvalReference", "clickDefinition")})
     source.update(key=request.source_key, name=SOURCE_NAMES[request.source_key], kind=kind,
                   provenance="approved_export" if approved else "simulated", rows=rows)
     if breakdown:
