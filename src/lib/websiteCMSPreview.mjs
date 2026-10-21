@@ -15,6 +15,12 @@ const providers = [
     detail: 'The same content mapped to BigCommerce page previews. A store destination and verified connection are still required for live staging.' },
 ];
 
+export function cmsToolScreenPath(runId, toolId) {
+  if (typeof runId !== 'string' || !/^[A-Za-z0-9_-]{1,120}$/.test(runId)) return null;
+  if (!providers.some((provider) => provider.id === toolId)) return null;
+  return `/runs/${encodeURIComponent(runId)}/tools/${toolId.replace(/-preview$/, '')}`;
+}
+
 // A deterministic local preview, never a provider response or execution receipt.
 // Opening saved results cannot call a CMS, approve content or mutate the packet.
 export function websiteCMSPreview(packet) {

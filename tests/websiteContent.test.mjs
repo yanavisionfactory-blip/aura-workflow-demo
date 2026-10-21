@@ -6,7 +6,7 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 import { build } from 'vite';
 import { primaryResultFromOutputs } from '../src/lib/resultPresentation.mjs';
 import { websiteContentFiles, websiteContentZip } from '../src/lib/websiteContentExport.mjs';
-import { websiteCMSPreview } from '../src/lib/websiteCMSPreview.mjs';
+import { cmsToolScreenPath, websiteCMSPreview } from '../src/lib/websiteCMSPreview.mjs';
 import { unzipSync, strFromU8 } from 'fflate';
 
 const packet = {
@@ -26,14 +26,14 @@ const packet = {
   discovery: {}, staging: { reason: 'Await exact content approval.' }, handoff: ['Create separate unpublished page records.'],
   execution: { mode: 'live_public_sources', model: 'test-model', model_attempts: 1, id: 'receipt-123', executed_at: '2026-10-20T20:00:00Z' },
 };
-let temporary, render;
+let temporary, render, renderTool;
 before(async () => {
   const repo = fileURLToPath(new URL('../', import.meta.url));
   temporary = fs.mkdtempSync(path.join(repo, '.website-render-'));
   await build({ configFile: path.join(repo, 'vite.config.js'), logLevel: 'silent', build: {
     ssr: path.join(repo, 'tests/fixtures/websiteContentRender.jsx'), outDir: temporary, emptyOutDir: true,
     rollupOptions: { output: { entryFileNames: 'render.mjs' } } }, ssr: { noExternal: ['lucide-react'] } });
-  ({ render } = await import(pathToFileURL(path.join(temporary, 'render.mjs'))));
+  ({ render, renderTool } = await import(pathToFileURL(path.join(temporary, 'render.mjs'))));
 });
 after(() => { if (temporary) fs.rmSync(temporary, { recursive: true, force: true }); });
 
@@ -149,10 +149,11 @@ test('screenshot-style per-tool rows expose full simulated outputs with honest s
   const real = render(packet);
   assert.match(real, /What happened/);
   assert.match(real, /Tools used/);
-  assert.doesNotMatch(real, /View simulated Shopify output/);
+  assert.doesNotMatch(real, /View in Shopify/);
   const simulated = render(packet, { initialSimulation: true });
   for (const provider of ['WordPress', 'Shopify', 'WooCommerce', 'BigCommerce']) {
-    assert.ok(simulated.includes(`View simulated ${provider} output`));
+    assert.ok(simulated.includes(`View in ${provider}`));
+    assert.ok(simulated.includes(`href="/runs/test-run/tools/${provider.toLowerCase()}"`));
   }
   assert.match(simulated, /Simulation mode/);
   assert.match(simulated, /No CMS API calls, records, approvals or live changes were made/);
@@ -165,5 +166,29 @@ test('screenshot-style per-tool rows expose full simulated outputs with honest s
       assert.ok(html.includes(page.version));
       assert.ok(html.includes(page.sections[0].body));
     }
+  }
+});
+
+test('view-in-tool links open isolated named tool screens rather than an AURA output tab', () => {
+  assert.equal(cmsToolScreenPath('test-run', 'wordpress-preview'), '/runs/test-run/tools/wordpress');
+  assert.equal(cmsToolScreenPath('../other-run', 'wordpress-preview'), null);
+  assert.equal(cmsToolScreenPath('test-run', 'external-provider-preview'), null);
+  assert.equal(cmsToolScreenPath(null, 'shopify-preview'), null);
+  const html = render(packet, { initialSimulation: true });
+  assert.doesNotMatch(html, /View in AURA/);
+  for (const tool of websiteCMSPreview(packet).tools) {
+    const list = renderTool(tool);
+    assert.ok(list.includes(`${tool.name} simulated tool screen`));
+    assert.ok(list.includes(`Simulated ${tool.name} screen`));
+    assert.match(list, /Back to AURA results/);
+    assert.match(list, /Search draft pages/);
+    for (const page of packet.pages) assert.ok(list.includes(page.content_version || page.version));
+    const editor = renderTool(tool, { initialPageId: packet.pages[0].page_id });
+    assert.match(editor, /Page editor sections/);
+    assert.match(editor, /Preview page/);
+    assert.ok(editor.includes(packet.pages[0].sections[0].body));
+    assert.ok(editor.includes(packet.pages[0].version));
+    assert.match(editor, /Content approval pending/);
+    assert.doesNotMatch(editor, /type="password"|name="client_secret"|>Publish<|CMS records created successfully/);
   }
 });

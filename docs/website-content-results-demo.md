@@ -1,7 +1,7 @@
 # Website content results and CMS preview
 
 Open a completed five-page website content run in AURA. The Results page has
-"What happened" rows and a "View in AURA" action for each recorded output.
+"What happened" rows and an action for each recorded output.
 Full pages, comparisons, pending approvals, developer handoff and source receipts
 remain inspectable.
 
@@ -15,6 +15,17 @@ The preview creates four local output envelopes from the exact saved content:
 - Shopify: five unpublished page previews for an alternative CMS demonstration.
 - WooCommerce: five WordPress page handoffs, without product or order mutations.
 - BigCommerce: five unpublished page previews for an alternative CMS demonstration.
+
+**View in WordPress**, **View in Shopify**, **View in WooCommerce** and **View in
+BigCommerce** open separate simulated admin screens at
+`/runs/:runId/tools/:toolSlug`. Each screen uses its tool's navigation and colors,
+shows all five draft pages, and provides a page editor, SEO and asset tabs, search
+and an unpublished page preview. The simulation label stays visible. Back to AURA
+results returns to the same package and simulation view.
+
+The screens load the same authenticated, tenant-scoped saved run as Results.
+They do not contact a CMS or collect credentials. Invalid tool routes and
+inaccessible runs cannot create a tool screen or bypass workspace access.
 
 Every envelope and page identifies itself as simulated, preserves the source
 page URL and exact content version, retains pending approval, and has null remote
