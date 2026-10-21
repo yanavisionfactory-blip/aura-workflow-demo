@@ -307,3 +307,61 @@ async def test_mixed_review_compiles_no_vendor_steps_and_marks_all_scenario_base
     assert "never actual client performance" in parse.await_args.kwargs["instructions"]
     assert not output_errors("weekly.review.prepare", result)
     assert result["external_writes"] is False
+
+
+def full_simulation_request():
+    from pathlib import Path
+    return json.loads((Path(__file__).parent / "fixtures/weekly_all_platforms_simulation.json").read_text())
+
+
+@pytest.mark.parametrize("change", [
+    lambda r: r["config"]["client"].update(engagementConfirmed=True),
+    lambda r: r["config"]["client"].update(fictional=False),
+    lambda r: r["config"]["scope"].update(confirmed=True),
+    lambda r: r["config"]["reporting"].update(confirmed=True),
+    lambda r: r["sources"][0].update(input_kind="approved_export"),
+    lambda r: r["sources"][0]["metadata"].update(simulationOnly=False),
+    lambda r: r["config"].update(simulationOnly=False),
+    lambda r: r["config"]["scope"].update(simulationConfirmed=False),
+])
+def test_full_simulation_cannot_claim_real_approvals_or_mix_in_live_sources(change):
+    request = full_simulation_request()
+    change(request)
+    with pytest.raises(ValueError):
+        weekly.validate_approved_config(request["config"], request["sources"])
+
+
+@pytest.mark.asyncio
+async def test_all_seven_sources_execute_with_independent_receipts_and_synthetic_review(monkeypatch):
+    request = full_simulation_request()
+    plan = weekly.weekly_workflow_recipe(weekly.APPROVED_WEEKLY_PREFIX + json.dumps(request), [
+        {"slug": "aura", "allowed_operations": native_operations("aura")}])
+    assert len(plan.steps) == 8
+    assert "SIMULATION ONLY" in plan.name
+    assert all(step.tool_slug == "aura" and not step.consequential for step in plan.steps)
+    checked = [weekly.analyze_source(item) for item in request["sources"]]
+    assert {item["source"]["key"] for item in checked} == set(weekly.SOURCE_NAMES)
+    assert all(item["synthetic"] and not item["receipt"]["provider_api_called"] for item in checked)
+    assert len({item["receipt"]["input_sha256"] for item in checked}) == 7
+    assert checked[4]["comparison"]["current"]["clickRate"] == .035
+    assert checked[5]["comparison"]["current"]["clickRate"] == .04
+    assert checked[6]["comparison"]["current"]["clickRate"] == .02
+    narrative = narrative_for(["google"])
+    for item in [*narrative.experiments, *narrative.backlog]:
+        item.evidence = ["SIM-google-previous", "SIM-google-current"]
+    parse = AsyncMock(return_value=SimpleNamespace(output_parsed=narrative))
+    class Client:
+        async def __aenter__(self):
+            return SimpleNamespace(responses=SimpleNamespace(parse=parse))
+        async def __aexit__(self, *_args):
+            return False
+    monkeypatch.setattr(weekly, "AsyncOpenAI", lambda **_kwargs: Client())
+    monkeypatch.setattr(weekly.get_settings(), "openai_api_key", "unit-test-only")
+    result = await weekly.prepare_review({"config": request["config"], "sources": checked})
+    assert result["execution"]["mode"] == "backend_executed_synthetic"
+    assert result["execution"]["source_operations"] == 7
+    assert result["packet"]["simulationOnly"] is True
+    assert result["packet"]["provenance"] == "simulated"
+    assert "FICTIONAL" in parse.await_args.kwargs["instructions"]
+    assert all(x["simulationBased"] for k in ("experiments", "creatives", "backlog") for x in result["packet"][k])
+    assert not output_errors("weekly.review.prepare", result)
