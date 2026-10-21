@@ -23,6 +23,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   const selectedVisual = visualChoices.find((choice) => choice.key === searchParams.get("main"));
   const primaryResult = selectedVisual?.result || selectPrimaryOutcome(results);
   const nativeAudit = primaryResult.kind === "seo_audit";
+  const approvedWeekly = primaryResult.kind === "weekly_review" && primaryResult.packet?.provenance === "approved_export";
   const nativeResult = nativeAudit || ["weekly_review", "executive_review", "website_content"].includes(primaryResult.kind);
   const metrics = useMemo(() => isFailure ? [] : resultMetrics(results.metrics || [], activity || []), [results.metrics, activity, isFailure]);
   const receipts = useMemo(() => supportingReceipts(results, activity || [], primaryResult, results.resultPresentation), [activity, primaryResult, results]);
@@ -115,10 +116,10 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
       </section>}
       <section className="rounded-xl border border-white/10 bg-card/20 p-4 sm:p-5">
         <h3 className="text-sm font-semibold">Continue this workflow</h3>
-        <p className="mt-1 text-sm text-muted-foreground">{isFailure ? "Your completed work is saved. Try again or start a new workflow." : "Continue from this result or create something new."}</p>
+        <p className="mt-1 text-sm text-muted-foreground">{approvedWeekly ? "This review uses fixed reporting dates and approved exports. Start a new review with fresh inputs for the next week." : isFailure ? "Your completed work is saved. Try again or start a new workflow." : "Continue from this result or create something new."}</p>
         <div className="mt-5 grid gap-3 sm:grid-cols-3">
-          <button type="button" onClick={() => onStartWorkflow(prompt)} className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium hover:bg-white/10"><RefreshCw className="h-4 w-4" />Run again</button>
-          {!isFailure && backendRunId && <button type="button" onClick={() => setShowSchedule(true)} className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium hover:bg-white/10"><CalendarClock className="h-4 w-4" />Schedule</button>}
+          <button type="button" onClick={() => { if (approvedWeekly) { setSearchParams({ weekly: "1" }); onNewWorkflow(); } else onStartWorkflow(prompt); }} className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium hover:bg-white/10"><RefreshCw className="h-4 w-4" />{approvedWeekly ? "New review with fresh exports" : "Run again"}</button>
+          {!isFailure && !approvedWeekly && backendRunId && <button type="button" onClick={() => setShowSchedule(true)} className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium hover:bg-white/10"><CalendarClock className="h-4 w-4" />Schedule</button>}
           <button type="button" onClick={onNewWorkflow} className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium hover:bg-white/10"><Plus className="h-4 w-4" />New workflow</button>
         </div>
       </section>
