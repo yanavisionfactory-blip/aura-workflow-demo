@@ -148,6 +148,7 @@ test('CMS simulations preserve all five exact versions and never become provider
 test('screenshot-style per-tool rows expose full simulated outputs with honest status', () => {
   const real = render(packet);
   assert.match(real, /What happened/);
+  assert.ok(real.indexOf("P1 revised page") < real.indexOf("Results by tool"));
   assert.match(real, /Tools used/);
   assert.match(real, /Shopify simulation preview/);
   assert.match(real, /View in Shopify/);
