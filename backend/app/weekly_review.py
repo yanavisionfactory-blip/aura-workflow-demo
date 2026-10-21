@@ -168,6 +168,8 @@ def analyze_source(arguments: dict) -> dict:
     approved = request.input_kind == "approved_export"
     scenario = request.input_kind == "simulated_scenario"
     normalized = approved or scenario
+    if approved and meta.get("provenance", "approved_export") != "approved_export":
+        raise ValueError("Simulated source metadata cannot become approved evidence")
     if scenario and (request.source_key not in {"meta", "amazon"}
                      or meta.get("provenance") != "simulated"
                      or meta.get("simulationAuthorized") is not True):
@@ -184,7 +186,8 @@ def analyze_source(arguments: dict) -> dict:
     if approved and any(not isinstance(meta.get(key), str) or not meta[key].strip()
                         for key in ("accountId", "approvedBy", "approvalReference", "clickDefinition")):
         raise ValueError("Approved exports require account ID, approver, approval reference and click definition")
-    if scenario and (not meta.get("clickDefinition") or not meta.get("simulationNotice")
+    if scenario and (any(not isinstance(meta.get(key), str) or not meta[key].strip()
+                         for key in ("clickDefinition", "simulationNotice"))
                      or not meta.get("filename", "").startswith("SIMULATED_")):
         raise ValueError("Scenario metadata must retain its SIMULATED filename, notice and click definition")
     ZoneInfo(meta["timezone"])
@@ -508,7 +511,8 @@ def weekly_workflow_recipe(prompt: str, inventory: list[dict]) -> WorkflowPlan |
                   "reason": "Recheck source arithmetic and use AURA's model to prepare three experiments, six creative drafts and a prioritized backlog.",
                   "expected_output": "Complete interactive weekly-review packet, per-source evidence, draft variants and implementation proposals.",
                   "consequential": False})
-    return WorkflowPlan.model_validate({"name": "Weekly account review — approved client exports" if approved else "Weekly account review — real AURA run, synthetic exports",
+    includes_scenarios = any(item.input_kind == "simulated_scenario" for item in request.sources)
+    return WorkflowPlan.model_validate({"name": "Weekly account review — includes Meta/Amazon simulations" if includes_scenarios else "Weekly account review — approved client exports" if approved else "Weekly account review — real AURA run, synthetic exports",
         "interpretation": ("Prepare the selected client review using only its scoped approved exports and explicitly labelled Meta/Amazon scenarios. Keep attribution separate and all experiments and copy as proposals inside AURA." if approved else "Execute the review in AURA using explicitly simulated Google Ads, Meta Ads and Klaviyo exports. No vendor metrics are uploaded or campaigns changed."),
         "steps": steps, "planning_artifacts": {"planner_recovery_mode": "approved_export_weekly_review" if approved else "synthetic_export_weekly_review"}})
 

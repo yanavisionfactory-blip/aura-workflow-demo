@@ -265,6 +265,10 @@ def test_scenario_rows_and_filename_must_keep_simulated_labels():
     source["metadata"]["filename"] = "client-export.csv"
     with pytest.raises(ValueError, match="SIMULATED filename"):
         weekly.analyze_source(source)
+    source = approved_request()["sources"][0]
+    source["metadata"]["provenance"] = "simulated"
+    with pytest.raises(ValueError, match="Simulated source metadata"):
+        weekly.analyze_source(source)
 
 
 @pytest.mark.asyncio
@@ -273,6 +277,7 @@ async def test_mixed_review_compiles_no_vendor_steps_and_marks_all_scenario_base
     plan = weekly.weekly_workflow_recipe(weekly.APPROVED_WEEKLY_PREFIX + json.dumps(request), [
         {"slug": "aura", "allowed_operations": native_operations("aura")}])
     assert len(plan.steps) == 4
+    assert "simulations" in plan.name
     assert all(step.tool_slug == "aura" and not step.consequential for step in plan.steps)
     narrative = narrative_for(["google"])
     for exp, creative in zip(narrative.experiments, narrative.creatives, strict=True):
