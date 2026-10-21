@@ -1,13 +1,11 @@
 name: Python control plane
 
 on:
+  # Run on every main commit: backend-release.yml requires a successful
+  # main-branch Python control-plane run for the exact release SHA.
+  # Path filtering left frontend-only releases permanently undeployable.
   push:
     branches: [main]
-    paths:
-      - "backend/**"
-      - "integrations/wordpress/**"
-      - "docker-compose.yml"
-      - ".github/workflows/python.yml"
   pull_request:
     branches: [main]
     paths:
