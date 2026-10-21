@@ -16,6 +16,9 @@ export function operationStepTitle(step = {}, tool = "the app") {
     return `Process the synthetic ${source} export`;
   }
   if (operation === "weekly.review.prepare") return "Prepare the weekly review and draft variants";
+  if (operation === "mailchimp.audience.get") return "Verify the selected client audience";
+  if (operation === "mailchimp.campaign.draft.create") return "Create an unsent Mailchimp campaign";
+  if (operation === "mailchimp.campaign.content.set") return "Save and verify the email content";
   const verifying = /^(?:verify|confirm|check (?:the )?saved|read back)/i.test(step.reason || "");
   const titles = {
     "get_report_schema": "Read the provider report schema",

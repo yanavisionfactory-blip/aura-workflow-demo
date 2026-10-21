@@ -58,6 +58,8 @@ def _review_kind(operation: str) -> str:
 
 
 def _review_title(kind: str, operation: str, tool_name: str | None) -> str:
+    if operation in {"mailchimp.campaign.draft.create", "mailchimp.campaign.content.set"}:
+        return "Review the unsent Mailchimp draft before saving"
     subject = tool_name or _label(operation.split(".", 1)[0])
     titles = {
         "email": "Review the email before sending",

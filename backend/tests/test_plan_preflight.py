@@ -56,18 +56,21 @@ def test_internal_summary_disguised_as_identity_is_not_reviewable():
 
 @pytest.mark.parametrize(("operation", "readback"), READBACK_OPERATIONS.items())
 def test_every_write_readback_is_required_before_start(operation, readback):
+    from app.extended_outcomes import required_reads
+    reads = required_reads(operation, {})
+    assert readback in reads
     # Custom connectors use the same preflight as native connectors; the
     # manifest describes the actual tool while the grant describes the account.
     manifest = {"provider_type": "connector_sdk", "capabilities": [
         {"name": name, "input_schema": {"type": "object"},
          "output_schema": {"type": "object"}, "permission_scope": "write"}
-        for name in (operation, readback)
+        for name in (operation, *reads)
     ]}
-    catalog = [{"slug": "fixture", "allowed_operations": [operation, readback]}]
+    catalog = [{"slug": "fixture", "allowed_operations": [operation, *reads]}]
     plan = _plan(operation, slug="fixture")
     check = preflight_plan(plan, catalog, {"fixture": manifest}, set(),
                            [{"slug": "fixture", "allowed_operations": [operation]}])
     assert not check.fixes
-    assert check.missing_grants == {"fixture": {readback}}
-    granted = [{"slug": "fixture", "allowed_operations": [operation, readback]}]
+    assert check.missing_grants == {"fixture": reads}
+    granted = [{"slug": "fixture", "allowed_operations": [operation, *reads]}]
     assert preflight_plan(plan, catalog, {"fixture": manifest}, set(), granted).missing_grants == {}
