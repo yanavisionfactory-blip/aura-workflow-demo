@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Activity, AlertTriangle, ArrowRight, BarChart3, Check, CheckCircle2, ChevronDown, Download, ExternalLink, Eye, FlaskConical, Mail, Plus, RefreshCw, Share2, Wrench } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { marketingToolStates } from '@/lib/marketingToolResults.mjs';
@@ -16,7 +16,14 @@ const details = {
 };
 
 export default function MarketingResultsSummary({packet,activity=[],onDownload,sourceRunId}) {
-  const [view,setView] = useState(null);
+  const [searchParams,setSearchParams] = useSearchParams();
+  const requestedView=searchParams.get('tool');
+  const view=['google','meta','mailchimp','klaviyo','activity','approvals'].includes(requestedView)?requestedView:null;
+  const setView=next=>setSearchParams(previous=>{
+    const params=new URLSearchParams(previous);
+    if(next) params.set('tool',next);else params.delete('tool');
+    return params;
+  },{replace:true});
   const [copied,setCopied] = useState(false);
   const [shareError,setShareError] = useState('');
   const states = marketingToolStates(activity);
@@ -80,7 +87,7 @@ export default function MarketingResultsSummary({packet,activity=[],onDownload,s
     <footer className="mt-4 flex flex-wrap items-center gap-2 border-t border-white/10 pt-4 text-xs"><button type="button" className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2" onClick={()=>setView('activity')}><Activity className="h-3.5 w-3.5"/>Activity</button><button type="button" className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2" onClick={share}>{copied?<Check className="h-3.5 w-3.5"/>:<Share2 className="h-3.5 w-3.5"/>}{copied?'Link copied':'Share'}</button><button type="button" className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2" onClick={download}><Download className="h-3.5 w-3.5"/>Download</button>{sourceRunId && <Link to={`/runs/${sourceRunId}`} className="ml-auto inline-flex items-center gap-1.5 py-2 text-[11px] text-slate-400">Native source run<ExternalLink className="h-3 w-3"/></Link>}</footer>
     {shareError && <p role="status" className="mt-3 text-xs text-amber-200">{shareError}</p>}
 
-    <Dialog open={Boolean(view)} onOpenChange={open=>{if(!open)setView(null);}}><DialogContent className="flex max-h-[90dvh] w-[calc(100vw-1.5rem)] max-w-5xl flex-col overflow-hidden rounded-2xl border-white/15 bg-[#0a111d] p-0"><div className="border-b border-white/10 px-5 py-4 pr-12"><DialogTitle>{isTool?states.find(tool=>tool.key===view).name+' output':view==='activity'?'Workflow activity':'Before implementation'}</DialogTitle><DialogDescription className="mt-2 text-xs leading-5">{isTool?'Review the output, evidence and proposals from this tool.':view==='activity'?'Native discovery reads and explicitly simulated adapter executions.':'Open approvals for this fictional client scenario. No implementation is authorized by this review.'}</DialogDescription></div><div className="min-h-0 overflow-y-auto p-4 sm:p-5">
+    <Dialog open={Boolean(view)} onOpenChange={open=>{if(!open)setView(null);}}><DialogContent className="flex max-h-[90dvh] w-[calc(100vw-1.5rem)] max-w-7xl flex-col overflow-hidden rounded-2xl border-white/15 bg-[#0a111d] p-0"><div className="border-b border-white/10 px-5 py-4 pr-12"><DialogTitle>{isTool?states.find(tool=>tool.key===view).name+' output':view==='activity'?'Workflow activity':'Before implementation'}</DialogTitle><DialogDescription className="mt-2 text-xs leading-5">{isTool?'Interface imitation inside AURA. Review the tool output and proposals; this is not a live vendor screen.':view==='activity'?'Native discovery reads and explicitly simulated adapter executions.':'Open approvals for this fictional client scenario. No implementation is authorized by this review.'}</DialogDescription></div><div className={`min-h-0 overflow-y-auto ${isTool?'':'p-4 sm:p-5'}`}>
       {isTool?<MarketingToolResults key={view} packet={packet} activity={activity} initialTool={view} compact/>:view==='activity'?<ol className="space-y-3">{states.map(tool=><li key={tool.key} className={`${card} p-4`}><h3 className="text-sm font-semibold">{tool.name} · {tool.mode}</h3><p className="mt-2 text-xs text-slate-400">{tool.label}</p><p className="mt-2 break-all text-xs text-slate-500">{tool.operation}</p><p className="mt-2 text-xs leading-5 text-slate-400">{tool.mode==='Simulated'?'Browser simulation adapter · vendor API not called · no external writes':'Native discovery only · does not verify a client match'}</p><button type="button" onClick={()=>setView(tool.key)} className="mt-3 text-xs text-cyan-300">View response and evidence<ArrowRight className="ml-1 inline h-3 w-3"/></button></li>)}</ol>:<div className="space-y-5 text-sm leading-7"><p className="rounded-xl border border-amber-400/25 bg-amber-400/5 p-4">{brief.native_limit}</p><h3 className="font-semibold">Shared campaign and approved scenario offers</h3><p>{brief.status}</p><p>{brief.objective}</p><p>{brief.offer}</p><p>{brief.retention_offer}</p><p>{brief.audience_ownership}</p><p className="break-all text-xs text-slate-400">{brief.destination} · {brief.destination_status}</p><h3 className="font-semibold">Platform approvals</h3><ul className="list-disc space-y-3 pl-5"><li><strong>Google Ads:</strong> Match the client account, approve conversion definition, copy, targeting and test settings.</li><li><strong>Meta Ads:</strong> Confirm account, approved creative, audience, measurement and spending cap.</li><li><strong>Mailchimp:</strong> Verify permissioned non-purchasers, purchaser and Klaviyo exclusions, sender and copy.</li><li><strong>Klaviyo:</strong> Validate checkout/order events, consent, suppression sync and existing-flow conflicts before approving messages and timing.</li></ul><p className="text-xs text-slate-400">Simulation links use a reserved .example destination. Assets remain proposals in this review; no native campaigns, flows or messages were saved.</p></div>}
     </div></DialogContent></Dialog>
   </section>;

@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { CheckCircle2, FlaskConical, ShieldCheck } from 'lucide-react';
+import { FlaskConical, ShieldCheck } from 'lucide-react';
 import { marketingToolStates } from '@/lib/marketingToolResults.mjs';
 import { EvidenceValue } from './ToolEvidence';
+import MarketingNativeScreen from './MarketingNativeScreen';
 
 const panel = 'rounded-xl border border-white/10 bg-[#0c1422]';
 const money = value => new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:2}).format(value);
@@ -37,7 +38,7 @@ export function MarketingToolOutput({packet}) {
   </div>;
 }
 
-export default function MarketingToolResults({packet,activity=[],initialTool='meta',compact=false}) {
+export default function MarketingToolResults({packet,activity=[],initialTool='meta',compact=false,initialSection}) {
   const [selected,setSelected] = useState(initialTool);
   const states = marketingToolStates(activity);
   const current = states.find(tool=>tool.key===selected);
@@ -48,10 +49,7 @@ export default function MarketingToolResults({packet,activity=[],initialTool='me
     {!compact && <><header><p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">Campaign workspace</p><h1 className="mt-3 text-2xl font-semibold sm:text-3xl">Meet your morning coffee</h1><p className="mt-2 text-sm text-muted-foreground">Maple & Ember Coffee · fictional client · account-manager review</p></header>
     <section className={`${panel} p-5`}><h2 className="font-semibold">One campaign, four tool views</h2><p className="mt-2 text-sm leading-7 text-muted-foreground">{brief.objective}</p><p className="mt-3 text-sm leading-7">{brief.offer}</p><p className="mt-3 text-xs leading-6 text-muted-foreground">AURA coordinates the workflow. Native Google Ads and Mailchimp checks retain their actual responses; Meta Ads and Klaviyo use authorized simulation adapters.</p></section></>}
     {!compact && <div role="tablist" aria-label="Marketing tools" className="grid grid-cols-2 gap-3 sm:grid-cols-4">{states.map(tool=><button key={tool.key} role="tab" aria-selected={selected===tool.key} onClick={()=>setSelected(tool.key)} className={`rounded-xl border p-4 text-left ${selected===tool.key?'border-primary/50 bg-primary/10':'border-white/10 bg-card/30'}`}><span className="flex items-center gap-2 text-sm font-semibold">{tool.mode==='Simulated'?<FlaskConical className="h-4 w-4 text-violet-300"/>:<ShieldCheck className="h-4 w-4 text-emerald-300"/>}{tool.name}</span><span className="mt-2 block text-xs text-muted-foreground">{tool.mode} · {tool.label}</span></button>)}</div>}
-    <div role="tabpanel" aria-label={`${current.name} output`} className={`${panel} p-4 sm:p-6`}>
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3"><h2 className="text-xl font-semibold">{current.name}</h2><span className={`rounded-full border px-3 py-1 text-xs ${current.mode==='Simulated'?'border-violet-400/30 text-violet-200':'border-emerald-400/30 text-emerald-200'}`}>{current.mode==='Simulated'?'Simulated adapter':'Native connection'}</span></div>
-      {current.mode==='Simulated' ? response ? <MarketingToolOutput packet={response}/> : <p>No successful simulation response is saved. Inspect this tool's activity for the failure.</p> : <div className="space-y-5"><div className="rounded-xl border border-amber-300/20 bg-amber-300/5 p-4 text-sm leading-7"><p><strong>Account selection required</strong></p><p>{brief.native_limit}</p></div><p className="flex items-center gap-2 text-sm"><CheckCircle2 className="h-4 w-4 text-primary"/>{current.label}</p><p className="break-all text-xs text-muted-foreground">Operation: {current.operation}</p>{current.step?.error && <p className="text-sm text-amber-200">{current.step.error}</p>}{current.response ? <EvidenceValue value={current.response}/> : <p className="text-sm text-muted-foreground">No native response is saved. This does not mean the platform returned zero rows.</p>}<section className="space-y-3"><h3 className="font-semibold">Proposed assets · unsaved</h3><p className="text-sm leading-7 text-muted-foreground">{brief.native_proposals_note}</p><div className="grid gap-4 lg:grid-cols-2">{(current.key==='google'?brief.google_drafts:brief.mailchimp_drafts)?.map(draft=><Draft key={draft.id} draft={draft}/>)}</div></section></div>}
-    </div>
+    <div role="tabpanel" aria-label={`${current.name} output`}><MarketingNativeScreen key={current.key} current={current} packet={response} brief={brief} initialSection={initialSection}/></div>
     <details className={`${panel} p-5`}><summary className="cursor-pointer text-sm font-semibold">Shared brief, offers and channel ownership</summary><div className="mt-4 space-y-3 text-sm leading-7"><p>{brief.status}</p>{brief.products.map(item=><p key={item}>{item}</p>)}<p>{brief.retention_offer}</p><p>{brief.shipping}</p><p>{brief.audience_ownership}</p><p className="break-all text-xs text-muted-foreground">{brief.destination} · {brief.destination_status}</p></div></details>
   </section>;
 }

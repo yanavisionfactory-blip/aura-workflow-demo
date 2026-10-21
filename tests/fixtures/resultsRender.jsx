@@ -4,8 +4,8 @@ import ResultsView from "../../src/components/aura/ResultsView";
 import { savedRunResults } from "../../src/lib/savedRunResults.mjs";
 import MarketingToolResults from "../../src/components/aura/MarketingToolResults";
 
-export function renderToolWorkspace(packet, activity, initialTool) {
-  return renderToStaticMarkup(<MarketingToolResults packet={packet} activity={activity} initialTool={initialTool} compact />);
+export function renderToolWorkspace(packet, activity, initialTool, initialSection) {
+  return renderToStaticMarkup(<MarketingToolResults packet={packet} activity={activity} initialTool={initialTool} initialSection={initialSection} compact />);
 }
 
 export function render(run) {
