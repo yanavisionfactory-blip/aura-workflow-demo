@@ -63,6 +63,8 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
     URL.revokeObjectURL(url);
   };
 
+  if (primaryResult.kind === "marketing_tools") return <div className="mx-auto w-full max-w-3xl pb-8"><ResultPreview result={primaryResult} results={results} activity={activity} backendRunId={backendRunId} /></div>;
+
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`mx-auto w-full pb-8 ${nativeAudit ? "max-w-3xl" : primaryResult.kind === "website_content" ? "max-w-6xl" : "max-w-5xl"}`}>
       {!nativeResult && <ResultsHeading eyebrow="Workflow result" title={results.title || "Workflow complete"} summary={results.summary} isFailure={isFailure} />}

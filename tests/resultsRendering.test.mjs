@@ -9,6 +9,7 @@ import { executeMarketingSimulation } from "../src/lib/marketingToolSimulation.m
 const repo = fileURLToPath(new URL("../", import.meta.url));
 let temporary;
 let render;
+let renderToolWorkspace;
 before(async () => {
   temporary = fs.mkdtempSync(path.join(repo, ".results-render-"));
   await build({
@@ -33,11 +34,11 @@ before(async () => {
       emptyOutDir: true, rollupOptions: { output: { entryFileNames: "render.mjs" } } },
     ssr: { noExternal: ["lucide-react"] },
   });
-  ({ render } = await import(pathToFileURL(path.join(temporary, "render.mjs"))));
+  ({ render, renderToolWorkspace } = await import(pathToFileURL(path.join(temporary, "render.mjs"))));
 });
 after(() => { if (temporary) fs.rmSync(temporary, { recursive: true, force: true }); });
 
-test("the marketing workspace shows four tool views and friendly simulated assets without an AURA report", async () => {
+test("the marketing results summarize actual execution and keep each tool output behind its own view", async () => {
   const simulations = await Promise.all(["meta", "klaviyo"].map(tool => executeMarketingSimulation(tool, {simulate:true, scenario:"maple_ember_v1"})));
   const steps = [
     {id:"g",tool_slug:"google-ads",operation:"google-ads.list-account-id-options",status:"completed",output:{operation:"google-ads.list-account-id-options",provider_result:{options:[]}}},
@@ -45,14 +46,24 @@ test("the marketing workspace shows four tool views and friendly simulated asset
     ...simulations.map((packet,index)=>({id:`sim-${index}`,tool_slug:index ? "klaviyo-simulated" : "meta-ads-simulated",operation:packet.receipt.operation,status:"completed",output:{operation:packet.receipt.operation,provider_result:packet}})),
   ];
   const html = render({id:"hybrid",status:"completed",plan:{name:"Hybrid marketing review"},steps});
-  assert.match(html,/aria-label="Marketing workflow tool results"/);
+  assert.match(html,/aria-label="Marketing workflow results"/);
   for (const tool of ["Google Ads", "Meta Ads", "Mailchimp", "Klaviyo"]) assert.ok(html.includes(tool));
-  assert.match(html,/Meta Ads · Simulated tool adapter/);
-  assert.match(html,/Simulated weekly performance/);
-  assert.match(html,/Coffee detail static/);
-  assert.match(html,/Morning brew video/);
-  assert.match(html,/not saved in Meta/);
+  for (const text of ['Marketing campaign review ready','native checks completed','simulated tool outputs','launches or sends','What happened','Tools used','the actual output','Suggested next','Review approvals','Client matching']) assert.ok(html.includes(text),text);
+  assert.match(html,/View Meta Ads output/);
+  assert.match(html,/View Klaviyo output/);
+  assert.match(html,/Needs attention/);
+  assert.doesNotMatch(html,/Simulated weekly performance|Campaign report sent|time saved/);
   assert.doesNotMatch(html,/AURA Intelligence output preview|report\.compose|weekly\.source\.analyze/);
+  for (const key of ['google','meta','mailchimp','klaviyo']) {
+    const output=renderToolWorkspace({simulations},steps,key);
+    const name={google:'Google Ads',meta:'Meta Ads',mailchimp:'Mailchimp',klaviyo:'Klaviyo'}[key];
+    assert.ok(output.includes(`aria-label="${name} output"`));
+    assert.doesNotMatch(output,/<h1/);
+    if(key==='meta') for(const text of ['Simulated weekly performance','Coffee detail static','Morning brew video','not saved in Meta','Source rows and execution receipt']) assert.ok(output.includes(text));
+    if(key==='klaviyo') for(const text of ['Abandoned checkout','Repeat-purchase replenishment','vendor API was not called','Source rows and execution receipt']) assert.ok(output.includes(text));
+    if(key==='mailchimp') assert.match(output,/Audience unavailable/);
+    if(key==='google') assert.match(output,/Account selection required/);
+  }
 });
 
 const body = `## Sourced campaign brief
