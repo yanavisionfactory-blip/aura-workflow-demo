@@ -9,6 +9,7 @@ import { campaignCopySections } from "@/lib/campaignCopySections.mjs";
 import { readableResultText } from "@/lib/resultPresentation.mjs";
 import SeoAuditResult from "./SeoAuditResult";
 import WeeklyReviewResult from "./WeeklyReviewResult";
+import ApprovedWeeklyReviewResult from "./ApprovedWeeklyReviewResult";
 import CampaignReportResult from "./CampaignReportResult";
 import { campaignReportGroups } from "@/lib/campaignReport.mjs";
 import ExecutiveReviewResult from "./ExecutiveReviewResult";
@@ -89,7 +90,8 @@ export default function ResultPreview({ result, results, activity = [] }) {
   if (campaignReport) return <CampaignReportResult preview={result.preview} campaign={campaignReport} activity={activity} />;
   if (result.kind === "executive_review") return <ExecutiveReviewResult packet={result.packet} />;
   if (result.kind === "website_content") return <WebsiteContentResult packet={result.packet} />;
-  if (result.kind === "weekly_review") return <WeeklyReviewResult packet={result.packet} />;
+  if (result.kind === "weekly_review") return result.packet.provenance === "approved_export"
+    ? <ApprovedWeeklyReviewResult packet={result.packet} /> : <WeeklyReviewResult packet={result.packet} />;
   if (result.kind === "seo_audit") return <SeoAuditResult manifest={result.audit} />;
   if (result.kind === "articles") return <ArticleResultPreview articles={result.articles} />;
   if (result.kind === "jira_tasks") return <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#0c1422]">

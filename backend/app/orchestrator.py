@@ -151,6 +151,11 @@ def _future_group_review_arguments(
 
 def _planning_prompt_with_documents(prompt: str, inputs: dict | None) -> str:
     """Add bounded uploaded text to the model call without exposing data URLs."""
+    from .weekly_review import resolve_weekly_attachment
+
+    weekly_prompt = resolve_weekly_attachment(prompt, inputs)
+    if weekly_prompt is not None:
+        return weekly_prompt
     documents = (inputs or {}).get("attached_documents", (inputs or {}).get("documents"))
     if not isinstance(documents, list) or not documents:
         return prompt
