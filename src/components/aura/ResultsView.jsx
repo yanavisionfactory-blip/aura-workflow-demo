@@ -27,7 +27,11 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   const metrics = useMemo(() => isFailure ? [] : resultMetrics(results.metrics || [], activity || []), [results.metrics, activity, isFailure]);
   const receipts = useMemo(() => supportingReceipts(results, activity || [], primaryResult, results.resultPresentation), [activity, primaryResult, results]);
   const creatorsOutcome = (results.outcomes || []).find((outcome) => outcome.type === "creators" && outcome.items?.length > 0);
-  const nextSteps = results.nextSteps || [];
+  const nextSteps = primaryResult.kind === "website_content" ? [
+    "Review the changes to each page.",
+    "Check image permissions and choose a reviewer.",
+    "Prepare a developer handoff after the pages are approved.",
+  ] : results.nextSteps || [];
   const artifactDelivery = primaryResult.delivery || (primaryResult.artifact ? primaryResult : null);
   const summaryArgs = { title: results.title, summary: results.summary, metrics, outcomes: results.outcomes, activity, prompt, interpretation, nextSteps };
 
