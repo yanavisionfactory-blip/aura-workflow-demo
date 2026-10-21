@@ -6,6 +6,7 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 import { build } from 'vite';
 import { primaryResultFromOutputs } from '../src/lib/resultPresentation.mjs';
 import { websiteContentFiles, websiteContentZip } from '../src/lib/websiteContentExport.mjs';
+import { websiteCMSPreview } from '../src/lib/websiteCMSPreview.mjs';
 import { unzipSync, strFromU8 } from 'fflate';
 
 const packet = {
@@ -107,4 +108,62 @@ test('marketing review and CMS-ready archive retain every full page, FAQ, exact 
   assert.ok(websiteContentFiles(marketing)['pages/01-page-0.html'].includes('&lt;script&gt;'));
   marketing.pages[0].cta_target = 'javascript:alert(1)';
   assert.throws(() => websiteContentFiles(marketing), /safe HTTPS/);
+});
+
+test('CMS simulations preserve all five exact versions and never become provider receipts or approvals', () => {
+  const original = structuredClone(packet);
+  const preview = websiteCMSPreview(packet);
+  assert.deepEqual(packet, original);
+  assert.equal(preview.mode, 'simulated');
+  assert.equal(preview.source_content_receipt, packet.execution.id);
+  assert.equal(preview.external_calls, 0);
+  assert.equal(preview.cms_records_created, 0);
+  assert.equal(preview.live_pages_modified, false);
+  assert.equal(preview.approvals_recorded, false);
+  assert.deepEqual(preview.tools.map((tool) => tool.name), ['WordPress', 'Shopify', 'WooCommerce', 'BigCommerce']);
+  for (const tool of preview.tools) {
+    assert.equal(tool.mode, 'simulated');
+    assert.equal(tool.connection_verified, false);
+    assert.equal(tool.pages.length, 5);
+    for (let i = 0; i < 5; i++) {
+      const page = tool.pages[i];
+      assert.equal(page.content_version, packet.pages[i].version);
+      assert.equal(page.source_live_url, packet.pages[i].url);
+      assert.equal(page.seo.page_title, packet.pages[i].page_title);
+      assert.ok(page.body_html.includes(packet.pages[i].sections[0].body));
+      assert.equal(page.remote_id, null);
+      assert.equal(page.remote_url, null);
+      assert.equal(page.publish_state, 'unpublished');
+      assert.equal(page.approval_status, 'pending');
+      assert.match(page.preview_id, /^simulated-/);
+      if (tool.name === 'WooCommerce') {
+        assert.equal(page.cms_owner, 'WordPress');
+        assert.equal(page.products_created, 0);
+      }
+    }
+  }
+  assert.equal(websiteContentFiles(packet)['metadata.json'].includes('"cms_drafts_created": 0'), true);
+});
+
+test('screenshot-style per-tool rows expose full simulated outputs with honest status', () => {
+  const real = render(packet);
+  assert.match(real, /What happened/);
+  assert.match(real, /Tools used/);
+  assert.doesNotMatch(real, /View simulated Shopify output/);
+  const simulated = render(packet, { initialSimulation: true });
+  for (const provider of ['WordPress', 'Shopify', 'WooCommerce', 'BigCommerce']) {
+    assert.ok(simulated.includes(`View simulated ${provider} output`));
+  }
+  assert.match(simulated, /Simulation mode/);
+  assert.match(simulated, /No CMS API calls, records, approvals or live changes were made/);
+  for (const tool of websiteCMSPreview(packet).tools) {
+    const html = render(packet, { initialSimulation: true, initialTab: 'Tool results', initialTool: tool.id });
+    assert.ok(html.includes(`${tool.name} simulated output`));
+    assert.match(html, /Simulated tool output/);
+    assert.match(html, /0 CMS records created/);
+    for (const page of packet.pages) {
+      assert.ok(html.includes(page.version));
+      assert.ok(html.includes(page.sections[0].body));
+    }
+  }
 });
