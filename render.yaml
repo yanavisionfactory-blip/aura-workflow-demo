@@ -1,0 +1,124 @@
+# Deployment proposal: paid resources are created only after budget and migration review.
+# Keep the existing credential keys when restoring the Railway database.
+previews:
+  generation: "off"
+
+projects:
+  - name: AURA Control Plane
+    environments:
+      - name: production
+        envVarGroups:
+          - name: aura-control-runtime
+            envVars:
+              - key: ENVIRONMENT
+                value: production
+              - key: FRONTEND_URL
+                value: https://yanavisionfactory-blip.github.io
+              - key: CLERK_AUTHORIZED_PARTIES
+                value: https://yanavisionfactory-blip.github.io
+              - key: ALLOW_LEGACY_WORKSPACE_TOKENS
+                value: "false"
+        databases:
+          - name: aura-control-db
+            plan: 0.1c-256mb
+            diskSizeGB: 5
+            region: oregon
+            postgresMajorVersion: "18"
+            ipAllowList: []
+        services:
+          - type: keyvalue
+            name: aura-control-queue
+            plan: 256mb
+            region: oregon
+            maxmemoryPolicy: noeviction
+            ipAllowList: []
+          - type: web
+            name: aura-control-api
+            runtime: docker
+            plan: 0.5c-512mb
+            region: oregon
+            branch: main
+            autoDeployTrigger: "off"
+            dockerfilePath: ./backend/Dockerfile
+            dockerContext: ./backend
+            dockerCommand: /bin/sh -c 'exec uvicorn app.main:app --host 0.0.0.0 --port "$PORT"'
+            healthCheckPath: /health
+            maxShutdownDelaySeconds: 300
+            envVars:
+              - fromGroup: aura-control-runtime
+              - key: PUBLIC_URL
+                fromService:
+                  type: web
+                  name: aura-control-api
+                  envVarKey: RENDER_EXTERNAL_URL
+              - key: DATABASE_URL
+                fromDatabase:
+                  name: aura-control-db
+                  property: connectionString
+              - key: REDIS_URL
+                fromService:
+                  type: keyvalue
+                  name: aura-control-queue
+                  property: connectionString
+              - key: OPENAI_API_KEY
+                sync: false
+              - key: CREDENTIAL_ENCRYPTION_KEY
+                sync: false
+              - key: SESSION_SIGNING_KEY
+                sync: false
+              - key: CLERK_JWT_KEY
+                sync: false
+              - key: CLERK_ISSUER
+                sync: false
+          - type: worker
+            name: aura-control-worker
+            runtime: docker
+            plan: 0.5c-512mb
+            region: oregon
+            branch: main
+            autoDeployTrigger: "off"
+            dockerfilePath: ./backend/Dockerfile
+            dockerContext: ./backend
+            dockerCommand: celery -A app.worker.celery worker --loglevel=INFO --concurrency=1
+            maxShutdownDelaySeconds: 300
+            envVars:
+              - fromGroup: aura-control-runtime
+              - key: DATABASE_URL
+                fromDatabase:
+                  name: aura-control-db
+                  property: connectionString
+              - key: REDIS_URL
+                fromService:
+                  type: keyvalue
+                  name: aura-control-queue
+                  property: connectionString
+              - key: PUBLIC_URL
+                fromService:
+                  type: web
+                  name: aura-control-api
+                  envVarKey: PUBLIC_URL
+              - key: OPENAI_API_KEY
+                fromService:
+                  type: web
+                  name: aura-control-api
+                  envVarKey: OPENAI_API_KEY
+              - key: CREDENTIAL_ENCRYPTION_KEY
+                fromService:
+                  type: web
+                  name: aura-control-api
+                  envVarKey: CREDENTIAL_ENCRYPTION_KEY
+              - key: SESSION_SIGNING_KEY
+                fromService:
+                  type: web
+                  name: aura-control-api
+                  envVarKey: SESSION_SIGNING_KEY
+              - key: CLERK_JWT_KEY
+                fromService:
+                  type: web
+                  name: aura-control-api
+                  envVarKey: CLERK_JWT_KEY
+              - key: CLERK_ISSUER
+                fromService:
+                  type: web
+                  name: aura-control-api
+                  envVarKey: CLERK_ISSUER

@@ -2,7 +2,7 @@ import json
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -124,6 +124,17 @@ class Settings(BaseSettings):
     connector_engineer_canary_connections_json: str = "{}"
     connector_engineer_allowed_providers_json: str = "[]"
     connector_engineer_allow_writes: bool = False
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def normalize_postgres_driver(cls, value):
+        # Render's managed URL uses a plain PostgreSQL scheme. SQLAlchemy's
+        # default psycopg2 driver is not the async psycopg3 driver we ship.
+        if isinstance(value, str):
+            scheme, separator, rest = value.partition("://")
+            if separator and scheme.lower() in {"postgres", "postgresql"}:
+                return "postgresql+psycopg://" + rest
+        return value
 
     @property
     def clerk_enabled(self) -> bool:
