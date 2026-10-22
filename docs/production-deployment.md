@@ -1,5 +1,10 @@
 # Production deployment
 
+For Render, follow [the Render migration runbook](render-migration.md). GitHub
+Pages reads the repository variable `AURA_API_URL` at build time, with the current
+Railway URL as its fallback. Set that variable only after the replacement API,
+worker, restored database and connected accounts have passed verification.
+
 ## Railway API and worker
 
 Configure the same environment on the API and Celery worker services:

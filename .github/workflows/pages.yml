@@ -34,7 +34,9 @@ jobs:
       - name: Build
         run: npm run build
         env:
-          VITE_AURA_API_URL: https://impartial-emotion-production-49d4.up.railway.app
+          # Set this repository variable after the new API passes /ready.
+          # Leaving it unset preserves the current production endpoint.
+          VITE_AURA_API_URL: ${{ vars.AURA_API_URL || 'https://impartial-emotion-production-49d4.up.railway.app' }}
           VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
           VITE_AURA_BUILD_SHA: ${{ github.sha }}
       - name: Reuse unchanged published walkthrough

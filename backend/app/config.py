@@ -2,7 +2,7 @@ import json
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,6 +14,19 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:5173"
     database_url: str = "postgresql+psycopg://aura:aura@postgres:5432/aura"
     redis_url: str = "redis://redis:6379/0"
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def use_psycopg_for_postgres_urls(cls, value):
+        # Render's managed database reference supplies postgresql://. Select
+        # the installed, async-capable driver without changing URL credentials
+        # or connection options. Explicit driver URLs and SQLite stay intact.
+        if isinstance(value, str):
+            for prefix in ("postgresql://", "postgres://"):
+                if value.startswith(prefix):
+                    return "postgresql+psycopg://" + value[len(prefix):]
+        return value
+
     openai_api_key: str = ""
     openai_model: str = "gpt-5.4-mini"
     # One structured model response followed by the existing deterministic

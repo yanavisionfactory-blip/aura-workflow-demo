@@ -1,0 +1,158 @@
+# Production resources. Follow docs/render-migration.md before the first Apply:
+# new datastores are empty, and the original encryption keys must be retained.
+projects:
+  - name: aura
+    environments:
+      - name: production
+        envVarGroups:
+          - name: aura-runtime
+            envVars:
+              - key: ENVIRONMENT
+                value: production
+              - key: PYTHON_VERSION
+                value: 3.12.14
+              - key: FRONTEND_URL
+                value: https://yanavisionfactory-blip.github.io/aura-workflow-demo
+              - key: CLERK_AUTHORIZED_PARTIES
+                value: https://yanavisionfactory-blip.github.io
+              - key: ALLOW_LEGACY_WORKSPACE_TOKENS
+                value: "false"
+              - key: OPENAI_MODEL
+                value: gpt-5.4-mini
+              - key: PLANNER_MODE
+                value: llm
+              - key: RECOVERY_SCHEDULER_ENABLED
+                value: "true"
+              - key: CONNECTOR_ENGINEER_ENABLED
+                value: "true"
+              - key: PIPEDREAM_ENVIRONMENT
+                value: production
+        services:
+          - type: web
+            name: aura-api-render
+            runtime: python
+            region: frankfurt
+            plan: 0.5c-512mb
+            repo: https://github.com/yanavisionfactory-blip/aura-workflow-demo
+            branch: main
+            rootDir: backend
+            buildCommand: pip install .
+            startCommand: uvicorn app.main:app --host 0.0.0.0 --port "$PORT"
+            # Check /ready separately before cutover. API and worker can start
+            # in either order; worker availability is not process liveness.
+            healthCheckPath: /health
+            maxShutdownDelaySeconds: 300
+            autoDeployTrigger: "off"
+            envVars:
+              - fromGroup: aura-runtime
+              - key: DATABASE_URL
+                fromDatabase:
+                  name: aura-postgres-render
+                  property: connectionString
+              - key: REDIS_URL
+                fromService:
+                  type: keyvalue
+                  name: aura-queue-render
+                  property: connectionString
+              - key: PUBLIC_URL
+                fromService:
+                  type: web
+                  name: aura-api-render
+                  envVarKey: RENDER_EXTERNAL_URL
+              # Supply the current production values in the secure Dashboard.
+              # Do not generate replacements for encrypted existing records.
+              - key: CREDENTIAL_ENCRYPTION_KEY
+                sync: false
+              - key: CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS
+                sync: false
+              - key: SESSION_SIGNING_KEY
+                sync: false
+              - key: CERTIFICATION_SIGNING_KEY
+                sync: false
+              - key: OPENAI_API_KEY
+                sync: false
+              - key: CLERK_ISSUER
+                sync: false
+              - key: CLERK_JWKS_URL
+                sync: false
+          - type: worker
+            name: aura-worker-render
+            runtime: python
+            region: frankfurt
+            plan: 0.5c-512mb
+            repo: https://github.com/yanavisionfactory-blip/aura-workflow-demo
+            branch: main
+            rootDir: backend
+            buildCommand: pip install .
+            # One child keeps the initial memory footprint bounded. Celery
+            # drains on SIGTERM; existing late acknowledgements enable recovery.
+            startCommand: celery -A app.worker.celery worker --loglevel=INFO --concurrency=1
+            maxShutdownDelaySeconds: 300
+            autoDeployTrigger: "off"
+            envVars:
+              - fromGroup: aura-runtime
+              - key: DATABASE_URL
+                fromDatabase:
+                  name: aura-postgres-render
+                  property: connectionString
+              - key: REDIS_URL
+                fromService:
+                  type: keyvalue
+                  name: aura-queue-render
+                  property: connectionString
+              - key: PUBLIC_URL
+                fromService:
+                  type: web
+                  name: aura-api-render
+                  envVarKey: RENDER_EXTERNAL_URL
+              - key: CREDENTIAL_ENCRYPTION_KEY
+                fromService:
+                  type: web
+                  name: aura-api-render
+                  envVarKey: CREDENTIAL_ENCRYPTION_KEY
+              - key: CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS
+                fromService:
+                  type: web
+                  name: aura-api-render
+                  envVarKey: CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS
+              - key: SESSION_SIGNING_KEY
+                fromService:
+                  type: web
+                  name: aura-api-render
+                  envVarKey: SESSION_SIGNING_KEY
+              - key: CERTIFICATION_SIGNING_KEY
+                fromService:
+                  type: web
+                  name: aura-api-render
+                  envVarKey: CERTIFICATION_SIGNING_KEY
+              - key: OPENAI_API_KEY
+                fromService:
+                  type: web
+                  name: aura-api-render
+                  envVarKey: OPENAI_API_KEY
+              - key: CLERK_ISSUER
+                fromService:
+                  type: web
+                  name: aura-api-render
+                  envVarKey: CLERK_ISSUER
+              - key: CLERK_JWKS_URL
+                fromService:
+                  type: web
+                  name: aura-api-render
+                  envVarKey: CLERK_JWKS_URL
+          - type: keyvalue
+            name: aura-queue-render
+            region: frankfurt
+            plan: 256mb
+            maxmemoryPolicy: noeviction
+            persistenceMode: journal-snapshot
+            ipAllowList: []
+        databases:
+          - name: aura-postgres-render
+            region: frankfurt
+            plan: 0.1c-256mb
+            postgresMajorVersion: "18"
+            databaseName: aura
+            user: aura
+            diskSizeGB: 5
+            ipAllowList: []
