@@ -186,12 +186,21 @@ def intent_bounded_tool_inventory(
         aliases = _inventory_aliases(item)
         if str(item.get("slug") or "").casefold() == "aura":
             continue
-        if any(f" {alias} " in text for alias in aliases if alias):
+        # Google Ads is its own account, not the shared Google Workspace
+        # identity/Gmail connector. Do not let the generic `google` alias in
+        # google.identity.get introduce an unrelated Workspace consent gate.
+        # Other explicit Workspace apps (Gmail, Docs, Drive...) still match.
+        item_text = text
+        item_requested = requested
+        if str(item.get("slug") or "").casefold() == "google":
+            item_text = re.sub(r"\bgoogle ads\b", " ", text)
+            item_requested = {re.sub(r"\bgoogle ads\b", " ", value) for value in requested}
+        if any(f" {alias} " in item_text for alias in aliases if alias):
             external_matches.add(index)
             continue
         if any(
             any(f" {alias} " in requested_value for alias in aliases if alias)
-            for requested_value in requested
+            for requested_value in item_requested
         ):
             external_matches.add(index)
 

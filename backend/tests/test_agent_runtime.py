@@ -154,6 +154,24 @@ def test_open_ended_intent_preserves_the_full_inventory() -> None:
     assert intent_bounded_tool_inventory("Help me automate this", inventory) == inventory
 
 
+def test_google_ads_does_not_select_workspace_identity_or_gmail() -> None:
+    inventory = [
+        {"slug": "google", "name": "Google Workspace", "allowed_operations": [
+            "google.identity.get", "gmail.get", "gmail.send", "docs.get"]},
+        {"slug": "google-ads", "name": "Google Ads", "allowed_operations": [
+            "google-ads.list-account-id-options"]},
+    ]
+    for prompt, selected in [
+        ("Review Google Ads performance for the weekly product package", []),
+        ("Review the selected ad account", ["Google Ads"]),
+    ]:
+        bounded = intent_bounded_tool_inventory(prompt, inventory, selected)
+        assert [item["slug"] for item in bounded] == ["google-ads"]
+    assert {item["slug"] for item in intent_bounded_tool_inventory(
+        "Review Google Ads and my Gmail conversations", inventory,
+    )} == {"google", "google-ads"}
+
+
 def test_senior_orchestrator_assigns_every_incomplete_step(monkeypatch) -> None:
     async def fake_run(*_args, **_kwargs):
         return ExecutionSupervision(
