@@ -13,15 +13,15 @@ before(async () => {
   ({ render } = await import(pathToFileURL(path.join(temporary, 'render.mjs'))));
 });
 after(() => { if (temporary) fs.rmSync(temporary, { recursive: true, force: true }); });
-test('complete review renders all requested tools, tests, copy, source tabs and approvals', async () => {
+test('compact results retain all requested draft outputs and source-linked approvals', async () => {
   const packet = await executeCommerceSimulation();
   const html = render(packet);
-  for (const text of ['Your weekly marketing action package', 'Inventory needs attention', 'Google Ads', 'Meta Ads Manager', 'Amazon Ads', 'Amazon Seller Central', 'Three revised listing bullets', 'Approval required:', 'Website total purchases:', 'unavailable', 'no causal or statistical-significance claim', 'S-STOCK']) assert.ok(html.includes(text), text);
+  for (const text of ['Marketing action package ready', 'What happened', 'Tools used', 'changes published', '1 inventory issue needs attention', 'Google Ads', 'Meta Ads Manager', 'Amazon Ads', 'Amazon Seller Central', 'Three revised listing bullets', 'Approval required:', 'Website total purchases:', 'unavailable', 'no causal or statistical-significance claim', 'S-STOCK']) assert.ok(html.includes(text), text);
   for (const test of packet.tests) assert.ok(html.includes(test.title));
   for (const copy of [...packet.copy.google.headlines, ...packet.copy.meta.primary, ...packet.copy.seller.bullets]) assert.ok(html.includes(copy.replaceAll('&', '&amp;')));
-  assert.equal((html.match(/role="tab"/g) || []).length, 4);
-  assert.match(html, /id="evidence-S-C"/);
+  assert.equal((html.match(/aria-label="View .*? report"/g) || []).length, 4);
+  assert.match(html, /<details class="ad-output"><summary>/);
   assert.match(html, /href="#evidence-G-C-N"/);
   assert.doesNotMatch(html, /launch now|publish now|Update Gmail/i);
-  assert.match(render(await executeCommerceSimulation('ready')), /Scenario stock gate passed; manager approval pending/);
+  assert.match(render(await executeCommerceSimulation('ready')), /Stock gate passed; approval pending/);
 });
