@@ -35,7 +35,14 @@ Render's secure Dashboard, preserving the current values for:
   Mailchimp, Canva and the other enabled providers.
 - Nango and Pipedream credentials and integration/project mappings.
 - Browser connector URL/token, resource aliases and enabled connector settings.
-- Recovery GitHub credentials, pipeline callback secret and signing keys.
+- Existing connector signing keys and other enabled runtime configuration.
+
+Keep `RECOVERY_GITHUB_REPOSITORY` and `RECOVERY_GITHUB_TOKEN` unset on the new
+runtime initially. The current isolated code-repair workflow deploys its canary
+and production release to Railway and reports to the Railway URL. It needs a
+Render release/canary adapter before being enabled for this host. Ordinary
+persisted workflow recovery remains enabled; this restriction applies to the
+external code-promotion pipeline.
 
 Do not import old `DATABASE_URL`, `REDIS_URL`, `PUBLIC_URL` or `FRONTEND_URL`
 values. The Blueprint wires the new datastores and actual Render API URL without
