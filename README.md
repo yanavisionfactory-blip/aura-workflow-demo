@@ -36,7 +36,13 @@ accepted. Tests cover arithmetic, deduplication, comparable periods, provenance,
 target definitions, evidence resolution, compilation, real provider dispatch,
 native result selection and all ten rendered tool views.
 
-`main` is the single controlled release source for both the GitHub Pages frontend and the Railway Python control plane. Production changes must be reconciled and tested on a branch from `main`, then merged through one reviewed pull request.
+`main` is the single controlled release source for the GitHub Pages frontend and Python control plane. Production changes must be reconciled and tested on a branch from `main`, then merged through one reviewed pull request.
+
+For a Render deployment, use the root [`render.yaml`](render.yaml) and follow
+[`docs/render-migration.md`](docs/render-migration.md). The Blueprint prepares a
+FastAPI web service, Celery worker, private Postgres database and durable job
+queue. Existing production data and encryption keys must be transferred before
+the frontend is switched to the new API.
 
 ## Frontend
 
