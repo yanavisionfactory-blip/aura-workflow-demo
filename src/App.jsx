@@ -13,6 +13,7 @@ import SavedRunResults from "@/pages/SavedRunResults";
 import SeoAuditDemo from "@/pages/SeoAuditDemo";
 import SimulatedCMSTool from "@/pages/SimulatedCMSTool";
 import MarketingToolsWorkflow from "@/pages/MarketingToolsWorkflow";
+import CommerceToolsWorkflow from "@/pages/CommerceToolsWorkflow";
 
 function UpdateNotice() {
   const [available, setAvailable] = useState(false);
@@ -88,6 +89,7 @@ function ProductRoutes() {
         <Route path="/" element={<Demo />} />
         <Route path="/results" element={<DeliveryResults />} />
         <Route path="/marketing-tools" element={<MarketingToolsWorkflow />} />
+        <Route path="/commerce-tools" element={<CommerceToolsWorkflow />} />
         <Route path="/results/:deliveryId" element={<DeliveryResults />} />
         <Route path="/runs/:runId" element={<SavedRunResults />} />
         <Route path="/runs/:runId/tools/:toolSlug" element={<SimulatedCMSTool />} />
