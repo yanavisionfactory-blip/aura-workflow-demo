@@ -41,6 +41,7 @@ jobs:
           npx playwright install --with-deps chromium
           sudo apt-get install -y ffmpeg
           node scripts/capture-website-walkthrough.mjs
+          node scripts/check-website-simulation.mjs
           python3 scripts/build-website-walkthrough.py .walkthrough-frames --output dist/showcase/website-content/walkthrough.mp4
           cp .walkthrough-frames/scene-04.jpg dist/showcase/website-content/walkthrough-poster.jpg
       - name: Keep the walkthrough video for review
@@ -51,6 +52,11 @@ jobs:
             dist/showcase/website-content/walkthrough.mp4
             dist/showcase/website-content/walkthrough.vtt
             dist/showcase/website-content/walkthrough-poster.jpg
+      - name: Keep website simulation checks and screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: aura-website-simulation-checks
+          path: .website-simulation-proof/
       - name: Support saved results deep links
         run: cp dist/index.html dist/404.html
       - name: Publish build version

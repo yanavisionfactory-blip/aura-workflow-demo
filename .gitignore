@@ -39,6 +39,7 @@ pip-unpack-*/
 *.sw?
 
 .vite/
+.website-simulation-proof/
 base44/.app.jsonc
 backend/.venv/
 backend/.pytest_cache/

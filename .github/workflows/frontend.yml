@@ -1,10 +1,10 @@
 name: Frontend validation
 on:
   pull_request:
-    paths: ["src/**", "tests/**", "patches/**", "package*.json", ".github/workflows/frontend.yml"]
+    paths: ["src/**", "tests/**", "scripts/check-website-simulation.mjs", "patches/**", "package*.json", ".github/workflows/frontend.yml"]
   push:
     branches: [main]
-    paths: ["src/**", "tests/**", "patches/**", "package*.json", ".github/workflows/frontend.yml"]
+    paths: ["src/**", "tests/**", "scripts/check-website-simulation.mjs", "patches/**", "package*.json", ".github/workflows/frontend.yml"]
 permissions:
   contents: read
 jobs:
@@ -21,3 +21,14 @@ jobs:
         env:
           VITE_AURA_API_URL: https://api.example.invalid
           VITE_CLERK_PUBLISHABLE_KEY: pk_test_ci_placeholder
+      - name: Check the complete website simulation in an isolated browser
+        run: |
+          npm install --no-save --package-lock=false playwright@1.56.1
+          npx playwright install --with-deps chromium
+          node scripts/check-website-simulation.mjs
+      - name: Keep website simulation proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aura-website-simulation-checks
+          path: .website-simulation-proof/
