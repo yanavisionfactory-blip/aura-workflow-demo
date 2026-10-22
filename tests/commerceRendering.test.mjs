@@ -6,12 +6,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build } from 'vite';
 import { executeCommerceSimulation } from '../src/lib/commerceSimulation.mjs';
 import { TOOL_PAGES, readToolRoute, toolHref } from '../src/showcase/commerce-workflow/toolNavigation.mjs';
-let temporary, render, renderWorkspace;
+let temporary, render, renderWorkspace, renderPlan, renderReview;
 const repo = fileURLToPath(new URL('../', import.meta.url));
 before(async () => {
   temporary = fs.mkdtempSync(path.join(repo, '.commerce-render-'));
   await build({ configFile: path.join(repo, 'vite.commerce.config.js'), logLevel: 'silent', build: { ssr: path.join(repo, 'tests/fixtures/commerceRender.jsx'), outDir: temporary, emptyOutDir: true, rollupOptions: { output: { entryFileNames: 'render.mjs' } } }, ssr: { noExternal: ['lucide-react'] } });
-  ({ render, renderWorkspace } = await import(pathToFileURL(path.join(temporary, 'render.mjs'))));
+  ({ render, renderWorkspace, renderPlan, renderReview } = await import(pathToFileURL(path.join(temporary, 'render.mjs'))));
 });
 after(() => { if (temporary) fs.rmSync(temporary, { recursive: true, force: true }); });
 test('compact results retain all requested draft outputs and source-linked approvals', async () => {
@@ -78,3 +78,19 @@ test('all report and source pages render, and evidence links highlight the match
   assert.ok(html.includes('16 oz travel mug'));
 });
 const BRIEF_PRODUCT = 'Everyday Travel Mug';
+test('approval shows collapsed source steps and an expanded draft, following the supplied AURA reference', async () => {
+  const packet = await executeCommerceSimulation();
+  const plan = renderPlan(), review = renderReview(packet);
+  assert.ok(plan.includes('Here’s how Aura plans to complete your task'));
+  assert.equal((plan.match(/class="ad-timeline-row"/g) || []).length, 5);
+  assert.ok(plan.includes('Ready to start?'));
+  assert.ok(review.includes('Review &amp; edit before running'));
+  assert.equal((review.match(/<details class="ad-review-source"/g) || []).length, 4);
+  assert.doesNotMatch(review, /<details[^>]*\sopen(?:=|\s|>)/);
+  assert.ok(review.includes('class="ad-review-draft"'));
+  assert.ok(review.includes('Approve &amp; run'));
+  assert.ok(review.includes(packet.copy.meta.primary[0].replaceAll('&', '&amp;')));
+  assert.doesNotMatch(review, /ad-product|ad-mini-tests|You approve the scope/);
+  const results = render(packet);
+  assert.ok(results.indexOf('class="ad-suggested"') > results.indexOf('</div></details>'));
+});
