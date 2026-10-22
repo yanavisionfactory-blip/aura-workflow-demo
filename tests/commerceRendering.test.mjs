@@ -33,6 +33,14 @@ test('compact results retain all requested draft outputs and source-linked appro
   assert.ok(mainOutput.includes('Open in Meta Ads'));
   assert.doesNotMatch(html, /Your next round of marketing tests|ad-main-test-grid/);
   assert.equal((html.match(/<details class="ad-other-output"/g) || []).length, 3);
+  for (const tool of ['google', 'amazon', 'seller']) {
+    const screen = html.match(new RegExp(`<figure class="ad-secondary-tool-output" data-tool-screen="${tool}">[\\s\\S]*?</figure>`))?.[0];
+    assert.ok(screen, `${tool} dropdown contains its tool screen`);
+    assert.equal((screen.match(/<img /g) || []).length, 1);
+    assert.ok(screen.includes('View in tool'));
+    assert.ok(screen.includes(toolHref(tool).replaceAll('&', '&amp;')));
+    assert.ok(screen.includes('loading="lazy"'));
+  }
   assert.ok(html.includes('Workflow summary &amp; full action package'));
   assert.doesNotMatch(html, /<details[^>]*\sopen(?:=|\s|>)/, 'supporting details start collapsed');
   assert.match(html, /href="\?tool=google&amp;view=campaigns&amp;evidence=G-C-N"/);
