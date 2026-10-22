@@ -58,4 +58,9 @@ export default [
       "react-hooks/rules-of-hooks": "error",
     },
   },
+  {
+    // The public demo shares the JSON fixture through standard import attributes.
+    files: ["src/showcase/marketing-workflow/data.mjs"],
+    languageOptions: { parserOptions: { ecmaVersion: "latest" } },
+  },
 ];
