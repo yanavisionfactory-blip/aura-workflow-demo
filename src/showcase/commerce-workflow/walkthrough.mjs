@@ -1,7 +1,7 @@
 export const SCENES = [
   { title: 'Start with the outcome', caption: 'One request describes the client, product, four tools and review-only scope.' },
   { title: 'Review AURA’s plan', caption: 'Seller Central comes first. Each tool has a clear role and keeps its own attribution.' },
-  { title: 'Keep control of the work', caption: 'Review the numbered source steps, edit draft copy and approve preparation without publishing changes.' },
+  { title: 'Keep control of the work', caption: 'Review the action, ask AURA for a simulated ad revision or edit manually, then approve the draft.' },
   { title: 'Follow the workflow', caption: 'Watch a prepared playback of the four simulated source reviews and package validation.' },
   { title: 'Get a review-ready action package', caption: 'See the Meta creative first. Expand the other tool screens and use View in tool to inspect each draft.' },
 ];
