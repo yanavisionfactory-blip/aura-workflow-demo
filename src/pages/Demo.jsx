@@ -1776,6 +1776,7 @@ Generate a results summary in plain, human-friendly language (not technical).
                 ) : (
                   <>
                     <CommandInput initialValue={inputPrompt} onSubmit={handleSubmit} examples={WORKFLOW_EXAMPLES} onPickExample={handlePickExample} />
+                    <div className="mt-5 text-center"><a className="inline-flex rounded-xl border border-primary/30 bg-primary/5 px-4 py-3 text-xs text-primary" href={`${import.meta.env.BASE_URL}showcase/commerce-workflow/`}>Run e-commerce marketing simulation · Google, Meta, Amazon Ads &amp; Seller Central</a></div>
                   </>
                 )}
               </motion.div>
