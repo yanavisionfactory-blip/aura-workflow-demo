@@ -4,6 +4,15 @@ import { Activity, ArrowRight, BarChart3, CalendarClock, Check, CheckCircle2, Ch
 import { BRIEF, TOOLS, commerceMarkdown, movement } from '../../lib/commerceSimulation.mjs';
 import { evidenceHref, toolHref } from './toolNavigation.mjs';
 import metaCreativeScreen from './assets/meta-creative-tool.jpg';
+import googleAdScreen from './assets/google-ad-tool.jpg';
+import amazonTargetingScreen from './assets/amazon-targeting-tool.jpg';
+import sellerListingScreen from './assets/seller-listing-tool.jpg';
+
+const SECONDARY_TOOL_SCREENS = [
+  { tool: 'google', label: 'Google ad preview', screen: googleAdScreen, alt: 'Prepared search ad displayed in the simulated Google Ads interface, with two headline options, description and search ad preview' },
+  { tool: 'amazon', label: 'Amazon targeting', screen: amazonTargetingScreen, alt: 'Prepared exact-keyword targeting displayed in the simulated Amazon Ads interface, with keyword, match type, ACoS evidence and inventory hold' },
+  { tool: 'seller', label: 'Seller Central listing', screen: sellerListingScreen, alt: 'Prepared listing displayed in the simulated Amazon Seller Central interface, with proposed title, three bullets and product detail page preview' },
+];
 
 const ORDER = ['seller', 'google', 'meta', 'amazon'];
 const money = value => value == null ? 'Unavailable' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
@@ -60,7 +69,7 @@ export function Results({ packet, onNew = () => {}, onReplay = onNew }) {
   const titles = { activity: 'Workflow activity', tests: 'Three proposed advertising tests', copy: 'Channel copy for review', stock: 'Inventory review', schedule: 'Schedule this workflow', share: 'Share the agency demo', connect: 'From demo to a real client workflow' };
   return <div className="ad-results ad-enter"><header className="ad-result-heading"><div className="ad-success"><CheckCircle2 size={29}/></div><h1>Marketing action package ready</h1><p>Reviewed one product across four tools and prepared next week’s<br className="ad-desktop-break"/> tests and copy for account-manager review.</p></header>
     <figure className="ad-featured-tool-output" data-testid="primary-tool-output"><div className="ad-featured-tool-heading"><h2><ToolIcon tool="meta"/>Primary output · Meta creative</h2><a href={toolHref('meta')} target="_blank" rel="noopener noreferrer"><ExternalLink size={12}/>Open in Meta Ads</a></div><a className="ad-featured-tool-image" href={toolHref('meta')} target="_blank" rel="noopener noreferrer" aria-label="Open the displayed Meta creative in the simulated Ads Manager"><img src={metaCreativeScreen} alt="Prepared Meta creative displayed in the simulated Meta Ads Manager, with primary text, headline and a product demonstration ad preview" width="1357" height="932" fetchPriority="high"/></a><figcaption>Draft for account-manager review · Simulated tool view</figcaption></figure>
-    <section className="ad-other-outputs" aria-label="Other outputs"><h2>Other outputs</h2>{[['google', 'Google ad preview'], ['amazon', 'Amazon targeting'], ['seller', 'Seller Central listing']].map(([tool, label]) => <details className="ad-other-output" key={tool}><summary><ToolIcon tool={tool}/><span>{label}</span><ChevronDown size={15}/></summary>{tool === 'amazon' ? <Tests packet={packet} only="amazon"/> : <ReviewCopy packet={packet} only={tool}/>}<a className="ad-secondary-tool-link" href={toolHref(tool)} target="_blank" rel="noopener noreferrer"><ExternalLink size={12}/>Open in {TOOLS[tool]}</a></details>)}</section>
+    <section className="ad-other-outputs" aria-label="Other outputs"><h2>Other outputs</h2>{SECONDARY_TOOL_SCREENS.map(({ tool, label, screen, alt }) => <details className="ad-other-output" key={tool}><summary><ToolIcon tool={tool}/><span>{label}</span><ChevronDown size={15}/></summary><figure className="ad-secondary-tool-output" data-tool-screen={tool}><div className="ad-featured-tool-heading"><h2>{TOOLS[tool]}</h2><a href={toolHref(tool)} target="_blank" rel="noopener noreferrer" aria-label={`View in ${TOOLS[tool]}`}><ExternalLink size={12}/>View in tool</a></div><a className="ad-featured-tool-image" href={toolHref(tool)} target="_blank" rel="noopener noreferrer" aria-label={`View the displayed output in simulated ${TOOLS[tool]}`}><img src={screen} alt={alt} width="1357" height="932" loading="lazy"/></a><figcaption>Draft for account-manager review · Simulated tool view</figcaption></figure></details>)}</section>
     <details className="ad-approved-results"><summary><FileText size={15}/><span>Workflow summary &amp; full action package</span><ChevronDown size={15}/></summary><div className="ad-approved-results-body">
     <Metrics items={[[4, 'tools reviewed'], [3, 'tests proposed'], [0, 'changes published']]}/>
     <section className="ad-happened"><h2>What happened</h2>
