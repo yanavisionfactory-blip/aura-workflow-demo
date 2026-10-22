@@ -78,14 +78,17 @@ test('all report and source pages render, and evidence links highlight the match
   assert.ok(html.includes('16 oz travel mug'));
 });
 const BRIEF_PRODUCT = 'Everyday Travel Mug';
-test('approval shows collapsed source steps and an expanded draft, following the supplied AURA reference', async () => {
+test('approval shows only the editable action with AI and manual editing paths', async () => {
   const packet = await executeCommerceSimulation();
   const plan = renderPlan(), review = renderReview(packet);
   assert.ok(plan.includes('Here’s how Aura plans to complete your task'));
   assert.equal((plan.match(/class="ad-timeline-row"/g) || []).length, 5);
   assert.ok(plan.includes('Ready to start?'));
   assert.ok(review.includes('Review &amp; edit before running'));
-  assert.equal((review.match(/<details class="ad-review-source"/g) || []).length, 4);
+  assert.doesNotMatch(review, /ad-review-source|read-only/);
+  assert.ok(review.includes('Ask AURA'));
+  assert.ok(review.includes('Edit manually'));
+  assert.ok(review.includes('Meta ad preview'));
   assert.doesNotMatch(review, /<details[^>]*\sopen(?:=|\s|>)/);
   assert.ok(review.includes('class="ad-review-draft"'));
   assert.ok(review.includes('Approve &amp; run'));

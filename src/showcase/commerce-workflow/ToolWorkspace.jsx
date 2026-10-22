@@ -14,7 +14,7 @@ function Brand({ tool }) {
 function DraftStatus({ hold = false }) { return <span className={`tw-status ${hold ? 'tw-hold' : ''}`}><span/>{hold ? 'On hold · stock clearance' : 'Draft · approval required'}</span>; }
 function Metrics({ items }) { return <div className="tw-metrics">{items.map(([label, value, previous]) => <div key={label}><span>{label}</span><strong>{value}</strong>{previous && <small>Previous week: {previous}</small>}</div>)}</div>; }
 function SourceLinks({ ids }) { return <div className="tw-evidence">Evidence {ids.map(id => <a key={id} href={evidenceHref(id)}>{id}<ArrowRight size={10}/></a>)}</div>; }
-function ProductArt({ scene = 'studio', frame = 0 }) {
+export function ProductArt({ scene = 'studio', frame = 0 }) {
   return <div className={`tw-product-art tw-art-${scene} tw-frame-${frame}`} role="img" aria-label={`Illustrative concept mockup of the Harbor and Field stainless steel travel mug, ${scene} setting`}><span className="tw-art-word">{frame === 1 ? 'STAINLESS STEEL' : frame === 2 ? 'REUSABLE. EVERYDAY.' : 'YOUR EVERYDAY 16 OZ.'}</span><div className="tw-art-disc"/><div className="tw-cup"><span>HARBOR<br/>&amp; FIELD</span></div>{scene === 'lifestyle' && <><div className="tw-book"/><div className="tw-coffee-shadow"/></>}<span className="tw-art-caption">Everyday Travel Mug</span><span className="tw-art-disclosure">Concept mockup</span></div>;
 }
 function DraftDownload({ packet, tool }) {
