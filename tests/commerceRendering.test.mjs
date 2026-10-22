@@ -22,7 +22,14 @@ test('compact results retain all requested draft outputs and source-linked appro
   for (const copy of [...packet.copy.google.headlines, ...packet.copy.meta.primary, ...packet.copy.seller.bullets]) assert.ok(html.includes(copy.replaceAll('&', '&amp;')));
   assert.equal((html.match(/class="ad-pill ad-cyan ad-tool-link"/g) || []).length, 4);
   for (const tool of Object.keys(TOOL_PAGES)) assert.ok(html.includes(toolHref(tool).replaceAll('&', '&amp;')));
-  assert.match(html, /<details class="ad-output"><summary>/);
+  assert.match(html, /<section class="ad-main-output" aria-label="Main output: weekly marketing action package"/);
+  const mainStart = html.indexOf('data-testid="main-output"');
+  const firstDropdown = html.indexOf('<details');
+  assert.ok(mainStart >= 0 && firstDropdown > mainStart, 'the main output precedes every dropdown');
+  const mainOutput = html.slice(mainStart, firstDropdown);
+  for (const text of [packet.copy.message, packet.copy.google.headlines[1], packet.copy.meta.headline, packet.copy.seller.title]) assert.ok(mainOutput.includes(text.replaceAll('&', '&amp;')));
+  for (const tool of Object.keys(TOOL_PAGES)) assert.ok(mainOutput.includes(toolHref(tool).replaceAll('&', '&amp;')));
+  assert.doesNotMatch(html, /<details[^>]*\sopen(?:=|\s|>)/, 'supporting details start collapsed');
   assert.match(html, /href="\?tool=google&amp;view=campaigns&amp;evidence=G-C-N"/);
   assert.doesNotMatch(html, /launch now|publish now|Update Gmail/i);
   assert.match(render(await executeCommerceSimulation('ready')), /Stock gate passed; approval pending/);
