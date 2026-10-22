@@ -23,6 +23,8 @@ jobs:
     steps:
       - name: Checkout production application
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -35,11 +37,40 @@ jobs:
           VITE_AURA_API_URL: https://impartial-emotion-production-49d4.up.railway.app
           VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
           VITE_AURA_BUILD_SHA: ${{ github.sha }}
+      - name: Reuse unchanged published walkthrough
+        id: walkthrough
+        shell: bash
+        run: |
+          set -euo pipefail
+          site_url="https://yanavisionfactory-blip.github.io/aura-workflow-demo"
+          published_build="$(curl --fail --silent --show-error --max-time 20 "$site_url/version.txt?for=$GITHUB_SHA")" || exit 0
+          if [[ ! "$published_build" =~ ^[0-9a-f]{40}$ ]] || ! git cat-file -e "$published_build^{commit}"; then exit 0; fi
+          # The public walkthrough has its own entry point. Native workflow pages
+          # and these commerce-only modules do not participate in its rendering.
+          if ! git diff --quiet "$published_build" HEAD -- src public package.json package-lock.json vite.config.js tailwind.config.js postcss.config.js scripts/capture-website-walkthrough.mjs scripts/build-website-walkthrough.py ':!src/App.jsx' ':!src/pages/Demo.jsx' ':!src/pages/DeliveryResults.jsx' ':!src/pages/CommerceToolsWorkflow.jsx' ':!src/components/aura/CommerceToolsResult.jsx' ':!src/lib/commerceToolContract.mjs' ':!src/lib/commerceToolWorkflow.mjs'; then exit 0; fi
+          cached_media="$(mktemp -d)"
+          for asset in walkthrough.mp4 walkthrough.vtt walkthrough-poster.jpg; do
+            curl --fail --silent --show-error --location --max-time 45 "$site_url/showcase/website-content/$asset?build=$published_build" -o "$cached_media/$asset" || exit 0
+            test -s "$cached_media/$asset" || exit 0
+          done
+          python3 - "$cached_media" <<'PY'
+          import sys
+          from pathlib import Path
+          root = Path(sys.argv[1])
+          assert (root / "walkthrough.mp4").read_bytes()[4:8] == b"ftyp"
+          assert (root / "walkthrough.vtt").read_text().startswith("WEBVTT")
+          assert (root / "walkthrough-poster.jpg").read_bytes().startswith(b"\xff\xd8")
+          PY
+          mkdir -p dist/showcase/website-content
+          cp "$cached_media/"* dist/showcase/website-content/
+          echo "reused=true" >> "$GITHUB_OUTPUT"
+          echo "Reused published walkthrough from $published_build; its rendering sources are unchanged."
       - name: Render captioned website-content walkthrough
+        if: steps.walkthrough.outputs.reused != 'true'
         run: |
           npm install --no-save --package-lock=false playwright@1.56.1
           npx playwright install --with-deps chromium
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y --no-install-recommends ffmpeg
           node scripts/capture-website-walkthrough.mjs
           python3 scripts/build-website-walkthrough.py .walkthrough-frames --output dist/showcase/website-content/walkthrough.mp4
           cp .walkthrough-frames/scene-04.jpg dist/showcase/website-content/walkthrough-poster.jpg
