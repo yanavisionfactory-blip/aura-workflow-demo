@@ -43,6 +43,14 @@ test('planner cannot substitute another tool or add report.compose',()=>{
   assert.throws(()=>validateCommercePlan({steps:[...plan.steps,{operation:'report.compose',tool_slug:'aura'}]},connections));
   assert.throws(()=>validateCommercePlan({steps:plan.steps.map((s,i)=>i===0?{...s,fallback_operation:'report.compose'}:s)},connections));
 });
+test('reviewed steps retain planner keys used by the native result contract',async()=>{
+  const plan={steps:commerceRunSteps(connections).map(step=>({...step,key:step.key+'_review'}))};
+  const edited=commerceRunSteps(connections,plan);
+  assert.deepEqual(edited.map(s=>s.key),COMMERCE_ORDER.map(k=>k+'_review'));
+  assert.ok(edited.slice(1).every(s=>s.depends_on.includes('seller_review')));
+  const run=await completedRun(); run.steps.forEach(s=>s.key+='_review');
+  assert.equal(buildCommerceDelivery(run,connections).activity.length,4);
+});
 test('workflow executes native connection/planning/approval flow and waits for complete receipts',async()=>{
   const done=await completedRun(); let poll=0, approvedSteps;
   const result=await runCommerceTools({connect:async p=>Object.values(connections).find(x=>x.name===p.name),createRun:async()=>({id:'native-run'}),getRun:async()=>poll++===0?{id:'native-run',status:'awaiting_approval',plan:{steps:commerceRunSteps(connections)},steps:[]}:done,approvePlan:async(_id,steps)=>{approvedSteps=steps},decideApproval:async()=>{throw Error('not expected')}},()=>{}, {pause:async()=>{},maxPolls:3});

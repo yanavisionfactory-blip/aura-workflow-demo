@@ -48,8 +48,9 @@ export async function commerceToolResponse(key, args, baseUrl) {
   return { kind: 'commerce_tool', schema_version: 1, tool_key: key, tool: tool.name, synthetic: true, simulated: true, brief: BRIEF, periods: PERIODS, definitions: input.definitions, source_rows: input.rows, listing: input.listing || null, comparison: analysis.comparison, readiness: analysis.readiness, test, copy, source_url, receipt, status: 'draft', disclosure: 'Simulated tool response. Executed by a separately connected MCP tool through AURA. No Google, Meta or Amazon vendor API was called. No campaign, budget, listing or inventory was changed.' };
 }
 
-export function commerceRunSteps(connections) {
-  return COMMERCE_ORDER.map(key => ({ key, agent: COMMERCE_TOOLS[key].name + ' reviewer', tool_slug: connections[key].slug, operation: COMMERCE_TOOLS[key].operation, arguments: { ...COMMERCE_ARGS }, depends_on: key === 'seller' ? [] : ['seller'], reason: key === 'seller' ? 'Check product listing, traffic, total ASIN sales and available stock before promotion.' : 'Compare both complete weeks and prepare this platform’s evidence-linked test and copy for review.', expected_output: 'Explicitly simulated source rows, weekly calculations, attribution definitions, draft proposal and execution receipt.', consequential: true }));
+export function commerceRunSteps(connections, plan = null) {
+  const keys = Object.fromEntries(COMMERCE_ORDER.map(key => [key, plan?.steps?.find(step => step.operation === COMMERCE_TOOLS[key].operation)?.key || key]));
+  return COMMERCE_ORDER.map(key => ({ key: keys[key], agent: COMMERCE_TOOLS[key].name + ' reviewer', tool_slug: connections[key].slug, operation: COMMERCE_TOOLS[key].operation, arguments: { ...COMMERCE_ARGS }, depends_on: key === 'seller' ? [] : [keys.seller], reason: key === 'seller' ? 'Check product listing, traffic, total ASIN sales and available stock before promotion.' : 'Compare both complete weeks and prepare this platform’s evidence-linked test and copy for review.', expected_output: 'Explicitly simulated source rows, weekly calculations, attribution definitions, draft proposal and execution receipt.', consequential: true }));
 }
 export function validateCommercePlan(plan, connections) {
   must(plan?.steps?.length === 4, 'The plan must contain exactly the four requested tool operations. No additional operation was approved.');
@@ -73,7 +74,7 @@ export function commerceSourcesFromRun(run, connections) {
     sources[key] = source;
     activity.push({ id: step.id, key, tool: COMMERCE_TOOLS[key].name, operation: step.operation, status: step.status, started_at: step.started_at, completed_at: step.completed_at, input: step.arguments, output: step.output });
   }
-  const seller = run.steps.find(s => s.key === 'seller');
+  const seller = run.steps.find(s => s.operation === COMMERCE_TOOLS.seller.operation);
   must(COMMERCE_ORDER.slice(1).every(key => { const s = run.steps.find(s => s.operation === COMMERCE_TOOLS[key].operation); return new Date(s.started_at) >= new Date(seller.completed_at); }), 'Seller Central must finish before advertising reviews start.');
   return { sources, activity };
 }

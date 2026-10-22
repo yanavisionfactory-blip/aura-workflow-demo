@@ -22,7 +22,7 @@ export async function runCommerceTools(api, update = () => {}, options = {}) {
     if (run.status === 'completed') return buildCommerceDelivery(run, connections);
     if (run.status === 'awaiting_approval' && !run.plan_approved && !planApproved) {
       validateCommercePlan(run.plan, connections);
-      await api.approvePlan(run.id, commerceRunSteps(connections), false);
+      await api.approvePlan(run.id, commerceRunSteps(connections, run.plan), false);
       planApproved = true;
     }
     for (const step of run.steps || []) {
