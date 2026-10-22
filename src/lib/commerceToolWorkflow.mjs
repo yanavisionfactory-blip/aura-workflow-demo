@@ -7,11 +7,21 @@ export function commerceWorkflowPrompt(connections) {
 
 export async function runCommerceTools(api, update = () => {}, options = {}) {
   const connections = {};
-  for (const key of COMMERCE_ORDER) {
+  let run;
+  if (options.runId) {
+    run = await api.getRun(options.runId);
+    const registered = await api.listConnections();
+    for (const key of COMMERCE_ORDER) {
+      const step = run.plan?.steps?.find(s => s.operation === COMMERCE_TOOLS[key].operation);
+      connections[key] = registered.find(c => c.slug === step?.tool_slug && c.endpoint === COMMERCE_ENDPOINT + '/' + key + '/mcp' && c.status === 'verified');
+      if (!connections[key]) throw new Error('This saved run does not use the four verified simulation connectors.');
+    }
+    validateCommercePlan(run.plan, connections);
+  } else for (const key of COMMERCE_ORDER) {
     update({ phase: 'connecting', key, message: 'Verifying ' + COMMERCE_TOOLS[key].name + ' simulation connector' });
     connections[key] = await api.connect({ protocol: 'mcp', name: COMMERCE_TOOLS[key].name + ' · Simulated', owner: 'Unstoprev fictional commerce scenario', endpoint: COMMERCE_ENDPOINT + '/' + key + '/mcp', authentication: 'none', data_access: ['Fixed fictional product and simulated reporting data only'], data_retention: 'No user data or vendor credentials retained; fixed public scenario', max_runtime_seconds: 30, max_cost_usd: 0 });
   }
-  let run = await api.createRun(commerceWorkflowPrompt(connections), null, options.requestKey || crypto.randomUUID(), { requested_tools: COMMERCE_ORDER.map(key => connections[key].name || COMMERCE_TOOLS[key].name + ' · Simulated') });
+  run ||= await api.createRun(commerceWorkflowPrompt(connections), null, options.requestKey || crypto.randomUUID(), { requested_tools: COMMERCE_ORDER.map(key => connections[key].name || COMMERCE_TOOLS[key].name + ' · Simulated') });
   options.remember?.(run.id);
   let planApproved = false, finalRetries = 0;
   const approved = new Set();

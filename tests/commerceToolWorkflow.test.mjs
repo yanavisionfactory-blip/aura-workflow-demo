@@ -56,3 +56,12 @@ test('workflow executes native connection/planning/approval flow and waits for c
   const result=await runCommerceTools({connect:async p=>Object.values(connections).find(x=>x.name===p.name),createRun:async()=>({id:'native-run'}),getRun:async()=>poll++===0?{id:'native-run',status:'awaiting_approval',plan:{steps:commerceRunSteps(connections)},steps:[]}:done,approvePlan:async(_id,steps)=>{approvedSteps=steps},decideApproval:async()=>{throw Error('not expected')}},()=>{}, {pause:async()=>{},maxPolls:3});
   assert.equal(result.kind,'commerce_tools'); assert.deepEqual(approvedSteps.map(s=>s.key),COMMERCE_ORDER); assert.ok(approvedSteps.slice(1).every(s=>s.depends_on.includes('seller')));
 });
+test('saved native run resumes without registering tools or replaying completed calls',async()=>{
+  const done=await completedRun(); done.plan={steps:commerceRunSteps(connections)};
+  const registered=COMMERCE_ORDER.map(key=>({...connections[key],status:'verified',endpoint:'https://aura-commerce-tools.onrender.com/'+key+'/mcp'}));
+  const noReplay=async()=>{throw Error('completed tool call must not replay')};
+  const api={getRun:async()=>done,listConnections:async()=>registered,connect:noReplay,createRun:noReplay,approvePlan:noReplay,decideApproval:noReplay};
+  const result=await runCommerceTools(api,()=>{}, {runId:done.id,maxPolls:2});
+  assert.equal(result.sourceRunId,done.id); assert.equal(result.activity.length,4);
+  await assert.rejects(()=>runCommerceTools({...api,listConnections:async()=>registered.map(c=>({...c,endpoint:'https://other.example/mcp'}))},()=>{}, {runId:done.id}),/verified simulation connectors/);
+});

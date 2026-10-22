@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ArrowRight, CheckCircle2, Loader2, ShieldCheck } from 'lucide-react';
 import WorkspaceShell from '@/components/aura/WorkspaceShell';
-import { connectAgentConnection, createPythonRun, getPythonRun, approvePythonPlan, decidePythonApproval, resumePythonRun } from '@/lib/auraApi';
+import { connectAgentConnection, listAgentConnections, createPythonRun, getPythonRun, approvePythonPlan, decidePythonApproval, resumePythonRun } from '@/lib/auraApi';
 import { aura } from '@/api/auraClient';
 import { COMMERCE_ORDER, COMMERCE_TOOLS } from '@/lib/commerceToolContract.mjs';
 import { runCommerceTools } from '@/lib/commerceToolWorkflow.mjs';
@@ -10,12 +10,13 @@ import { runCommerceTools } from '@/lib/commerceToolWorkflow.mjs';
 export default function CommerceToolsWorkflow() {
   const navigate = useNavigate();
   const [running, setRunning] = useState(false), [state, setState] = useState(null), [error, setError] = useState(''), [unsaved, setUnsaved] = useState(null);
+  const [savedRunId, setSavedRunId] = useState(() => sessionStorage.getItem('aura_commerce_run_id') || '');
   const save = async data => { const record = await aura.entities.Delivery.create(data); navigate('/results/' + record.id); };
-  const run = async () => {
+  const run = async (runId = null) => {
     if (running) return;
     setRunning(true); setError('');
     try {
-      const data = await runCommerceTools({ connect: connectAgentConnection, createRun: createPythonRun, getRun: getPythonRun, approvePlan: approvePythonPlan, decideApproval: decidePythonApproval, resume: resumePythonRun }, setState);
+      const data = await runCommerceTools({ connect: connectAgentConnection, listConnections: listAgentConnections, createRun: createPythonRun, getRun: getPythonRun, approvePlan: approvePythonPlan, decideApproval: decidePythonApproval, resume: resumePythonRun }, setState, { runId, remember: id => { setSavedRunId(id); sessionStorage.setItem('aura_commerce_run_id', id); } });
       setUnsaved(data); await save(data);
     } catch (problem) { setError(problem.message); }
     finally { setRunning(false); }
@@ -31,7 +32,8 @@ export default function CommerceToolsWorkflow() {
         return <li key={key} className="rounded-xl border border-white/10 bg-card/50 p-5"><div className="flex items-center justify-between gap-3"><h2 className="font-medium">{i + 1}. {COMMERCE_TOOLS[key].name}</h2>{step?.status === 'completed' ? <CheckCircle2 className="h-5 w-5 text-emerald-400"/> : running && (step?.status === 'executing' || state?.key === key) ? <Loader2 className="h-5 w-5 animate-spin text-primary"/> : <span className="text-[10px] text-violet-300">SIMULATED</span>}</div><p className="mt-2 text-xs leading-6 text-muted-foreground">{key === 'seller' ? 'Listing · traffic · units/session · total ASIN sales · inventory' : key === 'google' ? 'Search terms · ads · spend · purchase credits · CPA' : key === 'meta' ? 'Facebook & Instagram creatives · clicks · purchases · CPA' : 'Advertised product · search terms · attributed sales · ACoS'}</p><p className="mt-2 text-xs text-primary">{step?.status?.replaceAll('_',' ') || 'Ready to connect and review'}</p></li>;
       })}</ol>
       {state && <p role="status" className="mb-5 text-sm text-violet-200">{state.message}</p>}
-      <button type="button" onClick={run} disabled={running} className="inline-flex items-center gap-3 rounded-xl bg-primary px-6 py-3 text-sm font-semibold disabled:opacity-50">{running ? <><Loader2 className="h-4 w-4 animate-spin"/>Running through AURA…</> : <>Run four-tool workflow<ArrowRight className="h-4 w-4"/></>}</button>
+      <button type="button" onClick={() => run()} disabled={running} className="inline-flex items-center gap-3 rounded-xl bg-primary px-6 py-3 text-sm font-semibold disabled:opacity-50">{running ? <><Loader2 className="h-4 w-4 animate-spin"/>Running through AURA…</> : <>Run four-tool workflow<ArrowRight className="h-4 w-4"/></>}</button>
+      <div className="mt-5 flex flex-wrap items-center gap-3"><label htmlFor="commerce-saved-run" className="text-xs text-muted-foreground">Saved AURA run ID</label><input id="commerce-saved-run" value={savedRunId} onChange={event => setSavedRunId(event.target.value)} className="min-w-72 rounded-lg border border-white/15 bg-card px-3 py-2 text-xs"/><button disabled={running || !savedRunId.trim()} onClick={() => run(savedRunId.trim())} className="text-xs text-primary underline disabled:opacity-50">Continue saved four-tool run</button></div>
       <p className="mt-4 flex items-center gap-2 text-xs text-muted-foreground"><ShieldCheck className="h-4 w-4"/>No AURA Intelligence tool step. No launches, budget changes, published copy or inventory changes.</p>
       {state?.run?.id && <Link to={'/runs/' + state.run.id} className="mt-5 inline-block text-xs text-primary underline">Open native workflow and execution receipts</Link>}
       {error && <div role="alert" className="mt-5 rounded-xl border border-amber-300/30 p-5 text-sm text-amber-200">{error}{unsaved && <button className="ml-4 underline" onClick={() => save(unsaved)}>Save completed outputs</button>}</div>}
