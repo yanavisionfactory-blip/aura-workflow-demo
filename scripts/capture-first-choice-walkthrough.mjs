@@ -41,20 +41,46 @@ try{
  await page.getByRole('button',{name:'Save demo draft',exact:true}).click();
  await page.getByRole('dialog').waitFor({state:'hidden'});
  await page.goto('http://127.0.0.1:'+port+'/showcase/first-choice-seo/?screen=results',{waitUntil:'networkidle'});
- await page.locator('[aria-label="Primary WordPress output"]').getByRole('heading',{name:'AC Repair Dallas: Review Before Publication',exact:true}).waitFor();
+ await page.locator('[aria-label="Primary WordPress output"]').getByRole('heading',{name:'AC Repair Dallas: Review Before Publication',exact:true,level:1}).waitFor();
  const secondary=page.locator('[aria-label="Other tool outputs"] > details');
  if(await secondary.count()!==4)throw new Error('Expected four secondary tool dropdowns');
  for(const detail of await secondary.all())if(await detail.getAttribute('open')!==null)throw new Error('Secondary outputs must start closed');
  await secondary.nth(1).locator('summary').click();
  await secondary.nth(1).getByText('AC Repair Dallas: Review Before Publication',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Restore original demo copy',exact:true}).click();
- await page.locator('[aria-label="Primary WordPress output"]').getByRole('heading',{name:"AC Repair in Dallas: Plan a Clear Service Visit",exact:true}).waitFor();
+ await page.locator('[aria-label="Primary WordPress output"]').getByRole('heading',{name:"AC Repair in Dallas: Plan a Clear Service Visit",exact:true,level:1}).waitFor();
+ // Exercise the app-specific controls and their shared draft boundary.
+ await page.goto('http://127.0.0.1:'+port+'/showcase/first-choice-seo/?screen=tool&tool=planner',{waitUntil:'networkidle'});
+ await page.getByLabel('Search keyword ideas',{exact:true}).fill('plano');
+ if(await page.locator('.ga-keyword-table tbody tr').count()!==3)throw new Error('Keyword filter must show the three Plano examples');
+ await page.getByLabel('Review keyword ac repair plano',{exact:true}).check();
+ await page.getByText('2 selected for review',{exact:true}).waitFor();
+ await page.screenshot({path:path.join(frames,'google-keywords.jpg'),type:'jpeg',quality:90});
+ await page.goto('http://127.0.0.1:'+port+'/showcase/first-choice-seo/?scene=9&tour=1',{waitUntil:'networkidle'});
+ await page.getByRole('button',{name:'Edit Snippet',exact:true}).click();
+ await page.getByLabel('Guided walkthrough',{exact:true}).getByRole('button',{name:'Play',exact:true}).waitFor();
+ await page.getByLabel('Snippet title',{exact:true}).fill('AC Repair Dallas: Review Your Service Options');
+ await page.screenshot({path:path.join(frames,'rankmath-snippet.jpg'),type:'jpeg',quality:90});
+ await page.getByRole('button',{name:'Save demo SEO fields',exact:true}).click();
+ await page.getByRole('dialog').waitFor({state:'hidden'});
+ await page.getByLabel('Rank Math SEO panel',{exact:true}).getByText('AC Repair Dallas: Review Your Service Options',{exact:true}).waitFor();
+ await page.goto('http://127.0.0.1:'+port+'/showcase/first-choice-seo/?screen=tool&tool=asana',{waitUntil:'networkidle'});
+ await page.getByRole('button',{name:'Open plano review task',exact:true}).click();
+ await page.getByLabel('Asana task details',{exact:true}).getByRole('heading',{name:'Review Plano article and SEO',exact:true}).waitFor();
+ await page.getByLabel('Review complete article and local wording',{exact:true}).check();
+ await page.getByRole('button',{name:'Board',exact:true}).click();
+ await page.screenshot({path:path.join(frames,'asana-review.jpg'),type:'jpeg',quality:90});
  await page.setViewportSize({width:390,height:844});
  await page.goto('http://127.0.0.1:'+port+'/showcase/first-choice-seo/?screen=results',{waitUntil:'networkidle'});
  const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth+2);
  if(overflow)throw new Error('Mobile results overflow the viewport');
  await page.screenshot({path:path.join(frames,'mobile-results.jpg'),type:'jpeg',quality:90,fullPage:true});
- console.log('Local editor, persistence, secondary outputs, restore and mobile width checks passed');
+ for(const id of ['wordpress','planner','rankmath','asana','locations']){
+  await page.goto('http://127.0.0.1:'+port+'/showcase/first-choice-seo/?screen=tool&tool='+id,{waitUntil:'networkidle'});
+  if(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth+2))throw new Error(id+' tool overflows mobile viewport');
+  await page.screenshot({path:path.join(frames,'mobile-'+id+'.jpg'),type:'jpeg',quality:85,fullPage:true});
+ }
+ console.log('Local editing, SEO field persistence, keyword filters, task selection, secondary outputs and mobile checks passed');
  if(errors.length)throw new Error(`Demo render errors: ${errors.join('; ')}`);
  await context.close();
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
