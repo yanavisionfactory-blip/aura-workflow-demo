@@ -107,6 +107,29 @@ jobs:
             dist/showcase/website-content/walkthrough.mp4
             dist/showcase/website-content/walkthrough.vtt
             dist/showcase/website-content/walkthrough-poster.jpg
+      - name: Set up SEO demo video runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Render First Choice SEO walkthrough
+        timeout-minutes: 5
+        env:
+          AURA_BROWSER_CHANNEL: chrome
+        run: |
+          if [ ! -d node_modules/playwright ]; then npm install --no-save --package-lock=false playwright@1.56.1; fi
+          if [ ! -x .walkthrough-runtime/bin/python ]; then
+            python3 -m venv .walkthrough-runtime
+            .walkthrough-runtime/bin/pip install --disable-pip-version-check imageio-ffmpeg==0.6.0
+          fi
+          node scripts/capture-first-choice-walkthrough.mjs
+          encoder_path="$(.walkthrough-runtime/bin/python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          python3 scripts/build-website-walkthrough.py .first-choice-frames --scenario src/showcase/first-choice-seo/scenario.mjs --output dist/showcase/first-choice-seo/walkthrough.mp4 --ffmpeg "$encoder_path"
+          cp .first-choice-frames/scene-04.jpg dist/showcase/first-choice-seo/walkthrough-poster.jpg
+      - name: Keep SEO demo media for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: aura-first-choice-seo-video
+          path: dist/showcase/first-choice-seo/walkthrough.*
       - name: Support saved results deep links
         run: cp dist/index.html dist/404.html
       - name: Publish build version
