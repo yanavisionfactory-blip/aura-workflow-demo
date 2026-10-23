@@ -45,3 +45,20 @@ The build-time browser restricts requests to its local static server, captures
 thirteen scenes, tests editing and persistence, and checks mobile width. A
 pinned encoder produces the captioned walkthrough MP4 and VTT. Existing website-
 content tests also run to protect the earlier demo.
+
+## App-specific presentation
+
+The isolated demo now has separate WordPress block-editor, Google Ads keyword-
+planner and Asana project surfaces. Rank Math is shown as a WordPress plugin,
+including an editable snippet dialog; all saved SEO revisions use the same local
+draft model and export boundary as the AURA editor. Keyword filters, location
+selection, task details and review checks operate within the simulation.
+The Geo+ interface is explicitly a workflow concept; its vendor UI is unverified.
+
+Primary visual references, reviewed 23 October 2026:
+- https://wordpress.org/documentation/article/wordpress-block-editor/
+- https://support.google.com/google-ads/answer/7337243
+- https://rankmath.com/kb/general-tab/
+- https://help.asana.com/s/article/task-fields
+
+These are UI references, not sources for the synthetic client or keyword figures.
