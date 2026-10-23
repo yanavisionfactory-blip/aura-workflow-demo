@@ -1,57 +1,49 @@
-# Website content results and public demonstration
+# Website content agency demonstration
 
-The main five-page content package leads Results. Its four tabs are Pages,
-Changes, Approvals and Developer handoff. The pages show the complete revised
-copy, search listing, button destination and image instructions. Approval rows
-use readable page names and concrete next steps. Developer files remain
-available as a ZIP, with exact content versions and source evidence preserved
-inside that handoff.
+The separate public demo at showcase/website-content keeps AURA's task, plan,
+execution and workspace shell. Its action review shows the five-page draft
+preparation, a page selector and a rendered copy preview. Ask AURA and Edit
+manually open a reviewable local editor before or after prepared execution.
 
-## One set of simulated tool outcomes
+The result opens the main WordPress output as a visible simulated admin screen.
+The other three tools are closed dropdowns containing their own screens and
+View in tool links. The complete content package, source comparisons, pending
+approval tracker and developer handoff are another dropdown. WordPress is
+evidenced by historical website material; Shopify, WooCommerce and BigCommerce
+are alternative destinations, not independently verified client connections.
 
-A single Results by tool section follows the main result. It is always visible,
-with no simulation toggle, earlier source-tool result list, duplicate tool chips
-or separate raw-output tab. Each of the four cards explains:
+## Editing and safeguards
 
-- The tool's part of the task.
-- What its simulated outcome contains.
-- What the user should review next.
-- A named View in WordPress, Shopify, WooCommerce or BigCommerce action.
+Ask AURA supports prepared shorter, warmer and CTA editing rules, plus an
+explicitly quoted replacement heading. Unsupported instructions produce an
+explanation; no model is called. Manual editing supports headings, all four
+content sections, button labels and search fields. The editor shows a proposed
+preview, the prior draft and undo/cancel/save controls.
 
-AURA prepared the content package. The four CMS previews are alternative
-handoffs for those same five pages, rather than four claims of independent copy
-generation. Every card and tool screen is visibly simulated. Opening them does
-not connect a CMS, create a record, approve content or modify a live page.
+Saving writes only allowlisted copy to local browser storage. Revised text
+propagates to every simulated CMS and the ZIP handoff. A new local content
+version is generated; source excerpts, original routes, CTA destinations,
+asset requirements and permissions are retained. All reviewer decisions remain
+pending. Restore original demo copy removes these local overrides.
 
-The tool screens use readable page names, review statuses, search listings,
-button text and image instructions. They also explain their contribution to the
-task. Internal page IDs, version hashes, execution receipts, raw JSON and HTML
-are not displayed in these user flows. Programmatic evidence stays in the
-saved packet and developer download; it is not discarded or rewritten.
+The example uses saved public Kastner Hill Learning material. It does not imply
+agency or client participation, permission or approval. An approved brief,
+asset rights, confirmed destination accounts and a named reviewer are required
+for a live pilot. No provider calls, account changes or live website edits occur.
+The public build excludes live account modules and sets connect-src 'none'.
 
-## Separate public walkthrough
+## Walkthrough and validation
 
-The static build at `showcase/website-content/` reuses AURA's task, plan, review,
-prepared execution, main result and simulated CMS screen components without
-sign-in or access to private runs.
+- ?screen=results: WordPress first, secondary outputs collapsed.
+- ?screen=review: action review with simulated AI and manual editing.
+- ?tour=1: captioned walkthrough with Pause, Back and Next.
+- ?screen=video: regenerated captioned prepared-playback MP4.
+- ?scene=0 through ?scene=15: paused capture scenes.
 
-- `?tour=1`: guided walkthrough with captions, Pause, Back and Next.
-- `?screen=results`: the main result followed by the single tool-outcome section.
-- `?screen=video`: captioned MP4 and download.
-- `?scene=0` through `?scene=13`: paused scenes for capture and QA.
-
-The historical example uses public Kastner Hill Learning website material and
-the saved revised page copy. Source headings and asset instructions are
-selected or summarized; images are not reproduced. Approved brief, image
-permissions, named reviewer, asset storage and project tools remain separate
-confirmations. The demonstration implies no agency/client endorsement.
-
-The public build excludes account clients and prohibits API connections through
-CSP. It contains no private run or credential identifiers. Feedback stays local.
-The Pages build renders the 14 scenes in a fresh build-time browser that permits
-only its local static server, then uses ffmpeg to publish a 113-second MP4,
-VTT captions and poster. This prepared video is not evidence of live integrations.
-
-Validation: `npm test`, `npm run lint`, `npm run build`, plus the generated-video
-build and browser checks for one outcome section, named tool navigation and
-absence of raw technical output in rendered views.
+The 16-scene video includes both editors. The offline build-time renderer permits
+only its local static server. It checks AI revisions, manual changes, persistence
+into primary and alternative screens, restoring defaults, and mobile overflow.
+Unit and server-rendered tests check source retention, revision versioning,
+pending approvals, output hierarchy, tool navigation and all guided scenes.
+The authenticated application retains its existing results layout by default;
+the agency presentation is isolated to this public showcase.

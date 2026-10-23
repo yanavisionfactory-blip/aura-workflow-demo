@@ -1,0 +1,32 @@
+name: Website demo interaction checks
+on:
+  pull_request:
+    paths:
+      - "src/showcase/website-content/**"
+      - "src/components/aura/WebsiteContentResult.jsx"
+      - "src/components/aura/SimulatedCMSScreen.jsx"
+      - "scripts/capture-website-walkthrough.mjs"
+      - "tests/website*.test.mjs"
+      - ".github/workflows/website-demo.yml"
+permissions:
+  contents: read
+jobs:
+  website-demo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install
+      - run: node --test tests/websiteContentEdits.test.mjs tests/websiteShowcase.test.mjs
+      - run: npx vite build --config vite.website.config.js
+      - run: npm install --no-save --package-lock=false playwright@1.56.1
+      - run: npx playwright install --with-deps chromium
+      - run: node scripts/capture-website-walkthrough.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: website-demo-review-screens
+          path: .walkthrough-frames/
+          include-hidden-files: true

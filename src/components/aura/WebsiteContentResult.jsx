@@ -62,7 +62,7 @@ function PageCopy({ page }) {
   </article>;
 }
 
-export default function WebsiteContentResult({ packet, runId = null, initialTab = 'Pages', initialPage, initialTool = 'content', toolScreenHref = null, demoMode = false }) {
+export default function WebsiteContentResult({ packet, runId = null, initialTab = 'Pages', initialPage, initialTool = 'content', toolScreenHref = null, demoMode = false, includeToolOutcomes = true }) {
   const navigate = useNavigate();
   const outcomesRef = useRef(null);
   const [tab, setTab] = useState(tabs.includes(initialTab) ? initialTab : 'Pages');
@@ -98,10 +98,10 @@ export default function WebsiteContentResult({ packet, runId = null, initialTab 
         </div>
       </div>
     </section>
-    <section id="website-tool-results" aria-label="Simulated tool outcomes" className="mb-6 scroll-mt-6">
+    {includeToolOutcomes && <section id="website-tool-results" aria-label="Simulated tool outcomes" className="mb-6 scroll-mt-6">
       <h3 className="text-xl font-semibold">Results by tool</h3><p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">AURA prepared the copy above. These four simulated outcomes show how the same package would be prepared for each website or store. They are alternative destinations for this task.</p><p className="mt-3 flex items-center gap-2 text-xs leading-6 text-violet-300"><FlaskConical className="h-4 w-4 shrink-0"/>Simulated previews only. No pages have been added to a real account or published.</p>
       <div className="mt-5 grid gap-4 lg:grid-cols-2">{preview.tools.map(item => { const outcome = websiteToolOutcome(item.name); return <article key={item.id} aria-label={`${item.name} task outcome`} className="flex flex-col rounded-2xl border border-white/10 bg-[#101722] p-5 sm:p-6"><header className="flex flex-wrap items-center justify-between gap-3"><h4 className="text-lg font-semibold">{item.name}</h4><span className="rounded-full bg-violet-300/10 px-3 py-1 text-[10px] font-semibold text-violet-300">Simulated</span></header><p className="mt-2 text-xs text-muted-foreground">{outcome.destination}</p><p className="mt-5 text-[10px] font-semibold uppercase tracking-widest text-primary">Part of your task</p><h5 className="mt-2 text-base font-semibold leading-6">{outcome.part}</h5><p className="mt-3 text-sm leading-7 text-slate-300">{outcome.result}</p><ul className="mt-4 space-y-2 text-xs leading-6 text-slate-300">{outcome.includes.map(line => <li key={line} className="flex gap-2"><span className="text-emerald-300">✓</span>{line}</li>)}</ul><p className="mt-5 border-t border-white/10 pt-4 text-xs leading-6 text-muted-foreground"><strong className="text-slate-300">Your next step: </strong>{outcome.next}</p><Link to={toolPath(item.id) || '#'} onClick={event => { if (!toolPath(item.id)) { event.preventDefault(); chooseTool(item.id); } }} className="mt-5 self-start rounded-full border border-primary/30 px-4 py-2 text-xs font-medium text-primary">View in {item.name}<ArrowUpRight className="ml-1 inline h-3 w-3"/></Link></article>; })}</div>
       {inlineOutput && <div ref={outcomesRef} className="mt-6"><WebsiteCMSPreview key={inlineOutput.id} output={inlineOutput}/></div>}
-    </section>
+    </section>}
   </div>;
 }

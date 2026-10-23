@@ -18,9 +18,11 @@ export const workflowSteps = [
 export const tour = [
   {phase:'input',title:'Describe the outcome',caption:'Start with a five-page content request. The workflow must confirm the CMS and the client’s other tools separately.',seconds:7},
   {phase:'plan',title:'Review the plan',caption:'AURA separates website evidence, CMS discovery, source assets, content preparation and simulated CMS handoffs.',seconds:8},
-  {phase:'review',title:'Check the inputs',caption:'The public example uses Kastner Hill Learning pages. The approved brief, assets, client tools and named reviewer remain unconfirmed.',seconds:9},
+  {phase:'review',title:'Review the action',caption:'Inspect the page draft before running. Ask AURA for a simulated revision or edit the copy manually; client approval is still a separate step.',seconds:9},
   {phase:'execution',title:'Follow prepared playback',caption:'This is a local replay of the workflow, with no live provider calls, account connections or website changes.',seconds:10},
-  {phase:'results',title:'Read the main result first',caption:'The five-page package comes first. Select a page to inspect its purpose, complete copy, CTA, SEO and asset requirements.',seconds:10},
+  {phase:'results',title:'Read the main result first',caption:'The main output is already open in the WordPress screen. Inspect the finished draft, then expand the other tool screens and supporting package below.',seconds:10},
+  {phase:'results',editor:'ai',title:'Refine with an AI instruction',caption:'Try “Make it shorter and clearer”. This prepared editing simulation shows a proposed revision before you save it locally.',seconds:8},
+  {phase:'results',editor:'manual',title:'Edit the copy yourself',caption:'Change the heading, paragraphs, button or search fields and inspect the preview. Saved demo edits appear in every tool screen and download.',seconds:8},
   {phase:'results',focus:{tab:'Changes',page:'p02'},title:'Compare the proposed changes',caption:'Review current source excerpts beside revised headings, titles and meta descriptions. Source excerpts are historical, not a live crawl.',seconds:8},
   {phase:'results',focus:{tab:'Approvals'},title:'Keep approval explicit',caption:'All five drafts await copy and asset approval. No reviewer decision is implied by running or viewing this demo.',seconds:8},
   {phase:'results',focus:{tab:'Developer handoff'},title:'Hand off structured files',caption:'Download the website files for your developer. Approve the copy and images before creating real unpublished drafts.',seconds:8},
