@@ -1,1 +1,2 @@
-export default function Resources(){return <span className="rounded-full border border-white/10 px-3 py-1.5 text-[10px] text-slate-400">Easy Communications · simulated pilot</span>;}
+import {Link2} from 'lucide-react';
+export default function Resources(){return <button type="button" aria-label="Connections" onClick={()=>window.dispatchEvent(new Event('easy-demo-connections'))} className="flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 text-xs text-muted-foreground hover:border-white/20 hover:text-foreground"><Link2 className="h-3 w-3"/><span>Connections</span><span className="text-muted-foreground/50">6</span></button>;}

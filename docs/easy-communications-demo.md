@@ -1,8 +1,8 @@
 # Easy Communications two-week AURA pilot
 
-Separate public route: `/showcase/easy-communications/`. The base route shows the primary client record first. `?tour=1` runs the captioned 14-scene walkthrough; `?screen=connections`, `?screen=measurement`, `?screen=readiness` and `?screen=tool&tool=linkedin` are direct entry points.
+Separate public route: `/showcase/easy-communications/`. The base route shows AURA’s native task screen. `?screen=results` opens the primary client record first. `?tour=1` runs the captioned 17-scene walkthrough; `?screen=connections`, `?screen=measurement`, `?screen=readiness` and `?screen=tool&tool=linkedin` are direct entry points.
 
-The app reuses AURA's WorkspaceShell, CommandInput, PlanStep and ExecutionView. It does not alter the live application or other showcases. The Base44 reference URL supplied by the user returned a permission/loading error during visual inspection; no claim of verifying that preview is made.
+The app reuses AURA's WorkspaceShell, CommandInput, ConfirmView, PlanStep, ExecutionView, ResultsHeading and PrimaryResult. Its normal flow is task → confirmation → plan → action review → execution → results. Connection and measurement preferences live inside the plan/Connections control rather than adding a separate first-run page. There is no secondary demo navigation bar or custom marketing hero. It does not alter the live application or other showcases. The Base44 reference URL supplied by the user returned a permission/loading error during visual inspection; its opening-screen screenshot was available through the Base44 connector and was visually inspected. The native application components in this repository supply the remaining workflow layouts; the inaccessible editor itself is not claimed as verified.
 
 ## Inputs and provenance
 
