@@ -48,7 +48,7 @@ try{
  await secondary.nth(1).locator('summary').click();
  await secondary.nth(1).getByText('AC Repair Dallas: Review Before Publication',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Restore original demo copy',exact:true}).click();
- await page.locator('[aria-label="Primary WordPress output"]').getByRole('heading',{name:"AC Repair in Dallas: Make Your First Service Conversation Count",exact:true}).waitFor();
+ await page.locator('[aria-label="Primary WordPress output"]').getByRole('heading',{name:"AC Repair in Dallas: Plan a Clear Service Visit",exact:true}).waitFor();
  await page.setViewportSize({width:390,height:844});
  await page.goto('http://127.0.0.1:'+port+'/showcase/first-choice-seo/?screen=results',{waitUntil:'networkidle'});
  const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth+2);

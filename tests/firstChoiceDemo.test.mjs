@@ -13,7 +13,7 @@ after(()=>{if(temp)fs.rmSync(temp,{recursive:true,force:true});});
 test('public fixture is synthetic, distinct and free of private source material',()=>{
  assert.equal(data.simulation,true);assert.equal(data.articles.length,3);assert.equal(data.keywords.rows.length,12);assert.equal(data.keywords.totalIdeasReported,12);assert.equal(data.snapshotDate,'2026-10-23');
  assert.equal(new Set(data.articles.map(a=>a.body)).size,3);assert.match(data.source.provenance,/No private attachment/);
- for(const a of data.articles){assert.equal(a.status,'unpublished');assert.equal(a.approval,'pending');assert.match(a.notice,/fictional/i);assert.ok(a.body.length>2500);assert.equal(Object.keys(a.seo).length,3);assert.equal(a.sourcePages,undefined);}
+ for(const a of data.articles){assert.equal(a.status,'unpublished');assert.equal(a.approval,'pending');assert.match(a.notice,/fictional/i);assert.ok(a.body.split(/\s+/).length>350);assert.ok((a.body.match(/^## /gm)||[]).length>=4);assert.equal(Object.keys(a.seo).length,3);assert.equal(a.sourcePages,undefined);}
  assert.ok(Object.values(data.keywords.localVolumeVerified).every(v=>v===false));assert.match(data.limits.join(' '),/Every keyword metric is simulated/);
  assert.doesNotMatch(JSON.stringify(data),/atlassian\.net|@firstchoiceseo|api_key|client_secret|workspace_id|wp-admin|sourcePages|review pack/);
 });

@@ -9,11 +9,9 @@ ROOT = Path(__file__).resolve().parents[1]
 articles = [
     {
         "id": "dallas", "location": "Dallas",
-        "title": "AC Repair in Dallas: Make Your First Service Conversation Count",
+        "title": "AC Repair in Dallas: Plan a Clear Service Visit",
         "angle": "A practical first-visit guide: observations, questions and a clear next step.",
         "body": """A cooling problem is easier to discuss when you can explain what changed. Before arranging AC repair in Dallas, make a short note of the rooms affected, when the problem started and whether it happens throughout the day. You do not need a diagnosis. Useful observations give the service team a better starting point.
-
-Northstar Home Comfort is a fictional residential HVAC company created for this demonstration. This draft shows how an agency could turn a service brief into helpful local content, then review the wording, search metadata and handoff before publication.
 
 ## Start with the problem you can observe
 
@@ -43,16 +41,14 @@ Keep the comparison focused on information the provider can substantiate. Saving
 
 Save the written findings, the approved estimate and any follow-up instructions supplied by the provider. These records can help you explain the history if another concern appears later. If you are unclear about a recommendation, ask for clarification before approving additional work.
 
-For a real Dallas service page, the next step would be a confirmed contact route and a client-approved explanation of how appointments are requested. This demonstration intentionally leaves that destination unconnected. An agency reviewer should confirm business details, claims, images and the final call to action before publishing.""",
+When arranging AC repair in Dallas, bring your observations, ask about the scope and keep the written findings. A clear conversation gives you a record of what was discussed and a better basis for the next decision.""",
         "seo": {"title": "AC Repair Dallas: Plan Your Service Conversation", "description": "Prepare for an AC repair conversation in Dallas with useful symptom notes, service questions and a written review of the proposed work. Fictional demo.", "focusKeyword": "ac repair dallas"},
     },
     {
         "id": "plano", "location": "Plano",
-        "title": "Planning AC Service in Plano: Turn Repeated Comfort Concerns into Useful Notes",
+        "title": "AC Service in Plano: Track Recurring Comfort Concerns",
         "angle": "Recurring comfort patterns and maintenance history, with a distinct homeowner checklist.",
         "body": """A comfort problem that comes and goes can be difficult to describe when an appointment finally arrives. If you are planning AC repair in Plano, build a simple record of the pattern: which rooms are affected, what time it happens and how long the change lasts. A short set of observations is more useful than an unsupported guess about the cause.
-
-This article is a newly written example for Northstar Home Comfort, a fictional company. Its purpose is to demonstrate location-specific content preparation and agency review, rather than advertise an operating service.
 
 ## Build a brief comfort diary
 
@@ -76,16 +72,14 @@ Confirm what a proposed maintenance visit includes, how recommendations will be 
 
 Ask for the findings and recommended next step in writing. If you receive several options, request a plain-language comparison of the work included in each. Keep any appointment instructions and follow-up documents with your earlier records.
 
-A real Plano page would end with the business's verified service coverage and contact details. The agency should add those only after client review. This unpublished demonstration leaves bookings disconnected and makes no promises about response time, price or outcomes.""",
+For a recurring comfort concern in Plano, a simple pattern record and a clear appointment scope can make the conversation more useful. Keep questions together and ask the provider to confirm the next step before approving work.""",
         "seo": {"title": "AC Repair Plano: Notes for a Better Service Visit", "description": "Document recurring comfort concerns before arranging AC service in Plano. Review maintenance history, appointment scope and next steps. Fictional demo.", "focusKeyword": "ac repair plano"},
     },
     {
         "id": "richardson", "location": "Richardson",
-        "title": "AC Repair in Richardson: Understand the Estimate Before You Approve Work",
+        "title": "AC Repair in Richardson: Understand the Estimate",
         "angle": "Estimate scope and approval questions, rather than a renamed Dallas article.",
         "body": """When a cooling problem leads to a service recommendation, the next decision is often about scope: what work is proposed, what the estimate includes and what happens if the findings change. Homeowners considering AC repair in Richardson can prepare a few questions that make that decision easier to understand.
-
-Northstar Home Comfort is a fictional business used in this AURA walkthrough. This unpublished article demonstrates an estimate-focused local version with its own structure and search metadata. It is not a quote, diagnosis or offer of service.
 
 ## Describe the concern before discussing a solution
 
@@ -109,7 +103,7 @@ Do not approve a broader recommendation solely because it appears in a general a
 
 Keep the approved estimate, the service summary and any instructions the provider supplies. Record questions that remain open and ask when they will be addressed. These documents create a clear history for a later conversation without relying on memory.
 
-Before a real Richardson article goes live, the agency should verify service coverage, business credentials, contact details, image permissions and all specific claims. This demonstration includes none of those as confirmed facts. Its final step is editorial approval, with publication and appointment requests left disconnected.""",
+A useful AC repair estimate in Richardson should help you understand the work you are being asked to approve. Take time to ask questions, confirm the approval process and retain the documents that explain your decision.""",
         "seo": {"title": "AC Repair Richardson: Review the Proposed Scope", "description": "Questions to ask about an AC repair estimate in Richardson: included work, approval of changes and follow-up records. Unpublished fictional demo.", "focusKeyword": "ac repair richardson"},
     },
 ]
