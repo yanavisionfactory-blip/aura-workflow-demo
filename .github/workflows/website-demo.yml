@@ -8,6 +8,8 @@ on:
       - "scripts/capture-website-walkthrough.mjs"
       - "tests/website*.test.mjs"
       - ".github/workflows/website-demo.yml"
+      - ".github/workflows/pages.yml"
+      - "scripts/build-website-walkthrough.py"
 permissions:
   contents: read
 jobs:
@@ -20,10 +22,15 @@ jobs:
           node-version: "20"
       - run: npm install
       - run: node --test tests/websiteContentEdits.test.mjs tests/websiteShowcase.test.mjs
-      - run: npx vite build --config vite.website.config.js
+      - run: python3 -m py_compile scripts/build-website-walkthrough.py
+      - run: npm run build
+        env:
+          VITE_AURA_API_URL: https://api.example.invalid
+          VITE_CLERK_PUBLISHABLE_KEY: pk_test_ci_placeholder
       - run: npm install --no-save --package-lock=false playwright@1.56.1
       - run: npx playwright install --with-deps chromium
       - run: node scripts/capture-website-walkthrough.mjs
+        timeout-minutes: 3
       - uses: actions/upload-artifact@v4
         if: always()
         with:
