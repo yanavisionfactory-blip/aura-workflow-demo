@@ -29,3 +29,4 @@ jobs:
         with:
           name: website-demo-review-screens
           path: .walkthrough-frames/
+          include-hidden-files: true
