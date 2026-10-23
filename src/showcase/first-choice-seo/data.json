@@ -1,0 +1,179 @@
+{
+  "client": "Northstar Home Comfort \u00b7 fictional",
+  "agency": "Agency demonstration",
+  "fictional": true,
+  "snapshotDate": "2026-10-23",
+  "simulation": true,
+  "source": {
+    "label": "Newly authored synthetic walkthrough fixture",
+    "id": "synthetic-hvac-v1",
+    "provenance": "All article text and sample keyword metrics were created for this public demonstration. No private attachment, export or live account data is included."
+  },
+  "keywords": {
+    "primary": "ac repair dallas",
+    "target": "Illustrative targeting: Dallas, Plano and Richardson \u00b7 English \u00b7 Google Search",
+    "retrievedAt": "Simulated dataset created 23 October 2026 \u00b7 no provider retrieval",
+    "totalIdeasReported": 12,
+    "localVolumeVerified": {
+      "dallas": false,
+      "plano": false,
+      "richardson": false
+    },
+    "rows": [
+      {
+        "keyword": "ac repair dallas",
+        "volume": 900,
+        "competition": "HIGH",
+        "index": 80,
+        "lowBidMicros": null,
+        "highBidMicros": null
+      },
+      {
+        "keyword": "air conditioning repair dallas",
+        "volume": 900,
+        "competition": "HIGH",
+        "index": 80,
+        "lowBidMicros": null,
+        "highBidMicros": null
+      },
+      {
+        "keyword": "ac service dallas",
+        "volume": 300,
+        "competition": "MEDIUM",
+        "index": 55,
+        "lowBidMicros": null,
+        "highBidMicros": null
+      },
+      {
+        "keyword": "hvac maintenance dallas",
+        "volume": 180,
+        "competition": "MEDIUM",
+        "index": 40,
+        "lowBidMicros": null,
+        "highBidMicros": null
+      },
+      {
+        "keyword": "heat pump repair dallas",
+        "volume": 120,
+        "competition": "MEDIUM",
+        "index": 45,
+        "lowBidMicros": null,
+        "highBidMicros": null
+      },
+      {
+        "keyword": "ac repair plano",
+        "volume": 500,
+        "competition": "HIGH",
+        "index": 75,
+        "lowBidMicros": null,
+        "highBidMicros": null
+      },
+      {
+        "keyword": "ac maintenance plano",
+        "volume": 150,
+        "competition": "MEDIUM",
+        "index": 35,
+        "lowBidMicros": null,
+        "highBidMicros": null
+      },
+      {
+        "keyword": "air conditioning service plano",
+        "volume": 250,
+        "competition": "MEDIUM",
+        "index": 50,
+        "lowBidMicros": null,
+        "highBidMicros": null
+      },
+      {
+        "keyword": "ac repair richardson",
+        "volume": 400,
+        "competition": "HIGH",
+        "index": 70,
+        "lowBidMicros": null,
+        "highBidMicros": null
+      },
+      {
+        "keyword": "hvac service richardson",
+        "volume": 200,
+        "competition": "MEDIUM",
+        "index": 45,
+        "lowBidMicros": null,
+        "highBidMicros": null
+      },
+      {
+        "keyword": "emergency ac repair dallas",
+        "volume": 350,
+        "competition": "HIGH",
+        "index": 90,
+        "lowBidMicros": null,
+        "highBidMicros": null
+      },
+      {
+        "keyword": "commercial ac repair dallas",
+        "volume": 160,
+        "competition": "HIGH",
+        "index": 85,
+        "lowBidMicros": null,
+        "highBidMicros": null
+      }
+    ]
+  },
+  "articles": [
+    {
+      "id": "dallas",
+      "location": "Dallas",
+      "title": "AC Repair in Dallas: Plan a Clear Service Visit",
+      "angle": "A practical first-visit guide: observations, questions and a clear next step.",
+      "body": "A cooling problem is easier to discuss when you can explain what changed. Before arranging AC repair in Dallas, make a short note of the rooms affected, when the problem started and whether it happens throughout the day. You do not need a diagnosis. Useful observations give the service team a better starting point.\n\n## Start with the problem you can observe\n\nDescribe the difference between normal operation and what you notice now. Is one room uncomfortable while the rest of the home feels normal? Is the system running at different times than usual? Has the issue appeared once or become a repeating pattern? Record these details in ordinary language instead of guessing which component is responsible.\n\nIf you have an earlier service summary, keep it available. The equipment model and approximate installation date may also help the service team prepare. Share only records you have; missing paperwork should not lead you to invent an equipment history.\n\n## Explain what you want from the visit\n\nA request for repair and a request for a routine maintenance appointment may involve different work. Tell the team whether your main concern is a current cooling problem, recurring performance or a discussion about future replacement. Ask which appointment type fits that concern.\n\nBefore agreeing to a visit, confirm the service area, appointment arrangements and any assessment fee. Do not assume a business offers same-day or round-the-clock service unless it has confirmed that directly. This demonstration does not make availability or price promises.\n\n## Ask for a clear explanation of the findings\n\nDuring the conversation, ask the technician to connect their findings with the symptoms you described. Request an explanation of the proposed work, what is included in the estimate and whether additional work would require another approval. A clear scope helps you understand the decision in front of you.\n\nIf more than one option is proposed, ask how the options differ. The aim is to understand the recommendation, not to choose a repair based on a single online description. Diagnosis and equipment work belong with a qualified professional.\n\n## Compare repair and replacement questions\n\nAn older system or a repeated problem can raise questions about repair and replacement. Ask for a written comparison that addresses the current issue, the proposed scope and any relevant equipment information. An article cannot determine which option is appropriate for your home.\n\nKeep the comparison focused on information the provider can substantiate. Savings estimates, warranty terms and equipment claims need their own supporting documentation. Avoid treating an attractive headline or an unverified promise as evidence of the result you will receive.\n\n## Keep a useful record after the appointment\n\nSave the written findings, the approved estimate and any follow-up instructions supplied by the provider. These records can help you explain the history if another concern appears later. If you are unclear about a recommendation, ask for clarification before approving additional work.\n\nWhen arranging AC repair in Dallas, bring your observations, ask about the scope and keep the written findings. A clear conversation gives you a record of what was discussed and a better basis for the next decision.",
+      "seo": {
+        "title": "AC Repair Dallas: Plan Your Service Conversation",
+        "description": "Prepare for an AC repair conversation in Dallas with useful symptom notes, service questions and a written review of the proposed work. Fictional demo.",
+        "focusKeyword": "ac repair dallas"
+      },
+      "notice": "Fictional business \u00b7 newly written demonstration copy \u00b7 unpublished \u00b7 client review required. No real service or booking is offered.",
+      "sourceWordCount": 519,
+      "status": "unpublished",
+      "approval": "pending"
+    },
+    {
+      "id": "plano",
+      "location": "Plano",
+      "title": "AC Service in Plano: Track Recurring Comfort Concerns",
+      "angle": "Recurring comfort patterns and maintenance history, with a distinct homeowner checklist.",
+      "body": "A comfort problem that comes and goes can be difficult to describe when an appointment finally arrives. If you are planning AC repair in Plano, build a simple record of the pattern: which rooms are affected, what time it happens and how long the change lasts. A short set of observations is more useful than an unsupported guess about the cause.\n\n## Build a brief comfort diary\n\nChoose a few details you can record consistently. Note the date, the room and the change you noticed. You might describe a bedroom that feels different from the rest of the house or a concern that returns at a particular time. Keep the description factual and avoid drawing conclusions from one observation.\n\nBring those notes to the service conversation. Ask the provider which details would help them understand the request and whether a recurring concern needs a different appointment from a general maintenance visit.\n\n## Gather the records you already have\n\nPrevious estimates, appointment summaries and equipment documents can help explain the system's history. Place them together so the team can distinguish a new concern from work discussed earlier. If the information is incomplete, say so clearly.\n\nYou do not need to open equipment or attempt a repair to prepare for an appointment. Let a qualified professional determine which checks and work are appropriate. This article offers a communication checklist, not a technical diagnosis.\n\n## Separate the current problem from maintenance planning\n\nStart with the issue you want addressed now. Then ask whether the provider recommends a separate discussion about routine maintenance. Keeping those questions distinct makes it easier to understand the appointment scope and the cost of any additional service.\n\nConfirm what a proposed maintenance visit includes, how recommendations will be documented and whether new work requires your approval. Do not assume that a particular package, membership or guarantee exists unless the business has verified it.\n\n## Finish with an agreed next step\n\nAsk for the findings and recommended next step in writing. If you receive several options, request a plain-language comparison of the work included in each. Keep any appointment instructions and follow-up documents with your earlier records.\n\nFor a recurring comfort concern in Plano, a simple pattern record and a clear appointment scope can make the conversation more useful. Keep questions together and ask the provider to confirm the next step before approving work.",
+      "seo": {
+        "title": "AC Repair Plano: Notes for a Better Service Visit",
+        "description": "Document recurring comfort concerns before arranging AC service in Plano. Review maintenance history, appointment scope and next steps. Fictional demo.",
+        "focusKeyword": "ac repair plano"
+      },
+      "notice": "Fictional business \u00b7 newly written demonstration copy \u00b7 unpublished \u00b7 client review required. No real service or booking is offered.",
+      "sourceWordCount": 394,
+      "status": "unpublished",
+      "approval": "pending"
+    },
+    {
+      "id": "richardson",
+      "location": "Richardson",
+      "title": "AC Repair in Richardson: Understand the Estimate",
+      "angle": "Estimate scope and approval questions, rather than a renamed Dallas article.",
+      "body": "When a cooling problem leads to a service recommendation, the next decision is often about scope: what work is proposed, what the estimate includes and what happens if the findings change. Homeowners considering AC repair in Richardson can prepare a few questions that make that decision easier to understand.\n\n## Describe the concern before discussing a solution\n\nBegin with what you noticed and when it started. Explain whether the problem affects one space or several and whether it has happened before. Previous appointment notes may provide context, but avoid treating an earlier recommendation as a diagnosis of the current issue.\n\nAsk the provider how the visit will be arranged and what the initial assessment includes. Clarify any assessment fee and the process for receiving an estimate. A documented starting point reduces confusion about what you have authorized.\n\n## Read the proposed scope in plain language\n\nAn estimate should give you a basis for discussing the recommendation. Ask the provider to explain the work in terms you understand, including what is included and what remains outside the proposed scope. If an item is unclear, request a written explanation before making a decision.\n\nWhere the recommendation includes parts, follow-up work or another appointment, ask how those items are represented. Confirm which details are estimates and which are fixed terms. Only the service provider can verify the commercial terms it offers.\n\n## Confirm how changes will be approved\n\nAsk what happens if the technician identifies an additional issue during the work. Will the provider explain the finding and seek approval for a revised scope? Who should receive that request? Agreeing on a point of contact is useful when someone else in the household will be present.\n\nDo not approve a broader recommendation solely because it appears in a general article. Ask how it relates to the findings at your property and which alternatives the provider considers appropriate. Equipment assessment and repairs require a qualified professional.\n\n## Save the decision and follow-up record\n\nKeep the approved estimate, the service summary and any instructions the provider supplies. Record questions that remain open and ask when they will be addressed. These documents create a clear history for a later conversation without relying on memory.\n\nA useful AC repair estimate in Richardson should help you understand the work you are being asked to approve. Take time to ask questions, confirm the approval process and retain the documents that explain your decision.",
+      "seo": {
+        "title": "AC Repair Richardson: Review the Proposed Scope",
+        "description": "Questions to ask about an AC repair estimate in Richardson: included work, approval of changes and follow-up records. Unpublished fictional demo.",
+        "focusKeyword": "ac repair richardson"
+      },
+      "notice": "Fictional business \u00b7 newly written demonstration copy \u00b7 unpublished \u00b7 client review required. No real service or booking is offered.",
+      "sourceWordCount": 404,
+      "status": "unpublished",
+      "approval": "pending"
+    }
+  ],
+  "limits": [
+    "Every keyword metric is simulated; live research is required before a real content decision.",
+    "Business claims, service coverage, images and the contact destination require client confirmation.",
+    "Imagify is a pending image-review step; no image upload or optimization runs in this demo.",
+    "No live SEO Writing, Geo+, WordPress, RankMath or Asana action is performed.",
+    "Exact-site audits, backlinks, rankings, traffic and inquiries are outside this simulation.",
+    "All three articles are unpublished; reviewer assignment and approval remain pending."
+  ]
+}

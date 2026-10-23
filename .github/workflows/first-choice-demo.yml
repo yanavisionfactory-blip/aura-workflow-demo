@@ -1,0 +1,53 @@
+name: First Choice SEO demo checks
+on:
+  pull_request:
+    paths:
+      - "src/showcase/first-choice-seo/**"
+      - "showcase/first-choice-seo/**"
+      - "src/components/aura/SimulatedCMSScreen.jsx"
+      - "scripts/capture-first-choice-walkthrough.mjs"
+      - "scripts/build-website-walkthrough.py"
+      - "tests/firstChoiceDemo.test.mjs"
+      - "tests/fixtures/firstChoiceRender.jsx"
+      - "vite.first-choice.config.js"
+      - "package*.json"
+      - ".github/workflows/pages.yml"
+      - ".github/workflows/first-choice-demo.yml"
+permissions:
+  contents: read
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm install
+      - run: node --test tests/firstChoiceDemo.test.mjs tests/websiteShowcase.test.mjs
+      - run: npm run build
+        env:
+          VITE_AURA_API_URL: https://api.example.invalid
+          VITE_CLERK_PUBLISHABLE_KEY: pk_test_ci_placeholder
+      - run: npm install --no-save --package-lock=false playwright@1.56.1
+      - run: node scripts/capture-first-choice-walkthrough.mjs
+        env:
+          AURA_BROWSER_CHANNEL: chrome
+      - name: Encode the complete walkthrough
+        run: |
+          python3 -m venv .walkthrough-runtime
+          .walkthrough-runtime/bin/pip install --disable-pip-version-check imageio-ffmpeg==0.6.0
+          encoder_path="$(.walkthrough-runtime/bin/python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          python3 scripts/build-website-walkthrough.py .first-choice-frames --scenario src/showcase/first-choice-seo/scenario.mjs --output dist/showcase/first-choice-seo/walkthrough.mp4 --ffmpeg "$encoder_path"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: first-choice-demo-review
+          path: |
+            .first-choice-frames/
+            dist/showcase/first-choice-seo/walkthrough.*
+          include-hidden-files: true

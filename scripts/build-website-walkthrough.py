@@ -14,9 +14,11 @@ parser = argparse.ArgumentParser()
 parser.add_argument('frames', type=Path)
 parser.add_argument('--output', type=Path, default=Path('showcase/website-content/public/walkthrough.mp4'))
 parser.add_argument('--ffmpeg', default='ffmpeg', help='Path to a verified ffmpeg executable')
+parser.add_argument('--scenario', default='src/showcase/website-content/scenario.mjs')
 args = parser.parse_args()
 repo = Path(__file__).resolve().parents[1]
-scenes = json.loads(subprocess.check_output(['node', '--input-type=module', '-e', "import {tour} from './src/showcase/website-content/scenario.mjs'; console.log(JSON.stringify(tour));"], cwd=repo, text=True))
+scenario_uri = (repo / args.scenario).resolve().as_uri()
+scenes = json.loads(subprocess.check_output(['node', '--input-type=module', '-e', 'import {tour} from ' + json.dumps(scenario_uri) + '; console.log(JSON.stringify(tour));'], cwd=repo, text=True))
 args.output.parent.mkdir(parents=True, exist_ok=True)
 
 def timestamp(seconds):
