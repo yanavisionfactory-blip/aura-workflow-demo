@@ -28,6 +28,31 @@ try{
   await page.screenshot({path:path.join(frames,`scene-${String(i).padStart(2,'0')}.jpg`),type:'jpeg',quality:90});
   console.log(`${i+1}/${tour.length}: ${tour[i].title}`);
  }
+ // Verify the interactive controls against the local static build only.
+ await page.goto('http://127.0.0.1:'+port+'/showcase/website-content/?screen=review',{waitUntil:'networkidle'});
+ await page.getByRole('button',{name:'Ask AURA',exact:true}).click();
+ await page.getByLabel('What would you like to change?').fill('Make it shorter and clearer');
+ await page.getByRole('button',{name:'Generate simulated revision',exact:true}).click();
+ await page.getByText('After · proposed revision',{exact:true}).waitFor();
+ await page.getByRole('button',{name:'Edit manually',exact:true}).click();
+ await page.getByLabel('Page heading',{exact:true}).fill('Tutoring Around Your Student');
+ await page.getByRole('button',{name:'Save demo draft',exact:true}).click();
+ await page.getByRole('dialog').waitFor({state:'hidden'});
+ await page.goto('http://127.0.0.1:'+port+'/showcase/website-content/?screen=results',{waitUntil:'networkidle'});
+ await page.locator('[aria-label="Primary WordPress output"]').getByRole('heading',{name:'Tutoring Around Your Student',exact:true}).waitFor();
+ const secondary=page.locator('[aria-label="Other simulated tool outputs"] details');
+ if(await secondary.count()!==3)throw new Error('Expected three secondary tool dropdowns');
+ for(const detail of await secondary.all())if(await detail.getAttribute('open')!==null)throw new Error('Secondary outputs must start closed');
+ await secondary.first().locator('summary').click();
+ await secondary.first().getByRole('heading',{name:'Tutoring Around Your Student',exact:true}).waitFor();
+ await page.getByRole('button',{name:'Restore original demo copy',exact:true}).click();
+ await page.locator('[aria-label="Primary WordPress output"]').getByRole('heading',{name:'Personalized Tutoring for Test Prep, Academic Courses, and College Essays',exact:true}).waitFor();
+ await page.setViewportSize({width:390,height:844});
+ await page.goto('http://127.0.0.1:'+port+'/showcase/website-content/?screen=results',{waitUntil:'networkidle'});
+ const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth+2);
+ if(overflow)throw new Error('Mobile results overflow the viewport');
+ await page.screenshot({path:path.join(frames,'mobile-results.jpg'),type:'jpeg',quality:90,fullPage:true});
+ console.log('Local editor, persistence, secondary outputs, restore and mobile width checks passed');
  if(errors.length)throw new Error(`Demo render errors: ${errors.join('; ')}`);
  await context.close();
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

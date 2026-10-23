@@ -15,8 +15,8 @@ test('website demo preserves five complete copy drafts, historical evidence and 
  for(const p of data.pages){assert.equal(p.sections.length,4);assert.equal(p.approval.status,'pending');assert.equal(p.approval.reviewer,null);assert.ok(p.assets.every(a=>a.approval_status==='pending'&&a.rights_status==='unverified'));}
  assert.doesNotMatch(JSON.stringify(data),/workspace_id|client_secret|shpss_|oauth_access_token|4903a714|8e0194b8/);
 });
-test('main result appears before per-tool entries with public links for all four CMS screens',()=>{
- const html=render();assert.ok(html.indexOf('Home revised page')<html.indexOf('Results by tool'));
+test('primary tool screen appears before collapsed secondary outputs and supporting package',()=>{
+ const html=render();assert.ok(html.indexOf('Primary WordPress output')<html.indexOf('Other tool outputs'));assert.ok(html.indexOf('Other tool outputs')<html.indexOf('Content package, changes, approvals'));assert.match(html,/WordPress simulated tool screen/);assert.match(html,/Ask AURA/);assert.match(html,/Edit manually/);assert.match(html,/<details[^>]*><summary[^>]*>Content package/);
  for(const provider of ['wordpress','shopify','woocommerce','bigcommerce']){assert.ok(html.includes(`?screen=tool&amp;tool=${provider}`));const screen=render(`?screen=tool&tool=${provider}`);assert.match(screen,/simulated tool screen/);assert.match(screen,/5 drafts/);for(const p of data.pages)assert.ok(!screen.includes(p.version));assert.match(screen,/Part of your task/);}
  assert.doesNotMatch(html,/href="\/runs\//);assert.equal(toolHref('unknown-preview'),null);
  assert.match(render('?screen=results&tab=Approvals'),/Choose a reviewer/);
@@ -24,7 +24,7 @@ test('main result appears before per-tool entries with public links for all four
 });
 test('guided tour, input, review and playback remain explicit and offline',()=>{
  assert.match(render('?screen=input'),/Create plan/);assert.match(render('?screen=plan'),/Review before running/);
- assert.match(render('?screen=review'),/Start prepared demo/);assert.match(render('?screen=execution'),/No live provider calls/);
+ assert.match(render('?screen=review'),/Approve &amp; run demo/);assert.match(render('?screen=execution'),/No live provider calls/);
  for(let i=0;i<tour.length;i++){const html=render(`?scene=${i}`);assert.ok(html.includes(tour[i].title));assert.match(html,/Guided walkthrough/);}
  const feedback=render('?screen=feedback');assert.match(feedback,/No email or form submission is made/);assert.doesNotMatch(feedback,/<form|type="submit"/);
  assert.match(render('?screen=video'),/<video/);
