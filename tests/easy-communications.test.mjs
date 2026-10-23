@@ -49,3 +49,36 @@ test('download preserves edited copy, source history and synthetic outcome label
  assert.match(result.label,/SIMULATED/);assert.equal(result.posts[0].text,'Approved source material, revised draft.');assert.equal(result.posts[0].exactRevisionApproved,false);
  assert.equal(result.primaryLeadRecord,'aura');assert.equal(result.measurement,'existing');assert.equal(result.leads[0].selfReport,leads[0].selfReport);assert.equal(result.sources[0].url,sources[0].url);assert.match(result.attribution,/No causal/);
 });
+
+test('review covers each content draft and every workflow tool without selector state',async()=>{
+ const {reviewScreens}=await import('../src/showcase/easy-communications/drafts.mjs');
+ assert.deepEqual(reviewScreens.filter(s=>s.postId).map(s=>s.postId),posts.map(p=>p.id));
+ for(const tool of ['linkedin','meta','quora','hubspot','gmail','calendar','docusign','measurement'])assert.ok(reviewScreens.some(s=>s.tool===tool),tool);
+ assert.equal(new Set(reviewScreens.map(s=>s.draftId)).size,reviewScreens.length);
+});
+test('edits share the same draft across preview, tool, reload and export',async()=>{
+ const {getDraft}=await import('../src/showcase/easy-communications/drafts.mjs');
+ const {draftText,editDraft,editDraftField,draftField,draftVersion}=await import('../src/showcase/easy-communications/model.mjs');
+ let state=initialState();
+ for(const id of ['social-EC-101','email-Proposal','calendar-invitation','next-EC-101','agreement-scope','pilot-report']){
+  state=editDraft(state,id,'Revised '+id);
+  assert.equal(draftText(getDraft(id),state),'Revised '+id);
+  assert.equal(draftVersion(state,id),1);
+ }
+ state=editDraftField(state,'email-Proposal','subject','Revised scope for review');
+ const restored=restoreState(JSON.stringify(state));
+ assert.equal(draftField(getDraft('email-Proposal'),restored,'subject'),'Revised scope for review');
+ assert.equal(draftVersion(restored,'email-Proposal'),2);
+ const exported=JSON.parse(packageText(restored));
+ for(const id of ['social-EC-101','email-Proposal','calendar-invitation','next-EC-101','agreement-scope','pilot-report'])assert.equal(exported.drafts.find(d=>d.id===id).text,'Revised '+id);
+ assert.deepEqual(exported.metrics,summary());
+ assert.throws(()=>editDraft(state,'unknown','Text'),/Unknown draft/);
+ assert.throws(()=>editDraftField(state,'email-Proposal','certificate','verified'),/Invalid draft field/);
+});
+test('a revised agreement cannot inherit historical completion evidence',async()=>{
+ const {editDraft,verifyCurrentAgreement}=await import('../src/showcase/easy-communications/model.mjs');
+ const state=editDraft(initialState(),'agreement-scope','A revised scope awaiting review.');
+ assert.equal(verifyCurrentAgreement(initialState()),true);
+ assert.equal(verifyCurrentAgreement(state),false);
+ assert.equal(summary().signed,1);
+});
