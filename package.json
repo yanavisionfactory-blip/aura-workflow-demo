@@ -6,7 +6,7 @@
   "scripts": {
     "build:commerce": "vite build --config vite.commerce.config.js",
     "dev": "vite",
-    "build": "vite build && vite build --config vite.showcase.config.js && vite build --config vite.weekly.config.js && vite build --config vite.website.config.js && vite build --config vite.marketing.config.js && npm run build:commerce && vite build --config vite.first-choice.config.js",
+    "build": "vite build && vite build --config vite.showcase.config.js && vite build --config vite.weekly.config.js && vite build --config vite.website.config.js && vite build --config vite.marketing.config.js && npm run build:commerce && vite build --config vite.first-choice.config.js && vite build --config vite.easy.config.js",
     "lint": "eslint . --quiet",
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc -p ./jsconfig.json",
