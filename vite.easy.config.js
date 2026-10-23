@@ -7,7 +7,7 @@ export default defineConfig({
   root: fileURLToPath(new URL('./showcase/easy-communications', import.meta.url)),
   base: './',
   publicDir: fileURLToPath(new URL('./showcase/easy-communications/public', import.meta.url)),
-  resolve: { alias: [{find:'./ConnectionsPill',replacement:fileURLToPath(new URL('./src/showcase/easy-communications/Resources.jsx',import.meta.url))}, ...showcaseAliases, { find: '@', replacement: fileURLToPath(new URL('./src', import.meta.url)) }] },
+  resolve: { alias: [{find:'./ConnectionsPill',replacement:fileURLToPath(new URL('./src/showcase/easy-communications/Resources.jsx',import.meta.url))},{find:'@/api/base44Client',replacement:fileURLToPath(new URL('./src/showcase/easy-communications/demoApi.mjs',import.meta.url))}, ...showcaseAliases, { find: '@', replacement: fileURLToPath(new URL('./src', import.meta.url)) }] },
   plugins: [react(), {
     name: 'exclude-live-account-clients',
     generateBundle(_options, bundle) {
