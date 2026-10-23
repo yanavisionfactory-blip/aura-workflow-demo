@@ -12,6 +12,7 @@
 @media(max-width:640px){.ec-channel-switch{padding:10px;flex-wrap:wrap;gap:3px}.ec-tool .ec-channel-switch>button{font-size:9px;padding:7px 9px}.ec-channel-switch small{flex-basis:100%;margin:3px 9px;font-size:8px}.ec-inbox,.ec-embedded .ec-inbox{margin:15px 12px;grid-template-columns:1fr}.ec-inbox>aside{display:flex;overflow:auto;border-right:0;border-bottom:1px solid #e1e7ee}.ec-inbox>aside>h3,.ec-inbox>aside>p{display:none}.ec-tool .ec-inbox>aside>button{min-width:150px;width:150px;flex:none;padding:12px 10px}.ec-inbox>aside>button>.ec-avatar{display:none}.ec-inbox>main,.ec-embedded .ec-inbox>main{padding:18px 14px}.ec-inbox>main>header{flex-wrap:wrap;gap:10px}.ec-inbox>main>header>div{flex-basis:calc(100% - 50px)}.ec-inbox>main>header>.ec-chip{margin-left:46px}.ec-inbox .ec-select-label,.ec-inbox .ec-check-line{font-size:10px}.ec-message-bubble p{font-size:11px}.ec-inbox-context{padding:13px}}
 /* AURA pages use the native components without global typography overrides. */
 .ea-input-stage{min-height:calc(100dvh - 120px)}
+.ea-input-stage textarea{min-height:14rem}
 .ea-tool-frame{container-type:inline-size;height:460px;overflow:auto;overscroll-behavior:contain;border:1px solid #ffffff20;border-radius:10px;background:#f5f6f8}
 .ea-supporting-tool{height:480px}
 .ea-tour{backdrop-filter:blur(18px)}
