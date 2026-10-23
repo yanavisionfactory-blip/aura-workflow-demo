@@ -42,7 +42,7 @@ try{
  await page.getByRole('dialog').waitFor({state:'hidden'});
  await page.goto('http://127.0.0.1:'+port+'/showcase/first-choice-seo/?screen=results',{waitUntil:'networkidle'});
  await page.locator('[aria-label="Primary WordPress output"]').getByRole('heading',{name:'AC Repair Dallas: Review Before Publication',exact:true}).waitFor();
- const secondary=page.locator('[aria-label="Other tool outputs"] details');
+ const secondary=page.locator('[aria-label="Other tool outputs"] > details');
  if(await secondary.count()!==4)throw new Error('Expected four secondary tool dropdowns');
  for(const detail of await secondary.all())if(await detail.getAttribute('open')!==null)throw new Error('Secondary outputs must start closed');
  await secondary.nth(1).locator('summary').click();
