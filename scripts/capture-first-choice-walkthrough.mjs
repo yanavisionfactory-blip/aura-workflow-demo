@@ -41,14 +41,14 @@ try{
  await page.getByRole('button',{name:'Save demo draft',exact:true}).click();
  await page.getByRole('dialog').waitFor({state:'hidden'});
  await page.goto('http://127.0.0.1:'+port+'/showcase/first-choice-seo/?screen=results',{waitUntil:'networkidle'});
- await page.locator('[aria-label="Primary WordPress output"]').getByRole('heading',{name:'AC Repair Dallas: Review Before Publication',exact:true}).waitFor();
+ await page.locator('[aria-label="Primary WordPress output"]').getByRole('heading',{name:'AC Repair Dallas: Review Before Publication',exact:true,level:1}).waitFor();
  const secondary=page.locator('[aria-label="Other tool outputs"] > details');
  if(await secondary.count()!==4)throw new Error('Expected four secondary tool dropdowns');
  for(const detail of await secondary.all())if(await detail.getAttribute('open')!==null)throw new Error('Secondary outputs must start closed');
  await secondary.nth(1).locator('summary').click();
  await secondary.nth(1).getByText('AC Repair Dallas: Review Before Publication',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Restore original demo copy',exact:true}).click();
- await page.locator('[aria-label="Primary WordPress output"]').getByRole('heading',{name:"AC Repair in Dallas: Plan a Clear Service Visit",exact:true}).waitFor();
+ await page.locator('[aria-label="Primary WordPress output"]').getByRole('heading',{name:"AC Repair in Dallas: Plan a Clear Service Visit",exact:true,level:1}).waitFor();
  // Exercise the app-specific controls and their shared draft boundary.
  await page.goto('http://127.0.0.1:'+port+'/showcase/first-choice-seo/?screen=tool&tool=planner',{waitUntil:'networkidle'});
  await page.getByLabel('Search keyword ideas',{exact:true}).fill('plano');
