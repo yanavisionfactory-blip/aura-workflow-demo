@@ -14,7 +14,9 @@ const server=http.createServer(async(req,res)=>{
 });
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 const port=server.address().port;
-const browser=await chromium.launch({headless:true});
+const channel=process.env.AURA_BROWSER_CHANNEL;
+if(channel && channel!=='chrome')throw new Error('Only the preinstalled Chrome channel is supported');
+const browser=await chromium.launch({headless:true,...(channel?{channel}:{})});
 try{
  const context=await browser.newContext({viewport:{width:1440,height:990},deviceScaleFactor:1,reducedMotion:'reduce'});
  await context.route('**/*',route=>new URL(route.request().url()).origin===`http://127.0.0.1:${port}`?route.continue():route.abort());
