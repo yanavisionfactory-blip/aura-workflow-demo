@@ -56,8 +56,9 @@ try{
  await page.getByLabel('Review keyword ac repair plano',{exact:true}).check();
  await page.getByText('2 selected for review',{exact:true}).waitFor();
  await page.screenshot({path:path.join(frames,'google-keywords.jpg'),type:'jpeg',quality:90});
- await page.goto('http://127.0.0.1:'+port+'/showcase/first-choice-seo/?screen=tool&tool=rankmath',{waitUntil:'networkidle'});
+ await page.goto('http://127.0.0.1:'+port+'/showcase/first-choice-seo/?scene=9&tour=1',{waitUntil:'networkidle'});
  await page.getByRole('button',{name:'Edit Snippet',exact:true}).click();
+ await page.getByLabel('Guided walkthrough',{exact:true}).getByRole('button',{name:'Play',exact:true}).waitFor();
  await page.getByLabel('Snippet title',{exact:true}).fill('AC Repair Dallas: Review Your Service Options');
  await page.screenshot({path:path.join(frames,'rankmath-snippet.jpg'),type:'jpeg',quality:90});
  await page.getByRole('button',{name:'Save demo SEO fields',exact:true}).click();
