@@ -50,10 +50,12 @@ test('download preserves edited copy, source history and synthetic outcome label
  assert.equal(result.primaryLeadRecord,'aura');assert.equal(result.measurement,'existing');assert.equal(result.leads[0].selfReport,leads[0].selfReport);assert.equal(result.sources[0].url,sources[0].url);assert.match(result.attribution,/No causal/);
 });
 
-test('review covers each content draft and every workflow tool without selector state',async()=>{
- const {reviewScreens}=await import('../src/showcase/easy-communications/drafts.mjs');
+test('review covers content and action tools while measurement remains separate',async()=>{
+ const {reviewScreens,getDraft}=await import('../src/showcase/easy-communications/drafts.mjs');
  assert.deepEqual(reviewScreens.filter(s=>s.postId).map(s=>s.postId),posts.map(p=>p.id));
- for(const tool of ['linkedin','meta','quora','hubspot','gmail','calendar','docusign','measurement'])assert.ok(reviewScreens.some(s=>s.tool===tool),tool);
+ for(const tool of ['linkedin','meta','quora','hubspot','gmail','calendar','docusign'])assert.ok(reviewScreens.some(s=>s.tool===tool),tool);
+ assert.ok(!reviewScreens.some(s=>s.tool==='measurement'));
+ assert.ok(getDraft('pilot-report'));
  assert.equal(new Set(reviewScreens.map(s=>s.draftId)).size,reviewScreens.length);
 });
 test('edits share the same draft across preview, tool, reload and export',async()=>{
