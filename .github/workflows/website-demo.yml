@@ -20,6 +20,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - run: npm install
       - run: node --test tests/websiteContentEdits.test.mjs tests/websiteShowcase.test.mjs
       - run: python3 -m py_compile scripts/build-website-walkthrough.py

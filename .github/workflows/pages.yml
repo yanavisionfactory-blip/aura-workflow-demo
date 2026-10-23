@@ -75,6 +75,11 @@ jobs:
         if: steps.walkthrough.outputs.reused != 'true'
         timeout-minutes: 3
         run: google-chrome --version
+      - name: Set up video Python runtime
+        if: steps.walkthrough.outputs.reused != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: Install video encoder
         if: steps.walkthrough.outputs.reused != 'true'
         timeout-minutes: 3
