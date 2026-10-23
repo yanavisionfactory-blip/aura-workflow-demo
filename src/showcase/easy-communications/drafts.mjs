@@ -15,10 +15,10 @@ export const actionDrafts=[
 ];
 export const getDraft=id=>posts.find(p=>p.id===id)||actionDrafts.find(d=>d.id===id);
 export const reviewScreens=[
+ {draftId:'next-EC-101',tool:'hubspot',recordId:'EC-101',title:'Client record & next action'},
  ...posts.map(p=>({draftId:p.id,tool:p.channel,postId:p.id,title:'Day '+p.day+' · '+p.label})),
  {draftId:'social-EC-101',tool:'linkedin',view:'inbox',recordId:'EC-101',title:'Contextual reply · Maya'},
  {draftId:'social-EC-102',tool:'meta',view:'inbox',recordId:'EC-102',title:'Contextual reply · Adam'},
- {draftId:'next-EC-101',tool:'hubspot',recordId:'EC-101',title:'Client record & next action'},
  {draftId:'email-Reply',tool:'gmail',kind:'Reply',title:'Discovery reply · Nina'},
  {draftId:'calendar-invitation',tool:'calendar',title:'Discovery invitation'},
  {draftId:'email-Proposal',tool:'gmail',kind:'Proposal',title:'Proposal · Maya'},

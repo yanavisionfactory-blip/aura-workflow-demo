@@ -52,6 +52,7 @@ test('download preserves edited copy, source history and synthetic outcome label
 
 test('review covers content and action tools while measurement remains separate',async()=>{
  const {reviewScreens,getDraft}=await import('../src/showcase/easy-communications/drafts.mjs');
+ assert.equal(reviewScreens[0].draftId,'next-EC-101');
  assert.deepEqual(reviewScreens.filter(s=>s.postId).map(s=>s.postId),posts.map(p=>p.id));
  for(const tool of ['linkedin','meta','quora','hubspot','gmail','calendar','docusign'])assert.ok(reviewScreens.some(s=>s.tool===tool),tool);
  assert.ok(!reviewScreens.some(s=>s.tool==='measurement'));
