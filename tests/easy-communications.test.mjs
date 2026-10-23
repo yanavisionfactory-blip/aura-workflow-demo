@@ -82,3 +82,12 @@ test('a revised agreement cannot inherit historical completion evidence',async()
  assert.equal(verifyCurrentAgreement(state),false);
  assert.equal(summary().signed,1);
 });
+test('malformed saved draft values fall back to the prepared screen content',async()=>{
+ const {getDraft}=await import('../src/showcase/easy-communications/drafts.mjs');
+ const {draftText,draftField,draftVersion}=await import('../src/showcase/easy-communications/model.mjs');
+ const draft=getDraft('calendar-invitation');
+ const state=restoreState(JSON.stringify({draftEdits:{[draft.id]:{}},draftFields:{[draft.id]:{time:[]}},draftVersions:{[draft.id]:'Infinity'}}));
+ assert.equal(draftText(draft,state),draft.text);
+ assert.equal(draftField(draft,state,'time'),draft.time);
+ assert.equal(draftVersion(state,draft.id),0);
+});
