@@ -10,14 +10,14 @@ import Editor from './Editor';
 import Measurement from './Measurement';
 import {ActionReview,ConnectionsPanel,LiveInputs,NativeModal,PilotPlan,PilotResults} from './NativeWorkspace';
 import {getDraft} from './drafts.mjs';
-import {editDraft,initialState,packageText,restoreState,storageKey} from './model.mjs';
+import {editDraft,initialState,packageText,restoreSavedState,restoreState,storageKey,legacyStorageKey} from './model.mjs';
 import {interpretation,prompt as workflowPrompt,steps,tour} from './scenario.mjs';
 const examples=[{id:'pilot',title:'Create a two-week pilot',subtitle:'Connect Diana’s content to client work'},{id:'reply',title:'Prepare contextual replies',subtitle:'Review the recipient and exact message'},{id:'client',title:'Manage client handoffs',subtitle:'Keep leads, proposals and evidence together'},{id:'measurement',title:'Measure pilot success',subtitle:'Choose AURA or your existing tools'}];
 const previous={confirm:'input',plan:'confirm',review:'plan',execution:'plan',results:'input',measurement:'results',readiness:'results',connections:'plan'};
 export default function App(){
  const location=useLocation(),navigate=useNavigate(),params=new URLSearchParams(location.search),initial=params.has('scene')?Number(params.get('scene')):params.get('tour')==='1'?0:-1;
  const [index,setIndex]=useState(tour[initial]?initial:-1),[auto,setAuto]=useState(params.get('tour')==='1');
- const [state,setState]=useState(()=>{try{return restoreState(window.localStorage.getItem(storageKey));}catch{return initialState();}});
+ const [state,setState]=useState(()=>{try{return restoreSavedState(window.localStorage.getItem(storageKey),window.localStorage.getItem(legacyStorageKey));}catch{return initialState();}});
  const [editor,setEditor]=useState(null),[dialog,setDialog]=useState(null),[notice,setNotice]=useState(''),[progress,setProgress]=useState(0),[inputKey,setInputKey]=useState(0),[inputSeed,setInputSeed]=useState(workflowPrompt),[submitted,setSubmitted]=useState(''),[intent,setIntent]=useState(interpretation),[planSteps,setPlanSteps]=useState(steps);
  const current=index>=0?tour[index]:null,phase=current?.phase||params.get('screen')||(params.has('tool')?'tool':'input'),tool=current?.tool||params.get('tool')||'hubspot';
  const shownSteps=planSteps.map(s=>s.id==='leads'?{...s,tool:(state.crm==='aura'?'AURA lead tracker':'HubSpot')+' · Google Calendar',flow:[{label:'Uses',value:(state.crm==='aura'?'AURA lead tracker':'HubSpot')+' · Google Calendar'},{label:'Creates',value:s.output}]}:s.id==='measure'?{...s,tool:state.measurement==='combined'?'AURA + existing reports':state.measurement==='existing'?'Existing-tool reports':'AURA measurement',flow:[{label:'Uses',value:state.measurement==='combined'?'AURA + existing reports':state.measurement==='existing'?'Existing-tool reports':'AURA measurement'},{label:'Creates',value:s.output}]}:s);

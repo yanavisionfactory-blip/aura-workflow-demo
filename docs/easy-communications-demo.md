@@ -18,7 +18,7 @@ All eight contacts, conversations, company names, stage events, agreement record
 - Reply sending requires approval of both the current recipient and exact current text. Proposal sending also requires sample commercial-term approval. Calendar changes clear invitation approval. Sending and booking are local simulations only.
 - Signed-agreement counts require a completed envelope, all required signers, a matching final-document record, a certificate record and verification. The Docusign screen includes an incomplete-evidence exercise that does not rewrite baseline historical metrics.
 - Reports describe a prepared baseline. Browser edits, message exercises and sample invitations do not fabricate additional historical conversions.
-- Local state is namespaced and can be reset or downloaded as JSON. Source cards, connection requirements, manual handoffs and the live-pilot inputs are visible.
+- Local state is namespaced and can be reset or downloaded as JSON. The new editing format uses its own v2 key and imports v1 choices only on first open, so an older open walkthrough cannot strip new draft fields. Source cards, connection requirements, manual handoffs and the live-pilot inputs are visible.
 
 ## Integration boundaries
 
