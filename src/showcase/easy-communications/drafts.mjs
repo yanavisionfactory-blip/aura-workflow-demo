@@ -23,6 +23,5 @@ export const reviewScreens=[
  {draftId:'calendar-invitation',tool:'calendar',title:'Discovery invitation'},
  {draftId:'email-Proposal',tool:'gmail',kind:'Proposal',title:'Proposal · Maya'},
  {draftId:'email-Follow-up',tool:'gmail',kind:'Follow-up',title:'Proposal follow-up'},
- {draftId:'agreement-scope',tool:'docusign',title:'Agreement document & evidence'},
- {draftId:'pilot-report',tool:'measurement',title:'Pilot report'}
+ {draftId:'agreement-scope',tool:'docusign',title:'Agreement document & evidence'}
 ];
