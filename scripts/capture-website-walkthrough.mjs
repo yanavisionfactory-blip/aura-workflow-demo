@@ -34,7 +34,7 @@ try{
  await page.getByLabel('What would you like to change?').fill('Make it shorter and clearer');
  await page.getByRole('button',{name:'Generate simulated revision',exact:true}).click();
  await page.getByText('After · proposed revision',{exact:true}).waitFor();
- await page.getByRole('button',{name:'Edit manually',exact:true}).click();
+ await page.getByRole('dialog').getByRole('button',{name:'Edit manually',exact:true}).click();
  await page.getByLabel('Page heading',{exact:true}).fill('Tutoring Around Your Student');
  await page.getByRole('button',{name:'Save demo draft',exact:true}).click();
  await page.getByRole('dialog').waitFor({state:'hidden'});
