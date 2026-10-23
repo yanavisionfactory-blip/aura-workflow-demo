@@ -8,7 +8,7 @@ export const tour=[
  {phase:'confirm',title:'Confirm AURA’s understanding',caption:'Review what AURA understood before it puts the plan together. You can adjust the brief here.',seconds:7},
  {phase:'plan',title:'Review the plan',caption:'Review the steps, the tools each one uses and what it creates. Use Change on a step, or Connections to choose your lead tracker and measurement tools.',seconds:8},
  {phase:'plan',panel:'connections',title:'Review the tool connections',caption:'Connections stay within AURA. Choose HubSpot or AURA for leads, then AURA, existing reports, or both for measurement. Quora has a manual handoff.',seconds:8},
- {phase:'review',title:'Review the exact action',caption:'Every prepared tool screen is shown in order. Ask AURA or edit manually beside any screen; the editor shows the change live, and saving updates that same draft in the tool.',seconds:9},
+ {phase:'review',title:'Stay in control of AURA’s work',caption:'The main client record comes first. Open the other previews to inspect what AURA prepares, ask for changes or edit manually. Review and approve the exact action before it happens.',seconds:9},
  {phase:'execution',title:'Follow execution in AURA',caption:'AURA coordinates the prepared stages. No live post, message, meeting, CRM record or signature request is created.',seconds:7},
  {phase:'results',title:'See your result first',caption:'The primary client record is already open. Other tool outputs are collapsed below, with their own View in tool screens.',seconds:10},
  {phase:'tool',tool:'linkedin',title:'Review the LinkedIn draft',caption:'Inspect the proposed post in a LinkedIn-style screen. Editing the text clears the approval for its earlier revision.',seconds:8},
