@@ -6,7 +6,7 @@ export const steps=[step('content','Medium · LinkedIn · Facebook · Quora','Ad
 export const tour=[
  {phase:'input',title:'Review Diana’s prepared pilot brief',caption:'Diana’s specific workflow is already in the prompt. Review it and choose Create plan, or use Next to follow the prepared demonstration.',seconds:10},
  {phase:'confirm',title:'Confirm AURA’s understanding',caption:'Review what AURA understood before it puts the plan together. You can adjust the brief here.',seconds:7},
- {phase:'plan',title:'Review the plan',caption:'AURA shows the steps, the tools each one uses and what it creates. Change the lead tracker or measurement choice in the plan.',seconds:8},
+ {phase:'plan',title:'Review the plan',caption:'Review the steps, the tools each one uses and what it creates. Use Change on a step, or Connections to choose your lead tracker and measurement tools.',seconds:8},
  {phase:'plan',panel:'connections',title:'Review the tool connections',caption:'Connections stay within AURA. Choose HubSpot or AURA for leads, then AURA, existing reports, or both for measurement. Quora has a manual handoff.',seconds:8},
  {phase:'review',title:'Review the exact action',caption:'Read the channel draft in AURA’s approval screen. Ask AURA to revise it or edit it manually before running the prepared demo.',seconds:9},
  {phase:'execution',title:'Follow execution in AURA',caption:'AURA coordinates the prepared stages. No live post, message, meeting, CRM record or signature request is created.',seconds:7},
