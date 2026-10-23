@@ -91,3 +91,14 @@ test('malformed saved draft values fall back to the prepared screen content',asy
  assert.equal(draftField(draft,state,'time'),draft.time);
  assert.equal(draftVersion(state,draft.id),0);
 });
+test('new editing state migrates legacy drafts once and remains isolated from old tabs',async()=>{
+ const {legacyStorageKey,storageKey,restoreSavedState,editDraft,draftText}=await import('../src/showcase/easy-communications/model.mjs');
+ const {getDraft}=await import('../src/showcase/easy-communications/drafts.mjs');
+ assert.notEqual(storageKey,legacyStorageKey);
+ const legacy=JSON.stringify({...initialState(),crm:'aura',postEdits:{'li-filter':'A legacy draft.'}});
+ const migrated=restoreSavedState(null,legacy);
+ assert.equal(migrated.crm,'aura');assert.equal(migrated.postEdits['li-filter'],'A legacy draft.');
+ const edited=editDraft(migrated,'email-Proposal','A saved proposal revision.');
+ const reopened=restoreSavedState(JSON.stringify(edited),JSON.stringify(initialState()));
+ assert.equal(draftText(getDraft('email-Proposal'),reopened),'A saved proposal revision.');
+});

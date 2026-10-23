@@ -1,7 +1,9 @@
 import {leads,posts,sampleEnvelope,timeLog,sources} from './data.mjs';
 import {actionDrafts,getDraft} from './drafts.mjs';
 export {replyFor} from './drafts.mjs';
-export const storageKey='aura-easy-communications-v1';
+export const storageKey='aura-easy-communications-v2';
+export const legacyStorageKey='aura-easy-communications-v1';
+export function restoreSavedState(current,legacy){return restoreState(current??legacy);}
 export const initialState=()=>({measurement:'combined',crm:'hubspot',optionalGA:false,postEdits:{},postApprovals:{},postStates:{},sentReplies:{},nextActions:{},draftEdits:{},draftFields:{},draftVersions:{},events:[]});
 export function restoreState(raw){try{const v=JSON.parse(raw);if(!v||typeof v!=='object'||Array.isArray(v))return initialState();const s=initialState();for(const key of ['postEdits','postApprovals','postStates','sentReplies','nextActions','draftEdits','draftFields','draftVersions'])if(v[key]&&typeof v[key]==='object'&&!Array.isArray(v[key]))s[key]=v[key];if(['aura','existing','combined'].includes(v.measurement))s.measurement=v.measurement;if(['hubspot','aura'].includes(v.crm))s.crm=v.crm;s.optionalGA=v.optionalGA===true;s.events=Array.isArray(v.events)?v.events.filter(x=>typeof x==='string').slice(-50):[];return s;}catch{return initialState();}}
 export function postText(post,state){return typeof state.postEdits[post.id]==='string'?state.postEdits[post.id]:post.text;}
