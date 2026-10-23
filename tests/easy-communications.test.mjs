@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {leads,posts,sampleEnvelope,timeLog} from '../src/showcase/easy-communications/data.mjs';
+import {leads,posts,sampleEnvelope,timeLog,sources} from '../src/showcase/easy-communications/data.mjs';
 import {approvePost,editPost,initialState,isApproved,packageText,publishPost,replyAllowed,restoreState,summary,timeSummary,verifyEnvelope} from '../src/showcase/easy-communications/model.mjs';
 
 test('a changed social draft cannot inherit approval or be published',()=>{
@@ -47,5 +47,5 @@ test('download preserves edited copy, source history and synthetic outcome label
  const state=editPost({...initialState(),measurement:'existing',crm:'aura'},posts[0].id,'Approved source material, revised draft.');
  const result=JSON.parse(packageText(state));
  assert.match(result.label,/SIMULATED/);assert.equal(result.posts[0].text,'Approved source material, revised draft.');assert.equal(result.posts[0].exactRevisionApproved,false);
- assert.equal(result.primaryLeadRecord,'aura');assert.equal(result.measurement,'existing');assert.equal(result.leads[0].selfReport,leads[0].selfReport);assert.match(result.attribution,/No causal/);
+ assert.equal(result.primaryLeadRecord,'aura');assert.equal(result.measurement,'existing');assert.equal(result.leads[0].selfReport,leads[0].selfReport);assert.equal(result.sources[0].url,sources[0].url);assert.match(result.attribution,/No causal/);
 });
