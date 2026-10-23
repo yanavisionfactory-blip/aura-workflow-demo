@@ -20,6 +20,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - run: npm install
       - run: node --test tests/websiteContentEdits.test.mjs tests/websiteShowcase.test.mjs
       - run: python3 -m py_compile scripts/build-website-walkthrough.py
@@ -33,6 +36,16 @@ jobs:
         timeout-minutes: 3
         env:
           AURA_BROWSER_CHANNEL: chrome
+      - name: Install bundled video encoder
+        timeout-minutes: 3
+        run: |
+          python3 -m venv .walkthrough-runtime
+          .walkthrough-runtime/bin/pip install --disable-pip-version-check imageio-ffmpeg==0.6.0
+      - name: Check captioned video encoding
+        timeout-minutes: 3
+        run: |
+          encoder_path="$(.walkthrough-runtime/bin/python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          python3 scripts/build-website-walkthrough.py .walkthrough-frames --output dist/showcase/website-content/walkthrough.mp4 --ffmpeg "$encoder_path"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

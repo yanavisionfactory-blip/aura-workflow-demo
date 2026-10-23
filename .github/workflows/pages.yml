@@ -75,10 +75,17 @@ jobs:
         if: steps.walkthrough.outputs.reused != 'true'
         timeout-minutes: 3
         run: google-chrome --version
+      - name: Set up video Python runtime
+        if: steps.walkthrough.outputs.reused != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: Install video encoder
         if: steps.walkthrough.outputs.reused != 'true'
         timeout-minutes: 3
-        run: sudo apt-get install -y --no-install-recommends ffmpeg
+        run: |
+          python3 -m venv .walkthrough-runtime
+          .walkthrough-runtime/bin/pip install --disable-pip-version-check imageio-ffmpeg==0.6.0
       - name: Capture and check website demo screens
         if: steps.walkthrough.outputs.reused != 'true'
         timeout-minutes: 3
@@ -89,7 +96,8 @@ jobs:
         if: steps.walkthrough.outputs.reused != 'true'
         timeout-minutes: 3
         run: |
-          python3 scripts/build-website-walkthrough.py .walkthrough-frames --output dist/showcase/website-content/walkthrough.mp4
+          encoder_path="$(.walkthrough-runtime/bin/python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          python3 scripts/build-website-walkthrough.py .walkthrough-frames --output dist/showcase/website-content/walkthrough.mp4 --ffmpeg "$encoder_path"
           cp .walkthrough-frames/scene-04.jpg dist/showcase/website-content/walkthrough-poster.jpg
       - name: Keep the walkthrough video for review
         uses: actions/upload-artifact@v4
