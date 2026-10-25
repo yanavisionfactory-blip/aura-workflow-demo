@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from . import wordpress_plugins
 from .agent_runtime import is_governed_derivative_step
@@ -6238,7 +6239,11 @@ async def approve_plan(
     run = await session.get(WorkflowRun, run_id)
     if not run or run.workspace_id != wid:
         raise HTTPException(404, "Run not found")
-    if run.plan_approved:
+    explicit_reapproval = (
+        run.status == RunStatus.waiting_for_action
+        and ((run.execution_context or {}).get("__aura_blocker__") or {}).get("code") == "plan_approval_required"
+    )
+    if run.plan_approved and not explicit_reapproval:
         raise HTTPException(409, "Plan already approved")
     if not payload.approved:
         transition_run(
@@ -6424,9 +6429,10 @@ async def approve_plan(
         # The direct LLM planner has one visible proposal per run. The user is
         # approving this draft, so normalize/edit it in place before approval.
         latest_version.plan = plan_json
+        flag_modified(latest_version, "plan")
         latest_version.plan_hash = plan_hash
         plan_version = latest_version
-    elif steps_edited or normalized_arguments or not latest_version:
+    elif steps_edited or normalized_arguments or explicit_reapproval or not latest_version:
         plan_version = PlanVersion(
             workspace_id=wid,
             run_id=run.id,
@@ -6474,6 +6480,7 @@ async def approve_plan(
             stored.tool_slug = edited.tool_slug
             stored.operation = edited.operation
             stored.arguments = edited.arguments
+            flag_modified(stored, "arguments")
             stored.depends_on = edited.depends_on
             stored.dependency_mode = edited.dependency_mode
             stored.condition = (
@@ -6489,6 +6496,7 @@ async def approve_plan(
         # client or a revised plan classified the step as a read.
         stored.consequential = planned.consequential
     run.plan = plan_json
+    flag_modified(run, "plan")
     execution_context = dict(run.execution_context or {})
     write_repairs = {
         str(key): dict(value)
@@ -6578,6 +6586,7 @@ async def approve_plan(
         phase="execution",
         supervisor_status="active",
         error=None,
+        blocker=None,
     )
     session.add(
         AuditEvent(
@@ -6761,7 +6770,12 @@ async def decide_approval(
                 )
             )
             run.plan = plan_json
+            # SQLAlchemy considers 70 and 70.0 equal, while their signed JSON
+            # hashes differ. Persist the exact reviewed representation so a
+            # fresh worker sees the same plan as the immutable approval.
+            flag_modified(run, "plan")
             step.arguments = edited_arguments
+            flag_modified(step, "arguments")
             step.idempotency_key = idempotency_key(
                 run.id, step.position, step.operation, edited_arguments
             )
