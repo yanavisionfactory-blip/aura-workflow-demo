@@ -358,7 +358,7 @@ def test_large_selected_catalog_retains_exact_requested_generation_and_reads():
         for slug, operation in [("aura", "report.compose"), ("google", "sheets.read")]
     ]
     data = {
-        "request": "Use aura:report.compose and google:sheets.read for this report and read.",
+        "request": "Call aura:report.compose. Then call google:sheets.read.",
         "required_actions": [],
         "operations": [{"slug": "connector", "allowed_operations": [
             module["name"] for module in distractors
@@ -383,6 +383,9 @@ def test_exact_requested_contract_that_cannot_fit_fails_instead_of_substituting(
     }
     with pytest.raises(ModelInputTooLarge, match="Required action contracts"):
         llm_planner._bounded_planning_catalog(data)
+    data["request"] = "Use aura:report.compose.extra only."
+    packed = llm_planner._bounded_planning_catalog(data)
+    assert packed["operations"][0]["allowed_operations"] == []
 
 
 @pytest.mark.asyncio
