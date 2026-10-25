@@ -85,8 +85,10 @@ jobs:
               ('API', '4dae3f58-70dd-44e4-804f-e21441c4ec41'),
           ]:
               baseline = {item['id'] for item in deployments(service)}
+              # The CLI archives paths relative to the absolute repository root.
+              # An absolute backend path preserves /backend without a prefix mismatch.
               subprocess.run([
-                  'railway', 'up', './backend', '--detach', '--project', project,
+                  'railway', 'up', os.path.abspath('backend'), '--detach', '--project', project,
                   '--environment', environment, '--service', service,
                   '--message', f'AURA verified release {release} ({name})',
               ], check=True, timeout=180)
