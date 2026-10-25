@@ -291,6 +291,36 @@ def test_complete_requirements_collapse_routes_and_reuse_connected_family() -> N
     ) == []
 
 
+def test_compiled_sheets_requirement_preserves_the_exact_authorization_route():
+    inventory = [{"slug": "google-sheets", "name": "Google Sheets",
+                  "connected": False,
+                  "allowed_operations": ["google-sheets.new-spreadsheet"]}]
+    plan = WorkflowPlan(name="KPI dashboard", interpretation="Create a Google Sheets dashboard", steps=[
+        PlanStep(key="create", agent="Sheets", tool_slug="google-sheets",
+                 operation="google-sheets.new-spreadsheet", reason="Create dashboard",
+                 expected_output="Saved spreadsheet", consequential=True),
+    ])
+    # Intake can recognize a family; an executable plan must never ask the UI
+    # to authorize that family name as if it were a connector slug.
+    assert complete_connection_requirements("Create a Google Sheets dashboard", [], inventory) == ["sheets"]
+    assert complete_connection_requirements(
+        "Create a Google Sheets dashboard", [], inventory, compiled_plan=plan,
+    ) == ["google-sheets"]
+
+
+def test_compiled_requirements_keep_adapter_and_fallback_routes_separate():
+    inventory = [{"slug": slug, "name": "Slack", "connected": False}
+                 for slug in ("slack", "slack-v2")]
+    plan = WorkflowPlan(name="Read Slack", interpretation="Read Slack", steps=[
+        PlanStep(key="read", agent="Slack", tool_slug="slack-v2", operation="slack.read",
+                 fallback_tool_slug="slack", fallback_operation="slack.read",
+                 reason="Read messages", expected_output="Messages"),
+    ])
+    assert complete_connection_requirements(
+        "Read Slack", [], inventory, compiled_plan=plan,
+    ) == ["slack-v2", "slack"]
+
+
 def test_slack_adapter_versions_require_one_account_without_merging_other_providers():
     inventory = [
         {"slug": "slack", "name": "Slack", "connected": False},
