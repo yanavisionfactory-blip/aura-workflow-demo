@@ -34,3 +34,6 @@ export const connections=[
 ];
 export const period='26 Oct – 8 Nov 2026';
 export const toolNames={linkedin:'LinkedIn',meta:'Meta Business Suite',quora:'Quora',hubspot:'HubSpot',tracker:'AURA lead tracker',gmail:'Gmail',calendar:'Google Calendar',docusign:'Docusign',measurement:'Measurement workspace'};
+export function promptTools({crm='hubspot',measurement='combined',optionalGA=false}={}){
+ return ['Medium','LinkedIn','Meta Business Suite','Quora',crm==='aura'?'AURA lead tracker':'HubSpot','Gmail','Google Calendar','Docusign',...(measurement!=='existing'?['AURA measurement']:[]),...(measurement!=='aura'?['Existing-tool reports']:[]),...(optionalGA?['Google Analytics 4']:[])];
+}
