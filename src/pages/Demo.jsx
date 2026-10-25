@@ -159,6 +159,7 @@ const friendlyStepTitle = (step) => {
   }
   if (operation === "canva.presentation.create") return "Make the Canva slide";
   if (operation === "canva.export.create") return "Export the Canva PDF";
+  if (operation === "sheets.kpi.create") return "Create the KPI workbook";
   if (operation.startsWith("sheets.")) return operation.includes("update") || operation.includes("append") ? "Update the spreadsheet" : "Read the spreadsheet";
   if (operation.startsWith("hubspot.")) return reason.includes("update") ? "Update HubSpot records" : "Find HubSpot records";
   if (operation === "notion.search") return "Find the Notion notes";
@@ -1870,6 +1871,12 @@ Generate a results summary in plain, human-friendly language (not technical).
                 className="w-full flex justify-center"
               >
                 <ErrorView
+                  backendRunId={recoveryRun?.id}
+                  onReviewPlan={activeRecovery?.blockerAction === "review_plan" ? () => {
+                    pythonPlanRef.current = recoveryRun.plan;
+                    setPlan(uiPlanFromRun(recoveryRun));
+                    setPhase("plan");
+                  } : undefined}
                   error={activeRecovery || mock.errorStep}
                   step={execSteps[recoveryRun ? activeRecovery.index : mock.errorStep.index]}
                   runSteps={execSteps}

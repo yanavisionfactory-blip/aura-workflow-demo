@@ -71,6 +71,74 @@ async def test_template_passes_real_compiler_without_model(fields):
     assert plan.planning_artifacts["planner_recovery_mode"] == "audited_kpi_pilot_v1"
 
 
+async def test_browser_numeric_roundtrip_preserves_approved_plan_after_reload(runtime, fields, monkeypatch):
+    """JS serializes 29960.0 as 29960; approval must persist exactly what it hashes."""
+    from types import SimpleNamespace
+
+    from sqlalchemy import select
+
+    from app import main
+    from app.models import (
+        Approval,
+        ApprovalSnapshot,
+        PlanVersion,
+        RunStatus,
+        RunStep,
+        ToolConnection,
+        WorkflowRun,
+    )
+    from app.native_connectors import native_operations
+    from app.policy import canonical_plan_hash
+    from app.schemas import ApprovalDecision, PlanApproval, WorkflowPlan
+
+    plan = kpi_template(PREFIX + json.dumps(fields), [{"slug": "google", "connected": True}]).model_dump(mode="json")
+    assert type(plan["steps"][0]["arguments"]["actual"]["revenue"]) is float
+    monkeypatch.setattr(main, "dispatch_pending", AsyncMock())
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        run.plan = plan
+        version = await session.get(PlanVersion, "version")
+        version.plan, version.plan_hash = plan, canonical_plan_hash(plan)
+        snapshot = await session.get(ApprovalSnapshot, "snapshot")
+        snapshot.plan_hash = version.plan_hash
+        snapshot.permission_snapshot = {"google": native_operations("google")}
+        step = await session.get(RunStep, "step")
+        step.tool_slug, step.operation, step.arguments = "google", CREATE, plan["steps"][0]["arguments"]
+        tool = await session.get(ToolConnection, "tool")
+        tool.slug, tool.allowed_operations = "google", native_operations("google")
+        approval = await session.get(Approval, "approval")
+        approval.status = "pending"
+        approval.preview = {"status": "ready", "operation": CREATE, "arguments": step.arguments}
+        await session.commit()
+        await main.decide_approval("approval", ApprovalDecision(approved=True, edited_arguments=fields),
+                                   SimpleNamespace(workspace_id="w", subject="owner", role="owner"), session)
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        version = await session.scalar(select(PlanVersion).where(PlanVersion.run_id == "run").order_by(PlanVersion.version.desc()))
+        snapshot = await session.scalar(select(ApprovalSnapshot).where(ApprovalSnapshot.plan_version_id == version.id))
+        assert canonical_plan_hash(run.plan) == version.plan_hash == snapshot.plan_hash
+        assert canonical_plan_hash(run.plan) == canonical_plan_hash(version.plan)
+        # A run already stopped by an integrity mismatch can return to explicit
+        # review. It appends a new approval; it never silently repairs a signature.
+        main.transition_run(run, RunStatus.waiting_for_action, reason="approved_plan_integrity_failed",
+                            actor="policy-governor", phase="approval", supervisor_status="human_action_required",
+                            blocker={"code": "plan_approval_required", "action": "review_plan"}, dispatch=None)
+        old_version_id = version.id
+        await session.commit()
+        approved = await main.approve_plan("run", PlanApproval(approved=True,
+            edited_steps=WorkflowPlan.model_validate(run.plan).steps),
+            SimpleNamespace(workspace_id="w", subject="owner", role="owner"), session)
+        assert approved["plan_version"] == version.version + 1
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        version = await session.scalar(select(PlanVersion).where(PlanVersion.run_id == "run").order_by(PlanVersion.version.desc()))
+        assert version.derived_from_id == old_version_id
+        assert canonical_plan_hash(run.plan) == version.plan_hash
+        assert (await session.get(PlanVersion, old_version_id)).status == "approved"
+        assert (await session.get(Approval, "approval")).status == "pending"
+        assert not run.execution_context.get("__aura_blocker__")
+
+
 @pytest.mark.parametrize("damage", ["id", "formula", "feedback", "calculation", "missing_tab", "format", "error"])
 def test_wrong_or_partial_workbook_cannot_succeed(fields, damage):
     data = observed(fields)

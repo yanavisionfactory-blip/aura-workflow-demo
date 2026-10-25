@@ -2,6 +2,7 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { AlertOctagon, Pencil, SkipForward, Check, ChevronRight, ArrowRight, Clock3, Lightbulb, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import RunSupportAccess from "./RunSupportAccess";
 
 export default function ErrorView({
   error,
@@ -16,6 +17,8 @@ export default function ErrorView({
   onSuggest,
   onLater,
   onCancel,
+  onReviewPlan,
+  backendRunId,
   busy = false,
   message = "",
 }) {
@@ -128,6 +131,7 @@ export default function ErrorView({
       {message && <p role="status" className="mb-4 text-sm text-amber-200">{message}</p>}
       {/* Actions */}
       <div className="flex flex-wrap items-center gap-2 pt-4 border-t border-white/6">
+        {onReviewPlan && <Button size="sm" onClick={onReviewPlan} disabled={busy}>Review saved plan</Button>}
         {onRetry && error.canRetry !== false && (
           <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
             <Button
@@ -171,6 +175,8 @@ export default function ErrorView({
           </Button>
         )}
       </div>
+
+      <RunSupportAccess runId={backendRunId} />
 
       <AnimatePresence initial={false}>
         {showSuggestion && onSuggest && (
