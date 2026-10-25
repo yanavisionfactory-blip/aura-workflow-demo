@@ -80,7 +80,7 @@ def test_every_write_readback_is_required_before_start(operation, readback):
     "inputs.attached_documents.0.file_url.campaign_context",
 ])
 def test_report_rejects_unavailable_nested_upload_reference_before_start(path):
-    # Mason's source run completed four processors before discovering that a
+    # The supplied campaign run completed four processors before discovering that a
     # JSON key inside the uploaded file was not an upload-metadata field.
     inputs = {"attached_documents": [{
         "name": "campaign.json", "file_url": "data:application/json;base64,e30=", "size": 2,
