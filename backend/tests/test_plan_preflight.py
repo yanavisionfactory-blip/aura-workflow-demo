@@ -54,6 +54,29 @@ def test_internal_summary_disguised_as_identity_is_not_reviewable():
     assert any("narrative placeholder" in issue for issue in check.fixes)
 
 
+@pytest.mark.parametrize(("field", "valid"), [
+    ("spreadsheet.id", True),
+    ("spreadsheetId", False),
+    ("spreadsheet.spreadsheetId", False),
+])
+def test_spreadsheet_resolver_references_use_its_actual_output(field, valid):
+    plan = WorkflowPlan(name="Read existing workbook", interpretation="Read resolved cells", steps=[
+        PlanStep(key="resolve", agent="Reader", tool_slug="google",
+                 operation="drive.spreadsheet.resolve", arguments={"name": "Existing workbook"},
+                 reason="Resolve the existing workbook", expected_output="Spreadsheet metadata"),
+        PlanStep(key="read", agent="Reader", tool_slug="google", operation="sheets.read",
+                 arguments={"spreadsheet_id": "{{steps.resolve." + field + "}}", "range": "A1:B4"},
+                 depends_on=["resolve"], reason="Read the resolved workbook",
+                 expected_output="Source cells"),
+    ])
+    check = preflight_plan(plan, planning_catalog({"google"}),
+                           {"google": native_manifest("google")}, set())
+    if valid:
+        assert check.fixes == []
+    else:
+        assert any("outside the source contract" in issue for issue in check.fixes)
+
+
 @pytest.mark.parametrize(("operation", "readback"), READBACK_OPERATIONS.items())
 def test_every_write_readback_is_required_before_start(operation, readback):
     # Custom connectors use the same preflight as native connectors; the

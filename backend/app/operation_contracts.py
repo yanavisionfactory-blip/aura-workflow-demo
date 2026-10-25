@@ -314,6 +314,9 @@ KNOWN.update({
     }, ["resource_metadata"]),
     "drive.spreadsheet.resolve": ({
         "type": "object",
+        # This envelope is produced by AURA, not an open-ended provider payload.
+        # Reject invented aliases such as spreadsheetId before a plan can start.
+        "additionalProperties": False,
         "required": ["query", "status", "match_count", "matches", "spreadsheet"],
         "properties": {
             "query": TEXT,
@@ -326,6 +329,7 @@ KNOWN.update({
             "matches": {"type": "array", "items": OBJECT},
             "spreadsheet": {
                 "type": ["object", "null"],
+                "additionalProperties": False,
                 "properties": {
                     "id": TEXT, "name": TEXT, "mimeType": TEXT,
                     "createdTime": TEXT, "modifiedTime": TEXT,
