@@ -191,6 +191,31 @@ def test_completed_steps_with_unverified_result_show_a_human_handoff():
     assert public["public_blocker"] == blocker
 
 
+@pytest.mark.parametrize("status", [RunStatus.completed, RunStatus.cancelled])
+@pytest.mark.parametrize("stale_blocker", [None, {"code": "no_safe_recovery"}])
+def test_terminal_run_cannot_be_hidden_by_old_recovery_state(status, stale_blocker):
+    from app.main import _run_blocker
+    from app.models import RunStep, StepStatus
+
+    run = WorkflowRun(
+        status=status, plan_approved=True,
+        result={"verification": {"status": "verified"}},
+        execution_context={
+            "__aura_autonomy__": {"handoff_reason_code": "no_safe_recovery"},
+            "__aura_supervisor__": {"status": "operator_attention"},
+            "__aura_blocker__": stale_blocker,
+        },
+    )
+    steps = [RunStep(step_key="create", status=StepStatus.completed)]
+    assert _run_blocker(run, steps, {}, []) is None
+    # Projection also protects callers that have already derived a stale blocker.
+    public = public_run_projection(run, stale_blocker)
+    assert public["public_status"] == status.value
+    assert public["public_blocker"] is None
+    assert public["public_error"] is None
+    assert public["supervisor"]["status"] == status.value
+
+
 @pytest.mark.parametrize("reason", [
     "Final evidence preparation unavailable", "Outcome verification is temporarily unavailable",
 ])

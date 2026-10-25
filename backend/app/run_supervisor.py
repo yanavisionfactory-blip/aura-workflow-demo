@@ -593,6 +593,21 @@ def pause_direct_planning_failure(run: WorkflowRun, scope_error: str | None = No
 def public_run_projection(run: WorkflowRun, blocker: dict | None) -> dict:
     """Return the only run state technical users should need to understand."""
     state = supervisor_state(run)
+    # Terminal persistence state is authoritative. Retained recovery history
+    # must not turn a completed run back into an endless recovering screen.
+    if run.status in {RunStatus.completed, RunStatus.cancelled}:
+        return {
+            "public_status": run.status.value,
+            "public_error": None,
+            "public_blocker": None,
+            "supervisor": {
+                "owner": "run_supervisor",
+                "phase": "delivery" if run.status == RunStatus.completed else state.get("phase"),
+                "status": run.status.value,
+                "completed_work_preserved": True,
+                "browser_independent": True,
+            },
+        }
     autonomy = (run.execution_context or {}).get("__aura_autonomy__") or {}
     transition = state.get("last_transition") or {}
     failed_step = (run.result or {}).get("failed_step") or {}
