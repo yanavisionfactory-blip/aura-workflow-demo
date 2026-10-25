@@ -5644,6 +5644,10 @@ def _run_blocker(
     requirements,
     attempted_steps: set[str] | frozenset[str] = frozenset(),
 ) -> dict | None:
+    # Recovery metadata is historical after a terminal transition. It cannot
+    # create a new blocker for a verified completion or a cancelled run.
+    if run.status in {RunStatus.completed, RunStatus.cancelled}:
+        return None
     stored = (run.execution_context or {}).get("__aura_blocker__") or (run.result or {}).get(
         "blocker"
     )
