@@ -81,6 +81,35 @@ async def test_prestart_stops_before_any_write(database, monkeypatch, failure):
         else: assert execute.call_args.args[0] == "sheets.read"
 
 
+@pytest.mark.parametrize("blocker_code,expected_status", [("plan_approval_required", 200), ("account_changed", 409), (None, 409)])
+async def test_preflight_reopens_only_explicit_plan_review(database, monkeypatch, blocker_code, expected_status):
+    from fastapi import HTTPException
+
+    from app import main
+    from app.run_supervisor import transition_run
+    await seed(database)
+    check = AsyncMock(return_value={"passed": True})
+    monkeypatch.setattr(run_readiness, "check_run_readiness", check)
+    async with database() as session:
+        run = await session.get(WorkflowRun, "run")
+        run.plan_approved = True
+        transition_run(run, RunStatus.running, reason="test_started", actor="test", dispatch=None)
+        await session.commit()
+        if blocker_code:
+            transition_run(run, RunStatus.waiting_for_action, reason="test_blocker", actor="test",
+                           blocker={"code": blocker_code, "action": "review_plan"}, dispatch=None)
+            await session.commit()
+        context = SimpleNamespace(workspace_id="a", subject="owner", role="owner")
+        if expected_status == 200:
+            assert await main.review_run_readiness("run", None, context, session) == {"passed": True}
+            check.assert_awaited_once()
+        else:
+            with pytest.raises(HTTPException) as exc:
+                await main.review_run_readiness("run", None, context, session)
+            assert exc.value.status_code == expected_status
+            check.assert_not_awaited()
+
+
 def test_environment_change_preserves_existing_connection(monkeypatch):
     from app import pipedream_connect
     from app.config import Settings
