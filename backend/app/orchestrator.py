@@ -1331,17 +1331,27 @@ def complete_connection_requirements(
     missing = list(dict.fromkeys([*explicit, *planned]))
     if compiled_plan is None:
         return missing
-    used_families = set()
+    # Families are useful for matching prose before a plan exists, but they
+    # are not executable authorization routes (for example, "sheets" is not
+    # the certified "google-sheets" connector). Retain the exact route chosen
+    # by the compiled plan, including fallback routes, for the connection UI.
+    routes_by_family: dict[str, list[str]] = {}
+    known_routes = {item.get("slug") for item in inventory}
     for step in compiled_plan.steps:
         for slug, operation in (
             (step.tool_slug, step.operation),
             (step.fallback_tool_slug, step.fallback_operation),
         ):
-            if slug:
-                used_families.add(_connection_family({"slug": slug}))
+            if not slug or slug not in known_routes:
+                continue
+            families = {_connection_family({"slug": slug})}
             if operation:
-                used_families.add(_connection_family({"slug": operation.split(".", 1)[0]}))
-    return [family for family in missing if family in used_families]
+                families.add(_connection_family({"slug": operation.split(".", 1)[0]}))
+            for family in families:
+                routes_by_family.setdefault(family, []).append(slug)
+    return list(dict.fromkeys(
+        slug for family in missing for slug in routes_by_family.get(family, [])
+    ))
 
 
 def _required_permissions(capability: str, inventory: list[dict]) -> list[str]:
@@ -1522,6 +1532,7 @@ async def _persist_plan_draft(session, run: WorkflowRun, plan) -> tuple[str, str
                 "depends_on": item.depends_on,
                 "condition": item.condition is not None,
                 "optional": item.optional,
+                "tool_slug": item.tool_slug,
                 "operation": item.operation,
             }
             for item in plan.steps

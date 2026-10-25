@@ -247,10 +247,20 @@ def intent_bounded_tool_inventory(
         )
 
     if "report.compose" in original or re.search(
-        r"\b(?:report|review|analysis)\b.{0,100}\b(?:in|inside) aura\b", original,
+        r"\b(?:report|review|analysis|comparison|research|summary|draft|result)\b"
+        r".{0,100}\b(?:in|inside|within) aura\b", original,
     ):
         selected.update(index for index, item in enumerate(inventory)
                         if "report.compose" in item.get("allowed_operations", []))
+
+    # Web evidence is a supporting capability even when the destination is a
+    # named external app. Otherwise an incidental Sheets mention can hide the
+    # built-in reader and tempt the planner to substitute an SEO overview.
+    if re.search(r"\b(?:public web|web pages?|websites?|public sources?)\b", text):
+        selected.update(index for index, item in enumerate(inventory)
+                        if item.get("slug") == "aura" and
+                        {"web.search", "web.page.read"}.intersection(
+                            item.get("allowed_operations", [])))
 
     from .proofing import requested_proofing_sources
 
