@@ -25,3 +25,33 @@ def test_model_comparison_uses_identical_fixtures_and_strict_grading():
         assert not grade("not JSON", expected)
         assert not grade(json.dumps({**expected, "invented": "extra"}), expected)
     assert not grade('{"aov": true}', {"aov": 1})
+
+
+async def test_isolated_canary_does_not_require_a_worker_but_production_does(monkeypatch):
+    from contextlib import asynccontextmanager
+
+    import pytest
+    from fastapi import HTTPException
+
+    from app import worker_health
+    settings = SimpleNamespace(canary_mode=True, redis_url="redis://fixture", recovery_scheduler_enabled=False,
+                               connector_engineer_enabled=False, connector_release_signing_key="")
+    monkeypatch.setattr(main, "settings", settings)
+    monkeypatch.setattr(main, "production_configuration_checks", lambda: {"configuration": True})
+    @asynccontextmanager
+    async def connect():
+        yield SimpleNamespace(execute=AsyncMock())
+    monkeypatch.setattr(main, "engine", SimpleNamespace(connect=connect))
+    monkeypatch.setattr(main.redis, "from_url", lambda *_a, **_kw: SimpleNamespace(ping=AsyncMock(return_value=True), aclose=AsyncMock()))
+    worker = AsyncMock(return_value=False)
+    monkeypatch.setattr(worker_health, "worker_responds", worker)
+    result = await main.readiness()
+    assert result["status"] == "ready" and result["canary"] is True
+    assert "execution_worker" not in result["checks"]
+    worker.assert_not_awaited()
+    settings.canary_mode = False
+    with pytest.raises(HTTPException) as exc:
+        await main.readiness()
+    assert exc.value.status_code == 503
+    assert exc.value.detail["checks"]["execution_worker"] is False
+    worker.assert_awaited_once()
