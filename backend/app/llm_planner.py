@@ -2,6 +2,8 @@
 
 import json
 import re
+from functools import reduce
+from operator import or_
 from time import perf_counter
 from typing import Literal
 
@@ -23,7 +25,7 @@ from .schemas import MAX_WORKFLOW_STEPS, WorkflowPlan
 
 
 def _catalog_plan_format(inventory: list[dict]) -> type[CompactWorkflowPlan]:
-    """Pin generated routes to catalog identities, including hashed MCP slugs.
+    """Pin generated action/connection pairs to the catalog shown to the model.
 
     A display name/canonical provider is not an executable connection identity.
     This constrains generation only; preflight still checks operation/schema,
@@ -32,10 +34,32 @@ def _catalog_plan_format(inventory: list[dict]) -> type[CompactWorkflowPlan]:
     slugs = tuple(sorted({str(item['slug']) for item in inventory if item.get('slug')}))
     if not slugs:
         return CompactWorkflowPlan
-    step_type = create_model(
-        'CatalogPlanStep', __base__=CompactPlanStep,
-        tool_slug=(Literal[slugs], ...),
-    )
+    operations_by_slug: dict[str, set[str]] = {}
+    for item in inventory:
+        slug = str(item.get('slug') or '')
+        operations = {str(operation) for operation in item.get('allowed_operations') or []
+                      if operation}
+        if slug and operations:
+            operations_by_slug.setdefault(slug, set()).update(operations)
+    if operations_by_slug:
+        step_types = tuple(
+            create_model(
+                f'CatalogPlanStep{index}', __base__=CompactPlanStep,
+                tool_slug=(Literal[slug], ...),
+                operation=(Literal[tuple(sorted(operations))], ...),
+            )
+            for index, (slug, operations) in enumerate(sorted(operations_by_slug.items()))
+        )
+        # A nested anyOf is supported by structured outputs. A global operation
+        # enum would still allow report.compose to be paired with Google Sheets.
+        step_type = reduce(or_, step_types)
+    else:
+        # Legacy callers may supply identities without operation catalogs.
+        # They retain identity constraints; normal preflight remains mandatory.
+        step_type = create_model(
+            'CatalogPlanStep', __base__=CompactPlanStep,
+            tool_slug=(Literal[slugs], ...),
+        )
     return create_model(
         'CatalogWorkflowPlan', __base__=CompactWorkflowPlan,
         steps=(list[step_type], Field(min_length=1, max_length=MAX_WORKFLOW_STEPS)),
@@ -161,14 +185,15 @@ def _compact_schema(schema):
     }
 
 
-def _bounded_planning_payload(payload: dict) -> str:
+def _bounded_planning_catalog(payload: dict) -> dict:
     """Pack large connector catalogs before the one LLM call, with no retry loop.
 
     Request text and required actions are never shortened. Full operation
     contracts remain with the caller for validation and execution.
     """
     try:
-        return bounded_input(payload)
+        bounded_input(payload)
+        return payload
     except ModelInputTooLarge:
         pass
 
@@ -231,7 +256,11 @@ def _bounded_planning_payload(payload: dict) -> str:
                         "Required action contracts exceed the planning input budget"
                     ) from None
                 continue
-    return bounded_input(reduced)
+    return reduced
+
+
+def _bounded_planning_payload(payload: dict) -> str:
+    return bounded_input(_bounded_planning_catalog(payload))
 
 
 async def create_llm_plan(
@@ -253,7 +282,7 @@ async def create_llm_plan(
     started = perf_counter()
     relevant = intent_bounded_tool_inventory(prompt, inventory, requested_tool_names)
     effects = required_effects or []
-    payload = _bounded_planning_payload({
+    planning_data = _bounded_planning_catalog({
         "request": prompt,
         "selected_tools": sorted(requested_tool_names),
         "temporal_context": planning_temporal_context(),
@@ -262,6 +291,7 @@ async def create_llm_plan(
         "required_actions": effects,
         "operations": relevant,
     })
+    payload = bounded_input(planning_data)
     instructions = (
         "Create a short, ordered, executable workflow for the user's request. "
         "The operations list is the complete authority: use only its exact tool slugs and "
@@ -336,7 +366,9 @@ async def create_llm_plan(
                 model=settings.openai_model,
                 instructions=instructions,
                 input=payload,
-                text_format=_catalog_plan_format(relevant),
+                # Constrain to the packed catalog actually visible in input,
+                # not every action from all selected connected resources.
+                text_format=_catalog_plan_format(planning_data['operations']),
                 store=False,
             ),
             settings.model_call_timeout_seconds,

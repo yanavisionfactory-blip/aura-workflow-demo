@@ -179,8 +179,47 @@ async def test_live_planning_uses_catalog_scoped_route_format(malformed_plan_cli
     }], set())
     response_format = parse.call_args.kwargs['text_format']
     schema = response_format.model_json_schema()
-    assert schema['$defs']['CatalogPlanStep']['properties']['tool_slug']['const'] == 'wordpress'
+    assert schema['$defs']['CatalogPlanStep0']['properties']['tool_slug']['const'] == 'wordpress'
+    assert schema['$defs']['CatalogPlanStep0']['properties']['operation']['const'] == 'post.get'
     assert schema['properties']['steps']['maxItems'] == 40
+
+
+def test_catalog_format_keeps_each_action_on_its_declared_connector():
+    from openai.lib._pydantic import to_strict_json_schema
+
+    inventory = [
+        {'slug': 'aura', 'allowed_operations': ['report.compose']},
+        {'slug': 'google', 'allowed_operations': ['sheets.read', 'sheets.kpi.create']},
+        {'slug': 'google-sheets', 'allowed_operations': ['google-sheets.get-values-in-range']},
+        {'slug': 'agent-semrush-0123456789', 'allowed_operations': ['mcp.get_report']},
+        {'slug': 'empty', 'allowed_operations': []},
+    ]
+    response_format = llm_planner._catalog_plan_format(inventory)
+    schema = to_strict_json_schema(response_format)
+    assert len(schema['properties']['steps']['items']['anyOf']) == 4
+    assert schema['additionalProperties'] is False
+    payload = {
+        'name': 'Pilot', 'interpretation': 'Generate and save feedback', 'steps': [{
+            'key': 'compose', 'agent': 'AURA', 'tool_slug': 'aura',
+            'operation': 'report.compose', 'arguments_json': '{}',
+            'reason': 'Generate feedback', 'expected_output': 'Feedback body',
+            'consequential': False, 'depends_on': [], 'required_evidence': [],
+        }],
+    }
+    for item in inventory:
+        for operation in item['allowed_operations']:
+            payload['steps'][0].update(tool_slug=item['slug'], operation=operation)
+            assert response_format.model_validate(payload).steps[0].operation == operation
+    # These were valid individual strings but invalid executable pairs in the
+    # failed live pilot. Unknown actions and display-name routes also stay out.
+    for slug, operation in [
+        ('google', 'report.compose'), ('google-sheets', 'sheets.read'),
+        ('aura', 'sheets.kpi.create'), ('google', 'get-values-in-range'),
+        ('semrush', 'mcp.get_report'), ('empty', 'report.compose'),
+    ]:
+        payload['steps'][0].update(tool_slug=slug, operation=operation)
+        with pytest.raises(ValueError):
+            response_format.model_validate(payload)
 
 
 @pytest.mark.asyncio
@@ -296,6 +335,12 @@ def test_many_large_operations_keep_required_action_and_valid_catalog():
         module["name"] for module in item["operation_contracts"]
     }
     assert len(item["allowed_operations"]) < len(modules)
+    # The response schema uses the same reduced catalog, so dropped operations
+    # cannot be selected without their argument contract being visible.
+    catalog = llm_planner._bounded_planning_catalog(data)["operations"]
+    schema = llm_planner._catalog_plan_format(catalog).model_json_schema()
+    offered = schema['$defs']['CatalogPlanStep0']['properties']['operation']['enum']
+    assert set(offered) == set(item["allowed_operations"])
 
 
 @pytest.mark.asyncio
