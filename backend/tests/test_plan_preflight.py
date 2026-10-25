@@ -71,3 +71,61 @@ def test_every_write_readback_is_required_before_start(operation, readback):
     assert check.missing_grants == {"fixture": {readback}}
     granted = [{"slug": "fixture", "allowed_operations": [operation, readback]}]
     assert preflight_plan(plan, catalog, {"fixture": manifest}, set(), granted).missing_grants == {}
+
+
+@pytest.mark.parametrize("path", [
+    "inputs.attached_documents.0.campaign_context",
+    "inputs.attached_documents[0]['campaign_context']",
+    "inputs.attached_documents.1.file_url",
+    "inputs.attached_documents.0.file_url.campaign_context",
+])
+def test_report_rejects_unavailable_nested_upload_reference_before_start(path):
+    # Mason's source run completed four processors before discovering that a
+    # JSON key inside the uploaded file was not an upload-metadata field.
+    inputs = {"attached_documents": [{
+        "name": "campaign.json", "file_url": "data:application/json;base64,e30=", "size": 2,
+    }]}
+    plan = _plan("report.compose", slug="aura", arguments={
+        "title": "Synthetic campaign review", "instructions": "Review supplied evidence",
+        "sources": [{"id": "ClientContext", "title": "Client context",
+                     "content": "{{" + path + "}}"}], "synthetic": True,
+    })
+    check = preflight_plan(plan, planning_catalog({"aura"}),
+                           {"aura": native_manifest("aura")}, set(inputs),
+                           input_values=inputs)
+    assert any("unavailable input reference" in issue for issue in check.fixes)
+    assert all("base64" not in issue for issue in check.fixes)
+
+
+def test_nested_input_validation_preserves_valid_values_and_deferred_step_outputs():
+    inputs = {"context": {"rows": [{"total": 0, "approved": False, "note": None}]}}
+    manifest = {"provider_type": "connector_sdk", "capabilities": [{
+        "name": "fixture.read", "input_schema": {"type": "object"},
+        "output_schema": {"type": "object"}, "permission_scope": "read",
+    }]}
+    plan = _plan("fixture.read", slug="fixture", arguments={
+        "rows": "{{inputs.context.rows}}", "total": "{{inputs.context.rows[0].total}}",
+        "approved": "{{inputs.context.rows.0.approved}}", "note": "{{inputs.context.rows.0.note}}",
+    })
+    plan.steps.append(PlanStep(
+        key="review", agent="worker", tool_slug="fixture", operation="fixture.read",
+        arguments={"source": "{{steps.action.result}}"}, depends_on=["action"],
+        reason="Review source", expected_output="Review", consequential=False,
+    ))
+    catalog = [{"slug": "fixture", "allowed_operations": ["fixture.read"]}]
+    check = preflight_plan(plan, catalog, {"fixture": manifest}, set(inputs), input_values=inputs)
+    assert not check.fixes
+
+
+def test_input_validation_covers_reduced_scope_arguments_and_output_bindings():
+    plan = _plan("report.compose", slug="aura", arguments={
+        "title": "Review", "instructions": "Review evidence",
+        "sources": [{"id": "S1", "title": "Source", "content": "Valid evidence"}],
+    })
+    plan.steps[0].reduced_scope_arguments = {"content": "{{inputs.context.missing}}"}
+    plan.steps[0].output_variables = {"source": "{{inputs.context.other}}"}
+    check = preflight_plan(plan, planning_catalog({"aura"}),
+                           {"aura": native_manifest("aura")}, {"context"},
+                           input_values={"context": {}})
+    assert any("inputs.context.missing" in issue for issue in check.fixes)
+    assert any("inputs.context.other" in issue for issue in check.fixes)
