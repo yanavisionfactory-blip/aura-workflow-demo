@@ -116,6 +116,7 @@ class ConnectorMarketplaceRequest(BaseModel):
 class ConnectorBrokerComplete(BaseModel):
     account_id: str = Field(pattern=r"^apn_[A-Za-z0-9]+$", max_length=500)
     connection_id: str | None = Field(default=None, max_length=36)
+    authorization_state: str | None = Field(default=None, max_length=4096)
 
     @field_validator("account_id", mode="before")
     @classmethod
@@ -737,6 +738,10 @@ class MaterializedActionArguments(BaseModel):
 class ApprovalDecision(BaseModel):
     approved: bool
     edited_arguments: dict[str, Any] | None = None
+
+
+class RunPreflightRequest(BaseModel):
+    edited_steps: list[PlanStep] | None = None
 
 
 class PlanApproval(BaseModel):

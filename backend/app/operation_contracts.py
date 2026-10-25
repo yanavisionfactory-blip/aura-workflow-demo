@@ -336,6 +336,8 @@ KNOWN.update({
             },
         },
     }, ["resource_metadata", "unambiguous_resource_identity"]),
+    "sheets.kpi.create": ({"type": "object", "required": ["spreadsheetId", "spreadsheetUrl"], "properties": {"spreadsheetId": TEXT, "spreadsheetUrl": TEXT, "properties": OBJECT}}, ["write_receipt"]),
+    "sheets.workbook.get": ({"type": "object", "required": ["spreadsheetId", "sheets"], "properties": {"spreadsheetId": TEXT, "spreadsheetUrl": TEXT, "properties": OBJECT, "sheets": {"type": "array", "items": OBJECT}}}, ["cell_values"]),
     "sheets.read": ({"type": "object", "required": ["range"], "properties": {"range": TEXT, "values": {"type": "array", "items": {"type": "array"}}}}, ["cell_values"]),
     "sheets.append": ({"type": "object", "required": ["spreadsheetId", "updates"], "properties": {"spreadsheetId": TEXT, "updates": {"type": "object", "required": ["updatedRange"], "properties": {"updatedRange": TEXT}}}}, ["write_receipt"]),
     "airtable.list": (envelope("records"), ["record_fields"]),

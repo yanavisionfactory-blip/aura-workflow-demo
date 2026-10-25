@@ -728,7 +728,8 @@ async def test_linear_and_slack_barrier_plans_and_executes_complete_workflow(
     use_pipedream(monkeypatch, boundary)
     monkeypatch.setattr(pipedream_connect, "pipedream_client", lambda: boundary)
     monkeypatch.setattr(pipedream_connect, "get_settings", lambda: broker_api.settings)
-    monkeypatch.setattr(execution_preflight, "pipedream_client", lambda: boundary)
+    monkeypatch.setattr(execution_preflight, "pipedream_client_for_tool", lambda _tool: boundary)
+    monkeypatch.setattr(orchestrator, "pipedream_client_for_tool", lambda _tool: boundary)
 
     async with broker_api.factory() as session:
         session.add(

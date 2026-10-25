@@ -11,10 +11,10 @@ export AURA_TEST_POSTGRES_URL='postgresql+psycopg://postgres@127.0.0.1:55432/aur
 export DATABASE_URL="$AURA_TEST_POSTGRES_URL"
 export MAX_MODEL_CALLS_PER_DELIVERY=8
 export DELIVERY_BUDGET_SECONDS=90
-# Hard whole-process deadline; clean exit prevents restart-driven duplicate benchmarks.
+# Hard whole-process deadline. Preserve failure status so release gates cannot pass a failed benchmark.
 set +e
 timeout 1200 python -m app.load_evaluation --live --concurrency 2 --samples 30 --report /tmp/live-load-report.json
 assurance_exit=$?
 set -e
 printf 'AURA_BENCHMARK_EXIT %s\n' "$assurance_exit"
-exit 0
+exit "$assurance_exit"

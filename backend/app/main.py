@@ -15,7 +15,7 @@ import redis.asyncio as redis
 from agents import Agent, Runner
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -124,10 +124,13 @@ from .pipedream_connect import (
     PipedreamConnectError,
     canonical_display_name,
     canonical_provider_slug,
+    connection_environment,
     connection_setup_label,
     connection_strategy,
     opaque_external_user_id,
     pipedream_client,
+    pipedream_client_for_environment,
+    pipedream_client_for_tool,
 )
 from .pipedream_connect import (
     marketplace_entry as pipedream_marketplace_entry,
@@ -160,6 +163,7 @@ from .providers import (
     verify_oauth_credentials,
 )
 from .run_supervisor import SUPERVISOR_VERSION, transition_run
+from .run_support import support_router
 from .schemas import (
     AgentConnectionCreate,
     AgentConnectionIntent,
@@ -186,6 +190,7 @@ from .schemas import (
     RecoveryPipelineResult,
     ResumeDecision,
     RunCreate,
+    RunPreflightRequest,
     TrustSignalUpdate,
     WebhookReplayRequest,
     WebhookSubscriptionCreate,
@@ -241,8 +246,18 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def canary_read_only(request: Request, call_next):
+    if settings.canary_mode and request.url.path not in {"/health", "/ready"}:
+        return JSONResponse({"detail": "Release canary accepts health checks only"}, status_code=503)
+    return await call_next(request)
+
+
 @app.on_event("startup")
 async def startup() -> None:
+    if settings.canary_mode:
+        # A release canary must never migrate or dispatch customer work.
+        return
     await migrate_database()
     from .internal_diagnostics import log_recent_stops_safely
     from .scheduler_runtime import recover_recorded_jira_readbacks
@@ -355,7 +370,8 @@ async def tenant_session(
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "service": "aura-control-plane"}
+    from .release_info import release_sha
+    return {"status": "ok", "service": "aura-control-plane", "release_sha": release_sha(), "canary": settings.canary_mode}
 
 
 def production_configuration_checks() -> dict[str, bool]:
@@ -371,6 +387,7 @@ def production_configuration_checks() -> dict[str, bool]:
 
 @app.get("/ready")
 async def readiness() -> dict:
+    from .release_info import release_sha
     checks = production_configuration_checks()
     try:
         async with engine.connect() as connection:
@@ -402,7 +419,7 @@ async def readiness() -> dict:
             and len(settings.connector_release_signing_key) >= 32
         ),
     }
-    if settings.recovery_scheduler_enabled:
+    if settings.recovery_scheduler_enabled and not settings.canary_mode:
         now = datetime.now(UTC)
         started_at = datetime.fromisoformat(scheduler_observation["started_at"])
         last_tick = scheduler_observation.get("last_tick_at")
@@ -432,6 +449,8 @@ async def readiness() -> dict:
         )
     return {
         "status": "ready",
+        "release_sha": release_sha(),
+        "canary": settings.canary_mode,
         "checks": checks,
         "recovery_scheduler": scheduler_details,
         "connector_engineer": connector_engineer_details,
@@ -2502,6 +2521,7 @@ async def _activate_pipedream_account_family(
     account_id: str,
     external_user_id: str,
     verification: dict,
+    environment: str | None = None,
 ) -> tuple[ToolConnection, list[ToolConnection], list[str]]:
     """Attach every certified action/MCP route to one opaque managed account."""
     vendor_app = _pipedream_pack_vendor_app(requested_pack)
@@ -2547,6 +2567,7 @@ async def _activate_pipedream_account_family(
         tool.external_account_id = account_id
         tool.config = {
             "managed_by": "pipedream",
+            "pipedream_environment": environment or settings.pipedream_environment,
             "external_user_id": external_user_id,
             "account_id": account_id,
             "vendor_app": vendor_app,
@@ -2707,7 +2728,8 @@ async def create_connector_broker_session(
         else:
             return {**result, "backend": "native", "provider": provider}
 
-    client = pipedream_client()
+    environment = connection_environment(selected_tool, settings) if connection_id else settings.pipedream_environment
+    client = pipedream_client() if environment == settings.pipedream_environment else pipedream_client_for_environment(environment)
     if not client.configured or len(settings.connector_release_signing_key) < 32:
         raise HTTPException(409, "This app is coming soon")
     if connection_id and selected_backend != "pipedream":
@@ -2760,6 +2782,7 @@ async def create_connector_broker_session(
                 if item.enabled
                 and _pipedream_account_id(item)
                 and (item.config or {}).get("external_user_id") == external_user_id
+                and connection_environment(item, settings) == environment
             ),
             None,
         )
@@ -2780,6 +2803,7 @@ async def create_connector_broker_session(
                     account_id=_pipedream_account_id(reusable),
                     external_user_id=external_user_id,
                     verification=verification,
+                    environment=environment,
                 )
                 session.add(
                     AuditEvent(
@@ -2835,7 +2859,14 @@ async def create_connector_broker_session(
         "token": grant["token"],
         "expires_at": grant.get("expires_at"),
         "external_user_id": external_user_id,
-        "project_environment": settings.pipedream_environment,
+        "project_environment": environment,
+        "authorization_state": jwt.encode({
+            "aud": "aura-broker-complete", "workspace_id": context.workspace_id,
+            "sub": context.subject, "provider": provider,
+            "environment": environment,
+            "connection_id": connection_id, "iat": datetime.now(UTC),
+            "exp": datetime.now(UTC) + timedelta(minutes=15),
+        }, settings.session_signing_key, algorithm="HS256"),
         "account_id": selected_tool.external_connection_id if selected_tool else None,
         "connection_id": selected_tool.id if selected_tool else None,
         "connection_strategy": strategy,
@@ -2987,6 +3018,19 @@ async def complete_connector_broker_connection(
             or (selected_tool.config or {}).get("managed_by") != "pipedream"
         ):
             raise HTTPException(404, "Connection not found")
+    environment = connection_environment(selected_tool, settings) if selected_tool else settings.pipedream_environment
+    if payload.authorization_state:
+        try:
+            state = jwt.decode(payload.authorization_state, settings.session_signing_key,
+                               algorithms=["HS256"], audience="aura-broker-complete",
+                               options={"require": ["exp", "iat", "aud"]})
+            if (state.get("workspace_id") != context.workspace_id or state.get("sub") != context.subject
+                    or state.get("provider") != provider or state.get("connection_id") != payload.connection_id):
+                raise jwt.InvalidTokenError("Authorization context changed")
+            environment = state.get("environment")
+        except jwt.InvalidTokenError as exc:
+            raise HTTPException(409, "Restart this connection to renew authorization") from exc
+    client = pipedream_client() if environment == settings.pipedream_environment else pipedream_client_for_environment(environment)
     external_user_id = str(
         ((selected_tool.config or {}).get("external_user_id") if selected_tool else None)
         or opaque_external_user_id(context.workspace_id, context.subject, settings)
@@ -3012,6 +3056,7 @@ async def complete_connector_broker_connection(
         account_id=payload.account_id,
         external_user_id=external_user_id,
         verification=verification,
+        environment=environment,
     )
     session.add(
         AuditEvent(
@@ -4032,7 +4077,7 @@ async def test_connection(
             }
         else:
             try:
-                result = await pipedream_client().verify_account(
+                result = await pipedream_client_for_tool(tool).verify_account(
                     external_user_id, vendor_app, account_id
                 )
             except PipedreamConnectError as exc:
@@ -4205,7 +4250,7 @@ async def disconnect_connection(
             context.workspace_id,
             _pipedream_tool_vendor_app(tool),
         )
-        shared = [item for item in family if _pipedream_account_id(item) == account_id]
+        shared = [item for item in family if _pipedream_account_id(item) == account_id and connection_environment(item) == connection_environment(tool)]
         parent_ids = {item.id for item in shared or [tool]}
         plugin_connections = (await session.scalars(select(ToolConnection).where(
             ToolConnection.workspace_id == context.workspace_id,
@@ -4216,7 +4261,7 @@ async def disconnect_connection(
         try:
             if not account_id:
                 raise PipedreamConnectError("Account reference is missing", retryable=False)
-            await pipedream_client().delete_account(account_id)
+            await pipedream_client_for_tool(tool).delete_account(account_id)
         except PipedreamConnectError:
             revocation["ok"] = False
         for related in shared or [tool]:
@@ -6157,6 +6202,27 @@ async def resume_after_connection(
     }
 
 
+@app.post("/v1/runs/{run_id}/preflight")
+async def review_run_readiness(
+    run_id: str,
+    payload: RunPreflightRequest | None = None,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    from .run_readiness import check_run_readiness
+    run = await session.get(WorkflowRun, run_id)
+    if not run or run.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Run not found")
+    if not run.plan or run.plan_approved:
+        raise HTTPException(409, "This run is not awaiting plan review")
+    plan_data = dict(run.plan)
+    if payload and payload.edited_steps is not None:
+        if len(payload.edited_steps) != len(plan_data.get("steps", [])):
+            raise HTTPException(422, "Review must contain the same planned steps")
+        plan_data["steps"] = [step.model_dump(mode="json") for step in payload.edited_steps]
+    return await check_run_readiness(session, run, WorkflowPlan.model_validate(plan_data))
+
+
 @app.post("/v1/runs/{run_id}/approve-plan")
 async def approve_plan(
     run_id: str,
@@ -6324,6 +6390,14 @@ async def approve_plan(
         )
         await session.commit()
         return {"id": run.id, "status": run.status.value}
+    if (run.execution_context or {}).get("__aura_review_readiness__"):
+        from .run_readiness import check_run_readiness
+        reviewed_bindings = run.execution_context["__aura_review_readiness__"].get("bindings", {})
+        readiness_report = await check_run_readiness(session, run, plan)
+        if reviewed_bindings != run.execution_context["__aura_review_readiness__"].get("bindings", {}):
+            raise HTTPException(409, "The selected account changed. Check the account shown in plan review before starting.")
+        if not readiness_report["passed"]:
+            raise HTTPException(409, {"message": "Account or destination checks need attention before Start.", "readiness": readiness_report})
     for stored, planned in zip(steps, plan.steps, strict=True):
         if stored.output.get("provider_result") is not None and (
             planned.model_dump(mode="json")
@@ -7620,3 +7694,7 @@ async def forget_workflow_memory(
 from .assurance_api import install_routes as install_assurance_routes
 
 install_assurance_routes(app, tenant_context, tenant_session)
+
+
+# Dependency injection keeps scoped support access independent of user sessions.
+app.include_router(support_router(tenant_context, tenant_session))

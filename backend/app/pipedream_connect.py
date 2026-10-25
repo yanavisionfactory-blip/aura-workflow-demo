@@ -1420,3 +1420,29 @@ async def planning_catalog(
 @lru_cache
 def pipedream_client() -> PipedreamClient:
     return PipedreamClient(get_settings())
+
+
+def connection_environment(tool, settings: Settings | None = None) -> str:
+    settings = settings or get_settings()
+    config = (tool.config or {}) if tool else {}
+    value = config.get("pipedream_environment") or (
+        settings.pipedream_legacy_environment if config.get("managed_by") == "pipedream" else ""
+    ) or settings.pipedream_environment
+    if value not in {"development", "production"}:
+        raise PipedreamConnectError("Invalid connection environment", retryable=False)
+    return value
+
+
+@lru_cache(maxsize=2)
+def _environment_client(environment: str) -> PipedreamClient:
+    return PipedreamClient(get_settings().model_copy(update={"pipedream_environment": environment}))
+
+
+def pipedream_client_for_environment(environment: str) -> PipedreamClient:
+    if environment not in {"development", "production"}:
+        raise PipedreamConnectError("Invalid connection environment", retryable=False)
+    return pipedream_client() if environment == get_settings().pipedream_environment else _environment_client(environment)
+
+
+def pipedream_client_for_tool(tool) -> PipedreamClient:
+    return pipedream_client_for_environment(connection_environment(tool))

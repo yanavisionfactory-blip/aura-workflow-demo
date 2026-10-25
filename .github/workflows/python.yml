@@ -12,6 +12,7 @@ on:
       - "backend/**"
       - "integrations/wordpress/**"
       - "docker-compose.yml"
+      - ".github/workflows/**"
 
 permissions:
   contents: read
@@ -56,6 +57,12 @@ jobs:
           php ../integrations/wordpress/tests/bridge-test.php
       - name: Test
         run: pytest -q --junitxml=release-evaluation.xml
+      - name: Preserve dependable pilot evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependable-pilot-release-evidence
+          path: backend/release-evaluation.xml
       - name: Evaluate isolated execution load
         run: python -m app.load_evaluation --report engine-load.json
       - name: Preserve engine load evidence

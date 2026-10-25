@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     environment: str = "development"
+    canary_mode: bool = False
     public_url: str = "http://localhost:8000"
     frontend_url: str = "http://localhost:5173"
     database_url: str = "postgresql+psycopg://aura:aura@postgres:5432/aura"
@@ -120,7 +121,9 @@ class Settings(BaseSettings):
     pipedream_client_id: str = ""
     pipedream_client_secret: str = ""
     pipedream_project_id: str = ""
-    pipedream_environment: str = "production"
+    pipedream_environment: Literal["development", "production"] = "production"
+    # Set to the former environment before changing the default for new accounts.
+    pipedream_legacy_environment: Literal["", "development", "production"] = ""
     pipedream_base_url: str = "https://api.pipedream.com"
     pipedream_max_actions_per_app: int = Field(default=200, ge=1, le=500)
     pipedream_connect_token_ttl_seconds: int = Field(default=900, ge=60, le=14_400)

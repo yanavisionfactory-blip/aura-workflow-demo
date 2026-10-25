@@ -3,6 +3,8 @@ import { motion, AnimatePresence } from "framer-motion";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { AlertTriangle, Brain, Plus, ArrowRight, Sparkles, Loader2, Check, X, RotateCcw } from "lucide-react";
 import { aura } from "@/api/auraClient";
+import RunReadiness from "./RunReadiness";
+import RunSupportAccess from "./RunSupportAccess";
 import PlanStep from "./PlanStep";
 import PlanConnectionAlert from "./PlanConnectionAlert";
 import { CATALOG, catalogEntryFor } from "@/lib/toolCatalog";
@@ -97,6 +99,8 @@ const PLAN_HINTS = [
 
 export default function PlanView({
   plan,
+  backendRunId,
+  backendPlan,
   onApprove,
   approveLabel = "Start",
   requiredReconnectTools = [],
@@ -107,6 +111,7 @@ export default function PlanView({
   onRevisePlan,
   onRetryPlan,
 }) {
+  const [readinessPassed, setReadinessPassed] = useState(false);
   const [steps, setSteps] = useState(plan.steps);
   const [forceEditIndex, setForceEditIndex] = useState(null);
   const [name, setName] = useState(plan.workflowName || "");
@@ -670,6 +675,8 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         </AnimatePresence>
       </div>
 
+      {backendRunId && !plan.provisional && plan.compileState !== "waiting_for_connection" && !plan.error && <RunReadiness runId={backendRunId} plan={plan} backendPlan={backendPlan} steps={steps} onReady={setReadinessPassed} />}
+      <RunSupportAccess runId={backendRunId} />
       {/* Bottom approval bar */}
       <motion.div
         initial={{ opacity: 0, y: 10 }}
@@ -707,7 +714,7 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
               }
               onApprove(steps, name.trim());
             }}
-            disabled={steps.length === 0 && plan.compileState !== "blocked"}
+            disabled={(steps.length === 0 && plan.compileState !== "blocked") || (Boolean(backendRunId) && !plan.provisional && plan.compileState !== "waiting_for_connection" && !plan.error && missingTools.length === 0 && !readinessPassed)}
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white disabled:cursor-not-allowed disabled:opacity-40"
           >
             {plan.compileState === "blocked" || plan.error ? "Try again"

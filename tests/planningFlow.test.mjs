@@ -143,7 +143,7 @@ test("the UI displays the validated backend LLM plan without a second browser pl
   assert.equal(approveSource.includes('setPhase("executing")'), false);
   assert.equal(approveSource.includes('startPythonExecution()'), true);
   assert.equal(planViewSource.includes("AURA is checking the exact steps"), false);
-  assert.equal(planViewSource.includes('disabled={steps.length === 0 && plan.compileState !== "blocked"}'), true);
+  assert.equal(planViewSource.includes('!readinessPassed'), true);
 });
 
 test("complete actions can be reviewed early and dependent actions wait for exact approval", () => {

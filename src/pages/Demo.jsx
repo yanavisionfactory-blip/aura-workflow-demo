@@ -7,6 +7,7 @@ import WorkspaceShell from "@/components/aura/WorkspaceShell";
 import CommandInput from "@/components/aura/CommandInput";
 import PilotBuilder from "@/components/aura/PilotBuilder";
 import ConfirmView from "@/components/aura/ConfirmView";
+import KpiPilotBuilder from "@/components/aura/KpiPilotBuilder";
 import PlanView from "@/components/aura/PlanView";
 import PreviewView from "@/components/aura/PreviewView";
 import ExecutionView from "@/components/aura/ExecutionView";
@@ -313,6 +314,7 @@ export default function Demo() {
   const [editApproval, setEditApproval] = useState("writes");
   const [editFlag, setEditFlag] = useState(null);
   const [editRunMode, setEditRunMode] = useState(false);
+  const [kpiOpen, setKpiOpen] = useState(false);
   const [pilotOpen, setPilotOpen] = useState(false);
   const [pilotDraft, setPilotDraft] = useState(null);
   const editOriginalStepsRef = useRef([]);
@@ -1770,11 +1772,12 @@ Generate a results summary in plain, human-friendly language (not technical).
           <AnimatePresence mode="wait">
             {phase === "input" && (
               <motion.div key="input" exit={{ opacity: 0, y: -20 }} transition={{ duration: 0.3 }} className="w-full">
-                {pilotOpen ? (
+                {kpiOpen ? <KpiPilotBuilder onSubmit={handleSubmit} onBack={() => setKpiOpen(false)} /> : pilotOpen ? (
                   <PilotBuilder initialValues={pilotDraft} onSubmit={handlePilotSubmit}
                     onBack={() => { setPilotOpen(false); setPilotDraft(null); }} />
                 ) : (
                   <>
+                    <div className="mb-5 text-center"><button type="button" className="rounded-xl border border-emerald-400/30 px-4 py-2 text-sm hover:bg-emerald-400/10" onClick={() => setKpiOpen(true)}>KPI dashboard pilot</button></div>
                     <CommandInput initialValue={inputPrompt} onSubmit={handleSubmit} examples={WORKFLOW_EXAMPLES} onPickExample={handlePickExample} />
                   </>
                 )}
@@ -1810,6 +1813,8 @@ Generate a results summary in plain, human-friendly language (not technical).
                   </div>
                 ) : plan ? (
                   <PlanView
+                    backendRunId={pythonRunIdRef.current}
+                    backendPlan={pythonPlanRef.current}
                     plan={plan}
                     hasPreview={!!mock?.preview}
                     onApprove={handleApprove}

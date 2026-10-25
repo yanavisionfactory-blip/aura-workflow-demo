@@ -34,7 +34,7 @@ from .models import (
 from .native_connectors import native_manifest
 from .pipedream_connect import (
     PipedreamConnectError,
-    pipedream_client,
+    pipedream_client_for_tool,
 )
 from .pipedream_connect import (
     pack_signature_valid as pipedream_pack_signature_valid,
@@ -248,7 +248,7 @@ async def _connection_credentials(
             }
         else:
             try:
-                verification = await pipedream_client().verify_account(
+                verification = await pipedream_client_for_tool(tool).verify_account(
                     external_user_id, vendor_app, account_id
                 )
             except PipedreamConnectError as exc:
@@ -655,6 +655,21 @@ async def preflight_approved_run(session, run, steps: list[Any]) -> PreflightOut
                     ),
                 )
             credentials_by_slug[slug] = credentials or {}
+            from .connection_permissions import kpi_scope_missing
+            if slug == "google" and kpi_scope_missing(
+                {step.operation for step in steps if step.tool_slug == slug}, credentials or {},
+            ):
+                return await _stop_for_human(session, run, report, _blocker(
+                    "permission_required", "Reconnect Google with spreadsheet access before creating this workbook.",
+                    action="reconnect_account", tool_slug=slug, connection_id=tool.id,
+                ))
+            from .run_readiness import account_fingerprint
+            reviewed = (run.execution_context or {}).get("__aura_review_readiness__", {}).get("bindings", {}).get(slug)
+            if reviewed and (reviewed.get("connection_id") != tool.id or reviewed.get("account_fingerprint") != account_fingerprint(tool, verification)):
+                return await _stop_for_human(session, run, report, _blocker(
+                    "account_changed", "The connected account changed after plan review. Review the account before executing this saved plan.",
+                    action="choose_resource", tool_slug=slug, connection_id=tool.id,
+                ))
             accounts_by_slug[slug] = _account_label(verification or manifest.verification)
             report["checks"].append(
                 {

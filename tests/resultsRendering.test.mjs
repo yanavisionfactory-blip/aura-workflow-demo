@@ -26,6 +26,7 @@ before(async () => {
       },
       load(id) {
         if (id === "\0no-account-access") return `export const base44 = {};
+          export function auraRequest() { throw new Error("Render tests cannot access support APIs"); }
           export function createWorkflowSchedule() { throw new Error("Render tests cannot execute workflows"); }
           export function getPythonRun() { throw new Error("Render tests cannot read live workflows"); }`;
       },

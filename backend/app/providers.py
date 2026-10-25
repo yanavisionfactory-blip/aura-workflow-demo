@@ -551,6 +551,8 @@ class ProviderExecutor:
             "drive.spreadsheet.resolve": self._drive_spreadsheet_resolve,
             "sheets.read": self._sheets_read,
             "sheets.append": self._sheets_append,
+            "sheets.kpi.create": self._sheets_kpi_create,
+            "sheets.workbook.get": self._sheets_workbook_get,
             "airtable.record.get": self._airtable_record_get,
             "slack.message.get": self._slack_message_get,
             "hubspot.contact.get": self._hubspot_contact_get,
@@ -1568,6 +1570,24 @@ class ProviderExecutor:
         sid, cell_range = a.get("spreadsheet_id"), a.get("range", "A1:Z100")
         if not sid: raise ValueError("sheets.read requires spreadsheet_id")
         return await self._request("GET", f"https://sheets.googleapis.com/v4/spreadsheets/{sid}/values/{cell_range}")
+
+    async def _sheets_kpi_create(self, a: dict) -> dict:
+        from .kpi_pilot import workbook_payload
+        # One POST: no second mutation can strand a partially populated workbook.
+        # The runtime persists its receipt before any verification/model work.
+        return await self._request("POST", "https://sheets.googleapis.com/v4/spreadsheets",
+                                   params={"fields": "spreadsheetId,spreadsheetUrl,properties(title)"},
+                                   json=workbook_payload(a))
+
+    async def _sheets_workbook_get(self, a: dict) -> dict:
+        from urllib.parse import quote
+        sid = str(a.get("spreadsheet_id") or "")
+        if not sid:
+            raise ValueError("A saved workbook ID is required")
+        return await self._request("GET", f"https://sheets.googleapis.com/v4/spreadsheets/{quote(sid, safe='')}", params={
+            "ranges": ["'KPI Dashboard'!A1:F14", "'Feedback'!A1:D21", "'Product brief'!A1:A2"],
+            "fields": "spreadsheetId,spreadsheetUrl,properties(title),sheets(properties(title,gridProperties(frozenRowCount)),data(startRow,startColumn,rowData(values(userEnteredValue,effectiveValue,userEnteredFormat(numberFormat)))))",
+        })
 
     async def _sheets_append(self, a: dict) -> dict:
         sid, cell_range, values = a.get("spreadsheet_id"), a.get("range", "Sheet1!A1"), a.get("values")
