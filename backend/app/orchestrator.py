@@ -585,6 +585,9 @@ def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict]) -> None:
 
     normalize_bound_email_inputs(plan)
     normalize_planner_evidence_roles(plan, manifests_by_slug)
+    from .reports import preserve_web_source_provenance
+
+    preserve_web_source_provenance(plan)
     # A narrative draft may have no {{step}} reference even though it promises
     # to summarize earlier reads. Keep those reads in its executable dependency
     # graph so the argument resolver sees their accepted results before review.
