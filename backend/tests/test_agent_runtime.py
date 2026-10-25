@@ -154,6 +154,35 @@ def test_open_ended_intent_preserves_the_full_inventory() -> None:
     assert intent_bounded_tool_inventory("Help me automate this", inventory) == inventory
 
 
+def test_competitor_research_keeps_native_sources_and_in_aura_output():
+    inventory = [
+        {"slug": "aura", "name": "AURA Intelligence", "allowed_operations": [
+            "web.search", "web.page.read", "report.compose"]},
+        {"slug": "google", "name": "Google Workspace", "allowed_operations": [
+            "sheets.read", "docs.create"]},
+        {"slug": "seo", "name": "SEO", "allowed_operations": ["page_overview"]},
+    ]
+    prompt = (
+        "Research skincare competitors and save a sourced comparison INSIDE AURA. "
+        "Use public-web tools to read their websites. Do not create external files. "
+        "No Sheets access is needed for this research stage."
+    )
+    bounded = intent_bounded_tool_inventory(prompt, inventory)
+    assert inventory[0] in bounded
+    assert inventory[2] not in bounded
+
+
+def test_public_web_sources_remain_available_for_a_sheets_destination():
+    inventory = [
+        {"slug": "aura", "allowed_operations": ["web.search", "web.page.read"]},
+        {"slug": "google-sheets", "name": "Google Sheets", "allowed_operations": [
+            "google-sheets.add-multiple-rows"]},
+    ]
+    assert intent_bounded_tool_inventory(
+        "Research public websites and save the comparison to Google Sheets", inventory,
+    ) == inventory
+
+
 def test_google_ads_does_not_select_workspace_identity_or_gmail() -> None:
     inventory = [
         {"slug": "google", "name": "Google Workspace", "allowed_operations": [
