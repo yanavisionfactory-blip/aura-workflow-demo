@@ -176,6 +176,9 @@ def intent_bounded_tool_inventory(
     requested_tool_names: list[str] | tuple[str, ...] | set[str] = (),
 ) -> list[dict]:
     """Bound clear requests to relevant tools before model-based planning."""
+    from .connection_families import capability_family, uses_builtin_openai
+
+    builtin_openai = uses_builtin_openai(prompt, inventory)
     text = _intent_words(prompt)
     original = prompt.casefold()
     wants_google_disk = bool(re.search(r"\bgoogle\s+disk\b", original))
@@ -183,6 +186,8 @@ def intent_bounded_tool_inventory(
     requested = {_intent_words(str(value)) for value in requested_tool_names if value}
     external_matches: set[int] = set()
     for index, item in enumerate(inventory):
+        if builtin_openai and capability_family(item.get("canonical_provider") or item.get("slug")) == "openai":
+            continue
         aliases = _inventory_aliases(item)
         if str(item.get("slug") or "").casefold() == "aura":
             continue
@@ -246,7 +251,7 @@ def intent_bounded_tool_inventory(
             if "weather.forecast" in (item.get("allowed_operations") or [])
         )
 
-    if "report.compose" in original or re.search(
+    if builtin_openai or "report.compose" in original or re.search(
         r"\b(?:report|review|analysis|comparison|research|summary|draft|result)\b"
         r".{0,100}\b(?:in|inside|within) aura\b", original,
     ):
@@ -302,6 +307,31 @@ def intent_bounded_tool_inventory(
         }
 
     bounded = [item for index, item in enumerate(inventory) if index in selected] or inventory
+    # Prefer already granted native reads/appends over a duplicate unconnected
+    # broker route. Keep unique broker capabilities and separately connected
+    # accounts; this changes planning choices, never permissions or identities.
+    native_sheets = set().union(*(
+        set(item.get("granted_operations", item.get("allowed_operations")) or [])
+        for item in inventory if item.get("slug") == "google" and item.get("connected")
+    ))
+    if native_sheets and not re.search(r"\b(?:use|through|via)\s+(?:the\s+)?pipedream\b", original):
+        redundant = set()
+        if "sheets.read" in native_sheets:
+            redundant.add("google-sheets.get-values-in-range")
+        if {"sheets.read", "sheets.append"} <= native_sheets:
+            redundant.add("google-sheets.add-multiple-rows")
+        preferred = []
+        for item in bounded:
+            if item.get("slug") == "google-sheets" and not item.get("connected"):
+                operations = [op for op in item.get("allowed_operations") or [] if op not in redundant]
+                if not operations:
+                    continue
+                item = {**item, "allowed_operations": operations}
+                if "operation_contracts" in item:
+                    item["operation_contracts"] = [contract for contract in item["operation_contracts"]
+                                                   if contract.get("name") in operations]
+            preferred.append(item)
+        bounded = preferred
     if separate_docs_writer and writing_doc:
         # Gmail and Calendar may still use this same Google account. Remove only
         # the overlapping Docs operations from the planner's candidate route.
