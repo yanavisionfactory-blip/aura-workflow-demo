@@ -6207,6 +6207,13 @@ async def resume_after_connection(
     }
 
 
+def _requires_plan_reapproval(run: WorkflowRun) -> bool:
+    return (
+        run.status == RunStatus.waiting_for_action
+        and ((run.execution_context or {}).get("__aura_blocker__") or {}).get("code") == "plan_approval_required"
+    )
+
+
 @app.post("/v1/runs/{run_id}/preflight")
 async def review_run_readiness(
     run_id: str,
@@ -6218,7 +6225,7 @@ async def review_run_readiness(
     run = await session.get(WorkflowRun, run_id)
     if not run or run.workspace_id != context.workspace_id:
         raise HTTPException(404, "Run not found")
-    if not run.plan or run.plan_approved:
+    if not run.plan or (run.plan_approved and not _requires_plan_reapproval(run)):
         raise HTTPException(409, "This run is not awaiting plan review")
     plan_data = dict(run.plan)
     if payload and payload.edited_steps is not None:
@@ -6239,10 +6246,7 @@ async def approve_plan(
     run = await session.get(WorkflowRun, run_id)
     if not run or run.workspace_id != wid:
         raise HTTPException(404, "Run not found")
-    explicit_reapproval = (
-        run.status == RunStatus.waiting_for_action
-        and ((run.execution_context or {}).get("__aura_blocker__") or {}).get("code") == "plan_approval_required"
-    )
+    explicit_reapproval = _requires_plan_reapproval(run)
     if run.plan_approved and not explicit_reapproval:
         raise HTTPException(409, "Plan already approved")
     if not payload.approved:
