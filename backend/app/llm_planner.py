@@ -213,6 +213,19 @@ def _bounded_planning_catalog(payload: dict) -> dict:
         (target["tool_slug"], target["operation"])
         for effect in payload["required_actions"] for target in effect["targets"]
     }
+    from .request_contracts import user_request_text
+
+    request = user_request_text(payload["request"]).casefold()
+    # Selecting many resources must not hide an action the user named exactly.
+    # Keep its complete contract, or fail explicitly if the mandatory catalog
+    # does not fit. Ordinary word-overlap ranking can otherwise favor unrelated
+    # connector reports over report.compose, or a workbook read over sheets.read.
+    required.update(
+        (item["slug"], operation)
+        for item in catalog
+        for operation in item.get("allowed_operations") or []
+        if re.search(r"(?<![\w.-])" + re.escape(operation.casefold()) + r"(?![\w-]|\.\w)", request)
+    )
     words = set(re.findall(r"[a-z0-9]{3,}", payload["request"].casefold()))
     required_roots = {name.split(".", 1)[0] for _, name in required}
     candidates = []

@@ -343,6 +343,51 @@ def test_many_large_operations_keep_required_action_and_valid_catalog():
     assert set(offered) == set(item["allowed_operations"])
 
 
+def test_large_selected_catalog_retains_exact_requested_generation_and_reads():
+    distractors = [{
+        "name": f"connector.report.read.compose-{index}",
+        "description": str(index) + "X" * 5000,
+        "permission_scope": "read",
+        "input_schema": {"type": "object", "properties": {}},
+    } for index in range(80)]
+    named = [
+        {"slug": slug, "allowed_operations": [operation], "operation_contracts": [{
+            "name": operation, "description": operation + "Y" * 6000,
+            "permission_scope": "read", "input_schema": {"type": "object", "properties": {}},
+        }]}
+        for slug, operation in [("aura", "report.compose"), ("google", "sheets.read")]
+    ]
+    data = {
+        "request": "Call aura:report.compose. Then call google:sheets.read.",
+        "required_actions": [],
+        "operations": [{"slug": "connector", "allowed_operations": [
+            module["name"] for module in distractors
+        ], "operation_contracts": distractors}, *named],
+    }
+    packed = llm_planner._bounded_planning_catalog(data)
+    offered = {(item["slug"], operation) for item in packed["operations"]
+               for operation in item["allowed_operations"]}
+    assert {("aura", "report.compose"), ("google", "sheets.read")} <= offered
+    assert len(offered) < 82
+
+
+def test_exact_requested_contract_that_cannot_fit_fails_instead_of_substituting():
+    from app.model_inputs import ModelInputTooLarge
+
+    data = {
+        "request": "Use aura:report.compose to produce the report.", "required_actions": [],
+        "operations": [{"slug": "aura", "allowed_operations": ["report.compose"],
+                        "operation_contracts": [{"name": "report.compose",
+                            "description": "Required contract" + "X" * 100000,
+                            "input_schema": {"type": "object", "properties": {}}}]}],
+    }
+    with pytest.raises(ModelInputTooLarge, match="Required action contracts"):
+        llm_planner._bounded_planning_catalog(data)
+    data["request"] = "Use aura:report.compose.extra only."
+    packed = llm_planner._bounded_planning_catalog(data)
+    assert packed["operations"][0]["allowed_operations"] == []
+
+
 @pytest.mark.asyncio
 async def test_direct_planner_uses_one_structured_call(monkeypatch):
     response = CompactWorkflowPlan.model_validate({
