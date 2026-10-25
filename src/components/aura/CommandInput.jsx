@@ -11,11 +11,11 @@ import { promptToolChoices, promptToolHints } from "@/lib/promptToolHints.mjs";
 
 const EXAMPLE_ICONS = [FileBarChart, Mail, ListChecks, RefreshCw];
 
-export default function CommandInput({ onSubmit, disabled, examples, onPickExample, initialValue = "", enableWeeklyReviewSetup = true }) {
+export default function CommandInput({ onSubmit, disabled, examples, onPickExample, initialValue = "", initialTools, toolsLabel, enableWeeklyReviewSetup = true }) {
   const [value, setValue] = useState(initialValue);
   const [weeklyOpen, setWeeklyOpen] = useState(() => enableWeeklyReviewSetup && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("weekly") === "1");
   const [isFocused, setIsFocused] = useState(false);
-  const [manualTools, setManualTools] = useState([]);
+  const [manualTools, setManualTools] = useState(() => [...new Set(initialTools || [])]);
   const [removedTools, setRemovedTools] = useState([]);
   const [documents, setDocuments] = useState(getAttachedDocuments);
   const [showComposer, setShowComposer] = useState(false);
@@ -34,14 +34,18 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
   useEffect(() => subscribeDocuments(setDocuments), []);
 
   useEffect(() => {
-    const currentSuggestions = new Set(promptToolHints(value, CATALOG));
+    if (initialTools) setManualTools([...new Set(initialTools)]);
+  }, [initialTools]);
+
+  useEffect(() => {
+    const currentSuggestions = new Set(initialTools ?? promptToolHints(value, CATALOG));
     setRemovedTools((previous) => {
       const next = previous.filter((tool) => currentSuggestions.has(tool));
       return next.length === previous.length ? previous : next;
     });
-  }, [value]);
+  }, [value, initialTools]);
 
-  const suggestedTools = promptToolHints(value, CATALOG);
+  const suggestedTools = initialTools ?? promptToolHints(value, CATALOG);
   const toolChoices = promptToolChoices(suggestedTools, manualTools, removedTools);
   const selectedTools = toolChoices.filter((choice) => choice.selected).map((choice) => choice.label);
 
@@ -101,7 +105,7 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
               className="px-4 pb-2 flex items-center gap-1.5 flex-wrap"
             >
               <span className="text-[10px] text-muted-foreground/45">
-                {suggestedTools.length ? "AURA suggests" : "Selected resources"}
+                {toolsLabel || (suggestedTools.length ? "AURA suggests" : "Selected resources")}
               </span>
               {toolChoices.map((choice) => (
                 <motion.span
