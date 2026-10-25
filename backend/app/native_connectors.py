@@ -10,11 +10,11 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
 
+from .campaign_report import CampaignReportFields
 from .executive_review import PrepareRequest as ExecutivePrepareRequest
 from .executive_review import SourceRequest as ExecutiveSourceRequest
 from .file_delivery import ATTACHMENTS_SCHEMA
 from .kpi_pilot import KpiFields
-from .campaign_report import CampaignReportFields
 from .policy import operation_scope
 from .presentation_content import PRESENTATION_SCHEMA
 from .proofing import FeedbackImportRequest

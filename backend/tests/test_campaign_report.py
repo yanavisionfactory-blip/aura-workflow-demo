@@ -8,8 +8,16 @@ import zipfile
 from xml.sax.saxutils import escape
 
 from app.campaign_report import (
-    CREATE, READ, PREFIX, CampaignReportFields, build_workbook, extract_export_rows,
-    resolve_attachment, verify_workbook, verified_completion, workflow_recipe,
+    CREATE,
+    PREFIX,
+    READ,
+    CampaignReportFields,
+    build_workbook,
+    extract_export_rows,
+    resolve_attachment,
+    verified_completion,
+    verify_workbook,
+    workflow_recipe,
 )
 
 

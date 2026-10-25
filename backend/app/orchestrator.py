@@ -956,8 +956,8 @@ async def _create_compiled_plan(
         op for item in inventory for op in item.get("allowed_operations", [])
     }
     catalog_inventory = inventory
-    from .kpi_pilot import kpi_template
     from .campaign_report import workflow_recipe as campaign_report_recipe
+    from .kpi_pilot import kpi_template
     from .workflow_templates import (
         creator_outreach_template,
         mailchimp_canva_pilot_template,

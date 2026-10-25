@@ -125,8 +125,8 @@ def extract_export_rows(raw):
     """Read only literal export cells; never execute workbook formulas/macros."""
     import io
     import posixpath
-    import zipfile
     import xml.etree.ElementTree as ET
+    import zipfile
 
     ns = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:

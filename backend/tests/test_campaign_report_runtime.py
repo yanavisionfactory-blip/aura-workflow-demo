@@ -1,15 +1,17 @@
 """Production runtime wiring, tested with synthetic provider receipts."""
 import json
 from unittest.mock import AsyncMock
+
 import httpx
 import pytest
 from jsonschema import Draft202012Validator
-from app.campaign_report import CREATE, READ, PREFIX, MODE, workflow_recipe, workbook_payload
-from app.native_connectors import native_manifest, native_operations
+from test_campaign_report import observed, sample_fields
+
+from app.campaign_report import CREATE, MODE, PREFIX, READ, workbook_payload, workflow_recipe
 from app.extended_outcomes import required_reads
+from app.native_connectors import native_manifest, native_operations
 from app.outcome_checks import build_outcome_check, evaluate_outcome_check
 from app.providers import ProviderExecutor
-from test_campaign_report import sample_fields, observed
 
 
 @pytest.fixture
