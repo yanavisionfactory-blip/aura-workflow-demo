@@ -152,8 +152,12 @@ def _future_group_review_arguments(
 
 def _planning_prompt_with_documents(prompt: str, inputs: dict | None) -> str:
     """Add bounded uploaded text to the model call without exposing data URLs."""
+    from .campaign_report import resolve_attachment
     from .weekly_review import resolve_weekly_attachment
 
+    campaign_prompt = resolve_attachment(prompt, inputs)
+    if campaign_prompt is not None:
+        return campaign_prompt
     weekly_prompt = resolve_weekly_attachment(prompt, inputs)
     if weekly_prompt is not None:
         return weekly_prompt
@@ -953,6 +957,7 @@ async def _create_compiled_plan(
     }
     catalog_inventory = inventory
     from .kpi_pilot import kpi_template
+    from .campaign_report import workflow_recipe as campaign_report_recipe
     from .workflow_templates import (
         creator_outreach_template,
         mailchimp_canva_pilot_template,
@@ -985,6 +990,8 @@ async def _create_compiled_plan(
         audited_plan = crawl_review_recipe(prompt, inventory, available_input_names)
     if audited_plan is None:
         audited_plan = await agency_workflow_recipe(prompt, inventory, manifests_by_slug)
+    if audited_plan is None and not reviewed_revision:
+        audited_plan = campaign_report_recipe(prompt, inventory)
     if audited_plan is None and not reviewed_revision:
         audited_plan = kpi_template(prompt, inventory)
     if audited_plan is None:
@@ -4437,6 +4444,10 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 status="unverified",
                 reasons=["Provider read-back could not confirm: " + ", ".join(outcome_failures)],
             )
+        elif (run.plan.get("planning_artifacts") or {}).get("planner_recovery_mode") == "audited_campaign_report_v1":
+            from .campaign_report import verified_completion
+
+            synthesis, verification = verified_completion(run.plan, outputs)
         elif (run.plan.get("planning_artifacts") or {}).get("planner_recovery_mode") == "audited_kpi_pilot_v1":
             from .kpi_pilot import verified_completion
 
@@ -4597,3 +4608,4 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
         await audit(session, workspace_id, "run.completed", run.result, run.id)
         await session.commit()
         # Completion atomically enqueues memory indexing off the response path.
+

@@ -14,6 +14,7 @@ from .executive_review import PrepareRequest as ExecutivePrepareRequest
 from .executive_review import SourceRequest as ExecutiveSourceRequest
 from .file_delivery import ATTACHMENTS_SCHEMA
 from .kpi_pilot import KpiFields
+from .campaign_report import CampaignReportFields
 from .policy import operation_scope
 from .presentation_content import PRESENTATION_SCHEMA
 from .proofing import FeedbackImportRequest
@@ -317,6 +318,9 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
             ),
             {**_module("sheets.kpi.create", "action", "Create one new KPI dashboard workbook with exact reviewed inputs, formulas, formatting, product context and feedback. Never modifies an existing workbook. Requires independent workbook read-back.", permission_scope="write"),
              "input_schema": KpiFields.model_json_schema()},
+            {**_module("sheets.campaign_report.create", "action", "Create a new campaign report from approved Google Ads, Meta Ads and GA4 export rows, with editable formulas, revenue per session, campaign frequency, source notes, a summary draft and independent saved-calculation read-back. Does not query advertising accounts or modify existing files.", permission_scope="write"),
+             "input_schema": CampaignReportFields.model_json_schema()},
+            _module("sheets.campaign_report.get", "search", "Read all five campaign-report worksheets including saved inputs, formulas and calculated results.", required=("spreadsheet_id",), properties={"spreadsheet_id": _TEXT}),
             _module("sheets.workbook.get", "search", "Read the KPI Dashboard, Feedback and Product brief grids, including stored formulas and computed values, for verification.", required=("spreadsheet_id",), properties={"spreadsheet_id": _TEXT}),
             _module("sheets.read", "search", "Read a spreadsheet range.", required=("spreadsheet_id",), properties={
                 "spreadsheet_id": _TEXT, "range": _TEXT
@@ -1040,3 +1044,4 @@ def coerce_module_arguments(
     }
     validate_module_arguments(manifest, operation, coerced)
     return coerced
+

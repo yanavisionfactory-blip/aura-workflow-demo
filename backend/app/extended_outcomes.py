@@ -4,6 +4,7 @@ import hashlib
 from dataclasses import replace
 
 EXTRA_READBACK = {
+    "sheets.campaign_report.create": "sheets.campaign_report.get",
     "sheets.kpi.create": "sheets.workbook.get",
     "airtable.create": "airtable.record.get", "sheets.append": "sheets.read",
     "notion.blocks.children.append": "notion.blocks.children.list",
@@ -24,6 +25,9 @@ def build_extended(operation, a, receipt):
     if not read:
         return None
     rid = str(receipt.get("id") or "")
+    if operation == "sheets.campaign_report.create":
+        rid = str(receipt.get("spreadsheetId") or "")
+        return OutcomeCheck(read, {"spreadsheet_id": rid}, rid, a, "campaign_report")
     if operation == "sheets.kpi.create":
         rid = str(receipt.get("spreadsheetId") or "")
         return OutcomeCheck(read, {"spreadsheet_id": rid}, rid, a, "kpi_workbook")
@@ -125,6 +129,9 @@ def leaves(check):
 
 
 def evaluate_extended(check, observed):
+    if check.kind == "campaign_report":
+        from .campaign_report import verify_workbook
+        return verify_workbook(check.expected, observed, check.resource_id)
     if check.kind == "kpi_workbook":
         from .kpi_pilot import verify_workbook
         return verify_workbook(check.expected, observed, check.resource_id)
@@ -236,3 +243,4 @@ def required_reads(operation, arguments):
     if operation == "notion.page.create" and arguments.get("children"):
         required.add("notion.blocks.children.list")
     return required
+

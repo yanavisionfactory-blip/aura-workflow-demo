@@ -336,6 +336,8 @@ KNOWN.update({
             },
         },
     }, ["resource_metadata", "unambiguous_resource_identity"]),
+    "sheets.campaign_report.create": ({"type": "object", "required": ["spreadsheetId", "spreadsheetUrl"], "properties": {"spreadsheetId": TEXT, "spreadsheetUrl": TEXT, "properties": OBJECT}}, ["write_receipt"]),
+    "sheets.campaign_report.get": ({"type": "object", "required": ["spreadsheetId", "sheets"], "properties": {"spreadsheetId": TEXT, "spreadsheetUrl": TEXT, "properties": OBJECT, "sheets": {"type": "array", "items": OBJECT}}}, ["cell_values"]),
     "sheets.kpi.create": ({"type": "object", "required": ["spreadsheetId", "spreadsheetUrl"], "properties": {"spreadsheetId": TEXT, "spreadsheetUrl": TEXT, "properties": OBJECT}}, ["write_receipt"]),
     "sheets.workbook.get": ({"type": "object", "required": ["spreadsheetId", "sheets"], "properties": {"spreadsheetId": TEXT, "spreadsheetUrl": TEXT, "properties": OBJECT, "sheets": {"type": "array", "items": OBJECT}}}, ["cell_values"]),
     "sheets.read": ({"type": "object", "required": ["range"], "properties": {"range": TEXT, "values": {"type": "array", "items": {"type": "array"}}}}, ["cell_values"]),
@@ -771,3 +773,4 @@ def compile_contracts(plan, manifests: dict) -> dict:
     if failures:
         raise ValueError("Plan contract validation failed: " + "; ".join(failures))
     return compiled
+
