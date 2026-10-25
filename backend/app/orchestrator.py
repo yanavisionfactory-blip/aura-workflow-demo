@@ -71,6 +71,7 @@ from .native_connectors import (
 )
 from .outcome_runtime import check_provider_outcome
 from .pilot_template import PILOT_PREFIX, PilotInputError, pilot_template
+from .pipedream_connect import pipedream_client_for_tool
 from .policy import canonical_plan_hash, operation_scope, runtime_policy_check
 from .providers import (
     ProviderExecutor,
@@ -951,6 +952,7 @@ async def _create_compiled_plan(
         op for item in inventory for op in item.get("allowed_operations", [])
     }
     catalog_inventory = inventory
+    from .kpi_pilot import kpi_template
     from .workflow_templates import (
         creator_outreach_template,
         mailchimp_canva_pilot_template,
@@ -983,6 +985,8 @@ async def _create_compiled_plan(
         audited_plan = crawl_review_recipe(prompt, inventory, available_input_names)
     if audited_plan is None:
         audited_plan = await agency_workflow_recipe(prompt, inventory, manifests_by_slug)
+    if audited_plan is None and not reviewed_revision:
+        audited_plan = kpi_template(prompt, inventory)
     if audited_plan is None:
         audited_plan = None if reviewed_revision or get_settings().planner_mode == "llm" else (
             pilot_template(prompt, inventory)
@@ -3749,9 +3753,6 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             from .pipedream_connect import (
                                 pack_signature_valid as pipedream_pack_signature_valid,
                             )
-                            from .pipedream_connect import (
-                                pipedream_client,
-                            )
 
                             pack = await session.get(BrokerCapabilityPack, broker_pack_id)
                             if (
@@ -3782,7 +3783,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             confirm_provider_arguments(arguments)
                             await mark_provider_dispatched()
                             result = await asyncio.wait_for(
-                                pipedream_client().run_action(
+                                pipedream_client_for_tool(active_tool).run_action(
                                     external_user_id,
                                     account_id,
                                     capability,
@@ -4436,6 +4437,10 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 status="unverified",
                 reasons=["Provider read-back could not confirm: " + ", ".join(outcome_failures)],
             )
+        elif (run.plan.get("planning_artifacts") or {}).get("planner_recovery_mode") == "audited_kpi_pilot_v1":
+            from .kpi_pilot import verified_completion
+
+            synthesis, verification = verified_completion(run.plan, outputs)
         elif (run.plan.get("planning_artifacts") or {}).get("planner_recovery_mode") == "synthetic_export_executive_review":
             from .executive_review import verify_saved_completion
 

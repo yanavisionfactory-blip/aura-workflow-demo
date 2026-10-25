@@ -1,3 +1,4 @@
+import RunSupport from "@/pages/RunSupport";
 import { useEffect, useState } from "react";
 import { Show, SignIn, SignUp } from "@clerk/react";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -108,8 +109,10 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClientInstance}>
       <Router basename={import.meta.env.BASE_URL}>
-        <Show when="signed-out"><AuthLanding /></Show>
-        <Show when="signed-in"><AuthProvider><ProductRoutes /></AuthProvider></Show>
+        <Routes>
+          <Route path="/support/runs/:grantId" element={<RunSupport />} />
+          <Route path="*" element={<><Show when="signed-out"><AuthLanding /></Show><Show when="signed-in"><AuthProvider><ProductRoutes /></AuthProvider></Show></>} />
+        </Routes>
       </Router>
       <UpdateNotice />
       <Toaster />

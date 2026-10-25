@@ -4,6 +4,7 @@ import hashlib
 from dataclasses import replace
 
 EXTRA_READBACK = {
+    "sheets.kpi.create": "sheets.workbook.get",
     "airtable.create": "airtable.record.get", "sheets.append": "sheets.read",
     "notion.blocks.children.append": "notion.blocks.children.list",
     "slack.post": "slack.message.get",
@@ -23,6 +24,9 @@ def build_extended(operation, a, receipt):
     if not read:
         return None
     rid = str(receipt.get("id") or "")
+    if operation == "sheets.kpi.create":
+        rid = str(receipt.get("spreadsheetId") or "")
+        return OutcomeCheck(read, {"spreadsheet_id": rid}, rid, a, "kpi_workbook")
     if operation == "airtable.create":
         records = receipt.get("records", [])
         if not a.get("records") or len(records) != len(a["records"]) or len(records) > 10:
@@ -121,6 +125,9 @@ def leaves(check):
 
 
 def evaluate_extended(check, observed):
+    if check.kind == "kpi_workbook":
+        from .kpi_pilot import verify_workbook
+        return verify_workbook(check.expected, observed, check.resource_id)
     from .outcome_checks import _matches, _same_id, evaluate_outcome_check
     def result(status, reason):
         return {"status": status, "reasons": [reason]}

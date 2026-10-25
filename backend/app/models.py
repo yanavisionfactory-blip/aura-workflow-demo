@@ -640,6 +640,18 @@ class WorkflowRun(Base):
     )
 
 
+class RunSupportGrant(Base):
+    __tablename__ = "run_support_grants"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("workflow_runs.id", ondelete="CASCADE"), index=True)
+    created_by: Mapped[str] = mapped_column(String(240))
+    token_hash: Mapped[str] = mapped_column(String(64))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
 class PlanVersion(Base):
     __tablename__ = "plan_versions"
     __table_args__ = (UniqueConstraint("run_id", "version", name="uq_run_plan_version"),)

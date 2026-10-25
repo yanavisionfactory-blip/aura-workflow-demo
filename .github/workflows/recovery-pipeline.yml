@@ -201,7 +201,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install Railway CLI
-        run: npm install --global @railway/cli
+        run: npm install --global @railway/cli@5.23.3
       - name: Deploy isolated canary
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
@@ -209,7 +209,7 @@ jobs:
           CANARY_SERVICE: ${{ secrets.RAILWAY_CANARY_SERVICE_ID }}
           CANARY_ENVIRONMENT: ${{ secrets.RAILWAY_CANARY_ENVIRONMENT_ID }}
         run: >-
-          railway up ./backend --ci
+          railway up "$GITHUB_WORKSPACE/backend" --ci
           --project "$CANARY_PROJECT"
           --service "$CANARY_SERVICE"
           --environment "$CANARY_ENVIRONMENT"
@@ -236,7 +236,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install Railway CLI
-        run: npm install --global @railway/cli
+        run: npm install --global @railway/cli@5.23.3
       - name: Deploy verified repair and roll back on failed health
         id: release
         env:
@@ -249,7 +249,7 @@ jobs:
         shell: bash
         run: |
           set -o errexit -o nounset -o pipefail
-          if railway up ./backend --ci \
+          if railway up "$GITHUB_WORKSPACE/backend" --ci \
               --project "$PROD_PROJECT" \
               --service "$PROD_SERVICE" \
               --environment "$PROD_ENVIRONMENT" \
@@ -261,7 +261,7 @@ jobs:
           fi
           ROLLBACK_DIR="$(mktemp -d)"
           git worktree add --detach "$ROLLBACK_DIR" "$BASE_SHA"
-          if railway up "$ROLLBACK_DIR/backend" --ci --path-as-root \
+          if railway up "$ROLLBACK_DIR/backend" --ci \
               --project "$PROD_PROJECT" \
               --service "$PROD_SERVICE" \
               --environment "$PROD_ENVIRONMENT" \

@@ -189,11 +189,11 @@ export async function createConnectorBrokerSession(provider, connectionId = null
   });
 }
 
-export async function completeConnectorBrokerConnection(provider, accountId, connectionId = null) {
+export async function completeConnectorBrokerConnection(provider, accountId, connectionId = null, authorizationState = null) {
   await ensureWorkspace();
   return request(`/v1/connector-broker/${encodeURIComponent(provider)}/complete`, {
     method: "POST",
-    body: JSON.stringify({ account_id: accountId, connection_id: connectionId }),
+    body: JSON.stringify({ account_id: accountId, connection_id: connectionId, authorization_state: authorizationState }),
   });
 }
 
@@ -386,6 +386,7 @@ async function authorizePipedreamConnector(provider, session, timeoutMs) {
           provider,
           id,
           session.connection_id,
+          session.authorization_state,
         ).then(async (result) => {
           const tools = await listPythonTools();
           const tool = tools.find((item) => item.id === result.connection_id);
@@ -682,4 +683,13 @@ export async function cancelPythonRun(runId) {
 export async function dispatchDuePythonRun(runId) {
   await ensureWorkspace();
   return request(`/v1/runs/${runId}/dispatch-due`, { method: "POST" });
+}
+
+export async function readSupportDiagnostics(token) {
+  if (!token) throw new Error("The support link is missing, expired or revoked. Ask the run owner for a new link.");
+  const response = await fetch(`${API_URL}/v1/support/diagnostics`, {
+    method: "POST", headers: { Authorization: `Bearer ${token}` }, cache: "no-store", referrerPolicy: "no-referrer",
+  });
+  if (!response.ok) throw new Error("Support access is invalid, expired or revoked.");
+  return response.json();
 }

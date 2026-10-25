@@ -13,6 +13,7 @@ from typing import Any
 from .executive_review import PrepareRequest as ExecutivePrepareRequest
 from .executive_review import SourceRequest as ExecutiveSourceRequest
 from .file_delivery import ATTACHMENTS_SCHEMA
+from .kpi_pilot import KpiFields
 from .policy import operation_scope
 from .presentation_content import PRESENTATION_SCHEMA
 from .proofing import FeedbackImportRequest
@@ -314,6 +315,9 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                 required=("name",),
                 properties={"name": _TEXT},
             ),
+            {**_module("sheets.kpi.create", "action", "Create one new KPI dashboard workbook with exact reviewed inputs, formulas, formatting, product context and feedback. Never modifies an existing workbook. Requires independent workbook read-back.", permission_scope="write"),
+             "input_schema": KpiFields.model_json_schema()},
+            _module("sheets.workbook.get", "search", "Read the KPI Dashboard, Feedback and Product brief grids, including stored formulas and computed values, for verification.", required=("spreadsheet_id",), properties={"spreadsheet_id": _TEXT}),
             _module("sheets.read", "search", "Read a spreadsheet range.", required=("spreadsheet_id",), properties={
                 "spreadsheet_id": _TEXT, "range": _TEXT
             }),

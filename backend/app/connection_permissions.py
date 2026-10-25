@@ -6,6 +6,18 @@ from .models import ToolKind
 from .security import CredentialVault
 
 
+def kpi_scope_missing(operations, credentials) -> bool:
+    if not {"sheets.kpi.create", "sheets.workbook.get"}.intersection(operations):
+        return False
+    granted = credentials.get("scope") or credentials.get("scopes") or ""
+    scopes = set(re.split(r"[\s,]+", " ".join(granted) if isinstance(granted, list) else str(granted)))
+    sufficient = {"https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/drive.file",
+                  "https://www.googleapis.com/auth/spreadsheets"}
+    if "sheets.kpi.create" not in operations:
+        sufficient |= {"https://www.googleapis.com/auth/drive.readonly", "https://www.googleapis.com/auth/spreadsheets.readonly"}
+    return not bool(scopes & sufficient)
+
+
 def refresh_granted_readbacks(tool) -> None:
     # Native Google connections historically advertised gmail.list + gmail.send
     # before gmail.get was implemented. Both reads use the same OAuth grant.
@@ -23,6 +35,10 @@ def refresh_granted_readbacks(tool) -> None:
     scopes = set(re.split(r"[\s,]+", " ".join(granted) if isinstance(granted, list)
                           else str(granted))) - {""}
     allowed = set(tool.allowed_operations or [])
+    if not scopes & {"https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/drive.file"}:
+        allowed.discard("sheets.kpi.create")
+    if not scopes & {"https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/spreadsheets.readonly", "https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/drive.readonly", "https://www.googleapis.com/auth/drive.file"}:
+        allowed.discard("sheets.workbook.get")
     if not scopes & {
         "https://www.googleapis.com/auth/gmail.readonly",
         "https://www.googleapis.com/auth/gmail.modify", "https://mail.google.com/",

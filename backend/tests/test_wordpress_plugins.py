@@ -199,7 +199,7 @@ async def test_host_limit_preserves_verified_connection_and_schedules_only_prefl
 async def test_host_hourly_limit_is_sanitized_and_recognized_even_in_html(monkeypatch, code):
     broker = SimpleNamespace(wordpress_account_credentials=AsyncMock(return_value={
         "url": "https://demo.example", "username": "demo", "application_password": "private-secret"}))
-    monkeypatch.setattr(wp, "pipedream_client", lambda: broker)
+    monkeypatch.setattr(wp, "pipedream_client_for_tool", lambda _tool: broker)
     monkeypatch.setattr(wp, "validate_public_endpoint", lambda url: None)
     original = httpx.AsyncClient
     transport = httpx.MockTransport(lambda request: httpx.Response(code,
@@ -281,7 +281,7 @@ async def test_request_never_follows_redirects_or_exposes_credentials(monkeypatc
             }
         )
     )
-    monkeypatch.setattr(wp, "pipedream_client", lambda: broker)
+    monkeypatch.setattr(wp, "pipedream_client_for_tool", lambda _tool: broker)
     monkeypatch.setattr(wp, "validate_public_endpoint", lambda url: None)
     calls = []
 
@@ -326,7 +326,7 @@ async def test_bad_credential_destinations_rejected_before_network(monkeypatch, 
             }
         )
     )
-    monkeypatch.setattr(wp, "pipedream_client", lambda: broker)
+    monkeypatch.setattr(wp, "pipedream_client_for_tool", lambda _tool: broker)
     parent = SimpleNamespace(
         config={"external_user_id": "aura_demo", "account_id": "apn_demo"},
         external_connection_id=None,

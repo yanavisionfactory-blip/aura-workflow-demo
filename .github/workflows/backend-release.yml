@@ -20,7 +20,7 @@ jobs:
   deploy:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 50
     environment: recovery-production
     env:
       RELEASE_SHA: ${{ inputs.release_sha }}
@@ -43,6 +43,9 @@ jobs:
             --jq '[.workflow_runs[] | select(.name == "Python control plane" and .event == "push" and .head_branch == "main" and .status == "completed" and .conclusion == "success")] | length > 0' \
             | python3 -c 'import sys; assert sys.stdin.read().strip() == "true", "Release needs successful main-branch backend CI"'
           git checkout --detach "$RELEASE_SHA"
+      - name: Stamp immutable release identity
+        run: |
+          python3 -c 'import json, os, pathlib; pathlib.Path("backend/app/release.json").write_text(json.dumps({"sha": os.environ["RELEASE_SHA"]}))'
       - name: Require the existing production deployment credential
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
@@ -54,7 +57,7 @@ jobs:
           node-version: '22'
       - name: Install pinned Railway CLI
         run: npm install --global @railway/cli@5.23.3
-      - name: Deploy worker and API and require new successful deployments
+      - name: Deploy canary, worker and API and require exact release readiness
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           RAILWAY_CALLER: skill:use-railway@1.3.5
@@ -81,6 +84,7 @@ jobs:
               return data if isinstance(data, list) else data['deployments']
 
           for name, service in [
+              ('canary', '897cf632-57e3-4c53-978a-63c8c308bc02'),
               ('worker', '33c7fb6a-2fcd-446b-b8ff-969f6bcb93fd'),
               ('API', '4dae3f58-70dd-44e4-804f-e21441c4ec41'),
           ]:
@@ -111,6 +115,14 @@ jobs:
                   time.sleep(15)
               else:
                   raise TimeoutError(f'{name}: no new successful deployment within 13 minutes')
+
+              if name in {'canary', 'API'}:
+                  host = ('https://aura-recovery-canary-production.up.railway.app' if name == 'canary'
+                          else 'https://impartial-emotion-production-49d4.up.railway.app')
+                  with urllib.request.urlopen(host + '/ready', timeout=30) as response:
+                      ready = json.load(response)
+                  assert ready.get('status') == 'ready' and ready.get('release_sha') == release, f'{name}: wrong release or not ready'
+                  assert ready.get('canary') == (name == 'canary'), f'{name}: wrong deployment mode'
 
           url = 'https://impartial-emotion-production-49d4.up.railway.app/ready'
           with urllib.request.urlopen(url, timeout=30) as response:

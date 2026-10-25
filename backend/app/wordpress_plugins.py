@@ -16,7 +16,7 @@ from jsonschema import Draft202012Validator
 from sqlalchemy import select
 
 from .models import CapabilityManifest, ToolConnection, ToolKind
-from .pipedream_connect import pipedream_client
+from .pipedream_connect import pipedream_client_for_tool
 from .universal_connectors import ConnectorError, validate_public_endpoint
 
 PROVIDERS = {"rankmath": "RankMath", "imagify": "Imagify"}
@@ -205,7 +205,7 @@ async def catalog(session, workspace_id: str) -> list[dict]:
 
 
 async def _wordpress_request(parent, method: str, path: str, body: dict | None = None):
-    broker = pipedream_client()
+    broker = pipedream_client_for_tool(parent)
     config = parent.config or {}
     account_id = str(config.get("account_id") or parent.external_connection_id or "")
     # The broker first verifies external-user ownership without credentials,
