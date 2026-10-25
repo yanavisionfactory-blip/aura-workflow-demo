@@ -10,8 +10,36 @@ from .config import get_settings
 from .model_inputs import bounded_input
 from .reliability import bounded_model_call
 from .schemas import WorkflowPlan
+from .workflow_context import referenced_paths
 
 REPORT_PREFIX = "AURA_REPORT_V1\n"
+
+
+def preserve_web_source_provenance(plan: WorkflowPlan) -> None:
+    """Keep returned source URLs when a planner selects only a page's text."""
+    prior_reads: set[str] = set()
+    for step in plan.steps:
+        if step.tool_slug == "aura" and step.operation == "report.compose":
+            sources = step.arguments.get("sources")
+            for source in sources if isinstance(sources, list) else []:
+                if not isinstance(source, dict) or not isinstance(source.get("content"), str):
+                    continue
+                content = source["content"]
+                paths = referenced_paths(content)
+                prefixes = []
+                for path in sorted(paths):
+                    parts = path.split(".")
+                    if (len(parts) < 3 or parts[0] != "steps" or parts[1] not in prior_reads
+                            or parts[2:] not in (["text"], ["output", "text"],
+                                                ["result", "text"], ["provider_result", "text"])):
+                        continue
+                    root = path.rsplit(".", 1)[0]
+                    if f"{root}.url" not in paths:
+                        prefixes.append("Source URL: {{" + root + ".url}}")
+                if prefixes:
+                    source["content"] = "\n".join(prefixes) + "\n\n" + content
+        if step.tool_slug == "aura" and step.operation == "web.page.read":
+            prior_reads.add(step.key)
 
 
 class ReportSource(BaseModel):
