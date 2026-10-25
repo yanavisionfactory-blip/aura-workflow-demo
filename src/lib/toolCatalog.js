@@ -259,3 +259,17 @@ export function catalogEntryFor(toolName) {
 export function providerForTool(toolName) {
   return catalogEntryFor(toolName)?.provider || null;
 }
+
+export async function ensurePlanConnectionRoute(toolName, provider, discover) {
+  let entry = catalogEntryFor(toolName);
+  if (!provider || entry?.routes?.some((route) => route.provider === provider && route.connectable)) {
+    return entry;
+  }
+  // A connector can become certified after the catalogue was hydrated. Use
+  // the same verified discovery path as marketplace search before rejecting
+  // an exact plan route; never substitute the broader app-family connection.
+  const result = await discover(toolName);
+  mergeMarketplaceApps(result?.apps || []);
+  entry = catalogEntryFor(toolName);
+  return entry;
+}

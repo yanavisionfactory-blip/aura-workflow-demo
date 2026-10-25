@@ -7,11 +7,12 @@ import {
   listPythonTools,
   pythonRuntimeEnabled,
   reserveAuthorizationWindow,
+  searchConnectorBrokerApps,
   testPythonConnection,
 } from "@/lib/auraApi";
 import {
   CATALOG,
-  catalogEntryFor,
+  ensurePlanConnectionRoute,
   providerForTool,
   replaceToolCatalog,
 } from "@/lib/toolCatalog";
@@ -25,7 +26,8 @@ export async function connectTool(toolName, opts = {}) {
   if (!pythonRuntimeEnabled) {
     throw new Error("AURA's secure connection service is not available right now.");
   }
-  const entry = catalogEntryFor(toolName);
+  const requestedProvider = String(opts.provider || "").trim().toLowerCase();
+  const entry = await ensurePlanConnectionRoute(toolName, requestedProvider, searchConnectorBrokerApps);
   if (!entry?.connectable || !entry.provider) {
     throw new Error(
       `${toolName} is not available as a verified one-click connector yet. ` +
@@ -33,7 +35,6 @@ export async function connectTool(toolName, opts = {}) {
     );
   }
 
-  const requestedProvider = String(opts.provider || "").trim().toLowerCase();
   const requestedRoute = entry.routes?.find(
     (route) => route.provider === requestedProvider && route.connectable
   );

@@ -5,10 +5,41 @@ import {
   CATALOG,
   MARKETPLACE,
   catalogEntryFor,
+  ensurePlanConnectionRoute,
   mergeMarketplaceApps,
   replaceToolCatalog,
   searchMarketplace,
 } from "../src/lib/toolCatalog.js";
+
+test("plan connections discover a newly certified exact Sheets route before authorizing", async () => {
+  replaceToolCatalog({ marketplace: [
+    { provider: "google", display_name: "Google Workspace", connectable: true, connection_backend: "native" },
+  ] });
+  assert.equal(catalogEntryFor("Google Sheets").routes.some((route) => route.provider === "google-sheets"), false);
+  let discoveries = 0;
+  const discover = async (name) => {
+    discoveries += 1;
+    assert.equal(name, "Google Sheets");
+    return { apps: [{ provider: "google-sheets", display_name: "Google Sheets", connectable: true,
+      connection_backend: "pipedream", connection_strategy: "oauth" }] };
+  };
+  const entry = await ensurePlanConnectionRoute("Google Sheets", "google-sheets", discover);
+  assert.equal(entry.routes.find((route) => route.provider === "google-sheets")?.connectable, true);
+  await ensurePlanConnectionRoute("Google Sheets", "google-sheets", discover);
+  assert.equal(discoveries, 1);
+});
+
+test("discovery never upgrades an unverified route or substitutes shared Google consent", async () => {
+  replaceToolCatalog({ marketplace: [
+    { provider: "google", display_name: "Google Workspace", connectable: true, connection_backend: "native" },
+  ] });
+  const entry = await ensurePlanConnectionRoute("Google Sheets", "google-sheets", async () => ({
+    apps: [{ provider: "google-sheets", display_name: "Google Sheets", connectable: false,
+      availability: "coming_soon", connection_backend: "pipedream" }],
+  }));
+  assert.equal(entry.routes.find((route) => route.provider === "google")?.connectable, true);
+  assert.equal(entry.routes.find((route) => route.provider === "google-sheets")?.connectable, false);
+});
 
 test("discovered providers are searchable but only released providers are selectable", () => {
   replaceToolCatalog({
