@@ -1232,6 +1232,9 @@ def _connected_capability_families(inventory: list[dict]) -> set[str]:
 
 def explicit_disconnected_capabilities(prompt: str, inventory: list[dict]) -> list[str]:
     """Find every explicitly named, disconnected provider account family."""
+    from .connection_families import uses_builtin_openai
+
+    builtin_openai = uses_builtin_openai(prompt, inventory)
     # This intake section is a list of candidate CMS platforms, not four
     # mandatory connected accounts. Actual planned operations still undergo
     # normal grant preflight, including any explicit connect/read requests.
@@ -1244,6 +1247,7 @@ def explicit_disconnected_capabilities(prompt: str, inventory: list[dict]) -> li
         family = _connection_family(item)
         if (
             item.get("connected", False)
+            or (builtin_openai and family == "openai")
             or not family
             or family in connected_families
             or family in seen_families
@@ -1700,6 +1704,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 or tool.slug,
                 "kind": tool.kind.value,
                 "allowed_operations": tool.allowed_operations,
+                "granted_operations": list(tool.allowed_operations or []),
                 "connected": True,
             }
             for tool in tools
