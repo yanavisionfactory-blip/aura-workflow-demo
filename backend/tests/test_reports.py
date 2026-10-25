@@ -10,6 +10,8 @@ from app.operation_contracts import output_errors
 from app.orchestrator import _create_compiled_plan
 from app.providers import ProviderExecutor
 from app.reports import REPORT_PREFIX, ReportDraft, ReportRequest, report_workflow_recipe
+from app.schemas import WorkflowPlan
+from app.workflow_context import resolve_value
 
 PACKET = {
     "title": "Fictional agency review", "synthetic": True,
@@ -17,6 +19,41 @@ PACKET = {
     "sources": [{"id": "S1", "title": "Synthetic outcomes",
                  "content": "Current: 120 leads, 55 bookings, 20 customers. Previous: 100, 50, 18."}],
 }
+
+
+@pytest.mark.parametrize("receipt_path", ["page", "page.output", "page.result", "page.provider_result"])
+def test_compiled_web_report_retains_returned_url_with_text_only_source(receipt_path):
+    from app.orchestrator import _normalize_planned_steps
+
+    plan = WorkflowPlan.model_validate({
+        "name": "Competitor research", "interpretation": "Read and compare products inside AURA.",
+        "steps": [
+            {"key": "page", "tool_slug": "aura", "operation": "web.page.read",
+             "agent": "Researcher", "reason": "Read the product evidence.",
+             "expected_output": "Page text and returned source URL.",
+             "arguments": {"url": "https://example.com/serum"}},
+            {"key": "report", "tool_slug": "aura", "operation": "report.compose",
+             "agent": "Analyst", "reason": "Compare evidence with the supplied brief.",
+             "expected_output": "Sourced report inside AURA.",
+             "depends_on": ["page"], "arguments": {**PACKET, "sources": [
+                 {"id": "web", "title": "Product page", "content": "{{steps." + receipt_path + ".text}}"},
+                 {"id": "brief", "title": "Supplied brief", "content": "Texas serum, $70"},
+             ]}},
+        ],
+    })
+    _normalize_planned_steps(plan, {"aura": native_manifest("aura")})
+    normalized = plan.steps[1].arguments["sources"][0]["content"]
+    _normalize_planned_steps(plan, {"aura": native_manifest("aura")})
+    assert plan.steps[1].arguments["sources"][0]["content"] == normalized
+    receipt = {"url": "https://example.com/products/serum", "text": "Serum: $42, 30 ml"}
+    resolved = resolve_value(plan.steps[1].arguments, {"steps": {"page": {
+        **receipt, "output": receipt, "result": receipt, "provider_result": receipt,
+    }}})
+    prepared = coerce_module_arguments(native_manifest("aura"), "report.compose", resolved)
+    assert prepared["sources"][0]["content"] == (
+        "Source URL: https://example.com/products/serum\n\nSerum: $42, 30 ml"
+    )
+    assert prepared["sources"][1]["content"] == "Texas serum, $70"
 
 
 def test_report_packet_rejects_missing_evidence_and_duplicate_source_ids():
