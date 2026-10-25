@@ -552,6 +552,8 @@ class ProviderExecutor:
             "sheets.read": self._sheets_read,
             "sheets.append": self._sheets_append,
             "sheets.kpi.create": self._sheets_kpi_create,
+            "sheets.campaign_report.create": self._sheets_campaign_report_create,
+            "sheets.campaign_report.get": self._sheets_campaign_report_get,
             "sheets.workbook.get": self._sheets_workbook_get,
             "airtable.record.get": self._airtable_record_get,
             "slack.message.get": self._slack_message_get,
@@ -1579,6 +1581,22 @@ class ProviderExecutor:
                                    params={"fields": "spreadsheetId,spreadsheetUrl,properties(title)"},
                                    json=workbook_payload(a))
 
+    async def _sheets_campaign_report_create(self, a: dict) -> dict:
+        from .campaign_report import workbook_payload
+        return await self._request("POST", "https://sheets.googleapis.com/v4/spreadsheets",
+                                   params={"fields": "spreadsheetId,spreadsheetUrl,properties(title)"},
+                                   json=workbook_payload(a))
+
+    async def _sheets_campaign_report_get(self, a: dict) -> dict:
+        from urllib.parse import quote
+        sid = str(a.get("spreadsheet_id") or "")
+        if not sid:
+            raise ValueError("A saved campaign workbook ID is required")
+        return await self._request("GET", f"https://sheets.googleapis.com/v4/spreadsheets/{quote(sid, safe='')}", params={
+            "ranges": ["'Summary'!A1:E200", "'Google Ads'!A1:M101", "'Meta Ads'!A1:O101", "'GA4'!A1:J101", "'Notes'!A1:B16"],
+            "fields": "spreadsheetId,spreadsheetUrl,properties(title),sheets(properties(title,gridProperties(frozenRowCount)),data(startRow,startColumn,rowData(values(userEnteredValue,effectiveValue,userEnteredFormat(numberFormat)))))",
+        })
+
     async def _sheets_workbook_get(self, a: dict) -> dict:
         from urllib.parse import quote
         sid = str(a.get("spreadsheet_id") or "")
@@ -2096,3 +2114,4 @@ class ProviderExecutor:
 def idempotency_key(run_id: str, position: int, operation: str, arguments: dict) -> str:
     canonical = json.dumps(arguments, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(f"{run_id}:{position}:{operation}:{canonical}".encode()).hexdigest()
+

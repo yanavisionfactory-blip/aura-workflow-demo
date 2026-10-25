@@ -113,6 +113,8 @@ def _valid_schema_value(schema, root=None):
         return "https://example.com/resource"
     if schema.get("pattern") and "@" in schema["pattern"]:
         return "aura@example.com"
+    if schema.get("pattern") == "^[a-f0-9]{64}$":
+        return "a" * 64
     if schema.get("pattern") == "^SIMULATED_":
         return "SIMULATED_source.csv"
     return "value"

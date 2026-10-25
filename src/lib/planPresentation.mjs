@@ -20,6 +20,8 @@ export function operationStepTitle(step = {}, tool = "the app") {
   if (operation === "weekly.review.prepare") return "Prepare the weekly review and draft variants";
   const verifying = /^(?:verify|confirm|check (?:the )?saved|read back)/i.test(step.reason || "");
   const titles = {
+    "sheets.campaign_report.create": "Create and check the campaign report",
+    "sheets.campaign_report.get": "Verify the saved campaign workbook",
     "get_report_schema": "Read the provider report schema",
     "execute_report": "Run the provider report",
     "seo.crawl.analyze": "Analyze the supplied Screaming Frog exports",
@@ -63,3 +65,4 @@ export function weatherStepTitle(step = {}) {
   }
   return "Check the weather";
 }
+

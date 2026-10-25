@@ -7,13 +7,13 @@ from .security import CredentialVault
 
 
 def kpi_scope_missing(operations, credentials) -> bool:
-    if not {"sheets.kpi.create", "sheets.workbook.get"}.intersection(operations):
+    if not {"sheets.kpi.create", "sheets.workbook.get", "sheets.campaign_report.create", "sheets.campaign_report.get"}.intersection(operations):
         return False
     granted = credentials.get("scope") or credentials.get("scopes") or ""
     scopes = set(re.split(r"[\s,]+", " ".join(granted) if isinstance(granted, list) else str(granted)))
     sufficient = {"https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/drive.file",
                   "https://www.googleapis.com/auth/spreadsheets"}
-    if "sheets.kpi.create" not in operations:
+    if not {"sheets.kpi.create", "sheets.campaign_report.create"}.intersection(operations):
         sufficient |= {"https://www.googleapis.com/auth/drive.readonly", "https://www.googleapis.com/auth/spreadsheets.readonly"}
     return not bool(scopes & sufficient)
 
@@ -37,8 +37,10 @@ def refresh_granted_readbacks(tool) -> None:
     allowed = set(tool.allowed_operations or [])
     if not scopes & {"https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/drive.file"}:
         allowed.discard("sheets.kpi.create")
+        allowed.discard("sheets.campaign_report.create")
     if not scopes & {"https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/spreadsheets.readonly", "https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/drive.readonly", "https://www.googleapis.com/auth/drive.file"}:
         allowed.discard("sheets.workbook.get")
+        allowed.discard("sheets.campaign_report.get")
     if not scopes & {
         "https://www.googleapis.com/auth/gmail.readonly",
         "https://www.googleapis.com/auth/gmail.modify", "https://mail.google.com/",
@@ -99,3 +101,4 @@ def missing_plan_operations(plan, inventory) -> dict[str, set[str]]:
             if absent:
                 missing.setdefault(slug, set()).update(absent)
     return missing
+
