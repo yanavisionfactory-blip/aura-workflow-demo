@@ -405,7 +405,10 @@ async def readiness() -> dict:
     from .dispatch import scheduler_observation
     from .worker_health import worker_responds
 
-    checks["execution_worker"] = checks["redis"] and await worker_responds()
+    # The canary intentionally cannot dispatch jobs and may use an isolated
+    # broker without a worker. The production API must still prove a live worker.
+    if not settings.canary_mode:
+        checks["execution_worker"] = checks["redis"] and await worker_responds()
 
     scheduler_details = {
         "enabled": settings.recovery_scheduler_enabled,
@@ -435,6 +438,7 @@ async def readiness() -> dict:
     else:
         checks["recovery_scheduler"] = True
     if not all(checks.values()):
+        logger.warning("Readiness checks failed: %s", ",".join(key for key, passed in checks.items() if not passed))
         # Scheduler diagnostics contain timestamps, stage names, exception types,
         # and status codes only. Raw errors, payloads, and credentials never enter
         # the public readiness projection.
