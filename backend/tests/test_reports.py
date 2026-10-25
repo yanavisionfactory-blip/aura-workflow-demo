@@ -82,6 +82,37 @@ def test_report_receipt_coercion_does_not_truncate_oversized_evidence():
         coerce_module_arguments(native_manifest("aura"), "report.compose", oversized)
 
 
+def test_live_sheet_values_can_feed_the_report_and_written_body_readback():
+    from app.plan_preflight import preflight_plan
+
+    plan = WorkflowPlan.model_validate({
+        "name": "Live Sheets review", "interpretation": "Review live cells and save the complete report.",
+        "steps": [
+            {"key": "cells", "agent": "Reader", "tool_slug": "google", "operation": "sheets.read",
+             "arguments": {"spreadsheet_id": "existing", "range": "'Pilot Record'!A1:D50"},
+             "reason": "Read actual source cells.", "expected_output": "The actual range and values."},
+            {"key": "review", "agent": "Analyst", "tool_slug": "aura", "operation": "report.compose",
+             "depends_on": ["cells"], "arguments": {**PACKET, "synthetic": False, "sources": [
+                 {"id": "cells", "title": "Live worksheet", "content": "{{steps.cells.values}}"}]},
+             "reason": "Compose from the actual returned values.", "expected_output": "Full report body and summary."},
+            {"key": "save", "agent": "Writer", "tool_slug": "google", "operation": "sheets.append",
+             "depends_on": ["review"], "consequential": True,
+             "arguments": {"spreadsheet_id": "existing", "range": "'Pilot Record'!A:B",
+                           "values": [["Review", "{{steps.review.body}}"]]},
+             "reason": "Append the complete review.", "expected_output": "Write receipt and updated range."},
+            {"key": "verify", "agent": "Verifier", "tool_slug": "google", "operation": "sheets.read",
+             "depends_on": ["save"], "arguments": {"spreadsheet_id": "existing",
+                                                    "range": "{{steps.save.updates.updatedRange}}"},
+             "reason": "Read the actual write location.", "expected_output": "Saved full report body."},
+        ],
+    })
+    manifests = {slug: native_manifest(slug) for slug in ("aura", "google")}
+    inventory = [{"slug": slug, "connected": True, "allowed_operations": native_operations(slug)}
+                 for slug in manifests]
+    result = preflight_plan(plan, inventory, manifests, set())
+    assert result.fixes == []
+
+
 def test_native_report_stays_available_when_source_text_mentions_external_platforms():
     inventory = [
         {"slug": "aura", "name": "AURA Intelligence", "allowed_operations": ["report.compose"]},
