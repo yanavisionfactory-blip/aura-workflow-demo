@@ -71,7 +71,7 @@ async def test_campaign_report_run_and_resume_create_once(runtime, fields, monke
     from app.policy import canonical_plan_hash
     from app.schemas import ExecutionDirective
     from app.security import CredentialVault
-    plan = workflow_recipe(PREFIX + json.dumps(fields), [{"slug": "google", "connected": True}]).model_dump(mode="json")
+    plan = workflow_recipe(PREFIX + json.dumps(fields), [{"slug": "google", "connected": True, "allowed_operations": native_operations("google")}]).model_dump(mode="json")
     receipt = {"spreadsheetId": "qa-workbook", "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/qa-workbook/edit"}
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
