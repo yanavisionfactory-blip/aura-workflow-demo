@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { auraRequest } from "@/lib/auraApi";
 
-export default function RunSupportAccess({ runId }) {
+export default function RunSupportAccess({ runId, compact = false }) {
   const [open, setOpen] = useState(false);
   const [consent, setConsent] = useState(false);
   const [grants, setGrants] = useState([]);
@@ -16,8 +16,8 @@ export default function RunSupportAccess({ runId }) {
     return () => { live = false; };
   }, [open, runId, endpoint]);
   if (!runId) return null;
-  return <section className="my-4 rounded-xl border border-white/10 p-4 text-sm">
-    <button type="button" onClick={() => setOpen(!open)} className="font-medium">Get help with this run</button>
+  return <section className={`my-4 ${compact && !open ? "text-xs text-muted-foreground" : "rounded-xl border border-white/10 p-4 text-sm"}`}>
+    <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="font-medium">Get help with this run</button>
     {open && <div className="mt-3 space-y-3">
       <p className="text-muted-foreground">Share this run’s status, operation names and whether receipts and verification were saved. Prompts, account details, sheet contents and credentials are excluded. Anyone with the link can read these diagnostics until it expires or you revoke it. The link cannot change or resume your run.</p>
       <label className="flex gap-2"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />I agree to share these diagnostics for 30 minutes.</label>

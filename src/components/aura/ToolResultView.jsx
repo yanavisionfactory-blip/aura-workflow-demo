@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, ArrowUpRight, CheckCircle2, ChevronRight, FileText, Maximize2, Wrench } from "lucide-react";
+import { Activity, AlertTriangle, ArrowUpRight, Check, CheckCircle2, Clock, FileText, Maximize2, Wrench } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { toolResultGroups, toolResultName, toolResultStatus } from "@/lib/toolResultViews.mjs";
 import ResultPreview from "./ResultPreview";
@@ -24,14 +24,14 @@ export function ToolResultFrame({ tool, title, synthetic = false, onExpand, chil
 export function ResultsByTool({ entries, onOpen }) {
   if (!entries.length) return null;
   const attention = entries.filter((entry) => ["failed", "blocked", "provider_error"].includes(entry.status)).length;
-  return <section aria-label="Results by tool" className="mb-6 rounded-xl border border-white/10 bg-card/30 p-4 sm:p-5">
+  return <section aria-label="Results by tool" className="mb-6 rounded-xl border border-white/10 bg-[#0c121e]/65 p-4">
     <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
       <h3 className="flex items-center gap-2 text-sm font-semibold"><Wrench className="h-4 w-4 text-muted-foreground" />Tools used</h3>
-      <button type="button" onClick={() => onOpen("activity")} className="text-xs font-medium text-primary">View activity</button>
+      <button type="button" onClick={() => onOpen("activity")} className="inline-flex items-center gap-1 rounded-full border border-violet-400/20 px-2.5 py-1 text-[11px] text-violet-400"><Activity className="h-3 w-3" />View activity</button>
     </div>
     <div className="flex flex-wrap gap-2">{toolResultGroups(entries).map(({ tool, entries: items }) =>
-      <button type="button" key={tool} aria-label={`View ${tool} results`} onClick={() => onOpen(items[0].id)} className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs hover:border-primary/40 hover:bg-primary/10">
-        <span>{tool}</span><span className="text-muted-foreground">{items.length}</span><ChevronRight className="h-3 w-3 text-muted-foreground" />
+      <button type="button" key={tool} aria-label={`View ${tool} results`} onClick={() => onOpen(items[0].id)} className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.02] px-3 py-2 text-[11px] font-medium hover:border-violet-400/40">
+        {items.some((entry) => ["failed", "blocked", "provider_error"].includes(entry.status)) ? <AlertTriangle className="h-3 w-3 text-amber-400" /> : items.every((entry) => entry.status === "completed") ? <Check className="h-3 w-3 text-emerald-400" /> : <Clock className="h-3 w-3 text-muted-foreground" />}<span>{tool}</span>
       </button>)}
     </div>
     {attention > 0 && <p className="mt-3 flex items-center gap-2 text-xs text-amber-200"><AlertTriangle className="h-3.5 w-3.5" />{attention} {attention === 1 ? "action needs" : "actions need"} attention. Open its tool result for details.</p>}

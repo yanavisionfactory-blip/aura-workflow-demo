@@ -1,18 +1,22 @@
 import RunSupportAccess from "./RunSupportAccess";
 import { useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
-import { Activity, AlertTriangle, ArrowRight, CalendarClock, Check, CheckCircle2, ChevronDown, Clock, ExternalLink, FileDown, Plus, RefreshCw, Share2, Zap } from "lucide-react";
+import { Activity, AlertTriangle, ArrowRight, BarChart3, CalendarClock, Check, ChevronDown, ExternalLink, FileDown, FileText, Plus, RefreshCw, Share2, Table2, Zap } from "lucide-react";
 import AccessRequestModal from "./AccessRequestModal";
 import ScheduleModal from "./ScheduleModal";
 import CreatorApprovalList from "./CreatorApprovalList";
 import ResultPreview from "./ResultPreview";
-import PrimaryResult from "./PrimaryResult";
 import ToolResultDialog, { MainToolOutput, ResultsByTool, ToolResultFrame } from "./ToolResultView";
 import { ResultsHeading, ResultsMetrics } from "./ResultsSummary";
 import { buildSummaryText } from "@/lib/auraSummary";
 import { resultMetrics, selectPrimaryOutcome, supportingReceipts, visualResultChoices } from "@/lib/resultPresentation.mjs";
 import { mainToolEntry, toolResultEntries, toolResultName } from "@/lib/toolResultViews.mjs";
+import { sheetWorkflowSummary } from "@/lib/workflowResultSummary.mjs";
+
+const smallButton = "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full border border-cyan-400/25 px-3 py-1.5 text-[11px] font-medium text-cyan-300 transition hover:bg-cyan-400/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-cyan-300";
+const outlineButton = "inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium transition hover:bg-white/10";
+const footerButton = "inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 hover:bg-white/5";
 
 export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, workflowPrompt, activity, prompt, interpretation, backendRunId, historyWorkflowId, scheduleTitle }) {
   const isFailure = results.status === "failed" || results.status === "needs_attention";
@@ -31,8 +35,16 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   const nativeAudit = primaryResult.kind === "seo_audit";
   const approvedWeekly = primaryResult.kind === "weekly_review" && (primaryResult.packet?.version === 2 || primaryResult.packet?.provenance === "approved_export");
   const nativeResult = nativeAudit || ["weekly_review", "executive_review", "website_content", "marketing_tools"].includes(primaryResult.kind);
-  const metrics = useMemo(() => isFailure ? [] : resultMetrics(results.metrics || [], activity || []), [results.metrics, activity, isFailure]);
+  const sheetSummary = useMemo(() => sheetWorkflowSummary(toolEntries, primaryResult), [toolEntries, primaryResult]);
+  const metrics = useMemo(() => isFailure ? [] : sheetSummary?.metrics.length ? sheetSummary.metrics : resultMetrics(results.metrics || [], activity || []), [results.metrics, activity, isFailure, sheetSummary]);
   const receipts = useMemo(() => supportingReceipts(results, activity || [], primaryResult, results.resultPresentation, mainEntry?.id), [activity, primaryResult, results, mainEntry]);
+  const actions = sheetSummary?.actions.length ? [...sheetSummary.actions] : [
+    ...(hasMainOutput ? [{ key: "primary", title: mainEntry?.action || primaryResult.title || "Workflow output saved", detail: toolResultName(primaryResult.provider || mainEntry?.tool), actionId: "main", actionLabel: "View result", icon: "report" }] : []),
+    ...receipts.map((receipt) => ({ ...receipt, detail: toolResultName(receipt.tool), actionLabel: "View action" })),
+  ];
+  for (const entry of toolEntries.filter((item) => ["failed", "blocked", "provider_error"].includes(item.status))) {
+    if (!actions.some((action) => action.actionId === entry.id)) actions.push({ key: `issue-${entry.id}`, title: entry.action, detail: `${entry.tool} · Needs attention`, actionId: entry.id, actionLabel: "View issue", issue: true });
+  }
   const creatorsOutcome = (results.outcomes || []).find((outcome) => outcome.type === "creators" && outcome.items?.length > 0);
   const nextSteps = primaryResult.kind === "website_content" ? [
     "Review the changes to each page.",
@@ -67,9 +79,37 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   if (primaryResult.kind === "marketing_tools") return <div className="mx-auto w-full max-w-3xl pb-8"><ResultPreview result={primaryResult} results={results} activity={activity} backendRunId={backendRunId} /></div>;
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`mx-auto w-full pb-8 ${nativeAudit ? "max-w-3xl" : primaryResult.kind === "website_content" ? "max-w-6xl" : "max-w-5xl"}`}>
-      {!nativeResult && <ResultsHeading eyebrow="Workflow result" title={results.title || "Workflow complete"} summary={results.summary} isFailure={isFailure} />}
-      {!nativeResult && <ResultsMetrics metrics={metrics} />}
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`mx-auto w-full pb-8 ${primaryResult.kind === "website_content" ? "max-w-6xl" : "max-w-3xl"}`}>
+      {!nativeResult && <ResultsHeading centered title={(!isFailure && sheetSummary?.title) || results.title || "Workflow complete"} summary={(!isFailure && sheetSummary?.summary) || results.summary} isFailure={isFailure} />}
+      {!nativeResult && <ResultsMetrics metrics={metrics} compact />}
+
+      {nativeResult && <ResultPreview result={primaryResult} results={results} activity={activity} backendRunId={backendRunId} />}
+
+      {!nativeResult && actions.length > 0 && <section aria-label="Supporting workflow actions" className="mb-6">
+        <h3 className="mb-3 text-sm font-semibold">What happened</h3>
+        <div className="space-y-2">
+          {actions.map((action) => {
+            const Icon = action.issue ? AlertTriangle : action.icon === "sources" ? BarChart3 : action.icon === "sheet" ? Table2 : FileText;
+            return <div key={action.key} className={`flex flex-wrap items-center gap-3 rounded-xl border px-3 py-3 sm:flex-nowrap ${action.issue ? "border-amber-400/30 bg-amber-400/[0.04]" : "border-white/10 bg-[#0c121e]/65"}`}>
+              <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-xl ${action.issue ? "bg-amber-400/10 text-amber-400" : "bg-violet-400/10 text-violet-400"}`}><Icon className="h-4 w-4" /></span>
+              <div className="min-w-0 flex-1"><p className="text-sm font-medium">{action.count !== undefined && <strong className="mr-1.5 text-lg font-bold">{action.count}</strong>}{action.title}</p>
+                <p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">{action.detail}</p>
+                {action.preview?.length > 0 && <div className="mt-2 space-y-1 text-xs text-muted-foreground">{action.preview.map((audience, index) => <p key={index}>{audience.name}{audience.contacts !== null && ` · ${audience.contacts.toLocaleString("en-US")} contacts`}</p>)}</div>}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {action.actionId && <button type="button" aria-label={`${action.actionLabel}: ${action.title}`} onClick={() => openTool(action.actionId)} className={`${smallButton} ${action.issue ? "border-amber-400/30 text-amber-300 hover:bg-amber-400/10" : ""}`}>{action.actionLabel}</button>}
+                {action.link && <a href={action.link} target="_blank" rel="noopener noreferrer" className={smallButton}><ExternalLink className="h-3 w-3" />{action.linkLabel || `Open ${action.tool}`}</a>}
+              </div>
+            </div>;
+          })}
+        </div>
+      </section>}
+
+      {!nativeAudit && primaryResult.kind !== "website_content" && <ResultsByTool entries={toolEntries} onOpen={openTool} />}
+
+      {!nativeResult && <details aria-label="Main workflow result" className="group mb-6">
+        <summary className="flex w-fit cursor-pointer list-none items-center gap-2 text-sm font-semibold [&::-webkit-details-marker]:hidden"><BarChart3 className="h-4 w-4 text-violet-400" />Results<span className="text-[11px] font-normal text-muted-foreground">— the actual output</span><ChevronDown className="h-3.5 w-3.5 text-muted-foreground transition group-open:rotate-180" /></summary>
+        <div className="mt-4 space-y-4">
 
       {visualChoices.length > 0 && <label className="mb-5 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
         Main result
@@ -83,73 +123,44 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
         </select>
       </label>}
 
-      {nativeResult ? <ResultPreview result={primaryResult} results={results} activity={activity} backendRunId={backendRunId} /> : <PrimaryResult
-        title={primaryResult.title || results.title || "Workflow result"}
-        provider={primaryResult.provider}
-        providerVerb={primaryResult.providerVerb}
-        actions={<>
+        {(primaryResult.link && primaryResult.kind !== "spreadsheet" || primaryResult.artifact?.link) && <div className="flex flex-wrap gap-3">
           {primaryResult.link && primaryResult.kind !== "spreadsheet" && <a href={primaryResult.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white hover:bg-primary/90"><ExternalLink className="h-4 w-4" />{primaryResult.linkLabel || "Open result"}</a>}
           {primaryResult.artifact?.link && <a href={primaryResult.artifact.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl border border-primary/30 px-4 py-2.5 text-sm font-medium text-primary hover:bg-primary/10"><ExternalLink className="h-4 w-4" />{primaryResult.artifact.linkLabel || "Open presentation"}</a>}
-        </>}
-        footer={artifactDelivery && <><span>Presentation · {primaryResult.artifact?.title || primaryResult.title}</span><span className="text-emerald-400">{artifactDelivery.artifactDelivered ? "Attached and delivered" : "Created in Canva"}</span></>}
-      >
+        </div>}
         {hasMainOutput ? <ToolResultFrame tool={primaryResult.provider || mainEntry?.tool} title={primaryResult.title || results.title || "Main output"} synthetic={mainEntry?.synthetic} appScreen={primaryResult.kind === "spreadsheet"} onExpand={() => openTool("main")}>
           <MainToolOutput entry={mainEntry} result={primaryResult} results={results} activity={activity} backendRunId={backendRunId} />
         </ToolResultFrame> : <ResultPreview result={primaryResult} results={results} />}
-      </PrimaryResult>}
-
-      {!nativeResult && receipts.length > 0 && <section aria-label="Supporting workflow actions" className="mb-6">
-        <h3 className="mb-3 text-sm font-semibold">What happened</h3>
-        <div className="space-y-2">
-          {receipts.map((receipt) => <div key={receipt.key} className="flex flex-wrap items-center gap-3 rounded-xl border border-white/10 bg-card/40 p-4">
-            <Activity className="h-5 w-5 shrink-0 text-primary" />
-            <div className="min-w-0 flex-1"><p className="text-sm font-medium">{receipt.title}</p>
-            <p className="mt-1 text-xs text-muted-foreground">{toolResultName(receipt.tool)}</p>
-            {receipt.preview?.length > 0 && <div className="mt-3 space-y-2 border-t border-white/10 pt-3">
-              {receipt.preview.map((audience, index) => <div key={index} className="flex items-start justify-between gap-3 text-xs">
-                <span className="break-words">{audience.name}</span>
-                {audience.contacts !== null && <span className="shrink-0 text-muted-foreground">{audience.contacts.toLocaleString("en-US")} contacts</span>}
-              </div>)}
-            </div>}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {receipt.actionId && <button type="button" aria-label={`View action: ${receipt.title}`} onClick={() => openTool(receipt.actionId)} className="inline-flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1.5 text-xs text-primary hover:bg-primary/10">View action</button>}
-              {receipt.link && <a href={receipt.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-full border border-primary/25 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10">{receipt.linkLabel || `Open ${receipt.tool}`}<ExternalLink className="h-3 w-3" /></a>}
-            </div>
-          </div>)}
+          {artifactDelivery && <p className="flex flex-wrap justify-between gap-2 text-xs text-muted-foreground"><span>Presentation · {primaryResult.artifact?.title || primaryResult.title}</span><span className="text-emerald-400">{artifactDelivery.artifactDelivered ? "Attached and delivered" : "Created in Canva"}</span></p>}
         </div>
-      </section>}
-
-      {!nativeAudit && primaryResult.kind !== "website_content" && <ResultsByTool entries={toolEntries} onOpen={openTool} />}
+      </details>}
 
       {creatorsOutcome && <CreatorApprovalList items={creatorsOutcome.items} />}
       {!isFailure && (nextSteps.length > 0 || results.suggestionsLoading) && <section className="mb-6" aria-live="polite">
         <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold"><ArrowRight className="h-4 w-4 text-primary" />Suggested next</h3>
         {nextSteps.length > 0
-          ? <div className="flex flex-wrap gap-2">{nextSteps.map((step, index) => <button key={index} type="button" onClick={() => onStartWorkflow(step)} className="rounded-full border border-primary/25 bg-primary/[0.05] px-4 py-2 text-xs text-primary hover:bg-primary/10">{step}</button>)}</div>
+          ? <div className="flex flex-wrap gap-2">{nextSteps.map((step, index) => <button key={index} type="button" onClick={() => onStartWorkflow(step)} className="rounded-full border border-violet-400/20 px-3 py-1.5 text-xs text-violet-400 hover:bg-violet-400/10">{step}</button>)}</div>
           : <p className="text-sm text-muted-foreground">{results.suggestionsLoading ? "Finding useful follow-ups…" : "No follow-up suggestions are available for this result."}</p>}
       </section>}
-      <section className="rounded-xl border border-white/10 bg-card/20 p-4 sm:p-5">
-        <h3 className="text-sm font-semibold">Continue this workflow</h3>
-        <p className="mt-1 text-sm text-muted-foreground">{approvedWeekly ? "This review uses fixed reporting dates and individually labelled source inputs. Start a new review with fresh inputs for the next week." : isFailure ? "Your completed work is saved. Try again or start a new workflow." : "Continue from this result or create something new."}</p>
-        <div className="mt-5 grid gap-3 sm:grid-cols-3">
-          <button type="button" onClick={() => { if (approvedWeekly) { setSearchParams({ weekly: "1" }); onNewWorkflow(); } else onStartWorkflow(prompt); }} className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium hover:bg-white/10"><RefreshCw className="h-4 w-4" />{approvedWeekly ? "New review with fresh exports" : "Run again"}</button>
-          {!isFailure && !approvedWeekly && backendRunId && <button type="button" onClick={() => setShowSchedule(true)} className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium hover:bg-white/10"><CalendarClock className="h-4 w-4" />Schedule</button>}
-          <button type="button" onClick={onNewWorkflow} className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium hover:bg-white/10"><Plus className="h-4 w-4" />New workflow</button>
+      <section className="rounded-2xl border border-violet-400/15 bg-violet-400/[0.035] p-4">
+        <h3 className="text-sm font-semibold">What would you like to do next?</h3>
+        <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{approvedWeekly ? "This review uses fixed reporting dates and individually labelled source inputs. Start a new review with fresh inputs for the next week." : isFailure ? "Your completed work is saved. Try again or start a new workflow." : "Run it again, automate it for later, or start something new."}</p>
+        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+          <button type="button" onClick={() => { if (approvedWeekly) { setSearchParams({ weekly: "1" }); onNewWorkflow(); } else onStartWorkflow(prompt); }} className={outlineButton}><RefreshCw className="h-4 w-4" />{approvedWeekly ? "New review with fresh exports" : "Run again"}</button>
+          {!isFailure && !approvedWeekly && backendRunId && <button type="button" onClick={() => setShowSchedule(true)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-violet-500 to-sky-400 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_5px_20px_rgba(139,92,246,0.15)]"><CalendarClock className="h-4 w-4" />Schedule</button>}
+          <button type="button" onClick={onNewWorkflow} className={outlineButton}><Plus className="h-4 w-4" />New workflow</button>
         </div>
       </section>
 
-      <div className="mt-5 flex flex-wrap items-center gap-5 border-t border-white/10 pt-5 text-xs text-muted-foreground">
-        {backendRunId && <Link to={`/runs/${encodeURIComponent(backendRunId)}`} className="inline-flex items-center gap-1.5 hover:text-foreground"><ExternalLink className="h-3 w-3" />Open saved results</Link>}
-        {activity?.length > 0 && <details className="group relative"><summary className="flex cursor-pointer list-none items-center gap-1.5 hover:text-foreground [&::-webkit-details-marker]:hidden"><Activity className="h-4 w-4" />Activity<ChevronDown className="h-3 w-3 group-open:rotate-180" /></summary><ol className="absolute bottom-full left-0 z-10 mb-2 max-h-56 w-72 overflow-y-auto rounded-xl border border-white/10 bg-[#121725] p-3 shadow-xl">{activity.map((step, index) => <li key={step.id || index} className="flex items-start gap-2 py-1.5 text-xs">{step.status === "completed" ? <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-emerald-400" /> : ["failed", "blocked"].includes(step.status) ? <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-400" /> : <Clock className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />}<span>{step.action || step.tool || "Completed"}</span></li>)}</ol></details>}
-        <button type="button" onClick={handleShare} className="inline-flex items-center gap-1.5 hover:text-foreground">{copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Share2 className="h-4 w-4" />}{copied ? "Copied" : "Share"}</button>
+      <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-white/10 pt-4 text-xs">
+        {activity?.length > 0 && <button type="button" onClick={() => openTool("activity")} className={footerButton}><Activity className="h-3.5 w-3.5" />Activity</button>}
+        <button type="button" onClick={handleShare} className={footerButton}>{copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Share2 className="h-3.5 w-3.5" />}{copied ? "Copied" : "Share"}</button>
         {primaryResult.downloadUrl
-          ? <a href={primaryResult.downloadUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 hover:text-foreground"><FileDown className="h-4 w-4" />Download result</a>
-          : <button type="button" onClick={handleDownload} className="inline-flex items-center gap-1.5 hover:text-foreground"><FileDown className="h-4 w-4" />Download {primaryResult.preview?.body ? "output" : "summary"}</button>}
+          ? <a href={primaryResult.downloadUrl} target="_blank" rel="noopener noreferrer" className={footerButton}><FileDown className="h-3.5 w-3.5" />Download</a>
+          : <button type="button" onClick={handleDownload} className={footerButton}><FileDown className="h-3.5 w-3.5" />Download</button>}
         {!isFailure && !backendRunId && <button type="button" onClick={() => setShowModal(true)} className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 font-semibold text-white"><Zap className="h-4 w-4" />Connect & run for real</button>}
       </div>
       {!backendRunId && <AccessRequestModal open={showModal} onClose={() => setShowModal(false)} workflowPrompt={workflowPrompt} />}
-      <RunSupportAccess runId={backendRunId} />
+      <RunSupportAccess runId={backendRunId} compact />
       <ScheduleModal open={showSchedule} onClose={() => setShowSchedule(false)} title={scheduleTitle || results.title} backendRunId={backendRunId} historyWorkflowId={historyWorkflowId} />
       <ToolResultDialog request={toolView} onClose={() => setToolView(null)} entries={toolEntries} primary={primaryResult} mainEntry={mainEntry} hasMainOutput={hasMainOutput} results={results} activity={activity || []} backendRunId={backendRunId} />
     </motion.div>
