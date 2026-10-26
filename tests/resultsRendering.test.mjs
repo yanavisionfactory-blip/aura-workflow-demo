@@ -10,6 +10,7 @@ const repo = fileURLToPath(new URL("../", import.meta.url));
 let temporary;
 let render;
 let renderToolWorkspace;
+let renderSheetReview;
 before(async () => {
   temporary = fs.mkdtempSync(path.join(repo, ".results-render-"));
   await build({
@@ -35,9 +36,25 @@ before(async () => {
       emptyOutDir: true, rollupOptions: { output: { entryFileNames: "render.mjs" } } },
     ssr: { noExternal: ["lucide-react"] },
   });
-  ({ render, renderToolWorkspace } = await import(pathToFileURL(path.join(temporary, "render.mjs"))));
+  ({ render, renderToolWorkspace, renderSheetReview } = await import(pathToFileURL(path.join(temporary, "render.mjs"))));
 });
 after(() => { if (temporary) fs.rmSync(temporary, { recursive: true, force: true }); });
+
+test("spreadsheet approval shows actual prepared cells and completed ChatGPT output without claiming a write", () => {
+  const activity = [{ id: "analysis", tool: "AURA Intelligence", operation: "report.compose", status: "completed",
+    output: { operation: "report.compose", critic: { action: "accept" }, outcome_check: { status: "verified" },
+      provider_result: { status: "draft", title: "Competitor comparison", body: "## Comparison\n\n| Brand | Price |\n|---|---|\n| Example | $70 / 30 ml |" } } },
+    { id: "headers", tool: "Google Sheets", operation: "sheets.read", status: "completed", output: { operation: "sheets.read",
+      provider_result: { spreadsheetId: "target-sheet", range: "'Competitor Comparison'!A1:B1", values: [["Brand", "Current price"]] } } }];
+  const args = { spreadsheet_id: "target-sheet", range: "'Competitor Comparison'!A:B", values: [["Example", "$70 / 30 ml"], ["Other", "Unavailable"]] };
+  const html = renderSheetReview(args, activity);
+  for (const text of ["ChatGPT prepared output", "ChatGPT comparison", "Google Sheets action preview", "Current price", "$70 / 30 ml", "Unavailable", "2 new rows", "Not saved yet", "A · new row 1"]) assert.ok(html.includes(text), text);
+  assert.ok(html.indexOf("ChatGPT prepared output") < html.indexOf("Google Sheets action preview"));
+  assert.doesNotMatch(html, /Saved and verified|Complete saved cell|<textarea|AURA Intelligence/);
+  assert.match(renderSheetReview(args, activity, true), /<textarea/);
+  assert.doesNotMatch(renderSheetReview(args, activity, true, false), /<textarea/);
+  assert.doesNotMatch(renderSheetReview(args, [{ ...activity[0], status: "failed" }]), /ChatGPT prepared output|Response ready/);
+});
 
 test("the marketing results summarize actual execution and keep each tool output behind its own view", async () => {
   const simulations = await Promise.all(["meta", "klaviyo"].map(tool => executeMarketingSimulation(tool, {simulate:true, scenario:"maple_ember_v1"})));

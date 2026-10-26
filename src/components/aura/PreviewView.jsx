@@ -11,6 +11,7 @@ import { applyEmailCopy, emailCopySchema } from "@/lib/emailCopyEdit.mjs";
 import { fallbackReviewContract, mergeLegacyPreviewIntoArguments, requiresPreparedActionReview, setArgumentAtPath, unresolvedActionValues, validateReviewArguments } from "@/lib/approvalReview.mjs";
 import { editJiraBatchTask, jiraBatchTasks, removeJiraBatchTask } from "@/lib/jiraBatchReview.mjs";
 import { ArticleActionReview, JiraUpdateReview, SeoActionReview } from "./ContentActionReview";
+import SheetActionReview, { hasSheetRows, PreparedReports } from "./SheetActionReview";
 
 function EditableEmail({ preview, onPreviewChange, onCopyChange = null, editing, artifacts = [], args = { subject: "", body: "" }, contract = null }) {
   const [instruction, setInstruction] = useState("");
@@ -645,7 +646,7 @@ const previewForStep = (step) => {
   return null;
 };
 
-function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
+function EditableStepCard({ step, number, index, onUpdate, onFieldValidity, activity }) {
   const p = previewForStep(step) || {};
   const isModify = step.riskLevel === "modify";
   const args = step.resolvedArguments || step.arguments || {};
@@ -658,6 +659,7 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
   const richTicket = contract.operation === "jira.issue.create";
   const richJiraBatch = contract.operation === "jira.issues.create_from_blocks";
   const richPresentation = contract.operation === "canva.presentation.create";
+  const richSheet = contract.operation === "sheets.append" && hasSheetRows(args);
   const richDocument = contract.kind === "document";
   const richArticle = contract.operation === "wordpress-org.update-post" && typeof args.content === "string";
   const richSeo = contract.operation === "rankmath.post_seo.update";
@@ -715,6 +717,7 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
       <div className={richPresentation ? "border-t border-white/10" : "border-t border-white/10 p-5"}>
         {step.reviewContract ? (
           <>
+            {richSheet && <SheetActionReview args={args} editing={editing} onChange={updateArguments} activity={activity} canEdit={contract.fields?.some((field) => field.key === "values" && field.editable !== false)} />}
             {richArticle && <ArticleActionReview args={args} editing={editing} onChange={updateArguments} />}
             {richSeo && <SeoActionReview args={args} editing={editing} onChange={updateArguments} />}
             {richJiraUpdate && <JiraUpdateReview args={args} editing={editing} onChange={updateArguments} />}
@@ -738,6 +741,7 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
               onArgumentsChange={updateArguments}
               onFieldValidity={fieldValidity}
               excludeKeys={richEmail ? ["to", "subject", "body", "attachments"]
+                : richSheet ? (editing ? ["values"] : ["spreadsheet_id", "range", "values"])
                 : richDocument ? [documentTitleKey, ...(typeof args[documentBodyKey] === "string" ? [documentBodyKey] : [])]
                 : richPresentation ? ["title", "phases"]
                 : richJiraBatch ? ["project_key", "source_blocks"]
@@ -755,7 +759,7 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity }) {
   );
 }
 
-export default function PreviewView({ preview, steps, prepared = false, onApprove, onBack, error = "", readOnlySummary = null, approvalLabel = "", reviewDescription = "" }) {
+export default function PreviewView({ preview, steps, activity = [], prepared = false, onApprove, onBack, error = "", readOnlySummary = null, approvalLabel = "", reviewDescription = "" }) {
   const initial = steps && steps.length ? steps : preview?.steps || [];
   const [editSteps, setEditSteps] = useState(() => JSON.parse(JSON.stringify(initial)));
   const [showBackground, setShowBackground] = useState(false);
@@ -809,10 +813,12 @@ export default function PreviewView({ preview, steps, prepared = false, onApprov
           <Eye className="h-5 w-5 text-violet-300" />
         </div>
         <div>
-          <h2 className="text-2xl font-semibold text-foreground">{prepared ? "Review the finished action" : "Review before running"}</h2>
+          <h2 className="text-2xl font-semibold text-foreground">{prepared ? "Review your work before saving" : "Review before running"}</h2>
           <p className="mt-1 text-sm text-muted-foreground">{reviewDescription || (prepared ? "The needed information is ready. Check the exact values AURA will submit." : "Check the complete actions below. Actions that need more information will be reviewed when they are ready.")}</p>
         </div>
       </div>
+
+      {prepared && <PreparedReports activity={activity} />}
 
       {!readOnlySummary && <div className="mt-6 flex flex-wrap items-center gap-3 text-sm">
         <span className="rounded-full bg-violet-500/15 px-4 py-2 text-violet-200">{reviewSteps.length} {reviewSteps.length === 1 ? "change needs" : "changes need"} approval</span>
@@ -858,7 +864,7 @@ export default function PreviewView({ preview, steps, prepared = false, onApprov
       )}
       <div className="mb-6 mt-5 space-y-4">
         {reviewSteps.map(({ step, index }, reviewIndex) => (
-          <EditableStepCard key={index} step={step} number={reviewIndex + 1} index={index} onUpdate={update} onFieldValidity={updateFieldValidity} />
+          <EditableStepCard key={index} step={step} number={reviewIndex + 1} index={index} onUpdate={update} onFieldValidity={updateFieldValidity} activity={activity} />
         ))}
       </div>
 
