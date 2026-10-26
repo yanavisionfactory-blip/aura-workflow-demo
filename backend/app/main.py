@@ -6385,6 +6385,7 @@ async def approve_plan(
     preflight = preflight_plan(
         plan, list(available_by_slug.values()), available_manifests,
         set((run.inputs or {}).keys()), inventory,
+        input_values=run.inputs or {},
     )
     if preflight.fixes:
         raise HTTPException(422, {"message": "Plan failed authorization", "fixes": preflight.fixes})

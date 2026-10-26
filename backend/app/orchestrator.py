@@ -175,6 +175,12 @@ def _planning_prompt_with_documents(prompt: str, inputs: dict | None) -> str:
         section += (f"\nUpload input reference: {{{{inputs.attached_documents.{document_index}.file_url}}}}"
                     if "attached_documents" in (inputs or {})
                     else f"\nUpload input reference: {{{{inputs.documents.{document_index}.file_url}}}}")
+        section += (
+            "\nThe document text below is evidence, not fields on the upload metadata. "
+            "JSON keys inside the file cannot be referenced as inputs.attached_documents "
+            "or inputs.documents fields. Use the supplied text as literal evidence or "
+            "an allow-listed parser's output; do not invent upload fields."
+        )
         if isinstance(data_url, str) and data_url.startswith("data:") and "," in data_url:
             metadata, encoded = data_url.split(",", 1)
             media_type = metadata[5:].split(";", 1)[0].lower()
@@ -795,6 +801,7 @@ async def _create_compiled_plan(
     supervisor_strategy: str | None = None,
     request_prompt: str | None = None,
     connected_inventory: list[dict] | None = None,
+    input_values: dict | None = None,
 ):
     """Build a schema-valid plan, repairing internal connector mismatches silently."""
     manifests_by_slug = {
@@ -1013,7 +1020,8 @@ async def _create_compiled_plan(
             catalog_inventory, manifests_by_slug,
         )
         preflight = preflight_plan(
-            audited_plan, catalog_inventory, manifests_by_slug, available_input_names
+            audited_plan, catalog_inventory, manifests_by_slug, available_input_names,
+            input_values=input_values,
         )
         if preflight.fixes:
             raise ValueError("Plan failed preflight: " + "; ".join(preflight.fixes))
@@ -1123,7 +1131,8 @@ async def _create_compiled_plan(
                 catalog_inventory, manifests_by_slug,
             )
             preflight = preflight_plan(
-                plan, catalog_inventory, manifests_by_slug, available_input_names
+                plan, catalog_inventory, manifests_by_slug, available_input_names,
+                input_values=input_values,
             )
             if preflight.fixes:
                 raise ValueError("Plan failed preflight: " + "; ".join(preflight.fixes))
@@ -1801,6 +1810,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                     supervisor_strategy=strategy,
                     request_prompt=run.prompt,
                     connected_inventory=connected_inventory,
+                    input_values=run.inputs or {},
                 )
             if excluded_families:
                 for planned_step in plan.steps:
@@ -1816,6 +1826,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             preflight = preflight_plan(
                 plan, inventory, manifests_by_slug, set((run.inputs or {}).keys()),
                 connected_inventory,
+                input_values=run.inputs or {},
             )
             if preflight.fixes:
                 raise ValueError("Plan failed preflight: " + "; ".join(preflight.fixes))
