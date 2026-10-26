@@ -37,7 +37,9 @@ function SavedCells({ ranges = [] }) {
 }
 
 export default function GoogleSheetsResult({ result, backendRunId }) {
-  const [view, setView] = useState("app");
+  // Saved results must remain visible even when Google's embedded session
+  // requires a separate sign-in or third-party-cookie decision.
+  const [view, setView] = useState("saved");
   const [screen, setScreen] = useState(null);
   const [loading, setLoading] = useState(Boolean(backendRunId && result.sourceStepKey && !Number.isInteger(result.sheetId)));
   useEffect(() => {
@@ -57,9 +59,9 @@ export default function GoogleSheetsResult({ result, backendRunId }) {
   return <section aria-label="Google Sheets result screen" className="overflow-hidden rounded-xl border border-slate-200 bg-white">
     <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-[#f8fafd] px-4 py-3 text-slate-700">
       <div className="flex items-center gap-2 text-sm"><Table2 className="h-5 w-5 text-emerald-700" /><span className="font-medium">{sheetRange(result.range)?.tab || "Google Sheets"}</span>{result.verified && <span className="flex items-center gap-1 text-xs text-emerald-700"><CheckCircle2 className="h-3.5 w-3.5" />Verified</span>}</div>
-      <div className="flex rounded-lg border border-slate-200 bg-white p-1" role="tablist" aria-label="Spreadsheet view">
+      <div className="flex flex-wrap items-center gap-3"><div className="flex rounded-lg border border-slate-200 bg-white p-1" role="tablist" aria-label="Spreadsheet view">
         {[['app', 'Google Sheets'], ['saved', 'Saved cells']].map(([id, label]) => <button type="button" role="tab" aria-selected={view === id} key={id} onClick={() => setView(id)} className={`rounded-md px-3 py-1.5 text-xs font-medium ${view === id ? "bg-emerald-50 text-emerald-800" : "text-slate-600 hover:bg-slate-50"}`}>{label}</button>)}
-      </div>
+      </div><a href={app.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 rounded-lg bg-emerald-700 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-800">Open in Google Sheets<ArrowUpRight className="h-3.5 w-3.5" /></a></div>
     </div>
     {view === "app" ? loading ? <div className="flex min-h-80 items-center justify-center text-sm text-slate-600" role="status">Opening the saved Google Sheets tab…</div> : <iframe title="Google Sheets — final workflow result" src={app.embedUrl} className="block h-[min(70vh,760px)] min-h-[480px] w-full border-0 bg-white" referrerPolicy="no-referrer" onError={() => setView("saved")} /> : <SavedCells ranges={result.ranges} />}
     <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 px-4 py-2 text-xs text-slate-600"><button type="button" className="underline underline-offset-2" onClick={() => setView(view === "app" ? "saved" : "app")}>{view === "app" ? "Sheet not loading? View saved cells" : "View the Google Sheets app"}</button><a href={app.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-emerald-700">Open Google Sheets<ArrowUpRight className="h-3.5 w-3.5" /></a></div>
