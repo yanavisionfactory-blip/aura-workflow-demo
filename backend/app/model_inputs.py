@@ -264,3 +264,48 @@ def canonical_review_artifacts(artifacts):
             },
         })
     return projected
+
+
+def sheet_transfer_evidence(context, step):
+    """Transfer a completed report using its full text and direct dependencies.
+
+    The report already consumed its research. Sending every raw source through
+    the transfer model again wastes the delivery budget and can alter the report.
+    This projects model input only; stored receipts remain unchanged. Other
+    actions and non-report references retain their complete context.
+    """
+    from .workflow_context import (
+        REFERENCE, normalize_reference_path, referenced_paths, referenced_step_keys,
+    )
+
+    canonical = canonical_execution_evidence(context)
+    value = (step.get("arguments") or {}).get("values")
+    match = REFERENCE.fullmatch(value) if isinstance(value, str) else None
+    if step.get("operation") != "sheets.append" or not match:
+        return canonical
+    path = normalize_reference_path(match.group(1)).split(".")
+    if len(path) < 3 or path[0] != "steps" or path[2:] not in (
+        ["body"], ["provider_result", "body"], ["output", "body"], ["result", "body"],
+    ):
+        return canonical
+    report = canonical["steps"].get(path[1])
+    if not (isinstance(report, dict) and report.get("status") == "draft"
+            and isinstance(report.get("body"), str) and report["body"].strip()
+            and isinstance(report.get("sources"), list)):
+        return canonical
+    needed = set(step.get("depends_on") or []) | referenced_step_keys(step.get("arguments", {}))
+    # A variable may name evidence outside the declared dependencies. Preserve
+    # broader context until that reference has an explicit transfer contract.
+    if any(ref.startswith("vars.") for ref in referenced_paths(step.get("arguments", {}))):
+        return canonical
+    projected = {key: item for key, item in canonical["steps"].items() if key in needed}
+    projected[path[1]] = {
+        key: report[key] for key in ("title", "summary", "body", "status", "synthetic", "generated_at")
+        if key in report
+    }
+    projected[path[1]]["source_references"] = [
+        {key: source[key] for key in ("id", "title") if key in source}
+        for source in report["sources"] if isinstance(source, dict)
+    ]
+    projected[path[1]]["source_kind"] = "Complete prepared report for transfer; original research receipts retained by executor"
+    return {**canonical, "steps": projected}

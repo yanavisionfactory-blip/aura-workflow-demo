@@ -148,6 +148,27 @@ async def test_check_pending_work_preserves_finished_review(database, monkeypatc
         assert result.get("preparation_refreshed", False) is False
 
 
+async def test_retry_failed_preparation_preserves_completed_reads_and_pending_approval(database, monkeypatch):
+    async with database() as session:
+        run, read, write, approval = await saved_run(session, "retry-preparation", "{{steps.research.$return_value}}")
+        from app.run_supervisor import transition_run
+        transition_run(run, RunStatus.waiting_for_action, reason="preparation_failed",
+            actor="test", phase="execution", supervisor_status="human_action_required", dispatch=None)
+        run.plan = {"steps": [{"optional": False}, {"optional": False}]}
+        write.status = StepStatus.failed
+        await session.commit()
+        async def publish(*_args, **_kwargs):
+            return 1
+        monkeypatch.setattr(main, "dispatch_pending", publish)
+        result = await main.resume_run(run.id, main.ResumeDecision(action="retry", step_id=write.id),
+            SimpleNamespace(workspace_id="workspace", subject="owner"), session)
+        assert result["resumed_from_step"] == write.id
+        assert write.status == StepStatus.awaiting_approval
+        assert approval.status == "pending"
+        assert read.status == StepStatus.completed
+        assert read.output == {"provider_result": {"searches": 2400}}
+
+
 async def test_unresolved_preview_with_dispatch_evidence_requires_reconciliation(database, monkeypatch):
     async with database() as session:
         run, _, _, approval = await saved_run(session, "uncertain", "{{steps.research.$return_value}}", dispatched=True)

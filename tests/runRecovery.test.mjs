@@ -14,6 +14,22 @@ const run = (patch = {}) => ({ id: 'saved-run', status: 'waiting_for_action',
     { id: 'failed', position: 1, status: 'failed', consequential: false }],
   plan: { steps: [{}, {}] }, ...patch });
 
+test('failed preparation can resume only with server proof of an unsubmitted action and pending review', () => {
+  const step = { id: 'write', status: 'failed', consequential: true, operation: 'sheets.append',
+    approval_status: 'pending', recovery: { phase: 'before_action', can_retry: true } };
+  const saved = { status: 'waiting_for_action', steps: [step], blocker: {
+    action: 'inspect_run', code: 'no_safe_recovery', step_id: 'write', retryable: false,
+  } };
+  const result = recoveryForRun(saved);
+  assert.equal(result.canRetry, true);
+  assert.equal(result.buttonLabel, 'Retry preparation');
+  assert.match(result.fix, /require review/);
+  for (const patch of [{ approval_status: 'approved' }, { recovery: { phase: 'after_dispatch', can_retry: false } },
+    { recovery: undefined }, { status: 'completed' }]) {
+    assert.equal(recoveryForRun({ ...saved, steps: [{ ...step, ...patch }] }).canRetry, false);
+  }
+});
+
 test('AURA always launches into the original prompt flow', () => {
   const demo = readFileSync(new URL('../src/pages/Demo.jsx', import.meta.url), 'utf8');
   assert.match(demo, /useState\("input"\)/);
