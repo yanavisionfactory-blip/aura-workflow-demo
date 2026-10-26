@@ -14,7 +14,7 @@ const names = {
 };
 
 export function toolResultName(name = "AURA", operation = "") {
-  if (operation === "report.compose") return operationProviderName(name, operation);
+  if (["report.compose", "web.page.read", "web.search"].includes(operation)) return operationProviderName(name, operation);
   for (const [prefix, label] of [["docs.", "Google Docs"], ["sheets.", "Google Sheets"],
     ["drive.", "Google Drive"], ["gmail.", "Gmail"]]) {
     if (operation.startsWith(prefix)) return label;
