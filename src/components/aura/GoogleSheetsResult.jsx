@@ -4,6 +4,8 @@ import ReactMarkdown from "react-markdown";
 import { documentMarkdownOptions } from "@/lib/documentMarkdown.mjs";
 import { columnName, sheetAppLinks, sheetRange } from "@/lib/googleSheetsResult.mjs";
 import { auraRequest } from "@/lib/auraApi";
+import { sheetComparisonMarkdown } from "@/lib/sheetReviewEdit.mjs";
+import { downloadTextFile } from "@/lib/auraDownload";
 
 function SavedCells({ ranges = [] }) {
   const [tab, setTab] = useState(0);
@@ -56,15 +58,17 @@ export default function GoogleSheetsResult({ result, backendRunId }) {
     return () => { active = false; };
   }, [backendRunId, result.sourceStepKey, result.sheetId, result.spreadsheetId, result.range]);
   const app = screen || result;
+  const comparison = result.headers?.length && result.ranges?.length === 1
+    ? sheetComparisonMarkdown(result.headers, result.ranges[0].values) : "";
   return <section aria-label="Google Sheets result screen" className="overflow-hidden rounded-xl border border-slate-200 bg-white">
     <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-[#f8fafd] px-4 py-3 text-slate-700">
       <div className="flex items-center gap-2 text-sm"><Table2 className="h-5 w-5 text-emerald-700" /><span className="font-medium">{sheetRange(result.range)?.tab || "Google Sheets"}</span>{result.verified && <span className="flex items-center gap-1 text-xs text-emerald-700"><CheckCircle2 className="h-3.5 w-3.5" />Verified</span>}</div>
       <div className="flex flex-wrap items-center gap-3"><div className="flex rounded-lg border border-slate-200 bg-white p-1" role="tablist" aria-label="Spreadsheet view">
-        {[['app', 'Google Sheets'], ['saved', 'Saved cells']].map(([id, label]) => <button type="button" role="tab" aria-selected={view === id} key={id} onClick={() => setView(id)} className={`rounded-md px-3 py-1.5 text-xs font-medium ${view === id ? "bg-emerald-50 text-emerald-800" : "text-slate-600 hover:bg-slate-50"}`}>{label}</button>)}
+        {[['app', 'Google Sheets'], ['saved', 'Saved cells'], ...(comparison ? [['markdown', 'Markdown comparison']] : [])].map(([id, label]) => <button type="button" role="tab" aria-selected={view === id} key={id} onClick={() => setView(id)} className={`rounded-md px-3 py-1.5 text-xs font-medium ${view === id ? "bg-emerald-50 text-emerald-800" : "text-slate-600 hover:bg-slate-50"}`}>{label}</button>)}
       </div><a href={app.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 rounded-lg bg-emerald-700 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-800">Open in Google Sheets<ArrowUpRight className="h-3.5 w-3.5" /></a></div>
     </div>
-    {view === "app" ? loading ? <div className="flex min-h-80 items-center justify-center text-sm text-slate-600" role="status">Opening the saved Google Sheets tab…</div> : <iframe title="Google Sheets — final workflow result" src={app.embedUrl} className="block h-[min(70vh,760px)] min-h-[480px] w-full border-0 bg-white" referrerPolicy="no-referrer" onError={() => setView("saved")} /> : <SavedCells ranges={result.ranges} />}
+    {view === "app" ? loading ? <div className="flex min-h-80 items-center justify-center text-sm text-slate-600" role="status">Opening the saved Google Sheets tab…</div> : <iframe title="Google Sheets — final workflow result" src={app.embedUrl} className="block h-[min(70vh,760px)] min-h-[480px] w-full border-0 bg-white" referrerPolicy="no-referrer" onError={() => setView("saved")} /> : view === "markdown" ? <div className="max-h-[36rem] overflow-auto p-5 text-sm leading-6 text-slate-800 [&_th]:min-w-40 [&_th]:border [&_th]:bg-slate-50 [&_th]:p-3 [&_td]:min-w-48 [&_td]:border [&_td]:p-3 [&_td]:align-top"><ReactMarkdown {...documentMarkdownOptions}>{comparison}</ReactMarkdown></div> : <SavedCells ranges={result.ranges} />}
     <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 px-4 py-2 text-xs text-slate-600"><button type="button" className="underline underline-offset-2" onClick={() => setView(view === "app" ? "saved" : "app")}>{view === "app" ? "Sheet not loading? View saved cells" : "View the Google Sheets app"}</button><a href={app.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-emerald-700">Open Google Sheets<ArrowUpRight className="h-3.5 w-3.5" /></a></div>
-    <div className="flex flex-wrap justify-between gap-2 border-t border-slate-200 bg-[#f8fafd] px-4 py-2 text-xs text-slate-600"><span>{result.range || "Workbook"}</span><span>{view === "app" ? "Google Sheets app" : "Saved from the workflow’s Google Sheets read-back"}</span></div>
+    <div className="flex flex-wrap justify-between gap-2 border-t border-slate-200 bg-[#f8fafd] px-4 py-2 text-xs text-slate-600"><span>{result.range || "Workbook"}</span>{comparison && <button type="button" onClick={() => downloadTextFile("aura-verified-comparison.md", comparison)} className="font-medium text-emerald-700 underline">Download Markdown</button>}<span>{view === "app" ? "Google Sheets app" : "Saved from the workflow’s Google Sheets read-back"}</span></div>
   </section>;
 }

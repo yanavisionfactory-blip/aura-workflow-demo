@@ -11,7 +11,7 @@ import { applyEmailCopy, emailCopySchema } from "@/lib/emailCopyEdit.mjs";
 import { fallbackReviewContract, mergeLegacyPreviewIntoArguments, requiresPreparedActionReview, setArgumentAtPath, unresolvedActionValues, validateReviewArguments } from "@/lib/approvalReview.mjs";
 import { editJiraBatchTask, jiraBatchTasks, removeJiraBatchTask } from "@/lib/jiraBatchReview.mjs";
 import { ArticleActionReview, JiraUpdateReview, SeoActionReview } from "./ContentActionReview";
-import SheetActionReview, { hasSheetRows, PreparedReports } from "./SheetActionReview";
+import SheetActionReview, { hasSheetRows, PreparedReports, SheetReviewCard } from "./SheetActionReview";
 
 function EditableEmail({ preview, onPreviewChange, onCopyChange = null, editing, artifacts = [], args = { subject: "", body: "" }, contract = null }) {
   const [instruction, setInstruction] = useState("");
@@ -689,6 +689,8 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity, acti
   const fieldValidity = (fieldKey, valid) => onFieldValidity(`${index}:${fieldKey}`, valid);
 
   if (!isModify) return null;
+  if (richSheet) return <SheetReviewCard args={args} contract={contract} onChange={updateArguments}
+    activity={activity} onBusyChange={(busy) => fieldValidity("sheet_revision", !busy)} />;
 
   // Modify step (sends / changes data): the focus of review — expanded & editable.
   return (
@@ -813,12 +815,10 @@ export default function PreviewView({ preview, steps, activity = [], prepared = 
           <Eye className="h-5 w-5 text-violet-300" />
         </div>
         <div>
-          <h2 className="text-2xl font-semibold text-foreground">{prepared ? "Review your work before saving" : "Review before running"}</h2>
-          <p className="mt-1 text-sm text-muted-foreground">{reviewDescription || (prepared ? "The needed information is ready. Check the exact values AURA will submit." : "Check the complete actions below. Actions that need more information will be reviewed when they are ready.")}</p>
+          <h2 className="text-2xl font-semibold text-foreground">{prepared ? "Review & edit before saving" : "Review before running"}</h2>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">{reviewDescription || (prepared ? "See what AURA prepared in each tool. Edit the main output on screen or ask AURA for changes, then approve the content to save." : "Check the complete actions below. Actions that need more information will be reviewed when they are ready.")}</p>
         </div>
       </div>
-
-      {prepared && <PreparedReports activity={activity} />}
 
       {!readOnlySummary && <div className="mt-6 flex flex-wrap items-center gap-3 text-sm">
         <span className="rounded-full bg-violet-500/15 px-4 py-2 text-violet-200">{reviewSteps.length} {reviewSteps.length === 1 ? "change needs" : "changes need"} approval</span>
@@ -868,6 +868,8 @@ export default function PreviewView({ preview, steps, activity = [], prepared = 
         ))}
       </div>
 
+      {prepared && <div className="mb-6"><PreparedReports activity={activity} /></div>}
+
       {contractErrors.length > 0 && (
         <div className="mb-4 rounded-xl border border-rose-400/20 bg-rose-400/5 px-4 py-3 text-[11px] text-rose-200">
           Complete the highlighted approval values before running. {contractErrors[0].message}
@@ -901,7 +903,7 @@ export default function PreviewView({ preview, steps, activity = [], prepared = 
             className={`gap-1.5 border-0 bg-gradient-to-r text-white ${readOnlySummary ? "from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700" : "from-violet-500 to-violet-600 hover:from-violet-600 hover:to-violet-700"}`}
           >
             <Play className="w-3.5 h-3.5" />
-            {approvalBlocked ? "Complete required values" : approvalLabel || (prepared ? "Approve & continue" : "Approve & run")}
+            {[...invalidFields].some((key) => key.endsWith(":sheet_revision")) ? "Applying changes…" : approvalBlocked ? "Complete required values" : approvalLabel || (prepared ? "Approve & continue" : "Approve & run")}
           </Button>
         </motion.div>
       </div>

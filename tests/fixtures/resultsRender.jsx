@@ -3,7 +3,11 @@ import { StaticRouter } from "react-router-dom/server";
 import ResultsView from "../../src/components/aura/ResultsView";
 import { savedRunResults } from "../../src/lib/savedRunResults.mjs";
 import MarketingToolResults from "../../src/components/aura/MarketingToolResults";
-import SheetActionReview, { PreparedReports } from "../../src/components/aura/SheetActionReview";
+import SheetActionReview, { PreparedReports, SheetReviewCard } from "../../src/components/aura/SheetActionReview";
+
+export function renderSheetCard(args, canEdit = true) {
+  return renderToStaticMarkup(<SheetReviewCard args={args} contract={{ fields: [{ key: "values", editable: canEdit }] }} onChange={() => {}} />);
+}
 
 export function renderSheetReview(args, activity = [], editing = false, canEdit = true) {
   return renderToStaticMarkup(<><PreparedReports activity={activity} /><SheetActionReview args={args} activity={activity} editing={editing} canEdit={canEdit} onChange={() => {}} /></>);

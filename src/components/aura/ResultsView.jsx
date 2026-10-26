@@ -32,6 +32,8 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   const mainEntry = useMemo(() => mainToolEntry(toolEntries, primaryResult, results.resultPresentation), [toolEntries, primaryResult, results.resultPresentation]);
   const hasMainOutput = Boolean((primaryResult.kind && primaryResult.kind !== "result") || primaryResult.provider || mainEntry?.hasResponse || results.breakdown || primaryResult.items?.length);
   const openTool = (id) => setToolView({ id });
+  const MainResultContainer = primaryResult.kind === "spreadsheet" ? "section" : "details";
+  const MainResultHeading = primaryResult.kind === "spreadsheet" ? "div" : "summary";
   const nativeAudit = primaryResult.kind === "seo_audit";
   const approvedWeekly = primaryResult.kind === "weekly_review" && (primaryResult.packet?.version === 2 || primaryResult.packet?.provenance === "approved_export");
   const nativeResult = nativeAudit || ["weekly_review", "executive_review", "website_content", "marketing_tools"].includes(primaryResult.kind);
@@ -79,36 +81,14 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   if (primaryResult.kind === "marketing_tools") return <div className="mx-auto w-full max-w-3xl pb-8"><ResultPreview result={primaryResult} results={results} activity={activity} backendRunId={backendRunId} /></div>;
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`mx-auto w-full pb-8 ${primaryResult.kind === "website_content" ? "max-w-6xl" : "max-w-3xl"}`}>
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`mx-auto w-full pb-8 ${["website_content", "spreadsheet"].includes(primaryResult.kind) ? "max-w-6xl" : "max-w-3xl"}`}>
       {!nativeResult && <ResultsHeading centered title={(!isFailure && sheetSummary?.title) || results.title || "Workflow complete"} summary={(!isFailure && sheetSummary?.summary) || results.summary} isFailure={isFailure} />}
       {!nativeResult && <ResultsMetrics metrics={metrics} compact />}
 
       {nativeResult && <ResultPreview result={primaryResult} results={results} activity={activity} backendRunId={backendRunId} />}
 
-      {!nativeResult && actions.length > 0 && <section aria-label="Supporting workflow actions" className="mb-6">
-        <h3 className="mb-3 text-sm font-semibold">What happened</h3>
-        <div className="space-y-2">
-          {actions.map((action) => {
-            const Icon = action.issue ? AlertTriangle : action.icon === "sources" ? BarChart3 : action.icon === "sheet" ? Table2 : FileText;
-            return <div key={action.key} className={`flex flex-wrap items-center gap-3 rounded-xl border px-3 py-3 sm:flex-nowrap ${action.issue ? "border-amber-400/30 bg-amber-400/[0.04]" : "border-white/10 bg-[#0c121e]/65"}`}>
-              <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-xl ${action.issue ? "bg-amber-400/10 text-amber-400" : "bg-violet-400/10 text-violet-400"}`}><Icon className="h-4 w-4" /></span>
-              <div className="min-w-0 flex-1"><p className="text-sm font-medium">{action.count !== undefined && <strong className="mr-1.5 text-lg font-bold">{action.count}</strong>}{action.title}</p>
-                <p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">{action.detail}</p>
-                {action.preview?.length > 0 && <div className="mt-2 space-y-1 text-xs text-muted-foreground">{action.preview.map((audience, index) => <p key={index}>{audience.name}{audience.contacts !== null && ` · ${audience.contacts.toLocaleString("en-US")} contacts`}</p>)}</div>}
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {action.actionId && <button type="button" aria-label={`${action.actionLabel}: ${action.title}`} onClick={() => openTool(action.actionId)} className={`${smallButton} ${action.issue ? "border-amber-400/30 text-amber-300 hover:bg-amber-400/10" : ""}`}>{action.actionLabel}</button>}
-                {action.link && <a href={action.link} target="_blank" rel="noopener noreferrer" className={smallButton}><ExternalLink className="h-3 w-3" />{action.linkLabel || `Open ${action.tool}`}</a>}
-              </div>
-            </div>;
-          })}
-        </div>
-      </section>}
-
-      {!nativeAudit && primaryResult.kind !== "website_content" && <ResultsByTool entries={toolEntries} onOpen={openTool} />}
-
-      {!nativeResult && <details aria-label="Main workflow result" className="group mb-6">
-        <summary className="flex w-fit cursor-pointer list-none items-center gap-2 text-sm font-semibold [&::-webkit-details-marker]:hidden"><BarChart3 className="h-4 w-4 text-violet-400" />Results<span className="text-[11px] font-normal text-muted-foreground">— the actual output</span><ChevronDown className="h-3.5 w-3.5 text-muted-foreground transition group-open:rotate-180" /></summary>
+      {!nativeResult && <MainResultContainer aria-label="Main workflow result" className="group mb-6">
+        <MainResultHeading className={`flex w-fit list-none items-center gap-2 text-sm font-semibold [&::-webkit-details-marker]:hidden ${primaryResult.kind === "spreadsheet" ? "" : "cursor-pointer"}`}><BarChart3 className="h-4 w-4 text-violet-400" />Results<span className="text-[11px] font-normal text-muted-foreground">— the actual output</span>{primaryResult.kind !== "spreadsheet" && <ChevronDown className="h-3.5 w-3.5 text-muted-foreground transition group-open:rotate-180" />}</MainResultHeading>
         <div className="mt-4 space-y-4">
 
       {visualChoices.length > 0 && <label className="mb-5 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
@@ -132,7 +112,30 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
         </ToolResultFrame> : <ResultPreview result={primaryResult} results={results} />}
           {artifactDelivery && <p className="flex flex-wrap justify-between gap-2 text-xs text-muted-foreground"><span>Presentation · {primaryResult.artifact?.title || primaryResult.title}</span><span className="text-emerald-400">{artifactDelivery.artifactDelivered ? "Attached and delivered" : "Created in Canva"}</span></p>}
         </div>
-      </details>}
+      </MainResultContainer>}
+
+      {!nativeResult && actions.length > 0 && <section aria-label="Supporting workflow actions" className="mb-6">
+        <h3 className="mb-3 text-sm font-semibold">What happened</h3>
+        <div className="space-y-2">
+          {actions.map((action) => {
+            const Icon = action.issue ? AlertTriangle : action.icon === "sources" ? BarChart3 : action.icon === "sheet" ? Table2 : FileText;
+            return <div key={action.key} className={`flex flex-wrap items-center gap-3 rounded-xl border px-3 py-3 sm:flex-nowrap ${action.issue ? "border-amber-400/30 bg-amber-400/[0.04]" : "border-white/10 bg-[#0c121e]/65"}`}>
+              <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-xl ${action.issue ? "bg-amber-400/10 text-amber-400" : "bg-violet-400/10 text-violet-400"}`}><Icon className="h-4 w-4" /></span>
+              <div className="min-w-0 flex-1"><p className="text-sm font-medium">{action.count !== undefined && <strong className="mr-1.5 text-lg font-bold">{action.count}</strong>}{action.title}</p>
+                <p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">{action.detail}</p>
+                {action.preview?.length > 0 && <div className="mt-2 space-y-1 text-xs text-muted-foreground">{action.preview.map((audience, index) => <p key={index}>{audience.name}{audience.contacts !== null && ` · ${audience.contacts.toLocaleString("en-US")} contacts`}</p>)}</div>}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {action.actionId && <button type="button" aria-label={`${action.actionLabel}: ${action.title}`} onClick={() => openTool(action.actionId)} className={`${smallButton} ${action.issue ? "border-amber-400/30 text-amber-300 hover:bg-amber-400/10" : ""}`}>{action.actionLabel}</button>}
+                {action.link && <a href={action.link} target="_blank" rel="noopener noreferrer" className={smallButton}><ExternalLink className="h-3 w-3" />{action.linkLabel || `Open ${action.tool}`}</a>}
+              </div>
+            </div>;
+          })}
+        </div>
+      </section>}
+
+      {!nativeAudit && primaryResult.kind !== "website_content" && <ResultsByTool entries={toolEntries} onOpen={openTool} />}
+
 
       {creatorsOutcome && <CreatorApprovalList items={creatorsOutcome.items} />}
       {!isFailure && (nextSteps.length > 0 || results.suggestionsLoading) && <section className="mb-6" aria-live="polite">

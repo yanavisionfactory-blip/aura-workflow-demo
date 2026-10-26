@@ -11,6 +11,7 @@ let temporary;
 let render;
 let renderToolWorkspace;
 let renderSheetReview;
+let renderSheetCard;
 before(async () => {
   temporary = fs.mkdtempSync(path.join(repo, ".results-render-"));
   await build({
@@ -27,6 +28,7 @@ before(async () => {
       },
       load(id) {
         if (id === "\0no-account-access") return `export const base44 = {};
+          export function ensureWorkspace() { throw new Error("Render tests cannot access workspaces"); }
           export function auraRequest() { throw new Error("Render tests cannot access support APIs"); }
           export function createWorkflowSchedule() { throw new Error("Render tests cannot execute workflows"); }
           export function getPythonRun() { throw new Error("Render tests cannot read live workflows"); }`;
@@ -36,9 +38,16 @@ before(async () => {
       emptyOutDir: true, rollupOptions: { output: { entryFileNames: "render.mjs" } } },
     ssr: { noExternal: ["lucide-react"] },
   });
-  ({ render, renderToolWorkspace, renderSheetReview } = await import(pathToFileURL(path.join(temporary, "render.mjs"))));
+  ({ render, renderToolWorkspace, renderSheetReview, renderSheetCard } = await import(pathToFileURL(path.join(temporary, "render.mjs"))));
 });
 after(() => { if (temporary) fs.rmSync(temporary, { recursive: true, force: true }); });
+
+test("the main Sheet screen exposes both editing routes and preserves read-only review contracts", () => {
+  const args = { spreadsheet_id: "target", range: "'Comparison'!A1:B1000", values: [["Brand", "$70"]] };
+  const html = renderSheetCard(args);
+  for (const text of ["Main output", "Ask AURA", "Edit manually", "View in tool", "Google Sheets action preview", "Markdown comparison", "Not saved yet"]) assert.ok(html.includes(text), text);
+  assert.doesNotMatch(renderSheetCard(args, false), /Ask AURA|Edit manually/);
+});
 
 test("spreadsheet approval shows actual prepared cells and completed ChatGPT output without claiming a write", () => {
   const activity = [{ id: "analysis", tool: "AURA Intelligence", operation: "report.compose", status: "completed",
@@ -117,12 +126,12 @@ const run = { id: "saved-run", status: "completed", plan: { name: "Roofing campa
   } },
 };
 
-test("the compact overview leads with actions and tools, with actual output collapsed below", () => {
+test("the main output precedes supporting actions and tools", () => {
   const html = render(run);
   const main = html.indexOf('aria-label="Main workflow result"');
   const actions = html.indexOf('aria-label="Supporting workflow actions"');
   const tools = html.indexOf('aria-label="Results by tool"');
-  assert.ok(actions > 0 && actions < tools && tools < main);
+  assert.ok(main > 0 && main < actions && actions < tools);
   assert.match(html, /<details aria-label="Main workflow result" class="group mb-6">/);
   const content = html.slice(main, html.indexOf("What would you like to do next?"));
   for (const text of ["Sourced campaign brief", "Get a Free Estimate", "Final review remains pending."]) assert.ok(content.includes(text));
@@ -165,7 +174,7 @@ test("an unavailable main output does not create an empty tool preview", () => {
   assert.match(html, /View Google Ads results/);
 });
 
-test("the collapsed Results section retains final Sheets cells, exact link and ChatGPT attribution", () => {
+test("the visible Results section leads with final Sheets cells, exact link and ChatGPT attribution", () => {
   const sheetSteps = [
     { id: "source", key: "source", tool_slug: "google", status: "completed", output: { operation: "sheets.read", resolved_arguments: { spreadsheet_id: "workbook" }, provider_result: { range: "'Source'!A1:B2", values: [["Earlier source"]] } } },
     { id: "compose", key: "compose", tool_slug: "aura", status: "completed", output: { operation: "report.compose", provider_result: { body: "Generated report" } } },
@@ -182,8 +191,8 @@ test("the collapsed Results section retains final Sheets cells, exact link and C
   assert.match(html, /source tab read in Google Sheets/);
   assert.match(html, /report prepared with ChatGPT/);
   assert.match(html, /rows saved to Google Sheets/);
-  assert.match(html, /<details aria-label="Main workflow result" class="group mb-6">/);
-  assert.ok(html.indexOf('aria-label="Results by tool"') < html.indexOf('aria-label="Main workflow result"'));
+  assert.match(html, /<section aria-label="Main workflow result" class="group mb-6">/);
+  assert.ok(html.indexOf('aria-label="Main workflow result"') < html.indexOf('aria-label="Results by tool"'));
   assert.match(html, /aria-label="View ChatGPT results"/);
   assert.doesNotMatch(html, /AURA Intelligence|Earlier source|majorDimension|~12 min|time saved|Campaign report sent/);
 });
