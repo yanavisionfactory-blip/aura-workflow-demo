@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { campaignRepeatPrompt } from "../src/lib/runtimePlan.mjs";
 
 import {
   backendRunNeedsSync,
@@ -52,6 +53,33 @@ test("backend executions become reusable workflow and history records", () => {
   assert.deepEqual(projection.run.metrics, [{ value: "1", label: "step completed" }]);
   assert.equal(projection.run.steps[0].tool, "Canva");
   assert.equal(projection.run.steps[0].riskLevel, "modify");
+});
+
+test("campaign source inputs survive history reconciliation and workflow rollup", () => {
+  const prompt = 'AURA_CAMPAIGN_REPORT_V1\n{"attachment_name":"sample.xlsx"}';
+  const fields = {
+    client_name: "Sample", data_status: "anonymized_sample", currency: "USD",
+    prior_start: "2026-08-24", prior_end: "2026-09-20",
+    current_start: "2026-09-21", current_end: "2026-10-18",
+    meta_attribution: "7-day click / 1-day view", ga4_attribution: "Data-driven",
+    source_filename: "sample.xlsx", source_sha256: "a".repeat(64),
+    google_ads: [{ period: "Prior" }, { period: "Current" }],
+    meta_ads: [{ period: "Prior" }, { period: "Current" }],
+    ga4: [{ period: "Prior" }, { period: "Current" }],
+  };
+  const projection = backendRunHistoryProjection({
+    ...backendRun, prompt,
+    plan: { ...backendRun.plan, steps: [{ tool_slug: "google", consequential: true,
+      operation: "sheets.campaign_report.create", arguments: fields }] },
+  });
+  const rolled = workflowRollup("campaign-workflow", [{ ...projection.run,
+    id: "saved-run", workflow_id: "campaign-workflow" }]);
+  const repeated = campaignRepeatPrompt(projection.workflow.prompt, rolled.steps);
+  assert.deepEqual(JSON.parse(repeated.slice(repeated.indexOf("\n") + 1)), fields);
+  const oldSteps = projection.run.steps.map(({ operation, arguments: _arguments, ...display }) => display);
+  assert.equal(backendRunNeedsSync({ ...projection.run, steps: oldSteps }, projection.run), true);
+  assert.equal(backendRunNeedsSync(projection.run, projection.run), false);
+  assert.equal(backendRunHistoryProjection(backendRun).run.steps[0].arguments, undefined);
 });
 
 test("LLM suggestions travel with a completed backend result", () => {
