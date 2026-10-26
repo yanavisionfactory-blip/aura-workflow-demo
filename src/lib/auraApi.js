@@ -1,5 +1,6 @@
 import { createFrontendClient } from "@pipedream/sdk/browser";
 import { shopifyCredentialDialog } from "@/lib/shopifyCredentialDialog";
+import { redirectConnectorAuthorization } from "@/lib/connectionNavigation.mjs";
 
 const API_URL = (import.meta.env.VITE_AURA_API_URL || "").replace(/\/$/, "");
 const WORKSPACE_KEY = "aura_python_workspace_id";
@@ -416,7 +417,7 @@ async function authorizePipedreamConnector(provider, session, timeoutMs) {
 
 export async function authorizeConnectorBroker(
   provider,
-  { connection = null, timeoutMs = null, reservedWindow = null } = {},
+  { connection = null, timeoutMs = null, reservedWindow = null, sameTab = false } = {},
 ) {
   let session;
   try {
@@ -452,6 +453,10 @@ export async function authorizeConnectorBroker(
     return authorizeManagedConnector(provider, timeoutMs ?? 120000, reservedWindow, session);
   }
   if (session.backend === "native") {
+    if (sameTab) {
+      if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
+      return redirectConnectorAuthorization(session);
+    }
     return authorizeOAuth(session.provider || provider, timeoutMs ?? 120000, reservedWindow, session);
   }
   if (reservedWindow && !reservedWindow.closed) reservedWindow.close();

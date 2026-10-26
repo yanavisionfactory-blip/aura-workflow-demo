@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
+import { shouldNotifyAuthorizationOpener } from "@/lib/connectionNavigation.mjs";
 import { AnimatePresence, motion } from "framer-motion";
 import { useLocation } from "react-router-dom";
 import { aura } from "@/api/auraClient";
@@ -433,7 +434,7 @@ export default function Demo() {
     const params = new URLSearchParams(window.location.search);
     const provider = params.get("tool_connected") || params.get("oauth_provider");
     const status = params.get("oauth_status") || (params.has("tool_connected") ? "success" : null);
-    if (!provider || !status || !window.opener) return;
+    if (!provider || !status || !shouldNotifyAuthorizationOpener(window.location.search)) return;
     window.opener.postMessage(
       {
         source: "aura-oauth",
@@ -1156,6 +1157,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
         } else if (action === "connect" && options.canRetry) {
           const toolName = planToolName({ tool_slug: options.toolSlug || "", operation: "" });
           const connected = await connectTool(toolName, { connectionId: options.connectionId });
+          if (!connected.connected) return;
           const connectionId = connected.connection?.id || connected.tool?.id;
           if (options.blockerCode === "connection_required") {
             if (!connectionId) throw new Error(`${toolName} connected, but AURA could not identify the verified account.`);
