@@ -22,6 +22,28 @@ export function savedRunActionLocation(prompt) {
     workflowPrompt: typeof prompt === "string" && prompt.length <= 20000 ? prompt : "" } };
 }
 
+// Rebuild only the bounded campaign recipe from its reviewed source inputs.
+// Upload handles are transient; saved arguments retain the source fingerprint
+// and literal export rows. This is a new proposal, never an execution receipt
+// or a transfer of the previous run's approval.
+export function campaignRepeatPrompt(prompt, steps = []) {
+  const prefix = "AURA_CAMPAIGN_REPORT_V1\n";
+  if (!String(prompt || "").startsWith(prefix) || !Array.isArray(steps)
+      || steps.length !== 1 || steps[0]?.operation !== "sheets.campaign_report.create") return null;
+  const fields = steps[0].arguments;
+  if (!fields || !/^[a-f0-9]{64}$/.test(fields.source_sha256 || "")
+      || !["google_ads", "meta_ads", "ga4"].every((key) =>
+        Array.isArray(fields[key]) && fields[key].length >= 2 && fields[key].length <= 100)) return null;
+  const required = ["client_name", "data_status", "currency", "prior_start", "prior_end",
+    "current_start", "current_end", "meta_attribution", "ga4_attribution", "source_filename"];
+  if (!required.every((key) => typeof fields[key] === "string" && fields[key].trim())) return null;
+  const keys = [...required, "google_attribution", "source_timezone", "source_sha256",
+    "google_ads", "meta_ads", "ga4"];
+  const next = prefix + JSON.stringify(Object.fromEntries(keys
+    .filter((key) => fields[key] !== undefined).map((key) => [key, fields[key]])));
+  return next.length <= 20000 ? next : null;
+}
+
 export function restorablePlanningRun(run = {}) {
   if (run.plan_approved) return false;
   if (run.status === "awaiting_approval") return Boolean(run.plan?.steps?.length);

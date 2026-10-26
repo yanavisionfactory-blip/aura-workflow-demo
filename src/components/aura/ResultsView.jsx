@@ -13,6 +13,7 @@ import { buildSummaryText } from "@/lib/auraSummary";
 import { resultMetrics, selectPrimaryOutcome, supportingReceipts, visualResultChoices } from "@/lib/resultPresentation.mjs";
 import { mainToolEntry, toolResultEntries, toolResultName } from "@/lib/toolResultViews.mjs";
 import { sheetWorkflowSummary } from "@/lib/workflowResultSummary.mjs";
+import { campaignRepeatPrompt } from "@/lib/runtimePlan.mjs";
 
 const smallButton = "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full border border-cyan-400/25 px-3 py-1.5 text-[11px] font-medium text-cyan-300 transition hover:bg-cyan-400/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-cyan-300";
 const outlineButton = "inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium transition hover:bg-white/10";
@@ -148,7 +149,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
         <h3 className="text-sm font-semibold">What would you like to do next?</h3>
         <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{approvedWeekly ? "This review uses fixed reporting dates and individually labelled source inputs. Start a new review with fresh inputs for the next week." : isFailure ? "Your completed work is saved. Try again or start a new workflow." : "Run it again, automate it for later, or start something new."}</p>
         <div className="mt-3 grid gap-2 sm:grid-cols-3">
-          <button type="button" onClick={() => { if (approvedWeekly) { setSearchParams({ weekly: "1" }); onNewWorkflow(); } else onStartWorkflow(prompt); }} className={outlineButton}><RefreshCw className="h-4 w-4" />{approvedWeekly ? "New review with fresh exports" : "Run again"}</button>
+          <button type="button" onClick={() => { if (approvedWeekly) { setSearchParams({ weekly: "1" }); onNewWorkflow(); } else onStartWorkflow(campaignRepeatPrompt(prompt, activity) || prompt); }} className={outlineButton}><RefreshCw className="h-4 w-4" />{approvedWeekly ? "New review with fresh exports" : "Run again"}</button>
           {!isFailure && !approvedWeekly && backendRunId && <button type="button" onClick={() => setShowSchedule(true)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-violet-500 to-sky-400 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_5px_20px_rgba(139,92,246,0.15)]"><CalendarClock className="h-4 w-4" />Schedule</button>}
           <button type="button" onClick={onNewWorkflow} className={outlineButton}><Plus className="h-4 w-4" />New workflow</button>
         </div>
