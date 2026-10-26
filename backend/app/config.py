@@ -2,7 +2,7 @@ import json
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -96,6 +96,8 @@ class Settings(BaseSettings):
     atlassian_client_id: str = ""
     atlassian_client_secret: str = ""
     oauth_callback_overrides: str = ""
+    # Provider-issued MCP client registrations. Server-only; never VITE/public config.
+    mcp_oauth_clients_json: SecretStr = SecretStr("{}")
     browser_connector_url: str = ""
     browser_connector_token: str = ""
     resource_aliases_json: str = "{}"

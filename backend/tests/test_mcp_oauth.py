@@ -286,6 +286,22 @@ async def test_failed_live_verification_does_not_publish_a_connection(database, 
         assert "access_token" not in CredentialVault().decrypt(tool.encrypted_credentials)
 
 
+@pytest.mark.parametrize("error", ["invalid_client", "unauthorized_client", "invalid_redirect_uri"])
+async def test_client_setup_errors_are_not_reported_as_user_declined_consent(database, managed_auth, error):
+    _, exchange, verify = managed_auth
+    async with database() as session:
+        _, state, tool = await start(session)
+        response = await main.mcp_agent_oauth_callback(state, error=error, session=session)
+        query = parse_qs(urlsplit(response.headers["location"]).query)
+        assert query["oauth_status"] == ["error"]
+        assert "OAuth client setup" in query["oauth_message"][0]
+        assert "operator" in query["oauth_message"][0]
+        assert not tool.enabled
+        assert "mcp_oauth_pending" not in CredentialVault().decrypt(tool.encrypted_credentials)
+        exchange.assert_not_awaited()
+        verify.assert_not_awaited()
+
+
 async def test_wrong_callback_provider_never_exchanges_code(database, managed_auth):
     _, exchange, _ = managed_auth
     async with database() as session:
