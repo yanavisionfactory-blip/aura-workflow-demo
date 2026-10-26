@@ -6,6 +6,7 @@ import { getPythonRun } from "@/lib/auraApi";
 import { savedRunResults } from "@/lib/savedRunResults.mjs";
 import { operationStepTitle } from "@/lib/planPresentation.mjs";
 import { savedRunActionLocation } from "@/lib/runtimePlan.mjs";
+import { toolResultName } from "@/lib/toolResultViews.mjs";
 
 export default function SavedRunResults() {
   const { runId } = useParams();
@@ -19,9 +20,8 @@ export default function SavedRunResults() {
       .catch(() => { if (active) setError("These saved results are unavailable in this workspace. Open My workflows to choose an accessible run."); });
     return () => { active = false; };
   }, [runId]);
-  const names = { "google-docs": "Google Docs", google: "Google Workspace" };
   const activity = (run?.steps || []).map((step) => {
-    const tool = names[step.tool_slug] || step.tool_slug || "AURA";
+    const tool = toolResultName(step.tool_slug, step.operation);
     return { id: step.id, stepKey: step.key, tool, status: step.status,
       operation: step.operation, arguments: step.arguments, error: step.error,
       started_at: step.started_at, completed_at: step.completed_at,

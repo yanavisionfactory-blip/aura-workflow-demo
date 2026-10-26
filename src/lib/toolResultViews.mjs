@@ -1,5 +1,6 @@
 import { primaryResultFromOutputs } from "./resultPresentation.mjs";
 import { toolEvidence } from "./toolEvidence.mjs";
+import { operationProviderName } from "./providerDisplay.mjs";
 
 const names = {
   aura: "AURA Intelligence", "aura intelligence": "AURA Intelligence",
@@ -13,6 +14,7 @@ const names = {
 };
 
 export function toolResultName(name = "AURA", operation = "") {
+  if (operation === "report.compose") return operationProviderName(name, operation);
   for (const [prefix, label] of [["docs.", "Google Docs"], ["sheets.", "Google Sheets"],
     ["drive.", "Google Drive"], ["gmail.", "Gmail"]]) {
     if (operation.startsWith(prefix)) return label;
@@ -45,6 +47,11 @@ export function toolResultEntries(activity = []) {
 
 export function mainToolEntry(entries, primary = {}, presentation = {}) {
   presentation ||= {};
+  if (primary.sourceStepKey || primary.sourceStepId) {
+    const exact = entries.find((entry) => (primary.sourceStepKey && entry.stepKey === primary.sourceStepKey)
+      || (primary.sourceStepId && entry.id === primary.sourceStepId));
+    if (exact) return exact;
+  }
   const matching = entries.find((entry) => {
     if (primary.link && primary.link === entry.link) return true;
     const preview = entry.preview;

@@ -14,7 +14,7 @@ test("main output identity retains other actions from the same tool without dupl
   const primary = entries[1].preview;
   const main = mainToolEntry(entries, primary, null);
   assert.equal(main.id, "main");
-  assert.equal(toolResultGroups(entries)[0].tool, "AURA Intelligence");
+  assert.equal(toolResultGroups(entries)[0].tool, "ChatGPT");
   assert.equal(toolResultGroups(entries)[0].entries.length, 2);
   const receipts = supportingReceipts({}, activity, primary, null, main.id);
   assert.deepEqual(receipts.map((item) => item.actionId), ["first"]);
@@ -29,7 +29,7 @@ test("report prose naming platforms cannot fabricate provider actions or change 
   }];
   const entries = toolResultEntries(activity);
   assert.equal(entries.length, 2);
-  assert.deepEqual(toolResultGroups(entries).map((group) => group.tool), ["AURA Intelligence"]);
+  assert.deepEqual(toolResultGroups(entries).map((group) => group.tool), ["ChatGPT", "AURA Intelligence"]);
   assert.equal(entries[1].source.name, "Google Ads");
   assert.equal(entries[1].response.receipt.provider_api_called, false);
   assert.equal(entries[1].synthetic, true);

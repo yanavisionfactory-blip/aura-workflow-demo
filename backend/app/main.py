@@ -5976,6 +5976,17 @@ async def get_run(
     return await _run_view(session, run)
 
 
+@app.get("/v1/runs/{run_id}/steps/{step_key}/sheet-screen")
+async def get_saved_sheet_screen(
+    run_id: str,
+    step_key: str,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    from .sheet_screen import saved_sheet_screen
+    return await saved_sheet_screen(session, context, run_id, step_key)
+
+
 @app.get("/v1/runs/{run_id}/governance")
 async def get_run_governance(
     run_id: str,

@@ -147,6 +147,20 @@ test("an unavailable main output does not create an empty tool preview", () => {
   assert.match(html, /View Google Ads results/);
 });
 
+test("a saved Sheets result shows the app screen at the final tab and ChatGPT as its generator", () => {
+  const sheetSteps = [
+    { id: "source", key: "source", tool_slug: "google", status: "completed", output: { operation: "sheets.read", resolved_arguments: { spreadsheet_id: "workbook" }, provider_result: { range: "'Source'!A1:B2", values: [["Earlier source"]] } } },
+    { id: "compose", key: "compose", tool_slug: "aura", status: "completed", output: { operation: "report.compose", provider_result: { body: "Generated report" } } },
+    { id: "saved", key: "saved", tool_slug: "google", status: "completed", output: { operation: "sheets.append", provider_result: { spreadsheetId: "workbook", updates: { updatedRange: "'Pilot Record'!A49:B52" } }, outcome_check: { status: "verified", observed: { spreadsheetId: "workbook", sheets: [{ properties: { title: "Pilot Record", sheetId: 77 }, data: [{ startRow: 48, rowData: [{ values: [{ effectiveValue: { stringValue: "Actual final cells" } }] }] }] }] } } } },
+  ];
+  const html = render({ id: "sheet-run", status: "completed", plan: { name: "Pilot result" }, steps: sheetSteps, result: { result_presentation: { primary_step_key: "saved" } } });
+  assert.match(html, /Google Sheets result screen/);
+  assert.match(html, /<iframe[^>]+title="Google Sheets — final workflow result"[^>]+src="https:\/\/docs.google.com\/spreadsheets\/d\/workbook\/edit\?rm=minimal#gid=77&amp;range=A49%3AB52"/);
+  assert.match(html, /Saved cells/);
+  assert.match(html, /aria-label="View ChatGPT results"/);
+  assert.doesNotMatch(html, /AURA Intelligence|Earlier source|majorDimension/);
+});
+
 test("a supplied-evidence report renders its complete body without implying provider execution", () => {
   const html = render({ ...run, steps: [{ id: "compose", key: "compose", status: "completed", tool_slug: "AURA", output: {
     operation: "report.compose", critic: { action: "accept" }, outcome_check: { status: "verified" },
@@ -156,7 +170,7 @@ test("a supplied-evidence report renders its complete body without implying prov
   assert.match(html, /Prepared from supplied evidence/);
   assert.match(html, /Final review remains pending/);
   assert.match(html, /Supplied source inputs/);
-  assert.match(html, /aria-label="View AURA Intelligence results"/);
+  assert.match(html, /aria-label="View ChatGPT results"/);
 });
 
 test("a completed campaign stays native in AURA with channel views and actual per-tool evidence", () => {

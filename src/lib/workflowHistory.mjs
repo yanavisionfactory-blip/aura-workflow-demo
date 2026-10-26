@@ -1,5 +1,6 @@
 import { primaryResultFromOutputs } from "./resultPresentation.mjs";
 import { normalizeResultSuggestions } from "./resultSuggestions.mjs";
+import { operationProviderName } from "./providerDisplay.mjs";
 
 const FAILED_STATUSES = new Set(["blocked", "cancelled", "failed"]);
 
@@ -77,7 +78,7 @@ export function historyStatusForBackendRun(run = {}) {
 
 export function historyStepsForBackendRun(run = {}) {
   return (run.plan?.steps || []).map((step) => ({
-    tool: displayToolName(step.tool_slug || step.tool),
+    tool: operationProviderName(displayToolName(step.tool_slug || step.tool), step.operation),
     action: sentence(step.reason || step.action || step.operation),
     title: sentence(step.reason || step.action || step.operation),
     riskLevel: step.consequential ? "modify" : "read",

@@ -93,7 +93,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
         </>}
         footer={artifactDelivery && <><span>Presentation · {primaryResult.artifact?.title || primaryResult.title}</span><span className="text-emerald-400">{artifactDelivery.artifactDelivered ? "Attached and delivered" : "Created in Canva"}</span></>}
       >
-        {hasMainOutput ? <ToolResultFrame tool={primaryResult.provider || mainEntry?.tool} title={primaryResult.title || results.title || "Main output"} synthetic={mainEntry?.synthetic} onExpand={() => openTool("main")}>
+        {hasMainOutput ? <ToolResultFrame tool={primaryResult.provider || mainEntry?.tool} title={primaryResult.title || results.title || "Main output"} synthetic={mainEntry?.synthetic} appScreen={primaryResult.kind === "spreadsheet"} onExpand={() => openTool("main")}>
           <MainToolOutput entry={mainEntry} result={primaryResult} results={results} activity={activity} backendRunId={backendRunId} />
         </ToolResultFrame> : <ResultPreview result={primaryResult} results={results} />}
       </PrimaryResult>}

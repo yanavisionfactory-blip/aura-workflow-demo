@@ -17,7 +17,7 @@ test("AURA-native reports retain full body and sources after reopening saved his
       result_presentation: { primary_step_key: "review" },
       unified_deliverable: { summary: "Completed", deliverable: "A short summary" } } });
   assert.equal(result.primaryResult.kind, "report");
-  assert.equal(result.primaryResult.provider, "AURA");
+  assert.equal(result.primaryResult.provider, "ChatGPT");
   assert.equal(result.primaryResult.preview.body, report.provider_result.body);
   assert.deepEqual(result.primaryResult.preview.sources, report.provider_result.sources);
   assert.equal(result.primaryResult.link, null);
