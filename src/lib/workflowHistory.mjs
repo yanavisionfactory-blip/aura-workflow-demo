@@ -83,6 +83,13 @@ export function historyStepsForBackendRun(run = {}) {
     title: sentence(step.reason || step.action || step.operation),
     riskLevel: step.consequential ? "modify" : "read",
     output: step.expected_output || "Completed step",
+    // Campaign repeats need the reviewed literal exports after the upload is
+    // gone. Keep this bounded recipe's arguments, not provider write receipts
+    // or approval state. Other history entries remain display-only.
+    ...(step.operation === "sheets.campaign_report.create" ? {
+      operation: step.operation,
+      arguments: step.arguments,
+    } : {}),
   }));
 }
 
@@ -151,7 +158,8 @@ export function backendRunNeedsSync(savedRun = null, projectedRun = {}) {
     || savedRun.status !== projectedRun.status
     || savedRun.title !== projectedRun.title
     || savedRun.summary !== projectedRun.summary
-    || JSON.stringify(savedRun.outcomes || []) !== JSON.stringify(projectedRun.outcomes || []);
+    || JSON.stringify(savedRun.outcomes || []) !== JSON.stringify(projectedRun.outcomes || [])
+    || JSON.stringify(savedRun.steps || []) !== JSON.stringify(projectedRun.steps || []);
 }
 
 export function workflowForBackendRun(run = {}, workflows = []) {
