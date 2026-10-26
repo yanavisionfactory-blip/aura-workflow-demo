@@ -2,6 +2,15 @@
 
 from copy import deepcopy
 
+META_ADS_ENDPOINT = "https://meta-ads.mcp.pipeboard.co/"
+META_ADS_READ_TOOLS = frozenset(
+    prefix + name
+    for prefix in ("", "mcp_meta_ads_")
+    for name in ("get_ad_accounts", "get_account_info", "get_campaigns",
+                 "get_campaign_details", "get_adsets", "get_adset_details",
+                 "get_ads", "get_ad_details", "get_insights")
+)
+
 FRAMEIO_ENDPOINT = "https://mcp.frame.io/v1/mcp"
 PAGEPROOF_ENDPOINT = "https://mcp.pageproof.com/mcp"
 FRAMEIO_READ_TOOLS = frozenset({
@@ -23,6 +32,26 @@ SUPERMETRICS_READ_TOOLS = frozenset({
 
 
 def restrict_mcp_manifest(manifest: dict, endpoint: str) -> dict:
+    if endpoint.rstrip("/") == META_ADS_ENDPOINT.rstrip("/"):
+        result = deepcopy(manifest)
+        capabilities = []
+        for item in result.get("capabilities", []):
+            name = item.get("name")
+            if name not in META_ADS_READ_TOOLS or item.get("transport", {}).get("tool_name") != name:
+                continue
+            schema = item.setdefault("input_schema", {"type": "object"})
+            # Account credentials belong to the OAuth grant, never model inputs.
+            if any(key in schema.get("required", []) for key in ("access_token", "api_key")):
+                continue
+            for key in ("access_token", "api_key"):
+                schema.setdefault("properties", {}).pop(key, None)
+            schema["additionalProperties"] = False
+            item.update(permission_scope="read", requires_approval=False, module_type="search")
+            capabilities.append(item)
+        if not capabilities:
+            raise ValueError("Meta Ads did not expose reviewed reporting tools")
+        result["capabilities"] = capabilities
+        return result
     if endpoint in {FRAMEIO_ENDPOINT, PAGEPROOF_ENDPOINT}:
         result = deepcopy(manifest)
         capabilities = []

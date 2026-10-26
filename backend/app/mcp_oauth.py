@@ -72,6 +72,22 @@ MCP_SERVICES = {
         ],
         "required_scope": "ds_accounts_read", "canonical_provider": "supermetrics",
     },
+    "meta-ads": {
+        "name": "Meta Ads", "owner": "Pipeboard",
+        "endpoint": "https://meta-ads.mcp.pipeboard.co/",
+        "resource": "https://meta-ads.mcp.pipeboard.co/",
+        "resource_metadata_url": "https://meta-ads.mcp.pipeboard.co/.well-known/oauth-protected-resource",
+        "issuer": "https://meta-ads.mcp.pipeboard.co",
+        "auth_origins": ["https://meta-ads.mcp.pipeboard.co", "https://pipeboard.co"],
+        # These exact query-bearing endpoints are advertised by the issuer.
+        # Other providers and arbitrary query parameters remain forbidden.
+        "query_endpoints": [
+            "https://pipeboard.co/oauth/authorize?platform=meta-ads",
+            "https://pipeboard.co/oauth/register?platform=meta-ads",
+        ],
+        "scopes": ["mcp:read"], "required_scope": "mcp:read",
+        "canonical_provider": "meta-ads",
+    },
 }
 
 
@@ -130,6 +146,19 @@ def proofing_catalog() -> list[dict]:
     } for provider in ("frame-io", "pageproof")]
 
 
+def managed_mcp_catalog() -> list[dict]:
+    return [*proofing_catalog(), {
+        "provider": "meta-ads-mcp", "display_name": "Meta Ads",
+        "canonical_provider": "meta-ads",
+        "aliases": ["Meta Ads", "Facebook Ads", "Meta advertising", "Pipeboard"],
+        "categories": ["marketing", "reporting"],
+        "source": "partner_mcp", "connection_backend": "managed_mcp",
+        "connection_strategy": "oauth", "connectable": True, "availability": "available",
+        "capabilities": [], "capability_count": 0,
+        "setup_hint": "Via Pipeboard · Sign in and authorize Meta · Read-only reporting",
+    }]
+
+
 def semrush_api_credentials(secret: str) -> dict:
     secret = secret.strip()
     if not secret or len(secret) > 8000 or any(ord(char) < 32 for char in secret):
@@ -141,7 +170,7 @@ def semrush_api_credentials(secret: str) -> dict:
 
 def managed_mcp_provider(source: str) -> str | None:
     for provider, service in MCP_SERVICES.items():
-        if source.rstrip("/") == service["endpoint"]:
+        if source.rstrip("/") == service["endpoint"].rstrip("/"):
             return provider
     if source.rstrip("/") == UBERSUGGEST_ORIGIN:
         return "ubersuggest"
@@ -166,7 +195,7 @@ def _service_url(value: object, provider: str = "ubersuggest", *, resource: bool
         parsed.scheme != "https"
         or not allowed
         or parsed.username or parsed.password or parsed.port not in {None, 443}
-        or parsed.query
+        or (parsed.query and value not in service.get("query_endpoints", []))
         or parsed.fragment
     ):
         raise ConnectorError("The MCP service returned an unexpected authorization endpoint")
@@ -381,7 +410,8 @@ async def prepare_authorization(credentials: dict, state: str, callback_url: str
         }
         if not scopes:
             params.pop("scope")
-        return f"{authorization_url}?{urlencode(params)}", credentials, config
+        separator = "&" if urlsplit(authorization_url).query else "?"
+        return f"{authorization_url}{separator}{urlencode(params)}", credentials, config
 
 
 async def exchange_code(credentials: dict, config: dict, code: str, verifier: str) -> dict:

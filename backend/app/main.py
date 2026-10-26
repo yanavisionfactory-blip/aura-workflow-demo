@@ -1185,6 +1185,16 @@ async def _verify_managed_mcp(credentials: dict, provider: str = "ubersuggest") 
             probe_operation, probe_arguments = "data_source_discovery", {"compress": True}
         elif provider == "frame-io":
             probe_operation = "mandatory_init"
+        elif provider == "meta-ads":
+            probe = next((item for item in manifest.get("capabilities", [])
+                if item["name"] in {"get_ad_accounts", "mcp_meta_ads_get_ad_accounts"}
+                and item.get("permission_scope") == "read"), None)
+            if not probe:
+                raise ConnectorError("Meta Ads needs an account discovery tool before access can be verified")
+            probe_operation = probe["name"]
+            properties = probe.get("input_schema", {}).get("properties", {})
+            probe_arguments = {key: value for key, value in {"user_id": "me", "limit": 1}.items()
+                               if key in properties}
         elif provider == "pageproof":
             probe_operation = next((item["name"] for item in manifest.get("capabilities", [])
                 if item.get("permission_scope") == "read"
@@ -1206,6 +1216,29 @@ async def _verify_managed_mcp(credentials: dict, provider: str = "ubersuggest") 
                 isinstance(receipt.get("structured_content"), dict)
                 and receipt["structured_content"].get("success") is False
             )
+            if provider == "meta-ads":
+                # This server can return Graph errors inside successful MCP text.
+                # Only a real account-list response proves the grant works.
+                data = receipt.get("structured_content")
+                if data is None:
+                    texts = [item.get("text") for item in receipt.get("content", [])
+                             if item.get("type") == "text"]
+                    data = texts[0] if len(texts) == 1 else None
+                for _ in range(3):
+                    if isinstance(data, str):
+                        try:
+                            data = json.loads(data)
+                        except ValueError:
+                            data = None
+                    elif isinstance(data, dict) and set(data) == {"result"}:
+                        data = data["result"]
+                    else:
+                        break
+                failed = failed or not (
+                    isinstance(data, dict) and not data.get("error")
+                    and isinstance(data.get("data"), list)
+                    and all(isinstance(item, dict) and item.get("id") for item in data["data"])
+                )
             if failed:
                 error_text = json.dumps(receipt, ensure_ascii=False).upper()
                 if any(code in error_text for code in (
@@ -1549,8 +1582,8 @@ async def managed_connector_status(
         )
     from . import shopify_client_credentials as shopify
     native_catalog.append(shopify.catalog_entry())
-    from .mcp_oauth import proofing_catalog
-    native_catalog.extend(proofing_catalog())
+    from .mcp_oauth import managed_mcp_catalog
+    native_catalog.extend(managed_mcp_catalog())
     native_catalog.extend(await wordpress_plugins.catalog(session, context.workspace_id))
     dynamic_catalog = [
         {
@@ -1734,6 +1767,11 @@ async def search_connector_broker_apps(
         return query in haystack
 
     for item in await wordpress_plugins.catalog(session, context.workspace_id):
+        if matches(item):
+            entries[item["provider"]] = item
+
+    from .mcp_oauth import managed_mcp_catalog
+    for item in managed_mcp_catalog():
         if matches(item):
             entries[item["provider"]] = item
 
@@ -2623,7 +2661,7 @@ async def create_connector_broker_session(
     """Select the best connector plane and return only a short-lived browser grant."""
     provider = requested_marketplace_entry(provider)["provider"]
     provider = wordpress_plugins.provider_slug(provider)
-    if provider in {"frame-io-mcp", "pageproof-mcp"}:
+    if provider in {"frame-io-mcp", "pageproof-mcp", "meta-ads-mcp"}:
         managed_provider = provider.removesuffix("-mcp")
         endpoint = mcp_service(managed_provider)["endpoint"]
         if connection_id:
@@ -2635,7 +2673,7 @@ async def create_connector_broker_session(
         except MCPRegistrationRejected as exc:
             raise HTTPException(409, exc.public_detail(oauth_route_callback_url(settings, "mcp-agent"))) from exc
         except (ConnectorError, httpx.HTTPError, ValueError, TimeoutError) as exc:
-            raise HTTPException(409, "The proofing service could not verify its connection setup. Existing access was kept.") from exc
+            raise HTTPException(409, "The service could not verify its connection setup. Existing access was kept.") from exc
         if result.get("enabled"):
             return {"backend": "native", "provider": result["slug"], "already_connected": True,
                     "connection_id": result["id"]}
