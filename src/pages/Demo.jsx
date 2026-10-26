@@ -46,7 +46,7 @@ import {
   shouldStartFreshPlanningRun,
   unavailablePlanningState,
 } from "@/lib/planningFlow.mjs";
-import { hasDurablePlan, planningRequestPrompt, savedRunResumeView, sameExecutablePlan, shouldRestoreRememberedRun, workflowInputPrompt } from "@/lib/runtimePlan.mjs";
+import { campaignRepeatPrompt, hasDurablePlan, planningRequestPrompt, savedRunResumeView, sameExecutablePlan, shouldRestoreRememberedRun, workflowInputPrompt } from "@/lib/runtimePlan.mjs";
 import { operationStepTitle, weatherStepTitle } from "@/lib/planPresentation.mjs";
 import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
 import { savedRunResults } from "@/lib/savedRunResults.mjs";
@@ -1678,11 +1678,12 @@ Generate a results summary in plain, human-friendly language (not technical).
         setPilotOpen(true);
         return;
       }
-      const confirmedIntent = workflow.interpretation || workflow.prompt;
+      const repeatPrompt = campaignRepeatPrompt(workflow.prompt, workflow.steps);
+      const confirmedIntent = repeatPrompt || workflow.interpretation || workflow.prompt;
       reset();
       currentWorkflowIdRef.current = workflow.id || null;
-      setOriginalPrompt(workflow.prompt);
-      originalPromptRef.current = workflow.prompt;
+      setOriginalPrompt(repeatPrompt || workflow.prompt);
+      originalPromptRef.current = repeatPrompt || workflow.prompt;
       setInterpretation(confirmedIntent);
       setWorkflowName(workflow.name || "");
       setPhase("plan");
