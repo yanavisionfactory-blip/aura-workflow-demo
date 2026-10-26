@@ -72,11 +72,19 @@ export function googleSheetsResult(outputs, context = {}, explicitPrimary = null
   const receipt = read ? resultOf(read) : checked ? write.outcome_check.observed || {} : {};
   const ranges = grids(receipt);
   const range = targetRange || ranges[0]?.range || resultOf(explicitPrimary).range || "";
+  const origin = sheetRange(range);
+  const headerRead = matching.find((output) => {
+    const item = resultOf(output), at = sheetRange(item.range);
+    return READS.has(output.operation) && spreadsheetId(output) === id && at?.tab === origin?.tab
+      && at?.column === origin?.column && at?.row === 1 && item.values?.length === 1
+      && /\$?[A-Z]+\$?1(?::\$?[A-Z]+\$?1)?$/i.test(item.range || "");
+  });
+  const headers = headerRead ? resultOf(headerRead).values[0] : [];
   const gid = ranges[0]?.gid;
   return { kind: "spreadsheet", provider: "Google Sheets", providerVerb: write ? checked ? "Saved and verified in" : "Saved in" : "Read from",
     title: resultOf(write).properties?.title || resultOf(read).properties?.title || context.title || "Google Sheets result",
     sourceStepKey: read?.step_key || write?.step_key || explicitPrimary?.step_key,
     sourceStepId: read?.step_id || write?.step_id || explicitPrimary?.step_id,
-    spreadsheetId: id, range, ranges, sheetId: gid, verified: Boolean(checked),
+    spreadsheetId: id, range, ranges, headers, sheetId: gid, verified: Boolean(checked),
     ...sheetAppLinks(id, range, gid), linkLabel: "Open in Google Sheets", downloadUrl: null };
 }

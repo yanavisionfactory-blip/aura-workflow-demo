@@ -16,6 +16,14 @@ const write = { step_key: "save", operation: "sheets.append", resolved_arguments
 const outputs = [read("source", "'Competitors'!A1:B2", [["Source data"]]), write,
   read("verify", "'Pilot Record'!A49:B52", [["Review", "Actual saved content"]])];
 
+test("Markdown headers come from the matching saved header read, never another workbook or tab", () => {
+  const header = read("headers", "'Pilot Record'!A1:B1", [["Name", "Comparison"]]);
+  assert.deepEqual(googleSheetsResult([header, ...outputs]).headers, ["Name", "Comparison"]);
+  for (const wrong of [read("h", "'Other'!A1:B1", [["Wrong"]]), read("h", "'Pilot Record'!A1:B1", [["Wrong"]], "other"), read("h", "'Pilot Record'!B1:C1", [["Wrong"]])]) {
+    assert.deepEqual(googleSheetsResult([wrong, ...outputs]).headers, []);
+  }
+});
+
 test("the final range, provider cells and exact verification step win over an earlier read of the same URL", () => {
   const primary = primaryResultFromOutputs(outputs, { title: "Pilot review" }, { primary_step_key: "verify" });
   assert.equal(primary.kind, "spreadsheet");
