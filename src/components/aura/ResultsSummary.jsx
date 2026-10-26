@@ -9,21 +9,21 @@ export function ResultsHeading({ title, summary, isFailure = false, eyebrow, hea
       </div>
       <div className="min-w-0 flex-1">
         {eyebrow && <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">{eyebrow}</p>}
-        <Heading className="text-2xl font-bold tracking-tight sm:text-3xl">{title}</Heading>
-        {summary && <p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted-foreground">{summary}</p>}
+        <Heading className={`text-2xl font-bold tracking-tight ${centered ? "" : "sm:text-3xl"}`}>{title}</Heading>
+        {summary && <p className={`mt-2 text-sm leading-relaxed text-muted-foreground ${centered ? "mx-auto max-w-xl" : "max-w-3xl"}`}>{summary}</p>}
         {children}
       </div>
     </div>
   );
 }
 
-export function ResultsMetrics({ metrics }) {
+export function ResultsMetrics({ metrics, compact = false }) {
   if (!metrics.length) return null;
   return (
-    <div className="mb-7 grid gap-3 sm:grid-cols-3">
-      {metrics.map((metric, index) => <div key={`${metric.label}:${index}`} className="rounded-2xl border border-white/10 bg-card/60 px-5 py-4">
-        <p className="text-3xl font-semibold tracking-tight text-foreground">{metric.value}</p>
-        <p className="mt-1 text-xs text-muted-foreground">{metric.label}</p>
+    <div className={`mb-7 grid gap-3 ${compact ? "grid-cols-3" : "sm:grid-cols-3"}`}>
+      {metrics.map((metric, index) => <div key={`${metric.label}:${index}`} className={`border border-white/10 py-4 ${compact ? "rounded-xl bg-[#0c121e]/65 px-2 text-center" : "rounded-2xl bg-card/60 px-5"}`}>
+        <p className={`${compact ? "text-2xl font-bold" : "text-3xl font-semibold"} tracking-tight text-foreground`}>{metric.value}</p>
+        <p className={`mt-1 text-muted-foreground ${compact ? "text-[11px]" : "text-xs"}`}>{metric.label}</p>
       </div>)}
     </div>
   );

@@ -100,16 +100,17 @@ const run = { id: "saved-run", status: "completed", plan: { name: "Roofing campa
   } },
 };
 
-test("the main output opens in a bounded tool view before supporting actions and tool buttons", () => {
+test("the compact overview leads with actions and tools, with actual output collapsed below", () => {
   const html = render(run);
   const main = html.indexOf('aria-label="Main workflow result"');
   const actions = html.indexOf('aria-label="Supporting workflow actions"');
   const tools = html.indexOf('aria-label="Results by tool"');
-  assert.ok(main > 0 && main < actions && actions < tools);
-  const content = html.slice(main, actions);
+  assert.ok(actions > 0 && actions < tools && tools < main);
+  assert.match(html, /<details aria-label="Main workflow result" class="group mb-6">/);
+  const content = html.slice(main, html.indexOf("What would you like to do next?"));
   for (const text of ["Sourced campaign brief", "Get a Free Estimate", "Final review remains pending."]) assert.ok(content.includes(text));
   assert.match(content, /href="https:\/\/example.com\/roofing"/);
-  assert.doesNotMatch(content, /<details|Fictional demonstration/);
+  assert.doesNotMatch(content, /Fictional demonstration/);
   assert.match(html, /What happened/);
   assert.match(html, /View action/);
   assert.match(html, /Tools used/);
@@ -147,7 +148,7 @@ test("an unavailable main output does not create an empty tool preview", () => {
   assert.match(html, /View Google Ads results/);
 });
 
-test("a saved Sheets result is immediately visible without an embedded Google session", () => {
+test("the collapsed Results section retains final Sheets cells, exact link and ChatGPT attribution", () => {
   const sheetSteps = [
     { id: "source", key: "source", tool_slug: "google", status: "completed", output: { operation: "sheets.read", resolved_arguments: { spreadsheet_id: "workbook" }, provider_result: { range: "'Source'!A1:B2", values: [["Earlier source"]] } } },
     { id: "compose", key: "compose", tool_slug: "aura", status: "completed", output: { operation: "report.compose", provider_result: { body: "Generated report" } } },
@@ -160,8 +161,14 @@ test("a saved Sheets result is immediately visible without an embedded Google se
   assert.match(html, /https:\/\/docs.google.com\/spreadsheets\/d\/workbook\/edit#gid=77&amp;range=A49%3AB52/);
   assert.doesNotMatch(html, /<iframe/);
   assert.match(html, /Saved cells/);
+  assert.match(html, /Report saved to Google Sheets/);
+  assert.match(html, /source tab read in Google Sheets/);
+  assert.match(html, /report prepared with ChatGPT/);
+  assert.match(html, /rows saved to Google Sheets/);
+  assert.match(html, /<details aria-label="Main workflow result" class="group mb-6">/);
+  assert.ok(html.indexOf('aria-label="Results by tool"') < html.indexOf('aria-label="Main workflow result"'));
   assert.match(html, /aria-label="View ChatGPT results"/);
-  assert.doesNotMatch(html, /AURA Intelligence|Earlier source|majorDimension/);
+  assert.doesNotMatch(html, /AURA Intelligence|Earlier source|majorDimension|~12 min|time saved|Campaign report sent/);
 });
 
 test("a supplied-evidence report renders its complete body without implying provider execution", () => {
@@ -186,7 +193,7 @@ test("a completed campaign stays native in AURA with channel views and actual pe
       provider_result: { status: "draft", title: "Unpublished campaign package", body: campaignBody,
         summary: "Campaign prepared inside AURA.", synthetic: false, sources: [] },
     } }], result: { result_presentation: { primary_step_key: "compose", metrics: [] } } });
-  const main = html.slice(html.indexOf('aria-label="Main workflow result"'), html.indexOf('aria-label="Supporting workflow actions"'));
+  const main = html.slice(html.indexOf('aria-label="Main workflow result"'), html.indexOf("What would you like to do next?"));
   assert.match(main, /aria-label="Campaign launch package"/);
   for (const label of ["Google Ads", "Social ads", "Business Profile", "Indoor screens", "Assets", "Approvals and handoff", "Tool outputs"]) assert.ok(main.includes(label));
   assert.match(main, /Saved draft copy with pending client approvals/);
@@ -204,7 +211,7 @@ test("a scoped booking campaign shows saved GBP, Meta and Reel views without exc
     provider_result: { status: "draft", title: "Local booking campaign", body: campaignBody,
       summary: "Unpublished review package.", synthetic: false, sources: [] },
   } }], result: { result_presentation: { primary_step_key: "compose", metrics: [] } } });
-  const main = html.slice(html.indexOf('aria-label="Main workflow result"'), html.indexOf('aria-label="Supporting workflow actions"'));
+  const main = html.slice(html.indexOf('aria-label="Main workflow result"'), html.indexOf("What would you like to do next?"));
   for (const label of ["Social ads", "Business Profile", "Reel", "Booking and source checks", "Assets", "Approvals and handoff", "Tool outputs"]) assert.ok(main.includes(label));
   assert.doesNotMatch(main, /Google Ads|Indoor screens|Open in Google Docs/);
   assert.match(main, /Complete saved report and source evidence/);
