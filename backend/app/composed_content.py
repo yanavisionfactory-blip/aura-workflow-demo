@@ -79,7 +79,7 @@ def validate_composed_content(step, arguments):
 def preserve_action_targets(planned, resolved):
     """Composition changes prose, never a known destination or publish status."""
     result = dict(resolved)
-    for field in ("post", "post_id", "media_id", "issue_id_or_key", "status"):
+    for field in ("post", "post_id", "media_id", "issue_id_or_key", "status", "spreadsheet_id", "range"):
         value = planned.get(field)
         if value not in (None, "") and not referenced_paths(value):
             result[field] = value

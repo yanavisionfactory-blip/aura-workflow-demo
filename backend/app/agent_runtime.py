@@ -16,13 +16,13 @@ from .config import get_settings
 from .model_inputs import (
     ModelInputTooLarge,
     bounded_input,
-    canonical_execution_evidence,
     canonical_review_artifacts,
     encoded,
     evidence_chunks,
     is_input_limit,
     pack,
     semantic_evidence,
+    sheet_transfer_evidence,
     step_review_payload,
 )
 from .policy import operation_scope
@@ -1894,7 +1894,7 @@ async def materialize_action_arguments(
         ),
         None,
     )
-    execution_context = canonical_execution_evidence(execution_context)
+    execution_context = sheet_transfer_evidence(execution_context, step)
     referenced_variables = {path.split(".")[1] for path in referenced_paths(step)
                             if path.startswith("vars.") and len(path.split(".")) > 1}
     execution_context["vars"] = {key: value for key, value in execution_context["vars"].items()

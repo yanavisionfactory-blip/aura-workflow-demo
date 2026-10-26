@@ -12,7 +12,53 @@ from app.model_inputs import (
     bounded_input,
     evidence_chunks,
     pack,
+    sheet_transfer_evidence,
 )
+
+
+def report_transfer_fixture():
+    from app.workflow_context import step_context_value
+    pages = {f"page_{i}": {"text": f"Source {i}: " + str(i) * 30000} for i in range(8)}
+    report = {"status": "draft", "title": "Comparison", "body": "| Brand | Price |\n|---|---|\n| Example | $70 / 30 ml |\nFinal caveat remains intact.",
+              "sources": [{"id": key, "title": key, "content": page["text"]} for key, page in pages.items()]}
+    context = {"steps": {**pages, "comparison": step_context_value(report, "report.compose"),
+                         "headers": {"range": "'Comparison'!A1:B1", "values": [["Brand", "Price"]]}}}
+    step = {"tool_slug": "google", "operation": "sheets.append", "depends_on": ["comparison", "headers"],
+            "arguments": {"spreadsheet_id": "approved-sheet", "range": "'Comparison'!A1:B1000", "values": "{{steps.comparison.body}}"}}
+    return context, step, report
+
+
+def test_report_transfer_preserves_complete_report_and_headers_without_reprocessing_research():
+    context, step, report = report_transfer_fixture()
+    before = json.dumps(context)
+    projected = sheet_transfer_evidence(context, step)
+    assert set(projected["steps"]) == {"comparison", "headers"}
+    assert projected["steps"]["comparison"]["body"] == report["body"]
+    assert projected["steps"]["headers"]["values"] == [["Brand", "Price"]]
+    assert len(projected["steps"]["comparison"]["source_references"]) == 8
+    assert "Final caveat remains intact." in bounded_input(projected)
+    assert json.dumps(context) == before
+
+
+def test_transfer_projection_does_not_change_unrelated_actions_or_unknown_report_fields():
+    context, step, _ = report_transfer_fixture()
+    for patch in [{"operation": "gmail.send"}, {"arguments": {"values": "{{steps.comparison.sources}}"}},
+                  {"arguments": {"values": "{{steps.comparison.body}}", "range": "{{vars.target}}"}}]:
+        assert "page_7" in sheet_transfer_evidence(context, {**step, **patch})["steps"]
+
+
+async def test_sheet_materialization_uses_one_model_call_and_keeps_approved_destination(monkeypatch):
+    context, step, report = report_transfer_fixture()
+    calls = []
+    async def generate(agent, payload, **kwargs):
+        calls.append((agent.name, payload))
+        assert agent.name != "Evidence Reader"
+        assert payload["accepted_execution_context"]["steps"]["comparison"]["body"] == report["body"]
+        return {"arguments": {"spreadsheet_id": "wrong-sheet", "range": "Wrong!A1", "values": [["Example", "$70 / 30 ml"]]}}
+    monkeypatch.setattr(agent_runtime, "_run", generate)
+    result = await agent_runtime.materialize_action_arguments("Transfer the matching report rows", step, context)
+    assert len(calls) == 1
+    assert result == {**step["arguments"], "values": [["Example", "$70 / 30 ml"]]}
 
 
 def test_exact_repeated_provider_content_is_shared_without_losing_late_fields():

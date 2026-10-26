@@ -69,6 +69,11 @@ export function recoveryForRun(run = {}) {
     const savedReadback = blocker.action === "recheck_saved_result"
       && blocker.retryable === true && Boolean(blocker.step_id);
     const contentStep = steps[blockerIndex];
+    const preparationRetry = blocker.action === "inspect_run"
+      && ["no_safe_recovery", "recovery_budget_exhausted"].includes(blocker.code)
+      && contentStep?.status === "failed" && contentStep.consequential === true
+      && contentStep.approval_status === "pending"
+      && contentStep.recovery?.phase === "before_action" && contentStep.recovery.can_retry === true;
     // An explicit operator retry may continue read-only composition after a
     // deployed validation repair. The resume endpoint remains authoritative;
     // saved provider results are rechecked there without replaying generation.
@@ -84,7 +89,7 @@ export function recoveryForRun(run = {}) {
       && steps.some((step) => step.operation === "gmail.get");
     return {
       index: blockerIndex >= 0 ? blockerIndex : null,
-      stepId: blocker.step_id || (websiteContentRetry ? contentStep.id : null),
+      stepId: blocker.step_id || (websiteContentRetry || preparationRetry ? contentStep.id : null),
       blockerCode: blocker.code,
       blockerAction: blocker.action,
       toolSlug: blocker.tool_slug || null,
@@ -93,7 +98,9 @@ export function recoveryForRun(run = {}) {
       connectedAccount: blocker.connected_account || null,
       what: labels[blocker.code] || "AURA stopped at a required human decision.",
       why: blocker.message || "AURA cannot safely continue this run without this decision.",
-      fix: incompleteCustomerRead
+      fix: preparationRetry
+        ? "Retry preparation using the saved results. The action will still require review before anything is submitted."
+        : incompleteCustomerRead
         ? "Build a new plan that reads customer conversations and sent history, then review it before starting. This run only read messages; it sent nothing."
         : websiteContentRetry
         ? savedWebsiteContent
@@ -105,9 +112,9 @@ export function recoveryForRun(run = {}) {
         ? "Review the saved results, then provide the missing source details in a revised request. The completed steps will not run again automatically."
         : fixes[blocker.action] || "Resolve the exact blocker shown above, then return to this saved run.",
       canRestartReadPlan: incompleteCustomerRead,
-      canRetry: connectionAction || retryAction || savedReadback || finalReviewRetry || websiteContentRetry,
+      canRetry: connectionAction || retryAction || savedReadback || finalReviewRetry || websiteContentRetry || preparationRetry,
       canSkip: false,
-      buttonLabel: websiteContentRetry
+      buttonLabel: preparationRetry ? "Retry preparation" : websiteContentRetry
         ? savedWebsiteContent ? "Recheck saved content" : "Retry content step"
         : savedReadback
         ? "Recheck saved result"
@@ -120,7 +127,9 @@ export function recoveryForRun(run = {}) {
         : blocker.action === "reconnect_account"
           ? "Reconnect account"
           : "Connect account",
-      subtitle: websiteContentRetry
+      subtitle: preparationRetry
+        ? "Completed work is saved. This action has not been submitted."
+        : websiteContentRetry
         ? "Completed source reads are saved. This step prepares unapproved content and makes no CMS changes."
         : savedReadback
         ? "The saved provider action will not be submitted again."
