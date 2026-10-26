@@ -19,6 +19,7 @@ import {
 import { aura } from "@/api/auraClient";
 import AgentConnectionForm from "./AgentConnectionForm";
 import { agentConnectionPreset } from "@/lib/agentConnections.mjs";
+import { connectionScreenPreset } from "@/lib/connectionNavigation.mjs";
 import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
 import {
   connectTool,
@@ -47,12 +48,14 @@ export default function ConnectionsPill() {
   const [preset] = useState(() => agentConnectionPreset(
     typeof window === "undefined" ? "" : window.location.search,
   ));
+  const [appPreset] = useState(() => typeof window === "undefined"
+    ? null : connectionScreenPreset(window.location.search));
   const [connected, setConnected] = useState(getAllConnections);
   const [documents, setDocuments] = useState(getAttachedDocuments);
-  const [workspaceOpen, setWorkspaceOpen] = useState(Boolean(preset));
-  const [connectOpen, setConnectOpen] = useState(Boolean(preset));
-  const [tab, setTab] = useState(preset ? "agents" : "apps");
-  const [query, setQuery] = useState("");
+  const [workspaceOpen, setWorkspaceOpen] = useState(Boolean(preset || appPreset));
+  const [connectOpen, setConnectOpen] = useState(Boolean(preset || appPreset));
+  const [tab, setTab] = useState(appPreset ? "apps" : preset ? "agents" : "apps");
+  const [query, setQuery] = useState(appPreset?.query || "");
   const [catalogRevision, setCatalogRevision] = useState(0);
   const [connecting, setConnecting] = useState(null);
   const [requesting, setRequesting] = useState(null);
@@ -160,7 +163,8 @@ export default function ConnectionsPill() {
     setConnecting(tool.name);
     setError("");
     try {
-      await connectTool(tool.name);
+      const result = await connectTool(tool.name);
+      if (result.authorizationStarted) return;
       await hydrateConnections();
     } catch (cause) {
       setError(cause.message || `Could not connect ${tool.name}.`);
@@ -206,6 +210,7 @@ export default function ConnectionsPill() {
         setManagedConnection(null);
       } else if (action === "reconnect") {
         const result = await reconnectTool(name, managedConnection?.id);
+        if (result.redirecting) return;
         setManagedConnection({ ...result.tool, uiName: name });
       } else {
         const result = await testToolConnection(name, managedConnection?.id);
@@ -388,6 +393,7 @@ export default function ConnectionsPill() {
               </div>
 
               {error && <p className="mx-5 mt-3 rounded-lg border border-red-400/20 bg-red-400/5 p-2 text-xs text-red-400">{error}</p>}
+              {appPreset && <p role="status" className="mx-5 mt-3 rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-muted-foreground">{appPreset.message}</p>}
 
               {tab === "apps" ? (
                 <>

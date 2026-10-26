@@ -1,5 +1,6 @@
 import { replaceConnections } from "@/lib/connectionsStore";
 import { isVerifiedConnection, matchingConnections, selectConnection } from "@/lib/connectionSelection.mjs";
+import { usesSameTabAuthorization } from "@/lib/connectionNavigation.mjs";
 import {
   authorizeConnectorBroker,
   disconnectPythonConnection,
@@ -49,11 +50,13 @@ export async function connectTool(toolName, opts = {}) {
     });
     const authorizationProvider = existing?.slug || provider;
     const backend = existing?.connection_backend || requestedRoute?.connectionBackend || entry.connectionBackend;
-    if (!["pipedream", "wordpress_plugin", "shopify_client_credentials"].includes(backend)) authorizationWindow = reserveAuthorizationWindow(authorizationProvider);
+    const sameTab = usesSameTabAuthorization(authorizationProvider, existing);
+    if (!sameTab && !["pipedream", "wordpress_plugin", "shopify_client_credentials"].includes(backend)) authorizationWindow = reserveAuthorizationWindow(authorizationProvider);
     const result = await authorizeConnectorBroker(authorizationProvider, {
       connection: existing,
       timeoutMs: 600000,
       reservedWindow: authorizationWindow,
+      sameTab,
     });
 
     if (result.redirecting) {
@@ -154,7 +157,8 @@ export async function reconnectTool(toolName, connectionId = null) {
     // absent from the current one-click marketplace catalog.
     const provider = tool.slug || providerForTool(toolName);
     if (!provider) throw new Error(`${toolName} has no reconnectable provider.`);
-    if (!["pipedream", "shopify_client_credentials"].includes(tool.connection_backend)) {
+    const sameTab = usesSameTabAuthorization(provider, tool);
+    if (!sameTab && !["pipedream", "shopify_client_credentials"].includes(tool.connection_backend)) {
       authorizationWindow = reserveAuthorizationWindow(provider, true);
     }
     const result = await authorizeConnectorBroker(provider, {
@@ -162,7 +166,9 @@ export async function reconnectTool(toolName, connectionId = null) {
       // Google account selection and consent can take longer than two minutes.
       timeoutMs: 600000,
       reservedWindow: authorizationWindow,
+      sameTab,
     });
+    if (result.redirecting) return result;
     await hydrateConnections({ force: true });
     return result;
   } catch (error) {
