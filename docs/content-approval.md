@@ -8,6 +8,11 @@ Darius's final sign-off.
 
 ## Connect and select evidence
 
+If a provider rejects AURA before sign-in, use the operator instructions in
+[`backend/docs/proofing-oauth-setup.md`](../backend/docs/proofing-oauth-setup.md).
+That guide covers exact callback registration and the supported server-side
+configuration for provider-issued MCP clients.
+
 1. In **Connect → Find apps**, choose **Frame.io**. The direct connection uses
    Adobe consent for the official Frame.io V4 MCP service. Select the identity
    and organization containing the test asset. Existing broker connections are

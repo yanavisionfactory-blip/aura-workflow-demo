@@ -6,6 +6,7 @@ registers a client, sends a code, or refreshes a credential.
 
 import base64
 import hashlib
+import json
 import secrets
 import time
 from urllib.parse import urlencode, urlsplit
@@ -122,7 +123,95 @@ class MCPRegistrationRejected(ConnectorError):
                             "Desktop machine containing the completed client audit."),
                 support_url="https://sitebulb.com/support/",
             )
+        if self.provider == "frame-io" and "redirect" in self.reason.lower():
+            detail.update(
+                requires_provider_approval=True,
+                resolution=("Frame.io must approve AURA's exact callback or issue an AURA client "
+                            "registration for its MCP authorization server. Configure that "
+                            "registration on the backend before retrying Connect."),
+            )
         return detail
+
+
+class MCPClientConfigurationError(ConnectorError):
+    """An operator configuration error, containing no supplied credential values."""
+
+    def __init__(self, provider: str, reason: str):
+        self.provider = provider
+        super().__init__(f"{mcp_service(provider)['name']} OAuth setup needs correction: {reason}")
+
+    def public_detail(self, callback_url: str) -> dict:
+        return {
+            "code": "mcp_client_configuration_invalid",
+            "provider": mcp_service(self.provider)["name"],
+            "message": str(self),
+            "callback_url": callback_url,
+            "resolution": "An AURA operator must correct the provider-issued MCP client registration.",
+        }
+
+
+def configured_client_registration(settings, provider: str) -> dict | None:
+    """Read server-owned registrations; never accept these fields from a browser."""
+    if provider not in {"frame-io", "pageproof"}:
+        return None
+    try:
+        registrations = json.loads(settings.mcp_oauth_clients_json.get_secret_value())
+    except (ValueError, TypeError):
+        raise MCPClientConfigurationError(provider, "Client configuration must be a JSON object.") from None
+    if not isinstance(registrations, dict):
+        raise MCPClientConfigurationError(provider, "Client configuration must be a JSON object.")
+    if provider not in registrations:
+        return None
+    registration = registrations[provider]
+    if not isinstance(registration, dict):
+        raise MCPClientConfigurationError(provider, "The provider registration must be an object.")
+    fields = {"client_id", "issuer", "redirect_uri", "token_endpoint_auth_method", "client_secret"}
+    if set(registration) - fields:
+        raise MCPClientConfigurationError(provider, "The registration contains unsupported fields.")
+    for key in fields - {"client_secret"}:
+        value = registration.get(key)
+        if (not isinstance(value, str) or not value or len(value) > 2000
+                or value != value.strip() or any(ord(char) < 33 or ord(char) > 126 for char in value)):
+            raise MCPClientConfigurationError(provider, "Required registration fields are missing or malformed.")
+    method = registration["token_endpoint_auth_method"]
+    if method not in {"none", "client_secret_post", "client_secret_basic"}:
+        raise MCPClientConfigurationError(provider, "The registered authentication method is unsupported.")
+    secret = registration.get("client_secret", "")
+    if (not isinstance(secret, str) or len(secret) > 8000 or secret != secret.strip()
+            or any(ord(char) < 32 for char in secret)
+            or (method == "none" and secret) or (method != "none" and not secret)):
+        raise MCPClientConfigurationError(provider, "The client secret does not match the registered method.")
+    return {**registration, "client_secret": secret}
+
+
+def _registered_client(credentials: dict, registration: dict, provider: str,
+                       issuer: str, callback_url: str, methods: list) -> tuple[dict, str]:
+    """Bind a pre-registered client to the discovered issuer and exact callback."""
+    if registration["issuer"].rstrip("/") != issuer:
+        raise MCPClientConfigurationError(provider, "The registered issuer does not match the MCP service.")
+    parsed = urlsplit(callback_url)
+    if (registration["redirect_uri"] != callback_url or parsed.scheme != "https"
+            or not parsed.hostname or parsed.username or parsed.password
+            or parsed.query or parsed.fragment or parsed.port not in {None, 443}):
+        raise MCPClientConfigurationError(provider, "The registered callback must match AURA's HTTPS callback exactly.")
+    method = registration["token_endpoint_auth_method"]
+    if method not in methods:
+        raise MCPClientConfigurationError(provider, "The MCP issuer does not support the registered authentication method.")
+    binding = {
+        "client_id": registration["client_id"],
+        "registered_issuer": issuer,
+        "registered_redirect_uri": callback_url,
+        "registered_token_auth_method": method,
+    }
+    if credentials.get("access_token") and any(credentials.get(key) != value for key, value in binding.items()):
+        raise MCPClientConfigurationError(provider, "An existing grant uses a different client; arrange a planned migration.")
+    credentials = dict(credentials)
+    credentials.pop("client_secret", None)
+    credentials.pop("client_secret_expires_at", None)
+    if method != "none":
+        credentials["client_secret"] = registration["client_secret"]
+    credentials.update(binding, registered_client_source="operator")
+    return credentials, method
 
 
 def mcp_service(provider: str) -> dict:
@@ -317,7 +406,8 @@ async def _json(client: httpx.AsyncClient, method: str, url: str, *,
 
 
 async def prepare_authorization(credentials: dict, state: str, callback_url: str,
-                                provider: str = "ubersuggest") -> tuple[str, dict, dict]:
+                                provider: str = "ubersuggest", *,
+                                registration: dict | None = None) -> tuple[str, dict, dict]:
     """Prepare the vendor's supported client flow and return consent, never a user token."""
     service = mcp_service(provider)
     async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
@@ -332,7 +422,13 @@ async def prepare_authorization(credentials: dict, state: str, callback_url: str
         credentials = dict(credentials)
         use_metadata = (service.get("client_metadata_document")
                         and metadata.get("client_id_metadata_document_supported") is True)
-        if use_metadata:
+        if registration is not None:
+            credentials, token_method = _registered_client(
+                credentials, registration, provider, issuer, callback_url, methods,
+            )
+        elif credentials.get("registered_client_source") == "operator":
+            raise MCPClientConfigurationError(provider, "The configured registration for this client is missing.")
+        elif use_metadata:
             if "none" not in methods:
                 raise ConnectorError("PageProof did not offer public client metadata authentication")
             token_method = "none"

@@ -61,7 +61,9 @@ from .managed_connectors import (
     managed_connector_client,
 )
 from .mcp_oauth import (
+    MCPClientConfigurationError,
     MCPRegistrationRejected,
+    configured_client_registration,
     managed_mcp_provider,
     mcp_service,
     pageproof_client_metadata,
@@ -1136,7 +1138,7 @@ async def autoconnect_agent(
                 })
             return {**result, "connected_by": "aura_autodiscovery"}
         payload, manifest, credentials, kind = await _discover_agent_intent(intent)
-    except MCPRegistrationRejected as exc:
+    except (MCPRegistrationRejected, MCPClientConfigurationError) as exc:
         raise HTTPException(409, detail=exc.public_detail(
             oauth_route_callback_url(settings, "mcp-agent"),
         )) from exc
@@ -1337,9 +1339,11 @@ async def _managed_mcp_connection(
         session.add(tool)
         await session.flush()
     state = create_oauth_state(context.workspace_id, f"mcp-agent:{tool.id}")
+    registration = configured_client_registration(settings, provider)
     authorization_url, credentials, config = await prepare_mcp_authorization(
         credentials, state, oauth_route_callback_url(settings, "mcp-agent"),
         provider=provider,
+        **({"registration": registration} if registration is not None else {}),
     )
     credentials["mcp_oauth_pending"]["subject"] = context.subject
     tool.encrypted_credentials = CredentialVault().encrypt(credentials)
@@ -1408,6 +1412,9 @@ async def mcp_agent_oauth_callback(
     credentials.pop("mcp_oauth_pending", None)
     tool.encrypted_credentials = CredentialVault().encrypt(credentials)
     await session.commit()
+    if membership and error in {"invalid_client", "unauthorized_client", "invalid_redirect_uri"}:
+        return redirect("error", f"{service['name']} rejected AURA's OAuth client setup. "
+                        "An AURA operator must correct the registration before you sign in again.", tool.slug)
     if not membership or error or not code:
         return redirect("error", f"{service['name']} did not grant access. Existing connections were kept.", tool.slug)
     try:
@@ -2670,7 +2677,7 @@ async def create_connector_broker_session(
                 raise HTTPException(404, "Connection not found")
         try:
             result = await _managed_mcp_connection(context, session, provider=managed_provider)
-        except MCPRegistrationRejected as exc:
+        except (MCPRegistrationRejected, MCPClientConfigurationError) as exc:
             raise HTTPException(409, exc.public_detail(oauth_route_callback_url(settings, "mcp-agent"))) from exc
         except (ConnectorError, httpx.HTTPError, ValueError, TimeoutError) as exc:
             raise HTTPException(409, "The service could not verify its connection setup. Existing access was kept.") from exc
