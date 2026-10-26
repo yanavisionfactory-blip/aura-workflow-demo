@@ -275,7 +275,10 @@ def sheet_transfer_evidence(context, step):
     actions and non-report references retain their complete context.
     """
     from .workflow_context import (
-        REFERENCE, normalize_reference_path, referenced_paths, referenced_step_keys,
+        REFERENCE,
+        normalize_reference_path,
+        referenced_paths,
+        referenced_step_keys,
     )
 
     canonical = canonical_execution_evidence(context)
