@@ -8,6 +8,12 @@ const report = (id, body) => ({ id, key: id, status: "completed", tool: "AURA", 
     provider_result: { status: "draft", title: id, body, synthetic: true, sources: [] } },
 });
 
+test("public website reads are attributed to web research while composition remains ChatGPT", () => {
+  const entries = toolResultEntries([{ id: "page", tool: "AURA Intelligence", status: "completed",
+    output: { operation: "web.page.read", provider_result: { url: "https://example.com/", text: "Retrieved content" } } }, report("analysis", "Comparison")]);
+  assert.deepEqual(entries.map((entry) => entry.tool), ["Web research", "ChatGPT"]);
+});
+
 test("main output identity retains other actions from the same tool without duplicating the main report", () => {
   const activity = [report("first", "Full first report."), report("main", "Full final report.")];
   const entries = toolResultEntries(activity);

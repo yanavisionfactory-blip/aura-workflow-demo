@@ -48,3 +48,14 @@ test("an unverified write with no row receipt does not invent a count or verific
 test("non-Sheets results keep their own presentation", () => {
   assert.equal(sheetWorkflowSummary([compose], { kind: "document" }), null);
 });
+
+test("web research excludes failed reads, repeated pages and later tracking-table checks", () => {
+  const page = { id: "web", operation: "web.page.read", status: "completed", hasResponse: true,
+    response: { url: "https://example.com/", text: "Retrieved page" } };
+  const summary = sheetWorkflowSummary([page, { ...page, id: "repeat" },
+    { ...page, id: "failed", status: "failed", response: { url: "https://example.com/failed" } },
+    compose, read("Tracking headers"), write, read("Verification")], primary);
+  assert.deepEqual(summary.metrics, [{ value: 1, label: "web page read" }, { value: 1, label: "report prepared" }, { value: 4, label: "rows saved" }]);
+  assert.match(summary.summary, /using 1 public web page/);
+  assert.doesNotMatch(summary.summary, /source tab/);
+});
