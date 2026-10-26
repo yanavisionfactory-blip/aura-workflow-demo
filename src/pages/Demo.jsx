@@ -66,6 +66,7 @@ const PLANNING_POLL_INTERVAL_MS = 400;
 const PLANNING_TRANSIENT_FAILURE_LIMIT = 3;
 
 const planToolName = (step) => {
+  if (step.operation === "report.compose") return "ChatGPT";
   if (step.tool_slug === "google") {
     if (step.operation.startsWith("gmail.")) return "Gmail";
     if (step.operation.startsWith("calendar.")) return "Google Calendar";

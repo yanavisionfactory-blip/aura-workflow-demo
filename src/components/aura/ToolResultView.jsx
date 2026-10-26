@@ -5,7 +5,7 @@ import { toolResultGroups, toolResultName, toolResultStatus } from "@/lib/toolRe
 import ResultPreview from "./ResultPreview";
 import ToolEvidence, { EvidenceValue } from "./ToolEvidence";
 
-export function ToolResultFrame({ tool, title, synthetic = false, onExpand, children, expanded = false }) {
+export function ToolResultFrame({ tool, title, synthetic = false, onExpand, children, expanded = false, appScreen = false }) {
   return <section aria-label={`${toolResultName(tool)} output preview`} className="overflow-hidden rounded-xl border border-white/15 bg-[#0b1320]">
     <header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-white/[0.03] px-4 py-3">
       <div className="flex min-w-0 items-center gap-3">
@@ -17,7 +17,7 @@ export function ToolResultFrame({ tool, title, synthetic = false, onExpand, chil
         {onExpand && <button type="button" onClick={onExpand} className="inline-flex items-center gap-1.5 text-xs font-medium text-primary"><Maximize2 className="h-3.5 w-3.5" />Open tool view</button>}
       </div>
     </header>
-    <div tabIndex={0} aria-label={`${title} content`} className={`${expanded ? "min-h-0 flex-1" : "max-h-[30rem]"} overflow-auto overscroll-contain p-3 outline-offset-[-2px] sm:p-5`}>{children}</div>
+    <div tabIndex={0} aria-label={`${title} content`} className={`${expanded || appScreen ? "min-h-0 flex-1" : "max-h-[30rem]"} overflow-auto overscroll-contain outline-offset-[-2px] ${appScreen ? "p-0" : "p-3 sm:p-5"}`}>{children}</div>
   </section>;
 }
 

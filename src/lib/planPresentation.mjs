@@ -1,6 +1,7 @@
 // Labels follow the actual operation, never incidental words in its reason.
 export function operationStepTitle(step = {}, tool = "the app") {
   const operation = String(step.operation || "");
+  if (operation === "report.compose") return "Generate report with ChatGPT";
   if (operation === "meta-ads-simulated.review.get") return "Run the Meta Ads simulation";
   if (operation === "klaviyo-simulated.lifecycle.get") return "Run the Klaviyo simulation";
   if (operation === "website.source.inspect") {

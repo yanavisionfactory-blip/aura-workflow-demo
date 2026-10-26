@@ -3,6 +3,8 @@ import { articleMarkdown, articleWordCount } from "./actionContent.mjs";
 import { campaignCopySections } from "./campaignCopySections.mjs";
 import { marketingToolResult } from "./marketingToolResults.mjs";
 import { seoAuditManifest } from "./seoAuditResult.mjs";
+import { googleSheetsResult } from "./googleSheetsResult.mjs";
+import { operationProviderName } from "./providerDisplay.mjs";
 
 export function readableResultText(value, fallback = "Review the saved app results below.") {
   if (typeof value !== "string") return fallback;
@@ -290,7 +292,7 @@ export function supportingReceipts(results = {}, activity = [], primary = null, 
         || (designId ? `https://www.canva.com/design/${encodeURIComponent(designId)}/edit` : null)
         || (isDocumentCreate(operation) || isDocumentRead(operation) ? documentUrl(providerResult) : null)
         || (operation === "mailchimp.audiences.list" ? mailchimpAudienceLink(providerResult) : null);
-      const tool = operation === "gmail.send" ? "Gmail" : step.tool || "AURA";
+      const tool = operationProviderName(operation === "gmail.send" ? "Gmail" : step.tool || "AURA", operation);
       const savedTitle = isDocumentCreate(operation) || isDocumentRead(operation)
         ? providerResult.ret?.title || providerResult.ret?.name || providerResult.title || providerResult.name : null;
       return {
@@ -535,6 +537,8 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
     completionSummary: weekly.provider_result.summary || "Source processors and AURA model drafting completed. Inspect separate source results, experiments, draft variants and backlog.",
     packet: weekly.provider_result.packet, link: null, downloadUrl: null,
   };
+  const spreadsheet = googleSheetsResult(completed, context, explicitPrimary);
+  if (spreadsheet) return spreadsheet;
   const report = [...completed].reverse().find((output) => output.operation === "report.compose"
     && output.critic?.action === "accept" && output.outcome_check?.status === "verified"
     && output.provider_result?.status === "draft"
@@ -549,8 +553,8 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
       audit, link: null, downloadUrl: null,
     };
     return {
-      title: saved.title || context.title, kind: "report", provider: "AURA", providerVerb: "Saved in",
-      completionTitle: "Review draft ready in AURA",
+      title: saved.title || context.title, kind: "report", provider: "ChatGPT", providerVerb: "Generated with",
+      completionTitle: "Review draft ready",
       completionSummary: saved.synthetic
         ? "Fictional client review saved in AURA. All client data is synthetic."
         : saved.summary,

@@ -1,4 +1,5 @@
 // Display saved receipts only. This module never dispatches a provider action.
+import { operationProviderName } from "./providerDisplay.mjs";
 const secretKey = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|password|client[_-]?secret|credential|cookie|private[_-]?key)/i;
 
 export function redactEvidence(value, depth = 0) {
@@ -50,7 +51,7 @@ export function toolEvidence(activity = []) {
     return {
       id: step.id || step.stepKey || step.key || `step-${index}`,
       tool: (output.operation || step.operation) === "seo.crawl.analyze"
-        ? "Screaming Frog · export import" : evidenceToolName(step.tool),
+        ? "Screaming Frog · export import" : operationProviderName(evidenceToolName(step.tool), output.operation || step.operation),
       action: step.action || step.reason || "Provider action",
       operation: output.operation || step.operation || "",
       status: providerError ? "provider_error" : step.status || "pending",
