@@ -96,3 +96,86 @@ test("broker failure leaves the account unconnected and the saved run in place",
   assert.equal(flow.getAllConnections()["Meta Ads"], undefined);
   assert.equal(context.saved.get("aura_active_python_run_id"), "saved-run");
 });
+
+function popupBrowser() {
+  const namedWindows = new Map();
+  const popups = [];
+  return {
+    popups,
+    setTimeout(callback) { callback(); },
+    open(url, target) {
+      // Navigating an existing named window does not synchronously replace its
+      // cross-origin document with about:blank.
+      const existing = namedWindows.get(target);
+      if (existing && !existing.closed) return existing;
+      const document = { title: "", body: { innerHTML: "" } };
+      let crossOrigin = false;
+      const popup = {
+        closed: false,
+        get document() {
+          if (crossOrigin) throw new DOMException("Blocked access to a cross-origin document", "SecurityError");
+          return document;
+        },
+        location: { assign(destination) { crossOrigin = destination !== "about:blank"; } },
+        close() { this.closed = true; },
+      };
+      if (target !== "_blank") namedWindows.set(target, popup);
+      popups.push(popup);
+      return popup;
+    },
+  };
+}
+
+test("connect and reconnect retries do not access an earlier provider window's document", () => {
+  for (const reconnecting of [false, true]) {
+    globalThis.window = popupBrowser();
+    const earlier = flow.reserveAuthorizationWindow("google", reconnecting);
+    earlier.location.assign("https://connect.example.invalid/google");
+    assert.throws(() => earlier.document, { name: "SecurityError" });
+
+    const retry = flow.reserveAuthorizationWindow("google", reconnecting);
+    assert.notEqual(retry, earlier);
+    assert.equal(retry.document.title, reconnecting ? "Reconnecting to AURA" : "Connecting to AURA");
+    assert.match(retry.document.body.innerHTML, /Preparing/);
+    assert.equal(earlier.closed, false);
+  }
+});
+
+test("a blocked authorization popup still gives actionable guidance", () => {
+  globalThis.window = { open: () => null };
+  assert.throws(() => flow.reserveAuthorizationWindow("google"), /Allow pop-ups for AURA/);
+});
+
+test("a managed retry verifies Google access without reading the cross-origin popup", async () => {
+  const { saved } = setup();
+  globalThis.window = popupBrowser();
+  const earlier = flow.reserveAuthorizationWindow("google");
+  earlier.location.assign("https://connect.example.invalid/previous");
+  const retry = flow.reserveAuthorizationWindow("google");
+  const requests = [];
+  const google = { id: "google-connection", slug: "google", enabled: true };
+  globalThis.fetch = async (url, options) => {
+    const { pathname } = new URL(url);
+    requests.push(pathname);
+    assert.equal(options.headers["X-Workspace-Id"], "test-workspace");
+    assert.equal(options.headers.Authorization, "Bearer test-user-token");
+    if (pathname === "/v1/managed-connectors/google/sync") {
+      return Response.json({ connected: true, tool_id: google.id });
+    }
+    if (pathname === `/v1/connections/${google.id}/test`) {
+      return Response.json({ status: "verified", verification: { ok: true } });
+    }
+    if (pathname === "/v1/tools") return Response.json([google]);
+    throw new Error(`Unexpected request: ${pathname}`);
+  };
+
+  const result = await flow.authorizeManagedConnector("google", 1000, retry, {
+    connect_link: "https://connect.example.invalid/current",
+  });
+  assert.equal(result.connected, true);
+  assert.equal(result.tool.id, google.id);
+  assert.deepEqual(requests, ["/v1/managed-connectors/google/sync", `/v1/connections/${google.id}/test`, "/v1/tools"]);
+  assert.equal(retry.closed, true);
+  assert.equal(earlier.closed, false);
+  assert.equal(saved.get("aura_active_python_run_id"), "saved-run");
+});
