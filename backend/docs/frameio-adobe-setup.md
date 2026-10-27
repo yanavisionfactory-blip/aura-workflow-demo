@@ -34,6 +34,10 @@ MCP broker if native setup is missing. The OAuth flow uses Adobe IMS
 token exchange and refresh. Signed workspace state and exact callback matching
 use AURA's existing native OAuth contract.
 
+Starting OAuth requires active membership in the selected AURA workspace.
+API access logs retain the request path, method, and status while omitting all
+query strings, including temporary OAuth codes and signed state.
+
 The callback requires a refresh token, a successful `/v4/me` read, and at least
 one accessible account from `/v4/accounts` before saving a verified connection.
 An Adobe sign-in alone is not proof of a Frame.io subscription or membership.

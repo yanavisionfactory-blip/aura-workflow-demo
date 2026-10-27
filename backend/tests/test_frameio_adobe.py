@@ -11,11 +11,11 @@ from sqlalchemy import select
 
 from app import frameio, main, providers
 from app.config import Settings
-from app.models import CapabilityManifest, ToolConnection, Workspace
+from app.models import CapabilityManifest, TenantMembership, ToolConnection, Workspace
 from app.native_connectors import native_manifest
 from app.operation_contracts import output_errors
 from app.providers import PROVIDERS, ProviderExecutor
-from app.security import CredentialVault, create_oauth_state
+from app.security import CredentialVault, create_oauth_state, decode_oauth_state
 
 ACCOUNT = "11111111-1111-4111-8111-111111111111"
 FILE = "22222222-2222-4222-8222-222222222222"
@@ -303,6 +303,40 @@ async def test_callback_saves_only_verified_frameio_access_and_rejects_bad_state
         assert CredentialVault().decrypt(tool.encrypted_credentials)["frameio_verification"]["ok"]
         assert "fake-access" not in tool.encrypted_credentials
         assert (await session.scalar(select(CapabilityManifest))).status == "verified"
+
+
+@pytest.mark.parametrize("requested_workspace,active,status", [
+    ("own", True, 200), ("own", False, 403), ("other", True, 403),
+])
+async def test_oauth_start_requires_active_membership_in_the_requested_workspace(
+    monkeypatch, database, requested_workspace, active, status,
+):
+    monkeypatch.setattr(main, "settings", settings())
+    async with database() as session:
+        session.add_all([Workspace(id="own", name="Own"), Workspace(id="other", name="Other")])
+        session.add(TenantMembership(workspace_id="own", subject="alice", active=active))
+        await session.commit()
+
+    async def context():
+        return main.TenantContext(requested_workspace, "alice", "member")
+
+    async def session_override():
+        async with database() as session:
+            yield session
+
+    monkeypatch.setitem(main.app.dependency_overrides, main.tenant_context, context)
+    monkeypatch.setitem(main.app.dependency_overrides, main.session_dependency, session_override)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=main.app), base_url="https://api.example.com",
+    ) as client:
+        response = await client.get("/v1/oauth/frameio/start")
+    assert response.status_code == status
+    if status == 200:
+        query = parse_qs(urlsplit(response.json()["authorization_url"]).query)
+        claims = decode_oauth_state(query["state"][0])
+        assert claims["workspace_id"] == "own" and claims["provider"] == "frameio"
+    else:
+        assert "authorization_url" not in response.json()
 
 
 def test_configured_native_route_is_preferred_without_erasing_mcp_route():
