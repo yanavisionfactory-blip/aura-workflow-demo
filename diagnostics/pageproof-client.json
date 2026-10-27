@@ -1,0 +1,17 @@
+{
+  "client_id": "https://raw.githubusercontent.com/yanavisionfactory-blip/aura-workflow-demo/refs/heads/diagnose/pageproof-client-registration/diagnostics/pageproof-client.json",
+  "client_name": "AURA connection diagnostic",
+  "client_uri": "https://yanavisionfactory-blip.github.io/aura-workflow-demo/",
+  "redirect_uris": [
+    "https://impartial-emotion-production-49d4.up.railway.app/v1/oauth/mcp-agent/callback"
+  ],
+  "application_type": "web",
+  "grant_types": [
+    "authorization_code",
+    "refresh_token"
+  ],
+  "response_types": [
+    "code"
+  ],
+  "token_endpoint_auth_method": "none"
+}
