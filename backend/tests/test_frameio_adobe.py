@@ -116,6 +116,79 @@ async def test_adobe_login_alone_cannot_create_verified_frameio_connection(monke
         await providers.exchange_oauth_code(settings(), PROVIDERS["frameio"], "fake-code")
 
 
+@pytest.mark.parametrize("url,status,payload,stage,reason", [
+    ("https://ims-na1.adobelogin.com/ims/token/v3", 401, {"error": "invalid_client"},
+     "adobe_token", "invalid_client"),
+    ("https://ims-na1.adobelogin.com/ims/token/v3", 400, {"error": "invalid_grant"},
+     "adobe_token", "invalid_grant"),
+    ("https://ims-na1.adobelogin.com/ims/token/v3", 400, {"error": "invalid_scope"},
+     "adobe_token", "invalid_scope"),
+    ("https://api.frame.io/v4/me", 401,
+     {"errors": [{"detail": "Your Frame user is not linked to an Adobe ID."}]},
+     "frameio_identity", "adobe_identity_not_linked"),
+    ("https://api.frame.io/v4/accounts", 403, {"errors": "unexpected"},
+     "frameio_accounts", "frameio_access_denied"),
+    ("https://api.frame.io/v4/me", 503, {"error": "unavailable"},
+     "frameio_identity", "frameio_api_rejected"),
+])
+async def test_callback_identifies_failure_stage_without_saving_or_leaking_credentials(
+    monkeypatch, database, caplog, url, status, payload, stage, reason,
+):
+    request = httpx.Request("POST" if stage == "adobe_token" else "GET",
+                           url + "?code=private-code&state=private-state",
+                           headers={"Authorization": "Bearer private-token"})
+    response = httpx.Response(status, request=request, json={
+        **payload, "error_description": "private-provider-details",
+        "access_token": "private-token", "refresh_token": "private-refresh",
+    })
+    exc = httpx.HTTPStatusError("private-exception-details", request=request, response=response)
+    monkeypatch.setattr(main, "exchange_oauth_code", AsyncMock(side_effect=exc))
+    async with database() as session:
+        session.add(Workspace(id="workspace", name="Pilot"))
+        await session.commit()
+        result = await main.oauth_callback("frameio", create_oauth_state("workspace", "frameio"),
+                                           "private-code", session=session)
+        assert await session.scalar(select(ToolConnection)) is None
+        assert await session.scalar(select(CapabilityManifest)) is None
+    query = parse_qs(urlsplit(result.headers["location"]).query)
+    assert query["oauth_status"] == ["error"]
+    diagnostic = frameio.connection_failure(exc)
+    assert diagnostic["stage"] == stage
+    assert diagnostic["reason"] == reason
+    assert diagnostic["status_code"] == status
+    assert query["oauth_message"] == [diagnostic["message"]]
+    assert f"stage={stage} reason={reason} status={status}" in caplog.text
+    assert "private-" not in caplog.text + result.headers["location"] + json.dumps(diagnostic)
+
+
+@pytest.mark.parametrize("exc,reason", [
+    (frameio.FrameioReadError("This Adobe user has no accessible Frame.io V4 account."),
+     "no_frameio_accounts"),
+    (frameio.FrameioReadError("private-provider-details"), "invalid_frameio_response"),
+    (ValueError("Adobe did not grant refresh access; reconnect with offline_access."),
+     "refresh_access_missing"),
+    (httpx.ConnectTimeout("private-network-details"), "provider_unreachable"),
+    (ValueError("private-provider-details"), "unverified"),
+])
+def test_connection_failures_use_only_safe_actionable_messages(exc, reason):
+    diagnostic = frameio.connection_failure(exc)
+    assert diagnostic["reason"] == reason
+    assert "private-" not in json.dumps(diagnostic)
+    assert diagnostic["message"].endswith("Your plan was kept.")
+
+
+def test_html_and_untrusted_oauth_errors_never_escape_into_diagnostics():
+    request = httpx.Request("POST", "https://ims-na1.adobelogin.com/ims/token/v3")
+    for response in [
+        httpx.Response(502, request=request, text="private-gateway-diagnostics"),
+        httpx.Response(400, request=request, json={"error": "private-provider-details"}),
+    ]:
+        exc = httpx.HTTPStatusError("private-exception", request=request, response=response)
+        diagnostic = frameio.connection_failure(exc)
+        assert diagnostic["reason"] == "token_exchange_failed"
+        assert "private-" not in json.dumps(diagnostic)
+
+
 async def test_comments_read_all_pages_and_replies_without_claiming_approval(monkeypatch):
     def handler(request):
         if request.url.path == PATH:
