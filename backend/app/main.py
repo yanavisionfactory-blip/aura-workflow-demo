@@ -53,6 +53,7 @@ from .connector_sdk import ConnectorSDKError, validate_connector_definition
 from .db import SessionLocal, engine, session_dependency, set_tenant_context
 from .dispatch import dispatch_pending, recovery_loop
 from .identity import IdentityError, organization_claims, verify_clerk_session
+from .logging_privacy import protect_access_logs
 from .managed_connectors import (
     ConnectorConfigurationError,
     ManagedConnectorError,
@@ -235,6 +236,7 @@ from .worker import poll_subscription_task
 from .workflow_memory import select_memory_inputs
 
 logger = logging.getLogger(__name__)
+protect_access_logs()
 settings = get_settings()
 app = FastAPI(title="AURA Control Plane", version="0.1.0")
 frontend_url = settings.frontend_url.rstrip("/") + "/"
@@ -4645,6 +4647,7 @@ async def update_tool_trust(
 async def oauth_start(
     provider: str,
     context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
 ) -> dict:
     definition = PROVIDERS.get(provider)
     if not definition:
