@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Connecting to AURA</title>
+    <style>
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0b1020; color: #eef2ff; font-family: system-ui, sans-serif; }
+      main { padding: 24px; text-align: center; }
+      h1 { font-size: 18px; }
+      p { color: #94a3b8; font-size: 14px; }
+    </style>
+  </head>
+  <body>
+    <main role="status">
+      <h1>Preparing your secure connection…</h1>
+      <p>AURA will open the sign-in page here. Keep your main AURA tab open.</p>
+    </main>
+    <script>
+      if (new URLSearchParams(window.location.search).get("reconnect") === "1") {
+        document.title = "Reconnecting to AURA";
+        document.querySelector("h1").textContent = "Preparing secure reauthorization…";
+      }
+    </script>
+  </body>
+</html>

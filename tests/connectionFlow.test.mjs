@@ -11,7 +11,7 @@ const originalFetch = globalThis.fetch;
 before(async () => {
   temporary = fs.mkdtempSync(path.join(repo, ".connection-flow-"));
   await build({
-    configFile: path.join(repo, "vite.config.js"), logLevel: "silent",
+    configFile: path.join(repo, "vite.config.js"), logLevel: "silent", base: "/aura-workflow-demo/",
     define: { "import.meta.env.VITE_AURA_API_URL": JSON.stringify("https://api.example.invalid") },
     build: { ssr: path.join(repo, "tests/fixtures/connectionFlow.mjs"), outDir: temporary,
       emptyOutDir: true, rollupOptions: { output: { entryFileNames: "flow.mjs" } } },
@@ -97,13 +97,20 @@ test("broker failure leaves the account unconnected and the saved run in place",
   assert.equal(context.saved.get("aura_active_python_run_id"), "saved-run");
 });
 
-function popupBrowser() {
+function popupBrowser({ forbidDocument = false } = {}) {
   const namedWindows = new Map();
   const popups = [];
+  const openedUrls = [];
+  const destinations = [];
+  const listeners = new Map();
   return {
-    popups,
+    popups, openedUrls, destinations, listeners,
+    location: { origin: "https://aura.example.invalid" },
+    addEventListener(name, listener) { listeners.set(name, listener); },
+    removeEventListener(name) { listeners.delete(name); },
     setTimeout(callback) { callback(); },
     open(url, target) {
+      openedUrls.push(url);
       // Navigating an existing named window does not synchronously replace its
       // cross-origin document with about:blank.
       const existing = namedWindows.get(target);
@@ -113,10 +120,16 @@ function popupBrowser() {
       const popup = {
         closed: false,
         get document() {
-          if (crossOrigin) throw new DOMException("Blocked access to a cross-origin document", "SecurityError");
+          if (crossOrigin || forbidDocument) throw new DOMException("Blocked access to a cross-origin document", "SecurityError");
           return document;
         },
-        location: { assign(destination) { crossOrigin = destination !== "about:blank"; } },
+        location: {
+          get assign() {
+            if (crossOrigin) throw new DOMException("Blocked access to cross-origin location.assign", "SecurityError");
+            return (destination) => { crossOrigin = destination !== "about:blank"; destinations.push(destination); };
+          },
+          set href(destination) { crossOrigin = true; destinations.push(destination); },
+        },
         close() { this.closed = true; },
       };
       if (target !== "_blank") namedWindows.set(target, popup);
@@ -135,9 +148,19 @@ test("connect and reconnect retries do not access an earlier provider window's d
 
     const retry = flow.reserveAuthorizationWindow("google", reconnecting);
     assert.notEqual(retry, earlier);
-    assert.equal(retry.document.title, reconnecting ? "Reconnecting to AURA" : "Connecting to AURA");
-    assert.match(retry.document.body.innerHTML, /Preparing/);
+    const preparation = new URL(window.openedUrls.at(-1), window.location.origin);
+    assert.equal(preparation.origin, window.location.origin);
+    assert.ok(preparation.pathname.startsWith("/aura-workflow-demo/"));
     assert.equal(earlier.closed, false);
+  }
+});
+
+test("preparing authorization never needs access to the popup's document", () => {
+  globalThis.window = popupBrowser({ forbidDocument: true });
+  for (const reconnecting of [false, true]) {
+    const popup = flow.reserveAuthorizationWindow("google", reconnecting);
+    assert.equal(popup.closed, false);
+    assert.throws(() => popup.document, { name: "SecurityError" });
   }
 });
 
@@ -152,6 +175,7 @@ test("a managed retry verifies Google access without reading the cross-origin po
   const earlier = flow.reserveAuthorizationWindow("google");
   earlier.location.assign("https://connect.example.invalid/previous");
   const retry = flow.reserveAuthorizationWindow("google");
+  retry.location.href = "https://connect.example.invalid/previous";
   const requests = [];
   const google = { id: "google-connection", slug: "google", enabled: true };
   globalThis.fetch = async (url, options) => {
@@ -178,4 +202,51 @@ test("a managed retry verifies Google access without reading the cross-origin po
   assert.equal(retry.closed, true);
   assert.equal(earlier.closed, false);
   assert.equal(saved.get("aura_active_python_run_id"), "saved-run");
+});
+
+test("native authorization navigates a cross-origin popup and waits for the provider callback", async () => {
+  setup();
+  globalThis.window = popupBrowser();
+  const popup = window.open("about:blank", "_blank");
+  popup.location.href = "https://accounts.example.invalid/previous";
+  let callbackSent = false;
+  window.setTimeout = (callback) => {
+    window.listeners.get("message")({ origin: window.location.origin,
+      data: { source: "aura-oauth", provider: "google", status: "success" } });
+    callbackSent = true;
+    callback();
+  };
+  const google = { id: "google-native", slug: "google", enabled: true, updated_at: "new" };
+  globalThis.fetch = async (url) => {
+    assert.equal(new URL(url).pathname, "/v1/tools");
+    return Response.json(callbackSent ? [google] : []);
+  };
+  const authorization_url = "https://accounts.example.invalid/current";
+  const result = await flow.authorizeOAuth("google", 1000, popup, { authorization_url });
+  assert.equal(result.connected, true);
+  assert.equal(callbackSent, true);
+  assert.equal(window.destinations.at(-1), authorization_url);
+  assert.equal(popup.closed, true);
+  assert.equal(window.listeners.size, 0);
+});
+
+test("the connection reconnect endpoint can navigate a cross-origin popup", async () => {
+  setup();
+  globalThis.window = popupBrowser();
+  const popup = window.open("about:blank", "_blank");
+  popup.location.href = "https://accounts.example.invalid/previous";
+  const google = { id: "google-native", slug: "google", enabled: true, updated_at: "old" };
+  const authorization_url = "https://accounts.example.invalid/current";
+  globalThis.fetch = async (url) => {
+    const { pathname } = new URL(url);
+    if (pathname === `/v1/connections/${google.id}/reconnect`) {
+      return Response.json({ authorization_url, previous_updated_at: "old" });
+    }
+    if (pathname === "/v1/tools") return Response.json([{ ...google, updated_at: "new" }]);
+    throw new Error(`Unexpected request: ${pathname}`);
+  };
+  const result = await flow.reconnectPythonConnection(google, 1000, popup);
+  assert.equal(result.connected, true);
+  assert.equal(window.destinations.at(-1), authorization_url);
+  assert.equal(popup.closed, true);
 });
