@@ -12,6 +12,7 @@ import { fallbackReviewContract, mergeLegacyPreviewIntoArguments, requiresPrepar
 import { editJiraBatchTask, jiraBatchTasks, removeJiraBatchTask } from "@/lib/jiraBatchReview.mjs";
 import { ArticleActionReview, JiraUpdateReview, SeoActionReview } from "./ContentActionReview";
 import SheetActionReview, { hasSheetRows, PreparedReports, SheetReviewCard } from "./SheetActionReview";
+import ToolActionScreen from "./ToolActionScreen";
 
 function EditableEmail({ preview, onPreviewChange, onCopyChange = null, editing, artifacts = [], args = { subject: "", body: "" }, contract = null }) {
   const [instruction, setInstruction] = useState("");
@@ -382,11 +383,11 @@ function SchemaArgumentsEditor({ contract, args, editing, onArgumentsChange, onF
   if (!fields.length) return null;
 
   return (
-    <div className="rounded-xl border border-white/8 bg-card/40 overflow-hidden">
-      <div className="flex items-center gap-2 border-b border-white/6 bg-card/30 px-4 py-2.5">
+    <details className="mt-4 rounded-xl border border-white/8 bg-card/40 overflow-hidden">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-muted-foreground [&::-webkit-details-marker]:hidden">
         <Database className="h-3.5 w-3.5 text-accent" />
-        <span className="text-xs font-medium">Additional details</span>
-      </div>
+        <span className="text-xs font-medium">Action settings</span><ChevronDown className="ml-auto h-3.5 w-3.5" />
+      </summary>
       <div className="space-y-3 p-4">
         {fields.map((field) => {
           const value = args?.[field.key];
@@ -450,7 +451,7 @@ function SchemaArgumentsEditor({ contract, args, editing, onArgumentsChange, onF
           );
         })}
       </div>
-    </div>
+    </details>
   );
 }
 
@@ -576,35 +577,7 @@ function EditablePresentation({ args, contract, editing, onArgumentsChange }) {
 }
 
 function FallbackPreview({ step }) {
-  const f = step.flow || [];
-  return (
-    <div className="rounded-xl border border-white/8 bg-card/40 p-4 space-y-3">
-      {step.output && (
-        <div>
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground/50">Will produce</span>
-          <p className="text-sm mt-0.5">{step.output}</p>
-        </div>
-      )}
-      <div className={step.output ? "pt-2 border-t border-white/5" : ""}>
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/50">What you are approving</span>
-        <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
-          AURA will prepare the final values from the completed steps before making this change.
-        </p>
-      </div>
-      {f.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 pt-1">
-          {f.map((fl, i) => (
-            <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary">
-              {fl.label}: {fl.value}
-            </span>
-          ))}
-        </div>
-      )}
-      {!step.output && !step.detail && f.length === 0 && (
-        <p className="text-xs text-muted-foreground">No preview available.</p>
-      )}
-    </div>
-  );
+  return <ToolActionScreen step={step} args={step.resolvedArguments || parseArguments(step)} />;
 }
 
 const parseArguments = (step) => {
@@ -665,6 +638,8 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity, acti
   const richSeo = contract.operation === "rankmath.post_seo.update";
   const richJiraUpdate = contract.operation === "jira.issue.update"
     && Object.keys(args.fields || {}).every((key) => ["description", "summary", "labels"].includes(key));
+  const toolScreen = ![richSheet, richArticle, richSeo, richJiraUpdate, richEmail,
+    richTicket, richJiraBatch, richDocument, richPresentation].some(Boolean);
   const documentTitleKey = ["title", "name", "summary"].find((key) => Object.hasOwn(args, key));
   const documentBodyKey = ["body", "content", "description", "children"].find((key) => Object.hasOwn(args, key));
   const [editing, setEditing] = useState(() => richPresentation || richDocument || richJiraBatch || richArticle);
@@ -713,12 +688,12 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity, acti
               <Pencil className="h-3.5 w-3.5" /> {editing ? "Editing" : richEmail ? "Edit" : "Edit in AURA"}
             </button>
           </div>
-          {step.riskNote && !richJiraBatch && <p className="mt-2 text-xs text-amber-200">{step.riskNote}</p>}
         </div>
       </div>
       <div className={richPresentation ? "border-t border-white/10" : "border-t border-white/10 p-5"}>
         {step.reviewContract ? (
           <>
+            {toolScreen && <ToolActionScreen step={step} args={args} editing={editing} onChange={updateArguments} editableKeys={contract.fields?.filter((field) => field.editable !== false).map((field) => field.key) || []} />}
             {richSheet && <SheetActionReview args={args} editing={editing} onChange={updateArguments} activity={activity} canEdit={contract.fields?.some((field) => field.key === "values" && field.editable !== false)} />}
             {richArticle && <ArticleActionReview args={args} editing={editing} onChange={updateArguments} />}
             {richSeo && <SeoActionReview args={args} editing={editing} onChange={updateArguments} />}
@@ -743,6 +718,8 @@ function EditableStepCard({ step, number, index, onUpdate, onFieldValidity, acti
               onArgumentsChange={updateArguments}
               onFieldValidity={fieldValidity}
               excludeKeys={richEmail ? ["to", "subject", "body", "attachments"]
+                : contract.operation === "sheets.kpi.create" ? ["business_name", "reporting_period", "target", "actual", "product_brief"]
+                : contract.operation === "anthropic.chat" ? ["userMessage"]
                 : richSheet ? (editing ? ["values"] : ["spreadsheet_id", "range", "values"])
                 : richDocument ? [documentTitleKey, ...(typeof args[documentBodyKey] === "string" ? [documentBodyKey] : [])]
                 : richPresentation ? ["title", "phases"]
@@ -829,7 +806,7 @@ export default function PreviewView({ preview, steps, activity = [], prepared = 
         {readOnlySummary}
         <section className="rounded-xl border border-white/10 bg-card/50 p-5" aria-label="What will happen">
           <h3 className="mb-4 text-sm font-semibold">What will happen</h3>
-          <div className="space-y-4">{editSteps.map((step, index) => <div key={index} className="flex gap-3"><span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs text-primary">{index + 1}</span><div><p className="text-xs text-muted-foreground">{step.tool} <span className="ml-2 text-emerald-300">Read-only</span></p><p className="mt-1 text-sm">{step.action}</p><p className="mt-1 text-xs leading-5 text-muted-foreground">{step.output}</p></div></div>)}</div>
+          <div className="space-y-4">{editSteps.map((step, index) => <ToolActionScreen key={index} step={step} args={step.resolvedArguments || parseArguments(step)} />)}</div>
         </section>
       </div>}
 
@@ -845,12 +822,7 @@ export default function PreviewView({ preview, steps, activity = [], prepared = 
           </button>
           {showBackground && (
             <div className="mt-2 space-y-1.5 rounded-xl border border-white/6 bg-card/20 p-3">
-              {backgroundSteps.map(({ step, index }) => (
-                <div key={index} className="flex items-start gap-2 text-xs">
-                  <Check className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-sky-400" />
-                  <div><span className="text-muted-foreground/60">{step.tool}</span><p className="text-foreground/80">{step.title || step.action}</p></div>
-                </div>
-              ))}
+              {backgroundSteps.map(({ step, index }) => <ToolActionScreen key={index} step={step} args={step.resolvedArguments || parseArguments(step)} />)}
             </div>
           )}
         </div>

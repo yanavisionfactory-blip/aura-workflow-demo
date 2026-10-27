@@ -4,6 +4,19 @@ import ResultsView from "../../src/components/aura/ResultsView";
 import { savedRunResults } from "../../src/lib/savedRunResults.mjs";
 import MarketingToolResults from "../../src/components/aura/MarketingToolResults";
 import SheetActionReview, { PreparedReports, SheetReviewCard } from "../../src/components/aura/SheetActionReview";
+import PreviewView from "../../src/components/aura/PreviewView";
+import ToolActionScreen from "../../src/components/aura/ToolActionScreen";
+import { plannedApprovalStep } from "../../src/lib/approvalReview.mjs";
+
+export function renderActionScreen(step, editing = false) {
+  return renderToStaticMarkup(<ToolActionScreen step={step} args={step.arguments} editing={editing} onChange={() => {}} />);
+}
+
+export function renderApproval(steps) {
+  return renderToStaticMarkup(<PreviewView prepared steps={steps.map((step) => plannedApprovalStep(
+    { ...step, riskLevel: "modify" }, { ...step, consequential: true }, step.tool,
+  ))} onApprove={() => {}} onBack={() => {}} />);
+}
 
 export function renderSheetCard(args, canEdit = true) {
   return renderToStaticMarkup(<SheetReviewCard args={args} contract={{ fields: [{ key: "values", editable: canEdit }] }} onChange={() => {}} />);

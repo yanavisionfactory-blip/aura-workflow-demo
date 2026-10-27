@@ -1010,6 +1010,9 @@ async def _create_compiled_plan(
     if audited_plan is not None:
         reject_excluded_steps(audited_plan)
         _normalize_planned_steps(audited_plan, manifests_by_slug)
+        from .intelligence_backup import add_intelligence_backups
+
+        add_intelligence_backups(audited_plan, catalog_inventory, objective, excluded_tool_families)
         from .plan_preflight import preflight_plan
         from .request_contracts import validate_requested_operations
 
@@ -1119,6 +1122,9 @@ async def _create_compiled_plan(
                     catalog_inventory, manifests_by_slug,
                 )
             _normalize_planned_steps(plan, manifests_by_slug)
+            from .intelligence_backup import add_intelligence_backups
+
+            add_intelligence_backups(plan, catalog_inventory, objective, excluded_tool_families)
             _ensure_document_body_readback(plan, manifests_by_slug)
             _include_requested_story_in_email(plan, prompt)
             _normalize_illustrated_canva_slides(plan, prompt)
@@ -3553,7 +3559,15 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     ),
                     None,
                 )
-                consequential = _operation_is_consequential(
+                from .intelligence_backup import BACKUP_OPERATION, supports_claude_backup
+
+                approved_text_backup = (
+                    active_tool.slug == "aura" and operation == BACKUP_OPERATION
+                    and plan_steps[step.position].get("fallback_tool_slug") == "aura"
+                    and plan_steps[step.position].get("fallback_operation") == BACKUP_OPERATION
+                    and supports_claude_backup(plan_steps[step.position], arguments)
+                )
+                consequential = not approved_text_backup and _operation_is_consequential(
                     operation,
                     runtime_capability,
                     planned_consequential=step.consequential,
@@ -3631,6 +3645,11 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     consequential,
                     idempotency_key=step.idempotency_key,
                 )
+                if approved_text_backup:
+                    # Claude's rejected attempt is evidence for switching, not
+                    # an attempt at the separately approved AURA generator.
+                    existing = [item for item in existing if item.tool_slug == active_tool.slug
+                                and item.operation == operation]
                 if existing:
                     latest = max(existing, key=lambda item: item.attempt_number)
                     if (latest.error or "").startswith(
@@ -3678,7 +3697,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         "Previous action outcome is uncertain; reconcile provider state before a new approved action",
                     )
                 max_retries = (
-                    0 if consequential else int(snapshot.policy_snapshot["max_retries_per_step"])
+                    0 if consequential or approved_text_backup else int(snapshot.policy_snapshot["max_retries_per_step"])
                 )
                 from .reliability import classify_failure
 
@@ -3952,6 +3971,11 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             latency_ms=latency,
                         )
                         step.output = {
+                            **({"fallback": {**step.output["fallback"], "status": "used",
+                                "message": step.output["fallback"]["reason"]
+                                + " AURA Intelligence generated the content as the approved "
+                                  "backup so the workflow could continue."}}
+                               if approved_text_backup and step.output.get("fallback") else {}),
                             "step_id": step.id,
                             "provider_result": result,
                             "tool": active_tool.slug,
@@ -4083,7 +4107,12 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 "[execution_agent_escalated]",
             )
             recovery_blocked = bool(error and error.startswith(recovery_blocked_prefixes))
-            if error and not recovery_blocked and fallback_slug and fallback_operation:
+            from .intelligence_backup import BACKUP_OPERATION, backup_reason
+
+            intelligence_reason = backup_reason(approved_step, resolved_arguments, error)
+            if (error and (not recovery_blocked or intelligence_reason)
+                    and fallback_slug and fallback_operation and not run.cancellation_requested
+                    and (fallback_operation != BACKUP_OPERATION or intelligence_reason)):
                 fallback = await session.scalar(
                     select(ToolConnection).where(
                         ToolConnection.workspace_id == workspace_id,
@@ -4100,10 +4129,22 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     and fallback_operation in snapshot.permission_snapshot.get(fallback.slug, [])
                     and fallback_trust.score
                     >= float(snapshot.policy_snapshot["trust_execution_floor"])
+                    and not fallback_trust.incident_active
                     and operation_scope(fallback_operation) == operation_scope(step.operation)
                     and operation_scope(fallback_operation) == "read"
                 )
                 if fallback_allowed:
+                    if intelligence_reason:
+                        step.output = {**(step.output or {}), "fallback": {
+                            "status": "started",
+                            "requested_tool": tool.slug,
+                            "requested_operation": step.operation,
+                            "actual_tool": fallback.slug,
+                            "actual_operation": fallback_operation,
+                            "reason": intelligence_reason,
+                            "message": intelligence_reason + " AURA Intelligence is generating "
+                                       "the content as the approved backup.",
+                        }}
                     await audit(
                         session,
                         workspace_id,
@@ -4112,9 +4153,11 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             "step_id": step.id,
                             "from_tool": tool.slug,
                             "to_tool": fallback.slug,
+                            **({"reason": intelligence_reason} if intelligence_reason else {}),
                         },
                         run.id,
                     )
+                    await session.commit()
                     result, error = await delegated_call(
                         fallback, fallback_operation, resolved_arguments
                     )
@@ -4127,6 +4170,14 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             fallback_operation,
                             resolved_arguments,
                         )
+                    elif intelligence_reason:
+                        step.output = {**step.output, "fallback": {
+                            **step.output["fallback"], "status": "failed",
+                            "message": intelligence_reason + " AURA Intelligence backup also "
+                                       "failed; this step has not produced usable content.",
+                        }}
+                        error = (error + " [aura_intelligence_backup_failed] "
+                                 + intelligence_reason)
 
             recovery_blocked = bool(error and error.startswith(recovery_blocked_prefixes))
 
@@ -4172,6 +4223,8 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 step.status = StepStatus.failed
                 internal_error = error or "Tool execution failed"
                 step.error = _friendly_execution_error(internal_error)
+                if "[aura_intelligence_backup_failed]" in internal_error:
+                    step.error = step.output["fallback"]["message"]
                 billing_required = (
                     not run.cancellation_requested
                     and "credit_balance_exhausted" in internal_error
@@ -4294,6 +4347,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
 
             step.status = StepStatus.completed
             step.output = {
+                **({"fallback": step.output["fallback"]} if step.output.get("fallback") else {}),
                 "step_id": step.id,
                 "step_key": step.step_key,
                 "provider_result": result,

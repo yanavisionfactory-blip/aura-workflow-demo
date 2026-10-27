@@ -3,6 +3,7 @@ import { toolEvidence } from "./toolEvidence.mjs";
 import { operationProviderName } from "./providerDisplay.mjs";
 
 const names = {
+  anthropic: "Claude", claude: "Claude",
   aura: "AURA Intelligence", "aura intelligence": "AURA Intelligence",
   google: "Google Workspace", "google-ads": "Google Ads", "meta-ads": "Meta Ads",
   googleads: "Google Ads", metaads: "Meta Ads",
@@ -14,7 +15,7 @@ const names = {
 };
 
 export function toolResultName(name = "AURA", operation = "") {
-  if (["report.compose", "web.page.read", "web.search"].includes(operation)) return operationProviderName(name, operation);
+  if (["report.compose", "web.page.read", "web.search", "intelligence.claude_backup"].includes(operation)) return operationProviderName(name, operation);
   for (const [prefix, label] of [["docs.", "Google Docs"], ["sheets.", "Google Sheets"],
     ["drive.", "Google Drive"], ["gmail.", "Gmail"]]) {
     if (operation.startsWith(prefix)) return label;

@@ -12,6 +12,8 @@ let render;
 let renderToolWorkspace;
 let renderSheetReview;
 let renderSheetCard;
+let renderActionScreen;
+let renderApproval;
 before(async () => {
   temporary = fs.mkdtempSync(path.join(repo, ".results-render-"));
   await build({
@@ -38,9 +40,50 @@ before(async () => {
       emptyOutDir: true, rollupOptions: { output: { entryFileNames: "render.mjs" } } },
     ssr: { noExternal: ["lucide-react"] },
   });
-  ({ render, renderToolWorkspace, renderSheetReview, renderSheetCard } = await import(pathToFileURL(path.join(temporary, "render.mjs"))));
+  ({ render, renderToolWorkspace, renderSheetReview, renderSheetCard, renderActionScreen, renderApproval } = await import(pathToFileURL(path.join(temporary, "render.mjs"))));
 });
 after(() => { if (temporary) fs.rmSync(temporary, { recursive: true, force: true }); });
+
+test("all approval routes lead with app screens and keep technical settings collapsed", () => {
+  const steps = [
+    { tool: "Claude", operation: "anthropic.chat", action: "Prepare a dashboard", arguments: {
+      model: "claude-test", userMessage: "Make a clean KPI dashboard for September 2026.", maxTokensToSample: 800,
+    } },
+    { tool: "Custom CRM", operation: "custom.create", action: "Create customer", arguments: { name: "Example customer", owner: "Account team" } },
+    { tool: "Google Sheets", operation: "sheets.kpi.create", action: "Create dashboard", arguments: {
+      business_name: "Plantéa", reporting_period: "September 2026", illustrative: true, denominator: "sessions",
+      target: { revenue: 1000, orders: 10, conversions: 4, denominator_value: 100 },
+      actual: { revenue: 800, orders: 8, conversions: 0, denominator_value: 0 },
+    } },
+  ];
+  const html = renderApproval(steps);
+  for (const name of ["Claude", "Custom CRM", "Google Sheets"]) assert.ok(html.includes(`${name} action preview`));
+  assert.match(html, /New conversation|Ready to generate/);
+  assert.match(html, /KPI Dashboard/);
+  assert.match(html, /Illustrative template values/);
+  assert.match(html, /<details[^>]*><summary[^>]*>[\s\S]*?Action settings/);
+  assert.doesNotMatch(html, /<details open|Additional details|NaN|Infinity/);
+  assert.ok(html.indexOf("Claude action preview") < html.indexOf("Action settings"));
+  const edited = renderActionScreen(steps[2], true);
+  assert.match(edited, /aria-label="Revenue target"/);
+  assert.match(edited, /aria-label="Business name"/);
+  assert.doesNotMatch(renderActionScreen(steps[0]), /maxTokensToSample|claude-test|>800</);
+});
+
+test("backup results disclose the actual generator and preserve its saved response screen", () => {
+  const message = "Claude's API account has insufficient credits. AURA Intelligence generated the content as the approved backup so the workflow could continue.";
+  const html = render({ id: "backup", status: "completed", plan: { name: "KPI draft" }, steps: [{
+    id: "draft", tool_slug: "aura", operation: "intelligence.claude_backup", status: "completed", reason: "Prepare KPI draft",
+    output: { tool: "aura", operation: "intelligence.claude_backup", critic: { action: "accept" }, outcome_check: { status: "verified" },
+      fallback: { status: "used", actual_tool: "aura", actual_operation: "intelligence.claude_backup", message },
+      provider_result: { ret: { content: [{ type: "text", text: "## September 2026\n\nRevenue, targets and actuals." }] } },
+    },
+  }] });
+  for (const expected of ["AURA Intelligence response", "insufficient credits", "September 2026", "What happened", "Tools used"]) assert.ok(html.includes(expected), expected);
+  assert.ok(html.indexOf("What happened") < html.indexOf("Main workflow result"));
+  assert.match(html, /<section aria-label="Main workflow result"/);
+  assert.doesNotMatch(html, /Generated with Claude/);
+});
 
 test("the main Sheet screen exposes both editing routes and preserves read-only review contracts", () => {
   const args = { spreadsheet_id: "target", range: "'Comparison'!A1:B1000", values: [["Brand", "$70"]] };
@@ -126,13 +169,13 @@ const run = { id: "saved-run", status: "completed", plan: { name: "Roofing campa
   } },
 };
 
-test("the main output precedes supporting actions and tools", () => {
+test("the compact overview precedes the expanded final tool screen", () => {
   const html = render(run);
   const main = html.indexOf('aria-label="Main workflow result"');
   const actions = html.indexOf('aria-label="Supporting workflow actions"');
   const tools = html.indexOf('aria-label="Results by tool"');
-  assert.ok(main > 0 && main < actions && actions < tools);
-  assert.match(html, /<details aria-label="Main workflow result" class="group mb-6">/);
+  assert.ok(actions > 0 && actions < tools && tools < main);
+  assert.match(html, /<section aria-label="Main workflow result"/);
   const content = html.slice(main, html.indexOf("What would you like to do next?"));
   for (const text of ["Sourced campaign brief", "Get a Free Estimate", "Final review remains pending."]) assert.ok(content.includes(text));
   assert.match(content, /href="https:\/\/example.com\/roofing"/);
@@ -191,8 +234,8 @@ test("the visible Results section leads with final Sheets cells, exact link and 
   assert.match(html, /source tab read in Google Sheets/);
   assert.match(html, /report prepared with ChatGPT/);
   assert.match(html, /rows saved to Google Sheets/);
-  assert.match(html, /<section aria-label="Main workflow result" class="group mb-6">/);
-  assert.ok(html.indexOf('aria-label="Main workflow result"') < html.indexOf('aria-label="Results by tool"'));
+  assert.match(html, /<section aria-label="Main workflow result"/);
+  assert.ok(html.indexOf('aria-label="Results by tool"') < html.indexOf('aria-label="Main workflow result"'));
   assert.match(html, /aria-label="View ChatGPT results"/);
   assert.doesNotMatch(html, /AURA Intelligence|Earlier source|majorDimension|~12 min|time saved|Campaign report sent/);
 });

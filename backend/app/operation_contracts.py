@@ -30,6 +30,22 @@ FRAMEIO_FILE = {"type": "object", "required": [
              "properties": {"id": TEXT, "type": {"const": "file"}}},
 }}
 KNOWN = {
+    "intelligence.claude_backup": ({
+        "type": "object", "required": ["ret", "source_provider", "model_provider", "external_writes"],
+        "properties": {
+            "source_provider": {"const": "aura"}, "model_provider": {"const": "openai"},
+            "external_writes": {"const": False},
+            "ret": {"type": "object", "required": ["id", "model", "content"], "properties": {
+                "id": {"type": "string", "minLength": 1},
+                "model": {"type": "string", "minLength": 1},
+                "content": {"type": "array", "minItems": 1, "items": {
+                    "type": "object", "required": ["type", "text"], "properties": {
+                        "type": {"const": "text"}, "text": {"type": "string", "minLength": 1},
+                    },
+                }},
+            }},
+        },
+    }, ["generated_text"]),
     "frameio.identity.get": ({"type": "object", "required": ["ok", "identity", "account_ids", "accounts_verified"],
         "properties": {"ok": {"const": True}, "identity": OBJECT,
                        "account_ids": {"type": "array", "minItems": 1, "items": TEXT},

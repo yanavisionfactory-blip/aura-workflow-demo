@@ -53,6 +53,7 @@ import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
 import { savedRunResults } from "@/lib/savedRunResults.mjs";
 import { normalizeResultSuggestions, resultSuggestionsPrompt, RESULT_SUGGESTIONS_SCHEMA } from "@/lib/resultSuggestions.mjs";
 import { alignExecutionSteps } from "@/lib/executionSteps.mjs";
+import { intelligenceBackupNotice } from "@/lib/providerDisplay.mjs";
 import { jiraReceiptTasks } from "@/lib/jiraReceipt.mjs";
 import {
   editedArgumentsForStep,
@@ -202,6 +203,8 @@ const uiPlanStepFromRun = (step) => {
     output: step.expected_output,
     flow: [
       { label: "Uses", value: tool },
+      ...(step.fallback_tool_slug === "aura" && step.fallback_operation === "intelligence.claude_backup"
+        ? [{ label: "Backup", value: "AURA Intelligence if Claude cannot generate content" }] : []),
       { label: "Creates", value: step.expected_output },
     ],
     riskLevel: step.consequential ? "modify" : "read",
@@ -1063,13 +1066,13 @@ Write ONE clear, conversational sentence restating what they want — but offer 
       return {
         id: step?.id || planned.key,
         stepKey: planned.key,
-        tool: planned.tool,
+        tool: step?.output?.fallback?.status === "used" ? planToolName(step) : planned.tool,
         action: planned.title || planned.action,
         riskLevel: planned.riskLevel,
         status: step ? preflightRetrying ? "recovering" : visibleRecoveryStepStatus(run, step) : "pending",
         started_at: step?.started_at,
         completed_at: step?.completed_at,
-        liveOutput: preflightRetrying
+        liveOutput: intelligenceBackupNotice(step || {}) || (preflightRetrying
           ? "Checking your connections before continuing."
           : recoveryMessage
           ? recoveryMessage
@@ -1081,7 +1084,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             ? step?.consequential
               ? "Checking what was created in the app."
               : "Checking the saved response from the app."
-              : "",
+              : ""),
         output: step?.output,
         operation: step?.operation || planned.operation,
         arguments: step?.arguments || planned.arguments,

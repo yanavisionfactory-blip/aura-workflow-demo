@@ -539,6 +539,20 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
   };
   const spreadsheet = googleSheetsResult(completed, context, explicitPrimary);
   if (spreadsheet) return spreadsheet;
+  const chat = [...completed].reverse().find((output) => ["anthropic.chat", "intelligence.claude_backup"].includes(output.operation)
+    && output.critic?.action === "accept" && output.outcome_check?.status === "verified"
+    && !output.provider_result?.error && Array.isArray(output.provider_result?.ret?.content)
+    && output.provider_result.ret.content.some((part) => part.type === "text" && typeof part.text === "string" && part.text.trim()));
+  if (chat && (!explicitPrimary || explicitPrimary === chat)) {
+    const provider = chat.operation === "intelligence.claude_backup" ? "AURA Intelligence" : "Claude";
+    return {
+      title: context.title || `${provider} response`, kind: "ai_response", provider,
+      sourceStepId: chat.step_id, sourceStepKey: chat.step_key,
+      completionTitle: "Content ready", completionSummary: `Generated with ${provider}.`,
+      preview: { body: chat.provider_result.ret.content.filter((part) => part.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n\n") },
+      link: null, downloadUrl: null,
+    };
+  }
   const report = [...completed].reverse().find((output) => output.operation === "report.compose"
     && output.critic?.action === "accept" && output.outcome_check?.status === "verified"
     && output.provider_result?.status === "draft"
