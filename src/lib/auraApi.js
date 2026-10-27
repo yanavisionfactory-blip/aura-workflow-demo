@@ -208,19 +208,14 @@ export async function syncManagedConnector(provider, connection = {}) {
   return request(`/v1/managed-connectors/${provider}/sync${query}`, { method: "POST" });
 }
 
-const authorizationWindowContent = (reconnecting) => '<main style="font-family:system-ui;background:#0b1020;color:#eef2ff;min-height:100vh;display:grid;place-items:center;margin:0"><div style="text-align:center"><div style="font-size:32px;margin-bottom:12px">◌</div><strong>'
-  + (reconnecting ? "Preparing secure reauthorization…" : "Preparing your secure connection…")
-  + '</strong><p style="color:#94a3b8;font-size:14px">AURA handles setup and verifies access after you approve it.</p></div></main>';
-
 export function reserveAuthorizationWindow(provider, reconnecting = false) {
-  // A named window can still contain the provider's cross-origin document on
-  // retry. Start a fresh blank window before writing the preparation screen.
-  const popup = window.open("about:blank", "_blank", "popup,width=620,height=760");
+  // Render preparation inside its own page. The opener must never read or
+  // write the popup's document, even before provider navigation completes.
+  const preparationUrl = `${import.meta.env.BASE_URL}connect-pending.html${reconnecting ? "?reconnect=1" : ""}`;
+  const popup = window.open(preparationUrl, "_blank", "popup,width=620,height=760");
   if (!popup) {
     throw new Error("Your browser blocked the authorization window. Allow pop-ups for AURA and try again.");
   }
-  popup.document.title = reconnecting ? "Reconnecting to AURA" : "Connecting to AURA";
-  popup.document.body.innerHTML = authorizationWindowContent(reconnecting);
   return popup;
 }
 
@@ -235,7 +230,7 @@ export async function authorizeManagedConnector(provider, timeoutMs = 600000, re
   try {
     await ensureWorkspace();
     session = preparedSession || await request(`/v1/managed-connectors/${provider}/session`, { method: "POST" });
-    if (session.connect_link) popup.location.assign(session.connect_link);
+    if (session.connect_link) popup.location.href = session.connect_link;
     else if (!session.already_connected) throw new Error("AURA could not prepare this connection.");
   } catch (error) {
     popup.close();
@@ -304,7 +299,7 @@ export async function authorizeOAuth(provider, timeoutMs = 120000, reservedWindo
     window.removeEventListener("message", receiveOAuthResult);
     throw error;
   }
-  popup.location.assign(authorization_url);
+  popup.location.href = authorization_url;
   const started = Date.now();
   try {
     while (Date.now() - started < timeoutMs) {
@@ -480,7 +475,7 @@ export async function reconnectPythonConnection(connection, timeoutMs = 120000, 
   try {
     await ensureWorkspace();
     started = await request(`/v1/connections/${connection.id}/reconnect`, { method: "POST" });
-    popup.location.assign(started.authorization_url);
+    popup.location.href = started.authorization_url;
   } catch (error) {
     popup.close();
     throw error;
