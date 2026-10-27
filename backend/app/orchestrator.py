@@ -312,7 +312,7 @@ def _friendly_execution_error(error: str | None) -> str:
     if "credit_balance_exhausted" in detail:
         return (
             "The API account for this app has insufficient credits. "
-            "Add API credits, then retry this step. Completed work is preserved."
+            "Add API credits before running this action again. Completed work is preserved."
         )
     if "[execution_agent_escalated]" in detail:
         return "The Execution Agent paused this step for review. Your completed work is preserved."
