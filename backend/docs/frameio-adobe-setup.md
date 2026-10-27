@@ -19,6 +19,12 @@ Register only the callback for the target environment. If a deployment needs a
 different host, configure `OAUTH_CALLBACK_OVERRIDES` and register that exact URI
 in the same Adobe app. Do not broaden the redirect pattern.
 
+For an Adobe app that is still in development, save the intended test account
+in its beta-user list before asking that account to authorize. Confirm the
+identity actually shown by Adobe after social sign-in: an existing Google
+session can select a different account. Adding a beta user does not create a
+Frame.io account, link that account to Adobe, or verify AURA's connection.
+
 Save the issued client ID and secret as `FRAMEIO_CLIENT_ID` and
 `FRAMEIO_CLIENT_SECRET` in the API and worker's server configuration. Never put
 them in source control, public frontend variables, OAuth links, or support mail.
@@ -42,6 +48,13 @@ The callback requires a refresh token, a successful `/v4/me` read, and at least
 one accessible account from `/v4/accounts` before saving a verified connection.
 An Adobe sign-in alone is not proof of a Frame.io subscription or membership.
 Record a live connection test and refresh test before claiming completion.
+
+If Adobe authorization succeeds but `/v4/me` returns HTTP 401, keep the
+connection unverified. Check that the same selected identity can enter Frame.io
+and has the intended Adobe/Frame.io association. HTTP 401 alone does not prove
+an account was blocked or establish what caused an account-access problem.
+Start a new authorization flow after an expired session; do not reuse its URL
+or repeatedly retry an unchanged provider rejection.
 
 Exposed operations are `frameio.identity.get`, `frameio.accounts.list`,
 `frameio.file.get`, and `frameio.comments.list`. They are GET-only. File and

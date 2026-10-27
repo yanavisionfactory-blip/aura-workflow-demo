@@ -1,0 +1,69 @@
+{
+  "purpose": "Preparation record for one content-approval sandbox item; not an executable AURA plan",
+  "status": "awaiting_inputs_and_verified_connections",
+  "content": {
+    "title": null,
+    "type": null,
+    "draft_reference": null,
+    "intended_channel": null,
+    "deadline": null,
+    "deadline_timezone": null,
+    "brand_voice_guidelines": null,
+    "accuracy_sources": [],
+    "messaging_requirements": []
+  },
+  "roles": {
+    "creator": null,
+    "initial_reviewer": null,
+    "supervisor": null,
+    "publishing_owner": null
+  },
+  "frameio": {
+    "account_id": null,
+    "file_id": null,
+    "version_reference": null,
+    "connection_verified": false,
+    "scoped_read_verified": false,
+    "refresh_verified": false
+  },
+  "pageproof": {
+    "team_reference": null,
+    "proof_id": null,
+    "version_id": null,
+    "comments_export_filename": null,
+    "comments_export_created_at": null,
+    "metadata_connection_verified": false,
+    "export_only_phase_explicitly_agreed": false
+  },
+  "review_round": 1,
+  "revision": {
+    "actual_revised_file_reference": null,
+    "new_version_reference": null,
+    "outstanding_actions": []
+  },
+  "final_approval": {
+    "status": "not_approved",
+    "approver": null,
+    "version_reference": null,
+    "decision_recorded_at": null,
+    "evidence_reference": null
+  },
+  "handoff": {
+    "mode": "package_inside_aura_only",
+    "publishing_enabled": false,
+    "scheduling_enabled": false,
+    "external_notifications_enabled": false
+  },
+  "measurements": {
+    "intake_at": null,
+    "first_review_at": null,
+    "signoff_at": null,
+    "active_handling_minutes": null,
+    "revision_rounds": null,
+    "manual_handoffs": null,
+    "missed_comments": null,
+    "deadline_met": null,
+    "manual_baseline": null,
+    "agreed_target": null
+  }
+}
