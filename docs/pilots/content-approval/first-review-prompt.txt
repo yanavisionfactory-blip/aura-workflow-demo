@@ -1,0 +1,18 @@
+PREPARATION TEMPLATE: replace every bracketed field and attach the actual comments export before submitting this request. This text is not a completed or executable plan.
+
+Prepare the initial-review brief for one content-approval sandbox item inside AURA.
+
+Content: [title and type].
+Authorized draft and exact version: [reference].
+Intended channel: [channel].
+Deadline and timezone: [deadline and timezone].
+Review criteria: [brand voice guidelines, accuracy sources, messaging requirements].
+Creator: [name]. Initial reviewer: [name]. Supervisor: [name].
+
+Use Frame.io through the native Adobe API connection. Read the selected file and its full comment/reply set for account UUID [account UUID] and file UUID [exact file UUID]. The user-confirmed version is [version reference]. Do not select a different or latest file implicitly.
+
+Import the attached PageProof comments export [actual attached filename] for proof ID [proof ID] and version [version ID]. The export was created at [timestamp]. Use the real attached input reference. Do not substitute PageProof metadata for comment text or invent an absent input. If PageProof metadata access is required for this run, use only its verified connected tools; otherwise explicitly label the agreed export-only mode and do not claim PageProof is connected.
+
+Prepare one reviewable revision brief inside AURA after both feedback sources succeed. Include the draft/version references, source-linked comments, page/time references, reviewer names where supplied, actionable revision requests, conflicting requests, missing information, and a supervisor decision section marked PENDING. Distinguish evidence from suggestions. If the actual draft cannot be read, state that brand-voice/accuracy checks are pending instead of claiming the draft was reviewed.
+
+This run ends at the brief. Do not send email, post comments, upload files, mark a proof approved, publish, or schedule content. The creator will provide a real revised file for a new review round. Only the named supervisor can give final approval for that exact version. A later handoff package requires explicit sign-off evidence; approval to execute this plan is not content approval.
