@@ -2,7 +2,7 @@ import RunSupportAccess from "./RunSupportAccess";
 import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
-import { Activity, AlertTriangle, ArrowRight, BarChart3, CalendarClock, Check, ChevronDown, ExternalLink, FileDown, FileText, Plus, RefreshCw, Share2, Table2, Zap } from "lucide-react";
+import { Activity, AlertTriangle, ArrowRight, BarChart3, CalendarClock, Check, ExternalLink, FileDown, FileText, Plus, RefreshCw, Share2, Table2, Zap } from "lucide-react";
 import AccessRequestModal from "./AccessRequestModal";
 import ScheduleModal from "./ScheduleModal";
 import CreatorApprovalList from "./CreatorApprovalList";
@@ -14,6 +14,7 @@ import { resultMetrics, selectPrimaryOutcome, supportingReceipts, visualResultCh
 import { mainToolEntry, toolResultEntries, toolResultName } from "@/lib/toolResultViews.mjs";
 import { sheetWorkflowSummary } from "@/lib/workflowResultSummary.mjs";
 import { campaignRepeatPrompt } from "@/lib/runtimePlan.mjs";
+import { intelligenceBackupNotices } from "@/lib/providerDisplay.mjs";
 
 const smallButton = "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full border border-cyan-400/25 px-3 py-1.5 text-[11px] font-medium text-cyan-300 transition hover:bg-cyan-400/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-cyan-300";
 const outlineButton = "inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium transition hover:bg-white/10";
@@ -33,8 +34,8 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   const mainEntry = useMemo(() => mainToolEntry(toolEntries, primaryResult, results.resultPresentation), [toolEntries, primaryResult, results.resultPresentation]);
   const hasMainOutput = Boolean((primaryResult.kind && primaryResult.kind !== "result") || primaryResult.provider || mainEntry?.hasResponse || results.breakdown || primaryResult.items?.length);
   const openTool = (id) => setToolView({ id });
-  const MainResultContainer = primaryResult.kind === "spreadsheet" ? "section" : "details";
-  const MainResultHeading = primaryResult.kind === "spreadsheet" ? "div" : "summary";
+  const MainResultContainer = "section";
+  const MainResultHeading = "div";
   const nativeAudit = primaryResult.kind === "seo_audit";
   const approvedWeekly = primaryResult.kind === "weekly_review" && (primaryResult.packet?.version === 2 || primaryResult.packet?.provenance === "approved_export");
   const nativeResult = nativeAudit || ["weekly_review", "executive_review", "website_content", "marketing_tools"].includes(primaryResult.kind);
@@ -85,35 +86,13 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`mx-auto w-full pb-8 ${["website_content", "spreadsheet"].includes(primaryResult.kind) ? "max-w-6xl" : "max-w-3xl"}`}>
       {!nativeResult && <ResultsHeading centered title={(!isFailure && sheetSummary?.title) || results.title || "Workflow complete"} summary={(!isFailure && sheetSummary?.summary) || results.summary} isFailure={isFailure} />}
       {!nativeResult && <ResultsMetrics metrics={metrics} compact />}
+      {intelligenceBackupNotices(activity || []).map((notice) => (
+        <p key={notice} role="status" className="mb-5 rounded-xl border border-amber-400/25 bg-amber-400/5 p-4 text-sm leading-relaxed">{notice}</p>
+      ))}
 
       {nativeResult && <ResultPreview result={primaryResult} results={results} activity={activity} backendRunId={backendRunId} />}
 
-      {!nativeResult && <MainResultContainer aria-label="Main workflow result" className="group mb-6">
-        <MainResultHeading className={`flex w-fit list-none items-center gap-2 text-sm font-semibold [&::-webkit-details-marker]:hidden ${primaryResult.kind === "spreadsheet" ? "" : "cursor-pointer"}`}><BarChart3 className="h-4 w-4 text-violet-400" />Results<span className="text-[11px] font-normal text-muted-foreground">— the actual output</span>{primaryResult.kind !== "spreadsheet" && <ChevronDown className="h-3.5 w-3.5 text-muted-foreground transition group-open:rotate-180" />}</MainResultHeading>
-        <div className="mt-4 space-y-4">
 
-      {visualChoices.length > 0 && <label className="mb-5 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-        Main result
-        <select aria-label="Main result" value={selectedVisual?.key || ""} onChange={(event) => {
-          const next = new URLSearchParams(searchParams);
-          if (event.target.value) next.set("main", event.target.value); else next.delete("main");
-          setSearchParams(next, { replace: true });
-        }} className="max-w-full rounded-xl border border-white/10 bg-card px-3 py-2 text-foreground">
-          <option value="">Workflow summary</option>
-          {visualChoices.map((choice) => <option key={choice.key} value={choice.key}>{choice.label}</option>)}
-        </select>
-      </label>}
-
-        {(primaryResult.link && primaryResult.kind !== "spreadsheet" || primaryResult.artifact?.link) && <div className="flex flex-wrap gap-3">
-          {primaryResult.link && primaryResult.kind !== "spreadsheet" && <a href={primaryResult.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white hover:bg-primary/90"><ExternalLink className="h-4 w-4" />{primaryResult.linkLabel || "Open result"}</a>}
-          {primaryResult.artifact?.link && <a href={primaryResult.artifact.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl border border-primary/30 px-4 py-2.5 text-sm font-medium text-primary hover:bg-primary/10"><ExternalLink className="h-4 w-4" />{primaryResult.artifact.linkLabel || "Open presentation"}</a>}
-        </div>}
-        {hasMainOutput ? <ToolResultFrame tool={primaryResult.provider || mainEntry?.tool} title={primaryResult.title || results.title || "Main output"} synthetic={mainEntry?.synthetic} appScreen={primaryResult.kind === "spreadsheet"} onExpand={() => openTool("main")}>
-          <MainToolOutput entry={mainEntry} result={primaryResult} results={results} activity={activity} backendRunId={backendRunId} />
-        </ToolResultFrame> : <ResultPreview result={primaryResult} results={results} />}
-          {artifactDelivery && <p className="flex flex-wrap justify-between gap-2 text-xs text-muted-foreground"><span>Presentation · {primaryResult.artifact?.title || primaryResult.title}</span><span className="text-emerald-400">{artifactDelivery.artifactDelivered ? "Attached and delivered" : "Created in Canva"}</span></p>}
-        </div>
-      </MainResultContainer>}
 
       {!nativeResult && actions.length > 0 && <section aria-label="Supporting workflow actions" className="mb-6">
         <h3 className="mb-3 text-sm font-semibold">What happened</h3>
@@ -137,6 +116,33 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
 
       {!nativeAudit && primaryResult.kind !== "website_content" && <ResultsByTool entries={toolEntries} onOpen={openTool} />}
 
+
+      {!nativeResult && <MainResultContainer aria-label="Main workflow result" className="group mb-7">
+        <MainResultHeading className="flex flex-wrap items-center gap-2 text-sm font-semibold"><BarChart3 className="h-4 w-4 text-violet-400" />Results<span className="text-[11px] font-normal text-muted-foreground">— the actual output</span></MainResultHeading>
+        <div className="mt-4 space-y-4">
+
+      {visualChoices.length > 0 && <label className="mb-5 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+        Main result
+        <select aria-label="Main result" value={selectedVisual?.key || ""} onChange={(event) => {
+          const next = new URLSearchParams(searchParams);
+          if (event.target.value) next.set("main", event.target.value); else next.delete("main");
+          setSearchParams(next, { replace: true });
+        }} className="max-w-full rounded-xl border border-white/10 bg-card px-3 py-2 text-foreground">
+          <option value="">Workflow summary</option>
+          {visualChoices.map((choice) => <option key={choice.key} value={choice.key}>{choice.label}</option>)}
+        </select>
+      </label>}
+
+        {(primaryResult.link && primaryResult.kind !== "spreadsheet" || primaryResult.artifact?.link) && <div className="flex flex-wrap gap-3">
+          {primaryResult.link && primaryResult.kind !== "spreadsheet" && <a href={primaryResult.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white hover:bg-primary/90"><ExternalLink className="h-4 w-4" />{primaryResult.linkLabel || "Open result"}</a>}
+          {primaryResult.artifact?.link && <a href={primaryResult.artifact.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl border border-primary/30 px-4 py-2.5 text-sm font-medium text-primary hover:bg-primary/10"><ExternalLink className="h-4 w-4" />{primaryResult.artifact.linkLabel || "Open presentation"}</a>}
+        </div>}
+        {hasMainOutput ? <ToolResultFrame tool={primaryResult.provider || mainEntry?.tool} title={primaryResult.title || results.title || "Main output"} synthetic={mainEntry?.synthetic} appScreen={["spreadsheet", "ai_response"].includes(primaryResult.kind)} onExpand={() => openTool("main")}>
+          <MainToolOutput entry={mainEntry} result={primaryResult} results={results} activity={activity} backendRunId={backendRunId} />
+        </ToolResultFrame> : <ResultPreview result={primaryResult} results={results} />}
+          {artifactDelivery && <p className="flex flex-wrap justify-between gap-2 text-xs text-muted-foreground"><span>Presentation · {primaryResult.artifact?.title || primaryResult.title}</span><span className="text-emerald-400">{artifactDelivery.artifactDelivered ? "Attached and delivered" : "Created in Canva"}</span></p>}
+        </div>
+      </MainResultContainer>}
 
       {creatorsOutcome && <CreatorApprovalList items={creatorsOutcome.items} />}
       {!isFailure && (nextSteps.length > 0 || results.suggestionsLoading) && <section className="mb-6" aria-live="polite">

@@ -702,8 +702,9 @@ async def test_visible_saved_plan_resumes_at_review_after_connection(
         assert run.plan["steps"][0]["operation"] == f"{provider}.list-items"
 
 
+@pytest.mark.parametrize("source_credit_error", [False, True])
 async def test_linear_and_slack_barrier_plans_and_executes_complete_workflow(
-    broker_api, monkeypatch
+    broker_api, monkeypatch, source_credit_error
 ):
     linear = "linear"
     slack = "slack"
@@ -850,7 +851,39 @@ async def test_linear_and_slack_barrier_plans_and_executes_complete_workflow(
             )
         ),
     )
+    if source_credit_error:
+        client = pipedream_connect.PipedreamClient(broker_api.settings)
+        client._request = AsyncMock(return_value={
+            "exports": {}, "os": [{"k": "error", "err": {
+                "response": {"status": 400, "data": {"error": {
+                    "message": "Your credit balance is too low to access the Anthropic API.",
+                }}},
+            }}],
+        })
+        boundary.execution.side_effect = client.run_action
+
     await orchestrator._execute_run("linear-slack-run", broker_api.context.workspace_id)
+
+    if source_credit_error:
+        from app.recovery_engineer import diagnose_run
+
+        assert boundary.execution.await_count == 1
+        client._request.assert_awaited_once()
+        orchestrator.critique_step.assert_not_awaited()
+        async with broker_api.factory() as session:
+            run = await session.get(WorkflowRun, "linear-slack-run")
+            steps = list((await session.scalars(select(RunStep).where(
+                RunStep.run_id == run.id,
+            ).order_by(RunStep.position))).all())
+            assert run.status == RunStatus.waiting_for_action
+            assert run.execution_context["__aura_blocker__"]["code"] == "operator_billing_required"
+            assert "insufficient credits" in run.error
+            assert steps[0].status == StepStatus.failed
+            assert not (steps[0].output or {}).get("provider_result")
+            assert steps[1].status == StepStatus.awaiting_approval
+            assert not steps[1].output
+            assert diagnose_run(run, steps).human_action_required
+        return
 
     assert boundary.execution.await_count == 1
     async with broker_api.factory() as session:

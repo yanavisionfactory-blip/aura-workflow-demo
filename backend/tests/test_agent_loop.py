@@ -43,6 +43,120 @@ from app.schemas import (
 from app.workflow_memory import select_memory_inputs
 
 
+@pytest.mark.parametrize("scenario", ["credit", "primary_ok", "backup_failed", "unapproved"])
+async def test_claude_backup_preserves_plan_and_populates_dependent_write(runtime, monkeypatch, scenario):
+    from app.intelligence_backup import BACKUP_OPERATION, ClaudeTextRequest
+    from app.pipedream_connect import PipedreamConnectError
+
+    arguments = {"model": "claude-test", "userMessage": "Prepare a KPI table", "maxTokensToSample": 800}
+    plan = WorkflowPlan(name="Dashboard", interpretation="Use Claude", steps=[
+        PlanStep(key="write", agent="Claude", tool_slug="anthropic", operation="anthropic.chat",
+                 arguments=arguments, consequential=True, reason="Generate table", expected_output="KPI table",
+                 fallback_tool_slug="aura", fallback_operation=BACKUP_OPERATION),
+        PlanStep(key="save", agent="Writer", tool_slug="destination", operation="records.create",
+                 arguments={"title": "{{steps.write.ret.content.0.text}}"}, consequential=True,
+                 reason="Save table", expected_output="Saved table", depends_on=["write"]),
+    ]).model_dump(mode="json")
+    digest = canonical_plan_hash(plan)
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        run.plan = plan
+        run.execution_context = {"__aura_preflight__": {"version": 2, "plan_hash": digest, "status": "passed",
+                                                       "completed_at": datetime.now(UTC).isoformat()}}
+        version = await session.get(PlanVersion, "version")
+        version.plan, version.plan_hash = plan, digest
+        snapshot = await session.get(ApprovalSnapshot, "snapshot")
+        snapshot.plan_hash = digest
+        snapshot.permission_snapshot = {"anthropic": ["anthropic.chat"], "destination": ["records.create"],
+                                        "aura": [] if scenario == "unapproved" else [BACKUP_OPERATION]}
+        step = await session.get(RunStep, "step")
+        step.tool_slug, step.operation, step.arguments = "anthropic", "anthropic.chat", arguments
+        approval = await session.get(Approval, "approval")
+        approval.preview = {"status": "ready", "tool_slug": "anthropic", "operation": "anthropic.chat",
+                            "arguments": arguments}
+        tool = await session.get(ToolConnection, "tool")
+        tool.slug, tool.allowed_operations = "anthropic", ["anthropic.chat"]
+        manifest = await session.get(CapabilityManifest, "manifest")
+        destination_manifest = manifest.manifest
+        manifest.manifest = {"capabilities": [{"name": "anthropic.chat", "input_schema": ClaudeTextRequest.model_json_schema(),
+                                              "output_schema": {"type": "object"}, "permission_scope": "write",
+                                              "requires_approval": True}]}
+        await orchestrator.ensure_aura_intelligence(session, "w")
+        session.add(ToolConnection(id="destination", workspace_id="w", slug="destination", display_name="Destination",
+                                   kind=ToolKind.mcp, allowed_operations=["records.create"], config={}))
+        session.add(CapabilityManifest(id="dest-manifest", workspace_id="w", tool_id="destination", status="verified",
+                                      manifest=destination_manifest, provider_type="mcp"))
+        session.add(RunStep(id="save", run_id="run", position=1, step_key="save", agent="Writer", tool_slug="destination",
+                            operation="records.create", arguments=plan["steps"][1]["arguments"], consequential=True,
+                            depends_on=["write"], status=StepStatus.awaiting_approval, idempotency_key="save-once",
+                            approval_id="save-approval"))
+        session.add(Approval(id="save-approval", run_id="run", step_id="save", status="pending",
+                             preview={"status": "preparing"}))
+        await session.commit()
+
+    calls = []
+
+    async def execute(executor, operation, args):
+        calls.append((operation, args))
+        if operation == "anthropic.chat" and scenario != "primary_ok":
+            raise PipedreamConnectError("credit_balance_exhausted: Insufficient API credits", retryable=False,
+                                       status_code=400, upstream_code="credit_balance_exhausted")
+        if operation == BACKUP_OPERATION and scenario == "backup_failed":
+            raise ValueError("AURA Intelligence returned incomplete or empty content")
+        if operation == "records.create":
+            return {"id": "saved-table", "title": args["title"]}
+        return {"ret": {"id": "response", "model": "test-generator",
+                        "content": [{"type": "text", "text": "Revenue\tTarget\tActual"}]},
+                "source_provider": "aura", "model_provider": "openai", "external_writes": False}
+
+    async def review(*args):
+        return CriticDecision(action="accept")
+
+    async def outcome(*args):
+        return {"status": "verified"}
+
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", execute)
+    monkeypatch.setattr(orchestrator, "critique_step", review)
+    monkeypatch.setattr(orchestrator, "check_provider_outcome", outcome)
+    await orchestrator._execute_run("run", "w")
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        source = await session.get(RunStep, "step")
+        saved = await session.get(RunStep, "save")
+        assert run.plan == plan
+        if scenario in {"backup_failed", "unapproved"}:
+            assert run.status == RunStatus.waiting_for_action
+            assert source.status == StepStatus.failed
+            assert not saved.output
+            if scenario == "backup_failed":
+                assert "insufficient credits" in source.error
+                assert "backup also failed" in source.error
+                assert source.output["fallback"]["status"] == "failed"
+            else:
+                assert len(calls) == 1
+            return
+        assert source.status == StepStatus.completed, (source.error, source.output, calls)
+        assert run.status == RunStatus.awaiting_approval, run.error
+        approval = await session.get(Approval, saved.approval_id)
+        assert approval.preview["arguments"] == {"title": "Revenue\tTarget\tActual"}
+        if scenario == "credit":
+            assert source.tool_slug == "aura"
+            assert source.output["fallback"]["requested_tool"] == "anthropic"
+            assert source.output["fallback"]["status"] == "used"
+            assert "insufficient credits" in source.output["fallback"]["message"]
+        else:
+            assert source.tool_slug == "anthropic"
+            assert "fallback" not in source.output
+        approval.status = "approved"
+        saved.status = StepStatus.pending
+        transition_run(run, RunStatus.running, reason="test_approved", actor="test", phase="execution")
+        await session.commit()
+    await orchestrator._execute_run("run", "w")
+    assert [op for op, _ in calls].count("records.create") == 1
+    assert [op for op, _ in calls].count("anthropic.chat") == 1
+    assert [op for op, _ in calls].count(BACKUP_OPERATION) == (1 if scenario == "credit" else 0)
+
+
 def make_step(key, **kwargs):
     return PlanStep(
         key=key,

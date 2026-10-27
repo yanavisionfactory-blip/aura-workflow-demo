@@ -1,3 +1,5 @@
+import { intelligenceBackupNotices } from "./providerDisplay.mjs";
+
 // Builds a plain-text recap of a completed AURA workflow — used by the
 // "Share summary" (clipboard) and "Download" actions on the results screen.
 export function buildSummaryText({
@@ -19,6 +21,7 @@ export function buildSummaryText({
   lines.push("");
   lines.push(`Result: ${title || ""}`);
   if (summary) lines.push(summary);
+  lines.push(...intelligenceBackupNotices(activity || []));
   lines.push("");
   if (metrics && metrics.length) {
     lines.push("Key numbers:");

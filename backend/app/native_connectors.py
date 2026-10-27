@@ -14,6 +14,7 @@ from .campaign_report import CampaignReportFields
 from .executive_review import PrepareRequest as ExecutivePrepareRequest
 from .executive_review import SourceRequest as ExecutiveSourceRequest
 from .file_delivery import ATTACHMENTS_SCHEMA
+from .intelligence_backup import BACKUP_OPERATION, ClaudeTextRequest
 from .kpi_pilot import KpiFields
 from .policy import operation_scope
 from .presentation_content import PRESENTATION_SCHEMA
@@ -89,6 +90,12 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         "base_url": "provider-managed",
         "identity": {"provider": "aura"},
         "modules": [
+            {
+                **_module(BACKUP_OPERATION, "search", "AURA Intelligence text-only backup for "
+                          "a failed anthropic.chat step. Preserve the original request and "
+                          "returned text paths; disclose the actual provider. No external writes."),
+                "input_schema": ClaudeTextRequest.model_json_schema(),
+            },
             {**_module("proofing.feedback.import", "search", "Read an attached Frame.io or PageProof comments export (searchable PDF, text, CSV or JSON) for one exact asset/version. Retains pages and SHA-256; this is user-supplied evidence, not a vendor API call or current approval status."),
              "input_schema": FeedbackImportRequest.model_json_schema()},
             {**_module("executive.source.analyze", "search", "Execute one explicitly simulated biweekly channel or business-system CSV processor in AURA; retain rows, definitions, calculations and hashes. Vendor reporting API not called."),
