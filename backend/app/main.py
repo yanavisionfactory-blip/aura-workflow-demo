@@ -1481,6 +1481,7 @@ def _canonical_marketplace_entries(items: list[dict]) -> list[dict]:
             candidates,
             key=lambda item: (
                 not bool(item.get("connectable")),
+                not bool(item.get("preferred_connection")),
                 backend_priority.get(item.get("connection_backend"), 8),
                 execution_priority.get(item.get("execution_backend"), 3),
                 str(item.get("provider") or ""),
@@ -1565,7 +1566,7 @@ async def managed_connector_status(
     )
     native_catalog = []
     for slug, definition in sorted(PROVIDERS.items()):
-        backend = "nango" if client.configured else None
+        backend = "nango" if client.configured and not definition.native_only else None
         if backend is None:
             try:
                 oauth_authorization_url(settings, definition, "catalog-probe")
@@ -1583,6 +1584,7 @@ async def managed_connector_status(
                 "managed": True,
                 "source": "native",
                 "connection_backend": backend,
+                "preferred_connection": definition.native_only and backend == "native",
                 "availability": "available" if backend else "coming_soon",
                 "connectable": backend is not None,
             }
@@ -1788,7 +1790,7 @@ async def search_connector_broker_apps(
         entries[shopify.SLUG] = shopify_entry
 
     for slug, definition in PROVIDERS.items():
-        native_backend = "nango" if nango.configured else None
+        native_backend = "nango" if nango.configured and not definition.native_only else None
         if native_backend is None:
             try:
                 oauth_authorization_url(settings, definition, "catalog-probe")
@@ -1806,6 +1808,7 @@ async def search_connector_broker_apps(
             "connectable": native_backend is not None,
             "source": "native",
             "connection_backend": native_backend,
+            "preferred_connection": definition.native_only and native_backend == "native",
             "capability_count": len(native_operations(slug)),
         }
         if matches(item):
@@ -2742,6 +2745,11 @@ async def create_connector_broker_session(
             context=context,
             session=session,
         )
+        return {**result, "backend": "native", "provider": provider}
+    if not selected_tool and provider in PROVIDERS and PROVIDERS[provider].native_only:
+        # Adobe apps registered for AURA must use the exact AURA callback,
+        # never a Nango session or an MCP broker's client registration.
+        result = await oauth_start(provider=provider, context=context)
         return {**result, "backend": "native", "provider": provider}
     # Mailchimp and HubSpot require an exact registered redirect URI. Apps
     # registered for AURA return to AURA's provider callback, whereas a
@@ -4699,6 +4707,8 @@ async def oauth_callback(
         message = (
             "Jira did not return an accessible workspace. AURA kept your plan unchanged."
             if provider == "jira"
+            else "AURA could not verify Frame.io V4 access. Check the Adobe app configuration and Frame.io account membership. Your plan was kept."
+            if provider == "frameio"
             else "The app could not finish connecting. AURA kept your plan unchanged."
         )
         return RedirectResponse(

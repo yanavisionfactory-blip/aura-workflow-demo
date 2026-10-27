@@ -142,6 +142,19 @@ def test_both_feedback_sources_are_required_before_brief_or_write():
             consequential=True)), INVENTORY, {})
 
 
+def test_native_frameio_comments_and_pageproof_export_satisfy_both_sources():
+    native_inventory = [{"slug": "frameio", "name": "Frame.io",
+                         "allowed_operations": ["frameio.comments.list", "frameio.file.get"]},
+                        *INVENTORY[1:]]
+    reads = [step("frame_feedback", "frameio.comments.list", "frameio",
+                  arguments={"account_id": "selected-account", "file_id": "selected-file"}), sources()[1]]
+    validate_proofing_sources(PROMPT, plan(*reads, brief(
+        depends_on=["frame_feedback", "page_feedback"])), native_inventory, {})
+    reads[0].operation = "frameio.file.get"
+    with pytest.raises(ProofingSourceError, match="missing for Frame.io"):
+        validate_proofing_sources(PROMPT, plan(*reads), native_inventory, {})
+
+
 def test_dependency_labels_cannot_hide_failed_reads_or_fabricated_report_inputs():
     for candidate in [brief(depends_on=["frame_feedback", "page_feedback"], dependency_mode="all_settled"),
                       step("brief", "report.compose", "aura", arguments={"sources": "Invented feedback"},
