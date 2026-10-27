@@ -17,6 +17,69 @@ class FrameioReadError(ValueError):
     pass
 
 
+def connection_failure(exc: Exception) -> dict:
+    """Describe a failed connection without exposing provider payloads or OAuth secrets."""
+    result = {
+        "stage": "verification", "reason": "unverified", "status_code": None,
+        "message": "AURA could not verify Frame.io V4 access. Check the Adobe app configuration and Frame.io account membership.",
+    }
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        result["status_code"] = status
+        url = exc.request.url
+        if url.host == "ims-na1.adobelogin.com" and url.path == "/ims/token/v3":
+            result.update(stage="adobe_token", reason="token_exchange_failed",
+                          message=f"Adobe could not finish authorizing AURA (HTTP {status}).")
+            try:
+                payload = exc.response.json()
+            except ValueError:
+                payload = None
+            error = payload.get("error") if isinstance(payload, dict) else None
+            if error == "invalid_client":
+                result.update(reason="invalid_client",
+                              message="Adobe rejected AURA's app credentials. The AURA Adobe app configuration needs attention.")
+            elif error == "invalid_grant":
+                result.update(reason="invalid_grant",
+                              message="Adobe rejected or expired this authorization. Reconnect Frame.io from AURA.")
+            elif error == "invalid_scope":
+                result.update(reason="invalid_scope",
+                              message="Adobe rejected AURA's requested permissions. The AURA Adobe app configuration needs attention.")
+        elif url.host == "api.frame.io" and url.path in {"/v4/me", "/v4/accounts"}:
+            result.update(stage="frameio_identity" if url.path == "/v4/me" else "frameio_accounts",
+                          reason="frameio_api_rejected",
+                          message=f"Adobe sign-in succeeded, but Frame.io rejected the account check (HTTP {status}).")
+            if status in {401, 403}:
+                result.update(reason="frameio_access_denied",
+                              message=f"Adobe sign-in succeeded, but Frame.io denied account access (HTTP {status}). Check this user's Frame.io access and Adobe account link.")
+                try:
+                    payload = exc.response.json()
+                except ValueError:
+                    payload = None
+                errors = payload.get("errors", []) if isinstance(payload, dict) else []
+                if isinstance(errors, list) and any(
+                    isinstance(row, dict) and isinstance(row.get("detail"), str)
+                    and "not linked to an adobe id" in row["detail"].lower()
+                    for row in errors
+                ):
+                    result.update(reason="adobe_identity_not_linked",
+                                  message="Adobe sign-in succeeded, but Frame.io says this user is not linked to an Adobe ID. Link the same account in Frame.io before reconnecting.")
+    elif isinstance(exc, FrameioReadError):
+        if str(exc) == "This Adobe user has no accessible Frame.io V4 account.":
+            result.update(stage="frameio_accounts", reason="no_frameio_accounts",
+                          message="Adobe sign-in succeeded, but this user has no accessible Frame.io V4 workspace. Frame.io account access must be set up before AURA can connect.")
+        else:
+            result.update(reason="invalid_frameio_response",
+                          message="Frame.io returned an unexpected account response. AURA could not verify this connection.")
+    elif isinstance(exc, ValueError) and str(exc) == "Adobe did not grant refresh access; reconnect with offline_access.":
+        result.update(stage="adobe_token", reason="refresh_access_missing",
+                      message="Adobe did not grant continued access. Reconnect Frame.io and allow continued access so AURA can keep the connection working.")
+    elif isinstance(exc, httpx.RequestError):
+        result.update(reason="provider_unreachable",
+                      message="AURA could not reach Adobe or Frame.io to verify access. Try connecting again when the service is available.")
+    result["message"] += " Your plan was kept."
+    return result
+
+
 def _headers(credentials: dict) -> dict:
     token = credentials.get("access_token")
     if not isinstance(token, str) or not token:

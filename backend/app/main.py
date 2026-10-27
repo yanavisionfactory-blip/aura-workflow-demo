@@ -21,7 +21,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
-from . import wordpress_plugins
+from . import frameio, wordpress_plugins
 from .agent_runtime import is_governed_derivative_step
 from .approval_readiness import unfinished_action_content
 from .approval_review import (
@@ -4703,14 +4703,18 @@ async def oauth_callback(
         credentials = await exchange_oauth_code(
             settings, definition, code, state, callback_url=callback_url
         )
-    except (httpx.HTTPError, RuntimeError, ValueError):
+    except (httpx.HTTPError, RuntimeError, ValueError) as exc:
         message = (
             "Jira did not return an accessible workspace. AURA kept your plan unchanged."
             if provider == "jira"
-            else "AURA could not verify Frame.io V4 access. Check the Adobe app configuration and Frame.io account membership. Your plan was kept."
-            if provider == "frameio"
             else "The app could not finish connecting. AURA kept your plan unchanged."
         )
+        if provider == "frameio":
+            failure = frameio.connection_failure(exc)
+            message = failure["message"]
+            # Never log the exception, response body, code, state, or token URL.
+            logger.warning("frameio_connection_failed stage=%s reason=%s status=%s",
+                           failure["stage"], failure["reason"], failure["status_code"])
         return RedirectResponse(
             f"{frontend_url}?{urlencode({'oauth_provider': provider, 'oauth_status': 'error', 'oauth_message': message})}"
         )
