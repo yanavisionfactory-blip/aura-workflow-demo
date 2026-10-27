@@ -228,6 +228,8 @@ def test_every_managed_provider_uses_one_explicit_callback_contract():
     settings = _settings()
 
     for slug, provider in PROVIDERS.items():
+        if provider.native_only:
+            settings = settings.model_copy(update={provider.client_id_attr: "test-client", provider.client_secret_attr: "test-secret"})
         callback = oauth_callback_url(settings, provider)
         authorization = parse_qs(urlsplit(oauth_authorization_url(settings, provider, "state")).query)
 

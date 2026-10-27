@@ -19,7 +19,32 @@ COLLECTION = {"type": "object", "required": ["results"], "properties": {
 PAGE = {"type": "object", "required": ["id", "properties"], "properties": {
     "id": TEXT, "object": {"const": "page"}, "url": TEXT, "properties": OBJECT,
     "parent": OBJECT, "archived": {"type": "boolean"}, "in_trash": {"type": "boolean"}}}
+FRAMEIO_FILE = {"type": "object", "required": [
+    "source_provider", "input_mode", "vendor_api_called", "account_id", "asset_id",
+    "version_id", "file", "retrieved_at", "approval_status",
+], "properties": {
+    "source_provider": {"const": "frameio"}, "input_mode": {"const": "vendor_api"},
+    "vendor_api_called": {"const": True}, "account_id": TEXT, "asset_id": TEXT,
+    "version_id": TEXT, "retrieved_at": TEXT, "approval_status": {"const": "not_verified"},
+    "file": {"type": "object", "required": ["id", "type"],
+             "properties": {"id": TEXT, "type": {"const": "file"}}},
+}}
 KNOWN = {
+    "frameio.identity.get": ({"type": "object", "required": ["ok", "identity", "account_ids", "accounts_verified"],
+        "properties": {"ok": {"const": True}, "identity": OBJECT,
+                       "account_ids": {"type": "array", "minItems": 1, "items": TEXT},
+                       "accounts_verified": {"type": "integer", "minimum": 1}}}, ["verified_identity"]),
+    "frameio.accounts.list": ({"type": "object", "required": ["data", "next_cursor", "complete", "source_provider", "vendor_api_called"],
+        "properties": {"data": {"type": "array", "items": {"type": "object", "required": ["id"], "properties": {"id": TEXT}}},
+                       "next_cursor": {"type": ["string", "null"]}, "complete": {"type": "boolean"},
+                       "source_provider": {"const": "frameio"}, "vendor_api_called": {"const": True}}}, ["account_metadata"]),
+    "frameio.file.get": (FRAMEIO_FILE, ["exact_version_metadata"]),
+    "frameio.comments.list": ({**FRAMEIO_FILE,
+        "required": [*FRAMEIO_FILE["required"], "comments", "comment_count", "complete", "limitations"],
+        "properties": {**FRAMEIO_FILE["properties"], "complete": {"const": True},
+                       "comment_count": {"type": "integer", "minimum": 0},
+                       "comments": {"type": "array", "items": OBJECT},
+                       "limitations": {"type": "array", "items": TEXT}}}, ["reviewer_feedback", "exact_version_metadata"]),
     "proofing.feedback.import": ({"type": "object", "required": [
         "source_provider", "asset_id", "version_id", "source_sha256", "pages",
         "input_mode", "vendor_api_called", "approval_status",

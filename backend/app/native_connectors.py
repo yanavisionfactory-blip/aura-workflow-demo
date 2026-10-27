@@ -66,6 +66,20 @@ _POSITIVE_INTEGER = {"type": "integer", "minimum": 1}
 
 
 NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
+    "frameio": {
+        "schema_version": "1.1", "catalog_version": 1, "provider_type": "oauth",
+        "name": "Frame.io", "description": "Read exact Frame.io V4 file versions and reviewer comments.",
+        "base_url": "https://api.frame.io", "identity": {"provider": "frameio"},
+        "modules": [
+            _module("frameio.identity.get", "search", "Verify the Adobe identity and accessible Frame.io V4 accounts."),
+            _module("frameio.accounts.list", "search", "List accessible Frame.io accounts. Follow next_cursor until complete.",
+                    properties={"after": _TEXT, "page_size": {**_POSITIVE_INTEGER, "maximum": 100}}),
+            _module("frameio.file.get", "search", "Read the exact selected Frame.io file version. Use its file UUID, not a version stack or a guessed latest version.",
+                    required=("account_id", "file_id"), properties={"account_id": _TEXT, "file_id": _TEXT}),
+            _module("frameio.comments.list", "search", "Read all comments and replies for one exact file UUID, verifying the file first. Fails if pagination is incomplete or exceeds 1000 comments. Comment completion never proves asset approval.",
+                    required=("account_id", "file_id"), properties={"account_id": _TEXT, "file_id": _TEXT}),
+        ],
+    },
     "aura": {
         "schema_version": "1.1",
         "catalog_version": 1,

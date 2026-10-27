@@ -95,6 +95,8 @@ class Settings(BaseSettings):
     hubspot_client_secret: str = ""
     atlassian_client_id: str = ""
     atlassian_client_secret: str = ""
+    frameio_client_id: str = ""
+    frameio_client_secret: SecretStr = SecretStr("")
     oauth_callback_overrides: str = ""
     # Provider-issued MCP client registrations. Server-only; never VITE/public config.
     mcp_oauth_clients_json: SecretStr = SecretStr("{}")

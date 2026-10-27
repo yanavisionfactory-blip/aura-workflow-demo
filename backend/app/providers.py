@@ -37,9 +37,21 @@ class OAuthProvider:
     client_secret_attr: str
     callback_provider: str
     legacy_callback_providers: tuple[str, ...] = ()
+    native_only: bool = False
 
 
 PROVIDERS = {
+    "frameio": OAuthProvider(
+        slug="frameio",
+        display_name="Frame.io",
+        authorization_url="https://ims-na1.adobelogin.com/ims/authorize/v2",
+        token_url="https://ims-na1.adobelogin.com/ims/token/v3",
+        scopes=("openid", "email", "profile", "offline_access", "additional_info.roles"),
+        client_id_attr="frameio_client_id",
+        client_secret_attr="frameio_client_secret",
+        callback_provider="frameio",
+        native_only=True,
+    ),
     "google": OAuthProvider(
         slug="google",
         display_name="Google Workspace",
@@ -276,6 +288,8 @@ def oauth_authorization_url(settings: Settings, provider: OAuthProvider, state: 
     client_id = getattr(settings, provider.client_id_attr)
     if not client_id:
         raise ValueError(f"{provider.display_name} OAuth client is not configured")
+    if provider.native_only and not _oauth_client_secret(settings, provider):
+        raise ValueError(f"{provider.display_name} OAuth client is not configured")
     params = {
         ("client_key" if provider.slug == "tiktok" else "client_id"): client_id,
         "redirect_uri": oauth_callback_url(settings, provider),
@@ -292,7 +306,7 @@ def oauth_authorization_url(settings: Settings, provider: OAuthProvider, state: 
         })
     elif provider.slug == "mailchimp":
         pass
-    elif provider.slug in {"slack", "tiktok"}:
+    elif provider.slug in {"slack", "tiktok", "frameio"}:
         params["scope"] = ",".join(provider.scopes)
     else:
         params["scope"] = " ".join(provider.scopes)
@@ -306,6 +320,11 @@ def oauth_authorization_url(settings: Settings, provider: OAuthProvider, state: 
     return f"{provider.authorization_url}?{urlencode(params)}"
 
 
+def _oauth_client_secret(settings: Settings, provider: OAuthProvider) -> str:
+    secret = getattr(settings, provider.client_secret_attr)
+    return secret.get_secret_value() if hasattr(secret, "get_secret_value") else secret
+
+
 async def exchange_oauth_code(
     settings: Settings,
     provider: OAuthProvider,
@@ -314,7 +333,7 @@ async def exchange_oauth_code(
     callback_url: str | None = None,
 ) -> dict:
     client_id = getattr(settings, provider.client_id_attr)
-    client_secret = getattr(settings, provider.client_secret_attr)
+    client_secret = _oauth_client_secret(settings, provider)
     payload = {
         ("client_key" if provider.slug == "tiktok" else "client_id"): client_id,
         "client_secret": client_secret,
@@ -330,7 +349,7 @@ async def exchange_oauth_code(
         headers["Authorization"] = f"Basic {basic}"
         payload.pop("client_secret")
         payload["code_verifier"] = _canva_code_verifier(settings, state)
-    elif provider.slug in {"airtable", "notion"}:
+    elif provider.slug in {"airtable", "notion", "frameio"}:
         basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
         headers["Authorization"] = f"Basic {basic}"
         payload.pop("client_secret")
@@ -345,6 +364,11 @@ async def exchange_oauth_code(
         data = response.json()
     if provider.slug == "slack" and not data.get("ok", False):
         raise RuntimeError(data.get("error", "Slack OAuth failed"))
+    if provider.slug == "frameio":
+        from . import frameio
+        if not data.get("refresh_token"):
+            raise ValueError("Adobe did not grant refresh access; reconnect with offline_access.")
+        data["frameio_verification"] = await frameio.verify(data)
     if provider.slug == "mailchimp":
         async with httpx.AsyncClient(timeout=30) as client:
             metadata_response = await client.get(
@@ -419,12 +443,12 @@ async def refresh_oauth_credentials(
         ("client_key" if provider.slug == "tiktok" else "client_id"): getattr(
             settings, provider.client_id_attr
         ),
-        "client_secret": getattr(settings, provider.client_secret_attr),
+        "client_secret": _oauth_client_secret(settings, provider),
         "refresh_token": credentials["refresh_token"],
         "grant_type": "refresh_token",
     }
     headers = {"Accept": "application/json"}
-    if provider.slug in {"airtable", "canva", "notion"}:
+    if provider.slug in {"airtable", "canva", "notion", "frameio"}:
         basic = base64.b64encode(f"{payload['client_id']}:{payload['client_secret']}".encode()).decode()
         headers["Authorization"] = f"Basic {basic}"
         payload.pop("client_secret")
@@ -437,6 +461,8 @@ async def refresh_oauth_credentials(
         )
         response.raise_for_status()
         refreshed = response.json()
+    if provider.slug == "frameio" and not refreshed.get("access_token"):
+        raise ValueError("Adobe returned no refreshed access token.")
     merged = {**credentials, **refreshed}
     if refreshed.get("expires_in"):
         merged["expires_at"] = int(time.time()) + int(refreshed["expires_in"])
@@ -444,6 +470,9 @@ async def refresh_oauth_credentials(
 
 
 async def verify_oauth_credentials(provider_slug: str, credentials: dict) -> dict:
+    if provider_slug == "frameio":
+        from . import frameio
+        return await frameio.verify(credentials)
     token = credentials.get("access_token")
     if not token:
         return {"ok": False, "reason": "missing_access_token"}
@@ -530,6 +559,12 @@ class ProviderExecutor:
             arguments = coerce_module_arguments(
                 self.capability_manifest, operation, arguments
             )
+        from . import frameio
+        if operation in frameio.OPERATIONS:
+            capability_for(self.capability_manifest, operation)
+            if self.capability_manifest.get("identity", {}).get("provider") != "frameio":
+                raise ValueError("Frame.io requires its own verified connection")
+            return await frameio.execute(self.credentials, operation, arguments, self.timeout_seconds)
         from . import shopify_client_credentials as shopify
         if operation in {shopify.IDENTITY_OPERATION, shopify.PAGES_OPERATION}:
             capability_for(self.capability_manifest, operation)

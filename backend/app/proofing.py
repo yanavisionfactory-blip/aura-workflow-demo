@@ -131,7 +131,7 @@ def validate_proofing_sources(prompt: str, plan, inventory: list[dict], manifest
         # PageProof MCP exposes metadata only. A metadata read cannot count as
         # comment evidence, even if its generated reason promises otherwise.
         if source == "frameio" and source in feedback and step.operation in {
-            "read_comments", "frame.list-comments", "frame.get-comments",
+            "read_comments", "frame.list-comments", "frame.get-comments", "frameio.comments.list",
         }:
             feedback[source].add(step.key)
     missing = sorted(source for source, keys in feedback.items() if not keys)
@@ -139,7 +139,7 @@ def validate_proofing_sources(prompt: str, plan, inventory: list[dict], manifest
         names = {"frameio": "Frame.io", "pageproof": "PageProof"}
         raise ProofingSourceError(
             "Reviewer feedback is missing for " + ", ".join(names[source] for source in missing)
-            + ". Connect Frame.io's official MCP to read comments, or attach a comments export. "
+            + ". Connect Frame.io to read comments, or attach a comments export. "
             "PageProof MCP supplies metadata only; attach its comments print sheet. "
             "Select the exact asset and version before creating the revision brief."
         )
