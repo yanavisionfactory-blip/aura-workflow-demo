@@ -79,6 +79,63 @@ class PipedreamConnectError(RuntimeError):
         super().__init__(message)
 
 
+def _check_action_result(result: dict[str, Any]) -> None:
+    """HTTP success only confirms the broker ran the action, not that it succeeded."""
+    errors = [result["error"]] if result.get("error") else []
+    observations = result.get("os")
+    if isinstance(observations, list):
+        errors.extend(
+            item.get("err") or {}
+            for item in observations
+            if isinstance(item, dict) and item.get("k") == "error"
+        )
+    if not errors:
+        return
+
+    status = None
+    billing_required = False
+    for error in errors:
+        if not isinstance(error, dict):
+            error = {"message": error}
+        response = error.get("response")
+        response = response if isinstance(response, dict) else {}
+        candidate = response.get("status") or error.get("status")
+        if type(candidate) is int and 400 <= candidate <= 599:
+            status = candidate
+        payload = response.get("data")
+        message = error.get("message")
+        if not isinstance(payload, dict) and isinstance(message, str):
+            try:
+                payload = json.loads(message)
+            except (ValueError, TypeError):
+                payload = {}
+        payload = payload if isinstance(payload, dict) else {}
+        detail = payload.get("error", payload)
+        detail = detail if isinstance(detail, dict) else {}
+        evidence = " ".join(str(value or "") for value in (
+            message, error.get("type"), error.get("code"),
+            detail.get("message"), detail.get("type"), detail.get("code"),
+        )).casefold()
+        billing_required |= any(marker in evidence for marker in (
+            "credit balance is too low", "credit_balance_exhausted",
+            "insufficient_quota", "no credits remaining",
+        ))
+
+    # Do not retain provider bodies, headers, prompts, or credentials in the
+    # exception. Only stable categories and the HTTP rejection status escape.
+    if billing_required:
+        raise PipedreamConnectError(
+            "credit_balance_exhausted: The connected app has insufficient API credits.",
+            retryable=False, status_code=status or 400,
+            upstream_code="credit_balance_exhausted",
+        )
+    raise PipedreamConnectError(
+        "The connected app failed to complete this action.",
+        retryable=status in _RETRYABLE_STATUS,
+        status_code=status, upstream_code="action_failed",
+    )
+
+
 def _slug(value: Any, fallback: str = "connector") -> str:
     normalized = _SAFE_TOKEN.sub("-", str(value or "").strip().lower()).strip("-")
     return (normalized or fallback)[:120]
@@ -877,6 +934,7 @@ class PipedreamClient:
         )
         if not isinstance(result, dict):
             raise PipedreamConnectError("The connector action returned an invalid response")
+        _check_action_result(result)
         return result
 
     async def delete_account(self, account_id: str) -> None:

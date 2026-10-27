@@ -309,6 +309,11 @@ def _provider_rejection_detail(exc: Exception) -> str | None:
 
 def _friendly_execution_error(error: str | None) -> str:
     detail = (error or "").lower()
+    if "credit_balance_exhausted" in detail:
+        return (
+            "The API account for this app has insufficient credits. "
+            "Add API credits, then retry this step. Completed work is preserved."
+        )
     if "[execution_agent_escalated]" in detail:
         return "The Execution Agent paused this step for review. Your completed work is preserved."
     if any(
@@ -4167,6 +4172,10 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 step.status = StepStatus.failed
                 internal_error = error or "Tool execution failed"
                 step.error = _friendly_execution_error(internal_error)
+                billing_required = (
+                    not run.cancellation_requested
+                    and "credit_balance_exhausted" in internal_error
+                )
                 target_status = (
                     RunStatus.cancelled
                     if run.cancellation_requested
@@ -4178,15 +4187,24 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     reason=(
                         "cancellation_observed_after_attempt"
                         if run.cancellation_requested
+                        else "provider_api_credits_exhausted" if billing_required
                         else "step_recovery_exhausted"
                     ),
                     actor="senior-orchestrator",
                     phase="execution",
-                    supervisor_status=("cancelled" if run.cancellation_requested else "recovering"),
+                    supervisor_status=(
+                        "cancelled" if run.cancellation_requested
+                        else "human_action_required" if billing_required else "recovering"
+                    ),
                     error=step.error,
                     result=_partial_result(outputs, step, step.error),
                     dispatch=None,
                     metadata={"step_id": step.id},
+                    **({"blocker": {
+                        "kind": "human_action", "code": "operator_billing_required",
+                        "message": step.error, "action": "restore_api_credits",
+                        "retryable": False, "step_id": step.id,
+                    }} if billing_required else {}),
                 )
                 attempts = (
                     await session.scalars(select(StepAttempt).where(StepAttempt.step_id == step.id))

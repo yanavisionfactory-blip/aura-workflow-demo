@@ -29,6 +29,8 @@ class Failure:
 def classify_failure(exc: Exception, *, read: bool) -> Failure:
     response = getattr(exc, "response", None)
     status = getattr(exc, "status_code", None) or getattr(response, "status_code", None)
+    if getattr(exc, "upstream_code", None) == "credit_balance_exhausted":
+        return Failure("budget_exhausted", False)
     if status in (401, 403):
         return Failure("authorization_required", False)
     if isinstance(exc, BudgetExceeded):
