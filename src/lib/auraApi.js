@@ -213,8 +213,9 @@ const authorizationWindowContent = (reconnecting) => '<main style="font-family:s
   + '</strong><p style="color:#94a3b8;font-size:14px">AURA handles setup and verifies access after you approve it.</p></div></main>';
 
 export function reserveAuthorizationWindow(provider, reconnecting = false) {
-  const action = reconnecting ? "reconnect" : "connect";
-  const popup = window.open("about:blank", `aura-${action}-${provider}`, "popup,width=620,height=760");
+  // A named window can still contain the provider's cross-origin document on
+  // retry. Start a fresh blank window before writing the preparation screen.
+  const popup = window.open("about:blank", "_blank", "popup,width=620,height=760");
   if (!popup) {
     throw new Error("Your browser blocked the authorization window. Allow pop-ups for AURA and try again.");
   }
