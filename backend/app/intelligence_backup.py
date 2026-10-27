@@ -106,6 +106,7 @@ async def generate_claude_backup(arguments: dict) -> dict:
                 ),
                 input=messages,
                 max_output_tokens=request.maxTokensToSample,
+                reasoning={"effort": "low"},
                 store=False,
             ),
             settings.model_call_timeout_seconds,

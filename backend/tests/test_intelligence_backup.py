@@ -74,6 +74,8 @@ async def test_backup_preserves_text_history_and_rejects_incomplete_content(monk
         assert result["model_provider"] == "openai"
         assert result["external_writes"] is False
     submitted = create.call_args.kwargs
+    assert submitted["max_output_tokens"] == ARGS["maxTokensToSample"]
+    assert submitted["reasoning"] == {"effort": "low"}
     assert submitted["input"] == [
         {"role": "user", "content": "Source evidence"},
         {"role": "assistant", "content": "Acknowledged"},
