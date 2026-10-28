@@ -63,6 +63,7 @@ export function savedRunResumeView(run = {}) {
     return null;
   }
   if (!run.plan?.steps?.length) return null;
+  if (run.status === "awaiting_approval" && run.tool_output_review?.step_id) return "execution";
   if (run.automation_state?.status === "blocked"
       || ["waiting_for_action", "blocked", "failed"].includes(run.status)) return "recovery";
   if (run.status === "awaiting_approval" && run.steps?.some((step) =>

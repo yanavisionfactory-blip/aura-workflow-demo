@@ -6,15 +6,21 @@ import MarketingToolResults from "../../src/components/aura/MarketingToolResults
 import SheetActionReview, { PreparedReports, SheetReviewCard } from "../../src/components/aura/SheetActionReview";
 import PreviewView from "../../src/components/aura/PreviewView";
 import ToolActionScreen from "../../src/components/aura/ToolActionScreen";
-import PlanToolWorkspace from "../../src/components/aura/PlanToolWorkspace";
+import ExecutionView from "../../src/components/aura/ExecutionView";
+import ExecutionToolOutputs from "../../src/components/aura/ExecutionToolOutputs";
+import PlanView from "../../src/components/aura/PlanView";
 import { plannedApprovalStep } from "../../src/lib/approvalReview.mjs";
 
 export function renderActionScreen(step, editing = false) {
   return renderToStaticMarkup(<ToolActionScreen step={step} args={step.arguments} editing={editing} onChange={() => {}} />);
 }
 
-export function renderPlanTools(steps) {
-  return renderToStaticMarkup(<PlanToolWorkspace steps={steps} onRevise={() => {}} />);
+export function renderExecution(steps, review = null) {
+  return renderToStaticMarkup(<ExecutionView steps={steps} review={review} currentStepIndex={0} isReal><ExecutionToolOutputs steps={steps} review={review} onContinue={() => {}} /></ExecutionView>);
+}
+
+export function renderPlan(steps) {
+  return renderToStaticMarkup(<PlanView plan={{ workflowName: "KPI dashboard", steps }} onApprove={() => {}} />);
 }
 
 export function renderApproval(steps) {

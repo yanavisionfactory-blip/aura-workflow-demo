@@ -755,6 +755,11 @@ class PlanApproval(BaseModel):
     # writes, new tools, new operations and new literal resource targets still need
     # a new human approval.
     allow_autonomous_read_repairs: bool = True
+    review_tool_outputs: bool = False
+
+
+class ToolOutputReviewDecision(BaseModel):
+    step_id: str = Field(min_length=1)
 
 
 class ResumeDecision(BaseModel):

@@ -6,7 +6,6 @@ import { aura } from "@/api/auraClient";
 import RunReadiness from "./RunReadiness";
 import RunSupportAccess from "./RunSupportAccess";
 import PlanStep from "./PlanStep";
-import PlanToolWorkspace from "./PlanToolWorkspace";
 import PlanConnectionAlert from "./PlanConnectionAlert";
 import { CATALOG, catalogEntryFor } from "@/lib/toolCatalog";
 import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
@@ -555,8 +554,6 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
       )}
 
       {!connectionOnly && !planningFailure && <>
-
-      <PlanToolWorkspace steps={steps} onRevise={onRevisePlan} />
 
       {/* Steps */}
       <DragDropContext onDragEnd={onDragEnd}>

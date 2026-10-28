@@ -159,11 +159,11 @@ test("complete actions can be reviewed early and dependent actions wait for exac
   assert.equal(source.includes("VITE_STAGED_ACTION_REVIEW_ENABLED"), false);
   assert.equal(source.includes("startPythonPreparation"), false);
   assert.equal(source.includes("hasImmediateActionPreview(steps, autoApprove)"), false);
-  assert.equal(source.includes("approvePythonPlan(runId, editedSteps, false)"), true);
+  assert.equal(source.includes("approvePythonPlan(runId, editedSteps, false, { reviewToolOutputs: true })"), true);
   assert.equal(source.includes("const editedSteps = editedUiSteps?.length"), true);
   assert.equal(source.includes('setPhase("preview")'), true);
   assert.equal(source.includes("startPythonExecution(editedSteps, prepared)"), true);
-  assert.match(api, /approvePythonPlan\(runId, editedSteps = null, approveConsequential = false\)/);
+  assert.match(api, /approvePythonPlan\(runId, editedSteps = null, approveConsequential = false, \{ reviewToolOutputs = false \} = \{\}\)/);
 });
 
 test("the combined preview has a renderer for every supported action family", () => {
