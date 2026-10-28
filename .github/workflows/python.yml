@@ -10,6 +10,8 @@ on:
     branches: [main]
     paths:
       - "backend/**"
+      - "scripts/deploy_backend_release.py"
+      - "scripts/tests/test_backend_release.py"
       - "integrations/wordpress/**"
       - "docker-compose.yml"
       - ".github/workflows/**"
@@ -47,10 +49,12 @@ jobs:
           cache: pip
       - name: Install
         run: pip install -e ".[dev]"
+      - name: Test backend release recovery
+        run: python -m unittest discover -s ../scripts/tests -p test_backend_release.py
       - name: Compile
         run: python -m compileall -q app
       - name: Lint
-        run: ruff check app tests
+        run: ruff check --config pyproject.toml app tests ../scripts/deploy_backend_release.py ../scripts/tests/test_backend_release.py
       - name: Validate WordPress plugin bridge
         run: |
           php -l ../integrations/wordpress/aura-seo-bridge/aura-seo-bridge.php
