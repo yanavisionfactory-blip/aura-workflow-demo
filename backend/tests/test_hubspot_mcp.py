@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlsplit
 
@@ -113,3 +115,43 @@ def test_hubspot_probe_cannot_alias_a_write_tool():
         'name': 'get_user_details', 'transport': {'tool_name': 'manage_crm_objects'}, 'metadata': {},
     }]}, 'https://mcp.hubspot.com/')
     assert manifest['capabilities'][0]['requires_approval'] is True
+
+
+async def test_hubspot_read_probe_survives_real_agent_discovery_wrapper(monkeypatch):
+    from app import universal_connectors
+
+    @asynccontextmanager
+    async def stream(*args, **kwargs):
+        yield None, None, None
+
+    class Session:
+        def __init__(self, *args):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def initialize(self):
+            pass
+
+        async def list_tools(self):
+            return SimpleNamespace(tools=[SimpleNamespace(
+                name=name, description='', inputSchema={'type': 'object'}, annotations=None,
+            ) for name in ['get_user_details', 'manage_crm_objects']])
+
+    monkeypatch.setattr(universal_connectors, '_public_endpoint', lambda url: None)
+    monkeypatch.setattr(universal_connectors, 'streamablehttp_client', stream)
+    monkeypatch.setattr(universal_connectors, 'ClientSession', Session)
+    execute = AsyncMock(return_value={'structured_content': {'accountId': 149649755}})
+    monkeypatch.setattr(main.ProviderExecutor, 'execute', execute)
+    manifest = await main._verify_managed_mcp({'access_token': 'test'}, 'hubspot')
+    execute.assert_called_once_with('get_user_details', {})
+    read, write = manifest['capabilities']
+    assert read['permission_scope'] == 'read'
+    assert read['requires_approval'] is False
+    assert write['permission_scope'] == 'write'
+    assert write['requires_approval'] is True
+    assert read['metadata']['external_agent'] is True
