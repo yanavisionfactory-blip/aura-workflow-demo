@@ -92,7 +92,8 @@ export function KpiDraftScreen({ args, editing, onChange, editableKeys = Object.
 }
 
 export default function ToolActionScreen({ step, args = {}, editing = false, onChange = () => {}, editableKeys = Object.keys(args) }) {
-  if (["frameio.file.get", "frameio.comments.list"].includes(step.operation)) return <FrameioPlanScreen step={step} />;
+  if (["frameio.file.get", "frameio.comments.list"].includes(step.operation)
+    || (!step.operation && /^frame[.\s-]?io$/i.test(step.tool || step.tool_slug || ""))) return <FrameioPlanScreen step={step} />;
   if (step.operation === "sheets.kpi.create") return <KpiDraftScreen args={args} editing={editing} onChange={onChange} editableKeys={editableKeys} />;
   if (/anthropic\.chat|intelligence\.claude_backup|report\.compose/.test(step.operation || "") || ["userMessage", "prompt"].some((key) => typeof args[key] === "string")) return <ChatDraft step={step} args={args} editing={editing} onChange={onChange} editableKeys={editableKeys} />;
   const title = text(args.title || args.name || args.subject || step.title || step.action || "Prepared action");

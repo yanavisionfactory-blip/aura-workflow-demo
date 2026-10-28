@@ -10,6 +10,7 @@ import {
   isExecutedBackendRun,
   upsertHistoryRecord,
   uniqueBackendRuns,
+  runsForWorkflow,
   workflowForBackendRun,
   workflowRollup,
 } from "../src/lib/workflowHistory.mjs";
@@ -213,4 +214,17 @@ test("workflow detail edits use the durable AURA data client", () => {
     assert.equal(source.includes('import { aura } from "@/api/auraClient"'), true, file);
     assert.equal(source.includes("base44.entities"), false, file);
   }
+});
+
+
+test("duplicate saved associations do not hide a completed run from either workflow", () => {
+  const records = [
+    { id: "copy", backend_run_id: "run-1", workflow_id: "copy-workflow", status: "completed", backend_updated_at: "2026-10-28T01:00:00Z" },
+    { id: "original", backend_run_id: "run-1", workflow_id: "original-workflow", status: "completed", backend_updated_at: "2026-10-28T01:00:00Z" },
+    { id: "old-original", backend_run_id: "run-1", workflow_id: "original-workflow", status: "running", backend_updated_at: "2026-10-28T00:00:00Z" },
+  ];
+  assert.deepEqual(runsForWorkflow(records, "original-workflow").map(run => run.id), ["original"]);
+  assert.deepEqual(runsForWorkflow(records, "copy-workflow").map(run => run.id), ["copy"]);
+  assert.equal(workflowRollup("original-workflow", records).run_count, 1);
+  assert.equal(workflowRollup("original-workflow", records).last_run_status, "completed");
 });

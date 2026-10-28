@@ -19,7 +19,7 @@ import {
   backendRunNeedsSync,
   backendRunHistoryProjection,
   isExecutedBackendRun,
-  uniqueBackendRuns,
+  runsForWorkflow,
   upsertHistoryRecord,
   WORKFLOW_HISTORY_CHANGED_EVENT,
   workflowForBackendRun,
@@ -37,8 +37,8 @@ let savedHistoryPromise = null;
 async function loadSavedHistory() {
   if (!savedHistoryPromise) {
     savedHistoryPromise = Promise.all([
-      aura.entities.Workflow.list("-created_date", 50).catch(() => []),
-      aura.entities.WorkflowRun.list("-created_date", 100).catch(() => []),
+      aura.entities.Workflow.list("-created_date", 500).catch(() => []),
+      aura.entities.WorkflowRun.list("-created_date", 500).catch(() => []),
     ]).then(([workflows, runs]) => ({ workflows, runs }))
       .finally(() => {
         savedHistoryPromise = null;
@@ -64,6 +64,12 @@ async function reconcileDurableHistory(initialWorkflows, initialRuns) {
         ? workflows.find((item) => item.id === savedRun.workflow_id)
         : workflowForBackendRun(backendRun, workflows);
       try {
+        if (!workflow && savedRun?.workflow_id) {
+          // A parent outside the initial window is not a new workflow.
+          // If it cannot be read, preserve the existing association and retry later.
+          workflow = await aura.entities.Workflow.get(savedRun.workflow_id);
+          workflows = upsertHistoryRecord(workflows, workflow);
+        }
         if (!workflow) {
           workflow = await aura.entities.Workflow.create({
             ...projection.workflow,
@@ -434,7 +440,7 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun, onOpen
                 <HistoryRunDetail
                   run={selectedRun}
                   workflow={selectedWf}
-                  runCount={uniqueBackendRuns(runs).filter((r) => r.workflow_id === selectedRun.workflow_id).length}
+                  runCount={runsForWorkflow(runs, selectedRun.workflow_id).length}
                   onBack={() => setSelectedRun(null)}
                   onOpenRun={onOpenRun}
                   onViewResults={onViewResults}

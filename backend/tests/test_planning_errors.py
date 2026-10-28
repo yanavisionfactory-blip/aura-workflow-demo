@@ -336,6 +336,28 @@ def test_slack_adapter_versions_require_one_account_without_merging_other_provid
     ) == []
 
 
+def test_frameio_catalog_aliases_use_the_connected_native_account_for_intake():
+    inventory = [
+        {"slug": "frameio", "name": "Frame.io", "connected": True,
+         "allowed_operations": ["frameio.file.get", "frameio.comments.list"]},
+        {"slug": "frame", "name": "Frame.io", "connected": False},
+        {"slug": "frame-io-mcp", "name": "Frame.io (MCP)", "connected": False},
+        {"slug": "pageproof", "name": "PageProof", "connected": False},
+    ]
+    for name in ("Frame.io", "Frameio", "Frame io", "frame-io"):
+        assert explicit_disconnected_capabilities(f"Revise the {name} review brief", inventory) == []
+    assert actionable_connection_capabilities(["frame", "frame-io-mcp"], inventory) == []
+    assert explicit_disconnected_capabilities("Use Frame.io and PageProof", inventory) == ["pageproof"]
+    # With no connected account, retain the exact execution adapter route.
+    plan = WorkflowPlan(name="Read Frame.io", interpretation="Read Frame.io", steps=[
+        PlanStep(key="read", agent="Frame.io", tool_slug="frame", operation="frame.list-files",
+                 reason="Read files", expected_output="Files"),
+    ])
+    assert complete_connection_requirements(
+        "Read Frame.io", [], [{**item, "connected": False} for item in inventory], compiled_plan=plan,
+    ) == ["frame"]
+
+
 def test_google_workspace_connection_satisfies_named_gmail_family() -> None:
     inventory = [
         {

@@ -311,3 +311,11 @@ test("a scoped booking campaign shows saved GBP, Meta and Reel views without exc
   assert.doesNotMatch(main, /Google Ads|Indoor screens|Open in Google Docs/);
   assert.match(main, /Complete saved report and source evidence/);
 });
+
+
+test("older Frame.io history plans retain the tool screen without operation metadata", () => {
+  const html = renderPlanTools([{ tool: "frameio", title: "Read the saved file and comments", output: "Review feedback" }]);
+  assert.match(html, /Your selected file/);
+  assert.match(html, /File preview/);
+  assert.doesNotMatch(html, /Prepared draft|<video/);
+});
