@@ -374,12 +374,17 @@ async def discover_provider(kind: str, base_url: str, credentials: dict, config:
             manifest = normalize_manifest(raw, kind, base_url)
             manifest = restrict_mcp_manifest(manifest, base_url)
             if config.get("agent_protocol") == "mcp":
-                return _agent_manifest_metadata(
+                manifest = _agent_manifest_metadata(
                     manifest,
                     raw=raw,
                     protocol="mcp",
                     config=config,
                 )
+                # Generic external agents default to write approval. Restore
+                # HubSpot's reviewed policy after that wrapper, so its identity
+                # read probe can run while mutations remain approval-controlled.
+                if base_url.rstrip("/") == "https://mcp.hubspot.com":
+                    manifest = restrict_mcp_manifest(manifest, base_url)
             return manifest
     if kind == "openapi":
         spec_url = config.get("spec_url") or urljoin(base_url.rstrip("/") + "/", "openapi.json")
