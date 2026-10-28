@@ -876,6 +876,15 @@ class PipedreamClient:
                 "provider"
             )
         )
+        from .analytics_discovery import execute as execute_analytics_discovery
+        from .analytics_discovery import handles as handles_analytics_discovery
+
+        if transport_type in {"pipedream_action", "pipedream_mcp"} and handles_analytics_discovery(
+            provider, str(capability.get("name") or "")
+        ):
+            return await execute_analytics_discovery(
+                self, external_user_id, account_id, capability["name"], arguments
+            )
         from .wordpress_rest import execute as execute_wordpress_rest
         from .wordpress_rest import handles as handles_wordpress_rest
 
