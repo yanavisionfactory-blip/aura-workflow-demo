@@ -35,7 +35,13 @@ def restrict_mcp_manifest(manifest: dict, endpoint: str) -> dict:
     if endpoint.rstrip("/") == "https://mcp.hubspot.com":
         result = deepcopy(manifest)
         for item in result.get("capabilities", []):
-            read_only = item.get("metadata", {}).get("mcp_read_only") is True
+            # HubSpot's documented account-verification tool is read-only even
+            # when the server omits the optional MCP readOnlyHint annotation.
+            reviewed_probe = (
+                item.get("name") in {"get_user_details", "hubspot-get-user-details"}
+                and item.get("transport", {}).get("tool_name") == item.get("name")
+            )
+            read_only = reviewed_probe or item.get("metadata", {}).get("mcp_read_only") is True
             # Mixed-operation tools must not inherit the generic MCP read default.
             scope = "read" if read_only else "write"
             item.update(permission_scope=scope, requires_approval=not read_only,
