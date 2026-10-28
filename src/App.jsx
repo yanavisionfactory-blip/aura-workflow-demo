@@ -75,6 +75,11 @@ function AuthLanding() {
         ) : (
           <SignUp routing="hash" fallbackRedirectUrl={productUrl} />
         )}
+        <nav aria-label="About and legal" className="mt-6 flex flex-wrap justify-center gap-x-5 gap-y-2 text-xs text-slate-400">
+          <a className="underline underline-offset-4 hover:text-white" href={`${import.meta.env.BASE_URL}about.html`}>About AURA</a>
+          <a className="underline underline-offset-4 hover:text-white" href={`${import.meta.env.BASE_URL}privacy.html`}>Privacy Policy</a>
+          <a className="underline underline-offset-4 hover:text-white" href={`${import.meta.env.BASE_URL}terms.html`}>Terms of Service</a>
+        </nav>
       </section>
     </main>
   );
