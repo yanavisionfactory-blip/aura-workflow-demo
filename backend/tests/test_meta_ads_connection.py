@@ -1,5 +1,6 @@
 """Meta Ads setup must prove account access and expose only reviewed reads."""
 import json
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlsplit
@@ -132,3 +133,48 @@ def test_meta_catalog_names_the_authorization_partner_and_no_unverified_tools():
     entry = next(item for item in mcp_oauth.managed_mcp_catalog() if item["provider"] == "meta-ads-mcp")
     assert entry["connectable"] and entry["connection_backend"] == "managed_mcp"
     assert "Pipeboard" in entry["setup_hint"] and entry["capability_count"] == 0
+
+
+@pytest.mark.parametrize("probe_name", ["get_ad_accounts", "mcp_meta_ads_get_ad_accounts"])
+async def test_meta_read_probe_survives_real_agent_discovery_wrapper(monkeypatch, probe_name):
+    from app import universal_connectors
+
+    @asynccontextmanager
+    async def stream(*args, **kwargs):
+        yield None, None, None
+
+    class Session:
+        def __init__(self, *args):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def initialize(self):
+            pass
+
+        async def list_tools(self):
+            return SimpleNamespace(tools=[SimpleNamespace(
+                name=name, description="", inputSchema=module(name)["input_schema"],
+                annotations=None,
+            ) for name in [probe_name, "get_insights", "create_campaign", "unknown_tool"]])
+
+    monkeypatch.setattr(universal_connectors, "_public_endpoint", lambda url: None)
+    monkeypatch.setattr(universal_connectors, "streamablehttp_client", stream)
+    monkeypatch.setattr(universal_connectors, "ClientSession", Session)
+    execute = AsyncMock(return_value={"structured_content": {"data": [{"id": "act_123"}]}})
+    monkeypatch.setattr(main.ProviderExecutor, "execute", execute)
+
+    manifest = await main._verify_managed_mcp({"access_token": "test-access"}, "meta-ads")
+
+    execute.assert_awaited_once_with(probe_name, {"user_id": "me", "limit": 1})
+    assert [item["name"] for item in manifest["capabilities"]] == [probe_name, "get_insights"]
+    for item in manifest["capabilities"]:
+        assert item["permission_scope"] == "read"
+        assert item["requires_approval"] is False
+        assert item["metadata"]["external_agent"] is True
+        with pytest.raises(ValidationError):
+            validate({"access_token": "another-accounts-token"}, item["input_schema"])
