@@ -91,6 +91,7 @@ class Settings(BaseSettings):
     mailchimp_client_secret: str = ""
     canva_client_id: str = ""
     canva_client_secret: str = ""
+    hubspot_connection_mode: Literal["native", "mcp"] = "native"
     hubspot_client_id: str = ""
     hubspot_client_secret: str = ""
     atlassian_client_id: str = ""

@@ -32,6 +32,15 @@ SUPERMETRICS_READ_TOOLS = frozenset({
 
 
 def restrict_mcp_manifest(manifest: dict, endpoint: str) -> dict:
+    if endpoint.rstrip("/") == "https://mcp.hubspot.com":
+        result = deepcopy(manifest)
+        for item in result.get("capabilities", []):
+            read_only = item.get("metadata", {}).get("mcp_read_only") is True
+            # Mixed-operation tools must not inherit the generic MCP read default.
+            scope = "read" if read_only else "write"
+            item.update(permission_scope=scope, requires_approval=not read_only,
+                        module_type="search" if read_only else "action")
+        return result
     if endpoint.rstrip("/") == META_ADS_ENDPOINT.rstrip("/"):
         result = deepcopy(manifest)
         capabilities = []

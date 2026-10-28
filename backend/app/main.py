@@ -1186,7 +1186,13 @@ async def _verify_managed_mcp(credentials: dict, provider: str = "ubersuggest") 
             _discover_agent_payload(_mcp_payload(credentials, provider)), timeout=25
         )
         probe_operation, probe_arguments = None, {}
-        if provider == "supermetrics":
+        if provider == "hubspot":
+            probe_operation = next((item["name"] for item in manifest.get("capabilities", [])
+                if item["name"] in {"get_user_details", "hubspot-get-user-details"}
+                and item.get("permission_scope") == "read"), None)
+            if not probe_operation:
+                raise ConnectorError("HubSpot needs an authenticated user-details tool to verify access")
+        elif provider == "supermetrics":
             probe_operation, probe_arguments = "data_source_discovery", {"compress": True}
         elif provider == "frame-io":
             probe_operation = "mandatory_init"
@@ -1595,7 +1601,7 @@ async def managed_connector_status(
     from . import shopify_client_credentials as shopify
     native_catalog.append(shopify.catalog_entry())
     from .mcp_oauth import managed_mcp_catalog
-    native_catalog.extend(managed_mcp_catalog())
+    native_catalog.extend(managed_mcp_catalog(hubspot_enabled=settings.hubspot_connection_mode == "mcp"))
     native_catalog.extend(await wordpress_plugins.catalog(session, context.workspace_id))
     dynamic_catalog = [
         {
@@ -1783,7 +1789,7 @@ async def search_connector_broker_apps(
             entries[item["provider"]] = item
 
     from .mcp_oauth import managed_mcp_catalog
-    for item in managed_mcp_catalog():
+    for item in managed_mcp_catalog(hubspot_enabled=settings.hubspot_connection_mode == "mcp"):
         if matches(item):
             entries[item["provider"]] = item
 
@@ -2674,7 +2680,9 @@ async def create_connector_broker_session(
     """Select the best connector plane and return only a short-lived browser grant."""
     provider = requested_marketplace_entry(provider)["provider"]
     provider = wordpress_plugins.provider_slug(provider)
-    if provider in {"frame-io-mcp", "pageproof-mcp", "meta-ads-mcp"}:
+    if provider == "hubspot" and settings.hubspot_connection_mode == "mcp":
+        provider = "hubspot-mcp"
+    if provider in {"frame-io-mcp", "pageproof-mcp", "meta-ads-mcp", "hubspot-mcp"}:
         managed_provider = provider.removesuffix("-mcp")
         endpoint = mcp_service(managed_provider)["endpoint"]
         if connection_id:
