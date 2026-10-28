@@ -7,6 +7,20 @@ worker, restored database and connected accounts have passed verification.
 
 ## Railway API and worker
 
+The **Deploy AURA backend release** workflow requires a tested main-branch
+`release_sha` and deploys the canary, worker, then API. If a previous attempt
+timed out while its canary was still building, pass that deployment's UUID as
+`resume_canary_deployment_id`. The runner checks that the ID belongs to the
+canary service and requires its live readiness response to match both the
+requested SHA and canary mode before proceeding.
+
+Explicit Railway deployment pauses are retried every 60 seconds within a
+two-hour recovery window. Other upload failures stop immediately to avoid
+creating duplicate deployments after an ambiguous response. Build waits share
+the same recovery deadline, and failed deployments or incorrect readiness stop
+the release. The runner is preserved before checking out the requested release,
+so a previously tested commit can be deployed with the current recovery logic.
+
 Configure the same environment on the API and Celery worker services:
 
 ```env

@@ -7,6 +7,10 @@ on:
         description: Full main-branch commit SHA with a successful Python control plane run
         required: true
         type: string
+      resume_canary_deployment_id:
+        description: Optional existing canary deployment ID for this exact release
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -20,10 +24,11 @@ jobs:
   deploy:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 130
     environment: recovery-production
     env:
       RELEASE_SHA: ${{ inputs.release_sha }}
+      RESUME_CANARY_DEPLOYMENT_ID: ${{ inputs.resume_canary_deployment_id }}
       RAILWAY_PROJECT: 5d7502dc-9152-4f6d-b1e2-6fe3ba7fbf8c
       RAILWAY_ENVIRONMENT: 3f00203a-dff3-4808-9c6b-e18ea5912f48
     steps:
@@ -31,6 +36,8 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+      - name: Preserve the reviewed release runner before selecting source
+        run: cp scripts/deploy_backend_release.py "$RUNNER_TEMP/aura-deploy-backend-release.py"
       - name: Require a tested main-branch release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -63,69 +70,4 @@ jobs:
           RAILWAY_CALLER: skill:use-railway@1.3.5
           RAILWAY_AGENT_SESSION: aura-release-${{ github.run_id }}
         shell: bash
-        run: |
-          python3 - <<'PY'
-          import json
-          import os
-          import subprocess
-          import time
-          import urllib.request
-
-          project = os.environ['RAILWAY_PROJECT']
-          environment = os.environ['RAILWAY_ENVIRONMENT']
-          release = os.environ['RELEASE_SHA']
-
-          def deployments(service):
-              raw = subprocess.check_output([
-                  'railway', 'deployment', 'list', '--project', project,
-                  '--environment', environment, '--service', service, '--json',
-              ], text=True, timeout=60)
-              data = json.loads(raw)
-              return data if isinstance(data, list) else data['deployments']
-
-          for name, service in [
-              ('canary', '897cf632-57e3-4c53-978a-63c8c308bc02'),
-              ('worker', '33c7fb6a-2fcd-446b-b8ff-969f6bcb93fd'),
-              ('API', '4dae3f58-70dd-44e4-804f-e21441c4ec41'),
-          ]:
-              baseline = {item['id'] for item in deployments(service)}
-              # The CLI archives paths relative to the absolute repository root.
-              # An absolute backend path preserves /backend without a prefix mismatch.
-              subprocess.run([
-                  'railway', 'up', os.path.abspath('backend'), '--detach', '--project', project,
-                  '--environment', environment, '--service', service,
-                  '--message', f'AURA verified release {release} ({name})',
-              ], check=True, timeout=180)
-              deadline, new_id = time.monotonic() + 780, None
-              while time.monotonic() < deadline:
-                  fresh = [item for item in deployments(service) if item['id'] not in baseline]
-                  if fresh:
-                      new_id = new_id or fresh[0]['id']
-                      deployment = next((item for item in fresh if item['id'] == new_id), None)
-                      if deployment is None:
-                          raise RuntimeError(f'{name}: deployment disappeared from history')
-                      status = deployment['status']
-                      print(f'{name}: {new_id} {status}', flush=True)
-                      if status == 'SUCCESS':
-                          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-                              summary.write(f'- {name}: `{new_id}` SUCCESS; source `{release}`\n')
-                          break
-                      if status not in {'WAITING', 'QUEUED', 'INITIALIZING', 'BUILDING', 'DEPLOYING'}:
-                          raise RuntimeError(f'{name}: deployment stopped with {status}')
-                  time.sleep(15)
-              else:
-                  raise TimeoutError(f'{name}: no new successful deployment within 13 minutes')
-
-              if name in {'canary', 'API'}:
-                  host = ('https://aura-recovery-canary-production.up.railway.app' if name == 'canary'
-                          else 'https://impartial-emotion-production-49d4.up.railway.app')
-                  with urllib.request.urlopen(host + '/ready', timeout=30) as response:
-                      ready = json.load(response)
-                  assert ready.get('status') == 'ready' and ready.get('release_sha') == release, f'{name}: wrong release or not ready'
-                  assert ready.get('canary') == (name == 'canary'), f'{name}: wrong deployment mode'
-
-          url = 'https://impartial-emotion-production-49d4.up.railway.app/ready'
-          with urllib.request.urlopen(url, timeout=30) as response:
-              assert response.status == 200, 'API readiness failed'
-          print('API readiness passed; both services have new successful deployments.')
-          PY
+        run: python3 "$RUNNER_TEMP/aura-deploy-backend-release.py"
