@@ -89,3 +89,27 @@ def test_hubspot_write_tools_never_inherit_default_read_permission():
     assert result["capabilities"][1]["permission_scope"] == "write"
     assert result["capabilities"][1]["requires_approval"] is True
     assert manifest["capabilities"][1]["permission_scope"] == "read"
+
+
+@pytest.mark.parametrize('name', ['get_user_details', 'hubspot-get-user-details'])
+async def test_hubspot_verifies_documented_probe_without_optional_annotations(monkeypatch, name):
+    from app.mcp_restrictions import restrict_mcp_manifest
+    manifest = restrict_mcp_manifest({'capabilities': [
+        {'name': name, 'transport': {'tool_name': name}, 'metadata': {}},
+        {'name': 'manage_crm_objects', 'transport': {'tool_name': 'manage_crm_objects'}, 'metadata': {}},
+    ]}, 'https://mcp.hubspot.com/')
+    assert manifest['capabilities'][0]['permission_scope'] == 'read'
+    assert manifest['capabilities'][1]['requires_approval'] is True
+    monkeypatch.setattr(main, '_discover_agent_payload', AsyncMock(return_value=(manifest, {}, None)))
+    execute = AsyncMock(return_value={'structured_content': {'accountId': 123}})
+    monkeypatch.setattr(main.ProviderExecutor, 'execute', execute)
+    assert await main._verify_managed_mcp({'access_token': 'access'}, 'hubspot') == manifest
+    execute.assert_called_once_with(name, {})
+
+
+def test_hubspot_probe_cannot_alias_a_write_tool():
+    from app.mcp_restrictions import restrict_mcp_manifest
+    manifest = restrict_mcp_manifest({'capabilities': [{
+        'name': 'get_user_details', 'transport': {'tool_name': 'manage_crm_objects'}, 'metadata': {},
+    }]}, 'https://mcp.hubspot.com/')
+    assert manifest['capabilities'][0]['requires_approval'] is True
