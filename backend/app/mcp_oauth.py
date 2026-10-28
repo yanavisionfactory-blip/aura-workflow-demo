@@ -24,6 +24,13 @@ PAGEPROOF_CLIENT_METADATA_PATH = "/v1/oauth/mcp-client/pageproof"
 # Reviewed vendor endpoints only. Never derive OAuth destinations from a pasted
 # URL or accept a different provider's authorization metadata.
 MCP_SERVICES = {
+    "hubspot": {
+        "name": "HubSpot", "owner": "HubSpot", "endpoint": "https://mcp.hubspot.com/",
+        "resource_metadata_url": "https://mcp.hubspot.com/.well-known/oauth-protected-resource",
+        "auth_origins": ["https://mcp.hubspot.com"], "auth_domains": [],
+        "discover_issuer": True, "canonical_provider": "hubspot",
+        "data_access": "CRM data authorized by the connecting HubSpot user",
+    },
     "frame-io": {
         "name": "Frame.io", "owner": "Adobe", "endpoint": "https://mcp.frame.io/v1/mcp",
         "auth_domains": ["frame.io", "adobelogin.com"], "discover_issuer": True,
@@ -152,6 +159,19 @@ class MCPClientConfigurationError(ConnectorError):
 
 def configured_client_registration(settings, provider: str) -> dict | None:
     """Read server-owned registrations; never accept these fields from a browser."""
+    if provider == "hubspot":
+        from .providers import oauth_route_callback_url
+        if settings.hubspot_connection_mode != "mcp":
+            raise MCPClientConfigurationError(provider, "Enable the MCP connection mode first.")
+        if not settings.hubspot_client_id or not settings.hubspot_client_secret:
+            raise MCPClientConfigurationError(provider, "The MCP app credentials are not configured.")
+        return {
+            "client_id": settings.hubspot_client_id,
+            "client_secret": settings.hubspot_client_secret,
+            "issuer": "https://mcp.hubspot.com",
+            "redirect_uri": oauth_route_callback_url(settings, "mcp-agent"),
+            "token_endpoint_auth_method": "client_secret_post",
+        }
     if provider not in {"frame-io", "pageproof"}:
         return None
     try:
@@ -235,8 +255,17 @@ def proofing_catalog() -> list[dict]:
     } for provider in ("frame-io", "pageproof")]
 
 
-def managed_mcp_catalog() -> list[dict]:
-    return [*proofing_catalog(), {
+def managed_mcp_catalog(*, hubspot_enabled: bool = False) -> list[dict]:
+    hubspot = [{
+        "provider": "hubspot-mcp", "display_name": "HubSpot",
+        "canonical_provider": "hubspot", "aliases": ["HubSpot", "hubspot"],
+        "categories": ["crm", "marketing"], "source": "official_mcp",
+        "connection_backend": "managed_mcp", "connection_strategy": "oauth",
+        "connectable": True, "availability": "available", "preferred_connection": True,
+        "capabilities": [], "capability_count": 0,
+        "setup_hint": "HubSpot consent; verify CRM access through the official MCP server",
+    }] if hubspot_enabled else []
+    return [*hubspot, *proofing_catalog(), {
         "provider": "meta-ads-mcp", "display_name": "Meta Ads",
         "canonical_provider": "meta-ads",
         "aliases": ["Meta Ads", "Facebook Ads", "Meta advertising", "Pipeboard"],
