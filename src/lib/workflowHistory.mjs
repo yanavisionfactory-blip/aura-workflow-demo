@@ -32,6 +32,12 @@ export function uniqueBackendRuns(records = []) {
   return [...selected.values()];
 }
 
+export function runsForWorkflow(records = [], workflowId) {
+  // Older history reconciliation could save one backend run under several
+  // workflow records. Deduplicate within the selected workflow, not before it.
+  return uniqueBackendRuns(records.filter((run) => run.workflow_id === workflowId));
+}
+
 const displayToolName = (slug = "") => {
   const names = {
     aura: "AURA Intelligence",
@@ -177,8 +183,7 @@ export function workflowForBackendRun(run = {}, workflows = []) {
 }
 
 export function workflowRollup(workflowId, runs = []) {
-  const workflowRuns = uniqueBackendRuns(runs)
-    .filter((run) => run.workflow_id === workflowId)
+  const workflowRuns = runsForWorkflow(runs, workflowId)
     .sort((left, right) => Date.parse(right.backend_updated_at || right.updated_date || right.created_date || 0)
       - Date.parse(left.backend_updated_at || left.updated_date || left.created_date || 0));
   const latest = workflowRuns[0];

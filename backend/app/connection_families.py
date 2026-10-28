@@ -15,6 +15,9 @@ GOOGLE_APP_FAMILIES = {
 PROVIDER_FAMILIES = {
     "slack-v2": "slack", "rank-math": "rankmath", "rank-math-seo": "rankmath",
     "google-business-profile": "google-my-business",
+    # The catalog uses `frame`; the native Adobe adapter uses `frameio`.
+    # This is account discovery only; exact operation grants remain separate.
+    "frame": "frameio", "frame-io": "frameio",
 }
 
 
