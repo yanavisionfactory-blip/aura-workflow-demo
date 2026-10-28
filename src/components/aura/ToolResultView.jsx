@@ -21,16 +21,16 @@ export function ToolResultFrame({ tool, title, synthetic = false, onExpand, chil
   </section>;
 }
 
-export function ResultsByTool({ entries, onOpen }) {
+export function ResultsByTool({ entries, onOpen, selectedTool }) {
   if (!entries.length) return null;
   const attention = entries.filter((entry) => ["failed", "blocked", "provider_error"].includes(entry.status)).length;
   return <section aria-label="Results by tool" className="mb-6 rounded-xl border border-white/10 bg-[#0c121e]/65 p-4">
     <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-      <h3 className="flex items-center gap-2 text-sm font-semibold"><Wrench className="h-4 w-4 text-muted-foreground" />Tools used</h3>
+      <h3 className="flex items-center gap-2 text-sm font-semibold"><Wrench className="h-4 w-4 text-muted-foreground" />Results by tool</h3>
       <button type="button" onClick={() => onOpen("activity")} className="inline-flex items-center gap-1 rounded-full border border-violet-400/20 px-2.5 py-1 text-[11px] text-violet-400"><Activity className="h-3 w-3" />View activity</button>
     </div>
     <div className="flex flex-wrap gap-2">{toolResultGroups(entries).map(({ tool, entries: items }) =>
-      <button type="button" key={tool} aria-label={`View ${tool} results`} onClick={() => onOpen(items[0].id)} className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.02] px-3 py-2 text-[11px] font-medium hover:border-violet-400/40">
+      <button type="button" key={tool} aria-label={`View ${tool} results`} aria-pressed={selectedTool ? selectedTool === tool : undefined} onClick={() => onOpen(([...items].reverse().find((item) => item.preview) || items[0]).id)} className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-xs font-medium hover:border-violet-400/40 ${selectedTool === tool ? "border-violet-400/50 bg-violet-400/15 text-violet-100" : "border-white/10 bg-white/[0.02]"}`}>
         {items.some((entry) => ["failed", "blocked", "provider_error"].includes(entry.status)) ? <AlertTriangle className="h-3 w-3 text-amber-400" /> : items.every((entry) => entry.status === "completed") ? <Check className="h-3 w-3 text-emerald-400" /> : <Clock className="h-3 w-3 text-muted-foreground" />}<span>{tool}</span>
       </button>)}
     </div>
@@ -86,7 +86,7 @@ export default function ToolResultDialog({ request, onClose, entries, primary, m
             {isMain ? <ToolResultFrame tool={tool} title={title} synthetic={mainEntry?.synthetic} expanded><MainToolOutput entry={mainEntry} result={primary} results={results} activity={activity} backendRunId={backendRunId} /></ToolResultFrame> : entry ? <>
               {entry.synthetic && <p className="mb-4 rounded-lg border border-violet-400/25 p-3 text-xs text-violet-100">Synthetic data · saved AURA result</p>}
               {entry.error && <p role="status" className="mb-4 whitespace-pre-wrap rounded-lg bg-amber-400/10 p-3 text-sm text-amber-200">{typeof entry.error === "string" ? entry.error : JSON.stringify(entry.error)}</p>}
-              {entry.source ? <SourceOutput entry={entry} /> : entry.preview ? <ResultPreview result={entry.preview} results={{ summary: entry.action }} /> : entry.hasResponse ? <EvidenceValue value={entry.response} /> : <p className="text-sm text-muted-foreground">No provider response is saved for this action. This does not mean the tool returned zero results.</p>}
+              {entry.source ? <SourceOutput entry={entry} /> : entry.preview ? <ResultPreview result={entry.tool === "Frame.io" && primary.kind === "frameio_review" ? primary : entry.preview} results={{ summary: entry.action }} backendRunId={backendRunId} /> : entry.hasResponse ? <EvidenceValue value={entry.response} /> : <p className="text-sm text-muted-foreground">No provider response is saved for this action. This does not mean the tool returned zero results.</p>}
               <details className="mt-5 rounded-lg border border-white/10 p-3"><summary className="cursor-pointer text-xs font-semibold">Action details</summary><p className="my-3 break-all text-xs text-muted-foreground">{entry.operation}{entry.completedAt && ` · ${entry.completedAt}`}</p><h4 className="mb-3 text-xs font-semibold">Inputs used</h4><EvidenceValue value={entry.inputs} />{(entry.preview || entry.source) && <><h4 className="my-3 text-xs font-semibold">Saved response</h4><EvidenceValue value={entry.response} /></>}</details>
             </> : <p className="text-sm text-muted-foreground">This action is not available in the saved workflow.</p>}
           </>}

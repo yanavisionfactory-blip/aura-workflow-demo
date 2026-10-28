@@ -2,6 +2,7 @@ import { useState } from "react";
 import { FileText, MessageSquare, Plus, Search, Sparkles, Table2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { documentMarkdownOptions } from "@/lib/documentMarkdown.mjs";
+import FrameioPlanScreen from "./FrameioPlanScreen";
 
 const pending = (value) => typeof value === "string" && /\{\{[^}]+\}\}/.test(value);
 const label = (value) => String(value).replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_-]/g, " ");
@@ -91,8 +92,9 @@ export function KpiDraftScreen({ args, editing, onChange, editableKeys = Object.
 }
 
 export default function ToolActionScreen({ step, args = {}, editing = false, onChange = () => {}, editableKeys = Object.keys(args) }) {
+  if (["frameio.file.get", "frameio.comments.list"].includes(step.operation)) return <FrameioPlanScreen step={step} />;
   if (step.operation === "sheets.kpi.create") return <KpiDraftScreen args={args} editing={editing} onChange={onChange} editableKeys={editableKeys} />;
-  if (/anthropic\.chat|intelligence\.claude_backup/.test(step.operation || "") || ["userMessage", "prompt"].some((key) => typeof args[key] === "string")) return <ChatDraft step={step} args={args} editing={editing} onChange={onChange} editableKeys={editableKeys} />;
+  if (/anthropic\.chat|intelligence\.claude_backup|report\.compose/.test(step.operation || "") || ["userMessage", "prompt"].some((key) => typeof args[key] === "string")) return <ChatDraft step={step} args={args} editing={editing} onChange={onChange} editableKeys={editableKeys} />;
   const title = text(args.title || args.name || args.subject || step.title || step.action || "Prepared action");
   const body = args.body || args.content || args.text || args.description;
   const content = typeof body === "string" ? text(body) : "";

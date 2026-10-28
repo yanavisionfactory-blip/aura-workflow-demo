@@ -12,9 +12,11 @@ const names = {
   sheets: "Google Sheets", "google-drive": "Google Drive", drive: "Google Drive",
   gmail: "Gmail", mailchimp: "Mailchimp", klaviyo: "Klaviyo", canva: "Canva",
   jira: "Jira", slack: "Slack", notion: "Notion", hubspot: "HubSpot", salesforce: "Salesforce",
+  frameio: "Frame.io", frame: "Frame.io", "frame.io": "Frame.io", "frame-io": "Frame.io",
 };
 
 export function toolResultName(name = "AURA", operation = "") {
+  if (operation.startsWith("frameio.")) return "Frame.io";
   if (["report.compose", "web.page.read", "web.search", "intelligence.claude_backup"].includes(operation)) return operationProviderName(name, operation);
   for (const [prefix, label] of [["docs.", "Google Docs"], ["sheets.", "Google Sheets"],
     ["drive.", "Google Drive"], ["gmail.", "Gmail"]]) {
@@ -33,7 +35,8 @@ export const toolResultStatus = (entry) => ({ completed: "Completed", failed: "F
 export function toolResultEntries(activity = []) {
   return toolEvidence(activity).map((entry, index) => {
     const step = activity[index];
-    const output = { ...step.output, provider_result: entry.response, resolved_arguments: entry.inputs };
+    const output = { ...step.output, step_key: step.stepKey || step.key || step.output?.step_key,
+      step_id: step.id, provider_result: entry.response, resolved_arguments: entry.inputs };
     const candidate = entry.status === "completed" && entry.hasResponse
       ? primaryResultFromOutputs([output], { title: entry.action }) : null;
     return { ...entry, tool: toolResultName(entry.tool, entry.operation),

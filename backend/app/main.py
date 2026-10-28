@@ -6049,6 +6049,18 @@ async def get_saved_sheet_screen(
     return await saved_sheet_screen(session, context, run_id, step_key)
 
 
+@app.get("/v1/runs/{run_id}/steps/{step_key}/frameio-screen")
+async def get_saved_frameio_screen(
+    run_id: str,
+    step_key: str,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+):
+    from .frameio_screen import saved_frameio_screen
+    screen = await saved_frameio_screen(session, context, run_id, step_key)
+    return JSONResponse(screen, headers={"Cache-Control": "no-store, private", "Pragma": "no-cache"})
+
+
 @app.get("/v1/runs/{run_id}/governance")
 async def get_run_governance(
     run_id: str,

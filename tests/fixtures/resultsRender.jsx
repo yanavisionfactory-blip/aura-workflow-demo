@@ -6,10 +6,15 @@ import MarketingToolResults from "../../src/components/aura/MarketingToolResults
 import SheetActionReview, { PreparedReports, SheetReviewCard } from "../../src/components/aura/SheetActionReview";
 import PreviewView from "../../src/components/aura/PreviewView";
 import ToolActionScreen from "../../src/components/aura/ToolActionScreen";
+import PlanToolWorkspace from "../../src/components/aura/PlanToolWorkspace";
 import { plannedApprovalStep } from "../../src/lib/approvalReview.mjs";
 
 export function renderActionScreen(step, editing = false) {
   return renderToStaticMarkup(<ToolActionScreen step={step} args={step.arguments} editing={editing} onChange={() => {}} />);
+}
+
+export function renderPlanTools(steps) {
+  return renderToStaticMarkup(<PlanToolWorkspace steps={steps} onRevise={() => {}} />);
 }
 
 export function renderApproval(steps) {
