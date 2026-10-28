@@ -11,7 +11,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
 from .config import get_settings
-from .mcp_restrictions import restrict_mcp_manifest
+from .mcp_restrictions import META_ADS_ENDPOINT, restrict_mcp_manifest
 from .openapi_importer import OpenAPIImportError, compile_openapi
 
 
@@ -380,10 +380,12 @@ async def discover_provider(kind: str, base_url: str, credentials: dict, config:
                     protocol="mcp",
                     config=config,
                 )
-                # Generic external agents default to write approval. Restore
-                # HubSpot's reviewed policy after that wrapper, so its identity
-                # read probe can run while mutations remain approval-controlled.
-                if base_url.rstrip("/") == "https://mcp.hubspot.com":
+                # Generic external agents default to write approval.
+                # Reviewed HubSpot and Meta policies must survive that wrapper
+                # so authenticated read probes can run with their original limits.
+                if base_url.rstrip("/") in {
+                    "https://mcp.hubspot.com", META_ADS_ENDPOINT.rstrip("/"),
+                }:
                     manifest = restrict_mcp_manifest(manifest, base_url)
             return manifest
     if kind == "openapi":

@@ -24,6 +24,13 @@ are excluded. Actual schemas are discovered after consent; a public tools list
 alone is never treated as verified account access. Campaign reports still need
 an explicit account choice, date range, and separate Google Ads and GA4 access.
 
+The managed-agent wrapper reapplies Meta's reviewed policy after adding agent
+metadata. Its generic write-approval default must not relabel the account-read
+probe, or a valid OAuth grant cannot reach authenticated account verification.
+Regression tests exercise the complete discovery and verification path for both
+supported tool-name formats while checking that writes and credential overrides
+remain unavailable.
+
 On 2026-10-26, Meta's first-party MCP dynamic-registration endpoint rejected
 AURA with `invalid_client_metadata` / `Dynamic registration is not available for
 this client.` No client identity was spoofed and no provider review was bypassed.
