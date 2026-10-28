@@ -1,6 +1,6 @@
-from unittest.mock import AsyncMock
-from types import SimpleNamespace
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
