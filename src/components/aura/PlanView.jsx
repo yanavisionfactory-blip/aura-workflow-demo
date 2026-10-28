@@ -6,6 +6,7 @@ import { aura } from "@/api/auraClient";
 import RunReadiness from "./RunReadiness";
 import RunSupportAccess from "./RunSupportAccess";
 import PlanStep from "./PlanStep";
+import PlanToolWorkspace from "./PlanToolWorkspace";
 import PlanConnectionAlert from "./PlanConnectionAlert";
 import { CATALOG, catalogEntryFor } from "@/lib/toolCatalog";
 import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
@@ -427,7 +428,7 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
   };
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="w-full max-w-2xl mx-auto">
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="w-full max-w-5xl mx-auto">
       {/* Header */}
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
         <div className="flex items-center gap-2 mb-1.5">
@@ -554,6 +555,8 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
       )}
 
       {!connectionOnly && !planningFailure && <>
+
+      <PlanToolWorkspace steps={steps} onRevise={onRevisePlan} />
 
       {/* Steps */}
       <DragDropContext onDragEnd={onDragEnd}>

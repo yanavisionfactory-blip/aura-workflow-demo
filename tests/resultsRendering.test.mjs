@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { build } from "vite";
 import { executeMarketingSimulation } from "../src/lib/marketingToolSimulation.mjs";
+import { frameioOutputs } from "./fixtures/frameioReview.mjs";
 
 const repo = fileURLToPath(new URL("../", import.meta.url));
 let temporary;
@@ -14,6 +15,7 @@ let renderSheetReview;
 let renderSheetCard;
 let renderActionScreen;
 let renderApproval;
+let renderPlanTools;
 before(async () => {
   temporary = fs.mkdtempSync(path.join(repo, ".results-render-"));
   await build({
@@ -40,9 +42,33 @@ before(async () => {
       emptyOutDir: true, rollupOptions: { output: { entryFileNames: "render.mjs" } } },
     ssr: { noExternal: ["lucide-react"] },
   });
-  ({ render, renderToolWorkspace, renderSheetReview, renderSheetCard, renderActionScreen, renderApproval } = await import(pathToFileURL(path.join(temporary, "render.mjs"))));
+  ({ render, renderToolWorkspace, renderSheetReview, renderSheetCard, renderActionScreen, renderApproval, renderPlanTools } = await import(pathToFileURL(path.join(temporary, "render.mjs"))));
 });
 after(() => { if (temporary) fs.rmSync(temporary, { recursive: true, force: true }); });
+
+test("Frame.io review opens the file workspace with an editable brief and contextual prompt", () => {
+  const steps = frameioOutputs().map((output) => ({ id: output.step_id || output.step_key, key: output.step_key,
+    tool_slug: output.operation.startsWith("frameio") ? "frameio" : "aura", operation: output.operation,
+    status: "completed", reason: output.operation, output }));
+  const html = render({ id: "frameio-review", status: "completed", plan: { name: "Review campaign" }, steps,
+    result: { result_presentation: { primary_step_key: "brief" } } });
+  for (const text of ["Frame.io review workspace", "Campaign cut.mp4", "Revision brief", "Edit brief", "Comments (0)",
+    "Human review pending", "View Frame.io results", "View ChatGPT results", "Change result with a prompt", "Prepare requested changes"]) assert.ok(html.includes(text), text);
+  assert.ok(html.indexOf("Frame.io review workspace") < html.indexOf("Supporting workflow actions"));
+  assert.doesNotMatch(html, /Google Docs|Google Sheets|<iframe|Approved content|vendor_api_called/);
+  assert.match(html, /<details[^>]*><summary[^>]*>File details/);
+  assert.match(html, /Open in Frame.io/);
+});
+
+test("the Frame.io plan preview is a tool surface, with a prompt and no invented video or comments", () => {
+  const html = renderPlanTools([
+    { tool: "Frame.io", operation: "frameio.file.get", arguments: { file_id: "not-yet-read" } },
+    { tool: "Frame.io", operation: "frameio.comments.list", arguments: { file_id: "not-yet-read" } },
+    { tool: "ChatGPT", operation: "report.compose", arguments: { instructions: "Draft a review brief" } },
+  ]);
+  for (const text of ["Preview by tool", "Frame.io action preview", "Your selected file", "Reviewer comments", "Change this preview"]) assert.ok(html.includes(text), text);
+  assert.doesNotMatch(html, /Google Docs|<video|Comment count: 0|not-yet-read/);
+});
 
 test("all approval routes lead with app screens and keep technical settings collapsed", () => {
   const steps = [
@@ -79,8 +105,8 @@ test("backup results disclose the actual generator and preserve its saved respon
       provider_result: { ret: { content: [{ type: "text", text: "## September 2026\n\nRevenue, targets and actuals." }] } },
     },
   }] });
-  for (const expected of ["AURA Intelligence response", "insufficient credits", "September 2026", "What happened", "Tools used"]) assert.ok(html.includes(expected), expected);
-  assert.ok(html.indexOf("What happened") < html.indexOf("Main workflow result"));
+  for (const expected of ["AURA Intelligence response", "insufficient credits", "September 2026", "What happened", "Results by tool"]) assert.ok(html.includes(expected), expected);
+  assert.ok(html.indexOf("Main workflow result") < html.indexOf("What happened"));
   assert.match(html, /<section aria-label="Main workflow result"/);
   assert.doesNotMatch(html, /Generated with Claude/);
 });
@@ -169,12 +195,12 @@ const run = { id: "saved-run", status: "completed", plan: { name: "Roofing campa
   } },
 };
 
-test("the compact overview precedes the expanded final tool screen", () => {
+test("the expanded tool result precedes supporting activity", () => {
   const html = render(run);
   const main = html.indexOf('aria-label="Main workflow result"');
   const actions = html.indexOf('aria-label="Supporting workflow actions"');
   const tools = html.indexOf('aria-label="Results by tool"');
-  assert.ok(actions > 0 && actions < tools && tools < main);
+  assert.ok(main > 0 && main < tools && tools < actions);
   assert.match(html, /<section aria-label="Main workflow result"/);
   const content = html.slice(main, html.indexOf("What would you like to do next?"));
   for (const text of ["Sourced campaign brief", "Get a Free Estimate", "Final review remains pending."]) assert.ok(content.includes(text));
@@ -182,7 +208,7 @@ test("the compact overview precedes the expanded final tool screen", () => {
   assert.doesNotMatch(content, /Fictional demonstration/);
   assert.match(html, /What happened/);
   assert.match(html, /View action/);
-  assert.match(html, /Tools used/);
+  assert.match(html, /Results by tool/);
   assert.match(html, /View activity/);
   assert.match(content, /Google Docs output preview/);
   assert.match(content, /Open tool view/);
@@ -235,7 +261,7 @@ test("the visible Results section leads with final Sheets cells, exact link and 
   assert.match(html, /report prepared with ChatGPT/);
   assert.match(html, /rows saved to Google Sheets/);
   assert.match(html, /<section aria-label="Main workflow result"/);
-  assert.ok(html.indexOf('aria-label="Results by tool"') < html.indexOf('aria-label="Main workflow result"'));
+  assert.ok(html.indexOf('aria-label="Results by tool"') < html.indexOf('aria-label="Google Sheets result screen"'));
   assert.match(html, /aria-label="View ChatGPT results"/);
   assert.doesNotMatch(html, /AURA Intelligence|Earlier source|majorDimension|~12 min|time saved|Campaign report sent/);
 });

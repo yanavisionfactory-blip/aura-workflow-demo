@@ -17,6 +17,7 @@ import WebsiteContentResult from "./WebsiteContentResult";
 import { MarketingToolOutput } from "./MarketingToolResults";
 import MarketingResultsSummary from "./MarketingResultsSummary";
 import GoogleSheetsResult from "./GoogleSheetsResult";
+import FrameioReviewResult from "./FrameioReviewResult";
 
 const readableDetail = (value = "") => readableResultText(value)
   .split(/\n/)
@@ -89,6 +90,7 @@ function ThumbnailOnly({ result }) {
 }
 
 export default function ResultPreview({ result, results, activity = [], backendRunId }) {
+  if (result.kind === "frameio_review") return <FrameioReviewResult result={result} backendRunId={backendRunId} />;
   if (result.kind === "spreadsheet") return <GoogleSheetsResult result={result} backendRunId={backendRunId} />;
   if (result.kind === "marketing_tools") return <MarketingResultsSummary packet={result.packet} activity={activity} />;
   if (result.kind === "marketing_tool") return <MarketingToolOutput packet={result.packet} />;

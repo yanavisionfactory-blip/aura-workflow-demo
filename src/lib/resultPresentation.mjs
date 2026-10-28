@@ -5,6 +5,7 @@ import { marketingToolResult } from "./marketingToolResults.mjs";
 import { seoAuditManifest } from "./seoAuditResult.mjs";
 import { googleSheetsResult } from "./googleSheetsResult.mjs";
 import { operationProviderName } from "./providerDisplay.mjs";
+import { frameioReviewResult } from "./frameioResult.mjs";
 
 export function readableResultText(value, fallback = "Review the saved app results below.") {
   if (typeof value !== "string") return fallback;
@@ -499,6 +500,8 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
   let explicitPrimary = presentation?.primary_step_key
     ? completed.find((output) => output.step_key === presentation.primary_step_key)
     : null;
+  const frameio = frameioReviewResult(completed, explicitPrimary);
+  if (frameio) return frameio;
   const executive = [...completed].reverse().find((output) => output.operation === "executive.review.prepare"
     && output.critic?.action === "accept" && output.outcome_check?.status === "verified"
     && output.provider_result?.kind === "executive_review" && output.provider_result?.synthetic === true
