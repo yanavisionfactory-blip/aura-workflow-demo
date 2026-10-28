@@ -1,5 +1,6 @@
 """Meta Ads setup must prove account access and expose only reviewed reads."""
 import json
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlsplit
@@ -107,6 +108,55 @@ async def test_meta_requires_real_account_list_not_public_tools(monkeypatch, dat
         with pytest.raises(ValueError, match="read probe"):
             await main._verify_managed_mcp({"access_token": "test-access"}, "meta-ads")
     execute.assert_awaited_once_with("get_ad_accounts", {"user_id": "me", "limit": 1})
+
+
+@pytest.mark.parametrize("prefix", ["", "mcp_meta_ads_"])
+async def test_meta_read_probe_survives_real_agent_discovery_wrapper(monkeypatch, prefix):
+    from app import universal_connectors
+
+    @asynccontextmanager
+    async def stream(*args, **kwargs):
+        yield None, None, None
+
+    class Session:
+        def __init__(self, *args):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def initialize(self):
+            pass
+
+        async def list_tools(self):
+            return SimpleNamespace(tools=[SimpleNamespace(
+                name=prefix + name, description=name,
+                inputSchema=module(name)["input_schema"], annotations=None,
+            ) for name in ["get_ad_accounts", "get_insights", "create_campaign", "unknown_tool"]])
+
+    monkeypatch.setattr(universal_connectors, "_public_endpoint", lambda url: None)
+    monkeypatch.setattr(universal_connectors, "streamablehttp_client", stream)
+    monkeypatch.setattr(universal_connectors, "ClientSession", Session)
+    execute = AsyncMock(return_value={"is_error": False, "content": [{
+        "type": "text", "text": json.dumps({"data": [{"id": "act_123"}]}),
+    }]})
+    monkeypatch.setattr(main.ProviderExecutor, "execute", execute)
+
+    manifest = await main._verify_managed_mcp({"access_token": "test-access"}, "meta-ads")
+
+    execute.assert_awaited_once_with(prefix + "get_ad_accounts", {"user_id": "me", "limit": 1})
+    assert [item["name"] for item in manifest["capabilities"]] == [
+        prefix + "get_ad_accounts", prefix + "get_insights",
+    ]
+    for item in manifest["capabilities"]:
+        assert item["permission_scope"] == "read"
+        assert item["requires_approval"] is False
+        assert item["metadata"]["external_agent"] is True
+        with pytest.raises(ValidationError):
+            validate({"access_token": "another-accounts-token"}, item["input_schema"])
 
 
 async def test_meta_broker_routes_to_oauth_without_pipedream(database, monkeypatch):
