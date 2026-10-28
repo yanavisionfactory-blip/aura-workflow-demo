@@ -275,6 +275,7 @@ HUMAN_ACTION_CODES = frozenset(
         "resource_not_found",
         "resource_access_denied",
         "plan_approval_required",
+        "tool_output_review_required",
         "planning_retry_required",
         "operator_billing_required",
         "pilot_details_required",

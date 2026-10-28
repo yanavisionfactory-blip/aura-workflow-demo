@@ -44,9 +44,17 @@ from app.workflow_memory import select_memory_inputs
 
 
 @pytest.mark.parametrize("scenario", ["credit", "primary_ok", "backup_failed", "unapproved"])
-async def test_claude_backup_preserves_plan_and_populates_dependent_write(runtime, monkeypatch, scenario):
+@pytest.mark.parametrize("review_outputs", [False, True])
+async def test_claude_backup_preserves_plan_and_populates_dependent_write(runtime, monkeypatch, scenario, review_outputs):
+    from unittest.mock import AsyncMock
+
+    from app import main
     from app.intelligence_backup import BACKUP_OPERATION, ClaudeTextRequest
     from app.pipedream_connect import PipedreamConnectError
+    from app.schemas import ToolOutputReviewDecision
+    from app.tool_output_review import REVIEW_KEY
+
+    monkeypatch.setattr(main, "dispatch_pending", AsyncMock())
 
     arguments = {"model": "claude-test", "userMessage": "Prepare a KPI table", "maxTokensToSample": 800}
     plan = WorkflowPlan(name="Dashboard", interpretation="Use Claude", steps=[
@@ -62,7 +70,8 @@ async def test_claude_backup_preserves_plan_and_populates_dependent_write(runtim
         run = await session.get(WorkflowRun, "run")
         run.plan = plan
         run.execution_context = {"__aura_preflight__": {"version": 2, "plan_hash": digest, "status": "passed",
-                                                       "completed_at": datetime.now(UTC).isoformat()}}
+                                                       "completed_at": datetime.now(UTC).isoformat()},
+                                 REVIEW_KEY: {"enabled": review_outputs}}
         version = await session.get(PlanVersion, "version")
         version.plan, version.plan_hash = plan, digest
         snapshot = await session.get(ApprovalSnapshot, "snapshot")
@@ -119,6 +128,15 @@ async def test_claude_backup_preserves_plan_and_populates_dependent_write(runtim
     monkeypatch.setattr(orchestrator, "critique_step", review)
     monkeypatch.setattr(orchestrator, "check_provider_outcome", outcome)
     await orchestrator._execute_run("run", "w")
+    if review_outputs and scenario in {"credit", "primary_ok"}:
+        async with runtime() as session:
+            run = await session.get(WorkflowRun, "run")
+            assert run.status == RunStatus.awaiting_approval
+            assert run.execution_context[REVIEW_KEY]["pending"]["tool_slug"] == "anthropic"
+            assert (await session.get(Approval, "save-approval")).preview == {"status": "preparing"}
+            assert "records.create" not in [op for op, _ in calls]
+            await main.review_tool_output("run", ToolOutputReviewDecision(step_id="step"), main.TenantContext("w", "alice", "owner"), session)
+        await orchestrator._execute_run("run", "w")
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
         source = await session.get(RunStep, "step")
@@ -152,6 +170,12 @@ async def test_claude_backup_preserves_plan_and_populates_dependent_write(runtim
         transition_run(run, RunStatus.running, reason="test_approved", actor="test", phase="execution")
         await session.commit()
     await orchestrator._execute_run("run", "w")
+    if review_outputs:
+        async with runtime() as session:
+            run = await session.get(WorkflowRun, "run")
+            assert run.execution_context[REVIEW_KEY]["pending"]["step_id"] == "save"
+            await main.review_tool_output("run", ToolOutputReviewDecision(step_id="save"), main.TenantContext("w", "alice", "owner"), session)
+        await orchestrator._execute_run("run", "w")
     assert [op for op, _ in calls].count("records.create") == 1
     assert [op for op, _ in calls].count("anthropic.chat") == 1
     assert [op for op, _ in calls].count(BACKUP_OPERATION) == (1 if scenario == "credit" else 0)

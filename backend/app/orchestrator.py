@@ -2390,6 +2390,8 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
 
 
 async def _execute_run(run_id: str, workspace_id: str) -> None:
+    from .tool_output_review import output_review_enabled, pause_for_output_review
+
     vault = CredentialVault()
     async with SessionLocal() as session:
         await set_tenant_context(session, workspace_id)
@@ -2576,6 +2578,9 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             )
             await session.commit()
             return
+        # A resumed delivery cannot advance past an unacknowledged output.
+        if await pause_for_output_review(session, run, steps):
+            return
         for stored, approved in zip(steps, plan_steps, strict=True):
             primary_match = stored.tool_slug == approved.get(
                 "tool_slug"
@@ -2709,11 +2714,14 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
         await session.commit()
         step_by_key = {step.step_key: step for step in steps}
         for step in steps:
+            if await pause_for_output_review(session, run, steps):
+                return
             from .parallel_reads import prefetch_ready_reads
 
-            await prefetch_ready_reads(
-                session, run, steps, step.position, snapshot, context, outputs
-            )
+            if not output_review_enabled(run):
+                await prefetch_ready_reads(
+                    session, run, steps, step.position, snapshot, context, outputs
+                )
             materialized_for_approval = False
             recorded_result = isinstance(step.output, dict) and "provider_result" in step.output
             if recorded_result and step.output.get("critic", {}).get("action") != "accept":
@@ -2795,6 +2803,8 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 run.execution_context = deepcopy(context)
                 await mark_recovery_checkpoint_succeeded(session, run, step)
                 await session.commit()
+                if await pause_for_output_review(session, run, steps):
+                    return
                 continue
             if step.status == StepStatus.skipped:
                 continue
@@ -4437,7 +4447,11 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
 
             if await yield_after_checkpoint(session, run, step):
                 return
+            if await pause_for_output_review(session, run, steps):
+                return
 
+        if await pause_for_output_review(session, run, steps):
+            return
         required_incomplete = [
             step
             for step, approved in zip(steps, plan_steps, strict=True)

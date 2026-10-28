@@ -647,9 +647,16 @@ export async function getResumablePythonRun() {
   return latest || null;
 }
 
-export async function approvePythonPlan(runId, editedSteps = null, approveConsequential = false) {
+export async function approvePythonPlan(runId, editedSteps = null, approveConsequential = false, { reviewToolOutputs = false } = {}) {
   await ensureWorkspace();
-  return request(`/v1/runs/${runId}/approve-plan`, { method: "POST", body: JSON.stringify({ approved: true, edited_steps: editedSteps, approve_consequential: approveConsequential }) });
+  return request(`/v1/runs/${runId}/approve-plan`, { method: "POST", body: JSON.stringify({ approved: true, edited_steps: editedSteps, approve_consequential: approveConsequential, review_tool_outputs: reviewToolOutputs }) });
+}
+
+export async function reviewPythonToolOutput(runId, stepId) {
+  await ensureWorkspace();
+  return request(`/v1/runs/${runId}/review-tool-output`, {
+    method: "POST", body: JSON.stringify({ step_id: stepId }),
+  });
 }
 
 export async function decidePythonApproval(approvalId, approved, editedArguments = null) {

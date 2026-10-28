@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mainToolEntry, toolResultEntries, toolResultGroups } from "../src/lib/toolResultViews.mjs";
-import { supportingReceipts } from "../src/lib/resultPresentation.mjs";
+import { mainToolEntry, supportingToolOutputs, toolResultEntries, toolResultGroups } from "../src/lib/toolResultViews.mjs";
+import { primaryResultFromOutputs, supportingReceipts } from "../src/lib/resultPresentation.mjs";
+import { toolEvidence } from "../src/lib/toolEvidence.mjs";
 
 const report = (id, body) => ({ id, key: id, status: "completed", tool: "AURA", action: `Prepare ${id}`,
   output: { operation: "report.compose", critic: { action: "accept" }, outcome_check: { status: "verified" },
@@ -62,4 +63,34 @@ test("unknown primary identity does not silently select an unrelated first tool"
   const entries = toolResultEntries([{ id: "keywords", tool: "google-ads", status: "completed",
     output: { provider_result: { ret: [{ keyword: "coffee" }] } } }]);
   assert.equal(mainToolEntry(entries, {}, null), undefined);
+});
+
+test("Claude fallback remains one selected-tool output with honest execution details; Sheets leads results", () => {
+  const activity = [
+    { id: "draft", key: "draft", status: "completed", tool: "aura", action: "Prepare KPI comparison", output: {
+      step_id: "draft", operation: "intelligence.claude_backup", critic: { action: "accept" }, outcome_check: { status: "verified" },
+      fallback: { status: "used", requested_tool: "anthropic", requested_operation: "anthropic.chat",
+        actual_tool: "aura", actual_operation: "intelligence.claude_backup",
+        message: "Claude had insufficient API credits. AURA Intelligence completed this step." },
+      provider_result: { ret: { content: [{ type: "text", text: "# September 2026\nRevenue | Target | Actual" }] } },
+    } },
+    { id: "sheet", status: "completed", tool: "Google Sheets", output: { step_id: "sheet", operation: "sheets.append",
+      provider_result: { spreadsheetId: "test-id", updates: { updatedRange: "KPIs!A1:C2" } },
+      critic: { action: "accept" }, outcome_check: { status: "verified", observed: { range: "KPIs!A1:C2", values: [["Metric", "Target", "Actual"], ["Revenue", "", ""]] } },
+    } },
+  ];
+  const entries = toolResultEntries(activity);
+  assert.deepEqual(entries.map((entry) => entry.tool), ["Claude", "Google Sheets"]);
+  assert.equal(entries[0].actualTool, "AURA Intelligence");
+  assert.equal(toolEvidence(activity)[0].tool, "AURA Intelligence");
+  assert.match(entries[0].backupNotice, /insufficient API credits/);
+  assert.equal(entries[0].preview.displayProvider, "Claude");
+  assert.equal(entries[0].preview.provider, "AURA Intelligence");
+  const primary = primaryResultFromOutputs(activity.map((step) => step.output));
+  assert.equal(primary.kind, "spreadsheet");
+  assert.equal(mainToolEntry(entries, primary).tool, "Google Sheets");
+  assert.deepEqual(supportingToolOutputs(entries, primary).map((group) => group.tool), ["Claude"]);
+  const withoutReceipt = structuredClone(activity[0]);
+  delete withoutReceipt.output.fallback;
+  assert.equal(toolResultEntries([withoutReceipt])[0].tool, "AURA Intelligence");
 });

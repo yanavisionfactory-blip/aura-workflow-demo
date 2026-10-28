@@ -11,6 +11,7 @@ import ConfirmView from "@/components/aura/ConfirmView";
 import PlanView from "@/components/aura/PlanView";
 import PreviewView from "@/components/aura/PreviewView";
 import ExecutionView from "@/components/aura/ExecutionView";
+import ExecutionToolOutputs from "@/components/aura/ExecutionToolOutputs";
 import ErrorView from "@/components/aura/ErrorView";
 import ResultsView from "@/components/aura/ResultsView";
 import HistoryPanel from "@/components/aura/HistoryPanel";
@@ -25,6 +26,7 @@ import {
   cancelPythonRun,
   createPythonRun,
   decidePythonApproval,
+  reviewPythonToolOutput,
   forgetActivePythonRun,
   getPythonRun,
   rememberActivePythonRun,
@@ -53,7 +55,6 @@ import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
 import { savedRunResults } from "@/lib/savedRunResults.mjs";
 import { normalizeResultSuggestions, resultSuggestionsPrompt, RESULT_SUGGESTIONS_SCHEMA } from "@/lib/resultSuggestions.mjs";
 import { alignExecutionSteps } from "@/lib/executionSteps.mjs";
-import { intelligenceBackupNotice } from "@/lib/providerDisplay.mjs";
 import { jiraReceiptTasks } from "@/lib/jiraReceipt.mjs";
 import {
   editedArgumentsForStep,
@@ -308,6 +309,10 @@ export default function Demo() {
   const recoveryPendingRef = useRef(false);
   const [execSteps, setExecSteps] = useState([]);
   const [verifyingResult, setVerifyingResult] = useState(false);
+  const [toolReview, setToolReview] = useState(null);
+  const [toolReviewBusy, setToolReviewBusy] = useState(false);
+  const [toolReviewError, setToolReviewError] = useState("");
+  const toolReviewPendingRef = useRef(false);
   const [currentStepIdx, setCurrentStepIdx] = useState(0);
   const [approvedSteps, setApprovedSteps] = useState([]);
   const [previewError, setPreviewError] = useState("");
@@ -552,6 +557,8 @@ export default function Demo() {
     setRecoveryMessage("");
     setExecSteps([]);
     setVerifyingResult(false);
+    setToolReview(null);
+    setToolReviewError("");
     setCurrentStepIdx(0);
     setStartTime(null);
     setWorkflowName("");
@@ -1015,7 +1022,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
     }
   };
 
-  // ---- Approve plan -> preview (both mock and custom) ----
+  // Approving the plan starts execution; previews require saved runtime output.
   const handleApprove = useCallback((steps, name = "") => {
     if (plan?.compileState === "blocked") {
       void handleRetryPlanning();
@@ -1066,13 +1073,13 @@ Write ONE clear, conversational sentence restating what they want — but offer 
       return {
         id: step?.id || planned.key,
         stepKey: planned.key,
-        tool: step?.output?.fallback?.status === "used" ? planToolName(step) : planned.tool,
+        tool: planned.tool,
         action: planned.title || planned.action,
         riskLevel: planned.riskLevel,
         status: step ? preflightRetrying ? "recovering" : visibleRecoveryStepStatus(run, step) : "pending",
         started_at: step?.started_at,
         completed_at: step?.completed_at,
-        liveOutput: intelligenceBackupNotice(step || {}) || (preflightRetrying
+        liveOutput: (preflightRetrying
           ? "Checking your connections before continuing."
           : recoveryMessage
           ? recoveryMessage
@@ -1290,7 +1297,9 @@ Write ONE clear, conversational sentence restating what they want — but offer 
     const generation = ++pythonPollGenerationRef.current;
     setPlan((previous) => previous ? { ...previous, startError: "" } : previous);
     setPhase("executing");
-    setExecSteps(mapRuntimeSteps({ plan: pythonPlanRef.current, steps: [] }));
+    if (!observeOnly) setExecSteps(mapRuntimeSteps({ plan: pythonPlanRef.current, steps: [] }));
+    setToolReview(null);
+    setToolReviewError("");
     setVerifyingResult(false);
     setStartTime(Date.now());
     // Starting an approved proposal is not a plan edit. Send edited steps only
@@ -1319,7 +1328,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
           );
         }
       } else {
-        await approvePythonPlan(runId, editedSteps, false);
+        await approvePythonPlan(runId, editedSteps, false, { reviewToolOutputs: true });
       }
       // The backend run is durable. Synchronize the optional history view
       // after dispatch so its extra data requests cannot gate execution.
@@ -1330,6 +1339,13 @@ Write ONE clear, conversational sentence restating what they want — but offer 
         const run = await getPythonRunResilient(runId, generation);
         if (!run) return;
         setExecSteps(mapRuntimeSteps(run));
+        if (run.status === "awaiting_approval" && run.tool_output_review?.step_id) {
+          setToolReview(run.tool_output_review);
+          setVerifyingResult(false);
+          const reviewIndex = (run.steps || []).findIndex((step) => step.id === run.tool_output_review.step_id);
+          if (reviewIndex >= 0) setCurrentStepIdx(reviewIndex);
+          return;
+        }
         setVerifyingResult(
           (run.steps || []).length > 0
           && (run.steps || []).every((step) => ["completed", "skipped"].includes(step.status))
@@ -1481,6 +1497,24 @@ Write ONE clear, conversational sentence restating what they want — but offer 
   };
 
   startPythonExecutionRef.current = startPythonExecution;
+
+  const handleContinueToolReview = async () => {
+    if (!toolReview?.step_id || toolReviewPendingRef.current) return;
+    const runId = pythonRunIdRef.current;
+    const checkpointId = toolReview.step_id;
+    toolReviewPendingRef.current = true;
+    setToolReviewBusy(true);
+    setToolReviewError("");
+    try {
+      await reviewPythonToolOutput(runId, checkpointId);
+      if (pythonRunIdRef.current === runId) void startPythonExecution(null, false, true);
+    } catch (error) {
+      if (pythonRunIdRef.current === runId) setToolReviewError(error.message || "Couldn't continue yet. Your completed output is saved; try again.");
+    } finally {
+      toolReviewPendingRef.current = false;
+      setToolReviewBusy(false);
+    }
+  };
 
   const runFrom = (startIdx) => {
     const template = execTemplateRef.current;
@@ -1823,7 +1857,6 @@ Generate a results summary in plain, human-friendly language (not technical).
                     backendRunId={pythonRunIdRef.current}
                     backendPlan={pythonPlanRef.current}
                     plan={plan}
-                    hasPreview={!!mock?.preview}
                     onApprove={handleApprove}
                     onRevisePlan={originalPrompt.startsWith("AURA_PILOT_V1\n") ? handlePilotRevision : handlePlanRevision}
                     onRetryPlan={originalPrompt.startsWith("AURA_PILOT_V1\n") ? handlePilotRevision : handleRetryPlanning}
@@ -1862,8 +1895,12 @@ Generate a results summary in plain, human-friendly language (not technical).
               >
                 <ExecutionView steps={execSteps} currentStepIndex={currentStepIdx} isReal={!mock}
                   verifying={verifyingResult}
+                  review={toolReview}
                   onCancel={pythonRunIdRef.current ? () => cancelSavedRun({ id: pythonRunIdRef.current }) : undefined}
-                  cancelBusy={recoveryBusy} cancelError={recoveryMessage} />
+                  cancelBusy={recoveryBusy} cancelError={recoveryMessage} >
+                  <ExecutionToolOutputs steps={execSteps} review={toolReview} reviewBusy={toolReviewBusy} reviewError={toolReviewError}
+                    onContinue={handleContinueToolReview} backendRunId={pythonRunIdRef.current} />
+                </ExecutionView>
               </motion.div>
             )}
 

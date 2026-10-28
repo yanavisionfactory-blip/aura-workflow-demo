@@ -128,3 +128,15 @@ test("revisions preserve the executable provider instead of its display label", 
     assert.doesNotMatch(prompt, /"tool":"Google Docs"/);
   }
 });
+
+
+test("refresh restores a tool-output checkpoint before any later write approval", () => {
+  const run = { id: "run", status: "awaiting_approval", plan_approved: true,
+    plan: { steps: [{ key: "draft" }, { key: "save" }] },
+    tool_output_review: { step_id: "draft", step_ids: ["draft"] },
+    steps: [{ id: "draft", status: "completed" }, { id: "save", approval_status: "pending", approval_preview: { status: "ready" } }],
+  };
+  assert.equal(savedRunResumeView(run), "execution");
+  delete run.tool_output_review;
+  assert.equal(savedRunResumeView(run), "preview");
+});

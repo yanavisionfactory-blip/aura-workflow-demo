@@ -195,6 +195,7 @@ from .schemas import (
     ResumeDecision,
     RunCreate,
     RunPreflightRequest,
+    ToolOutputReviewDecision,
     TrustSignalUpdate,
     WebhookReplayRequest,
     WebhookSubscriptionCreate,
@@ -5962,6 +5963,9 @@ async def _run_view(session: AsyncSession, run: WorkflowRun) -> dict:
         "automation_state": (run.execution_context or {}).get("__aura_preflight__"),
         "autonomy_state": (run.execution_context or {}).get("__aura_autonomy__"),
         "autonomy_authority": (run.execution_context or {}).get("__aura_authority__"),
+        "tool_output_review": (run.execution_context or {}).get(
+            "__aura_tool_output_review__", {}
+        ).get("pending") if run.status == RunStatus.awaiting_approval else None,
         "connection_requirements": [
             {
                 "id": item.id,
@@ -6324,6 +6328,54 @@ async def review_run_readiness(
     return await check_run_readiness(session, run, WorkflowPlan.model_validate(plan_data))
 
 
+@app.post("/v1/runs/{run_id}/review-tool-output")
+async def review_tool_output(
+    run_id: str,
+    payload: ToolOutputReviewDecision,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    from .tool_output_review import REVIEW_KEY, output_review_enabled
+
+    run = await session.scalar(select(WorkflowRun).where(
+        WorkflowRun.id == run_id, WorkflowRun.workspace_id == context.workspace_id,
+    ).with_for_update())
+    if not run:
+        raise HTTPException(404, "Run not found")
+    if run.cancellation_requested or run.status == RunStatus.cancelled:
+        raise HTTPException(409, "This workflow has been cancelled")
+    state = dict((run.execution_context or {}).get(REVIEW_KEY, {}))
+    reviewed = list(state.get("reviewed_step_ids", []))
+    # A delayed or repeated click can only acknowledge its original checkpoint.
+    if payload.step_id in reviewed:
+        return {"id": run.id, "status": run.status.value, "already_reviewed": True}
+    pending = state.get("pending") or {}
+    if (not output_review_enabled(run) or not run.plan_approved
+            or run.status != RunStatus.awaiting_approval
+            or pending.get("step_id") != payload.step_id):
+        raise HTTPException(409, "This tool output is not waiting for review")
+    steps = (await session.scalars(select(RunStep).where(
+        RunStep.run_id == run.id, RunStep.id.in_(pending.get("step_ids", [])),
+    ))).all()
+    if not steps or len(steps) != len(pending["step_ids"]) or any(
+        step.status != StepStatus.completed or "provider_result" not in (step.output or {})
+        for step in steps
+    ):
+        raise HTTPException(409, "The saved output is not ready for review")
+    state.update(pending=None, reviewed_step_ids=list(dict.fromkeys(
+        [*reviewed, *pending["step_ids"]]
+    )))
+    run.execution_context = {**(run.execution_context or {}), REVIEW_KEY: state}
+    transition_run(
+        run, RunStatus.running, reason="tool_output_reviewed", actor=context.subject,
+        phase="execution", supervisor_status="active", error=None, blocker=None,
+        metadata={"step_ids": pending["step_ids"]},
+    )
+    await session.commit()
+    await dispatch_pending(context.workspace_id)
+    return {"id": run.id, "status": run.status.value}
+
+
 @app.post("/v1/runs/{run_id}/approve-plan")
 async def approve_plan(
     run_id: str,
@@ -6617,6 +6669,13 @@ async def approve_plan(
         "approved_plan_hash": plan_hash,
         "allow_autonomous_read_repairs": payload.allow_autonomous_read_repairs,
         "read_repair_count": 0,
+    }
+    from .tool_output_review import REVIEW_KEY
+
+    execution_context[REVIEW_KEY] = {
+        "version": 1,
+        "enabled": payload.review_tool_outputs,
+        "reviewed_step_ids": execution_context.get(REVIEW_KEY, {}).get("reviewed_step_ids", []),
     }
     run.execution_context = execution_context
     plan_version.status = "approved"

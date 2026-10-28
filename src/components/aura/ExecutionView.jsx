@@ -1,10 +1,12 @@
 import { motion } from "framer-motion";
 import { Activity, Zap, Clock } from "lucide-react";
 import ExecutionStep from "./ExecutionStep";
+import { toolResultName } from "@/lib/toolResultViews.mjs";
 
 const STEP_DURATION = 2.6; // seconds per step (for ETA)
 
-export default function ExecutionView({ steps, currentStepIndex, isReal, verifying = false, onCancel, cancelBusy = false, cancelError = "", demo = false }) {
+export default function ExecutionView({ steps, currentStepIndex, isReal, verifying = false, onCancel, cancelBusy = false, cancelError = "", demo = false, review, children }) {
+  const reviewTool = toolResultName(review?.tool_slug, review?.operation);
   const stepCount = steps.length;
   const completedCount = steps.filter((s) => s.status === "completed").length;
   const failed = steps.some((s) => s.status === "failed");
@@ -12,7 +14,7 @@ export default function ExecutionView({ steps, currentStepIndex, isReal, verifyi
   const progress = stepCount ? (completedCount / stepCount) * 100 : 0;
   const remaining = Math.max(0, stepCount - completedCount);
   const etaSecs = remaining > 0 && !failed ? remaining * STEP_DURATION : 0;
-  const eta = failed
+  const eta = failed || review
     ? null
     : isReal
     ? remaining > 0
@@ -24,7 +26,7 @@ export default function ExecutionView({ steps, currentStepIndex, isReal, verifyi
     ? `About ${Math.max(1, Math.round(etaSecs / 60))} min remaining`
     : `~${Math.round(etaSecs)}s remaining`;
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="w-full max-w-4xl mx-auto">
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="w-full max-w-6xl mx-auto">
       {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: 10 }}
@@ -34,11 +36,11 @@ export default function ExecutionView({ steps, currentStepIndex, isReal, verifyi
         <div className="flex items-center gap-3">
           <div className="relative p-2 rounded-xl bg-accent/10 border border-accent/20">
             <Activity className="w-5 h-5 text-accent" />
-            {failed ? null : <div className="absolute inset-0 rounded-xl bg-accent/20 animate-pulse" />}
+            {failed || review ? null : <div className="absolute inset-0 rounded-xl bg-accent/20 animate-pulse" />}
           </div>
           <div>
             <h2 className="text-lg font-semibold">
-              {failed ? "Workflow paused" : verifying ? "Checking the final result" : recovering
+              {review ? `Review ${reviewTool} output` : failed ? "Workflow paused" : verifying ? "Checking the final result" : recovering
                 ? steps.some((step) => step.jiraTasks?.length) ? "Checking your Jira tasks" : "Checking your results"
                 : demo ? "Playing the prepared workflow" : "Running your workflow"}
             </h2>
@@ -68,6 +70,8 @@ export default function ExecutionView({ steps, currentStepIndex, isReal, verifyi
         />
       </div>
 
+      {children}
+
       <motion.div
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
@@ -81,7 +85,7 @@ export default function ExecutionView({ steps, currentStepIndex, isReal, verifyi
       {!failed && (
         <div className="flex items-center justify-center gap-1.5 mt-4 text-[11px] text-muted-foreground/50">
           <Clock className="w-3 h-3" />
-          {demo ? "Local demo playback · no provider calls or external changes" : "Safe to leave this page — we'll notify you when it's done or if something needs you"}
+          {demo ? "Local demo playback · no provider calls or external changes" : review ? "Your place is saved. You can return to this review later." : "Outputs appear here as each tool finishes."}
         </div>
       )}
       {isReal && onCancel && (

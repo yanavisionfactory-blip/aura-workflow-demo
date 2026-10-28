@@ -15,7 +15,8 @@ let renderSheetReview;
 let renderSheetCard;
 let renderActionScreen;
 let renderApproval;
-let renderPlanTools;
+let renderExecution;
+let renderPlan;
 before(async () => {
   temporary = fs.mkdtempSync(path.join(repo, ".results-render-"));
   await build({
@@ -35,14 +36,16 @@ before(async () => {
           export function ensureWorkspace() { throw new Error("Render tests cannot access workspaces"); }
           export function auraRequest() { throw new Error("Render tests cannot access support APIs"); }
           export function createWorkflowSchedule() { throw new Error("Render tests cannot execute workflows"); }
-          export function getPythonRun() { throw new Error("Render tests cannot read live workflows"); }`;
+          export function getPythonRun() { throw new Error("Render tests cannot read live workflows"); }
+          export const pythonRuntimeEnabled = false;
+          ${["authorizeConnectorBroker", "disconnectPythonConnection", "getManagedConnectorStatus", "listPythonTools", "reserveAuthorizationWindow", "searchConnectorBrokerApps", "testPythonConnection"].map((name) => `export function ${name}() { throw new Error("Render tests cannot access connections"); }`).join("\n")}`;
       },
     }],
     build: { ssr: path.join(repo, "tests/fixtures/resultsRender.jsx"), outDir: temporary,
       emptyOutDir: true, rollupOptions: { output: { entryFileNames: "render.mjs" } } },
     ssr: { noExternal: ["lucide-react"] },
   });
-  ({ render, renderToolWorkspace, renderSheetReview, renderSheetCard, renderActionScreen, renderApproval, renderPlanTools } = await import(pathToFileURL(path.join(temporary, "render.mjs"))));
+  ({ render, renderToolWorkspace, renderSheetReview, renderSheetCard, renderActionScreen, renderApproval, renderExecution, renderPlan } = await import(pathToFileURL(path.join(temporary, "render.mjs"))));
 });
 after(() => { if (temporary) fs.rmSync(temporary, { recursive: true, force: true }); });
 
@@ -55,19 +58,23 @@ test("Frame.io review opens the file workspace with an editable brief and contex
   for (const text of ["Frame.io review workspace", "Campaign cut.mp4", "Revision brief", "Edit brief", "Comments (0)",
     "Human review pending", "View Frame.io results", "View ChatGPT results", "Change result with a prompt", "Prepare requested changes"]) assert.ok(html.includes(text), text);
   assert.ok(html.indexOf("Frame.io review workspace") < html.indexOf("Supporting workflow actions"));
-  assert.doesNotMatch(html, /Google Docs|Google Sheets|<iframe|Approved content|vendor_api_called/);
+  assert.doesNotMatch(html, /Google Docs|Google Sheets|<iframe|Approved content/);
   assert.match(html, /<details[^>]*><summary[^>]*>File details/);
   assert.match(html, /Open in Frame.io/);
 });
 
-test("the Frame.io plan preview is a tool surface, with a prompt and no invented video or comments", () => {
-  const html = renderPlanTools([
-    { tool: "Frame.io", operation: "frameio.file.get", arguments: { file_id: "not-yet-read" } },
-    { tool: "Frame.io", operation: "frameio.comments.list", arguments: { file_id: "not-yet-read" } },
-    { tool: "ChatGPT", operation: "report.compose", arguments: { instructions: "Draft a review brief" } },
-  ]);
-  for (const text of ["Preview by tool", "Frame.io action preview", "Your selected file", "Reviewer comments", "Change this preview"]) assert.ok(html.includes(text), text);
-  assert.doesNotMatch(html, /Google Docs|<video|Comment count: 0|not-yet-read/);
+test("execution waits on saved tool output and does not invent previews for pending steps", () => {
+  const pending = { id: "save", tool: "Google Sheets", operation: "sheets.append", action: "Save dashboard", status: "pending" };
+  const before = renderExecution([pending]);
+  assert.doesNotMatch(before, /output preview|Saved Google Sheets cells|Tool output checkpoint/);
+  const draft = { id: "draft", key: "draft", tool: "Claude", operation: "anthropic.chat", action: "Prepare comparison", status: "completed",
+    output: { operation: "anthropic.chat", critic: { action: "accept" }, outcome_check: { status: "verified" },
+      provider_result: { ret: { content: [{ type: "text", text: "## September 2026\nRevenue, targets and actuals." }] } } } };
+  const html = renderExecution([draft, pending], { step_id: "draft", step_ids: ["draft"], tool_slug: "anthropic", operation: "anthropic.chat", next_tool_slug: "google", next_operation: "sheets.append", is_final: false });
+  for (const text of ["Tool output checkpoint", "Claude output preview", "September 2026", "Continue to Google Sheets", "paused until you continue", "Your place is saved"]) assert.ok(html.includes(text), text);
+  assert.doesNotMatch(html, /Google Sheets output preview|Saved Google Sheets cells/);
+  const final = renderExecution([draft], { step_id: "draft", step_ids: ["draft"], is_final: true });
+  assert.match(final, /Continue to results/);
 });
 
 test("all approval routes lead with app screens and keep technical settings collapsed", () => {
@@ -101,14 +108,15 @@ test("backup results disclose the actual generator and preserve its saved respon
   const html = render({ id: "backup", status: "completed", plan: { name: "KPI draft" }, steps: [{
     id: "draft", tool_slug: "aura", operation: "intelligence.claude_backup", status: "completed", reason: "Prepare KPI draft",
     output: { tool: "aura", operation: "intelligence.claude_backup", critic: { action: "accept" }, outcome_check: { status: "verified" },
-      fallback: { status: "used", actual_tool: "aura", actual_operation: "intelligence.claude_backup", message },
+      fallback: { status: "used", requested_tool: "anthropic", requested_operation: "anthropic.chat", actual_tool: "aura", actual_operation: "intelligence.claude_backup", message },
       provider_result: { ret: { content: [{ type: "text", text: "## September 2026\n\nRevenue, targets and actuals." }] } },
     },
   }] });
-  for (const expected of ["AURA Intelligence response", "insufficient credits", "September 2026", "What happened", "Results by tool"]) assert.ok(html.includes(expected), expected);
+  for (const expected of ["Claude response", "Backup used", "insufficient credits", "September 2026", "What happened", "Results by tool"]) assert.ok(html.includes(expected), expected);
   assert.ok(html.indexOf("Main workflow result") < html.indexOf("What happened"));
   assert.match(html, /<section aria-label="Main workflow result"/);
-  assert.doesNotMatch(html, /Generated with Claude/);
+  assert.doesNotMatch(html, /Generated with Claude|AURA Intelligence output preview/);
+  assert.match(html, /<details[^>]*><summary[^>]*>Execution details · backup used/);
 });
 
 test("the main Sheet screen exposes both editing routes and preserves read-only review contracts", () => {
@@ -313,9 +321,36 @@ test("a scoped booking campaign shows saved GBP, Meta and Reel views without exc
 });
 
 
-test("older Frame.io history plans retain the tool screen without operation metadata", () => {
-  const html = renderPlanTools([{ tool: "frameio", title: "Read the saved file and comments", output: "Review feedback" }]);
-  assert.match(html, /Your selected file/);
-  assert.match(html, /File preview/);
-  assert.doesNotMatch(html, /Prepared draft|<video/);
+test("plans show steps without tool previews, including older saved plans", () => {
+  for (const steps of [[
+    { tool: "Claude", title: "Prepare KPI comparison", operation: "anthropic.chat", arguments: { userMessage: "Create dashboard" }, riskLevel: "read" },
+    { tool: "Google Sheets", title: "Save KPI dashboard", operation: "sheets.append", riskLevel: "modify" },
+  ], [{ tool: "frameio", title: "Read the saved file and comments", output: "Review feedback" }]]) {
+    const html = renderPlan(steps);
+    assert.match(html, /KPI dashboard/);
+    assert.doesNotMatch(html, /Tool workspace preview|Preview by tool|action preview|output preview|Your selected file|<video/);
+  }
+});
+
+
+test("final results show both tool screens, with the Sheet ahead of the Claude step", () => {
+  const steps = [
+    { id: "draft", key: "draft", tool_slug: "aura", operation: "intelligence.claude_backup", status: "completed", reason: "Prepare comparison", output: {
+      step_id: "draft", operation: "intelligence.claude_backup", critic: { action: "accept" }, outcome_check: { status: "verified" },
+      fallback: { status: "used", requested_tool: "anthropic", requested_operation: "anthropic.chat", actual_tool: "aura", actual_operation: "intelligence.claude_backup",
+        message: "Claude had insufficient credits. AURA Intelligence completed the step." },
+      provider_result: { ret: { content: [{ type: "text", text: "Full saved KPI comparison from the drafting step." }] } },
+    } },
+    { id: "saved", key: "saved", tool_slug: "google", status: "completed", output: { step_id: "saved", operation: "sheets.append",
+      provider_result: { spreadsheetId: "dashboard", updates: { updatedRange: "KPIs!A1:C2" } },
+      outcome_check: { status: "verified", observed: { range: "KPIs!A1:C2", values: [["Metric", "Target", "Actual"], ["Revenue", "", ""]] } } } },
+  ];
+  const html = render({ id: "kpi", status: "completed", plan: { name: "September 2026 KPIs" }, steps, result: { result_presentation: { primary_step_key: "draft" } } });
+  const sheet = html.indexOf('aria-label="Google Sheets result screen"');
+  const claude = html.indexOf('aria-label="Claude response"');
+  assert.ok(sheet > 0 && claude > sheet);
+  assert.match(html, /Full saved KPI comparison from the drafting step/);
+  assert.match(html, /Backup used/);
+  assert.doesNotMatch(html, /AURA Intelligence output preview|Generated with Claude/);
+  assert.match(html, /<details[^>]*><summary[^>]*>Execution details · backup used/);
 });

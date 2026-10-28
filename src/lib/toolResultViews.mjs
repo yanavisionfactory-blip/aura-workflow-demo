@@ -1,6 +1,7 @@
 import { primaryResultFromOutputs } from "./resultPresentation.mjs";
 import { toolEvidence } from "./toolEvidence.mjs";
-import { operationProviderName } from "./providerDisplay.mjs";
+import { intelligenceBackupNotice, operationProviderName } from "./providerDisplay.mjs";
+import { googleSheetsResult } from "./googleSheetsResult.mjs";
 
 const names = {
   anthropic: "Claude", claude: "Claude",
@@ -16,6 +17,7 @@ const names = {
 };
 
 export function toolResultName(name = "AURA", operation = "") {
+  operation ||= "";
   if (operation.startsWith("frameio.")) return "Frame.io";
   if (["report.compose", "web.page.read", "web.search", "intelligence.claude_backup"].includes(operation)) return operationProviderName(name, operation);
   for (const [prefix, label] of [["docs.", "Google Docs"], ["sheets.", "Google Sheets"],
@@ -39,14 +41,48 @@ export function toolResultEntries(activity = []) {
       step_id: step.id, provider_result: entry.response, resolved_arguments: entry.inputs };
     const candidate = entry.status === "completed" && entry.hasResponse
       ? primaryResultFromOutputs([output], { title: entry.action }) : null;
-    return { ...entry, tool: toolResultName(entry.tool, entry.operation),
+    const backupNotice = intelligenceBackupNotice(step);
+    const fallback = step.output?.fallback;
+    const actualTool = toolResultName(entry.tool, entry.operation);
+    const tool = backupNotice && fallback?.status === "used" && fallback.requested_tool && fallback.requested_operation
+      ? toolResultName(fallback.requested_tool, fallback.requested_operation) : actualTool;
+    return { ...entry, tool, actualTool, backupNotice,
       stepKey: step.stepKey || step.key || output.step_key,
-      preview: candidate?.kind && candidate.kind !== "result" ? candidate : null,
+      preview: candidate?.kind && candidate.kind !== "result" ? { ...candidate, displayProvider: tool } : null,
       link: candidate?.link || null,
       source: entry.operation === "weekly.source.analyze" ? entry.response?.source : null,
       synthetic: entry.response?.synthetic === true || entry.response?.receipt?.synthetic === true,
     };
   });
+}
+
+// The deliverable leads the final page; every other completed tool stays visible.
+// Execution uses the original order instead of this final-results ordering.
+export function supportingToolOutputs(entries, primary = {}, presentation = {}) {
+  const main = mainToolEntry(entries, primary, presentation);
+  const primaryTool = main?.tool || toolResultName(primary.provider);
+  return toolResultGroups(entries.filter((entry) => entry.status === "completed" && entry.hasResponse))
+    .filter((group) => group.tool !== primaryTool);
+}
+
+export function preferredToolOutcome(primary, activity = []) {
+  if (!["ai_response", "report"].includes(primary.kind)) return primary;
+  const outputs = activity.filter((step) => step.status === "completed").map((step) => ({
+    ...step.output, step_id: step.id, step_key: step.stepKey || step.key,
+    operation: step.output?.operation || step.operation,
+  }));
+  // A saved spreadsheet is the deliverable; a source-only read stays secondary.
+  return googleSheetsResult(outputs, { title: primary.title }) || primary;
+}
+
+export function toolOutputResult(entries, activity = []) {
+  const outputs = entries.map((entry) => {
+    const step = activity.find((item) => (item.id || item.stepKey || item.key) === entry.id);
+    return step?.output ? { ...step.output, step_id: entry.id, step_key: entry.stepKey,
+      provider_result: entry.response, resolved_arguments: entry.inputs } : null;
+  }).filter(Boolean);
+  const candidate = primaryResultFromOutputs(outputs, { title: entries.at(-1)?.action });
+  return candidate.kind && candidate.kind !== "result" ? candidate : null;
 }
 
 export function mainToolEntry(entries, primary = {}, presentation = {}) {

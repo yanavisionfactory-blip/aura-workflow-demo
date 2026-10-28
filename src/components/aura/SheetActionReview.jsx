@@ -8,7 +8,7 @@ import { toolResultEntries } from "@/lib/toolResultViews.mjs";
 import { applySheetEdits, sheetComparisonMarkdown, sheetEditSchema } from "@/lib/sheetReviewEdit.mjs";
 
 export function PreparedReports({ activity = [] }) {
-  const reports = toolResultEntries(activity).filter((entry) => entry.preview?.kind === "report");
+  const reports = toolResultEntries(activity).filter((entry) => ["report", "ai_response"].includes(entry.preview?.kind));
   return reports.map((entry) => <section key={entry.id} aria-label={`${entry.tool} prepared output`} className="mt-6 overflow-hidden rounded-2xl border border-white/15 bg-white text-slate-800">
     <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-5 py-4">
       <div className="flex items-center gap-3"><span className="rounded-xl bg-slate-900 p-2.5 text-white"><Sparkles className="h-5 w-5" /></span><div><h3 className="text-sm font-semibold">{entry.tool}</h3><p className="mt-0.5 text-xs text-slate-500">{entry.preview.title}</p></div></div>
@@ -18,7 +18,8 @@ export function PreparedReports({ activity = [] }) {
       <ReactMarkdown {...documentMarkdownOptions}>{entry.preview.preview.body}</ReactMarkdown>
     </div>
     <details className="border-t border-slate-200 px-5 py-3 text-xs"><summary className="cursor-pointer font-medium">Research sources ({entry.response?.sources?.length || 0})</summary><div className="mt-3 space-y-2">{(entry.response?.sources || []).map((source) => <details key={source.id} className="rounded-lg border border-slate-200 p-3"><summary className="cursor-pointer">{source.title}</summary><pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words font-sans text-xs leading-6">{source.content}</pre></details>)}</div></details>
-    <p className="border-t border-slate-200 bg-slate-50 px-5 py-2 text-xs text-slate-500">Original ChatGPT response from this run · Your reviewed spreadsheet draft above is the content that will be saved</p>
+    {entry.backupNotice && <details className="border-t border-slate-200 px-5 py-3 text-xs"><summary className="cursor-pointer font-medium">Execution details · backup used</summary><p className="mt-2 leading-6">{entry.backupNotice}</p></details>}
+    <p className="border-t border-slate-200 bg-slate-50 px-5 py-2 text-xs text-slate-500">Saved {entry.tool} step output · The reviewed spreadsheet draft is the content that will be saved</p>
   </section>);
 }
 
