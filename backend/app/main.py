@@ -1191,6 +1191,8 @@ async def _verify_managed_mcp(credentials: dict, provider: str = "ubersuggest") 
                 if item["name"] in {"get_user_details", "hubspot-get-user-details"}
                 and item.get("permission_scope") == "read"), None)
             if not probe_operation:
+                logger.warning("hubspot_verification_probe_unavailable capabilities=%s",
+                               len(manifest.get("capabilities", [])))
                 raise ConnectorError("HubSpot needs an authenticated user-details tool to verify access")
         elif provider == "supermetrics":
             probe_operation, probe_arguments = "data_source_discovery", {"compress": True}
@@ -1426,17 +1428,24 @@ async def mcp_agent_oauth_callback(
                         "An AURA operator must correct the registration before you sign in again.", tool.slug)
     if not membership or error or not code:
         return redirect("error", f"{service['name']} did not grant access. Existing connections were kept.", tool.slug)
+    verification_stage = "token_exchange"
     try:
         credentials = await exchange_mcp_oauth_code(
             credentials, tool.config, code, pending["code_verifier"],
         )
+        verification_stage = "authenticated_read"
         manifest = await _verify_managed_mcp(credentials, provider)
+        verification_stage = "save_connection"
         await _persist_agent_connection(
             _mcp_payload(credentials, provider), manifest, credentials, ToolKind.mcp,
             TenantContext(wid, membership.subject, membership.role), session,
             connection_config=_mcp_auth_config(tool.config),
         )
-    except (ConnectorError, httpx.HTTPError, ValueError, TimeoutError, KeyError):
+    except (ConnectorError, httpx.HTTPError, ValueError, TimeoutError, KeyError) as exc:
+        # Never log exception text, response bodies, tokens, codes, or URLs.
+        status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+        logger.warning("managed_mcp_verification_failed provider=%s stage=%s error_type=%s http_status=%s",
+                       provider, verification_stage, type(exc).__name__, status)
         return redirect("error", f"{service['name']} access could not be verified. Return to Connect and try again.", tool.slug)
     return redirect("success", f"{service['name']} is connected and its live tools are verified.", tool.slug)
 
