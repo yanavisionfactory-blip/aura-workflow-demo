@@ -839,7 +839,7 @@ async def test_registered_app_broker_uses_its_native_callback(monkeypatch, provi
     managed_session.assert_not_awaited()
 
 
-@pytest.mark.parametrize("provider", ["mailchimp", "hubspot"])
+@pytest.mark.parametrize("provider", ["mailchimp", "hubspot", "tiktok"])
 async def test_registered_app_existing_nango_account_stays_on_nango(monkeypatch, provider):
     monkeypatch.setattr(main, "settings", settings(
         **{

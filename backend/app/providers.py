@@ -123,6 +123,7 @@ PROVIDERS = {
         client_id_attr="tiktok_client_id",
         client_secret_attr="tiktok_client_secret",
         callback_provider="installation",
+        native_only=True,
     ),
     "slack": OAuthProvider(
         slug="slack",

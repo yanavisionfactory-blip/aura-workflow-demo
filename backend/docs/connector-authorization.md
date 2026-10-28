@@ -24,6 +24,18 @@ test still need operator verification; structural preflight alone cannot prove
 either. A foreign or invalid state at AURA's callback is rejected without a
 token exchange and returned to the app as a connection error.
 
+TikTok's registered AURA app also uses the native installation callback. New
+TikTok connections go directly to TikTok Login Kit, even when Nango is enabled;
+Nango's availability alone does not establish a working TikTok integration.
+Both `TIKTOK_CLIENT_ID` (TikTok's client key) and `TIKTOK_CLIENT_SECRET` must be
+configured before the marketplace offers that route. Existing managed accounts
+keep their recorded backend. Register the exact
+`<PUBLIC_URL>/v1/oauth/installation/callback` URI in TikTok Login Kit (or the
+explicit callback override), and approve the requested products and scopes in
+TikTok's developer portal. App review and an authenticated profile read are
+still required to verify live access; reaching TikTok's login page is not a
+successful account connection. TikTok Ads Manager is a separate connector.
+
 Use an explicit integration map when multiple integrations match a provider.
 An exact provider-named integration is preferred; otherwise there must be exactly
 one match. Explicit mappings are checked against the returned integration identity

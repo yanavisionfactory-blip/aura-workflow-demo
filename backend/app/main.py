@@ -2767,7 +2767,7 @@ async def create_connector_broker_session(
         )
         return {**result, "backend": "native", "provider": provider}
     if not selected_tool and provider in PROVIDERS and PROVIDERS[provider].native_only:
-        # Adobe apps registered for AURA must use the exact AURA callback,
+        # Apps registered for AURA must use the exact AURA callback,
         # never a Nango session or an MCP broker's client registration.
         result = await oauth_start(provider=provider, context=context)
         return {**result, "backend": "native", "provider": provider}
