@@ -16,6 +16,7 @@ from app.pipedream_connect import PipedreamClient, certify_app
     ("google_ads", "Google Ads"),
     ("google_analytics", "Google Analytics"),
     ("google_sheets", "Google Sheets"),
+    ("google_docs", "Google Docs"),
 ])
 def google_runtime(request, monkeypatch):
     app_id, name = request.param
@@ -58,7 +59,7 @@ async def test_new_google_customers_get_isolated_production_sessions(database, g
         await session.commit()
         for workspace in ("first", "second"):
             result = await main.create_connector_broker_session(
-                provider, context=main.TenantContext(workspace, "customer", "owner"), session=session,
+                provider, context=main.TenantContext(workspace, f"customer-{workspace}", "owner"), session=session,
             )
             assert result["backend"] == "pipedream"
             assert result["app"] == definition["name_slug"]
@@ -67,7 +68,11 @@ async def test_new_google_customers_get_isolated_production_sessions(database, g
             claims = jwt.decode(result["authorization_state"], config.session_signing_key,
                                 algorithms=["HS256"], audience="aura-broker-complete")
             assert claims["workspace_id"] == workspace
+            assert claims["sub"] == f"customer-{workspace}"
+            assert claims["provider"] == provider
             assert claims["environment"] == "production"
+            assert result["account_id"] is None
+            assert result["connection_id"] is None
             results.append(result)
     assert results[0]["external_user_id"] != results[1]["external_user_id"]
     assert client.create_connect_token.await_count == 2

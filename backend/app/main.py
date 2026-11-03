@@ -1461,7 +1461,9 @@ def _marketplace_route(item: dict) -> dict:
     }
 
 
-PUBLIC_GOOGLE_CONNECTORS = frozenset({"google-ads", "google-analytics", "google-sheets"})
+PUBLIC_GOOGLE_CONNECTORS = frozenset({
+    "google-ads", "google-analytics", "google-docs", "google-sheets",
+})
 
 
 def _prefers_pipedream_connection(provider: str) -> bool:
