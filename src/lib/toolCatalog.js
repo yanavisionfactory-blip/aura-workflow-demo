@@ -224,7 +224,13 @@ export function searchMarketplace(query, limit = 120) {
 
 function expandGoogle(item) {
   if (item.provider !== "google" || !item.connectable) return [item];
-  return NATIVE_FALLBACK.filter((tool) => tool.provider === "google");
+  return NATIVE_FALLBACK.filter((tool) => tool.provider === "google").map((tool) => ({
+    ...item,
+    name: tool.name,
+    icon: tool.icon,
+    desc: tool.desc,
+    aliases: [...new Set([...(item.aliases || []), tool.name])],
+  }));
 }
 
 function replace(target, items) {

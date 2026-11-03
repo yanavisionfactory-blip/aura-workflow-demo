@@ -7,6 +7,17 @@ do not perform this extra configuration read.
 
 ## Configuration ownership
 
+New **Google Ads**, **Google Analytics**, and **Google Sheets** connections
+prefer their signed Pipedream managed OAuth route. The marketplace and broker
+must agree on that route, including when a legacy Nango integration or broad
+Google Workspace app also exists. Google Sheets must not select broad
+Gmail/Drive/Calendar consent simply because the legacy card was expanded first.
+Existing connections keep their stored backend and environment. New managed
+connections use the deployed `PIPEDREAM_ENVIRONMENT=production` setting and an
+opaque identity bound to the customer and workspace. Customers still consent
+with Google and need access to the relevant ad account, Analytics property, or
+spreadsheet; connection health alone does not establish access to those assets.
+
 New Canva accounts use Pipedream Connect's managed Canva OAuth client. This is
 the public-user route: the customer signs into Canva and grants consent, and
 AURA keeps a tenant-scoped opaque account reference. Customers do not need a

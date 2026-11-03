@@ -75,6 +75,20 @@ test("plan connections discover a newly certified exact Sheets route before auth
   assert.equal(discoveries, 1);
 });
 
+test("managed Sheets consent wins over broad Google consent and keeps the legacy plan route", () => {
+  replaceToolCatalog({ marketplace: [
+    { provider: "google", display_name: "Google Workspace", connectable: true,
+      connection_backend: "nango", connection_strategy: "oauth", source: "native" },
+    { provider: "google-sheets", display_name: "Google Sheets", connectable: true,
+      connection_backend: "pipedream", connection_strategy: "oauth", preferred_connection: true },
+  ] });
+  const sheets = catalogEntryFor("Google Sheets");
+  assert.equal(sheets.provider, "google-sheets");
+  assert.equal(sheets.connectionBackend, "pipedream");
+  assert.equal(sheets.routes.find(route => route.provider === "google").connectionBackend, "nango");
+  assert.equal(catalogEntryFor("Google Docs").connectionBackend, "nango");
+});
+
 test("discovery never upgrades an unverified route or substitutes shared Google consent", async () => {
   replaceToolCatalog({ marketplace: [
     { provider: "google", display_name: "Google Workspace", connectable: true, connection_backend: "native" },
