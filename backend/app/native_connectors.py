@@ -505,6 +505,9 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         "identity": {"provider": "x"},
         "modules": [
             _module("x.profile.get", "search", "Read the connected X profile.", permission_scope="read"),
+            _module("x.posts.get", "search", "Read a specific X post to verify its content.",
+                    permission_scope="read", required=("post_id",),
+                    properties={"post_id": {"type": "string", "pattern": "^[0-9]+$"}}),
             _module("x.posts.list", "search", "Read the connected account's posts. Follow pagination_token for more results.",
                     permission_scope="read", properties={
                         "max_results": {"type": "integer", "minimum": 5, "maximum": 100},

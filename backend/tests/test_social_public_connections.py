@@ -12,6 +12,8 @@ from fastapi import HTTPException
 from app import main, providers, security
 from app.config import Settings
 from app.native_connectors import native_manifest
+from app.operation_contracts import output_errors
+from app.outcome_checks import build_outcome_check, evaluate_outcome_check
 from app.providers import PROVIDERS, ProviderExecutor
 
 
@@ -169,3 +171,29 @@ async def test_x_posts_use_connected_identity_and_preserve_pagination(monkeypatc
     assert result["meta"]["next_token"] == "next"
     request.assert_awaited_with("GET", "https://api.x.com/2/users/123/tweets",
                               params={"max_results": 10, "pagination_token": "cursor"})
+
+
+def test_x_contracts_accept_empty_timeline_and_reject_unverified_responses():
+    assert not output_errors("x.posts.list", {"meta": {"result_count": 0}})
+    assert output_errors("x.posts.list", {"meta": {"result_count": 1}})
+    assert output_errors("x.posts.get", {"errors": [{"title": "Unavailable"}]})
+    assert output_errors("x.profile.get", {"data": {"id": "123"}})
+    assert not output_errors("x.posts.get", {"data": {"id": "123", "text": "Approved"}})
+
+
+async def test_x_post_readback_checks_recorded_id_and_approved_content(monkeypatch):
+    executor = ProviderExecutor({"access_token": "test"})
+    observed = {"data": {"id": "123", "text": "See https://t.co/short", "entities": {
+        "urls": [{"url": "https://t.co/short", "expanded_url": "https://example.com/"}]}}}
+    request = AsyncMock(return_value=observed)
+    monkeypatch.setattr(executor, "_request", request)
+    check = build_outcome_check("x.posts.create", {"text": "See https://example.com/"}, {"data": {"id": "123"}})
+    result = await executor.execute(check.operation, check.arguments)
+    request.assert_awaited_once_with("GET", "https://api.x.com/2/tweets/123", params={"tweet.fields": "entities"})
+    assert evaluate_outcome_check(check, result)["status"] == "verified"
+    for bad in ({"data": {"id": "124", "text": "See https://example.com/"}},
+                {"data": {"id": "123", "text": "Unapproved text"}},
+                {**observed, "errors": [{"title": "Partial failure"}]}, {}):
+        assert evaluate_outcome_check(check, bad)["status"] != "verified"
+    with pytest.raises(ValueError, match="only digits"):
+        await executor.execute("x.posts.get", {"post_id": "../users/me"})

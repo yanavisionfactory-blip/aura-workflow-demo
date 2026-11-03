@@ -646,6 +646,7 @@ class ProviderExecutor:
             "tiktok.video.publish.init": self._tiktok_video_publish_init,
             "tiktok.post.status.get": self._tiktok_post_status_get,
             "x.profile.get": self._x_profile_get,
+            "x.posts.get": self._x_posts_get,
             "x.posts.list": self._x_posts_list,
             "x.posts.create": self._x_posts_create,
             "mailchimp.audiences.list": self._mailchimp_audiences_list,
@@ -1763,6 +1764,13 @@ class ProviderExecutor:
 
     async def _x_profile_get(self, a: dict) -> dict:
         return await self._request("GET", "https://api.x.com/2/users/me")
+
+    async def _x_posts_get(self, a: dict) -> dict:
+        post_id = str(a["post_id"])
+        if not post_id.isdigit():
+            raise ValueError("X post ID must contain only digits.")
+        return await self._request("GET", f"https://api.x.com/2/tweets/{post_id}",
+                                   params={"tweet.fields": "entities"})
 
     async def _x_posts_list(self, a: dict) -> dict:
         # Resolve the connected identity instead of accepting another user's ID.
