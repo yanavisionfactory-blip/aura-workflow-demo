@@ -218,8 +218,8 @@ cards. Once the key is configured, these are preferred for new connections.
 Native, Nango and Pipedream accounts keep their stored backend and grants.
 TikTok Ads stays on Pipedream. Missing credentials never make a route connectable.
 
-One opaque Zernio profile is provisioned per AURA workspace. A compact signed,
-15-minute, single-use authorization locator binds the callback to the active
+One opaque Zernio profile is provisioned per AURA workspace. A compact opaque,
+15-minute, single-use authorization token binds the callback to the active
 workspace member, platform and profile. The API verifies the returned account
 against Zernio and checks token health before saving a connection. Reconnects
 pin `reconnectAccountId`; callbacks cannot switch to a different account. The

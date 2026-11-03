@@ -108,7 +108,10 @@ async def test_new_external_users_get_direct_login_and_isolated_accounts(databas
     assert a1["profileId"] != a2["profileId"] and s1 != s2
     assert "server-secret" not in json.dumps([first, second])
     # Fits the documented X state budget, including Zernio's exit-notice wrapper.
-    assert len(quote(setup[2]["redirects"][0]["redirect_url"], safe="")) < 190
+    callback = setup[2]["redirects"][0]["redirect_url"]
+    for suffix in ("", "&reconnectAccountId=" + "a" * 24):
+        wrapped = "https://zernio.com/connect/continue?to=" + quote(callback + suffix, safe="")
+        assert len(quote(wrapped, safe="")) <= 258
     tool1, tool2 = await complete(database, setup, s1, a1), await complete(database, setup, s2, a2)
     assert tool1.workspace_id != tool2.workspace_id
     assert tool1.external_account_id != tool2.external_account_id
@@ -124,8 +127,11 @@ async def test_new_external_users_get_direct_login_and_isolated_accounts(databas
 
 async def test_callbacks_reject_other_workspace_accounts_and_replay(database, setup):
     _, token, a1 = await begin(database, setup)
-    _, _, a2 = await begin(database, setup, 1)
+    _, other_state, a2 = await begin(database, setup, 1)
     async with database() as session:
+        altered = other_state.split(".")[0] + "." + token.split(".")[1]
+        with pytest.raises(zc.ZernioError, match="invalid or expired"):
+            await zc.finish(session, altered, a2["_id"], a2["profileId"], "twitter", "", setup[0])
         with pytest.raises(zc.ZernioError, match="does not belong"):
             await zc.finish(session, token, a2["_id"], a1["profileId"], "twitter", "", setup[0])
     await complete(database, setup, token, a1)

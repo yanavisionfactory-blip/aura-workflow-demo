@@ -4739,7 +4739,7 @@ async def update_tool_trust(
     return {"tool_slug": tool.slug, "score": trust.score}
 
 
-@app.get("/v1/zernio/callback")
+@app.get("/v1/z/c")
 async def zernio_oauth_callback(
     s: str, accountId: str = "", profileId: str = "", connected: str = "", error: str = "",
     session: AsyncSession = Depends(session_dependency),

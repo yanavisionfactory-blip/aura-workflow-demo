@@ -5,7 +5,6 @@ Only verified account/profile references are saved; OAuth tokens stay at Zernio.
 """
 import base64
 import hashlib
-import hmac
 import secrets
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode, urlsplit
@@ -132,21 +131,17 @@ def catalog(settings=None):
             for slug, (platform, name) in PROVIDERS.items()]
 
 
-def _signature(value, settings):
-    digest = hmac.new(settings.session_signing_key.encode(), value.encode(), hashlib.sha256).digest()[:16]
-    return base64.urlsafe_b64encode(digest).decode().rstrip("=")
-
-
 def state_workspace(state, settings):
-    # A JWT would exceed X's 500-character OAuth-state limit once Zernio embeds
-    # our callback. This compact signed locator has 128-bit nonce/MAC strength;
-    # its expiry and single-use state are held server-side.
+    # X embeds this URL plus its exit notice and reconnect marker in a limited
+    # OAuth state. The workspace prefix ONLY locates the tenant partition: it
+    # is untrusted until the hash of the entire 128-bit random token matches a
+    # live, unused grant there. Changing either part invalidates that lookup.
     try:
-        workspace, nonce, signature = state.split(".")
-        value = workspace + "." + nonce
-        if len(nonce) != 22 or not hmac.compare_digest(_signature(value, settings), signature):
+        workspace, nonce = state.split(".")
+        import re
+        if not re.fullmatch(r"[A-Za-z0-9_-]{22}", workspace) or not re.fullmatch(r"[A-Za-z0-9_-]{22}", nonce):
             raise ValueError()
-        return str(UUID(hex=workspace))
+        return str(UUID(bytes=base64.urlsafe_b64decode(workspace + "==")))
     except (ValueError, AttributeError):
         raise ZernioError("This connection link is invalid or expired. Start again from Connect.") from None
 
@@ -180,9 +175,9 @@ async def start(session, context, provider, settings):
         ToolConnection.workspace_id == context.workspace_id, ToolConnection.slug == provider))
     if tool and (tool.config or {}).get("managed_by") != "zernio":
         raise ZernioError("This connection uses a different authorization service.")
-    value = UUID(context.workspace_id).hex + "." + secrets.token_urlsafe(16)
-    state = value + "." + _signature(value, settings)
-    callback = settings.public_url.rstrip("/") + "/v1/zernio/callback?" + urlencode({"s": state})
+    workspace_token = base64.urlsafe_b64encode(UUID(context.workspace_id).bytes).decode().rstrip("=")
+    state = workspace_token + "." + secrets.token_urlsafe(16)
+    callback = settings.public_url.rstrip("/") + "/v1/z/c?" + urlencode({"s": state})
     params = {"profileId": profile.profile_id, "redirect_url": callback}
     if tool and tool.external_account_id:
         # The broker enforces this before changing any existing provider grant.
