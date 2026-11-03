@@ -38,6 +38,7 @@ import {
 import { listAgentConnections, requestManagedConnector, searchConnectorBrokerApps } from "@/lib/auraApi";
 import {
   CATALOG,
+  catalogEntryFor,
   mergeMarketplaceApps,
   searchMarketplace,
 } from "@/lib/toolCatalog";
@@ -95,7 +96,7 @@ export default function ConnectionsPill() {
 
   useEffect(() => {
     const normalized = query.trim().replace(/\s+/g, " ");
-    if (normalized.length < 2) {
+    if (normalized.length < 2 && normalized.toLowerCase() !== "x") {
       setSearchingCatalog(false);
       setCatalogSearchQuery("");
       return undefined;
@@ -139,7 +140,7 @@ export default function ConnectionsPill() {
     const catalogNames = new Set(CATALOG.map((tool) => tool.name.toLowerCase()));
     const agentNames = new Set(agentConnections.map((agent) => agent.name.toLowerCase()));
     const existingConnections = Object.keys(connected)
-      .filter((name) => !isAura(name) && !catalogNames.has(name.toLowerCase()) && !agentNames.has(name.toLowerCase()))
+      .filter((name) => !isAura(name) && !catalogNames.has(name.toLowerCase()) && !catalogEntryFor(name) && !agentNames.has(name.toLowerCase()))
       .map((name) => ({ name, icon: "🔗", desc: "Existing workspace connection" }));
     return [...catalogConnected, ...existingConnections];
   }, [agentConnections, connected, catalogRevision]);

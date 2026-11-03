@@ -495,6 +495,26 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
             _module("canva.export.get", "search", "Check an export and retrieve its download links.", required=("export_id",), properties={"export_id": _TEXT}),
         ],
     },
+    "x": {
+        "schema_version": "1.1",
+        "catalog_version": 1,
+        "provider_type": "oauth",
+        "name": "X (Twitter)",
+        "description": "Read the connected X profile and posts, and publish approved text posts.",
+        "base_url": "provider-managed",
+        "identity": {"provider": "x"},
+        "modules": [
+            _module("x.profile.get", "search", "Read the connected X profile.", permission_scope="read"),
+            _module("x.posts.list", "search", "Read the connected account's posts. Follow pagination_token for more results.",
+                    permission_scope="read", properties={
+                        "max_results": {"type": "integer", "minimum": 5, "maximum": 100},
+                        "pagination_token": _TEXT,
+                    }),
+            _module("x.posts.create", "action", "Publish an approved text post to the connected X account.",
+                    permission_scope="write", requires_approval=True, required=("text",),
+                    properties={"text": {"type": "string", "minLength": 1, "maxLength": 280}}),
+        ],
+    },
     "tiktok": {
         "schema_version": "1.1",
         "catalog_version": 1,

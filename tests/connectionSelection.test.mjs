@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  isVerifiedConnection, planConnectionKey, planConnectionRoute, selectConnection,
+  isVerifiedConnection, matchingConnections, planConnectionKey, planConnectionRoute, selectConnection,
 } from "../src/lib/connectionSelection.mjs";
 
 test("selects the exact account by stable connection id", () => {
@@ -14,6 +14,23 @@ test("selects the exact account by stable connection id", () => {
     selectConnection(tools, { toolName: "Slack", provider: "slack", connectionId: "selected" }).id,
     "selected"
   );
+});
+
+test("social display aliases preserve old accounts without changing executable routes", () => {
+  const tools = [
+    { id: "old-twitter", slug: "twitter-v2", display_name: "Twitter(v2)" },
+    { id: "old-ads", slug: "tiktok-ads-manager", display_name: "TikTok Ads Manager" },
+    { id: "personal", slug: "tiktok", display_name: "TikTok" },
+    { id: "app-only", slug: "twitter-client-credentials", display_name: "Twitter (Client Credentials)" },
+  ];
+  assert.deepEqual(matchingConnections(tools, "X (Twitter)", "x").map((tool) => tool.id), ["old-twitter"]);
+  assert.equal(selectConnection(tools, { toolName: "TikTok Ads", provider: "tiktok-ads" })?.id, "old-ads");
+  assert.equal(selectConnection(tools, { toolName: "TikTok", provider: "tiktok" })?.id, "personal");
+  assert.equal(selectConnection(tools, { toolName: "X (Twitter)", provider: "x", exactProvider: true }), null);
+  assert.equal(selectConnection(tools, { toolName: "X (Twitter)", provider: "twitter-v2", exactProvider: true })?.id,
+    "old-twitter");
+  assert.throws(() => selectConnection([...tools, { id: "new-x", slug: "x", display_name: "X (Twitter)" }],
+    { toolName: "X (Twitter)", provider: "x" }), /Choose which/);
 });
 
 test("never guesses when multiple accounts are ambiguous", () => {

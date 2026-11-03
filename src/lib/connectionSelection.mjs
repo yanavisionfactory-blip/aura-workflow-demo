@@ -1,5 +1,14 @@
 const normalized = (value) => String(value || "").trim().toLowerCase();
 
+// Display aliases preserve existing accounts; reviewed plans still require the
+// exact executable provider below and never inherit another route's permissions.
+const socialFamily = (value) => {
+  const key = normalized(value).replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  if (["x", "x-twitter", "twitter", "twitter-v1", "twitter-v2", "twitter-oauth2"].includes(key)) return "x";
+  if (["tiktok-ads", "tiktok-ads-manager"].includes(key)) return "tiktok-ads";
+  return null;
+};
+
 const GOOGLE_FAMILY_OPERATION = {
   "google calendar": "calendar.",
   "google docs": "docs.",
@@ -22,16 +31,19 @@ export function matchingConnections(tools, toolName, provider) {
   const name = normalized(toolName);
   const slug = name.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   const providerSlug = normalized(provider);
+  const family = socialFamily(provider) || socialFamily(toolName);
   return (tools || []).filter((tool) => {
     const toolSlug = normalized(tool.slug);
     const canonicalProvider = normalized(tool.canonical_provider);
     const displayName = normalized(tool.display_name);
+    const sameSocialApp = family && [toolSlug, canonicalProvider, displayName]
+      .some((value) => socialFamily(value) === family);
     const googleOperation = GOOGLE_FAMILY_OPERATION[name];
     const sharedGoogleAccount = toolSlug === "google" && googleOperation
       && (tool.allowed_operations || []).some((operation) => operation.startsWith(googleOperation));
     if (toolSlug === "google" && googleOperation && !sharedGoogleAccount) return false;
     return displayName === name || toolSlug === slug || canonicalProvider === slug ||
-      sharedGoogleAccount ||
+      sharedGoogleAccount || sameSocialApp ||
       (providerSlug && (toolSlug === providerSlug || canonicalProvider === providerSlug));
   });
 }
