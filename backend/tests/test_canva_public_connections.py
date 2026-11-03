@@ -166,3 +166,37 @@ async def test_existing_canva_accounts_keep_backend_and_environment(
         managed.assert_awaited_once()
     else:
         reconnect.assert_awaited_once()
+
+
+@pytest.mark.parametrize("backend", ["nango", "native", "pipedream"])
+async def test_authorizing_related_canva_route_preserves_existing_account(database, canva_runtime, backend):
+    config, client, _, _ = canva_runtime
+    client.list_mcp_tools = AsyncMock(return_value=[{
+        "name": "list_designs", "inputSchema": {"type": "object"},
+        "annotations": {"readOnlyHint": True},
+    }])
+    client.verify_account = AsyncMock(return_value={"ok": True, "identity": {"id": "customer"}})
+    legacy_config = {"managed_by": backend, "pipedream_environment": "development"}
+    async with database() as session:
+        session.add(Workspace(id="workspace", name="Existing account"))
+        existing = ToolConnection(
+            workspace_id="workspace", slug="canva", display_name="Canva", kind=ToolKind.oauth,
+            config=legacy_config, external_connection_id="legacy-account", enabled=True,
+            encrypted_credentials="legacy-encrypted", allowed_operations=["canva.designs.list"],
+        )
+        session.add(existing)
+        await certify_app(session, client, CANVA_APP, config)
+        await certify_app(session, client, {
+            **CANVA_APP, "name_slug": "canva-mcp", "vendor_app": "canva", "categories": ["mcp"],
+        }, config)
+        await session.commit()
+        result = await main.complete_connector_broker_connection(
+            "canva-mcp", main.ConnectorBrokerComplete(account_id="apn_new"),
+            context=main.TenantContext("workspace", "customer", "owner"), session=session,
+        )
+        assert result["connected"] is True
+        assert result["activated_routes"] == ["canva-mcp"]
+        assert existing.config == legacy_config
+        assert existing.external_connection_id == "legacy-account"
+        assert existing.encrypted_credentials == "legacy-encrypted"
+        assert existing.allowed_operations == ["canva.designs.list"]

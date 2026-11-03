@@ -2622,6 +2622,19 @@ async def _activate_pipedream_account_family(
                     ToolConnection.slug == pack.provider_slug,
                 )
             )
+        if tool is not None and (
+            (tool.config or {}).get("managed_by") != "pipedream"
+            or (
+                pack.provider_slug != requested_pack.provider_slug
+                and connection_environment(tool, settings)
+                != (environment or settings.pipedream_environment)
+            )
+        ):
+            # Authorizing an additional action/MCP route is not permission to
+            # migrate an existing account to a different OAuth client or environment.
+            if pack.provider_slug == requested_pack.provider_slug:
+                raise HTTPException(409, "Reconnect the existing account using its current connection")
+            continue
         if tool is None:
             tool = ToolConnection(
                 workspace_id=context.workspace_id,
