@@ -1461,6 +1461,15 @@ def _marketplace_route(item: dict) -> dict:
     }
 
 
+PUBLIC_GOOGLE_CONNECTORS = frozenset({"google-ads", "google-analytics", "google-sheets"})
+
+
+def _prefers_pipedream_connection(provider: str) -> bool:
+    return canonical_provider_slug(provider) in PUBLIC_GOOGLE_CONNECTORS or bool(
+        provider in PROVIDERS and PROVIDERS[provider].pipedream_only
+    )
+
+
 def _canonical_marketplace_entries(items: list[dict]) -> list[dict]:
     """Present one app card while retaining every certified execution route."""
     grouped: dict[str, list[dict]] = {}
@@ -1665,9 +1674,7 @@ async def managed_connector_status(
             "managed": True,
             "source": "connector_broker",
             "connection_backend": "pipedream",
-            "preferred_connection": bool(
-                pack.provider_slug in PROVIDERS and PROVIDERS[pack.provider_slug].pipedream_only
-            ),
+            "preferred_connection": _prefers_pipedream_connection(pack.provider_slug),
             "connection_strategy": pack.definition.get("connection_strategy"),
             "execution_backend": f"pipedream_{pack.definition.get('execution_strategy')}",
             "setup_hint": pack.definition.get("connection_setup"),
@@ -1971,9 +1978,7 @@ async def search_connector_broker_apps(
                 )
                 if query == "x" and not matches(item):
                     continue
-                item["preferred_connection"] = bool(
-                    item["provider"] in PROVIDERS and PROVIDERS[item["provider"]].pipedream_only
-                )
+                item["preferred_connection"] = _prefers_pipedream_connection(item["provider"])
                 if pack and pipedream_pack_signature_valid(pack):
                     item.update(
                         capability_count=len(pack.definition.get("capabilities") or []),
@@ -1986,7 +1991,8 @@ async def search_connector_broker_apps(
                         setup_hint=connection_setup_label(app_definition),
                     )
                 current = entries.get(item["provider"])
-                if current is None or not current.get("connectable"):
+                if (current is None or not current.get("connectable")
+                    or (item.get("connectable") and item.get("preferred_connection"))):
                     entries[item["provider"]] = item
 
     ordered = sorted(
@@ -2797,6 +2803,14 @@ async def create_connector_broker_session(
         except zernio_connect.ZernioError as exc:
             raise HTTPException(503 if exc.retryable else 409, {"code": exc.code, "message": str(exc)}) from None
     pipedream_only = provider in PROVIDERS and PROVIDERS[provider].pipedream_only
+    # A signed managed Google route is suitable for new external users. An
+    # unrelated Nango integration or broad AURA Google client must not win
+    # simply because it exists. Reconnects remain pinned to their stored backend.
+    preferred_pipedream = bool(
+        not selected_tool and provider in PUBLIC_GOOGLE_CONNECTORS
+        and pipedream_client().configured
+        and await released_pipedream_pack(session, provider)
+    )
     nango_release = None if provider in PROVIDERS else await released_connector(session, provider)
     if selected_tool and selected_backend not in {"nango", "pipedream"}:
         result = await reconnect_connection(
@@ -2826,6 +2840,7 @@ async def create_connector_broker_session(
     if (
         nango.configured
         and selected_backend != "pipedream"
+        and not preferred_pipedream
         and (not pipedream_only or selected_backend == "nango")
         and (provider in PROVIDERS or nango_release)
     ):
