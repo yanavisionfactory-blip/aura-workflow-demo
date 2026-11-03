@@ -1,12 +1,6 @@
 name: Deploy AURA backend release
 
 on:
-  # Temporary trigger for the authorized Google Docs release only.
-  # Remove after deployment verification; other commits cannot deploy here.
-  workflow_run:
-    workflows: ["Python control plane"]
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
     inputs:
       release_sha:
@@ -28,24 +22,12 @@ concurrency:
 
 jobs:
   deploy:
-    if: >-
-      github.ref == 'refs/heads/main' &&
-      (
-        github.event_name == 'workflow_dispatch' ||
-        (
-          github.event_name == 'workflow_run' &&
-          github.event.workflow_run.event == 'push' &&
-          github.event.workflow_run.head_branch == 'main' &&
-          github.event.workflow_run.head_repository.full_name == github.repository &&
-          github.event.workflow_run.head_sha == '887ce514443e7c164ec747e38214d6800473e8a6' &&
-          github.event.workflow_run.conclusion == 'success'
-        )
-      )
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 130
     environment: recovery-production
     env:
-      RELEASE_SHA: ${{ inputs.release_sha || github.event.workflow_run.head_sha }}
+      RELEASE_SHA: ${{ inputs.release_sha }}
       RESUME_CANARY_DEPLOYMENT_ID: ${{ inputs.resume_canary_deployment_id }}
       RAILWAY_PROJECT: 5d7502dc-9152-4f6d-b1e2-6fe3ba7fbf8c
       RAILWAY_ENVIRONMENT: 3f00203a-dff3-4808-9c6b-e18ea5912f48
@@ -64,9 +46,6 @@ jobs:
           set -euo pipefail
           [[ "$RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo 'A full commit SHA is required.'; exit 1; }
           git merge-base --is-ancestor "$RELEASE_SHA" origin/main
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_run" ]]; then
-            git diff --exit-code "$RELEASE_SHA" origin/main -- backend scripts/deploy_backend_release.py
-          fi
           gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$RELEASE_SHA&per_page=100" \
             --jq '[.workflow_runs[] | select(.name == "Python control plane" and .event == "push" and .head_branch == "main" and .status == "completed" and .conclusion == "success")] | length > 0' \
             | python3 -c 'import sys; assert sys.stdin.read().strip() == "true", "Release needs successful main-branch backend CI"'
