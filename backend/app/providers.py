@@ -38,6 +38,9 @@ class OAuthProvider:
     callback_provider: str
     legacy_callback_providers: tuple[str, ...] = ()
     native_only: bool = False
+    # New accounts use the broker's managed OAuth client; existing accounts
+    # retain their stored backend and refresh credentials.
+    pipedream_only: bool = False
 
 
 PROVIDERS = {
@@ -113,6 +116,7 @@ PROVIDERS = {
         client_id_attr="canva_client_id",
         client_secret_attr="canva_client_secret",
         callback_provider="installation",
+        pipedream_only=True,
     ),
     "tiktok": OAuthProvider(
         slug="tiktok",

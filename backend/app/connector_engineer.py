@@ -1123,7 +1123,10 @@ async def engineer_pipedream_catalog(
         for item in apps
         if pipedream_connection_strategy(item) != "unsupported"
         and pipedream_has_executable_strategy(item)
-        and _slug(item.get("name_slug") or item.get("name")) not in PROVIDERS
+        and (
+            _slug(item.get("name_slug") or item.get("name")) not in PROVIDERS
+            or PROVIDERS[_slug(item.get("name_slug") or item.get("name"))].pipedream_only
+        )
     ]
     # Pre-warm deterministic action contracts before slower MCP discovery so
     # one remote MCP server cannot delay ordinary marketplace connections.

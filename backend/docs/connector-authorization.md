@@ -7,6 +7,27 @@ do not perform this extra configuration read.
 
 ## Configuration ownership
 
+New Canva accounts use Pipedream Connect's managed Canva OAuth client. This is
+the public-user route: the customer signs into Canva and grants consent, and
+AURA keeps a tenant-scoped opaque account reference. Customers do not need a
+Nango or Pipedream login or their own OAuth app. Use
+`PIPEDREAM_ENVIRONMENT=production` for the public deployment. Pipedream's managed
+client supports action execution and API proxying; do not export its tokens.
+
+Canva's Pipedream action contract must pass the normal schema/signature
+certification before the marketplace enables Connect. A Nango API key or legacy
+`CANVA_CLIENT_ID` alone must not mark this public route available. New connections
+must not fall back to the legacy Nango/native app when Pipedream is unavailable.
+Existing Nango/native accounts keep their backend; existing Pipedream accounts
+also keep their recorded environment, including when reconnecting without an
+explicit connection ID. This change does not rotate or overwrite credentials.
+
+Release verification requires a fresh customer connection in production mode,
+the customer's Canva consent, and a successful account ownership/health probe.
+Passing unit tests or opening the consent window alone is not an end-to-end
+connection test. See Pipedream's [OAuth client support](https://pipedream.com/docs/connect/managed-auth/oauth-clients)
+and [Canva connector](https://pipedream.com/apps/canva).
+
 Existing OAuth integration credentials belong to Nango. Backend environment
 credentials are used only to provision a missing integration. Updating environment
 variables does not repair an existing Nango integration. Never automatically
