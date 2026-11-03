@@ -16,6 +16,15 @@ test("selects the exact account by stable connection id", () => {
   );
 });
 
+test("Zernio accounts display under their social app without inheriting legacy plan permissions", () => {
+  const tools = [{ id: "managed-x", slug: "x-zernio", canonical_provider: "x", display_name: "X (Twitter)" },
+    { id: "managed-tiktok", slug: "tiktok-zernio", canonical_provider: "tiktok", display_name: "TikTok" }];
+  assert.equal(selectConnection(tools, { toolName: "Twitter", provider: "x" }).id, "managed-x");
+  assert.equal(selectConnection(tools, { toolName: "TikTok", provider: "tiktok" }).id, "managed-tiktok");
+  assert.equal(selectConnection(tools, { provider: "x", exactProvider: true }), null);
+  assert.equal(selectConnection(tools, { provider: "tiktok", exactProvider: true }), null);
+});
+
 test("social display aliases preserve old accounts without changing executable routes", () => {
   const tools = [
     { id: "old-twitter", slug: "twitter-v2", display_name: "Twitter(v2)" },

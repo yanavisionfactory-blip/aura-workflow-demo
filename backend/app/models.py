@@ -131,6 +131,29 @@ class ToolConnection(Base):
     )
 
 
+class ZernioProfile(Base):
+    __tablename__ = "zernio_profiles"
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), primary_key=True
+    )
+    profile_id: Mapped[str] = mapped_column(String(100), unique=True)
+
+
+class ZernioAuthorization(Base):
+    __tablename__ = "zernio_authorizations"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    subject: Mapped[str] = mapped_column(String(240))
+    provider: Mapped[str] = mapped_column(String(120))
+    profile_id: Mapped[str] = mapped_column(String(100))
+    tool_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    account_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    consumed: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 class ToolTrustState(Base):
     __tablename__ = "tool_trust_states"
     __table_args__ = (UniqueConstraint("workspace_id", "tool_id", name="uq_tenant_tool_trust"),)

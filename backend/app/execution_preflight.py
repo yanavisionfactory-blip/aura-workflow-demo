@@ -173,6 +173,21 @@ async def _connection_credentials(
     manifest: CapabilityManifest,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
     """Return credentials, verification and a human blocker when one is required."""
+    if tool.config.get("managed_by") == "zernio":
+        from .zernio_connect import ZernioError, verify_tool
+        try:
+            verification = await verify_tool(tool)
+        except ZernioError as exc:
+            if exc.retryable:
+                raise RuntimeError("provider_temporarily_unavailable") from exc
+            return None, None, _blocker(
+                "connection_unusable", str(exc), action="reconnect_account",
+                tool_slug=tool.slug, connection_id=tool.id,
+            )
+        manifest.verification = verification
+        manifest.verified_at = _now()
+        manifest.status = "verified"
+        return CredentialVault().decrypt(tool.encrypted_credentials), verification, None
     if tool.config.get("managed_by") == "wordpress_plugin":
         from .wordpress_plugins import WordPressHostLimitError, WordPressPluginError, verify
         from .wordpress_plugins import manifest as plugin_manifest
