@@ -139,11 +139,11 @@ function popupBrowser({ forbidDocument = false } = {}) {
   };
 }
 
-function googleConnectionSelection(tools) {
+function googleConnectionSelection(tools, { name = "Google Sheets", provider = "google-sheets" } = {}) {
   setup();
   globalThis.window = popupBrowser();
   flow.mergeMarketplaceApps([{
-    display_name: "Google Sheets", provider: "google-sheets", connectable: true,
+    display_name: name, provider, connectable: true,
     connection_backend: "pipedream", preferred_connection: true, connection_strategy: "oauth",
   }]);
   const requests = [];
@@ -161,42 +161,56 @@ function googleConnectionSelection(tools) {
   return requests;
 }
 
-test("fresh Google Sheets Connect does not inherit a broad Workspace account", async () => {
-  for (const enabled of [false, true]) {
-    const requests = googleConnectionSelection([{
-      id: "legacy-workspace", slug: "google", display_name: "Google Workspace",
-      connection_backend: "native", enabled, allowed_operations: ["sheets.read_range"],
-    }]);
-    await assert.rejects(flow.connectTool("Google Sheets"), /Stop before consent/);
-    assert.equal(requests[0].pathname, "/v1/connector-broker/google-sheets/session");
+for (const app of [
+  { name: "Google Sheets", provider: "google-sheets", operation: "sheets.read_range" },
+  { name: "Google Docs", provider: "google-docs", operation: "docs.create" },
+]) {
+  test(`new customer ${app.name} Connect starts on the managed route with no existing accounts`, async () => {
+    const requests = googleConnectionSelection([], app);
+    await assert.rejects(flow.connectTool(app.name), /Stop before consent/);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].pathname, `/v1/connector-broker/${app.provider}/session`);
     assert.equal(requests[0].searchParams.has("connection_id"), false);
     assert.equal(window.popups.length, 0);
-  }
-});
+  });
 
-test("Google Sheets reconnects keep an explicitly selected Workspace account", async () => {
-  for (const connect of [flow.connectTool, (name, opts) => flow.reconnectTool(name, opts.connectionId)]) {
-    const requests = googleConnectionSelection([{
-      id: "legacy-workspace", slug: "google", display_name: "Google Workspace",
-      connection_backend: "native", enabled: false, allowed_operations: ["sheets.read_range"],
-    }]);
-    await assert.rejects(connect("Google Sheets", { connectionId: "legacy-workspace" }), /Stop before consent/);
-    assert.equal(requests[0].pathname, "/v1/connector-broker/google/session");
-    assert.equal(requests[0].searchParams.get("connection_id"), "legacy-workspace");
-  }
-});
+  test(`fresh ${app.name} Connect does not inherit a broad Workspace account`, async () => {
+    for (const enabled of [false, true]) {
+      const requests = googleConnectionSelection([{
+        id: "legacy-workspace", slug: "google", display_name: "Google Workspace",
+        connection_backend: "native", enabled, allowed_operations: [app.operation],
+      }], app);
+      await assert.rejects(flow.connectTool(app.name), /Stop before consent/);
+      assert.equal(requests[0].pathname, `/v1/connector-broker/${app.provider}/session`);
+      assert.equal(requests[0].searchParams.has("connection_id"), false);
+      assert.equal(window.popups.length, 0);
+    }
+  });
 
-test("fresh Google Sheets Connect retains an existing account on its exact route", async () => {
-  for (const backend of ["native", "nango", "pipedream"]) {
-    const requests = googleConnectionSelection([{
-      id: "existing-sheets", slug: "google-sheets", display_name: "Google Sheets",
-      connection_backend: backend, enabled: false,
-    }]);
-    await assert.rejects(flow.connectTool("Google Sheets"), /Stop before consent/);
-    assert.equal(requests[0].pathname, "/v1/connector-broker/google-sheets/session");
-    assert.equal(requests[0].searchParams.get("connection_id"), "existing-sheets");
-  }
-});
+  test(`${app.name} reconnects keep an explicitly selected Workspace account`, async () => {
+    for (const connect of [flow.connectTool, (name, opts) => flow.reconnectTool(name, opts.connectionId)]) {
+      const requests = googleConnectionSelection([{
+        id: "legacy-workspace", slug: "google", display_name: "Google Workspace",
+        connection_backend: "native", enabled: false, allowed_operations: [app.operation],
+      }], app);
+      await assert.rejects(connect(app.name, { connectionId: "legacy-workspace" }), /Stop before consent/);
+      assert.equal(requests[0].pathname, "/v1/connector-broker/google/session");
+      assert.equal(requests[0].searchParams.get("connection_id"), "legacy-workspace");
+    }
+  });
+
+  test(`fresh ${app.name} Connect retains an existing account on its exact route`, async () => {
+    for (const backend of ["native", "nango", "pipedream"]) {
+      const requests = googleConnectionSelection([{
+        id: "existing-google-app", slug: app.provider, display_name: app.name,
+        connection_backend: backend, enabled: false,
+      }], app);
+      await assert.rejects(flow.connectTool(app.name), /Stop before consent/);
+      assert.equal(requests[0].pathname, `/v1/connector-broker/${app.provider}/session`);
+      assert.equal(requests[0].searchParams.get("connection_id"), "existing-google-app");
+    }
+  });
+}
 
 test("connect and reconnect retries do not access an earlier provider window's document", () => {
   for (const reconnecting of [false, true]) {

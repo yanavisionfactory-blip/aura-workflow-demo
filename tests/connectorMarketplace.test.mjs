@@ -235,3 +235,22 @@ test("Meta search exposes the verified Pages route without satisfying Meta Ads",
   assert.equal(searchMarketplace("Meta Ads")[0].connectable, false);
   assert.match(searchMarketplace("Meta Pages")[0].desc, /9 verified capabilities/);
 });
+
+test("new Docs customers get managed consent while existing Workspace routes remain available", () => {
+  for (const broadFirst of [false, true]) {
+    const entries = [
+      { provider: "google", display_name: "Google Workspace", connectable: true,
+        connection_backend: "nango", connection_strategy: "oauth", source: "native" },
+      { provider: "google-docs", display_name: "Google Docs", connectable: true,
+        connection_backend: "pipedream", connection_strategy: "oauth", preferred_connection: true },
+    ];
+    replaceToolCatalog({ marketplace: broadFirst ? entries : entries.toReversed() });
+    const docs = catalogEntryFor("Google Docs");
+    assert.equal(docs.provider, "google-docs");
+    assert.equal(docs.connectionBackend, "pipedream");
+    assert.equal(docs.preferredConnection, true);
+    assert.equal(docs.routes.find(route => route.provider === "google").connectionBackend, "nango");
+    assert.equal(catalogEntryFor("Google Drive").provider, "google");
+    assert.equal(catalogEntryFor("Google Calendar").provider, "google");
+  }
+});
