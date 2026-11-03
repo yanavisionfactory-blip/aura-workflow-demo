@@ -1556,6 +1556,20 @@ def _canonical_marketplace_entries(items: list[dict]) -> list[dict]:
     return merged
 
 
+def _builtin_connection_backend(definition, *, nango_configured: bool) -> str | None:
+    if definition.pipedream_only:
+        # Its signed Pipedream pack supplies the public connection route.
+        # A Nango API key or legacy app credentials do not certify that route.
+        return None
+    if nango_configured and not definition.native_only:
+        return "nango"
+    try:
+        oauth_authorization_url(settings, definition, "catalog-probe")
+    except ValueError:
+        return None
+    return "native"
+
+
 @app.get("/v1/managed-connectors/status")
 async def managed_connector_status(
     context: TenantContext = Depends(tenant_context),
@@ -1584,14 +1598,7 @@ async def managed_connector_status(
     )
     native_catalog = []
     for slug, definition in sorted(PROVIDERS.items()):
-        backend = "nango" if client.configured and not definition.native_only else None
-        if backend is None:
-            try:
-                oauth_authorization_url(settings, definition, "catalog-probe")
-            except ValueError:
-                pass
-            else:
-                backend = "native"
+        backend = _builtin_connection_backend(definition, nango_configured=client.configured)
         native_catalog.append(
             {
                 "provider": slug,
@@ -1655,6 +1662,9 @@ async def managed_connector_status(
             "managed": True,
             "source": "connector_broker",
             "connection_backend": "pipedream",
+            "preferred_connection": bool(
+                pack.provider_slug in PROVIDERS and PROVIDERS[pack.provider_slug].pipedream_only
+            ),
             "connection_strategy": pack.definition.get("connection_strategy"),
             "execution_backend": f"pipedream_{pack.definition.get('execution_strategy')}",
             "setup_hint": pack.definition.get("connection_setup"),
@@ -1808,14 +1818,7 @@ async def search_connector_broker_apps(
         entries[shopify.SLUG] = shopify_entry
 
     for slug, definition in PROVIDERS.items():
-        native_backend = "nango" if nango.configured and not definition.native_only else None
-        if native_backend is None:
-            try:
-                oauth_authorization_url(settings, definition, "catalog-probe")
-            except ValueError:
-                pass
-            else:
-                native_backend = "native"
+        native_backend = _builtin_connection_backend(definition, nango_configured=nango.configured)
         item = {
             "provider": slug,
             "display_name": definition.display_name,
@@ -1955,6 +1958,9 @@ async def search_connector_broker_apps(
                 item = pipedream_marketplace_entry(
                     app_definition,
                     connectable=bool(pack and pipedream_pack_signature_valid(pack)),
+                )
+                item["preferred_connection"] = bool(
+                    item["provider"] in PROVIDERS and PROVIDERS[item["provider"]].pipedream_only
                 )
                 if pack and pipedream_pack_signature_valid(pack):
                     item.update(
@@ -2758,6 +2764,7 @@ async def create_connector_broker_session(
             )
         )
     selected_backend = (selected_tool.config or {}).get("managed_by") if selected_tool else None
+    pipedream_only = provider in PROVIDERS and PROVIDERS[provider].pipedream_only
     nango_release = None if provider in PROVIDERS else await released_connector(session, provider)
     if selected_tool and selected_backend not in {"nango", "pipedream"}:
         result = await reconnect_connection(
@@ -2787,6 +2794,7 @@ async def create_connector_broker_session(
     if (
         nango.configured
         and selected_backend != "pipedream"
+        and (not pipedream_only or selected_backend == "nango")
         and (provider in PROVIDERS or nango_release)
     ):
         result = await create_managed_connector_session(
@@ -2797,7 +2805,7 @@ async def create_connector_broker_session(
             session=session,
         )
         return {**result, "backend": "nango", "provider": provider}
-    if not selected_tool and provider in PROVIDERS:
+    if not selected_tool and provider in PROVIDERS and not pipedream_only:
         try:
             result = await oauth_start(provider=provider, context=context)
         except HTTPException as exc:
@@ -2806,7 +2814,7 @@ async def create_connector_broker_session(
         else:
             return {**result, "backend": "native", "provider": provider}
 
-    environment = connection_environment(selected_tool, settings) if connection_id else settings.pipedream_environment
+    environment = connection_environment(selected_tool, settings) if selected_tool else settings.pipedream_environment
     client = pipedream_client() if environment == settings.pipedream_environment else pipedream_client_for_environment(environment)
     if not client.configured or len(settings.connector_release_signing_key) < 32:
         raise HTTPException(409, "This app is coming soon")
