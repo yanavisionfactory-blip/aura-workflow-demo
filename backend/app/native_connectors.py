@@ -644,6 +644,18 @@ UNIVERSAL_PLANNING_CONNECTORS: dict[str, str] = {
 }
 
 
+for _slug, _name in (("tiktok-zernio", "TikTok"), ("x-zernio", "X (Twitter)")):
+    NATIVE_CONNECTORS[_slug] = {
+        "schema_version": "1.1", "catalog_version": 1, "provider_type": "zernio",
+        "name": _name, "description": "Read the connected social account and its published posts.",
+        "base_url": "https://zernio.com/api/v1", "identity": {"provider": _slug},
+        "modules": [
+            _module("zernio.account.get", "search", "Read the verified social account connected to this AURA workspace.", permission_scope="read"),
+            _module("zernio.posts.list", "search", "Read the connected account's published posts returned by the platform. Results may be bounded or cached; this does not promise complete history.", permission_scope="read"),
+        ],
+    }
+
+
 def native_manifest(slug: str) -> dict[str, Any]:
     definition = NATIVE_CONNECTORS.get(slug)
     if not definition:

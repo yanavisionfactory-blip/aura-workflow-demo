@@ -4,7 +4,8 @@ const normalized = (value) => String(value || "").trim().toLowerCase();
 // exact executable provider below and never inherit another route's permissions.
 const socialFamily = (value) => {
   const key = normalized(value).replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-  if (["x", "x-twitter", "twitter", "twitter-v1", "twitter-v2", "twitter-oauth2"].includes(key)) return "x";
+  if (["x", "x-zernio", "x-twitter", "twitter", "twitter-v1", "twitter-v2", "twitter-oauth2"].includes(key)) return "x";
+  if (["tiktok", "tiktok-zernio"].includes(key)) return "tiktok";
   if (["tiktok-ads", "tiktok-ads-manager"].includes(key)) return "tiktok-ads";
   return null;
 };

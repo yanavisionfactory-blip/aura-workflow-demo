@@ -11,6 +11,21 @@ import {
   searchMarketplace,
 } from "../src/lib/toolCatalog.js";
 
+test("managed social connections share app cards and preserve existing authorization routes", () => {
+  replaceToolCatalog({ marketplace: [
+    { provider: "x", display_name: "X (Twitter)", connectable: true, connection_backend: "native", preferred_connection: true },
+    { provider: "x-zernio", display_name: "X (Twitter)", canonical_provider: "x", connectable: true, connection_backend: "zernio", preferred_connection: true },
+    { provider: "tiktok", display_name: "TikTok", connectable: true, connection_backend: "native", preferred_connection: true },
+    { provider: "tiktok-zernio", display_name: "TikTok", canonical_provider: "tiktok", connectable: true, connection_backend: "zernio", preferred_connection: true },
+    { provider: "tiktok-ads-manager", display_name: "TikTok Ads", connectable: true, connection_backend: "pipedream" },
+  ] });
+  assert.equal(searchMarketplace("X").length, 1);
+  assert.equal(catalogEntryFor("X").provider, "x-zernio");
+  assert.equal(catalogEntryFor("TikTok").provider, "tiktok-zernio");
+  assert.equal(catalogEntryFor("TikTok Ads").provider, "tiktok-ads-manager");
+  assert.deepEqual(catalogEntryFor("X").routes.map(route => route.provider).sort(), ["x", "x-zernio"]);
+});
+
 test("social apps stay visible in a large catalog without bypassing readiness", () => {
   replaceToolCatalog({ marketplace: [
     ...Array.from({ length: 150 }, (_, index) => ({ provider: `app-${index}`, display_name: `App ${index}`, connectable: true })),

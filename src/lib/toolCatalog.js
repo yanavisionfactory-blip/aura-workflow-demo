@@ -21,7 +21,7 @@ const ICONS = {
   jira: "✅",
 };
 
-const socialAliases = { "tiktok-ads": "tiktok-ads-manager", twitter: "x", "twitter-v1": "x", "twitter-v2": "x", "twitter-oauth2": "x", "x-twitter": "x" };
+const socialAliases = { "tiktok-zernio": "tiktok", "x-zernio": "x", "tiktok-ads": "tiktok-ads-manager", twitter: "x", "twitter-v1": "x", "twitter-v2": "x", "twitter-oauth2": "x", "x-twitter": "x" };
 const socialNames = { "tiktok-ads-manager": "TikTok Ads", x: "X (Twitter)" };
 const socialSearchAliases = { "tiktok-ads-manager": ["TikTok Ads", "TikTok Ads Manager"], x: ["X", "Twitter", "X (Twitter)"] };
 const featuredSocial = ["tiktok", "tiktok-ads-manager", "x"];
@@ -134,7 +134,7 @@ function normalize(item) {
   };
 }
 
-const backendPriority = { nango: 0, native: 1, managed_mcp: 1, pipedream: 2 };
+const backendPriority = { zernio: -1, nango: 0, native: 1, managed_mcp: 1, pipedream: 2 };
 const executionPriority = { pipedream_action: 0, pipedream_proxy: 1, pipedream_mcp: 2 };
 
 function entryPriority(item) {

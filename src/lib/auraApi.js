@@ -448,7 +448,7 @@ export async function authorizeConnectorBroker(
   if (session.backend === "nango") {
     return authorizeManagedConnector(provider, timeoutMs ?? 120000, reservedWindow, session);
   }
-  if (session.backend === "native") {
+  if (session.backend === "native" || session.backend === "zernio") {
     if (sameTab) {
       if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
       return redirectConnectorAuthorization(session);

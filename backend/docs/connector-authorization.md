@@ -188,3 +188,49 @@ rotating large-catalog coverage, customer capability probes, and Nango
 action/record execution. Administrators can
 inspect `GET /v1/admin/connector-engineer` and trigger a bounded reconciliation
 with `POST /v1/admin/connector-engineer/scan`; neither endpoint returns credentials.
+# Zernio: public TikTok and X connections
+
+AURA owns one Zernio team and its server API key. Customers use their normal
+TikTok/X accounts; they do not create a Zernio account, install a plugin, supply
+developer credentials, or visit Zernio billing. The provider consent screen may
+name Zernio. Zernio currently shows a one-click exit notice before returning to
+AURA; that page is not a Zernio sign-in.
+
+Activation:
+
+1. Create the AURA-owned account at https://zernio.com and generate a server API
+   key. X requires a payment method on that team, including within the free
+   connected-account allowance. Account fees and X usage are billed to AURA.
+2. Save `ZERNIO_API_KEY` on the Railway API, worker and recovery canary. Use the
+   same key on all three. Never put it in `VITE_` settings, source code, browser
+   storage or customer connection forms. Keep existing Pipedream production and
+   legacy variables unchanged.
+3. Run the existing **Backend Release** workflow on the tested main-branch SHA.
+   Follow its canary → worker → API gates. Verify `/ready` on API and canary and
+   successful new worker deployment before enabling customer testing.
+4. From a fresh AURA customer session without a Zernio session, choose Connect →
+   TikTok or X, complete provider consent, continue back to AURA and run Test.
+   Verify the account's identity and a read operation. Repeat with a second
+   customer and confirm neither can see or use the other's account.
+
+Routes are `tiktok-zernio` and `x-zernio`, grouped into the existing TikTok/X
+cards. Once the key is configured, these are preferred for new connections.
+Native, Nango and Pipedream accounts keep their stored backend and grants.
+TikTok Ads stays on Pipedream. Missing credentials never make a route connectable.
+
+One opaque Zernio profile is provisioned per AURA workspace. A compact opaque,
+15-minute, single-use authorization token binds the callback to the active
+workspace member, platform and profile. The API verifies the returned account
+against Zernio and checks token health before saving a connection. Reconnects
+pin `reconnectAccountId`; callbacks cannot switch to a different account. The
+API key stays server-side and only account/profile references are encrypted in
+the connection record. New tables receive the same PostgreSQL tenant policies.
+
+This release exposes two read operations: `zernio.account.get` and
+`zernio.posts.list`. Post reads may be bounded or cached by Zernio; they are not
+a complete-history export. Publishing, ads, comments and messages are not
+advertised by these routes. Existing native routes retain their capabilities.
+
+References: https://docs.zernio.com/multi-tenant,
+https://docs.zernio.com/guides/connecting-accounts,
+https://github.com/zernio-dev/zernio-dotnet/blob/main/docs/ConnectApi.md.

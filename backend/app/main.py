@@ -16,12 +16,12 @@ from agents import Agent, Runner
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
-from . import frameio, wordpress_plugins
+from . import frameio, wordpress_plugins, zernio_connect
 from .agent_runtime import is_governed_derivative_step
 from .approval_readiness import unfinished_action_content
 from .approval_review import (
@@ -1488,7 +1488,7 @@ def _canonical_marketplace_entries(items: list[dict]) -> list[dict]:
         }
         grouped.setdefault(canonical_provider_slug(display_name), []).append(item)
 
-    backend_priority = {"nango": 0, "native": 1, "managed_mcp": 1, "pipedream": 2, None: 9}
+    backend_priority = {"zernio": -1, "nango": 0, "native": 1, "managed_mcp": 1, "pipedream": 2, None: 9}
     execution_priority = {
         "pipedream_action": 0,
         "pipedream_proxy": 1,
@@ -1621,6 +1621,7 @@ async def managed_connector_status(
     from .mcp_oauth import managed_mcp_catalog
     native_catalog.extend(managed_mcp_catalog(hubspot_enabled=settings.hubspot_connection_mode == "mcp"))
     native_catalog.extend(await wordpress_plugins.catalog(session, context.workspace_id))
+    native_catalog.extend(zernio_connect.catalog(settings))
     dynamic_catalog = [
         {
             **release_descriptor(release),
@@ -1809,6 +1810,10 @@ async def search_connector_broker_apps(
         return query in haystack
 
     for item in await wordpress_plugins.catalog(session, context.workspace_id):
+        if matches(item):
+            entries[item["provider"]] = item
+
+    for item in zernio_connect.catalog(settings):
         if matches(item):
             entries[item["provider"]] = item
 
@@ -2784,6 +2789,13 @@ async def create_connector_broker_session(
             )
         )
     selected_backend = (selected_tool.config or {}).get("managed_by") if selected_tool else None
+    if not selected_tool and provider in {"x", "tiktok"} and zernio_connect.ZernioClient(settings).configured:
+        provider += "-zernio"
+    if provider in zernio_connect.PROVIDERS:
+        try:
+            return await zernio_connect.start(session, context, provider, settings)
+        except zernio_connect.ZernioError as exc:
+            raise HTTPException(503 if exc.retryable else 409, {"code": exc.code, "message": str(exc)}) from None
     pipedream_only = provider in PROVIDERS and PROVIDERS[provider].pipedream_only
     nango_release = None if provider in PROVIDERS else await released_connector(session, provider)
     if selected_tool and selected_backend not in {"nango", "pipedream"}:
@@ -4126,6 +4138,19 @@ async def test_connection(
     )
     if not manifest:
         raise HTTPException(409, "Connection has no discovered capability manifest")
+    if tool.config.get("managed_by") == "zernio":
+        try:
+            result = await zernio_connect.verify_tool(tool, settings)
+        except zernio_connect.ZernioError as exc:
+            if exc.retryable:
+                raise HTTPException(503, str(exc)) from None
+            result = {"ok": False, "reason": exc.code}
+        manifest.verification = result
+        manifest.status = "verified" if result.get("ok") else "degraded"
+        manifest.verified_at = datetime.now(UTC)
+        tool.enabled = bool(result.get("ok"))
+        await session.commit()
+        return {"id": tool.id, "status": manifest.status, "verification": result}
     from . import shopify_client_credentials as shopify
     if tool.config.get("managed_by") == shopify.BACKEND:
         try:
@@ -4348,6 +4373,31 @@ async def disconnect_connection(
     tool = await session.get(ToolConnection, connection_id)
     if not tool or tool.workspace_id != context.workspace_id:
         raise HTTPException(404, "Connection not found")
+    if tool.config.get("managed_by") == "zernio":
+        client = zernio_connect.ZernioClient(settings)
+        try:
+            await client.account(tool.config["profile_id"], tool.config["account_id"],
+                                 tool.config["platform"], require_active=False)
+            await client.request("DELETE", "/accounts/" + zernio_connect._valid_id(tool.config["account_id"]))
+        except zernio_connect.ZernioError as exc:
+            raise HTTPException(503 if exc.retryable else 409, str(exc)) from None
+        tool.enabled = False
+        tool.encrypted_credentials = None
+        # The revoked remote ID must not pin the next connection to a deleted account.
+        tool.external_account_id = None
+        tool.external_connection_id = None
+        tool.config = {**tool.config, "account_id": ""}
+        await session.execute(update(zernio_connect.ZernioAuthorization).where(
+            zernio_connect.ZernioAuthorization.workspace_id == context.workspace_id,
+            zernio_connect.ZernioAuthorization.provider == tool.slug,
+        ).values(consumed=True))
+        manifest = await session.scalar(select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id))
+        if manifest:
+            manifest.status = "revoked"
+        session.add(AuditEvent(workspace_id=context.workspace_id, actor=context.subject,
+                               event_type="connector.revoked", payload={"tool_id": tool.id, "backend": "zernio"}))
+        await session.commit()
+        return {"id": tool.id, "status": "revoked", "provider_revocation": {"attempted": True, "ok": True}}
     if tool.config.get("managed_by") == "pipedream":
         revocation = {"attempted": True, "ok": True, "managed": True}
         account_id = _pipedream_account_id(tool)
@@ -4501,7 +4551,7 @@ async def reconnect_connection(
             "This connector is re-verified with Test; replace its credentials to reauthorize it",
         )
     previous_updated_at = tool.updated_at.isoformat() if tool.updated_at else None
-    if tool.config.get("managed_by") == "pipedream":
+    if tool.config.get("managed_by") in {"pipedream", "zernio"}:
         result = await create_connector_broker_session(
             provider=tool.slug,
             connection_id=tool.id,
@@ -4687,6 +4737,32 @@ async def update_tool_trust(
     )
     await session.commit()
     return {"tool_slug": tool.slug, "score": trust.score}
+
+
+@app.get("/v1/z/c")
+async def zernio_oauth_callback(
+    s: str, accountId: str = "", profileId: str = "", connected: str = "", error: str = "",
+    session: AsyncSession = Depends(session_dependency),
+):
+    provider = "installation"
+    try:
+        tool, subject = await zernio_connect.finish(session, s, accountId, profileId, connected, error, settings)
+        provider = tool.slug
+        context = TenantContext(tool.workspace_id, subject, "member")
+        resumed = await _satisfy_matching_connection_requirements(session, context, tool)
+        session.add(AuditEvent(workspace_id=tool.workspace_id, actor=subject,
+                               event_type="connector.authorized", payload={"tool_id": tool.id, "backend": "zernio"}))
+        await session.commit()
+        if resumed:
+            await dispatch_pending(tool.workspace_id)
+    except zernio_connect.ZernioError as exc:
+        await session.rollback()
+        return RedirectResponse(frontend_url + "?" + urlencode({
+            "oauth_provider": provider, "oauth_status": "error", "oauth_message": str(exc),
+        }), headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+    return RedirectResponse(frontend_url + "?" + urlencode({
+        "oauth_provider": provider, "oauth_status": "success", "tool_connected": provider,
+    }), headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 
 
 @app.get("/v1/oauth/{provider}/start")

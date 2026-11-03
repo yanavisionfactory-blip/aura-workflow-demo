@@ -592,6 +592,14 @@ class ProviderExecutor:
             arguments = coerce_module_arguments(
                 self.capability_manifest, operation, arguments
             )
+        from . import zernio_connect
+        if operation in zernio_connect.OPERATIONS:
+            capability_for(self.capability_manifest, operation)
+            slug = self.capability_manifest.get("identity", {}).get("provider")
+            if (slug not in zernio_connect.PROVIDERS or self.capability_manifest.get("provider_type") != "zernio"
+                    or (self.credentials.get("zernio") or {}).get("platform") != zernio_connect.PROVIDERS[slug][0]):
+                raise ValueError("This operation requires its own verified social connection")
+            return await zernio_connect.execute(self.credentials, operation, arguments, self.timeout_seconds)
         from . import frameio
         if operation in frameio.OPERATIONS:
             capability_for(self.capability_manifest, operation)

@@ -6,6 +6,8 @@ _APPS = {
     "x": ("X (Twitter)", ("X", "Twitter", "X (Twitter)")),
 }
 _ALIASES = {
+    "tiktok-zernio": "tiktok",
+    "x-zernio": "x",
     "tiktok-ads": "tiktok-ads-manager",
     "twitter": "x",
     "twitter-v1": "x",

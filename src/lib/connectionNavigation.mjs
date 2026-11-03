@@ -19,7 +19,7 @@ export function usesSameTabAuthorization(provider, connection = null) {
 // workspace, code, or state from a connection-screen link.
 export function redirectConnectorAuthorization(session, browser = window) {
   const destination = new URL(session.authorization_url);
-  if (session.backend !== "native" || destination.protocol !== "https:"
+  if (!["native", "zernio"].includes(session.backend) || destination.protocol !== "https:"
     || destination.username || destination.password) {
     throw new Error("AURA could not prepare a secure authorization page.");
   }

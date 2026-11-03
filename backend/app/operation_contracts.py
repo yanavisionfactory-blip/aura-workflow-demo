@@ -399,6 +399,19 @@ KNOWN.update({
     "jira.issue.update": ({"type": "object", "required": ["status_code"], "properties": {"status_code": {"const": 204}}}, ["write_receipt"]),
 })
 
+KNOWN.update({
+    "zernio.account.get": ({"type": "object", "required": ["account"], "properties": {
+        "account": {"type": "object", "required": ["id", "platform", "username"], "properties": {
+            "id": TEXT, "platform": {"enum": ["twitter", "tiktok"]}, "username": {"type": "string"},
+        }},
+    }}, ["account_identity"]),
+    "zernio.posts.list": ({"type": "object", "required": ["account_id", "posts"], "properties": {
+        "account_id": TEXT, "posts": {"type": "array", "items": {
+            "type": "object", "required": ["id"], "properties": {"id": TEXT},
+        }}, "last_updated": {"type": ["string", "null"]},
+    }}, ["record_fields"]),
+})
+
 # Native provider envelopes. An accepted job is evidence of dispatch, not completion.
 IDENTIFIED = {"type": "object", "required": ["id"], "properties": {"id": TEXT}}
 DESIGN = {"type": "object", "required": ["design"], "properties": {"design": IDENTIFIED}}
