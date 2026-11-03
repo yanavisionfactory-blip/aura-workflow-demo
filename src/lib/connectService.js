@@ -46,7 +46,10 @@ export async function connectTool(toolName, opts = {}) {
   let authorizationWindow = null;
   try {
     const existing = await getToolConnection(toolName, opts.connectionId, provider, {
-      exactProvider: Boolean(requestedProvider),
+      // A fresh Connect action must keep the preferred provider shown on the
+      // card. A broad Google Workspace entry is not a Google Sheets account
+      // on that route. Explicit reconnects still retain their chosen account.
+      exactProvider: Boolean(requestedProvider || (!opts.connectionId && entry.preferredConnection)),
     });
     const authorizationProvider = existing?.slug || provider;
     const backend = existing?.connection_backend || requestedRoute?.connectionBackend || entry.connectionBackend;
