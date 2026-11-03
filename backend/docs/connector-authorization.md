@@ -57,6 +57,34 @@ TikTok's developer portal. App review and an authenticated profile read are
 still required to verify live access; reaching TikTok's login page is not a
 successful account connection. TikTok Ads Manager is a separate connector.
 
+The marketplace features **TikTok**, **TikTok Ads**, and **X (Twitter)** at the
+start of the directory. "TikTok Ads" selects the signed Pipedream
+`tiktok-ads-manager` pack (vendor ID `tiktok_ads_manager`), with the project's
+production environment and a separate opaque identity for each external user.
+It does not use the personal TikTok Login Kit app. Catalog aliases group legacy
+discovery rows without renaming stored accounts or their authorization routes.
+Existing grants retain their original backend and environment.
+
+X uses an AURA-owned OAuth 2.0 confidential web app. Configure `X_CLIENT_ID` and
+`X_CLIENT_SECRET` on both API and worker, and register the exact
+`<PUBLIC_URL>/v1/oauth/installation/callback` URL in the X developer console.
+Enable user authentication and the `users.read`, `tweet.read`, `tweet.write`,
+and `offline.access` scopes. The application must have X API access for its
+requested endpoints. End users authorize their own X accounts; they never
+supply developer API keys. The public route stays unavailable until both
+server-side client credentials are configured. Nango availability alone cannot
+enable it. Each authorization has tenant-bound signed state and an S256 PKCE
+challenge; the verifier and client secret stay on the server. A successful
+token response is followed by `GET /2/users/me` before saving the account.
+Refresh token rotation preserves the connection identity. Post creation uses
+the ordinary workflow approval gate and requires X's returned post ID.
+
+Production release checks do not prove provider consent. Verify a fresh
+external-user authorization separately for each provider. TikTok must show
+**Live** in its production developer configuration; sandbox/test-user access
+does not enable arbitrary external users. No new vendor subscription or API
+credit purchase is part of this configuration.
+
 Use an explicit integration map when multiple integrations match a provider.
 An exact provider-named integration is preferred; otherwise there must be exactly
 one match. Explicit mappings are checked against the returned integration identity

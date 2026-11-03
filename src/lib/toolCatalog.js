@@ -13,18 +13,27 @@ const ICONS = {
   notion: "📝",
   slack: "💬",
   tiktok: "🎵",
+  "tiktok-ads-manager": "📣",
+  x: "𝕏",
   mailchimp: "✉️",
   canva: "🎨",
   hubspot: "🔶",
   jira: "✅",
 };
 
-const canonicalProvider = (value) => String(value || "")
+const socialAliases = { "tiktok-ads": "tiktok-ads-manager", twitter: "x", "twitter-v1": "x", "twitter-v2": "x", "twitter-oauth2": "x", "x-twitter": "x" };
+const socialNames = { "tiktok-ads-manager": "TikTok Ads", x: "X (Twitter)" };
+const socialSearchAliases = { "tiktok-ads-manager": ["TikTok Ads", "TikTok Ads Manager"], x: ["X", "Twitter", "X (Twitter)"] };
+const featuredSocial = ["tiktok", "tiktok-ads-manager", "x"];
+
+const providerSlug = (value) => String(value || "")
   .trim()
   .toLowerCase()
   .replace(/(?:[-_\s]+mcp|\s*\(mcp\))$/i, "")
   .replace(/[^a-z0-9]+/g, "-")
   .replace(/^-|-$/g, "");
+
+const canonicalProvider = (value) => socialAliases[providerSlug(value)] || providerSlug(value);
 
 const canonicalName = (value) => String(value || "")
   .trim()
@@ -91,13 +100,14 @@ function normalize(item) {
       connectable: item.connectable ?? item.availability === "available",
     }];
   return {
-    name: canonicalName(item.display_name || provider),
+    name: socialNames[canonical] || canonicalName(item.display_name || provider),
     provider,
     canonicalProvider: canonical,
     aliases: [...new Set([
       provider,
       canonical,
       String(item.display_name || "").trim(),
+      ...(socialSearchAliases[canonical] || []),
       ...(Array.isArray(item.aliases) ? item.aliases.map(String) : []),
     ].filter(Boolean))],
     routes: rawRoutes.map((route) => ({
@@ -116,6 +126,7 @@ function normalize(item) {
     availability: item.availability || (item.connectable ? "available" : "verifying"),
     source: item.source || "connector_engineer",
     connectionBackend: item.connection_backend || item.connectionBackend || null,
+    preferredConnection: Boolean(item.preferred_connection),
     connectionStrategy: item.connection_strategy || item.connectionStrategy || null,
     executionBackend: item.execution_backend || item.executionBackend || null,
     setupHint: item.setup_hint || item.setupHint || null,
@@ -129,6 +140,7 @@ const executionPriority = { pipedream_action: 0, pipedream_proxy: 1, pipedream_m
 function entryPriority(item) {
   return [
     item.connectable ? 0 : 1,
+    item.preferredConnection ? 0 : 1,
     backendPriority[item.connectionBackend] ?? 8,
     executionPriority[item.executionBackend] ?? 3,
   ];
@@ -176,6 +188,7 @@ export function searchMarketplace(query, limit = 120) {
   const needle = displayName.toLowerCase();
   const matches = MARKETPLACE.filter((tool) => {
     if (!needle) return true;
+    if (needle === "x") return tool.canonicalProvider === "x";
     return tool.name.toLowerCase().includes(needle) ||
       tool.provider.includes(needle) ||
       tool.canonicalProvider?.includes(needle) ||
@@ -183,6 +196,15 @@ export function searchMarketplace(query, limit = 120) {
       tool.routes?.some((route) => route.provider.includes(needle)) ||
       tool.categories?.some((category) => category.toLowerCase().includes(needle));
   });
+  if (!needle) {
+    // Keep requested social connectors visible even in a directory with
+    // thousands of apps. Readiness still comes exclusively from the backend.
+    const rank = (tool) => {
+      const index = featuredSocial.indexOf(tool.canonicalProvider);
+      return index < 0 ? featuredSocial.length : index;
+    };
+    matches.sort((a, b) => rank(a) - rank(b));
+  }
   if (matches.length || displayName.length < 2) return matches.slice(0, limit);
 
   const requestedSlug = needle.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "app";

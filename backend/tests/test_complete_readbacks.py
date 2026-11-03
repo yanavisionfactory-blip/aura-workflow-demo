@@ -11,6 +11,8 @@ from app.policy import operation_scope
 
 
 def cases():
+    yield ("x.posts.create", {"text": "Approved post"}, {"data": {"id": "123", "text": "Approved post"}},
+           {"data": {"id": "123", "text": "Approved post"}})
     yield ("docs.create", {"title": "Fixture", "body": "First line\nSecond line"},
         {"id": "doc-1", "name": "Fixture", "mimeType": "application/vnd.google-apps.document"},
         {"id": "doc-1", "title": "Fixture", "body": "First line\nSecond line"})
@@ -97,6 +99,8 @@ def test_wrong_resource_and_incomplete_jobs_cannot_pass():
             observed["_aura_completeness"]["complete"] = False
         elif check.kind == "sheets":
             observed["values"] = [["Wrong"]]
+        elif check.kind == "x_post":
+            observed["data"]["id"] = "wrong"
         elif check.kind == "canva_design":
             observed["design"]["id"] = "wrong"
         elif check.kind == "canva_export":

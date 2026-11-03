@@ -115,6 +115,8 @@ def _valid_schema_value(schema, root=None):
         return "aura@example.com"
     if schema.get("pattern") == "^[a-f0-9]{64}$":
         return "a" * 64
+    if schema.get("pattern") == "^[0-9]+$":
+        return "123"
     if schema.get("pattern") == "^SIMULATED_":
         return "SIMULATED_source.csv"
     return "value"

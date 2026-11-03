@@ -174,7 +174,7 @@ export async function requestManagedConnector(name) {
 
 export async function searchConnectorBrokerApps(query, limit = 30) {
   const normalized = String(query || "").trim().replace(/\s+/g, " ");
-  if (normalized.length < 2) return { apps: [], count: 0, backends: {} };
+  if (normalized.length < 2 && normalized.toLowerCase() !== "x") return { apps: [], count: 0, backends: {} };
   await ensureWorkspace();
   const params = new URLSearchParams({ q: normalized, limit: String(limit) });
   return request(`/v1/connector-broker/apps?${params.toString()}`);

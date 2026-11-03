@@ -404,6 +404,10 @@ IDENTIFIED = {"type": "object", "required": ["id"], "properties": {"id": TEXT}}
 DESIGN = {"type": "object", "required": ["design"], "properties": {"design": IDENTIFIED}}
 JOB = {"type": "object", "required": ["job"], "properties": {"job": {
     "type": "object", "required": ["id", "status"], "properties": {"id": TEXT, "status": TEXT, "urls": {"type": "array", "items": TEXT}}}}}
+X_POST = {"type": "object", "required": ["id", "text"], "properties": {
+    "id": {"type": "string", "pattern": "^[0-9]+$"}, "text": TEXT, "entities": OBJECT}}
+X_SINGLE_POST = {"type": "object", "required": ["data"], "properties": {
+    "data": X_POST, "errors": {"type": "array", "maxItems": 0}}}
 
 def tiktok_data(required, properties):
     return {"type": "object", "required": ["data", "error"], "properties": {
@@ -411,6 +415,19 @@ def tiktok_data(required, properties):
         "error": {"type": "object", "required": ["code"], "properties": {"code": {"const": "ok"}}}}}
 
 KNOWN.update({
+    "x.profile.get": ({"type": "object", "required": ["data"], "properties": {
+        "data": {"type": "object", "required": ["id", "username"], "properties": {
+            "id": {"type": "string", "pattern": "^[0-9]+$"}, "username": TEXT, "name": TEXT}},
+        "errors": {"type": "array", "maxItems": 0}}}, ["profile_metadata"]),
+    "x.posts.get": (X_SINGLE_POST, ["post_content"]),
+    "x.posts.create": (X_SINGLE_POST, ["write_receipt"]),
+    "x.posts.list": ({"type": "object", "required": ["meta"], "properties": {
+        "data": {"type": "array", "items": X_POST},
+        "meta": {"type": "object", "required": ["result_count"], "properties": {
+            "result_count": {"type": "integer", "minimum": 0}, "next_token": TEXT}},
+        "errors": {"type": "array", "maxItems": 0}},
+        "allOf": [{"if": {"properties": {"meta": {"properties": {"result_count": {"minimum": 1}}}}},
+                   "then": {"required": ["data"], "properties": {"data": {"minItems": 1}}}}]}, ["post_content"]),
     "mailchimp.audiences.list": (envelope("lists", IDENTIFIED), ["audience_metadata"]),
     "mailchimp.members.list": (envelope("members", IDENTIFIED), ["record_fields"]),
     "mailchimp.member.upsert": (IDENTIFIED, ["write_receipt"]),

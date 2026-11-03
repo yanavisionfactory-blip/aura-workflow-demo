@@ -4,6 +4,7 @@ import hashlib
 from dataclasses import replace
 
 EXTRA_READBACK = {
+    "x.posts.create": "x.posts.get",
     "sheets.campaign_report.create": "sheets.campaign_report.get",
     "sheets.kpi.create": "sheets.workbook.get",
     "airtable.create": "airtable.record.get", "sheets.append": "sheets.read",
@@ -25,6 +26,9 @@ def build_extended(operation, a, receipt):
     if not read:
         return None
     rid = str(receipt.get("id") or "")
+    if operation == "x.posts.create":
+        rid = str(receipt.get("data", {}).get("id") or "")
+        return OutcomeCheck(read, {"post_id": rid}, rid, {"text": a["text"]}, "x_post")
     if operation == "sheets.campaign_report.create":
         rid = str(receipt.get("spreadsheetId") or "")
         return OutcomeCheck(read, {"spreadsheet_id": rid}, rid, a, "campaign_report")
@@ -209,6 +213,16 @@ def evaluate_extended(check, observed):
         if job.get("status") != "success":
             return result("pending" if job.get("status") == "in_progress" else "failed", "Export job is not successfully complete")
         matched = bool(job.get("urls")) and all(isinstance(url, str) and url.startswith("https://") for url in job["urls"])
+    elif check.kind == "x_post":
+        post = observed.get("data") or {}
+        text = str(post.get("text") or "")
+        # X shortens links to t.co; restore the provider's expanded URLs before
+        # comparing with the approved text, without accepting other edits.
+        for link in (post.get("entities") or {}).get("urls", []):
+            if link.get("url") and link.get("expanded_url"):
+                text = text.replace(link["url"], link["expanded_url"])
+        matched = (not observed.get("errors") and str(post.get("id") or "") == check.resource_id
+                   and text == check.expected["text"])
     elif check.kind == "tiktok_job":
         if observed.get("_aura_requested_publish_id") != check.resource_id or observed.get("error", {}).get("code") != "ok":
             return result("unverified", "Posting status is not correlated with the recorded job")

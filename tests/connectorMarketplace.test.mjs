@@ -11,6 +11,37 @@ import {
   searchMarketplace,
 } from "../src/lib/toolCatalog.js";
 
+test("social apps stay visible in a large catalog without bypassing readiness", () => {
+  replaceToolCatalog({ marketplace: [
+    ...Array.from({ length: 150 }, (_, index) => ({ provider: `app-${index}`, display_name: `App ${index}`, connectable: true })),
+    { provider: "tiktok", display_name: "TikTok", connectable: true, connection_backend: "native", preferred_connection: true },
+    { provider: "tiktok-ads", display_name: "TikTok Ads", connectable: false },
+    { provider: "tiktok-ads-manager", display_name: "TikTok Ads Manager", connectable: true, connection_backend: "pipedream" },
+    { provider: "x", display_name: "X (Twitter)", connectable: false, connection_backend: null },
+    { provider: "twitter-v2", display_name: "Twitter (v2)", connectable: false },
+    { provider: "xero", display_name: "Xero", connectable: true },
+  ] });
+  assert.deepEqual(searchMarketplace("").slice(0, 3).map(item => item.name), ["TikTok", "TikTok Ads", "X (Twitter)"]);
+  assert.equal(searchMarketplace("X").length, 1);
+  assert.equal(searchMarketplace("X")[0].connectable, false);
+  assert.equal(catalogEntryFor("X"), null);
+  assert.equal(searchMarketplace("Twitter")[0].name, "X (Twitter)");
+  assert.equal(searchMarketplace("TikTok Ads").length, 1);
+  assert.equal(catalogEntryFor("TikTok Ads Manager").provider, "tiktok-ads-manager");
+  assert.equal(catalogEntryFor("TikTok").provider, "tiktok");
+  assert.equal(catalogEntryFor("TikTok Ads").routes.find(route => route.provider === "tiktok-ads").connectable, false);
+});
+
+test("configured X uses the registered native route and retains legacy route IDs", () => {
+  replaceToolCatalog({ marketplace: [
+    { provider: "twitter-v2", display_name: "Twitter (v2)", connectable: true, connection_backend: "nango" },
+    { provider: "x", display_name: "X (Twitter)", connectable: true, connection_backend: "native", preferred_connection: true },
+  ] });
+  assert.equal(catalogEntryFor("Twitter").provider, "x");
+  assert.equal(catalogEntryFor("X").provider, "x");
+  assert.deepEqual(catalogEntryFor("X").routes.map(route => route.provider).sort(), ["twitter-v2", "x"]);
+});
+
 test("plan connections discover a newly certified exact Sheets route before authorizing", async () => {
   replaceToolCatalog({ marketplace: [
     { provider: "google", display_name: "Google Workspace", connectable: true, connection_backend: "native" },

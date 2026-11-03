@@ -218,6 +218,7 @@ from .security import (
     verify_webhook_signature,
 )
 from .semantic_memory import MemoryUnavailable, index_run_memory, search_memory, source_owner
+from .social_catalog import social_catalog_entry
 from .trigger_runtime import (
     classify_delivery,
     delivery_can_be_replayed,
@@ -1464,6 +1465,7 @@ def _canonical_marketplace_entries(items: list[dict]) -> list[dict]:
     """Present one app card while retaining every certified execution route."""
     grouped: dict[str, list[dict]] = {}
     for raw in items:
+        raw = social_catalog_entry(raw)
         provider = str(raw.get("provider") or "").strip()
         if not provider:
             continue
@@ -1778,7 +1780,7 @@ async def managed_connector_status(
 
 @app.get("/v1/connector-broker/apps")
 async def search_connector_broker_apps(
-    q: str = Query(min_length=2, max_length=160),
+    q: str = Query(min_length=1, max_length=160),
     limit: int = Query(default=30, ge=1, le=50),
     context: TenantContext = Depends(tenant_context),
     session: AsyncSession = Depends(tenant_session),
@@ -1793,6 +1795,9 @@ async def search_connector_broker_apps(
     entries: dict[str, dict] = {}
 
     def matches(item: dict) -> bool:
+        item = social_catalog_entry(item)
+        if query == "x":
+            return item.get("canonical_provider") == "x"
         haystack = " ".join(
             [
                 str(item.get("provider") or ""),
@@ -1940,7 +1945,7 @@ async def search_connector_broker_apps(
 
     if long_tail_ready:
         try:
-            apps = await long_tail.list_apps(q, limit=limit)
+            apps = await long_tail.list_apps("Twitter" if query == "x" else q, limit=limit)
         except PipedreamConnectError:
             cached = await discovered_pipedream_marketplace(session)
             for item in cached["providers"]:
@@ -1959,6 +1964,8 @@ async def search_connector_broker_apps(
                     app_definition,
                     connectable=bool(pack and pipedream_pack_signature_valid(pack)),
                 )
+                if query == "x" and not matches(item):
+                    continue
                 item["preferred_connection"] = bool(
                     item["provider"] in PROVIDERS and PROVIDERS[item["provider"]].pipedream_only
                 )

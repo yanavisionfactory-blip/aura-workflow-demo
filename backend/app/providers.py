@@ -129,6 +129,17 @@ PROVIDERS = {
         callback_provider="installation",
         native_only=True,
     ),
+    "x": OAuthProvider(
+        slug="x",
+        display_name="X (Twitter)",
+        authorization_url="https://x.com/i/oauth2/authorize",
+        token_url="https://api.x.com/2/oauth2/token",
+        scopes=("users.read", "tweet.read", "tweet.write", "offline.access"),
+        client_id_attr="x_client_id",
+        client_secret_attr="x_client_secret",
+        callback_provider="installation",
+        native_only=True,
+    ),
     "slack": OAuthProvider(
         slug="slack",
         display_name="Slack",
@@ -275,7 +286,7 @@ def oauth_registry_errors(settings: Settings) -> list[str]:
     return errors
 
 
-def _canva_code_verifier(settings: Settings, state: str) -> str:
+def _oauth_code_verifier(settings: Settings, state: str) -> str:
     """Derive a short-lived PKCE verifier without persisting OAuth secrets."""
     digest = hmac.new(
         settings.session_signing_key.encode(), state.encode(), hashlib.sha256
@@ -283,8 +294,8 @@ def _canva_code_verifier(settings: Settings, state: str) -> str:
     return base64.urlsafe_b64encode(digest).decode().rstrip("=")
 
 
-def _canva_code_challenge(settings: Settings, state: str) -> str:
-    verifier = _canva_code_verifier(settings, state)
+def _oauth_code_challenge(settings: Settings, state: str) -> str:
+    verifier = _oauth_code_verifier(settings, state)
     digest = hashlib.sha256(verifier.encode()).digest()
     return base64.urlsafe_b64encode(digest).decode().rstrip("=")
 
@@ -315,9 +326,9 @@ def oauth_authorization_url(settings: Settings, provider: OAuthProvider, state: 
         params["scope"] = ",".join(provider.scopes)
     else:
         params["scope"] = " ".join(provider.scopes)
-    if provider.slug == "canva":
+    if provider.slug in {"canva", "x"}:
         params.update({
-            "code_challenge": _canva_code_challenge(settings, state),
+            "code_challenge": _oauth_code_challenge(settings, state),
             "code_challenge_method": "S256",
         })
     if provider.slug == "google":
@@ -347,13 +358,13 @@ async def exchange_oauth_code(
         "redirect_uri": callback_url or oauth_callback_url(settings, provider),
     }
     headers = {"Accept": "application/json"}
-    if provider.slug == "canva":
+    if provider.slug in {"canva", "x"}:
         if not state:
-            raise ValueError("Canva OAuth callback is missing PKCE state")
+            raise ValueError(f"{provider.display_name} OAuth callback is missing PKCE state")
         basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
         headers["Authorization"] = f"Basic {basic}"
         payload.pop("client_secret")
-        payload["code_verifier"] = _canva_code_verifier(settings, state)
+        payload["code_verifier"] = _oauth_code_verifier(settings, state)
     elif provider.slug in {"airtable", "notion", "frameio"}:
         basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
         headers["Authorization"] = f"Basic {basic}"
@@ -369,6 +380,15 @@ async def exchange_oauth_code(
         data = response.json()
     if provider.slug == "slack" and not data.get("ok", False):
         raise RuntimeError(data.get("error", "Slack OAuth failed"))
+    if provider.slug == "x":
+        if not data.get("access_token") or not data.get("refresh_token"):
+            raise ValueError("X did not grant renewable account access.")
+        if not set(provider.scopes) <= set(str(data.get("scope") or "").split()):
+            raise ValueError("X did not grant the requested account permissions.")
+        verification = await verify_oauth_credentials("x", data)
+        if not verification.get("ok"):
+            raise ValueError("X account access could not be verified.")
+        data["x_user_id"] = verification["identity"]["id"]
     if provider.slug == "frameio":
         from . import frameio
         if not data.get("refresh_token"):
@@ -453,7 +473,7 @@ async def refresh_oauth_credentials(
         "grant_type": "refresh_token",
     }
     headers = {"Accept": "application/json"}
-    if provider.slug in {"airtable", "canva", "notion", "frameio"}:
+    if provider.slug in {"airtable", "canva", "notion", "frameio", "x"}:
         basic = base64.b64encode(f"{payload['client_id']}:{payload['client_secret']}".encode()).decode()
         headers["Authorization"] = f"Basic {basic}"
         payload.pop("client_secret")
@@ -468,6 +488,8 @@ async def refresh_oauth_credentials(
         refreshed = response.json()
     if provider.slug == "frameio" and not refreshed.get("access_token"):
         raise ValueError("Adobe returned no refreshed access token.")
+    if provider.slug == "x" and not refreshed.get("access_token"):
+        raise ValueError("X returned no refreshed access token.")
     merged = {**credentials, **refreshed}
     if refreshed.get("expires_in"):
         merged["expires_at"] = int(time.time()) + int(refreshed["expires_in"])
@@ -502,6 +524,8 @@ async def verify_oauth_credentials(provider_slug: str, credentials: dict) -> dic
         )
     elif provider_slug == "canva":
         method, url, kwargs = "GET", "https://api.canva.com/rest/v1/users/me/profile", {}
+    elif provider_slug == "x":
+        method, url, kwargs = "GET", "https://api.x.com/2/users/me", {}
     elif provider_slug == "hubspot":
         method, url, kwargs = "GET", "https://api.hubapi.com/crm/v3/objects/contacts", {"params": {"limit": 1}}
     elif provider_slug == "jira":
@@ -514,6 +538,9 @@ async def verify_oauth_credentials(provider_slug: str, credentials: dict) -> dic
     ok = response.is_success and (provider_slug != "slack" or bool(data.get("ok")))
     if provider_slug == "tiktok":
         identity_source = data.get("data", {}).get("user", {})
+    elif provider_slug == "x":
+        identity_source = data.get("data") if isinstance(data.get("data"), dict) else {}
+        ok = ok and not data.get("errors") and bool(identity_source.get("id"))
     elif provider_slug == "jira":
         site = next((item for item in data if any("jira" in scope for scope in item.get("scopes", []))), {})
         identity_source = {
@@ -528,6 +555,7 @@ async def verify_oauth_credentials(provider_slug: str, credentials: dict) -> dic
         for key in (
             "sub", "email", "team", "team_id", "user", "user_id", "id",
             "open_id", "union_id", "display_name", "site_url",
+            "username", "name",
         )
         if identity_source.get(key) is not None
     }
@@ -617,6 +645,10 @@ class ProviderExecutor:
             "tiktok.video.upload.init": self._tiktok_video_upload_init,
             "tiktok.video.publish.init": self._tiktok_video_publish_init,
             "tiktok.post.status.get": self._tiktok_post_status_get,
+            "x.profile.get": self._x_profile_get,
+            "x.posts.get": self._x_posts_get,
+            "x.posts.list": self._x_posts_list,
+            "x.posts.create": self._x_posts_create,
             "mailchimp.audiences.list": self._mailchimp_audiences_list,
             "mailchimp.members.list": self._mailchimp_members_list,
             "mailchimp.member.upsert": self._mailchimp_member_upsert,
@@ -1729,6 +1761,34 @@ class ProviderExecutor:
             f"blocks/{quote(a['block_id'], safe='')}/children",
             json={"children": a["children"]},
         )
+
+    async def _x_profile_get(self, a: dict) -> dict:
+        return await self._request("GET", "https://api.x.com/2/users/me")
+
+    async def _x_posts_get(self, a: dict) -> dict:
+        post_id = str(a["post_id"])
+        if not post_id.isdigit():
+            raise ValueError("X post ID must contain only digits.")
+        return await self._request("GET", f"https://api.x.com/2/tweets/{post_id}",
+                                   params={"tweet.fields": "entities"})
+
+    async def _x_posts_list(self, a: dict) -> dict:
+        # Resolve the connected identity instead of accepting another user's ID.
+        profile = await self._x_profile_get({})
+        user_id = str((profile.get("data") or {}).get("id") or "")
+        if not user_id.isdigit():
+            raise ValueError("X did not return a verified account identity.")
+        params = {"max_results": min(max(int(a.get("max_results", 10)), 5), 100)}
+        if a.get("pagination_token"):
+            params["pagination_token"] = a["pagination_token"]
+        return await self._request("GET", f"https://api.x.com/2/users/{user_id}/tweets", params=params)
+
+    async def _x_posts_create(self, a: dict) -> dict:
+        result = await self._request("POST", "https://api.x.com/2/tweets", json={"text": a["text"]})
+        post_id = str((result.get("data") or {}).get("id") or "")
+        if not post_id.isdigit() or result.get("errors"):
+            raise ValueError("X did not confirm that the post was created.")
+        return {**result, "result_url": f"https://x.com/i/web/status/{post_id}"}
 
     async def _canva_request(self, method: str, path: str, **kwargs: Any) -> dict:
         return await self._request(method, f"https://api.canva.com/rest/v1/{path.lstrip('/')}", **kwargs)
