@@ -180,13 +180,14 @@ export async function searchConnectorBrokerApps(query, limit = 30) {
   return request(`/v1/connector-broker/apps?${params.toString()}`);
 }
 
-export async function createConnectorBrokerSession(provider, connectionId = null) {
+export async function createConnectorBrokerSession(provider, connectionId = null, options = {}) {
   await ensureWorkspace();
   const params = new URLSearchParams();
   if (connectionId) params.set("connection_id", connectionId);
   const query = params.size ? `?${params.toString()}` : "";
   const session = await request(`/v1/connector-broker/${encodeURIComponent(provider)}/session${query}`, {
     method: "POST",
+    signal: options.signal,
   });
   const googleApps = {
     "google-sheets": "google_sheets", "google-docs": "google_docs",
@@ -354,71 +355,94 @@ export async function authorizeOAuth(provider, timeoutMs = 120000, reservedWindo
 }
 
 async function authorizePipedreamConnector(provider, session, timeoutMs) {
-  const tokenCallback = async () => {
-    const refreshed = await createConnectorBrokerSession(provider, session.connection_id);
-    return {
-      token: refreshed.token,
-      expiresAt: refreshed.expires_at ? new Date(refreshed.expires_at) : new Date(Date.now() + 60000),
-      connectLinkUrl: "",
-    };
-  };
-  const client = createFrontendClient({
-    externalUserId: session.external_user_id,
-    projectEnvironment: session.project_environment,
-    token: session.token,
-    tokenCallback,
-  });
-
   return new Promise((resolve, reject) => {
     let settled = false;
-    let completion = null;
+    let renewed = false;
+    const controller = new AbortController();
+    const expiredMessage = "The connection session expired again. Click Connect to try again. Your work is saved.";
     const finish = (callback, value) => {
       if (settled) return;
       settled = true;
       window.clearTimeout(timer);
+      controller.abort();
       document.querySelectorAll('iframe[id^="pipedream-connect-iframe-"]').forEach((frame) => frame.remove());
       callback(value);
     };
     const timer = window.setTimeout(() => {
-      document.querySelectorAll('iframe[id^="pipedream-connect-iframe-"]').forEach((frame) => frame.remove());
       finish(reject, new Error("The app did not finish connecting. AURA kept your plan unchanged."));
     }, timeoutMs);
 
-    client.connectAccount({
-      app: session.app || provider,
-      token: session.token,
-      accountId: session.account_id || undefined,
-      customOauthClient: false,
-      onSuccess: ({ id }) => {
-        completion = completeConnectorBrokerConnection(
-          provider,
-          id,
-          session.connection_id,
-          session.authorization_state,
-        ).then(async (result) => {
-          const tools = await listPythonTools();
-          const tool = tools.find((item) => item.id === result.connection_id);
-          if (!tool) throw new Error(`${provider} access could not be verified.`);
-          return { connected: true, managed: true, backend: "pipedream", tool };
-        });
-        completion.then(
-          (result) => finish(resolve, result),
-          (error) => finish(reject, error),
-        );
-      },
-      onError: (error) => finish(
-        reject,
-        new Error(error?.message || "AURA could not verify this connection."),
-      ),
-      onClose: ({ successful }) => {
-        if (successful && completion) return;
-        finish(reject, new Error("Connection was cancelled. AURA kept your plan unchanged."));
-      },
-    }).then(() => {
-      document.querySelectorAll('iframe[id^="pipedream-connect-iframe-"]').forEach((frame) => {
-        frame.title = `Connect ${provider}`;
+    const renewSession = async () => {
+      if (settled) return;
+      if (renewed) throw new Error(expiredMessage);
+      renewed = true;
+      const refreshed = await createConnectorBrokerSession(provider, session.connection_id, { signal: controller.signal });
+      if (settled) return;
+      // A new grant and its completion state travel together. Never switch the
+      // app, tenant, environment or selected account while recovering consent.
+      const identity = ["backend", "provider", "app", "external_user_id", "project_environment", "connection_id", "account_id"];
+      if (!refreshed.token || identity.some((key) => (refreshed[key] ?? null) !== (session[key] ?? null))) {
+        throw new Error("AURA could not renew this connection. Click Connect to try again. Your work is saved.");
+      }
+      return openSession(refreshed);
+    };
+
+    const openSession = async (current) => {
+      if (settled) return;
+      const expiresAt = Date.parse(current.expires_at);
+      if (Number.isFinite(expiresAt) && expiresAt <= Date.now() + 5000) return renewSession();
+      // The SDK's tokenCallback does not replace a token already passed to
+      // connectAccount. Reopen with a complete fresh session after expiry.
+      const client = createFrontendClient({
+        externalUserId: current.external_user_id,
+        projectEnvironment: current.project_environment,
+        token: current.token,
       });
-    }).catch((error) => finish(reject, error));
+      let attemptFinished = false;
+      const onError = (error) => {
+        if (settled || attemptFinished) return;
+        attemptFinished = true;
+        const message = error?.message || "AURA could not verify this connection.";
+        if (/\b(?:session|token)\s+(?:(?:has|is)\s+)?expired\b/i.test(message)) {
+          renewSession().catch((cause) => finish(reject, cause));
+        } else {
+          finish(reject, new Error(message));
+        }
+      };
+      await client.connectAccount({
+        app: current.app || provider,
+        token: current.token,
+        accountId: current.account_id || undefined,
+        customOauthClient: false,
+        onSuccess: ({ id }) => {
+          if (settled || attemptFinished) return;
+          attemptFinished = true;
+          completeConnectorBrokerConnection(
+            provider, id, current.connection_id, current.authorization_state,
+          ).then(async (result) => {
+            const tools = await listPythonTools();
+            const tool = tools.find((item) => item.id === result.connection_id);
+            if (!tool) throw new Error(`${provider} access could not be verified.`);
+            return { connected: true, managed: true, backend: "pipedream", tool };
+          }).then(
+            (result) => finish(resolve, result),
+            (error) => finish(reject, error),
+          );
+        },
+        onError,
+        onClose: () => {
+          if (settled || attemptFinished) return;
+          attemptFinished = true;
+          finish(reject, new Error("Connection was cancelled. AURA kept your plan unchanged."));
+        },
+      }).catch(onError);
+      if (!settled) {
+        document.querySelectorAll('iframe[id^="pipedream-connect-iframe-"]').forEach((frame) => {
+          frame.title = `Connect ${provider}`;
+        });
+      }
+    };
+    openSession(session).catch((error) => finish(reject, error));
   });
 }
 
