@@ -55,17 +55,19 @@ export default function ResourceComposer({ open, onClose, onAddTool, onAddAgent,
 
   // One selection is one connection action: AURA opens the provider consent
   // page immediately and performs discovery/verification itself.
-  const select = async (name) => {
+  const select = async (tool) => {
+    const { name } = tool;
     if (pinnedTools.includes(name)) return;
     onAddTool(name);
-    if (!connections[name]) await connectOne(name);
+    if (!connections[name]) await connectOne(tool);
   };
 
-  const connectOne = async (name) => {
+  const connectOne = async (tool) => {
+    const { name } = tool;
     setConnecting(name);
     setConnectionError("");
     try {
-      await connectTool(name);
+      await connectTool(name, { provider: tool.provider });
     } catch (error) {
       setConnectionError(error?.message || `AURA couldn't connect ${name}.`);
     } finally {
@@ -167,7 +169,7 @@ export default function ResourceComposer({ open, onClose, onAddTool, onAddAgent,
                             </span>
                             {!isConnected && (
                               <button
-                                onClick={() => connectOne(t.name)}
+                                onClick={() => connectOne(t)}
                                 disabled={isConnecting}
                                 className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-md text-amber-400 hover:bg-amber-400/10 transition-colors"
                               >
@@ -178,7 +180,7 @@ export default function ResourceComposer({ open, onClose, onAddTool, onAddAgent,
                           </>
                         ) : (
                           <button
-                            onClick={() => select(t.name)}
+                            onClick={() => select(t)}
                             disabled={isConnecting}
                             className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-md text-primary hover:bg-primary/10 transition-colors shrink-0"
                           >

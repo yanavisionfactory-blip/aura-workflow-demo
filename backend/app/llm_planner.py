@@ -199,7 +199,7 @@ def _bounded_planning_catalog(payload: dict) -> dict:
 
     catalog = payload["operations"]
     compact = [
-        {key: item[key] for key in ("slug", "name", "connected", "canonical_provider")
+        {key: item[key] for key in ("slug", "name", "connected", "canonical_provider", "google_ads_account")
          if key in item}
         | {"allowed_operations": [], "operation_contracts": []}
         for item in catalog
@@ -316,6 +316,9 @@ async def create_llm_plan(
         "schema for arguments_json, a JSON-encoded object. Resolve named resources with "
         "listed reads; omit optional fields such as folderId when no real value is known. "
         "Never use null as a placeholder for an optional ID. "
+        "For Google Ads, use the connector's google_ads_account selection for accountId "
+        "(login_customer_id) and customerClientId (customer_id). Do not ask users to type "
+        "customer numbers; use the account picker or supported discovery reads. "
         "Use search/list reads and reference their output using {{steps.key.field}}. "
         "Reference only prior steps and listed input names. Declare dependencies and exact "
         "required_evidence tags only when present in the selected operation's reliability "

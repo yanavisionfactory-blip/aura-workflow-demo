@@ -21,7 +21,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
-from . import frameio, wordpress_plugins, zernio_connect
+from . import frameio, google_ads_accounts, wordpress_plugins, zernio_connect
 from .agent_runtime import is_governed_derivative_step
 from .approval_readiness import unfinished_action_content
 from .approval_review import (
@@ -662,6 +662,7 @@ async def list_tools(
                 "external_connection_id": tool.external_connection_id,
                 "external_account_id": tool.external_account_id,
                 "connection_backend": (tool.config or {}).get("managed_by"),
+                "google_ads_account": google_ads_accounts.selected_account(tool),
                 "canonical_provider": (tool.config or {}).get("canonical_provider")
                 or canonical_provider_slug(tool.slug),
                 "execution_strategy": (tool.config or {}).get("execution_strategy"),
@@ -4139,6 +4140,44 @@ async def connect_shopify_client_credentials(
     if resumed:
         await dispatch_pending(context.workspace_id)
     return {"id": tool.id, "status": "verified", "verification": verification}
+
+
+@app.get("/v1/connections/{connection_id}/google-ads/accounts")
+async def google_ads_account_options(
+    connection_id: str,
+    login_customer_id: str | None = Query(default=None, pattern=r"^[0-9]{10}$"),
+    search: str = Query(default="", max_length=100),
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    tool = await session.get(ToolConnection, connection_id)
+    if not tool or tool.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Connection not found")
+    try:
+        return await google_ads_accounts.discover_accounts(session, tool, login_customer_id, search)
+    except google_ads_accounts.AccountDiscoveryError as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
+@app.post("/v1/connections/{connection_id}/google-ads/account")
+async def choose_google_ads_account(
+    connection_id: str,
+    payload: google_ads_accounts.AccountSelection,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    tool = await session.get(ToolConnection, connection_id)
+    if not tool or tool.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Connection not found")
+    try:
+        selected = await google_ads_accounts.select_account(session, tool, payload)
+    except google_ads_accounts.AccountDiscoveryError as exc:
+        raise HTTPException(409, str(exc)) from None
+    session.add(AuditEvent(workspace_id=context.workspace_id, actor=context.subject,
+                          event_type="connector.google_ads_account_selected",
+                          payload={"tool_id": tool.id, **selected}))
+    await session.commit()
+    return {"selected_account": selected}
 
 
 @app.post("/v1/connections/{connection_id}/test")

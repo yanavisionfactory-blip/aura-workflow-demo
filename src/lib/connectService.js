@@ -1,14 +1,17 @@
 import { replaceConnections } from "@/lib/connectionsStore";
 import { isVerifiedConnection, matchingConnections, selectConnection } from "@/lib/connectionSelection.mjs";
-import { usesSameTabAuthorization } from "@/lib/connectionNavigation.mjs";
+import { clearAuthorizationNavigation, usesSameTabAuthorization } from "@/lib/connectionNavigation.mjs";
+import { googleAdsAccountDialog } from "@/lib/googleAdsAccountDialog";
 import {
   authorizeConnectorBroker,
   disconnectPythonConnection,
   getManagedConnectorStatus,
   listPythonTools,
+  listGoogleAdsAccounts,
   pythonRuntimeEnabled,
   reserveAuthorizationWindow,
   searchConnectorBrokerApps,
+  selectGoogleAdsAccount,
   testPythonConnection,
 } from "@/lib/auraApi";
 import {
@@ -23,10 +26,22 @@ let hydrationPromise = null;
 let hydratedTools = null;
 let hydratedAt = 0;
 
+export async function chooseGoogleAdsAccount(tool, { force = false } = {}) {
+  if (tool?.slug !== "google-ads" || tool.connection_backend !== "pipedream"
+    || (!force && tool.google_ads_account)) return tool;
+  const selected = await googleAdsAccountDialog({
+    selected: tool.google_ads_account,
+    load: (login, search) => listGoogleAdsAccounts(tool.id, login, search),
+    save: (selection) => selectGoogleAdsAccount(tool.id, selection),
+  });
+  return selected ? { ...tool, google_ads_account: selected } : tool;
+}
+
 export async function connectTool(toolName, opts = {}) {
   if (!pythonRuntimeEnabled) {
     throw new Error("AURA's secure connection service is not available right now.");
   }
+  clearAuthorizationNavigation();
   const requestedProvider = String(opts.provider || "").trim().toLowerCase();
   const entry = await ensurePlanConnectionRoute(toolName, requestedProvider, searchConnectorBrokerApps);
   if (!entry?.connectable || !entry.provider) {
@@ -71,11 +86,14 @@ export async function connectTool(toolName, opts = {}) {
       throw new Error(`AURA is still restoring ${toolName} access. Your work is preserved.`);
     }
     const refreshedTools = await hydrateConnections({ force: true });
+    const connection = await chooseGoogleAdsAccount(
+      refreshedTools.find((tool) => tool.id === result.tool.id) || result.tool,
+    );
     return {
       method: result.managed ? "managed" : "oauth",
       connected: true,
       provider: authorizationProvider,
-      connection: refreshedTools.find((tool) => tool.id === result.tool.id) || result.tool,
+      connection,
     };
   } catch (error) {
     if (authorizationWindow && !authorizationWindow.closed) authorizationWindow.close();
@@ -152,6 +170,7 @@ export async function disconnectTool(toolName, connectionId = null) {
 
 export async function reconnectTool(toolName, connectionId = null) {
   if (!pythonRuntimeEnabled) throw new Error("Reauthorization requires the secure control plane.");
+  clearAuthorizationNavigation();
   let authorizationWindow = null;
   try {
     const tool = await getToolConnection(toolName, connectionId);
@@ -173,6 +192,7 @@ export async function reconnectTool(toolName, connectionId = null) {
     });
     if (result.redirecting) return result;
     await hydrateConnections({ force: true });
+    result.tool = await chooseGoogleAdsAccount(result.tool);
     return result;
   } catch (error) {
     if (authorizationWindow && !authorizationWindow.closed) authorizationWindow.close();

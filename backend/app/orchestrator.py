@@ -38,6 +38,7 @@ from .composed_content import validate_composed_content
 from .config import get_settings
 from .db import SessionLocal, engine, set_tenant_context
 from .execution_lock import execution_lock
+from .google_ads_accounts import apply_account_defaults, selected_account
 from .managed_connectors import managed_connection_reference, managed_connector_client
 from .models import (
     Approval,
@@ -1121,6 +1122,7 @@ async def _create_compiled_plan(
                     request_prompt or prompt, plan, available_operations,
                     catalog_inventory, manifests_by_slug,
                 )
+            apply_account_defaults(plan, inventory, manifests_by_slug)
             _normalize_planned_steps(plan, manifests_by_slug)
             from .intelligence_backup import add_intelligence_backups
 
@@ -1723,6 +1725,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 "kind": tool.kind.value,
                 "allowed_operations": tool.allowed_operations,
                 "granted_operations": list(tool.allowed_operations or []),
+                "google_ads_account": selected_account(tool),
                 "connected": True,
             }
             for tool in tools
@@ -1782,6 +1785,13 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             plan = (None if get_settings().planner_mode == "llm" else await reuse_saved_plan(
                 session, run, connected_inventory, manifests_by_slug,
             ))
+            if plan is not None and any(
+                item.get("google_ads_account") and any(step.tool_slug == item["slug"] for step in plan.steps)
+                for item in connected_inventory
+            ):
+                # A cached plan can contain a previous customer's literal IDs.
+                # Compile new Ads work with the current explicit account choice.
+                plan = None
             if plan is not None:
                 try:
                     validate_requested_operations(

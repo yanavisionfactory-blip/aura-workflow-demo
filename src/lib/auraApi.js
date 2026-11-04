@@ -185,9 +185,20 @@ export async function createConnectorBrokerSession(provider, connectionId = null
   const params = new URLSearchParams();
   if (connectionId) params.set("connection_id", connectionId);
   const query = params.size ? `?${params.toString()}` : "";
-  return request(`/v1/connector-broker/${encodeURIComponent(provider)}/session${query}`, {
+  const session = await request(`/v1/connector-broker/${encodeURIComponent(provider)}/session${query}`, {
     method: "POST",
   });
+  const googleApps = {
+    "google-sheets": "google_sheets", "google-docs": "google_docs",
+    "google-ads": "google_ads", "google-analytics": "google_analytics",
+  };
+  // These are distinct OAuth apps, even when they share a Google login.
+  // Check refreshed sessions too, before the SDK can open another provider.
+  if (googleApps[provider] && (session.provider !== provider
+    || (session.backend === "pipedream" && session.app !== googleApps[provider]))) {
+    throw new Error("AURA received a connection for a different app. Please retry the app you selected.");
+  }
+  return session;
 }
 
 export async function completeConnectorBrokerConnection(provider, accountId, connectionId = null, authorizationState = null) {
@@ -462,6 +473,21 @@ export async function authorizeConnectorBroker(
 export async function testPythonConnection(connectionId) {
   await ensureWorkspace();
   return request(`/v1/connections/${connectionId}/test`, { method: "POST" });
+}
+
+export async function listGoogleAdsAccounts(connectionId, loginCustomerId = "", search = "") {
+  await ensureWorkspace();
+  const query = new URLSearchParams();
+  if (loginCustomerId) query.set("login_customer_id", loginCustomerId);
+  if (search) query.set("search", search);
+  return request(`/v1/connections/${encodeURIComponent(connectionId)}/google-ads/accounts?${query}`, { timeoutMs: 80000 });
+}
+
+export async function selectGoogleAdsAccount(connectionId, selection) {
+  await ensureWorkspace();
+  return request(`/v1/connections/${encodeURIComponent(connectionId)}/google-ads/account`, {
+    method: "POST", body: JSON.stringify(selection), timeoutMs: 80000,
+  });
 }
 
 export async function disconnectPythonConnection(connectionId) {

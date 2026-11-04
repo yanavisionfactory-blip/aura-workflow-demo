@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { shouldNotifyAuthorizationOpener } from "@/lib/connectionNavigation.mjs";
+import { clearAuthorizationNavigation, shouldNotifyAuthorizationOpener } from "@/lib/connectionNavigation.mjs";
 import { AnimatePresence, motion } from "framer-motion";
 import { useLocation } from "react-router-dom";
 import { aura } from "@/api/auraClient";
@@ -442,7 +442,10 @@ export default function Demo() {
     const params = new URLSearchParams(window.location.search);
     const provider = params.get("tool_connected") || params.get("oauth_provider");
     const status = params.get("oauth_status") || (params.has("tool_connected") ? "success" : null);
-    if (!provider || !status || !shouldNotifyAuthorizationOpener(window.location.search)) return;
+    if (!provider || !status) return;
+    const notifyOpener = shouldNotifyAuthorizationOpener(window.location.search);
+    clearAuthorizationNavigation();
+    if (!notifyOpener) return;
     window.opener.postMessage(
       {
         source: "aura-oauth",
