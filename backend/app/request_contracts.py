@@ -339,27 +339,31 @@ def validate_revision_write_scope(
             prior_write_kinds.setdefault(_family(slug, operation), set()).update(
                 replaceable_writes.get(operation, set())
             )
-    for step in plan.steps:
-        module = next((item for item in manifests.get(step.tool_slug, {}).get("capabilities", [])
-                       if item.get("name") == step.operation), None)
+    calls = [(step.tool_slug, step.operation) for step in plan.steps]
+    if connection_routes:
+        calls.extend((step.fallback_tool_slug, step.fallback_operation) for step in plan.steps
+                     if step.fallback_tool_slug and step.fallback_operation)
+    for slug, operation in calls:
+        module = next((item for item in manifests.get(slug, {}).get("capabilities", [])
+                       if item.get("name") == operation), None)
         if not module or module.get("permission_scope") not in {"write", "destructive"}:
             continue
-        if (step.tool_slug, step.operation) in prior_operations | authorized:
+        if (slug, operation) in prior_operations | authorized:
             continue
-        family = _family(step.tool_slug, step.operation)
+        family = _family(slug, operation)
         # Changing a draft's connection requires different real operations.
         # Preserve the reviewed creation/content writes only on the explicitly
         # selected route; it cannot authorize deletion, sharing, delivery or
         # writes for a previously read-only app. Start still needs fresh review.
         prior_kinds = prior_write_kinds.get(family, set())
-        if ((connection_routes or {}).get(family) == step.tool_slug
+        if ((connection_routes or {}).get(family) == slug
                 and module.get("permission_scope") == "write"
                 and not any(_operation_matches(kind, module) for kind in ("delete", "share", "send"))
                 and (("create" in prior_kinds and any(_operation_matches(kind, module) for kind in ("create", "update")))
                      or ("update" in prior_kinds and _operation_matches("update", module)))):
             continue
         raise ValueError(
-            f"Unrequested {family} write in the revised plan: {step.operation}. "
+            f"Unrequested {family} write in the revised plan: {operation}. "
             "Keep the reviewed actions and add only the requested reads."
         )
 

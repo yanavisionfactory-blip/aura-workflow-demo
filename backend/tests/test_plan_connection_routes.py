@@ -123,6 +123,13 @@ def test_old_google_fallback_is_rejected_even_when_primary_uses_selected_route()
         validate_plan_connection_routes(plan(fallback_tool_slug="google", fallback_operation="sheets.read"), ROUTES)
 
 
+def test_switch_cannot_hide_destructive_write_in_a_dedicated_route_fallback():
+    inventory, manifests = catalog()
+    candidate = plan(fallback_tool_slug="google-sheets", fallback_operation="google-sheets.delete-spreadsheet")
+    with pytest.raises(ValueError, match="Unrequested sheets write"):
+        validate_revision_write_scope(revision(), candidate, inventory, manifests, ROUTES)
+
+
 @pytest.mark.asyncio
 async def test_full_compile_rebuilds_sheet_actions_and_requires_only_exact_new_grants(monkeypatch):
     inventory, manifests = catalog()
