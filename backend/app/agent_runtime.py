@@ -198,6 +198,10 @@ def intent_bounded_tool_inventory(
         item_text = text
         item_requested = requested
         if str(item.get("slug") or "").casefold() == "google":
+            # The brand alone is not an app requirement. After a customer
+            # selects dedicated Sheets, remaining Workspace Gmail/identity
+            # operations must not sneak back into that Sheets-only draft.
+            aliases.discard("google")
             item_text = re.sub(r"\bgoogle ads\b", " ", text)
             item_requested = {re.sub(r"\bgoogle ads\b", " ", value) for value in requested}
         if any(f" {alias} " in item_text for alias in aliases if alias):

@@ -6679,16 +6679,22 @@ async def approve_plan(
                     item["name"] for item in manifest.get("capabilities", [])
                 ],
             }
+    from .plan_connection_routes import selected_connection_routes, validate_plan_connection_routes
     from .request_contracts import validate_requested_operations
 
     try:
+        connection_routes = selected_connection_routes(
+            (run.inputs or {}).get("connection_routes"), list(available_by_slug.values()), plan=plan,
+        )
+        validate_plan_connection_routes(plan, connection_routes)
         validate_requested_operations(
             run.prompt, plan,
             {operation for item in available_by_slug.values()
              for operation in item.get("allowed_operations", [])},
             list(available_by_slug.values()), available_manifests,
+            connection_routes=connection_routes,
         )
-    except ValueError as exc:
+    except (ValueError, TypeError) as exc:
         raise HTTPException(422, {
             "message": "The saved plan is missing work required by your request",
             "fixes": [str(exc)],

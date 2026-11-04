@@ -131,3 +131,53 @@ test("the checklist cancels preparation, retries with a focusable sign-in window
     container.remove();
   }
 });
+
+test("switching a blocked Sheets plan recompiles for review without opening consent or executing", async () => {
+  let popups = 0, finishRevision;
+  const revisions = [], approvals = [];
+  window.open = () => { popups += 1; throw new Error("The switch must not open OAuth"); };
+  globalThis.fetch = async (url) => {
+    const { pathname } = new URL(url);
+    if (pathname === "/v1/managed-connectors/status") return Response.json({ marketplace: [
+      { display_name: "Google Workspace", provider: "google", connection_backend: "nango", connectable: true },
+      { display_name: "Google Sheets", provider: "google-sheets", connection_backend: "pipedream",
+        connectable: true, preferred_connection: true },
+    ] });
+    if (pathname === "/v1/tools") return Response.json([{ id: "google-account", slug: "google",
+      display_name: "Google Workspace", connection_backend: "nango", kind: "oauth", enabled: false }]);
+    throw new Error(`Unexpected request: ${pathname}`);
+  };
+  const plan = { workflowName: "KPI workbook", connectionRoutes: { docs: "google-docs" },
+    steps: [{ title: "Create workbook", tool: "Google Sheets", toolSlug: "google",
+      operation: "sheets.kpi.create", action: "Create the required KPI workbook" }],
+    connectionChecklist: [{ provider_hint: "google", canonical_provider: "google", status: "required",
+      required_permissions: ["sheets.kpi.create", "sheets.workbook.get"] }] };
+  const original = JSON.stringify(plan);
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const button = (text) => [...container.querySelectorAll("button")].find((item) => item.textContent.includes(text));
+  try {
+    await act(async () => root.render(React.createElement(PlanView, {
+      plan, onApprove: (...args) => approvals.push(args),
+      onRevisePlan: (...args) => { revisions.push(args); return new Promise((resolve) => { finishRevision = resolve; }); },
+    })));
+    assert.equal(button("Use dedicated Google Sheets connection").disabled, false);
+    await act(async () => Simulate.click(button("Use dedicated Google Sheets connection")));
+    assert.equal(revisions.length, 1);
+    assert.deepEqual(revisions[0][1], { connectionRoutes: { docs: "google-docs", sheets: "google-sheets" } });
+    assert.match(container.textContent, /Updating your plan/);
+    assert.match(container.textContent, /Nothing will run before review/);
+    assert.equal(button("Cancel connection"), undefined, "plan rebuilding is not an OAuth attempt");
+    assert.equal(button("Use dedicated Google Sheets connection").disabled, true);
+    await act(async () => finishRevision({ ok: false, error: "The revised plan needs another review." }));
+    assert.match(container.textContent, /The revised plan needs another review/);
+    assert.equal(button("Use dedicated Google Sheets connection").disabled, false);
+    assert.equal(popups, 0);
+    assert.deepEqual(approvals, []);
+    assert.equal(JSON.stringify(plan), original);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});

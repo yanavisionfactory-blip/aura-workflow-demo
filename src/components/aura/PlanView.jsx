@@ -15,6 +15,7 @@ import { isVerifiedConnection } from "@/lib/connectionSelection.mjs";
 import { hasPlanConnectionGrant, planConnectionRequirements, buildPlanConnectionTools, requirementTools } from "@/lib/planConnections.mjs";
 import { planningConnectionsEnabled } from "@/lib/planningFlow.mjs";
 import { removeStepInstruction } from "@/lib/planPresentation.mjs";
+import { alternativePlanConnection, planConnectionRevision } from "@/lib/planConnectionRoutes.mjs";
 import { CONNECTION_CANCELLED } from "@/lib/connectionAttempt.mjs";
 const PLAN_REVISION_SCHEMA = {
   type: "object",
@@ -180,6 +181,26 @@ export default function PlanView({
   const connectionCount = needed.length || planTools.length;
   const planningFailure = steps.length === 0 && Boolean(plan.error) && !connectionOnly;
   const connectionsCanOpen = planningConnectionsEnabled(plan.compileState);
+
+  const handleSwitchConnection = async (tool) => {
+    const provider = alternativePlanConnection(tool, CATALOG);
+    if (!provider || !onRevisePlan || connectingRef.current) return;
+    connectingRef.current = true;
+    setConnectingTool(tool.name);
+    setConnectionProgress({ phase: "replanning" });
+    setConnectionErrors((previous) => ({ ...previous, [tool.key]: "" }));
+    try {
+      const revision = planConnectionRevision(tool, provider, plan.connectionRoutes);
+      const result = await onRevisePlan(revision.instruction, { connectionRoutes: revision.connectionRoutes });
+      if (result?.ok === false) throw new Error(result.error || "AURA couldn't revise this plan.");
+    } catch (error) {
+      setConnectionErrors((previous) => ({ ...previous, [tool.key]: error.message }));
+    } finally {
+      connectingRef.current = false;
+      setConnectingTool(null);
+      setConnectionProgress(null);
+    }
+  };
 
   const handleRecheck = useCallback(async (targetKey = "", silent = false) => {
     if (busy || !connectionsReady || !needed.length || checkingRef.current || connectingRef.current) return;
@@ -421,7 +442,9 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
       )}
 
       <PlanConnectionAlert
-        tools={planTools.filter((tool) => catalogEntryFor(tool.name))}
+        tools={planTools.filter((tool) => catalogEntryFor(tool.name)).map((tool) => ({
+          ...tool, alternativeProvider: onRevisePlan ? alternativePlanConnection(tool, CATALOG) : null,
+        }))}
         connections={effectiveConnections}
         connectingTool={connectingTool}
         progress={connectionProgress}
@@ -431,6 +454,7 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         onRecheck={handleRecheck}
         onSkipTool={onSkipTool}
         onReplaceTool={onReplaceTool}
+        onSwitchConnection={handleSwitchConnection}
         replacements={CATALOG.filter((entry) => connections[entry.name]).map((entry) => entry.name)}
         connectionEnabled={connectionsCanOpen}
       />

@@ -49,6 +49,7 @@ export default function PlanConnectionAlert({
   onRecheck,
   onSkipTool,
   onReplaceTool,
+  onSwitchConnection,
   replacements = [],
   userSelectedTools = [],
   connectionEnabled = true,
@@ -93,7 +94,8 @@ export default function PlanConnectionAlert({
             ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
             : <Plus className="w-3.5 h-3.5" />}
           {isConnecting
-            ? progress?.phase === "waiting" ? `Waiting for ${connectingTool} sign-in…`
+            ? progress?.phase === "replanning" ? "Updating your plan…"
+              : progress?.phase === "waiting" ? `Waiting for ${connectingTool} sign-in…`
               : progress?.phase === "retrying" ? "Retrying connection check…"
               : progress?.phase === "verifying" ? `Verifying ${connectingTool} access…`
               : `Preparing ${connectingTool} sign-in…`
@@ -105,7 +107,8 @@ export default function PlanConnectionAlert({
         </button>
         {isConnecting && progress && <div className="mt-3 text-xs">
           <p role="status" aria-live="polite" className="text-muted-foreground">
-            {progress.phase === "waiting"
+            {progress.phase === "replanning" ? "Rebuilding the plan for your selected connection. Nothing will run before review."
+              : progress.phase === "waiting"
               ? progress.focus ? "Finish signing in and approving access in the window AURA opened."
                 : "Finish signing in and approving access in the connection form."
               : progress.phase === "retrying" ? "The connection check is taking longer than usual. You can cancel and retry."
@@ -117,7 +120,7 @@ export default function PlanConnectionAlert({
               className="rounded-md border border-white/20 px-3 py-1.5 hover:bg-white/5">
               Open sign-in window
             </button>}
-            {onCancel && <button type="button" onClick={onCancel}
+            {onCancel && progress.phase !== "replanning" && <button type="button" onClick={onCancel}
               className="rounded-md border border-white/20 px-3 py-1.5 hover:bg-white/5">
               Cancel connection
             </button>}
@@ -147,6 +150,18 @@ export default function PlanConnectionAlert({
                   <p className="text-[11px] text-muted-foreground/70 mt-0.5 leading-relaxed">{cap(t.reason)}.</p>
                 )}
                 {error && <p className="mt-1 text-[11px] leading-relaxed text-red-300">{error}</p>}
+                {!connected && t.alternativeProvider && onSwitchConnection && (
+                  <div className="mt-2 rounded-lg border border-primary/25 bg-primary/5 p-2.5">
+                    <p className="text-[11px] leading-relaxed text-muted-foreground">
+                      Google blocked AURA sign-in? Use the dedicated {t.name} connection and review a revised plan.
+                    </p>
+                    <button type="button" onClick={() => onSwitchConnection(t)}
+                      disabled={isConnecting || !connectionEnabled}
+                      className="mt-2 rounded-md border border-primary/40 px-2.5 py-1 text-[11px] text-foreground hover:bg-primary/10 disabled:opacity-50">
+                      Use dedicated {t.name} connection
+                    </button>
+                  </div>
+                )}
                 {!connected && connectionEnabled && (
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <button type="button" onClick={() => onRecheck?.(t.key)} disabled={isConnecting}

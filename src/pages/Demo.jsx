@@ -222,6 +222,7 @@ const uiPlanFromRun = (run) => ({
     : "Ready to start",
   steps: (run.plan?.steps || []).map(uiPlanStepFromRun),
   omittedTools: run.plan?.steps?.length ? run.inputs?.excluded_tool_families || [] : [],
+  connectionRoutes: run.inputs?.connection_routes || {},
 });
 
 const uiConnectionPlanFromRun = (run, interpretation) => ({
@@ -364,6 +365,8 @@ export default function Demo() {
           compileError: failedPlanning ? run.error || run.blocker?.message : "" };
       pythonRunIdRef.current = run.id;
       pythonPlanRef.current = run.plan || null;
+      omittedToolsRef.current = [...(run.inputs?.excluded_tool_families || [])];
+      userSelectedToolsRef.current = [...(run.inputs?.requested_tools || [])];
       originalPromptRef.current = intent;
       lastPlanningIntentRef.current = intent;
       setOriginalPrompt(intent);
@@ -693,15 +696,17 @@ Write ONE clear, conversational sentence restating what they want — but offer 
 
   // ---- Confirm interpretation ----
   const handleConfirm = useCallback(
-    (editedInterpretation, revisionInstruction = "") => {
+    (editedInterpretation, revisionInstruction = "", options = {}) => {
       setInterpretation(editedInterpretation);
       const currentSteps = pythonPlanRef.current?.steps?.length
         ? pythonPlanRef.current.steps : reviewedPlanRef.current?.steps || [];
       const reviewedSteps = revisionInstruction
         ? (currentSteps.length ? currentSteps : pendingPlanRevisionRef.current?.reviewedSteps || [])
         : [];
+      const connectionRoutes = options.connectionRoutes || pendingPlanRevisionRef.current?.connectionRoutes
+        || reviewedPlanRef.current?.connectionRoutes || {};
       pendingPlanRevisionRef.current = revisionInstruction
-        ? { instruction: revisionInstruction, reviewedSteps } : null;
+        ? { instruction: revisionInstruction, reviewedSteps, connectionRoutes } : null;
       const confirmedIntent = editedInterpretation.trim() || originalPromptRef.current;
       const selectedTools = userSelectedToolsRef.current.filter(
         (tool) => !omittedToolsRef.current.includes(tool)
@@ -742,6 +747,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
           const created = await createPythonRunResilient(planningPrompt, null, requestKey, {
             requested_tools: selectedTools,
             excluded_tool_families: [...omittedToolsRef.current],
+            connection_routes: connectionRoutes,
             saved_workflow_id: currentWorkflowIdRef.current,
             attached_documents: (resources.documents || []).map(({ name, file_url, size }) => ({
               name, file_url, size,
@@ -807,7 +813,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
   reviewedPlanRef.current = plan;
 
   const handlePlanRevision = useCallback(
-    (instruction) => handleConfirm(interpretation, instruction),
+    (instruction, options) => handleConfirm(interpretation, instruction, options),
     [handleConfirm, interpretation]
   );
 
