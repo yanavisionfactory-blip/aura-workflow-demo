@@ -462,6 +462,116 @@ async def test_google_reconnect_session_carries_original_provider_revision(monke
     client.connection_revision.assert_awaited_once_with("nango-1", "google")
 
 
+async def test_google_reconnect_opens_consent_when_old_credentials_are_invalid(monkeypatch, caplog):
+    import httpx
+
+    from app import main
+
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        if request.url.path == "/connections/nango-1":
+            return httpx.Response(424, json={"error": {
+                "code": "invalid_credentials",
+                "message": "access_token=DO-NOT-LOG-THIS",
+                "payload": {"connection": {
+                    "connection_id": "nango-1", "provider_config_key": "google",
+                    "updated_at": "2026-11-04T20:00:00.000Z",
+                    "errors": [{"type": "auth"}],
+                }},
+            }})
+        if request.url.path == "/integrations/google":
+            return httpx.Response(200, json=integration("google", "google"))
+        assert request.method == "POST"
+        assert request.url.path == "/connect/sessions/reconnect"
+        return httpx.Response(201, json={"data": {"connect_link": "https://connect.example"}})
+
+    original = httpx.AsyncClient
+    transport = httpx.MockTransport(respond)
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original(transport=transport, **kwargs))
+    config = settings()
+    config.nango_integration_map = '{"google":"google"}'
+    client = NangoClient(config)
+    monkeypatch.setattr(main, "managed_connector_client", lambda: client)
+    tool = SimpleNamespace(
+        id="tool-1", workspace_id="workspace-1", slug="google",
+        config={"managed_by": "nango", "connection_id": "nango-1", "integration_id": "google"},
+        external_connection_id="nango-1",
+    )
+    session = SimpleNamespace(get=AsyncMock(return_value=tool), add=Mock(), commit=AsyncMock())
+
+    result = await main.create_managed_connector_session(
+        "google", connection_id="tool-1",
+        context=main.TenantContext("workspace-1", "user-1", "owner"), session=session,
+    )
+
+    assert result["connect_link"] == "https://connect.example"
+    assert result["mode"] == "reconnect"
+    assert result["previous_provider_updated_at"] == "2026-11-04T20:00:00.000Z"
+    assert [request.url.path for request in requests] == [
+        "/connections/nango-1", "/integrations/google", "/connect/sessions/reconnect",
+    ]
+    assert "DO-NOT-LOG-THIS" not in caplog.text
+
+
+@pytest.mark.parametrize("status,code,connection", [
+    (424, "invalid_credentials", {}),
+    (424, "invalid_credentials", {
+        "connection_id": "other", "provider_config_key": "google", "updated_at": "old",
+    }),
+    (424, "invalid_credentials", {
+        "connection_id": "nango-1", "provider_config_key": "other", "updated_at": "old",
+    }),
+    (424, "invalid_credentials", {
+        "connection_id": "nango-1", "provider_config_key": "google", "updated_at": None,
+    }),
+    (424, "other_error", {
+        "connection_id": "nango-1", "provider_config_key": "google", "updated_at": "old",
+    }),
+    (404, "invalid_credentials", {
+        "connection_id": "nango-1", "provider_config_key": "google", "updated_at": "old",
+    }),
+])
+async def test_reconnect_revision_rejects_unrelated_or_incomplete_errors(
+    monkeypatch, status, code, connection,
+):
+    import httpx
+
+    from app.managed_connectors import ManagedConnectorError
+
+    original = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda request: httpx.Response(status, json={
+        "error": {"code": code, "payload": {"connection": connection}},
+    }))
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original(transport=transport, **kwargs))
+
+    with pytest.raises(ManagedConnectorError):
+        await NangoClient(settings()).connection_revision("nango-1", "google")
+
+
+async def test_invalid_connection_metadata_never_counts_as_usable_credentials(monkeypatch):
+    import httpx
+
+    from app.managed_connectors import ConnectionAuthorizationRequired
+
+    original = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda request: httpx.Response(424, json={"error": {
+        "code": "invalid_credentials", "payload": {"connection": {
+            "connection_id": "nango-1", "provider_config_key": "google", "updated_at": "old",
+        }},
+    }}))
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original(transport=transport, **kwargs))
+    config = settings()
+    config.nango_integration_map = '{"google":"google"}'
+    client = NangoClient(config)
+
+    with pytest.raises(ConnectionAuthorizationRequired):
+        await client.get_credentials("nango-1", "google")
+    _, verification = await client.verify_connection("google", {"connection_id": "nango-1"})
+    assert verification == {"ok": False, "reason": "authorization_required", "retryable": False}
+
+
 async def test_ambiguous_provider_mapping_is_not_guessed():
     client = FakeNango([{"data": [
         {"unique_key": "one", "provider": "jira"},

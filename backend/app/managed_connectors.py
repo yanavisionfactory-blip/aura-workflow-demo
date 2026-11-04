@@ -45,6 +45,18 @@ class ManagedConnectorError(RuntimeError):
         super().__init__(message)
 
 
+class ConnectionAuthorizationRequired(ManagedConnectorError):
+    """An invalid connection can still supply metadata needed to reconnect it."""
+
+    def __init__(self, connection: dict):
+        # Retain only revision/identity fields, never credentials or upstream messages.
+        self.connection_id = connection.get("connection_id")
+        self.integration_id = connection.get("provider_config_key")
+        revision = connection.get("updated_at")
+        self.revision = revision if isinstance(revision, str) else ""
+        super().__init__("This app needs to be reconnected", retryable=False)
+
+
 class ConnectorConfigurationError(ManagedConnectorError):
     """Operator-owned setup failure, never a request for user credentials."""
 
@@ -285,6 +297,18 @@ class NangoClient:
                     "managed_connector_upstream_http method=%s status=%s",
                     method, exc.response.status_code,
                 )
+                if exc.response.status_code == 424:
+                    try:
+                        body = exc.response.json()
+                    except ValueError:
+                        body = {}
+                    error = body.get("error") if isinstance(body, dict) else None
+                    if isinstance(error, dict) and error.get("code") == "invalid_credentials":
+                        payload = error.get("payload")
+                        connection = payload.get("connection") if isinstance(payload, dict) else None
+                        raise ConnectionAuthorizationRequired(
+                            connection if isinstance(connection, dict) else {}
+                        ) from None
                 break
             except (httpx.TransportError, ValueError) as exc:
                 last_error = exc
@@ -513,12 +537,24 @@ class NangoClient:
         return credentials
 
     async def connection_revision(self, connection_id: str, integration_id: str) -> str:
-        """Read Nango's connection revision without exposing its credentials."""
-        result = await self._request(
-            "GET",
-            f"/connections/{quote(connection_id, safe='')}",
-            params={"provider_config_key": integration_id},
-        )
+        """Read the revision even when Nango cannot refresh the old credentials."""
+        try:
+            result = await self._request(
+                "GET",
+                f"/connections/{quote(connection_id, safe='')}",
+                params={"provider_config_key": integration_id},
+            )
+        except ConnectionAuthorizationRequired as exc:
+            # Nango includes connection metadata in invalid_credentials responses.
+            # Reconnect needs this baseline, not a working token. Credential reads
+            # and verification still reject the same error until consent succeeds.
+            if (
+                exc.connection_id != connection_id
+                or exc.integration_id != integration_id
+                or not exc.revision
+            ):
+                raise
+            return exc.revision
         return str(result.get("updated_at") or "")
 
     async def verify_connection(self, provider: str, connection: dict) -> tuple[str, dict]:
