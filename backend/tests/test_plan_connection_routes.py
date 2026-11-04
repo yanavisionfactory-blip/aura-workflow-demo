@@ -23,6 +23,7 @@ from app.models import (
 )
 from app.native_connectors import native_manifest
 from app.plan_connection_routes import (
+    prefer_connected_app_routes,
     route_bounded_inventory,
     selected_connection_routes,
     validate_plan_connection_routes,
@@ -32,6 +33,12 @@ from app.request_contracts import validate_revision_write_scope
 from app.schemas import PlanApproval, PlanStep, WorkflowPlan
 
 ROUTES = {"sheets": "google-sheets"}
+
+KPI_PROMPT = ("Create a simple KPI dashboard template including revenue, sales and conversions, "
+              "optional charts and sales, marketing or operations categories in Google Sheets for "
+              "Plantea skin nourishing serum in Texas compared to dermalogica.com and bskincaretx.com. "
+              "Make it clean, with business name, reporting period September 2026, key metrics, "
+              "target values and actual performance.")
 
 
 def catalog():
@@ -167,6 +174,46 @@ def test_negative_shared_workspace_mention_does_not_request_five_google_apps():
     assert orchestrator.explicit_disconnected_capabilities(
         "Use Google Sheets instead of the shared Google Workspace connector.", inventory,
     ) == ["sheets"]
+
+
+@pytest.mark.asyncio
+async def test_kpi_request_uses_existing_dedicated_sheets_grants_before_planning(monkeypatch):
+    monkeypatch.setattr(get_settings(), "planner_mode", "llm")
+    inventory, manifests = catalog()
+    inventory[1]["connected"] = True
+    grants = [{"slug": "google", "allowed_operations": ["gmail.get"]}, inventory[1]]
+    original = deepcopy(inventory)
+    create = AsyncMock(return_value=plan())
+    monkeypatch.setattr(llm_planner, "create_llm_plan", create)
+    compiled = await orchestrator._create_compiled_plan(
+        KPI_PROMPT, inventory, set(), manifests, requested_tool_names=["Google Sheets"],
+        connected_inventory=grants,
+    )
+    assert create.await_count == 1
+    offered = {item["slug"]: item["allowed_operations"] for item in create.await_args.args[1]}
+    assert "google" not in offered
+    assert "google-sheets.new-spreadsheet" in offered["google-sheets"]
+    assert {target["tool_slug"] for effect in create.await_args.args[5]
+            if effect["effect"] == "sheets create" for target in effect["targets"]} == {"google-sheets"}
+    assert preflight_plan(compiled, inventory, manifests, set(), grants).missing_grants == {}
+    assert orchestrator.complete_connection_requirements(KPI_PROMPT, [], inventory, compiled_plan=compiled) == []
+    assert preflight_plan(compiled, inventory, manifests, set(), grants[:1]).missing_grants
+    assert inventory == original
+
+
+def test_connected_route_preference_preserves_real_permissions_and_explicit_choices():
+    inventory, manifests = catalog()
+    native = {"slug": "google", "allowed_operations": ["sheets.kpi.create", "sheets.workbook.get", "gmail.get"]}
+    native_only = prefer_connected_app_routes(KPI_PROMPT, inventory, [native], manifests)
+    assert {item["slug"] for item in native_only} == {"google"}
+    assert "gmail.get" in native_only[0]["allowed_operations"]
+    for grants in [[], [native, inventory[1]], [{"slug": "google-sheets", "allowed_operations": ["google-sheets.get-spreadsheet"]}]]:
+        assert prefer_connected_app_routes(KPI_PROMPT, inventory, grants, manifests) == inventory
+    # A selected route is bounded first; a different connected account cannot
+    # undo that choice or silently turn its catalog into granted permissions.
+    chosen = route_bounded_inventory(inventory, ROUTES)
+    assert prefer_connected_app_routes(KPI_PROMPT, chosen, [native], manifests) == chosen
+    assert prefer_connected_app_routes("Use sheets.kpi.create", inventory, [inventory[1]], manifests) == inventory
 
 
 @pytest.mark.asyncio

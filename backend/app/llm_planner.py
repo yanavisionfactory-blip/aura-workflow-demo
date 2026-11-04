@@ -227,6 +227,10 @@ def _bounded_planning_catalog(payload: dict) -> dict:
         if re.search(r"(?<![\w.-])" + re.escape(operation.casefold()) + r"(?![\w-]|\.\w)", request)
     )
     words = set(re.findall(r"[a-z0-9]{3,}", payload["request"].casefold()))
+    from .selected_tools import selected_tool_targets
+
+    selected = selected_tool_targets(payload.get("selected_tools", []), catalog)
+    selected_pairs = set().union(*selected.values()) if selected else set()
     required_roots = {name.split(".", 1)[0] for _, name in required}
     candidates = []
     for index, item in enumerate(catalog):
@@ -242,6 +246,7 @@ def _bounded_planning_catalog(payload: dict) -> dict:
             scope = module.get("permission_scope")
             score = (
                 10000 * ((slug, name) in required)
+                + 1000 * ((slug, name) in selected_pairs)
                 + 100 * len(words & name_words)
                 + 5 * len(words & description_words)
                 + 20 * (name.split(".", 1)[0] in required_roots and scope == "read")
@@ -249,7 +254,20 @@ def _bounded_planning_catalog(payload: dict) -> dict:
             )
             candidates.append((-score, index, name, module))
 
-    for _, index, name, module in sorted(candidates):
+    # Reserve a useful contract for every selected app before filling the
+    # remaining budget. One large connector must not crowd another app out.
+    reserved = set()
+    for choices in selected.values():
+        best = next((candidate for candidate in sorted(candidates)
+                     if (catalog[candidate[1]]["slug"], candidate[2]) in choices), None)
+        if best:
+            reserved.add((catalog[best[1]]["slug"], best[2]))
+    required.update(reserved)
+    candidates.sort(key=lambda candidate: (
+        (catalog[candidate[1]]["slug"], candidate[2]) not in reserved, candidate,
+    ))
+
+    for _, index, name, module in candidates:
         item = compact[index]
         contract = _compact_operation(module)
         item["allowed_operations"].append(name)
@@ -368,6 +386,9 @@ async def create_llm_plan(
         "Preserve page/time references, distinguish conflicting requests, and leave unresolved "
         "questions open. Never create placeholder revised assets or claim a human approved them. "
         "A real revised file and observed current provider status are needed for re-review. "
+        "selected_tools contains apps explicitly chosen by the user in the composer, even if their names "
+        "are absent from the request text. Use each selected app in a relevant required primary step. "
+        "A backup or a mention in prose does not satisfy a selection. Do not introduce unrelated writes. "
         "Every item in requirements is mandatory. Before returning, verify each "
         "requested external action has a nonoptional step using one of its exact "
         "listed operations and the right tool slug. In particular, an export of "

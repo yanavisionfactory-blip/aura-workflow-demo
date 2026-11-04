@@ -100,7 +100,9 @@ export default function PlanConnectionAlert({
               : progress?.phase === "verifying" ? `Verifying ${connectingTool} access…`
               : `Preparing ${connectingTool} sign-in…`
             : connectionEnabled
-              ? needed.length === 1
+              ? needed.some((tool) => tool.alternativeConnected)
+                ? `Use connected ${needed.find((tool) => tool.alternativeConnected).name}`
+                : needed.length === 1
                 ? needed[0].accessNeeded ? `Update ${needed[0].name} access` : `Connect ${needed[0].name}`
                 : "Connect or update remaining accounts"
               : "Validating required accounts…"}
@@ -143,7 +145,7 @@ export default function PlanConnectionAlert({
                   <span className="text-sm font-medium">{t.name}</span>
                   <span className={`inline-flex items-center gap-1 text-[11px] ${connected ? "text-emerald-400" : "text-amber-400"}`}>
                     {connected && <CheckCircle2 className="h-3 w-3" />}
-                    {connected ? "Ready" : t.accessNeeded ? "More access needed" : "Connection needed"}
+                    {connected ? "Ready" : t.alternativeConnected ? "Connected · update plan" : t.accessNeeded ? "More access needed" : "Connection needed"}
                   </span>
                 </div>
                 {t.reason && (
@@ -153,12 +155,13 @@ export default function PlanConnectionAlert({
                 {!connected && t.alternativeProvider && onSwitchConnection && (
                   <div className="mt-2 rounded-lg border border-primary/25 bg-primary/5 p-2.5">
                     <p className="text-[11px] leading-relaxed text-muted-foreground">
-                      Google blocked AURA sign-in? Use the dedicated {t.name} connection and review a revised plan.
+                      {t.alternativeConnected ? `${t.name} is already connected. Update this older plan to use it, then review the revised steps.`
+                        : `Use the dedicated ${t.name} connection and review a revised plan.`}
                     </p>
                     <button type="button" onClick={() => onSwitchConnection(t)}
                       disabled={isConnecting || !connectionEnabled}
                       className="mt-2 rounded-md border border-primary/40 px-2.5 py-1 text-[11px] text-foreground hover:bg-primary/10 disabled:opacity-50">
-                      Use dedicated {t.name} connection
+                      {t.alternativeConnected ? `Update plan to use connected ${t.name}` : `Use dedicated ${t.name} connection`}
                     </button>
                   </div>
                 )}

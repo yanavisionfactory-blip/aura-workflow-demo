@@ -374,17 +374,6 @@ export default function Demo() {
       setInterpretation(restored.interpretation);
       setPlan(restored);
       setPlanLoading(pending && !run.plan?.steps?.length);
-      if (resumeView === "preview") {
-        setExecSteps(mapRuntimeSteps(run));
-        const preparedSteps = restored.steps.map((step, index) =>
-          resolvedApprovalStep(step, run.steps?.[index], planToolName(run.steps?.[index] || step))
-        );
-        approvedStepsRef.current = preparedSteps;
-        setApprovedSteps(preparedSteps);
-        preparedActionPreviewRef.current = true;
-        setPhase("preview");
-        return;
-      }
       if (resumeView === "recovery") {
         showRunRecovery(run);
         return;
@@ -584,7 +573,7 @@ export default function Demo() {
     if (phase === "confirm") reset();
     else if (phase === "plan") setPhase("confirm");
     else if (phase === "preview") {
-      if (preparedActionPreviewRef.current) reset();
+      if (preparedActionPreviewRef.current) setPhase("executing");
       else setPhase("plan");
     }
     else if (phase === "executing" || phase === "error") {
@@ -1245,7 +1234,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
   const openSavedRunReview = async (runId) => {
     const run = await getPythonRun(runId);
     const preparation = pendingTextPreparation(run);
-    if (savedRunResumeView(run) !== "preview" && !preparation) {
+    if (savedRunResumeView(run, { openPreview: true }) !== "preview" && !preparation) {
       throw new Error("This action is no longer waiting for review. Check the saved run again.");
     }
     reset();
@@ -1467,7 +1456,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
           approvedStepsRef.current = preparedSteps;
           setApprovedSteps(preparedSteps);
           preparedActionPreviewRef.current = true;
-          setPhase("preview");
+          setPhase("executing");
           return;
         }
         if (run.automation_state?.status === "blocked") {
@@ -1904,7 +1893,7 @@ Generate a results summary in plain, human-friendly language (not technical).
                 transition={{ duration: 0.4 }}
                 className="w-full flex justify-center"
               >
-                <PreviewView key={preparedActionPreviewRef.current ? `prepared-${approvedSteps.find((step) => step.approvalId)?.approvalId}` : "planned"} preview={previewData} steps={approvedSteps} activity={execSteps} prepared={preparedActionPreviewRef.current} approvalStep={approvalStep} error={previewError} onApprove={handlePreviewApprove} onBack={() => preparedActionPreviewRef.current ? reset() : setPhase("plan")} />
+                <PreviewView key={preparedActionPreviewRef.current ? `prepared-${approvedSteps.find((step) => step.approvalId)?.approvalId}` : "planned"} preview={previewData} steps={approvedSteps} activity={execSteps} prepared={preparedActionPreviewRef.current} approvalStep={approvalStep} error={previewError} onApprove={handlePreviewApprove} onBack={() => setPhase(preparedActionPreviewRef.current ? "executing" : "plan")} />
               </motion.div>
             )}
 
@@ -1920,6 +1909,8 @@ Generate a results summary in plain, human-friendly language (not technical).
                 <ExecutionView steps={execSteps} currentStepIndex={currentStepIdx} isReal={!mock}
                   verifying={verifyingResult}
                   review={toolReview}
+                  approvalPending={preparedActionPreviewRef.current}
+                  onOpenPreview={() => setPhase("preview")}
                   onCancel={pythonRunIdRef.current ? () => cancelSavedRun({ id: pythonRunIdRef.current }) : undefined}
                   cancelBusy={recoveryBusy} cancelError={recoveryMessage} >
                   <ExecutionToolOutputs steps={execSteps} review={toolReview} reviewBusy={toolReviewBusy} reviewError={toolReviewError}

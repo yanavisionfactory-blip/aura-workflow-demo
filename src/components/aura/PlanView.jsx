@@ -124,6 +124,8 @@ export default function PlanView({
 
   const handleConnectAll = async () => {
     if (connectingRef.current) return;
+    const reusable = needed.find((tool) => connectedAlternatives[tool.key]);
+    if (reusable) return handleSwitchConnection(reusable);
     connectingRef.current = true;
     const recovered = [];
     const authorized = new Map();
@@ -181,6 +183,27 @@ export default function PlanView({
     });
     return () => { active = false; };
   }, [connectionRouteLookup]);
+
+  const [connectedAlternatives, setConnectedAlternatives] = useState({});
+  const alternativesLookup = connectionsReady && onRevisePlan ? JSON.stringify(planTools.flatMap((tool) => {
+    const provider = alternativePlanConnection(tool, CATALOG);
+    return provider ? [{ key: tool.key, name: tool.name, provider }] : [];
+  })) : "[]";
+  useEffect(() => {
+    let active = true;
+    setConnectedAlternatives({});
+    Promise.allSettled(JSON.parse(alternativesLookup).map(async (tool) => {
+      const account = await getToolConnection(tool.name, null, tool.provider, { exactProvider: true });
+      if (!account?.id || !account.enabled || !account.allowed_operations?.length) return null;
+      if (!isVerifiedConnection(await testPythonConnection(account.id))) return null;
+      return tool.key;
+    })).then((results) => {
+      if (active) setConnectedAlternatives(Object.fromEntries(results
+        .filter((result) => result.status === "fulfilled" && result.value)
+        .map((result) => [result.value, true])));
+    });
+    return () => { active = false; };
+  }, [alternativesLookup]);
 
   // AURA handles connector discovery and setup. The only thing a user may need
   // to do is grant the provider's required account permission.
@@ -470,6 +493,7 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
       <PlanConnectionAlert
         tools={planTools.filter((tool) => catalogEntryFor(tool.name)).map((tool) => ({
           ...tool, alternativeProvider: onRevisePlan ? alternativePlanConnection(tool, CATALOG) : null,
+          alternativeConnected: Boolean(connectedAlternatives[tool.key]),
         }))}
         connections={effectiveConnections}
         connectingTool={connectingTool}

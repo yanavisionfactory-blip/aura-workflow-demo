@@ -72,8 +72,9 @@ test("execution waits on saved tool output and does not invent previews for pend
     output: { operation: "anthropic.chat", critic: { action: "accept" }, outcome_check: { status: "verified" },
       provider_result: { ret: { content: [{ type: "text", text: "## September 2026\nRevenue, targets and actuals." }] } } } };
   const html = renderExecution([draft, pending], { step_id: "draft", step_ids: ["draft"], tool_slug: "anthropic", operation: "anthropic.chat", next_tool_slug: "google", next_operation: "sheets.append", is_final: false });
-  for (const text of ["Tool output checkpoint", "Claude output preview", "September 2026", "Continue to Google Sheets", "paused until you continue", "Your place is saved"]) assert.ok(html.includes(text), text);
-  assert.doesNotMatch(html, /Google Sheets output preview|Saved Google Sheets cells/);
+  for (const text of ["Tool output checkpoint", "Preview Claude", "Continue to Google Sheets", "paused until you continue", "Your place is saved"]) assert.ok(html.includes(text), text);
+  assert.doesNotMatch(html, /output preview|September 2026|Saved Google Sheets cells/);
+  assert.ok(html.indexOf('aria-label="Execution steps"') < html.indexOf('aria-label="Tool output checkpoint"'));
   const final = renderExecution([draft], { step_id: "draft", step_ids: ["draft"], is_final: true });
   assert.match(final, /Continue to results/);
 });

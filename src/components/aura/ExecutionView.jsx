@@ -5,7 +5,7 @@ import { toolResultName } from "@/lib/toolResultViews.mjs";
 
 const STEP_DURATION = 2.6; // seconds per step (for ETA)
 
-export default function ExecutionView({ steps, currentStepIndex, isReal, verifying = false, onCancel, cancelBusy = false, cancelError = "", demo = false, review, children }) {
+export default function ExecutionView({ steps, currentStepIndex, isReal, verifying = false, onCancel, cancelBusy = false, cancelError = "", demo = false, review, approvalPending = false, onOpenPreview, children }) {
   const reviewTool = toolResultName(review?.tool_slug, review?.operation);
   const stepCount = steps.length;
   const completedCount = steps.filter((s) => s.status === "completed").length;
@@ -14,7 +14,7 @@ export default function ExecutionView({ steps, currentStepIndex, isReal, verifyi
   const progress = stepCount ? (completedCount / stepCount) * 100 : 0;
   const remaining = Math.max(0, stepCount - completedCount);
   const etaSecs = remaining > 0 && !failed ? remaining * STEP_DURATION : 0;
-  const eta = failed || review
+  const eta = failed || review || approvalPending
     ? null
     : isReal
     ? remaining > 0
@@ -36,11 +36,11 @@ export default function ExecutionView({ steps, currentStepIndex, isReal, verifyi
         <div className="flex items-center gap-3">
           <div className="relative p-2 rounded-xl bg-accent/10 border border-accent/20">
             <Activity className="w-5 h-5 text-accent" />
-            {failed || review ? null : <div className="absolute inset-0 rounded-xl bg-accent/20 animate-pulse" />}
+            {failed || review || approvalPending ? null : <div className="absolute inset-0 rounded-xl bg-accent/20 animate-pulse" />}
           </div>
           <div>
             <h2 className="text-lg font-semibold">
-              {review ? `Review ${reviewTool} output` : failed ? "Workflow paused" : verifying ? "Checking the final result" : recovering
+              {approvalPending ? "Execution paused for approval" : review ? `${reviewTool} finished · execution paused` : failed ? "Workflow paused" : verifying ? "Checking the final result" : recovering
                 ? steps.some((step) => step.jiraTasks?.length) ? "Checking your Jira tasks" : "Checking your results"
                 : demo ? "Playing the prepared workflow" : "Running your workflow"}
             </h2>
@@ -70,22 +70,29 @@ export default function ExecutionView({ steps, currentStepIndex, isReal, verifyi
         />
       </div>
 
-      {children}
-
       <motion.div
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         className="mt-2"
+        aria-label="Execution steps"
       >
         {steps.map((step, i) => (
           <ExecutionStep key={i} step={step} index={i} isLast={i === steps.length - 1} />
         ))}
       </motion.div>
 
+      {approvalPending && <section aria-label="Action awaiting approval" className="mt-6 flex flex-wrap items-center justify-between gap-4 rounded-xl border border-primary/25 bg-primary/5 p-4">
+        <div><h3 className="text-sm font-semibold">Your action is ready to preview</h3>
+          <p className="mt-1 text-xs text-muted-foreground">Execution is paused. Open the preview to review and approve the exact changes.</p></div>
+        <button type="button" onClick={onOpenPreview} className="rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white hover:bg-primary/90">Open action preview</button>
+      </section>}
+
+      {children && <div className="mt-6 border-t border-white/10 pt-5">{children}</div>}
+
       {!failed && (
         <div className="flex items-center justify-center gap-1.5 mt-4 text-[11px] text-muted-foreground/50">
           <Clock className="w-3 h-3" />
-          {demo ? "Local demo playback · no provider calls or external changes" : review ? "Your place is saved. You can return to this review later." : "Outputs appear here as each tool finishes."}
+          {demo ? "Local demo playback · no provider calls or external changes" : review || approvalPending ? "Your place is saved. You can return to this review later." : "Outputs appear here as each tool finishes."}
         </div>
       )}
       {isReal && onCancel && (

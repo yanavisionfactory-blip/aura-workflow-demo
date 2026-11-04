@@ -57,6 +57,55 @@ after(async () => {
   if (temporary) fs.rmSync(temporary, { recursive: true, force: true });
 });
 
+test("an older blocked plan offers its existing Sheets account without another consent flow", async () => {
+  localStorage.setItem("aura_python_workspace_id", "test-workspace");
+  const revisions = [], approvals = [], requests = [];
+  window.open = () => { throw new Error("An existing Sheets account must not open OAuth"); };
+  globalThis.fetch = async (url) => {
+    const { pathname } = new URL(url);
+    requests.push(pathname);
+    if (pathname === "/v1/managed-connectors/status") return Response.json({ marketplace: [
+      { display_name: "Google Workspace", provider: "google", connection_backend: "nango", connectable: true },
+      { display_name: "Google Sheets", provider: "google-sheets", connection_backend: "pipedream", connectable: true },
+    ] });
+    if (pathname === "/v1/connector-broker/apps") return Response.json({ apps: [
+      { display_name: "Google Sheets", provider: "google-sheets", connection_backend: "pipedream", connectable: true },
+    ] });
+    if (pathname === "/v1/tools") return Response.json([{ id: "existing-sheets", slug: "google-sheets",
+      display_name: "Google Sheets", connection_backend: "pipedream", kind: "oauth", enabled: true,
+      allowed_operations: ["google-sheets.new-spreadsheet", "google-sheets.get-spreadsheet"] }]);
+    if (pathname === "/v1/connections/existing-sheets/test") return Response.json({ status: "verified", verification: { ok: true } });
+    throw new Error(`Unexpected request: ${pathname}`);
+  };
+  const plan = { workflowName: "Plantea KPI dashboard", steps: [{ title: "Create workbook", tool: "Google Sheets",
+    toolSlug: "google", operation: "sheets.kpi.create", action: "Create the KPI workbook" }],
+    connectionChecklist: [{ provider_hint: "google", canonical_provider: "google", status: "required",
+      reason: "Authorize exact operations for google", required_permissions: ["sheets.kpi.create"] }] };
+  const original = JSON.stringify(plan);
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(React.createElement(PlanView, {
+      plan, onApprove: () => approvals.push(true), onRevisePlan: (...args) => { revisions.push(args); return { ok: true }; },
+    })));
+    const reuse = [...container.querySelectorAll("button")].find((button) => button.textContent === "Use connected Google Sheets");
+    assert.ok(reuse);
+    assert.match(container.textContent, /Google Sheets is already connected/);
+    assert.doesNotMatch(container.textContent, /More access needed/);
+    assert.equal(revisions.length, 0, "viewing a saved plan never changes it automatically");
+    await act(async () => Simulate.click(reuse));
+    assert.equal(revisions.length, 1);
+    assert.deepEqual(revisions[0][1], { connectionRoutes: { sheets: "google-sheets" } });
+    assert.deepEqual(approvals, []);
+    assert.ok(requests.every((path) => !path.endsWith("/session")));
+    assert.equal(JSON.stringify(plan), original, "the old plan is replaced only after a reviewed recompilation");
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
 test("the checklist cancels preparation, retries with a focusable sign-in window, and preserves the plan", async () => {
   localStorage.setItem("aura_python_workspace_id", "test-workspace");
   localStorage.setItem("aura_active_python_run_id", "saved-run");

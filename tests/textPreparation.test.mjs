@@ -11,6 +11,7 @@ const run = () => ({ id: "run", plan_approved: true, status: "awaiting_approval"
 test("Start and restored runs generate certified text before displaying a review", async () => {
   const value = run();
   assert.equal(savedRunResumeView(value), "execution");
+  assert.equal(savedRunResumeView(value, { openPreview: true }), "execution");
   const calls = [], attempted = new Set();
   const decide = async (...args) => calls.push(args);
   assert.equal(await continueTextPreparation(value, decide, attempted), true);
@@ -23,7 +24,7 @@ test("tool names and planner classifications never authorize external writes", (
   const value = run();
   delete value.steps[0].preparation_only;
   assert.equal(pendingTextPreparation(value), null);
-  assert.equal(savedRunResumeView(value), "preview");
+  assert.equal(savedRunResumeView(value, { openPreview: true }), "preview");
   value.steps.unshift({ ...value.steps[0], id: "sheet", operation: "sheets.append" });
   value.steps[1].preparation_only = true;
   assert.equal(pendingTextPreparation(value), null);
