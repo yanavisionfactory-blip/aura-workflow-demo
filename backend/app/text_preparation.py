@@ -27,6 +27,5 @@ def is_text_preparation(manifest: dict, step: dict, arguments: dict) -> bool:
         and broker.get("provider") == "anthropic"
         and schema.get("type") == "object"
         and schema.get("additionalProperties") is False
-        and {"userMessage", "model", "maxTokensToSample"} <= properties
-        and properties <= set(ClaudeTextRequest.model_fields)
+        and {"userMessage", "model", "maxTokensToSample"} <= properties <= set(ClaudeTextRequest.model_fields)
     )

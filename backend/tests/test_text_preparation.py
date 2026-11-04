@@ -4,9 +4,18 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app import main, orchestrator
-from app.models import (Approval, ApprovalSnapshot, CapabilityManifest, PlanVersion,
-                        RunStatus, RunStep, StepAttempt, StepStatus, ToolConnection,
-                        ToolKind, WorkflowRun)
+from app.models import (
+    Approval,
+    ApprovalSnapshot,
+    CapabilityManifest,
+    PlanVersion,
+    RunStep,
+    StepAttempt,
+    StepStatus,
+    ToolConnection,
+    ToolKind,
+    WorkflowRun,
+)
 from app.pipedream_connect import compile_action_manifest
 from app.policy import canonical_plan_hash
 from app.schemas import ApprovalDecision, CriticDecision, PlanStep, ToolOutputReviewDecision
