@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -59,6 +60,37 @@ async def test_saved_identity_only_plan_cannot_start_customer_followups(database
         assert exc.value.status_code == 422
         assert "gmail send" in str(exc.value.detail)
         assert (await session.get(WorkflowRun, run_id)).plan_approved is False
+
+
+async def test_saved_report_with_invalid_nested_input_cannot_start(database, monkeypatch):
+    workspace_id, run_id = str(uuid4()), str(uuid4())
+    plan = WorkflowPlan(name="Synthetic review", interpretation="Review supplied evidence", steps=[
+        PlanStep(key="report", agent="AURA", tool_slug="aura", operation="report.compose",
+                 arguments={"title": "Review", "instructions": "Summarize the source",
+                            "sources": [{"id": "ClientContext", "title": "Client context",
+                                         "content": "{{inputs.attached_documents.0.campaign_context}}"}]},
+                 reason="Compose review", expected_output="Report draft"),
+    ])
+    dispatch = AsyncMock()
+    monkeypatch.setattr(main, "dispatch_pending", dispatch)
+    async with database() as session:
+        session.add(Workspace(id=workspace_id, name="Input validation"))
+        run = WorkflowRun(id=run_id, workspace_id=workspace_id,
+                          prompt="Prepare a review from supplied evidence",
+                          inputs={"attached_documents": [{"name": "campaign.json",
+                                  "file_url": "data:application/json;base64,e30="}]},
+                          plan=plan.model_dump(mode="json"), status=RunStatus.awaiting_approval)
+        session.add(run)
+        await session.commit()
+        with pytest.raises(HTTPException) as exc:
+            await main.approve_plan(run_id, PlanApproval(approved=True),
+                                   SimpleNamespace(workspace_id=workspace_id, subject="owner", role="owner"),
+                                   session)
+        assert exc.value.status_code == 422
+        assert "inputs.attached_documents.0.campaign_context" in str(exc.value.detail)
+        assert run.plan_approved is False
+        assert run.status == RunStatus.awaiting_approval
+        dispatch.assert_not_awaited()
 
 
 async def test_old_review_missing_gmail_readback_becomes_connection_wait(monkeypatch, database):
