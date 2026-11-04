@@ -157,6 +157,8 @@ function popupBrowser({ forbidDocument = false } = {}) {
       let crossOrigin = false;
       const popup = {
         closed: false,
+        focusCount: 0,
+        focus() { this.focusCount += 1; },
         get document() {
           if (crossOrigin || forbidDocument) throw new DOMException("Blocked access to a cross-origin document", "SecurityError");
           return document;
@@ -419,4 +421,110 @@ test("the connection reconnect endpoint can navigate a cross-origin popup", asyn
   assert.equal(result.connected, true);
   assert.equal(window.destinations.at(-1), authorization_url);
   assert.equal(popup.closed, true);
+});
+
+test("cancelling managed consent releases a hung sync and ignores its late success", async () => {
+  const { saved } = setup();
+  globalThis.window = popupBrowser();
+  const controller = new AbortController();
+  const progress = [], requests = [];
+  let finishSync, syncSignal, markStarted;
+  const started = new Promise((resolve) => { markStarted = resolve; });
+  globalThis.fetch = (url, options) => {
+    requests.push(new URL(url).pathname);
+    syncSignal = options.signal;
+    markStarted();
+    // Deliberately ignore abort, like a response already queued by the browser.
+    return new Promise((resolve) => { finishSync = resolve; });
+  };
+  const pending = flow.authorizeManagedConnector("google", 1000, null,
+    { connect_link: "https://connect.example.invalid/google", tool_connection_id: "google-account" },
+    { signal: controller.signal, onProgress: (value) => progress.push(value) });
+  await started;
+  assert.equal(progress.at(-1).phase, "waiting");
+  progress.at(-1).focus();
+  assert.equal(window.popups[0].focusCount, 1);
+  controller.abort(new Error("Connection cancelled. Your plan is unchanged."));
+  await assert.rejects(pending, /Connection cancelled/);
+  assert.equal(window.popups[0].closed, true);
+  assert.equal(syncSignal.aborted, true);
+  finishSync(Response.json({ connected: true, tool_id: "google-account" }));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(requests, ["/v1/managed-connectors/google/sync"]);
+  assert.equal(progress.length, 1, "no verification or success after cancellation");
+  assert.equal(saved.get("aura_active_python_run_id"), "saved-run");
+});
+
+test("the managed consent deadline closes the popup even when sync never returns", async () => {
+  setup();
+  globalThis.window = popupBrowser();
+  let syncSignal;
+  globalThis.fetch = (_url, options) => { syncSignal = options.signal; return new Promise(() => {}); };
+  await assert.rejects(flow.authorizeManagedConnector("google", 30, null,
+    { connect_link: "https://connect.example.invalid/google" }), /Sign-in timed out/);
+  assert.equal(syncSignal.aborted, true);
+  assert.equal(window.popups[0].closed, true);
+});
+
+test("managed consent stops after repeated service failures instead of hiding them for ten minutes", async () => {
+  setup();
+  globalThis.window = popupBrowser();
+  const progress = [];
+  let attempts = 0;
+  globalThis.fetch = async () => {
+    attempts += 1;
+    return Response.json({ detail: "Connection check is unavailable" }, { status: 503 });
+  };
+  await assert.rejects(flow.authorizeManagedConnector("google", 1000, null,
+    { connect_link: "https://connect.example.invalid/google" },
+    { onProgress: (value) => progress.push(value.phase) }), /Connection check is unavailable/);
+  assert.equal(attempts, 3);
+  assert.deepEqual(progress, ["waiting", "retrying", "retrying"]);
+  assert.equal(window.popups[0].closed, true);
+});
+
+test("cancelling native consent removes its callback listener while a read is stalled", async () => {
+  setup();
+  globalThis.window = popupBrowser();
+  const controller = new AbortController();
+  globalThis.fetch = () => new Promise(() => {});
+  const pending = flow.authorizeOAuth("google", 1000, null,
+    { authorization_url: "https://accounts.example.invalid/google" }, { signal: controller.signal });
+  assert.equal(window.listeners.has("message"), true);
+  controller.abort(new Error("Connection cancelled"));
+  await assert.rejects(pending, /Connection cancelled/);
+  assert.equal(window.listeners.size, 0);
+  assert.equal(window.popups[0].closed, true);
+});
+
+test("Connect can time out during account discovery and closes its synchronously reserved window", async () => {
+  googleConnectionSelection([]);
+  globalThis.fetch = () => new Promise(() => {});
+  const pending = flow.connectTool("Google Sheets", { provider: "google", timeoutMs: 30 });
+  assert.equal(window.popups.length, 1);
+  await assert.rejects(pending, /Sign-in timed out/);
+  assert.equal(window.popups[0].closed, true);
+});
+
+test("a request deadline still applies with an external abort signal and aborts the fetch", async () => {
+  setup();
+  const controller = new AbortController();
+  let requestSignal;
+  globalThis.fetch = (_url, options) => { requestSignal = options.signal; return new Promise(() => {}); };
+  await assert.rejects(flow.auraRequest("/v1/tools", { signal: controller.signal, timeoutMs: 30 }), /took too long/);
+  assert.equal(requestSignal.aborted, true);
+  assert.equal(controller.signal.aborted, false);
+});
+
+test("request deadlines include a stalled token lookup and prevent a late network request", async () => {
+  setup();
+  let finishToken, requests = 0;
+  flow.setAuraTokenProvider(() => new Promise((resolve) => { finishToken = resolve; }));
+  globalThis.fetch = async () => { requests += 1; return Response.json([]); };
+  try {
+    await assert.rejects(flow.auraRequest("/v1/tools", { timeoutMs: 30 }), /took too long/);
+    finishToken("late-token");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(requests, 0);
+  } finally { flow.setAuraTokenProvider(async () => "test-user-token"); }
 });
