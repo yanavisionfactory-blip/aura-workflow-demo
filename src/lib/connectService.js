@@ -16,6 +16,7 @@ import {
 } from "@/lib/auraApi";
 import {
   CATALOG,
+  catalogEntryFor,
   ensurePlanConnectionRoute,
   providerForTool,
   replaceToolCatalog,
@@ -43,23 +44,32 @@ export async function connectTool(toolName, opts = {}) {
   }
   clearAuthorizationNavigation();
   const requestedProvider = String(opts.provider || "").trim().toLowerCase();
-  const entry = await ensurePlanConnectionRoute(toolName, requestedProvider, searchConnectorBrokerApps);
-  if (!entry?.connectable || !entry.provider) {
-    throw new Error(
-      `${toolName} is not available as a verified one-click connector yet. ` +
-      "Your work remains saved and no API key or MCP setup is required from you."
-    );
-  }
-
-  const requestedRoute = entry.routes?.find(
-    (route) => route.provider === requestedProvider && route.connectable
-  );
-  if (requestedProvider && !requestedRoute) {
-    throw new Error(`${toolName} needs its exact plan connection. This connector route is not available for one-click access yet.`);
-  }
-  const provider = requestedRoute?.provider || entry.provider;
+  // Reserve a native consent window in the click's user gesture, before any
+  // catalog/account request. Otherwise Safari can silently block Update access.
   let authorizationWindow = null;
   try {
+    const knownEntry = catalogEntryFor(toolName);
+    const knownRoute = knownEntry?.routes?.find((route) => route.provider === requestedProvider);
+    const knownAccount = opts.connectionId
+      ? hydratedTools?.find((tool) => tool.id === opts.connectionId) : null;
+    const knownProvider = knownAccount?.slug || requestedProvider || knownEntry?.provider;
+    const knownBackend = knownAccount?.connection_backend || knownRoute?.connectionBackend || knownEntry?.connectionBackend;
+    if (knownEntry?.connectable && knownProvider && !usesSameTabAuthorization(knownProvider, knownAccount)
+      && !["pipedream", "wordpress_plugin", "shopify_client_credentials"].includes(knownBackend)) {
+      authorizationWindow = reserveAuthorizationWindow(knownProvider);
+    }
+    const entry = await ensurePlanConnectionRoute(toolName, requestedProvider, searchConnectorBrokerApps);
+    if (!entry?.connectable || !entry.provider) {
+      throw new Error(`${toolName} is not available as a verified one-click connector yet. ` +
+        "Your work remains saved and no API key or MCP setup is required from you.");
+    }
+    const requestedRoute = entry.routes?.find(
+      (route) => route.provider === requestedProvider && route.connectable
+    );
+    if (requestedProvider && !requestedRoute) {
+      throw new Error(`${toolName} needs its exact plan connection. This connector route is not available for one-click access yet.`);
+    }
+    const provider = requestedRoute?.provider || entry.provider;
     const existing = await getToolConnection(toolName, opts.connectionId, provider, {
       // A fresh Connect action must keep the preferred provider shown on the
       // card. A broad Google Workspace entry is not a Google Sheets account
@@ -69,7 +79,7 @@ export async function connectTool(toolName, opts = {}) {
     const authorizationProvider = existing?.slug || provider;
     const backend = existing?.connection_backend || requestedRoute?.connectionBackend || entry.connectionBackend;
     const sameTab = usesSameTabAuthorization(authorizationProvider, existing);
-    if (!sameTab && !["pipedream", "wordpress_plugin", "shopify_client_credentials"].includes(backend)) authorizationWindow = reserveAuthorizationWindow(authorizationProvider);
+    if (!authorizationWindow && !sameTab && !["pipedream", "wordpress_plugin", "shopify_client_credentials"].includes(backend)) authorizationWindow = reserveAuthorizationWindow(authorizationProvider);
     const result = await authorizeConnectorBroker(authorizationProvider, {
       connection: existing,
       timeoutMs: 600000,

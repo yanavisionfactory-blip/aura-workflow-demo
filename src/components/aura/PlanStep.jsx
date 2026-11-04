@@ -72,23 +72,10 @@ export default function PlanStep({ step, index, isLast, provided, onChange, onDe
     setError("");
     try {
       if (onRequestChange) {
-        const revision = onRequestChange(text);
-        // The parent displays compilation progress and the resulting plan.
-        // Holding this editor open until a remote planner finishes makes a
-        // simple tool change look as though its button has frozen.
+        const result = await onRequestChange(text);
+        if (result?.ok === false) throw new Error(result.error || "AURA couldn't update this step.");
         setChanging(false);
         setChangeText("");
-        void Promise.resolve(revision).then((result) => {
-          if (result?.ok === false) {
-            setChanging(true);
-            setChangeText(text);
-            setError(result.error || "AURA couldn't update this step.");
-          }
-        }).catch((cause) => {
-          setChanging(true);
-          setChangeText(text);
-          setError(cause?.message || "AURA couldn't update this step.");
-        });
         return;
       }
       const res = await base44.integrations.Core.InvokeLLM({

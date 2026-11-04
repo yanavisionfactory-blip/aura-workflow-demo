@@ -49,7 +49,7 @@ import {
   shouldStartFreshPlanningRun,
   unavailablePlanningState,
 } from "@/lib/planningFlow.mjs";
-import { campaignRepeatPrompt, hasDurablePlan, planningRequestPrompt, savedRunResumeView, sameExecutablePlan, shouldRestoreRememberedRun, workflowInputPrompt } from "@/lib/runtimePlan.mjs";
+import { campaignRepeatPrompt, hasDurablePlan, planningRequestPrompt, savedRunResumeView, planningRevisionOutcome, shouldRestoreRememberedRun, workflowInputPrompt } from "@/lib/runtimePlan.mjs";
 import { operationStepTitle, weatherStepTitle } from "@/lib/planPresentation.mjs";
 import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
 import { savedRunResults } from "@/lib/savedRunResults.mjs";
@@ -221,6 +221,7 @@ const uiPlanFromRun = (run) => ({
     ? `Planned in ${(run.plan.planning_artifacts.timings_ms.total / 1000).toFixed(1)}s`
     : "Ready to start",
   steps: (run.plan?.steps || []).map(uiPlanStepFromRun),
+  omittedTools: run.plan?.steps?.length ? run.inputs?.excluded_tool_families || [] : [],
 });
 
 const uiConnectionPlanFromRun = (run, interpretation) => ({
@@ -301,6 +302,8 @@ export default function Demo() {
   const [interpretation, setInterpretation] = useState("");
   const [interpretationLoading, setInterpretationLoading] = useState(false);
   const [planLoading, setPlanLoading] = useState(false);
+  const planningInFlightRef = useRef(false);
+  planningInFlightRef.current = planLoading;
   const [plan, setPlan] = useState(null);
   const [results, setResults] = useState(null);
   const [recoveryRun, setRecoveryRun] = useState(null);
@@ -657,6 +660,37 @@ Write ONE clear, conversational sentence restating what they want — but offer 
       });
   }, [interpretation]);
 
+  const acceptPlanningResult = useCallback(async (run, confirmedIntent, revision, generation) => {
+    const waiting = planningDisposition(run) === "connection";
+    const completedPlan = waiting
+      ? { ...uiConnectionPlanFromRun(run, confirmedIntent), provisional: false, compileState: "waiting_for_connection" }
+      : { ...uiPlanFromRun(run), provisional: false, compileState: "ready" };
+    const outcome = planningRevisionOutcome(confirmedIntent, revision, run.plan?.steps || []);
+    if (outcome.status === "unchanged") {
+      await cancelPythonRun(run.id);
+      if (generation !== pythonPollGenerationRef.current) return { ok: false, error: "A newer plan is being prepared." };
+      forgetActivePythonRun(run.id);
+      pythonRunIdRef.current = null;
+      pythonPlanRef.current = null;
+      runRequestKeyRef.current = null;
+      setPlan({ ...completedPlan, provisional: true, compileState: "blocked", compileError: outcome.error });
+      return { ok: false, error: outcome.error };
+    }
+    pythonPlanRef.current = run.plan || null;
+    if (outcome.status === "applied") {
+      originalPromptRef.current = outcome.interpretation;
+      setOriginalPrompt(outcome.interpretation);
+      setInterpretation(outcome.interpretation);
+      pendingPlanRevisionRef.current = null;
+      const revisedPlan = { ...completedPlan, interpretation: outcome.interpretation, appliedRevision: outcome.instruction };
+      setPlan(revisedPlan);
+      return { ok: true, plan: revisedPlan };
+    }
+    setPlan(completedPlan);
+    if (outcome.status === "pending") return { ok: false, error: "Your change is saved. Connect the required account to finish updating this plan." };
+    return { ok: true, plan: completedPlan };
+  }, []);
+
   // ---- Confirm interpretation ----
   const handleConfirm = useCallback(
     (editedInterpretation, revisionInstruction = "") => {
@@ -672,6 +706,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
       const selectedTools = userSelectedToolsRef.current.filter(
         (tool) => !omittedToolsRef.current.includes(tool)
       );
+      planningInFlightRef.current = true;
       setPlanLoading(true);
       setPhase("plan");
 
@@ -728,60 +763,31 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             if (disposition === "review" || disposition === "connection") break;
             if (disposition === "unavailable") {
               pythonPlanRef.current = run.plan || null;
-              const unavailable = run.plan?.steps?.length
+              const unavailable = revisionInstruction
+                ? { ...reviewedPlanRef.current, provisional: true, compileState: "blocked",
+                    appliedRevision: "", compileError: run.error || run.blocker?.message || "AURA couldn't update this plan. Please try again." }
+                : run.plan?.steps?.length
                 ? { ...uiPlanFromRun(run), provisional: true, compileState: "blocked",
                     compileError: run.error || run.blocker?.message }
                 : { ...unavailablePlanningState(run), interpretation: confirmedIntent };
               setPlan(unavailable);
               setPhase("plan");
-              return;
+              return { ok: false, error: unavailable.compileError || unavailable.error };
             }
             await new Promise((resolve) => setTimeout(resolve, PLANNING_POLL_INTERVAL_MS));
           }
-          pythonPlanRef.current = run.plan || null;
-          if (planningDisposition(run) === "connection") {
-            const connectionPlan = {
-              ...uiConnectionPlanFromRun(run, confirmedIntent),
-              provisional: false, compileState: "waiting_for_connection",
-            };
-            setPlan(connectionPlan);
-            setPhase("plan");
-            if (revisionInstruction) return { ok: false, error: "Connect the required account before revising this plan." };
-            return;
-          }
-          const completedPlan = { ...uiPlanFromRun(run), provisional: false, compileState: "ready" };
-          if (revisionInstruction && reviewedSteps.length
-            && sameExecutablePlan(reviewedSteps, run.plan?.steps || [])) {
-            await cancelPythonRun(created.id);
-            forgetActivePythonRun(created.id);
-            pythonRunIdRef.current = null;
-            pythonPlanRef.current = null;
-            runRequestKeyRef.current = null;
-            const error = "AURA returned the original plan without applying your change. Try a more specific edit.";
-            setPlan({ ...completedPlan, provisional: true, compileState: "blocked", compileError: error });
-            setPhase("plan");
-            return { ok: false, error };
-          }
-          if (revisionInstruction) {
-            // A successful edit becomes the saved workflow's intent, including
-            // its source correction, so a later rerun does not use the old scope.
-            const revisedIntent = `${confirmedIntent}\n\n${revisionInstruction.trim()}`;
-            originalPromptRef.current = revisedIntent;
-            setOriginalPrompt(revisedIntent);
-            setInterpretation(revisedIntent);
-            const revisedPlan = { ...completedPlan, interpretation: revisedIntent };
-            setPlan(revisedPlan);
-            pendingPlanRevisionRef.current = null;
-            return { ok: true, plan: revisedPlan };
-          }
-          setPlan(completedPlan);
+          return await acceptPlanningResult(run, confirmedIntent,
+            { instruction: revisionInstruction, reviewedSteps }, generation);
         } catch (error) {
           if (generation !== pythonPollGenerationRef.current) return;
           console.warn("LLM planning unavailable", error);
           pythonPlanRef.current = null;
           const failed = {
-            interpretation: confirmedIntent, steps: [], provisional: true,
+            ...(revisionInstruction ? reviewedPlanRef.current : {}),
+            interpretation: confirmedIntent,
+            steps: revisionInstruction ? reviewedPlanRef.current?.steps || [] : [], provisional: true,
             compileState: "blocked",
+            appliedRevision: "",
             compileError: error?.message || "AURA couldn't prepare this plan. Please try again.",
           };
           setPlan(failed);
@@ -792,7 +798,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
         }
       })();
     },
-    []
+    [acceptPlanningResult]
   );
 
   // handleSubmit is declared earlier for the existing recovery callbacks; the
@@ -870,8 +876,11 @@ Write ONE clear, conversational sentence restating what they want — but offer 
     return handleConfirm(interpretation, pendingPlanRevisionRef.current?.instruction || "");
   }, [handleConfirm, interpretation]);
 
-  const handlePlanningConnectionRecovered = async (recoveries) => {
-    const runId = pythonRunIdRef.current;
+  const handlePlanningConnectionRecovered = async (recoveries, runId) => {
+    if (planningInFlightRef.current) return;
+    if (runId !== pythonRunIdRef.current) return;
+    const generation = ++pythonPollGenerationRef.current;
+    const isCurrent = () => generation === pythonPollGenerationRef.current && runId === pythonRunIdRef.current;
     const connections = Array.isArray(recoveries) ? recoveries : [];
     const connectionIds = [...new Set(connections.map((item) => item?.connectionId).filter(Boolean))];
     if (!runId || connectionIds.length === 0) return handleRetryPlanning();
@@ -884,26 +893,18 @@ Write ONE clear, conversational sentence restating what they want — but offer 
     try {
       for (const connectionId of connectionIds) {
         const latest = await getPythonRun(runId);
+        if (!isCurrent()) return;
         if (!["waiting_for_action"].includes(latest.status)) break;
         await resumePythonRunAfterConnection(runId, connectionId);
       }
-      const generation = ++pythonPollGenerationRef.current;
+      if (!isCurrent()) return;
       for (;;) {
         const run = await getPythonRunResilient(runId, generation);
-        if (!run) return;
+        if (!run || !isCurrent()) return;
         const disposition = planningDisposition(run);
-        if (disposition === "review") {
-          pythonPlanRef.current = run.plan;
-          const ready = { ...uiPlanFromRun(run), provisional: false, compileState: "ready" };
-          setPlan(ready);
-          return;
-        }
-        if (disposition === "connection") {
-          pythonPlanRef.current = run.plan || null;
-          const connectionPlan = { ...uiConnectionPlanFromRun(run, interpretation),
-            provisional: false, compileState: "waiting_for_connection" };
-          setPlan(connectionPlan);
-          return;
+        if (disposition === "review" || disposition === "connection") {
+          return await acceptPlanningResult(run, interpretation,
+            pendingPlanRevisionRef.current || {}, generation);
         }
         if (disposition === "unavailable") {
           throw new Error(run.error || "AURA could not resume planning after the connection was verified.");
@@ -911,7 +912,9 @@ Write ONE clear, conversational sentence restating what they want — but offer 
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     } catch (error) {
+      if (!isCurrent()) return;
       const latest = await getPythonRun(runId).catch(() => null);
+      if (!isCurrent()) return;
       const authoritative = latest && planningDisposition(latest) === "connection"
         ? uiConnectionPlanFromRun(latest, interpretation)
         : null;
@@ -924,7 +927,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
         compileError: error?.message || "AURA couldn't resume executable validation right now.",
       }));
     } finally {
-      setPlanLoading(false);
+      if (isCurrent()) setPlanLoading(false);
     }
   };
 
@@ -1804,6 +1807,7 @@ Generate a results summary in plain, human-friendly language (not technical).
     }
   }
   const activeRecovery = recoveryRun ? recoveryForRun(recoveryRun) : null;
+  const renderedPlanningRunId = pythonRunIdRef.current;
 
   return (
     <>
@@ -1850,26 +1854,32 @@ Generate a results summary in plain, human-friendly language (not technical).
                 transition={{ duration: 0.4 }}
                 className="w-full flex justify-center"
               >
-                {planLoading ? (
+                {planLoading && !plan ? (
                   <div className="flex flex-col items-center gap-4">
                     <ThinkingAnimation />
                     <p className="text-sm text-muted-foreground">AURA is building your plan…</p>
                   </div>
                 ) : plan ? (
-                  <PlanView
-                    backendRunId={pythonRunIdRef.current}
-                    backendPlan={pythonPlanRef.current}
-                    plan={plan}
-                    onApprove={handleApprove}
-                    onRevisePlan={originalPrompt.startsWith("AURA_PILOT_V1\n") ? handlePilotRevision : handlePlanRevision}
-                    onRetryPlan={originalPrompt.startsWith("AURA_PILOT_V1\n") ? handlePilotRevision : handleRetryPlanning}
-                    onConnectionRecovered={handlePlanningConnectionRecovered}
-                    onSkipTool={originalPrompt.startsWith("AURA_PILOT_V1\n") ? undefined : handleSkipTool}
-                    onReplaceTool={originalPrompt.startsWith("AURA_PILOT_V1\n") ? undefined : handleReplaceTool}
-                    omittedTools={omittedToolsRef.current}
-                    onBack={originalPrompt.startsWith("AURA_PILOT_V1\n") ? handlePilotRevision : () => setPhase("confirm")}
-                    approveLabel={editRunMode ? "Review changes" : "Start"}
-                  />
+                  <div className="w-full max-w-5xl" aria-busy={planLoading}>
+                    {planLoading && <p role="status" className="mb-4 text-sm text-primary">Updating your plan…</p>}
+                    <fieldset disabled={planLoading} className="min-w-0 border-0 p-0 m-0">
+                      <PlanView
+                        busy={planLoading}
+                        backendRunId={pythonRunIdRef.current}
+                        backendPlan={pythonPlanRef.current}
+                        plan={plan}
+                        onApprove={handleApprove}
+                        onRevisePlan={originalPrompt.startsWith("AURA_PILOT_V1\n") ? handlePilotRevision : handlePlanRevision}
+                        onRetryPlan={originalPrompt.startsWith("AURA_PILOT_V1\n") ? handlePilotRevision : handleRetryPlanning}
+                        onConnectionRecovered={(recoveries) => handlePlanningConnectionRecovered(recoveries, renderedPlanningRunId)}
+                        onSkipTool={originalPrompt.startsWith("AURA_PILOT_V1\n") ? undefined : handleSkipTool}
+                        onReplaceTool={originalPrompt.startsWith("AURA_PILOT_V1\n") ? undefined : handleReplaceTool}
+                        omittedTools={plan.omittedTools || []}
+                        onBack={originalPrompt.startsWith("AURA_PILOT_V1\n") ? handlePilotRevision : () => setPhase("confirm")}
+                        approveLabel={editRunMode ? "Review changes" : "Start"}
+                      />
+                    </fieldset>
+                  </div>
                 ) : null}
               </motion.div>
             )}
