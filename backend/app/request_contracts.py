@@ -293,7 +293,10 @@ def requested_effects(prompt: str, inventory: list[dict], manifests: dict) -> li
     ]
 
 
-def validate_revision_write_scope(prompt: str, plan, inventory: list[dict], manifests: dict) -> None:
+def validate_revision_write_scope(
+    prompt: str, plan, inventory: list[dict], manifests: dict,
+    connection_routes: dict[str, str] | None = None,
+) -> None:
     """The orchestrator may add a write only when the user requested it.
 
     Read expansions can preserve reviewed writes, but a model-generated write
@@ -321,6 +324,21 @@ def validate_revision_write_scope(prompt: str, plan, inventory: list[dict], mani
         for effect in requested_effects(prompt, inventory, manifests)
         for target in effect["targets"]
     }
+    prior_write_kinds: dict[str, set[str]] = {}
+    # These are the actual shared Google writes this recovery can replace.
+    # Appending rows modifies an existing workbook; it must not authorize a
+    # new workbook merely because "append" is a generic create-effect verb.
+    replaceable_writes = {
+        "docs.create": {"create"}, "sheets.kpi.create": {"create"},
+        "sheets.campaign_report.create": {"create"}, "sheets.append": {"update"},
+    }
+    for slug, operation in prior_operations:
+        module = next((item for item in manifests.get(slug, {}).get("capabilities", [])
+                       if item.get("name") == operation), {})
+        if module.get("permission_scope") == "write":
+            prior_write_kinds.setdefault(_family(slug, operation), set()).update(
+                replaceable_writes.get(operation, set())
+            )
     for step in plan.steps:
         module = next((item for item in manifests.get(step.tool_slug, {}).get("capabilities", [])
                        if item.get("name") == step.operation), None)
@@ -329,6 +347,17 @@ def validate_revision_write_scope(prompt: str, plan, inventory: list[dict], mani
         if (step.tool_slug, step.operation) in prior_operations | authorized:
             continue
         family = _family(step.tool_slug, step.operation)
+        # Changing a draft's connection requires different real operations.
+        # Preserve the reviewed creation/content writes only on the explicitly
+        # selected route; it cannot authorize deletion, sharing, delivery or
+        # writes for a previously read-only app. Start still needs fresh review.
+        prior_kinds = prior_write_kinds.get(family, set())
+        if ((connection_routes or {}).get(family) == step.tool_slug
+                and module.get("permission_scope") == "write"
+                and not any(_operation_matches(kind, module) for kind in ("delete", "share", "send"))
+                and (("create" in prior_kinds and any(_operation_matches(kind, module) for kind in ("create", "update")))
+                     or ("update" in prior_kinds and _operation_matches("update", module)))):
+            continue
         raise ValueError(
             f"Unrequested {family} write in the revised plan: {step.operation}. "
             "Keep the reviewed actions and add only the requested reads."
@@ -360,6 +389,7 @@ def missing_requested_operations(
 def validate_requested_operations(
     prompt: str, plan, available: set[str],
     inventory: list[dict] | None = None, manifests: dict | None = None,
+    *, connection_routes: dict[str, str] | None = None,
 ) -> list[dict]:
     from .audit_sources import validate_audit_sources
     from .proofing import validate_proofing_sources
@@ -374,7 +404,7 @@ def validate_requested_operations(
             "remove every send step and synthesize the finished drafts from read evidence."
         )
     if inventory is not None and manifests is not None:
-        validate_revision_write_scope(prompt, plan, inventory, manifests)
+        validate_revision_write_scope(prompt, plan, inventory, manifests, connection_routes)
     if (
         draft_only_email_request(prompt)
         and (re.search(r"\b(?:gmail|inbox|mailbox)\b", user_request_text(prompt), re.IGNORECASE)

@@ -47,6 +47,7 @@ export default function PlanConnectionAlert({
   onRecheck,
   onSkipTool,
   onReplaceTool,
+  onSwitchConnection,
   replacements = [],
   userSelectedTools = [],
   connectionEnabled = true,
@@ -122,6 +123,18 @@ export default function PlanConnectionAlert({
                   <p className="text-[11px] text-muted-foreground/70 mt-0.5 leading-relaxed">{cap(t.reason)}.</p>
                 )}
                 {error && <p className="mt-1 text-[11px] leading-relaxed text-red-300">{error}</p>}
+                {!connected && t.alternativeProvider && onSwitchConnection && (
+                  <div className="mt-2 rounded-lg border border-primary/25 bg-primary/5 p-2.5">
+                    <p className="text-[11px] leading-relaxed text-muted-foreground">
+                      Google blocked AURA sign-in? Use the dedicated {t.name} connection and review a revised plan.
+                    </p>
+                    <button type="button" onClick={() => onSwitchConnection(t)}
+                      disabled={isConnecting || !connectionEnabled}
+                      className="mt-2 rounded-md border border-primary/40 px-2.5 py-1 text-[11px] text-foreground hover:bg-primary/10 disabled:opacity-50">
+                      Use dedicated {t.name} connection
+                    </button>
+                  </div>
+                )}
                 {!connected && connectionEnabled && (
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <button type="button" onClick={() => onRecheck?.(t.key)} disabled={isConnecting}

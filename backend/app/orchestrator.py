@@ -801,6 +801,7 @@ async def _create_compiled_plan(
     supervisor_strategy: str | None = None,
     request_prompt: str | None = None,
     connected_inventory: list[dict] | None = None,
+    connection_routes: dict[str, str] | None = None,
 ):
     """Build a schema-valid plan, repairing internal connector mismatches silently."""
     manifests_by_slug = {
@@ -809,6 +810,14 @@ async def _create_compiled_plan(
         )
         for item in inventory
     }
+    from .plan_connection_routes import (
+        route_bounded_inventory,
+        selected_connection_routes,
+        validate_plan_connection_routes,
+    )
+
+    connection_routes = selected_connection_routes(connection_routes, inventory)
+    inventory = route_bounded_inventory(inventory, connection_routes)
     if excluded_tool_families:
         from .connection_families import capability_family
 
@@ -920,6 +929,7 @@ async def _create_compiled_plan(
         ]
 
     def reject_excluded_steps(plan) -> None:
+        validate_plan_connection_routes(plan, connection_routes)
         if not excluded_tool_families:
             return
         from .connection_families import capability_family
@@ -1020,6 +1030,7 @@ async def _create_compiled_plan(
         validate_requested_operations(
             request_prompt or prompt, audited_plan, available_operations,
             catalog_inventory, manifests_by_slug,
+            connection_routes=connection_routes,
         )
         preflight = preflight_plan(
             audited_plan, catalog_inventory, manifests_by_slug, available_input_names
@@ -1121,6 +1132,7 @@ async def _create_compiled_plan(
                 validate_requested_operations(
                     request_prompt or prompt, plan, available_operations,
                     catalog_inventory, manifests_by_slug,
+                    connection_routes=connection_routes,
                 )
             apply_account_defaults(plan, inventory, manifests_by_slug)
             _normalize_planned_steps(plan, manifests_by_slug)
@@ -1134,6 +1146,7 @@ async def _create_compiled_plan(
             validate_requested_operations(
                 request_prompt or prompt, plan, available_operations,
                 catalog_inventory, manifests_by_slug,
+                connection_routes=connection_routes,
             )
             preflight = preflight_plan(
                 plan, catalog_inventory, manifests_by_slug, available_input_names
@@ -1253,7 +1266,9 @@ def _connected_capability_families(inventory: list[dict]) -> set[str]:
 def explicit_disconnected_capabilities(prompt: str, inventory: list[dict]) -> list[str]:
     """Find every explicitly named, disconnected provider account family."""
     from .connection_families import uses_builtin_openai
+    from .request_contracts import user_request_text
 
+    prompt = user_request_text(prompt)
     builtin_openai = uses_builtin_openai(prompt, inventory)
     # This intake section is a list of candidate CMS platforms, not four
     # mandatory connected accounts. Actual planned operations still undergo
@@ -1295,8 +1310,8 @@ def explicit_disconnected_capabilities(prompt: str, inventory: list[dict]) -> li
         # to connect Slack. Keep genuine positive mentions actionable.
         negative_prefix = re.compile(
             r"\b(?:no|without|exclude|excluding|omit|skip|never use|"
-            r"do not (?:use|connect|include)|don t (?:use|connect|include)) "
-            r"(?:(?:any|new|additional|the|a|an) )*$"
+            r"do not (?:use|connect|include)|don t (?:use|connect|include)|instead of) "
+            r"(?:(?:any|new|additional|the|a|an|shared) )*$"
         )
         if any(
             alias and any(
@@ -1779,10 +1794,18 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
         await session.commit()
 
         try:
+            from .plan_connection_routes import (
+                route_bounded_inventory,
+                selected_connection_routes,
+                validate_plan_connection_routes,
+            )
+
+            connection_routes = selected_connection_routes((run.inputs or {}).get("connection_routes"), inventory)
+            requirement_inventory = route_bounded_inventory(requirement_inventory, connection_routes)
             from .plan_reuse import reuse_saved_plan
             from .request_contracts import validate_requested_operations
 
-            plan = (None if get_settings().planner_mode == "llm" else await reuse_saved_plan(
+            plan = (None if connection_routes or get_settings().planner_mode == "llm" else await reuse_saved_plan(
                 session, run, connected_inventory, manifests_by_slug,
             ))
             if plan is not None and any(
@@ -1822,7 +1845,9 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                     supervisor_strategy=strategy,
                     request_prompt=run.prompt,
                     connected_inventory=connected_inventory,
+                    connection_routes=connection_routes,
                 )
+            validate_plan_connection_routes(plan, connection_routes)
             if excluded_families:
                 for planned_step in plan.steps:
                     for slug, operation in (
@@ -2068,7 +2093,10 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             # A failed model call cannot establish that connecting a catalog
             # app would help. In particular, do not hide exhausted AI credits
             # behind an unrelated account-authorization prompt.
-            missing = ([] if failure_category == "operator_quota" else
+            # A failed connector switch is a failed draft, not evidence that
+            # unrelated Google accounts need consent. Only a compiled plan's
+            # actual grant checks may ask for access after an explicit choice.
+            missing = ([] if failure_category == "operator_quota" or (run.inputs or {}).get("connection_routes") else
                        explicit_disconnected_capabilities(run.prompt, requirement_inventory))
             missing = [item for item in missing if capability_family(item) not in excluded_families]
             if missing:
