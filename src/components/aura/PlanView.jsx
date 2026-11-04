@@ -7,10 +7,10 @@ import RunReadiness from "./RunReadiness";
 import RunSupportAccess from "./RunSupportAccess";
 import PlanStep from "./PlanStep";
 import PlanConnectionAlert from "./PlanConnectionAlert";
-import { CATALOG, catalogEntryFor } from "@/lib/toolCatalog";
+import { CATALOG, catalogEntryFor, mergeMarketplaceApps } from "@/lib/toolCatalog";
 import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
 import { connectTool, getToolConnection, hydrateConnections } from "@/lib/connectService";
-import { testPythonConnection } from "@/lib/auraApi";
+import { searchConnectorBrokerApps, testPythonConnection } from "@/lib/auraApi";
 import { isVerifiedConnection } from "@/lib/connectionSelection.mjs";
 import { hasPlanConnectionGrant, planConnectionRequirements, buildPlanConnectionTools, requirementTools } from "@/lib/planConnections.mjs";
 import { planningConnectionsEnabled } from "@/lib/planningFlow.mjs";
@@ -155,6 +155,32 @@ export default function PlanView({
   // Distinct external integrations the plan touches, with the reason each is needed.
   const planTools = useMemo(() => buildPlanConnectionTools(steps, plan),
     [steps, plan.connectionChecklist, plan.connectionRequirements]);
+  const [, refreshConnectionRoutes] = useState(0);
+  const connectionRouteLookup = connectionsReady && onRevisePlan
+    ? [...new Set(planTools.filter((tool) => ["google", "google-workspace"].includes(tool.provider)
+      && ["Google Sheets", "Google Docs"].includes(tool.name)).map((tool) => tool.name))].sort().join("|")
+    : "";
+  useEffect(() => {
+    if (!connectionRouteLookup) return undefined;
+    let active = true;
+    // The broad catalog can omit app-specific route details. Load the same
+    // verified app entry used by marketplace search, without starting consent.
+    Promise.allSettled(connectionRouteLookup.split("|").map(async (name) => {
+      if (alternativePlanConnection({ name, provider: "google" }, CATALOG)) return null;
+      return searchConnectorBrokerApps(name);
+    })).then((results) => {
+      if (!active) return;
+      let changed = false;
+      for (const result of results) {
+        if (result.status === "fulfilled" && result.value?.apps?.length) {
+          mergeMarketplaceApps(result.value.apps);
+          changed = true;
+        }
+      }
+      if (changed) refreshConnectionRoutes((value) => value + 1);
+    });
+    return () => { active = false; };
+  }, [connectionRouteLookup]);
 
   // AURA handles connector discovery and setup. The only thing a user may need
   // to do is grant the provider's required account permission.

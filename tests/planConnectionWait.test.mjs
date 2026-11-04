@@ -132,17 +132,22 @@ test("the checklist cancels preparation, retries with a focusable sign-in window
   }
 });
 
-test("switching a blocked Sheets plan recompiles for review without opening consent or executing", async () => {
+test("a restored blocked plan discovers its dedicated Sheets route and recompiles without consent or execution", async () => {
   let popups = 0, finishRevision;
-  const revisions = [], approvals = [];
+  const revisions = [], approvals = [], catalogQueries = [];
   window.open = () => { popups += 1; throw new Error("The switch must not open OAuth"); };
   globalThis.fetch = async (url) => {
-    const { pathname } = new URL(url);
+    const { pathname, searchParams } = new URL(url);
     if (pathname === "/v1/managed-connectors/status") return Response.json({ marketplace: [
       { display_name: "Google Workspace", provider: "google", connection_backend: "nango", connectable: true },
+    ] });
+    if (pathname === "/v1/connector-broker/apps") {
+      catalogQueries.push(searchParams.get("q"));
+      return Response.json({ apps: [
       { display_name: "Google Sheets", provider: "google-sheets", connection_backend: "pipedream",
         connectable: true },
-    ] });
+      ] });
+    }
     if (pathname === "/v1/tools") return Response.json([{ id: "google-account", slug: "google",
       display_name: "Google Workspace", connection_backend: "nango", kind: "oauth", enabled: false }]);
     throw new Error(`Unexpected request: ${pathname}`);
@@ -162,6 +167,7 @@ test("switching a blocked Sheets plan recompiles for review without opening cons
       plan, onApprove: (...args) => approvals.push(args),
       onRevisePlan: (...args) => { revisions.push(args); return new Promise((resolve) => { finishRevision = resolve; }); },
     })));
+    assert.deepEqual(catalogQueries, ["Google Sheets"], "load only the app required by the plan");
     assert.equal(button("Use dedicated Google Sheets connection").disabled, false);
     await act(async () => Simulate.click(button("Use dedicated Google Sheets connection")));
     assert.equal(revisions.length, 1);
