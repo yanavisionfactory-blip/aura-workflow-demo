@@ -513,12 +513,39 @@ class NangoClient:
         return credentials
 
     async def connection_revision(self, connection_id: str, integration_id: str) -> str:
-        """Read Nango's connection revision without exposing its credentials."""
-        result = await self._request(
-            "GET",
-            f"/connections/{quote(connection_id, safe='')}",
-            params={"provider_config_key": integration_id},
-        )
+        """Read the consent baseline even when the old credentials need repair.
+
+        Nango's connection read also refreshes/validates credentials. Its 424
+        invalid_credentials response retains the exact connection's metadata;
+        requiring a successful credential read here would prevent reconnecting
+        the expired grant. Only the revision is used, never the failed token.
+        """
+        try:
+            result = await self._request(
+                "GET",
+                f"/connections/{quote(connection_id, safe='')}",
+                params={"provider_config_key": integration_id},
+            )
+        except ManagedConnectorError as exc:
+            upstream = exc.__cause__
+            if not isinstance(upstream, httpx.HTTPStatusError) or upstream.response.status_code != 424:
+                raise
+            try:
+                body = upstream.response.json()
+            except ValueError:
+                raise exc from None
+            error = body.get("error") if isinstance(body, dict) else None
+            payload = error.get("payload") if isinstance(error, dict) else None
+            result = payload.get("connection") if isinstance(payload, dict) else None
+            if (
+                not isinstance(error, dict) or error.get("code") != "invalid_credentials"
+                or not isinstance(result, dict)
+                or result.get("connection_id") != connection_id
+                or result.get("provider_config_key") != integration_id
+                or not isinstance(result.get("updated_at"), str)
+                or not result["updated_at"].strip()
+            ):
+                raise exc from None
         return str(result.get("updated_at") or "")
 
     async def verify_connection(self, provider: str, connection: dict) -> tuple[str, dict]:
