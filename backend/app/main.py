@@ -5871,6 +5871,22 @@ async def create_run(
     return {"id": run.id, "status": run.status.value}
 
 
+def _failed_claude_text_backup(run, step) -> bool:
+    from .intelligence_backup import failed_text_backup
+
+    if (run.status not in {RunStatus.waiting_for_action, RunStatus.failed}
+            or step.status != StepStatus.failed or step.tool_slug != "anthropic"
+            or step.operation != "anthropic.chat" or not run.plan_approved):
+        return False
+    plan_steps = (getattr(run, "plan", None) or {}).get("steps") or []
+    position = getattr(step, "position", None)
+    return bool(
+        isinstance(position, int) and 0 <= position < len(plan_steps)
+        and failed_text_backup({"tool_slug": step.tool_slug, "operation": step.operation,
+                                "arguments": step.arguments, "output": step.output}, plan_steps[position])
+    )
+
+
 def _step_recovery_state(run, step, attempted_steps: set[str]) -> dict:
     # Attempts are durably recorded before dispatch. Absence plus no receipt
     # proves that this step never reached its provider; frontend guesses do not.
@@ -5899,6 +5915,17 @@ def _run_blocker(
     stored = (run.execution_context or {}).get("__aura_blocker__") or (run.result or {}).get(
         "blocker"
     )
+    if not stored or stored.get("action") == "inspect_run":
+        failed_backup = next((step for step in steps if _failed_claude_text_backup(run, step)), None)
+        if failed_backup:
+            attempts = ((run.execution_context or {}).get("__aura_recovery__") or {}).get(failed_backup.id, 0)
+            return {
+                "code": "claude_backup_failed", "kind": "human_action",
+                "message": failed_backup.output["fallback"].get("message")
+                    or "Claude and the approved AURA backup could not generate usable content.",
+                "action": "retry_step", "retryable": attempts < 3,
+                "tool_slug": failed_backup.tool_slug, "step_id": failed_backup.id,
+            }
     if (run.status in {RunStatus.waiting_for_action, RunStatus.failed, RunStatus.blocked}
             and run.plan_approved
             and (not stored or stored.get("action") in {"inspect_run", "recheck_saved_result"})):
@@ -7368,7 +7395,10 @@ async def resume_run(
             return {"id": run.id, "status": run.status.value, "review_only": True}
         raise HTTPException(404, "Failed step not found")
     recorded_result = isinstance(step.output, dict) and "provider_result" in step.output
-    if step.consequential and payload.action in {"retry", "fallback"}:
+    # A failed, declared text-only backup has no external mutation to duplicate.
+    # Keep the dispatch guard for every other operation and explicit fallback.
+    text_backup_retry = payload.action == "retry" and _failed_claude_text_backup(run, step)
+    if step.consequential and payload.action in {"retry", "fallback"} and not text_backup_retry:
         attempted = await session.scalar(
             select(StepAttempt.id)
             .where(
@@ -7450,7 +7480,7 @@ async def resume_run(
             )
     if (
         payload.action in {"retry", "fallback"}
-        and not step.consequential
+        and (not step.consequential or text_backup_retry)
         and operation_scope(step.operation) == "read"
     ):
         attempt_count = int(

@@ -3693,9 +3693,15 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     consequential,
                     idempotency_key=step.idempotency_key,
                 )
-                if approved_text_backup:
-                    # Claude's rejected attempt is evidence for switching, not
-                    # an attempt at the separately approved AURA generator.
+                if approved_text_backup or (
+                    active_tool.slug == "anthropic" and operation == "anthropic.chat"
+                    and plan_steps[step.position].get("fallback_tool_slug") == "aura"
+                    and plan_steps[step.position].get("fallback_operation") == BACKUP_OPERATION
+                    and supports_claude_backup(plan_steps[step.position], arguments)
+                ):
+                    # Keep each text provider's history separate. A failed
+                    # backup must not overwrite Claude's known credit rejection
+                    # when an operator retries the approved backup after repair.
                     existing = [item for item in existing if item.tool_slug == active_tool.slug
                                 and item.operation == operation]
                 if existing:

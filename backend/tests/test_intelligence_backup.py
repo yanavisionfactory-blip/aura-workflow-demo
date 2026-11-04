@@ -60,7 +60,7 @@ async def test_backup_preserves_text_history_and_rejects_incomplete_content(monk
     context.__aenter__.return_value = client
     monkeypatch.setattr(backup, "AsyncOpenAI", lambda **kwargs: context)
     monkeypatch.setattr(backup, "get_settings", lambda: SimpleNamespace(
-        openai_api_key="test", openai_model="aura-model", model_call_timeout_seconds=5))
+        openai_api_key="test", openai_model="gpt-5.4-mini", model_call_timeout_seconds=5))
     args = {**ARGS, "messages": '["Source evidence", "Acknowledged"]'}
     if status != "completed" or not text.strip():
         with pytest.raises(ValueError, match="incomplete or empty"):
@@ -75,10 +75,52 @@ async def test_backup_preserves_text_history_and_rejects_incomplete_content(monk
         assert result["external_writes"] is False
     submitted = create.call_args.kwargs
     assert submitted["max_output_tokens"] == ARGS["maxTokensToSample"]
-    assert submitted["reasoning"] == {"effort": "low"}
+    assert submitted["reasoning"] == {"effort": "none"}
     assert submitted["input"] == [
         {"role": "user", "content": "Source evidence"},
         {"role": "assistant", "content": "Acknowledged"},
         {"role": "user", "content": ARGS["userMessage"]},
     ]
     assert "tools" not in submitted
+
+
+@pytest.mark.parametrize("model", ["gpt-5.4-mini", "gpt-5.4", "gpt-5.4-mini-2026-03-17"])
+def test_short_text_requests_do_not_spend_answer_budget_on_reasoning(model):
+    options = backup.backup_output_options(model, 800)
+    assert options == {"max_output_tokens": 800, "reasoning": {"effort": "none"}}
+
+
+def test_older_reasoning_models_have_separate_bounded_headroom():
+    assert backup.backup_output_options("gpt-5-mini", 800) == {
+        "max_output_tokens": 4896, "reasoning": {"effort": "low"}}
+
+
+def test_failed_text_retry_requires_approved_fallback_and_no_saved_result():
+    approved = {**plan().steps[0].model_dump(), "fallback_tool_slug": "aura",
+                "fallback_operation": backup.BACKUP_OPERATION}
+    receipt = {"status": "failed", "requested_tool": "anthropic", "requested_operation": "anthropic.chat",
+               "actual_tool": "aura", "actual_operation": backup.BACKUP_OPERATION}
+    step = {"tool_slug": "anthropic", "operation": "anthropic.chat", "arguments": ARGS,
+            "output": {"fallback": receipt}}
+    assert backup.failed_text_backup(step, approved)
+    assert not backup.failed_text_backup(step, {**approved, "fallback_operation": None})
+    assert not backup.failed_text_backup({**step, "operation": "email.send"}, approved)
+    assert not backup.failed_text_backup({**step, "arguments": {**ARGS, "tools": [{}]}}, approved)
+    assert not backup.failed_text_backup({**step, "output": {**step["output"], "provider_result": {}}}, approved)
+    assert not backup.failed_text_backup({**step, "output": {"fallback": {**receipt, "status": "used"}}}, approved)
+
+
+async def test_token_exhaustion_is_reported_without_accepting_partial_content(monkeypatch, caplog):
+    create = AsyncMock(return_value=SimpleNamespace(
+        status="incomplete", output_text="PRIVATE partial text", model="gpt-5.4-mini",
+        incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+        usage=SimpleNamespace(output_tokens=800, output_tokens_details=SimpleNamespace(reasoning_tokens=0))))
+    context = AsyncMock()
+    context.__aenter__.return_value = SimpleNamespace(responses=SimpleNamespace(create=create))
+    monkeypatch.setattr(backup, "AsyncOpenAI", lambda **kwargs: context)
+    monkeypatch.setattr(backup, "get_settings", lambda: SimpleNamespace(
+        openai_api_key="test", openai_model="gpt-5.4-mini", model_call_timeout_seconds=5))
+    with pytest.raises(ValueError, match="response length limit"):
+        await backup.generate_claude_backup(ARGS)
+    assert "reason=max_output_tokens" in caplog.text
+    assert "PRIVATE" not in caplog.text

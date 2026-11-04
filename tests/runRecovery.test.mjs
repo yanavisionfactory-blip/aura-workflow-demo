@@ -9,6 +9,24 @@ import {
   visibleRecoveryStepStatus,
 } from '../src/lib/runRecovery.mjs';
 
+test('a failed Claude backup explains the cause and offers only the bounded content retry', () => {
+  const value = { status: 'waiting_for_action',
+    blocker: { code: 'claude_backup_failed', action: 'retry_step', retryable: true, step_id: 'claude',
+      message: "Claude's API account has insufficient credits. AURA Intelligence backup also failed." },
+    steps: [{ id: 'claude', tool_slug: 'anthropic', operation: 'anthropic.chat', status: 'failed', consequential: true }] };
+  const result = recoveryForRun(value);
+  assert.match(result.what, /Claude and AURA/);
+  assert.match(result.why, /insufficient credits/);
+  assert.equal(result.canRetry, true);
+  assert.equal(result.canSkip, false);
+  assert.equal(result.buttonLabel, 'Retry content generation');
+  assert.match(result.fix, /existing review requirements/);
+  assert.doesNotMatch(result.fix, /export|connect.*account|policy-safe/);
+  const exhausted = recoveryForRun({ ...value, blocker: { ...value.blocker, retryable: false } });
+  assert.equal(exhausted.canRetry, false);
+  assert.match(exhausted.fix, /retry limit/);
+});
+
 const run = (patch = {}) => ({ id: 'saved-run', status: 'waiting_for_action',
   steps: [{ id: 'done', status: 'completed', consequential: false },
     { id: 'failed', position: 1, status: 'failed', consequential: false }],
