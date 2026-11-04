@@ -6586,7 +6586,7 @@ async def review_tool_output(
     context: TenantContext = Depends(tenant_context),
     session: AsyncSession = Depends(tenant_session),
 ) -> dict:
-    from .tool_output_review import REVIEW_KEY, output_review_enabled
+    from .tool_output_review import REVIEW_KEY, editable_text_output, output_review_enabled
 
     run = await session.scalar(select(WorkflowRun).where(
         WorkflowRun.id == run_id, WorkflowRun.workspace_id == context.workspace_id,
@@ -6599,6 +6599,15 @@ async def review_tool_output(
     reviewed = list(state.get("reviewed_step_ids", []))
     # A delayed or repeated click can only acknowledge its original checkpoint.
     if payload.step_id in reviewed:
+        if payload.edited_outputs:
+            saved = (await session.scalars(select(RunStep).where(
+                RunStep.run_id == run.id, RunStep.id.in_(payload.edited_outputs),
+            ))).all()
+            if len(saved) != len(payload.edited_outputs) or any(
+                step.id not in reviewed or (step.output or {}).get("user_revision", {}).get("text")
+                != payload.edited_outputs[step.id] for step in saved
+            ):
+                raise HTTPException(409, "This output was already reviewed; its saved content cannot be changed")
         return {"id": run.id, "status": run.status.value, "already_reviewed": True}
     pending = state.get("pending") or {}
     if (not output_review_enabled(run) or not run.plan_approved
@@ -6613,6 +6622,25 @@ async def review_tool_output(
         for step in steps
     ):
         raise HTTPException(409, "The saved output is not ready for review")
+    edits = payload.edited_outputs or {}
+    steps_by_id = {step.id: step for step in steps}
+    # Validate the entire request before saving any edits or releasing the checkpoint.
+    for step_id, edited_text in edits.items():
+        step = steps_by_id.get(step_id)
+        if not step or not editable_text_output(step):
+            raise HTTPException(422, "Only generated text in the current result review can be edited here")
+        if not edited_text.strip() or len(edited_text) > 200_000:
+            raise HTTPException(422, "Enter result text between 1 and 200,000 characters")
+    for step_id, edited_text in edits.items():
+        step = steps_by_id[step_id]
+        step.output = {**step.output, "user_revision": {
+            "text": edited_text, "edited_by": context.subject,
+            "edited_at": datetime.now(UTC).isoformat(),
+        }}
+        session.add(AuditEvent(
+            workspace_id=context.workspace_id, run_id=run.id, actor=context.subject,
+            event_type="step.output_edited", payload={"step_id": step_id},
+        ))
     state.update(pending=None, reviewed_step_ids=list(dict.fromkeys(
         [*reviewed, *pending["step_ids"]]
     )))
@@ -6638,6 +6666,8 @@ async def approve_plan(
     run = await session.get(WorkflowRun, run_id)
     if not run or run.workspace_id != wid:
         raise HTTPException(404, "Run not found")
+    if payload.execute_reviewed_plan and not payload.review_tool_outputs:
+        raise HTTPException(422, "Plan execution requires review of the completed tool outputs")
     explicit_reapproval = _requires_plan_reapproval(run)
     if run.plan_approved and not explicit_reapproval:
         raise HTTPException(409, "Plan already approved")
@@ -6932,6 +6962,8 @@ async def approve_plan(
     execution_context[REVIEW_KEY] = {
         "version": 1,
         "enabled": payload.review_tool_outputs,
+        "execute_reviewed_plan": payload.execute_reviewed_plan,
+        "approved_plan_hash": plan_hash if payload.execute_reviewed_plan else None,
         "reviewed_step_ids": execution_context.get(REVIEW_KEY, {}).get("reviewed_step_ids", []),
     }
     run.execution_context = execution_context
@@ -6976,8 +7008,8 @@ async def approve_plan(
             approvals.append(approval)
         elif approval:
             approval.preview = {"status": "preparing"}
-    # Approving a plan starts preparation, never an external write. Even static
-    # values must pass the worker's final connector validation and preview.
+    # The worker always validates concrete arguments before dispatch. In the
+    # explicit execute-reviewed-plan mode, Start supplies the scoped decision.
     for approval in approvals:
         step = next(stored for stored in steps if stored.id == approval.step_id)
         if step.status == StepStatus.completed:
@@ -7008,7 +7040,7 @@ async def approve_plan(
                 "version": plan_version.version,
                 "plan_hash": plan_hash,
                 "policy_decision": policy_decision,
-                "approval_mode": "staged",
+                "approval_mode": "review_results" if payload.execute_reviewed_plan else "staged",
                 "allow_autonomous_read_repairs": payload.allow_autonomous_read_repairs,
             },
         )

@@ -2455,8 +2455,42 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                     break
 
 
+async def _pause_for_action_approval(session, run, step, workspace_id):
+    transition_run(
+        run,
+        RunStatus.awaiting_approval,
+        reason="consequential_step_ready_for_approval",
+        actor="senior-orchestrator",
+        phase="approval",
+        supervisor_status="human_action_required",
+        blocker={
+            "kind": "human_action",
+            "code": "external_submission_approval_required",
+            "message": "Review this consequential action before it is submitted.",
+            "action": "review_step",
+            "step_id": step.id,
+            "retryable": False,
+        },
+        dispatch=None,
+        metadata={"step_id": step.id, "operation": step.operation},
+    )
+    await audit(
+        session,
+        workspace_id,
+        "step.approval_preview_ready",
+        {"step_id": step.id, "operation": step.operation},
+        run.id,
+    )
+    await session.commit()
+
+
 async def _execute_run(run_id: str, workspace_id: str) -> None:
-    from .tool_output_review import output_review_enabled, pause_for_output_review
+    from .tool_output_review import (
+        output_review_enabled,
+        pause_for_output_review,
+        plan_authorizes_action,
+        reviewed_step_result,
+    )
 
     vault = CredentialVault()
     async with SessionLocal() as session:
@@ -2851,7 +2885,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             if step.status == StepStatus.completed:
                 outputs.append(step.output)
                 context.setdefault("steps", {})[step.step_key] = step_context_value(
-                    step.output.get("provider_result", step.output), step.operation,
+                    reviewed_step_result(step), step.operation,
                     step.output.get("resolved_arguments", step.arguments),
                     planned_steps=plan_steps, step_key=step.step_key,
                 )
@@ -3284,7 +3318,8 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     ),
                 }
                 approval_group = plan_steps[step.position].get("approval_group")
-                if approval_group:
+                authorized_by_start = plan_authorizes_action(run, snapshot, step)
+                if approval_group and not authorized_by_start:
                     group_id = f"{run.id}:{approval_group}"
                     grouped_steps = []
                     for future_step in steps[step.position + 1 :]:
@@ -3378,33 +3413,22 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         approval_preview["grouped_step_ids"] = grouped_steps
                 approval.preview = approval_preview
                 run.execution_context = deepcopy(context)
-                transition_run(
-                    run,
-                    RunStatus.awaiting_approval,
-                    reason="consequential_step_ready_for_approval",
-                    actor="senior-orchestrator",
-                    phase="approval",
-                    supervisor_status="human_action_required",
-                    blocker={
-                        "kind": "human_action",
-                        "code": "external_submission_approval_required",
-                        "message": "Review this consequential action before it is submitted.",
-                        "action": "review_step",
-                        "step_id": step.id,
-                        "retryable": False,
-                    },
-                    dispatch=None,
-                    metadata={"step_id": step.id, "operation": step.operation},
-                )
-                await audit(
-                    session,
-                    workspace_id,
-                    "step.approval_preview_ready",
-                    {"step_id": step.id, "operation": step.operation},
-                    run.id,
-                )
-                await session.commit()
-                return
+                if authorized_by_start:
+                    # Keep exact argument matching at dispatch. No future group
+                    # is pre-approved: each action is resolved and validated here.
+                    approval.status = "approved"
+                    approval.decided_by = snapshot.approver_subject
+                    approval.decided_at = datetime.now(UTC)
+                    step.status = StepStatus.pending
+                    await audit(
+                        session, workspace_id, "step.authorized_by_plan_start",
+                        {"step_id": step.id, "operation": step.operation,
+                         "plan_hash": snapshot.plan_hash}, run.id,
+                    )
+                    await session.commit()
+                else:
+                    await _pause_for_action_approval(session, run, step, workspace_id)
+                    return
 
             if (
                 step.operation == "gmail.send"

@@ -2,6 +2,7 @@ from copy import deepcopy
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import HTTPException
 
 from app import main, orchestrator
 from app.models import (
@@ -9,6 +10,7 @@ from app.models import (
     ApprovalSnapshot,
     CapabilityManifest,
     PlanVersion,
+    RunStatus,
     RunStep,
     StepAttempt,
     StepStatus,
@@ -18,7 +20,14 @@ from app.models import (
 )
 from app.pipedream_connect import compile_action_manifest
 from app.policy import canonical_plan_hash
-from app.schemas import ApprovalDecision, CriticDecision, PlanStep, ToolOutputReviewDecision
+from app.run_supervisor import transition_run
+from app.schemas import (
+    ApprovalDecision,
+    CriticDecision,
+    PlanApproval,
+    PlanStep,
+    ToolOutputReviewDecision,
+)
 from app.text_preparation import is_text_preparation
 from app.tool_output_review import REVIEW_KEY
 
@@ -144,6 +153,113 @@ async def test_saved_text_request_generates_once_then_reviews_output_before_any_
         assert view["steps"][1]["approval_preview"]["status"] == "ready", view
         assert view["steps"][1]["preparation_only"] is False
     assert execute.await_count == 1  # external write still requires review
+
+
+async def start_with_result_review(factory, monkeypatch):
+    monkeypatch.setattr(main, "dispatch_pending", AsyncMock())
+    async with factory() as session:
+        run = await session.get(WorkflowRun, "run")
+        run.plan_approved = False
+        transition_run(run, RunStatus.awaiting_approval, reason="test_plan_ready", dispatch=None)
+        plan = deepcopy(run.plan)
+        plan["steps"][1]["arguments"] = {"title": "{{steps.draft.ret.content.0.text}}"}
+        run.plan = plan
+        version = await session.get(PlanVersion, "version")
+        version.plan, version.plan_hash, version.status = plan, canonical_plan_hash(plan), "draft"
+        run.execution_context = {**run.execution_context, "__aura_preflight__": {
+            **run.execution_context["__aura_preflight__"], "plan_hash": version.plan_hash,
+        }}
+        await session.delete(await session.get(ApprovalSnapshot, "snapshot"))
+        (await session.get(RunStep, "save")).arguments = plan["steps"][1]["arguments"]
+        await session.commit()
+        await main.approve_plan("run", PlanApproval(
+            approved=True, review_tool_outputs=True, execute_reviewed_plan=True,
+        ), main.TenantContext("w", "alice", "owner"), session)
+        # The test connections have no external credentials. Seed the same
+        # readiness proof for the normalized plan that production probes supply.
+        run.execution_context = {**run.execution_context, "__aura_preflight__": {
+            **run.execution_context["__aura_preflight__"], "plan_hash": canonical_plan_hash(run.plan),
+        }}
+        await session.commit()
+
+
+async def test_start_executes_then_reviews_and_edits_saved_output_without_replay(text_run, monkeypatch):
+    original = {"ret": {"content": [{"type": "text", "text": "Original dashboard"}]}}
+    execute = AsyncMock(side_effect=[original, {"id": "saved", "title": "Revised dashboard"}])
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", execute)
+    monkeypatch.setattr(orchestrator, "critique_step", AsyncMock(return_value=CriticDecision(action="accept")))
+    monkeypatch.setattr(orchestrator, "check_provider_outcome", AsyncMock(return_value={"status": "verified"}))
+    await start_with_result_review(text_run, monkeypatch)
+    await orchestrator._execute_run("run", "w")
+    async with text_run() as session:
+        run = await session.get(WorkflowRun, "run")
+        view = await main._run_view(session, run)
+        assert execute.await_count == 1, view
+        assert view["tool_output_review"]["step_ids"] == ["step"], view
+        assert view["blocker"]["code"] == "tool_output_review_required"
+        assert (await session.get(Approval, "approval")).decided_by == "alice"
+        assert (await session.get(Approval, "save-approval")).status == "pending"
+        decision = ToolOutputReviewDecision(step_id="step", edited_outputs={"step": "Revised dashboard"})
+        with pytest.raises(HTTPException) as tenant:
+            await main.review_tool_output("run", decision, main.TenantContext("other", "eve", "owner"), session)
+        assert tenant.value.status_code == 404
+        with pytest.raises(HTTPException) as future:
+            await main.review_tool_output("run", ToolOutputReviewDecision(
+                step_id="step", edited_outputs={"save": "Cannot change a future action"},
+            ), main.TenantContext("w", "alice", "owner"), session)
+        assert future.value.status_code == 422
+        await main.review_tool_output("run", decision, main.TenantContext("w", "alice", "owner"), session)
+        step = await session.get(RunStep, "step")
+        assert step.output["provider_result"] == original
+        assert step.output["user_revision"]["text"] == "Revised dashboard"
+        # A lost acknowledgment may be retried, but cannot change the saved edit.
+        assert (await main.review_tool_output("run", decision, main.TenantContext("w", "alice", "owner"), session))["already_reviewed"]
+        with pytest.raises(HTTPException) as stale:
+            await main.review_tool_output("run", ToolOutputReviewDecision(
+                step_id="step", edited_outputs={"step": "Late change"},
+            ), main.TenantContext("w", "alice", "owner"), session)
+        assert stale.value.status_code == 409
+    await orchestrator._execute_run("run", "w")
+    assert execute.await_count == 2
+    async with text_run() as session:
+        view = await main._run_view(session, await session.get(WorkflowRun, "run"))
+        assert view["tool_output_review"]["step_ids"] == ["save"], view
+        approval = await session.get(Approval, "save-approval")
+        assert approval.status == "approved"
+        assert approval.preview["arguments"] == {"title": "Revised dashboard"}
+        assert (await session.get(RunStep, "save")).output["resolved_arguments"] == {"title": "Revised dashboard"}
+    await orchestrator._execute_run("run", "w")
+    assert execute.await_count == 2
+    async with text_run() as session:
+        await main.review_tool_output("run", ToolOutputReviewDecision(step_id="save"),
+                                      main.TenantContext("w", "alice", "owner"), session)
+    await orchestrator._execute_run("run", "w")
+    async with text_run() as session:
+        assert (await session.get(WorkflowRun, "run")).status == RunStatus.completed
+        assert (await session.get(RunStep, "step")).output["provider_result"] == original
+    assert execute.await_count == 2
+
+
+@pytest.mark.parametrize("block", ["different_plan", "revoked", "unverified", "cancelled"])
+async def test_plan_start_cannot_escape_approved_scope_or_current_permissions(text_run, monkeypatch, block):
+    execute = AsyncMock()
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", execute)
+    await start_with_result_review(text_run, monkeypatch)
+    async with text_run() as session:
+        run = await session.get(WorkflowRun, "run")
+        if block == "different_plan":
+            state = deepcopy(run.execution_context)
+            state[REVIEW_KEY]["approved_plan_hash"] = "not-this-plan"
+            run.execution_context = state
+        elif block == "revoked":
+            (await session.get(ToolConnection, "claude")).allowed_operations = []
+        elif block == "unverified":
+            (await session.get(CapabilityManifest, "claude-manifest")).status = "pending"
+        else:
+            run.cancellation_requested = True
+        await session.commit()
+    await orchestrator._execute_run("run", "w")
+    execute.assert_not_awaited()
 
 
 @pytest.mark.parametrize("block", ["unapproved", "cancelled", "unverified", "disabled", "revoked",

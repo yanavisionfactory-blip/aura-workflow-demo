@@ -9,6 +9,19 @@ const report = (id, body) => ({ id, key: id, status: "completed", tool: "AURA", 
     provider_result: { status: "draft", title: id, body, synthetic: true, sources: [] } },
 });
 
+test("saved text edits appear in results while action evidence keeps the original provider response", () => {
+  const output = { operation: "anthropic.chat", critic: { action: "accept" },
+    outcome_check: { status: "verified" },
+    provider_result: { ret: { content: [{ type: "text", text: "Original dashboard" }] } },
+    user_revision: { text: "Revised dashboard" },
+  };
+  const [entry] = toolResultEntries([{ id: "draft", key: "draft", tool: "anthropic", status: "completed", output }]);
+  assert.equal(entry.preview.preview.body, "Revised dashboard");
+  assert.equal(entry.preview.userEdited, true);
+  assert.equal(entry.response.ret.content[0].text, "Original dashboard");
+  assert.equal(primaryResultFromOutputs([output]).preview.body, "Revised dashboard");
+});
+
 test("public website reads are attributed to web research while composition remains ChatGPT", () => {
   const entries = toolResultEntries([{ id: "page", tool: "AURA Intelligence", status: "completed",
     output: { operation: "web.page.read", provider_result: { url: "https://example.com/", text: "Retrieved content" } } }, report("analysis", "Comparison")]);

@@ -210,7 +210,7 @@ const uiPlanStepFromRun = (step) => {
       { label: "Creates", value: step.expected_output },
     ],
     riskLevel: step.consequential ? "modify" : "read",
-    riskNote: step.consequential ? "AURA will show the exact values before this action runs." : "",
+    riskNote: step.consequential ? "Start runs this action. Review the result when the tool finishes." : "",
   };
   return plannedApprovalStep(planned, step, tool);
 };
@@ -1333,7 +1333,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
           );
         }
       } else {
-        await approvePythonPlan(runId, editedSteps, false, { reviewToolOutputs: true });
+        await approvePythonPlan(runId, editedSteps, false, { reviewToolOutputs: true, executeReviewedPlan: true });
       }
       // The backend run is durable. Synchronize the optional history view
       // after dispatch so its extra data requests cannot gate execution.
@@ -1504,7 +1504,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
 
   startPythonExecutionRef.current = startPythonExecution;
 
-  const handleContinueToolReview = async () => {
+  const handleContinueToolReview = async (editedOutputs = null) => {
     if (!toolReview?.step_id || toolReviewPendingRef.current) return;
     const runId = pythonRunIdRef.current;
     const checkpointId = toolReview.step_id;
@@ -1512,7 +1512,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
     setToolReviewBusy(true);
     setToolReviewError("");
     try {
-      await reviewPythonToolOutput(runId, checkpointId);
+      await reviewPythonToolOutput(runId, checkpointId, editedOutputs);
       if (pythonRunIdRef.current === runId) void startPythonExecution(null, false, true);
     } catch (error) {
       if (pythonRunIdRef.current === runId) setToolReviewError(error.message || "Couldn't continue yet. Your completed output is saved; try again.");

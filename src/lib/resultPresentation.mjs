@@ -552,7 +552,8 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
       title: context.title || `${provider} response`, kind: "ai_response", provider,
       sourceStepId: chat.step_id, sourceStepKey: chat.step_key,
       completionTitle: "Content ready", completionSummary: `Generated with ${provider}.`,
-      preview: { body: chat.provider_result.ret.content.filter((part) => part.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n\n") },
+      preview: { body: chat.user_revision?.text ?? chat.provider_result.ret.content.filter((part) => part.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n\n") },
+      userEdited: Boolean(chat.user_revision),
       link: null, downloadUrl: null,
     };
   }

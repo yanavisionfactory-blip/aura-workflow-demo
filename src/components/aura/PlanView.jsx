@@ -386,7 +386,7 @@ Return the FULL revised steps array reflecting the change (reorder, swap tools, 
 - "action": plain business-language description.
 - "flow": 1-2 entries. Each has "label" (ONLY "Uses" or "Creates") and "value". "Uses" = the tool/data this step reads; "Creates" = the result or destination it produces.
 - "riskLevel": "read" or "modify".
-- "riskNote": for modify steps, a short line saying the user will review it before it happens. Empty for read.
+- "riskNote": for modify steps, say Start runs the action and the user reviews its completed result. Empty for read.
 Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         response_json_schema: PLAN_REVISION_SCHEMA,
       });
@@ -692,6 +692,7 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
           />
         </div>
         <div className="flex items-center justify-end gap-3">
+          {backendRunId && <p className="max-w-sm text-right text-xs text-muted-foreground">Start runs the reviewed plan. Review each tool’s result and edit it if needed.</p>}
           <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
