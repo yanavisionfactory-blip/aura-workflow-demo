@@ -55,6 +55,7 @@ import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
 import { savedRunResults } from "@/lib/savedRunResults.mjs";
 import { normalizeResultSuggestions, resultSuggestionsPrompt, RESULT_SUGGESTIONS_SCHEMA } from "@/lib/resultSuggestions.mjs";
 import { alignExecutionSteps } from "@/lib/executionSteps.mjs";
+import { continueTextPreparation, pendingTextPreparation } from "@/lib/textPreparation.mjs";
 import { jiraReceiptTasks } from "@/lib/jiraReceipt.mjs";
 import {
   editedArgumentsForStep,
@@ -1232,7 +1233,8 @@ Write ONE clear, conversational sentence restating what they want — but offer 
 
   const openSavedRunReview = async (runId) => {
     const run = await getPythonRun(runId);
-    if (savedRunResumeView(run, { openPreview: true }) !== "preview") {
+    const preparation = pendingTextPreparation(run);
+    if (savedRunResumeView(run, { openPreview: true }) !== "preview" && !preparation) {
       throw new Error("This action is no longer waiting for review. Check the saved run again.");
     }
     reset();
@@ -1247,15 +1249,16 @@ Write ONE clear, conversational sentence restating what they want — but offer 
     originalPromptRef.current = intent;
     lastPlanningIntentRef.current = intent;
     approvedStepsRef.current = preparedSteps;
-    preparedActionPreviewRef.current = true;
+    preparedActionPreviewRef.current = !preparation;
     rememberActivePythonRun(run.id);
     setOriginalPrompt(intent);
     setInterpretation(restored.interpretation);
     setPlan(restored);
     setApprovedSteps(preparedSteps);
     setExecSteps(mapRuntimeSteps(run));
-    setPhase("preview");
     setHistoryOpen(false);
+    if (preparation) void startPythonExecution(null, false, true);
+    else setPhase("preview");
   };
 
   const openSavedRunResults = async (savedRun) => {
@@ -1296,6 +1299,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
     const runId = pythonRunIdRef.current;
     if (!runId || !pythonPlanRef.current) return;
     const generation = ++pythonPollGenerationRef.current;
+    const preparationAttempts = new Set();
     setPlan((previous) => previous ? { ...previous, startError: "" } : previous);
     setPhase("executing");
     if (!observeOnly) setExecSteps(mapRuntimeSteps({ plan: pythonPlanRef.current, steps: [] }));
@@ -1347,6 +1351,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
           if (reviewIndex >= 0) setCurrentStepIdx(reviewIndex);
           return;
         }
+        if (await continueTextPreparation(run, decidePythonApproval, preparationAttempts)) continue;
         setVerifyingResult(
           (run.steps || []).length > 0
           && (run.steps || []).every((step) => ["completed", "skipped"].includes(step.status))

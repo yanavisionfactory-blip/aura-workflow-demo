@@ -6,6 +6,7 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import { build } from "vite";
 import { executeMarketingSimulation } from "../src/lib/marketingToolSimulation.mjs";
 import { frameioOutputs } from "./fixtures/frameioReview.mjs";
+import { resolvedApprovalStep } from "../src/lib/approvalReview.mjs";
 
 const repo = fileURLToPath(new URL("../", import.meta.url));
 let temporary;
@@ -76,6 +77,24 @@ test("execution waits on saved tool output and does not invent previews for pend
   assert.ok(html.indexOf('aria-label="Execution steps"') < html.indexOf('aria-label="Tool output checkpoint"'));
   const final = renderExecution([draft], { step_id: "draft", step_ids: ["draft"], is_final: true });
   assert.match(final, /Continue to results/);
+});
+
+test("completed preparation displays the saved response instead of the input prompt", () => {
+  const planned = { key: "draft", tool: "Claude", operation: "anthropic.chat", riskLevel: "modify",
+    arguments: { userMessage: "INPUT REQUEST MUST NOT LOOK LIKE THE RESULT" }, output: "Expected table" };
+  const runtime = { id: "saved-draft", key: "draft", tool_slug: "anthropic", operation: "anthropic.chat",
+    status: "completed", consequential: true, approval_status: "approved",
+    output: { operation: "anthropic.chat", critic: { action: "accept" }, outcome_check: { status: "verified" }, provider_result: { ret: { content: [
+      { type: "text", text: "## Plantéa — September 2026\nRevenue | Target | Actual" },
+    ] } } } };
+  const step = resolvedApprovalStep(planned, runtime, "Claude");
+  assert.equal(step.riskLevel, "read");
+  const html = renderActionScreen(step);
+  assert.match(html, /Claude prepared output/);
+  assert.match(html, /Plantéa — September 2026/);
+  assert.doesNotMatch(html, /INPUT REQUEST|Ready to generate|Expected table|Not saved yet/);
+  const failed = renderActionScreen(resolvedApprovalStep(planned, { ...runtime, status: "failed" }, "Claude"));
+  assert.doesNotMatch(failed, /Claude prepared output|Plantéa — September 2026/);
 });
 
 test("all approval routes lead with app screens and keep technical settings collapsed", () => {

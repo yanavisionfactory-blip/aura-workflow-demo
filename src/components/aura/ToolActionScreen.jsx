@@ -3,6 +3,8 @@ import { FileText, MessageSquare, Plus, Search, Sparkles, Table2 } from "lucide-
 import ReactMarkdown from "react-markdown";
 import { documentMarkdownOptions } from "@/lib/documentMarkdown.mjs";
 import FrameioPlanScreen from "./FrameioPlanScreen";
+import { toolResultEntries } from "@/lib/toolResultViews.mjs";
+import { PreparedReports } from "./SheetActionReview";
 
 const pending = (value) => typeof value === "string" && /\{\{[^}]+\}\}/.test(value);
 const label = (value) => String(value).replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_-]/g, " ");
@@ -92,6 +94,13 @@ export function KpiDraftScreen({ args, editing, onChange, editableKeys = Object.
 }
 
 export default function ToolActionScreen({ step, args = {}, editing = false, onChange = () => {}, editableKeys = Object.keys(args) }) {
+  const activity = step.runtimeStep ? [{ ...step.runtimeStep,
+    tool: step.runtimeStep.tool_slug || step.tool,
+    action: step.title || step.action,
+    stepKey: step.runtimeStep.key || step.key,
+  }] : [];
+  const savedText = toolResultEntries(activity).some((entry) => ["report", "ai_response"].includes(entry.preview?.kind));
+  if (savedText) return <PreparedReports activity={activity} />;
   if (["frameio.file.get", "frameio.comments.list"].includes(step.operation)
     || (!step.operation && /^frame[.\s-]?io$/i.test(step.tool || step.tool_slug || ""))) return <FrameioPlanScreen step={step} />;
   if (step.operation === "sheets.kpi.create") return <KpiDraftScreen args={args} editing={editing} onChange={onChange} editableKeys={editableKeys} />;
