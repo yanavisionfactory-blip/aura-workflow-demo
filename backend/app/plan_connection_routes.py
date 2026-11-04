@@ -3,19 +3,31 @@
 from .connection_families import capability_family
 
 
-def selected_connection_routes(value, inventory: list[dict]) -> dict[str, str]:
+def selected_connection_routes(value, inventory: list[dict], *, plan=None) -> dict[str, str]:
     if value is None:
         return {}
     if not isinstance(value, dict):
         raise TypeError("Connection choices must name an app and a verified connector")
     known = {item["slug"] for item in inventory if item.get("allowed_operations")}
+    used = None if plan is None else {
+        capability_family(identity.split(".", 1)[0])
+        for step in plan.steps
+        for identity in (step.tool_slug, step.operation, step.fallback_tool_slug, step.fallback_operation)
+        if identity
+    }
     routes = {}
     for app, provider in value.items():
         family = capability_family(app)
         # Only the independently released app routes can replace a shared
         # Google operation. A client cannot invent a route or grant operations.
-        if (family not in {"sheets", "docs"} or not isinstance(provider, str) or provider not in known
+        if (family not in {"sheets", "docs"} or not isinstance(provider, str)
                 or provider != f"google-{family}"):
+            raise ValueError("The selected app connection is not available for this plan")
+        # A later "run without Sheets" revision keeps its history but no
+        # longer needs that account (or its catalog route) to pass Start.
+        if used is not None and family not in used:
+            continue
+        if provider not in known:
             raise ValueError("The selected app connection is not available for this plan")
         routes[family] = provider
     return routes

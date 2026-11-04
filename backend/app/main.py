@@ -6684,7 +6684,7 @@ async def approve_plan(
 
     try:
         connection_routes = selected_connection_routes(
-            (run.inputs or {}).get("connection_routes"), list(available_by_slug.values()),
+            (run.inputs or {}).get("connection_routes"), list(available_by_slug.values()), plan=plan,
         )
         validate_plan_connection_routes(plan, connection_routes)
         validate_requested_operations(

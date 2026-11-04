@@ -98,6 +98,15 @@ def test_choice_cannot_invent_a_route_or_substitute_another_app(value):
         selected_connection_routes(value, catalog()[0])
 
 
+def test_running_without_sheets_does_not_require_the_omitted_route_at_start():
+    candidate = plan()
+    candidate.steps[0].tool_slug = "aura"
+    candidate.steps[0].operation = "report.compose"
+    assert selected_connection_routes(ROUTES, [], plan=candidate) == {}
+    with pytest.raises(ValueError, match="not available"):
+        selected_connection_routes(ROUTES, [], plan=plan())
+
+
 def test_switch_permits_rebuilt_creation_and_content_steps_on_the_selected_route():
     inventory, manifests = catalog()
     for operation in ("google-sheets.new-spreadsheet", "google-sheets.update-cells"):
