@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -16,7 +17,7 @@ from app.models import (
 )
 from app.native_connectors import native_manifest, native_operations
 from app.run_readiness import check_run_readiness
-from app.schemas import PlanStep, WorkflowPlan
+from app.schemas import PlanApproval, PlanStep, WorkflowPlan
 
 
 async def seed(database):
@@ -79,6 +80,63 @@ async def test_prestart_stops_before_any_write(database, monkeypatch, failure):
         assert not result["passed"] and "SECRET" not in str(result)
         if failure != "destination": execute.assert_not_awaited()
         else: assert execute.call_args.args[0] == "sheets.read"
+
+
+@pytest.mark.parametrize("change", ["none", "account", "authorization", "destination"])
+async def test_start_rechecks_expired_review_before_dispatch(database, monkeypatch, change):
+    from fastapi import HTTPException
+
+    from app import main
+
+    plan = await seed(database)
+    credentials = AsyncMock(return_value=(
+        {}, {"identity": {"email": "approved@example.com"}}, None,
+    ))
+    execute = AsyncMock(return_value={"values": [[1, 2]]})
+    dispatch = AsyncMock()
+    monkeypatch.setattr(run_readiness, "_connection_credentials", credentials)
+    monkeypatch.setattr(run_readiness.ProviderExecutor, "execute", execute)
+    monkeypatch.setattr(main, "dispatch_pending", dispatch)
+    async with database() as session:
+        run = await session.get(WorkflowRun, "run")
+        assert (await check_run_readiness(session, run, plan))["passed"]
+        # A user can review a plan for longer than the snapshot's one-minute TTL.
+        old = dict(run.execution_context["__aura_review_readiness__"])
+        old["expires_at"] = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+        run.execution_context = {**run.execution_context, "__aura_review_readiness__": old}
+        await session.commit()
+        credentials.reset_mock()
+        execute.reset_mock()
+        if change == "account":
+            credentials.return_value = ({}, {"identity": {"email": "other@example.com"}}, None)
+        elif change == "authorization":
+            credentials.return_value = (None, {}, {
+                "code": "authorization_required", "message": "Reconnect Google",
+            })
+        elif change == "destination":
+            execute.side_effect = PermissionError("Destination is no longer accessible")
+
+        context = SimpleNamespace(workspace_id="a", subject="owner", role="owner")
+        if change == "none":
+            result = await main.approve_plan("run", PlanApproval(approved=True), context, session)
+            assert result["status"] == "running"
+            assert run.plan_approved is True
+            dispatch.assert_awaited_once_with("a")
+        else:
+            with pytest.raises(HTTPException) as exc:
+                await main.approve_plan("run", PlanApproval(approved=True), context, session)
+            assert exc.value.status_code == 409
+            assert run.plan_approved is False
+            dispatch.assert_not_awaited()
+
+        credentials.assert_awaited_once()
+        if change == "authorization":
+            execute.assert_not_awaited()
+        else:
+            execute.assert_awaited_once_with("sheets.read", {
+                "spreadsheet_id": "approved-sheet", "range": "A1:B5",
+            })
+        assert run.execution_context["__aura_review_readiness__"]["expires_at"] != old["expires_at"]
 
 
 @pytest.mark.parametrize("blocker_code,expected_status", [("plan_approval_required", 200), ("account_changed", 409), (None, 409)])
