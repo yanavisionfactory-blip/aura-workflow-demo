@@ -53,7 +53,6 @@ test("browser code cannot submit provider secrets directly to AURA", () => {
     "utf8",
   );
   for (const forbidden of [
-    "request(\"/v1/tools\", {",
     "/v1/connectors/discover",
     "/v1/oauth/custom/start",
     "authorizeCustomOAuth",
@@ -62,6 +61,9 @@ test("browser code cannot submit provider secrets directly to AURA", () => {
   ]) {
     assert.equal(source.includes(forbidden), false, forbidden);
   }
+  // Reading accounts needs signal/timeout options too. Only writes or request
+  // bodies on this endpoint could submit provider secrets from the browser.
+  assert.doesNotMatch(source, /request\(["']\/v1\/tools["'],\s*\{[^}]*\b(?:body\s*:|method\s*:\s*["'](?:POST|PUT|PATCH|DELETE)["'])/i);
   assert.equal(source.includes("/v1/connector-broker/"), true);
   assert.equal(source.includes("completeConnectorBrokerConnection"), true);
 });
