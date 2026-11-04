@@ -23,6 +23,7 @@ import { connectionScreenPreset } from "@/lib/connectionNavigation.mjs";
 import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
 import {
   connectTool,
+  chooseGoogleAdsAccount,
   disconnectTool,
   getToolConnection,
   hydrateConnections,
@@ -166,6 +167,9 @@ export default function ConnectionsPill() {
     try {
       const result = await connectTool(tool.name, { provider: tool.provider });
       if (result.authorizationStarted) return;
+      if (result.connection?.slug === "google-ads") {
+        setManagedConnection({ ...result.connection, uiName: tool.name });
+      }
       await hydrateConnections();
     } catch (cause) {
       setError(cause.message || `Could not connect ${tool.name}.`);
@@ -206,7 +210,10 @@ export default function ConnectionsPill() {
     setConnectionAction(name);
     setError("");
     try {
-      if (action === "disconnect") {
+      if (action === "account") {
+        const updated = await chooseGoogleAdsAccount(managedConnection, { force: true });
+        setManagedConnection(updated);
+      } else if (action === "disconnect") {
         await disconnectTool(name, managedConnection?.id);
         setManagedConnection(null);
       } else if (action === "reconnect") {
@@ -422,7 +429,7 @@ export default function ConnectionsPill() {
                             <p className="truncate text-xs text-muted-foreground">{tool.desc}</p>
                           </div>
                           {isConnected ? (
-                            <span className="flex items-center gap-1 text-xs text-emerald-400"><Check className="h-3.5 w-3.5" />Connected</span>
+                            <button type="button" onClick={() => openConnectionManager(tool.name)} className="flex items-center gap-1 text-xs text-emerald-400"><Check className="h-3.5 w-3.5" />Manage</button>
                           ) : tool.requestable && catalogSearchQuery !== query.trim().replace(/\s+/g, " ") ? (
                             searchingCatalog
                               ? <span className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />Searching…</span>
@@ -497,6 +504,17 @@ export default function ConnectionsPill() {
                   <div><p className="text-xs font-medium text-emerald-400">Connected and verified</p><p className="mt-0.5 text-[11px] text-muted-foreground">AURA checks permissions for each plan before Start.</p></div>
                 </div>
                 {managedConnection.identity?.domain && <p className="mt-2 text-sm">Verified store: <span className="font-medium">{managedConnection.identity.domain}</span></p>}
+                {managedConnection.slug === "google-ads" && managedConnection.connection_backend === "pipedream" && (
+                  <div className="mt-4 rounded-xl border border-white/10 p-3">
+                    <p className="text-sm font-medium">{managedConnection.google_ads_account?.name || "Choose an advertising account"}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">{managedConnection.google_ads_account
+                      ? "Selected for new workflows. Existing reviewed workflows keep their original account."
+                      : "Google sign-in is saved. Select an account to finish setup."}</p>
+                    <button type="button" onClick={() => runConnectionAction(managedConnection.uiName, "account")} disabled={connectionAction === managedConnection.uiName} className="mt-3 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground disabled:opacity-40">
+                      {managedConnection.google_ads_account ? "Change ad account" : "Choose ad account"}
+                    </button>
+                  </div>
+                )}
                 {managedConnection.verification?.read_only && <p className="mt-2 text-xs text-muted-foreground">Read-only connection · {managedConnection.verification.pages_readable ? "Content page reads authorized" : "Content page scope not granted"}</p>}
                 {managedConnection.is_agent && (
                   <div className="mt-4 rounded-xl border border-white/8 bg-white/5 p-3 text-[11px] text-muted-foreground">

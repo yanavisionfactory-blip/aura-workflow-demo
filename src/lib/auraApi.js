@@ -475,6 +475,21 @@ export async function testPythonConnection(connectionId) {
   return request(`/v1/connections/${connectionId}/test`, { method: "POST" });
 }
 
+export async function listGoogleAdsAccounts(connectionId, loginCustomerId = "", search = "") {
+  await ensureWorkspace();
+  const query = new URLSearchParams();
+  if (loginCustomerId) query.set("login_customer_id", loginCustomerId);
+  if (search) query.set("search", search);
+  return request(`/v1/connections/${encodeURIComponent(connectionId)}/google-ads/accounts?${query}`, { timeoutMs: 80000 });
+}
+
+export async function selectGoogleAdsAccount(connectionId, selection) {
+  await ensureWorkspace();
+  return request(`/v1/connections/${encodeURIComponent(connectionId)}/google-ads/account`, {
+    method: "POST", body: JSON.stringify(selection), timeoutMs: 80000,
+  });
+}
+
 export async function disconnectPythonConnection(connectionId) {
   await ensureWorkspace();
   return request(`/v1/connections/${connectionId}`, { method: "DELETE" });

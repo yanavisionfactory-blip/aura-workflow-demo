@@ -475,6 +475,10 @@ def build_agents() -> dict[str, Agent]:
             provider resources through an available read-only search, find, or list step before an
             operation that requires an opaque ID. Reference the discovery step's output and declare
             the dependency; never ask the user to supply an ID for a resource they already named.
+            For Google Ads, use the inventory's google_ads_account selection as the default:
+            accountId is login_customer_id and customerClientId is customer_id. Do not ask the user
+            to type a customer number. If no selection exists, direct them to choose an ad account
+            in the connection manager, or discover accounts with the available read operations.
             Resolve relative
             dates from temporal_context using concrete arguments. An unknown user timezone
             requires a broad read window followed by selection using event local dates/times. Notion page.get
@@ -516,6 +520,8 @@ def build_agents() -> dict[str, Agent]:
             as a serialized JSON object matching the selected operation's input schema.
             Ground values in the request and prior step outputs. Use {{steps.key.field}}
             references for dependent values; never invent opaque IDs or recipients.
+            Use google_ads_account from the connector inventory for default Google Ads accountId
+            (login_customer_id) and customerClientId (customer_id), without asking for customer numbers.
             Mark writes consequential and declare dependencies. Required evidence
             names must match the selected operation's output reliability.provides;
             never use the field for input descriptions or upstream content.
@@ -761,6 +767,7 @@ def _builder_inventory(inventory: list[dict], selected_slugs: set[str]) -> list[
         "allowed_operations",
         "connected",
         "operation_contracts",
+        "google_ads_account",
     )
     return [{key: item.get(key) for key in keys if key in item} for item in source]
 

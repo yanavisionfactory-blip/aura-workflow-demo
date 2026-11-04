@@ -38,7 +38,7 @@ before(async () => {
           export function createWorkflowSchedule() { throw new Error("Render tests cannot execute workflows"); }
           export function getPythonRun() { throw new Error("Render tests cannot read live workflows"); }
           export const pythonRuntimeEnabled = false;
-          ${["authorizeConnectorBroker", "disconnectPythonConnection", "getManagedConnectorStatus", "listPythonTools", "reserveAuthorizationWindow", "searchConnectorBrokerApps", "testPythonConnection"].map((name) => `export function ${name}() { throw new Error("Render tests cannot access connections"); }`).join("\n")}`;
+          ${["authorizeConnectorBroker", "disconnectPythonConnection", "getManagedConnectorStatus", "listPythonTools", "listGoogleAdsAccounts", "selectGoogleAdsAccount", "reserveAuthorizationWindow", "searchConnectorBrokerApps", "testPythonConnection"].map((name) => `export function ${name}() { throw new Error("Render tests cannot access connections"); }`).join("\n")}`;
       },
     }],
     build: { ssr: path.join(repo, "tests/fixtures/resultsRender.jsx"), outDir: temporary,
