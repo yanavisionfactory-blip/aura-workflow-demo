@@ -164,7 +164,7 @@ export default function ConnectionsPill() {
     setConnecting(tool.name);
     setError("");
     try {
-      const result = await connectTool(tool.name);
+      const result = await connectTool(tool.name, { provider: tool.provider });
       if (result.authorizationStarted) return;
       await hydrateConnections();
     } catch (cause) {

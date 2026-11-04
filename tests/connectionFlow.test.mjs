@@ -212,6 +212,51 @@ for (const app of [
   });
 }
 
+test("the selected Sheets route survives conflicting marketplace aliases and stale Meta state", async () => {
+  const requests = googleConnectionSelection([]);
+  flow.mergeMarketplaceApps([{
+    provider: "unrelated-ads", display_name: "A shared ads connector", connectable: true,
+    aliases: ["Google Sheets"], connection_backend: "managed_mcp",
+  }]);
+  const state = new Map([["aura_same_tab_authorization", JSON.stringify({ provider: account.slug, startedAt: Date.now() })]]);
+  window.sessionStorage = { removeItem: (key) => state.delete(key) };
+  await assert.rejects(flow.connectTool("Google Sheets", { provider: "google-sheets" }), /Stop before consent/);
+  assert.equal(requests[0].pathname, "/v1/connector-broker/google-sheets/session");
+  assert.equal(state.size, 0);
+  assert.equal(window.popups.length, 0);
+});
+
+test("Google broker sessions reject another provider before consent or account reuse", async () => {
+  for (const session of [
+    { backend: "native", provider: account.slug, authorization_url: "https://pipeboard.co/oauth/authorize" },
+    { backend: "pipedream", provider: "google-sheets", app: "facebook_ads" },
+    { backend: "pipedream", provider: "google-sheets", app: "google_ads", already_connected: true, connection_id: "wrong-account" },
+  ]) {
+    setup();
+    globalThis.fetch = async () => Response.json(session);
+    await assert.rejects(flow.authorizeConnectorBroker("google-sheets"), /different app/);
+  }
+});
+
+test("Google Ads starts with managed Google sign-in and no customer-number input", async () => {
+  const requests = googleConnectionSelection([], { name: "Google Ads", provider: "google-ads" });
+  await assert.rejects(flow.connectTool("Google Ads", { provider: "google-ads" }), /Stop before consent/);
+  assert.equal(requests[0].pathname, "/v1/connector-broker/google-ads/session");
+  assert.equal(requests[0].search, "");
+  assert.equal(window.popups.length, 0);
+});
+
+test("matching Google broker identities remain valid for managed and legacy accounts", async () => {
+  for (const provider of ["google-sheets", "google-docs", "google-ads", "google-analytics"]) {
+    for (const backend of ["native", "nango", "pipedream"]) {
+      setup();
+      const session = { backend, provider, app: provider.replaceAll("-", "_") };
+      globalThis.fetch = async () => Response.json(session);
+      assert.deepEqual(await flow.createConnectorBrokerSession(provider), session);
+    }
+  }
+});
+
 test("connect and reconnect retries do not access an earlier provider window's document", () => {
   for (const reconnecting of [false, true]) {
     globalThis.window = popupBrowser();

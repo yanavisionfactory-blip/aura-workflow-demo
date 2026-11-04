@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  connectionScreenPreset, isSameTabAuthorizationReturn,
+  clearAuthorizationNavigation, connectionScreenPreset, isSameTabAuthorizationReturn,
   redirectConnectorAuthorization, shouldNotifyAuthorizationOpener, usesSameTabAuthorization,
 } from "../src/lib/connectionNavigation.mjs";
 
@@ -20,7 +20,7 @@ function browserStub() {
     // Reproduces Safari blocking every popup; this method must never be used.
     open() { throw new Error("Popup blocked"); },
     location: { origin: "https://aura.example", assign(url) { destinations.push(url); } },
-    sessionStorage: { setItem(key, value) { storage.set(key, value); }, getItem(key) { return storage.get(key); } },
+    sessionStorage: { setItem(key, value) { storage.set(key, value); }, getItem(key) { return storage.get(key); }, removeItem(key) { storage.delete(key); } },
   };
 }
 
@@ -89,5 +89,36 @@ test("denial and expired consent have retry guidance and no connected claim", ()
     const preset = connectionScreenPreset(query, browser);
     assert.match(preset.message, /Tap Connect to try again/);
     assert.equal(preset.connected, undefined);
+  }
+});
+
+test("a Google return overrides an old Meta Ads deep link", () => {
+  const browser = browserStub();
+  redirectConnectorAuthorization(session, browser);
+  for (const query of [
+    "?connect=meta-ads&oauth_provider=google-sheets&oauth_status=success",
+    "?connect=meta-ads&oauth_provider=google-ads&oauth_status=error",
+    "?connect=meta-ads&tool_connected=google-sheets",
+    "?connect=meta-ads&oauth_provider=mcp-agent&oauth_status=success",
+  ]) assert.equal(connectionScreenPreset(query, browser), null);
+});
+
+test("new connection attempts clear old Meta routing while preserving the saved workflow URL", () => {
+  const browser = browserStub();
+  redirectConnectorAuthorization(session, browser);
+  browser.location.href = "https://aura.example/app?connect=meta-ads&oauth_provider=mcp-agent&oauth_status=error&oauth_message=denied&tool_connected=old&run=saved-run#plan";
+  let replaced;
+  browser.history = { state: { page: 1 }, replaceState(state, title, url) { replaced = { state, title, url }; } };
+  clearAuthorizationNavigation(browser);
+  assert.equal(browser.storage.size, 0);
+  assert.deepEqual(replaced, { state: { page: 1 }, title: "", url: "/app?run=saved-run#plan" });
+  assert.equal(isSameTabAuthorizationReturn("?oauth_provider=mcp-agent&oauth_status=error", browser), false);
+});
+
+test("expired and future Meta markers cannot claim an unrelated agent return", () => {
+  const browser = browserStub();
+  for (const startedAt of [Date.now() - 31 * 60 * 1000, Date.now() + 60 * 1000]) {
+    browser.storage.set("aura_same_tab_authorization", JSON.stringify({ provider, startedAt }));
+    assert.equal(connectionScreenPreset("?oauth_provider=mcp-agent&oauth_status=error", browser), null);
   }
 });

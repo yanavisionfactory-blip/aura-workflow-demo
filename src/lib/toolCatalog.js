@@ -274,14 +274,20 @@ export function replaceToolCatalog(status = {}) {
 
 export function catalogEntryFor(toolName) {
   const key = String(toolName || "").trim().toLowerCase();
+  if (!key) return null;
   const canonicalKey = canonicalProvider(key);
-  return CATALOG.find((item) =>
-    item.name.toLowerCase() === key ||
-    item.provider === key ||
-    item.canonicalProvider === canonicalKey ||
-    item.aliases?.some((alias) => alias.toLowerCase() === key) ||
-    item.routes?.some((route) => route.provider === key)
-  ) || null;
+  // Resolve identities before search aliases. A broad connector can mention
+  // Google Sheets without being the Google Sheets card the customer selected.
+  for (const matches of [
+    (item) => item.name.toLowerCase() === key,
+    (item) => item.provider === key || item.routes?.some((route) => route.provider === key),
+    (item) => item.canonicalProvider === canonicalKey,
+    (item) => item.aliases?.some((alias) => alias.toLowerCase() === key),
+  ]) {
+    const candidates = CATALOG.filter(matches);
+    if (candidates.length) return candidates.length === 1 ? candidates[0] : null;
+  }
+  return null;
 }
 
 export function providerForTool(toolName) {

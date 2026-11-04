@@ -11,6 +11,27 @@ import {
   searchMarketplace,
 } from "../src/lib/toolCatalog.js";
 
+test("exact Google Sheets identity wins over another connector's search aliases", () => {
+  replaceToolCatalog({ marketplace: [
+    { provider: "meta-ads-mcp", display_name: "A shared ads connector", connectable: true,
+      aliases: ["Google Sheets", "google-sheets"], connection_backend: "managed_mcp" },
+    { provider: "google-sheets", display_name: "Google Sheets", connectable: true,
+      connection_backend: "pipedream" },
+  ] });
+  assert.equal(catalogEntryFor("Google Sheets").provider, "google-sheets");
+  assert.equal(catalogEntryFor("google-sheets").provider, "google-sheets");
+});
+
+test("an ambiguous alias never silently selects the first unrelated connector", () => {
+  replaceToolCatalog({ marketplace: [
+    { provider: "first", display_name: "First", connectable: true, aliases: ["Shared app"] },
+    { provider: "second", display_name: "Second", connectable: true, aliases: ["Shared app"] },
+  ] });
+  assert.equal(catalogEntryFor("Shared app"), null);
+  assert.equal(catalogEntryFor(""), null);
+  assert.equal(catalogEntryFor("second").provider, "second");
+});
+
 test("managed social connections share app cards and preserve existing authorization routes", () => {
   replaceToolCatalog({ marketplace: [
     { provider: "x", display_name: "X (Twitter)", connectable: true, connection_backend: "native", preferred_connection: true },
