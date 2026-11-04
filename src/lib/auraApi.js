@@ -1,6 +1,7 @@
 import { createFrontendClient } from "@pipedream/sdk/browser";
 import { shopifyCredentialDialog } from "@/lib/shopifyCredentialDialog";
 import { redirectConnectorAuthorization } from "@/lib/connectionNavigation.mjs";
+import { connectionTask, connectionPollDelay, CONNECTION_REQUEST_TIMEOUT_MS, CONNECTION_CANCELLED } from "@/lib/connectionAttempt.mjs";
 
 const API_URL = (import.meta.env.VITE_AURA_API_URL || "").replace(/\/$/, "");
 const WORKSPACE_KEY = "aura_python_workspace_id";
@@ -36,15 +37,12 @@ async function request(path, options = {}) {
   const fetchOptions = { ...options };
   delete fetchOptions.timeoutMs;
   delete fetchOptions.workspaceId;
-  const performRequest = async (token) => {
-    const controller = timeoutMs > 0 ? new AbortController() : null;
-    const timeout = controller
-      ? window.setTimeout(() => controller.abort(), timeoutMs)
-      : null;
-    try {
+  return connectionTask(async (signal) => {
+    const performRequest = async (token) => {
+      if (signal.aborted) throw signal.reason;
       const response = await fetch(`${API_URL}${path}`, {
         ...fetchOptions,
-        signal: fetchOptions.signal || controller?.signal,
+        signal,
         headers: {
           "Content-Type": "application/json",
           ...(workspaceId ? { "X-Workspace-Id": workspaceId } : {}),
@@ -54,30 +52,26 @@ async function request(path, options = {}) {
       });
       const data = await response.json().catch(() => ({}));
       return { response, data };
-    } finally {
-      if (timeout) window.clearTimeout(timeout);
+    };
+
+    let token = tokenProvider ? await tokenProvider() : null;
+    let result = await performRequest(token);
+
+    if (result.response.status === 401 && tokenProvider) {
+      token = await tokenProvider({ skipCache: true });
+      result = await performRequest(token);
     }
-  };
 
-  let token = tokenProvider ? await tokenProvider() : null;
-  let result = await performRequest(token);
-
-  if (result.response.status === 401 && tokenProvider) {
-    token = await tokenProvider({ skipCache: true });
-    result = await performRequest(token);
-  }
-
-  // A transient/expired access token must not destroy the workspace identity.
-  // Connections are persisted against that workspace, so clearing it here made
-  // healthy apps look disconnected after a reload. Explicit sign-out remains
-  // responsible for calling clearWorkspace().
-  if (!result.response.ok) {
-    const error = new Error(messageFrom(result.data, result.response.status));
-    error.status = result.response.status;
-    error.details = result.data;
-    throw error;
-  }
-  return result.data;
+    // A transient/expired access token must not destroy the workspace identity.
+    // Explicit sign-out remains responsible for calling clearWorkspace().
+    if (!result.response.ok) {
+      const error = new Error(messageFrom(result.data, result.response.status));
+      error.status = result.response.status;
+      error.details = result.data;
+      throw error;
+    }
+    return result.data;
+  }, { signal: options.signal, timeoutMs });
 }
 
 export const auraRequest = request;
@@ -120,9 +114,11 @@ export async function createPythonWorkspace(name) {
   });
 }
 
-export async function listPythonTools() {
+export async function listPythonTools(options = {}) {
   await ensureWorkspace();
-  return request("/v1/tools");
+  return request("/v1/tools", {
+    method: "GET", signal: options.signal, timeoutMs: CONNECTION_REQUEST_TIMEOUT_MS,
+  });
 }
 
 export async function listAgentConnections() {
@@ -159,7 +155,7 @@ let managedConnectorStatus = null;
 export async function getManagedConnectorStatus(refresh = false) {
   await ensureWorkspace();
   if (refresh || !managedConnectorStatus) {
-    managedConnectorStatus = await request("/v1/managed-connectors/status");
+    managedConnectorStatus = await request("/v1/managed-connectors/status", { timeoutMs: CONNECTION_REQUEST_TIMEOUT_MS });
   }
   return managedConnectorStatus;
 }
@@ -177,7 +173,7 @@ export async function searchConnectorBrokerApps(query, limit = 30) {
   if (normalized.length < 2 && normalized.toLowerCase() !== "x") return { apps: [], count: 0, backends: {} };
   await ensureWorkspace();
   const params = new URLSearchParams({ q: normalized, limit: String(limit) });
-  return request(`/v1/connector-broker/apps?${params.toString()}`);
+  return request(`/v1/connector-broker/apps?${params.toString()}`, { timeoutMs: CONNECTION_REQUEST_TIMEOUT_MS });
 }
 
 export async function createConnectorBrokerSession(provider, connectionId = null, options = {}) {
@@ -188,6 +184,7 @@ export async function createConnectorBrokerSession(provider, connectionId = null
   const session = await request(`/v1/connector-broker/${encodeURIComponent(provider)}/session${query}`, {
     method: "POST",
     signal: options.signal,
+    timeoutMs: CONNECTION_REQUEST_TIMEOUT_MS,
   });
   const googleApps = {
     "google-sheets": "google_sheets", "google-docs": "google_docs",
@@ -202,22 +199,25 @@ export async function createConnectorBrokerSession(provider, connectionId = null
   return session;
 }
 
-export async function completeConnectorBrokerConnection(provider, accountId, connectionId = null, authorizationState = null) {
+export async function completeConnectorBrokerConnection(provider, accountId, connectionId = null, authorizationState = null, options = {}) {
   await ensureWorkspace();
   return request(`/v1/connector-broker/${encodeURIComponent(provider)}/complete`, {
     method: "POST",
     body: JSON.stringify({ account_id: accountId, connection_id: connectionId, authorization_state: authorizationState }),
+    timeoutMs: CONNECTION_REQUEST_TIMEOUT_MS, ...options,
   });
 }
 
-export async function syncManagedConnector(provider, connection = {}) {
+export async function syncManagedConnector(provider, connection = {}, options = {}) {
   await ensureWorkspace();
   const params = new URLSearchParams();
   if (connection.connectionId) params.set("connection_id", connection.connectionId);
   if (connection.externalConnectionId) params.set("external_connection_id", connection.externalConnectionId);
   if (connection.previousProviderUpdatedAt) params.set("previous_provider_updated_at", connection.previousProviderUpdatedAt);
   const query = params.size ? `?${params.toString()}` : "";
-  return request(`/v1/managed-connectors/${provider}/sync${query}`, { method: "POST" });
+  return request(`/v1/managed-connectors/${provider}/sync${query}`, {
+    method: "POST", timeoutMs: CONNECTION_REQUEST_TIMEOUT_MS, ...options,
+  });
 }
 
 export function reserveAuthorizationWindow(provider, reconnecting = false) {
@@ -236,12 +236,28 @@ function authorizationWindow(provider, reconnecting, reservedWindow) {
   return reserveAuthorizationWindow(provider, reconnecting);
 }
 
-export async function authorizeManagedConnector(provider, timeoutMs = 600000, reservedWindow = null, preparedSession = null) {
+export function authorizeManagedConnector(provider, timeoutMs = 600000, reservedWindow = null, preparedSession = null, controls = {}) {
   const popup = authorizationWindow(provider, false, reservedWindow);
+  return connectionTask((signal) => waitForManagedConnector(provider, timeoutMs, popup, preparedSession, { ...controls, signal }), {
+    signal: controls.signal, timeoutMs,
+    timeoutMessage: "Sign-in timed out. Click Connect to open a fresh sign-in window. Your plan is unchanged.",
+  }).finally(() => { if (!popup.closed) popup.close(); });
+}
+
+function reportConsentWindow(controls, popup, phase = "waiting") {
+  if (controls.signal?.aborted) return;
+  controls.onProgress?.({ phase, focus: () => { if (!popup.closed) popup.focus(); } });
+}
+
+async function waitForManagedConnector(provider, timeoutMs, popup, preparedSession, controls) {
+  const { signal } = controls;
   let session;
   try {
     await ensureWorkspace();
-    session = preparedSession || await request(`/v1/managed-connectors/${provider}/session`, { method: "POST" });
+    session = preparedSession || await request(`/v1/managed-connectors/${provider}/session`, {
+      method: "POST", signal, timeoutMs: CONNECTION_REQUEST_TIMEOUT_MS,
+    });
+    if (signal.aborted) throw signal.reason;
     if (session.connect_link) popup.location.href = session.connect_link;
     else if (!session.already_connected) throw new Error("AURA could not prepare this connection.");
   } catch (error) {
@@ -250,24 +266,37 @@ export async function authorizeManagedConnector(provider, timeoutMs = 600000, re
   }
   const startedAt = Date.now();
   let closedAt = null;
+  let failures = 0;
+  reportConsentWindow(controls, popup);
   while (Date.now() - startedAt < timeoutMs) {
-    await new Promise((resolve) => window.setTimeout(resolve, 1000));
-    const result = await syncManagedConnector(provider, {
-      connectionId: session.tool_connection_id,
-      externalConnectionId: session.external_connection_id,
-      previousProviderUpdatedAt: session.previous_provider_updated_at,
-    }).catch(() => null);
+    await connectionPollDelay(signal, Date.now() - startedAt < 30_000 ? 2000 : 5000);
+    let result;
+    try {
+      result = await syncManagedConnector(provider, {
+        connectionId: session.tool_connection_id,
+        externalConnectionId: session.external_connection_id,
+        previousProviderUpdatedAt: session.previous_provider_updated_at,
+      }, { signal });
+      if (failures) reportConsentWindow(controls, popup);
+      failures = 0;
+    } catch (error) {
+      if (signal.aborted) throw signal.reason;
+      if (++failures >= 3 || (error.status && error.status < 500 && error.status !== 429)) throw error;
+      reportConsentWindow(controls, popup, "retrying");
+    }
     if (result?.connected) {
-      const verification = await testPythonConnection(result.tool_id || result.connection_id).catch(() => null);
+      controls.onProgress?.({ phase: "verifying" });
+      const verification = await testPythonConnection(result.tool_id || result.connection_id, { signal });
       if (verification?.status === "verified" && verification.verification?.ok === true) {
         if (!popup.closed) popup.close();
-        const tools = await listPythonTools();
+        const tools = await listPythonTools({ signal });
         return {
           connected: true,
           managed: true,
           tool: tools.find((tool) => tool.id === (result.tool_id || result.connection_id)),
         };
       }
+      throw new Error("The app has not granted the access this plan needs. Please reconnect and approve the requested access.");
     }
     if (popup.closed) {
       closedAt ||= Date.now();
@@ -280,8 +309,16 @@ export async function authorizeManagedConnector(provider, timeoutMs = 600000, re
   throw new Error("The app did not finish connecting. AURA kept your plan unchanged.");
 }
 
-export async function authorizeOAuth(provider, timeoutMs = 120000, reservedWindow = null, preparedSession = null) {
+export function authorizeOAuth(provider, timeoutMs = 120000, reservedWindow = null, preparedSession = null, controls = {}) {
   const popup = authorizationWindow(provider, false, reservedWindow);
+  return connectionTask((signal) => waitForOAuth(provider, timeoutMs, popup, preparedSession, { ...controls, signal }), {
+    signal: controls.signal, timeoutMs,
+    timeoutMessage: "Sign-in timed out. Click Connect to try again. Your plan is unchanged.",
+  }).finally(() => { if (!popup.closed) popup.close(); });
+}
+
+async function waitForOAuth(provider, timeoutMs, popup, preparedSession, controls) {
+  const { signal } = controls;
   let authorization_url;
   let previousUpdatedAt = null;
   const oauthSignal = { current: null };
@@ -295,27 +332,34 @@ export async function authorizeOAuth(provider, timeoutMs = 120000, reservedWindo
     oauthSignal.current = event.data;
   };
   window.addEventListener("message", receiveOAuthResult);
+  const cleanup = () => {
+    window.removeEventListener("message", receiveOAuthResult);
+    signal.removeEventListener("abort", cleanup);
+  };
+  signal.addEventListener("abort", cleanup, { once: true });
   try {
     await ensureWorkspace();
-    const before = await listPythonTools().catch(() => []);
+    const before = await listPythonTools({ signal });
     const existing = before.find((tool) => tool.slug === provider);
     if (existing?.enabled && !preparedSession) {
       popup.close();
-      window.removeEventListener("message", receiveOAuthResult);
+      cleanup();
       return { connected: true, reused: true, tool: existing };
     }
     previousUpdatedAt = preparedSession?.previous_updated_at || existing?.updated_at || null;
-    ({ authorization_url } = preparedSession || await request(`/v1/oauth/${provider}/start`));
+    ({ authorization_url } = preparedSession || await request(`/v1/oauth/${provider}/start`, { signal, timeoutMs: CONNECTION_REQUEST_TIMEOUT_MS }));
+    if (signal.aborted) throw signal.reason;
   } catch (error) {
     popup.close();
-    window.removeEventListener("message", receiveOAuthResult);
+    cleanup();
     throw error;
   }
   popup.location.href = authorization_url;
+  reportConsentWindow(controls, popup);
   const started = Date.now();
   try {
     while (Date.now() - started < timeoutMs) {
-      await new Promise((resolve) => window.setTimeout(resolve, 1000));
+      await connectionPollDelay(signal, 1000);
       if (oauthSignal.current?.status === "error") {
         throw new Error(oauthSignal.current.message || "The app did not grant AURA access.");
       }
@@ -325,7 +369,8 @@ export async function authorizeOAuth(provider, timeoutMs = 120000, reservedWindo
         if (popup.closed) throw new Error("The app did not grant access. AURA kept your plan unchanged.");
         continue;
       }
-      const tools = await listPythonTools().catch(() => []);
+      controls.onProgress?.({ phase: "verifying" });
+      const tools = await listPythonTools({ signal });
       const connected = tools.find((tool) =>
         tool.enabled &&
         (tool.slug === provider || (tool.kind === "oauth" && tool.slug.includes(provider))) &&
@@ -350,11 +395,11 @@ export async function authorizeOAuth(provider, timeoutMs = 120000, reservedWindo
         : "The app did not finish connecting. AURA kept your plan unchanged."
     );
   } finally {
-    window.removeEventListener("message", receiveOAuthResult);
+    cleanup();
   }
 }
 
-async function authorizePipedreamConnector(provider, session, timeoutMs) {
+async function authorizePipedreamConnector(provider, session, timeoutMs, controls = {}) {
   return new Promise((resolve, reject) => {
     let settled = false;
     let renewed = false;
@@ -364,6 +409,7 @@ async function authorizePipedreamConnector(provider, session, timeoutMs) {
       if (settled) return;
       settled = true;
       window.clearTimeout(timer);
+      controls.signal?.removeEventListener("abort", cancel);
       controller.abort();
       document.querySelectorAll('iframe[id^="pipedream-connect-iframe-"]').forEach((frame) => frame.remove());
       callback(value);
@@ -371,6 +417,10 @@ async function authorizePipedreamConnector(provider, session, timeoutMs) {
     const timer = window.setTimeout(() => {
       finish(reject, new Error("The app did not finish connecting. AURA kept your plan unchanged."));
     }, timeoutMs);
+    const cancel = () => finish(reject, controls.signal?.reason || new Error(CONNECTION_CANCELLED));
+    if (controls.signal?.aborted) { cancel(); return; }
+    controls.signal?.addEventListener("abort", cancel, { once: true });
+    controls.onProgress?.({ phase: "waiting" });
 
     const renewSession = async () => {
       if (settled) return;
@@ -417,10 +467,12 @@ async function authorizePipedreamConnector(provider, session, timeoutMs) {
         onSuccess: ({ id }) => {
           if (settled || attemptFinished) return;
           attemptFinished = true;
+          controls.onProgress?.({ phase: "verifying" });
           completeConnectorBrokerConnection(
-            provider, id, current.connection_id, current.authorization_state,
+            provider, id, current.connection_id, current.authorization_state, { signal: controller.signal },
           ).then(async (result) => {
-            const tools = await listPythonTools();
+            if (settled) return;
+            const tools = await listPythonTools({ signal: controller.signal });
             const tool = tools.find((item) => item.id === result.connection_id);
             if (!tool) throw new Error(`${provider} access could not be verified.`);
             return { connected: true, managed: true, backend: "pipedream", tool };
@@ -448,18 +500,22 @@ async function authorizePipedreamConnector(provider, session, timeoutMs) {
 
 export async function authorizeConnectorBroker(
   provider,
-  { connection = null, timeoutMs = null, reservedWindow = null, sameTab = false } = {},
+  { connection = null, timeoutMs = null, reservedWindow = null, sameTab = false, signal, onProgress } = {},
 ) {
+  if (signal?.aborted) throw signal.reason;
+  onProgress?.({ phase: "preparing" });
   let session;
   try {
-    session = await createConnectorBrokerSession(provider, connection?.id || null);
+    session = await createConnectorBrokerSession(provider, connection?.id || null, { signal });
+    if (signal?.aborted) throw signal.reason;
   } catch (error) {
     if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
     throw error;
   }
   if (session.already_connected && session.connection_id) {
     if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
-    const tools = await listPythonTools();
+    onProgress?.({ phase: "verifying" });
+    const tools = await listPythonTools({ signal });
     const tool = tools.find((item) => item.id === session.connection_id);
     if (!tool) throw new Error(`${provider} access could not be verified.`);
     return { connected: true, reused: true, managed: true, backend: session.backend, tool };
@@ -468,7 +524,7 @@ export async function authorizeConnectorBroker(
     if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
     // Match the broker grant's default lifetime: account sign-in and multiple
     // verification factors routinely take longer than the old two-minute wait.
-    return authorizePipedreamConnector(provider, session, timeoutMs ?? 15 * 60 * 1000);
+    return authorizePipedreamConnector(provider, session, timeoutMs ?? 15 * 60 * 1000, { signal, onProgress });
   }
   if (session.backend === "shopify_client_credentials") {
     if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
@@ -481,22 +537,24 @@ export async function authorizeConnectorBroker(
     return { connected: true, managed: true, backend: session.backend, tool };
   }
   if (session.backend === "nango") {
-    return authorizeManagedConnector(provider, timeoutMs ?? 120000, reservedWindow, session);
+    return authorizeManagedConnector(provider, timeoutMs ?? 120000, reservedWindow, session, { signal, onProgress });
   }
   if (session.backend === "native" || session.backend === "zernio") {
     if (sameTab) {
       if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
       return redirectConnectorAuthorization(session);
     }
-    return authorizeOAuth(session.provider || provider, timeoutMs ?? 120000, reservedWindow, session);
+    return authorizeOAuth(session.provider || provider, timeoutMs ?? 120000, reservedWindow, session, { signal, onProgress });
   }
   if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
   throw new Error("AURA could not select a secure connection route for this app.");
 }
 
-export async function testPythonConnection(connectionId) {
+export async function testPythonConnection(connectionId, options = {}) {
   await ensureWorkspace();
-  return request(`/v1/connections/${connectionId}/test`, { method: "POST" });
+  return request(`/v1/connections/${connectionId}/test`, {
+    method: "POST", timeoutMs: CONNECTION_REQUEST_TIMEOUT_MS, ...options,
+  });
 }
 
 export async function listGoogleAdsAccounts(connectionId, loginCustomerId = "", search = "") {

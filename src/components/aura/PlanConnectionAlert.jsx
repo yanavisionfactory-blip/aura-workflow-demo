@@ -42,6 +42,8 @@ export default function PlanConnectionAlert({
   tools,
   connections,
   connectingTool,
+  progress,
+  onCancel,
   errors = {},
   onConnectAll,
   onRecheck,
@@ -92,13 +94,38 @@ export default function PlanConnectionAlert({
             ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
             : <Plus className="w-3.5 h-3.5" />}
           {isConnecting
-            ? `Connecting ${connectingTool}…`
+            ? progress?.phase === "replanning" ? "Updating your plan…"
+              : progress?.phase === "waiting" ? `Waiting for ${connectingTool} sign-in…`
+              : progress?.phase === "retrying" ? "Retrying connection check…"
+              : progress?.phase === "verifying" ? `Verifying ${connectingTool} access…`
+              : `Preparing ${connectingTool} sign-in…`
             : connectionEnabled
               ? needed.length === 1
                 ? needed[0].accessNeeded ? `Update ${needed[0].name} access` : `Connect ${needed[0].name}`
                 : "Connect or update remaining accounts"
               : "Validating required accounts…"}
         </button>
+        {isConnecting && progress && <div className="mt-3 text-xs">
+          <p role="status" aria-live="polite" className="text-muted-foreground">
+            {progress.phase === "replanning" ? "Rebuilding the plan for your selected connection. Nothing will run before review."
+              : progress.phase === "waiting"
+              ? progress.focus ? "Finish signing in and approving access in the window AURA opened."
+                : "Finish signing in and approving access in the connection form."
+              : progress.phase === "retrying" ? "The connection check is taking longer than usual. You can cancel and retry."
+                : progress.phase === "verifying" ? "Sign-in returned. AURA is checking the access needed for this plan."
+                  : "Opening secure sign-in. Your plan is saved."}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {progress.focus && <button type="button" onClick={progress.focus}
+              className="rounded-md border border-white/20 px-3 py-1.5 hover:bg-white/5">
+              Open sign-in window
+            </button>}
+            {onCancel && progress.phase !== "replanning" && <button type="button" onClick={onCancel}
+              className="rounded-md border border-white/20 px-3 py-1.5 hover:bg-white/5">
+              Cancel connection
+            </button>}
+          </div>
+        </div>}
       </div>
 
       <div className="divide-y divide-white/5">

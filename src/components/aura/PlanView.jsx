@@ -16,6 +16,7 @@ import { hasPlanConnectionGrant, planConnectionRequirements, buildPlanConnection
 import { planningConnectionsEnabled } from "@/lib/planningFlow.mjs";
 import { removeStepInstruction } from "@/lib/planPresentation.mjs";
 import { alternativePlanConnection, planConnectionRevision } from "@/lib/planConnectionRoutes.mjs";
+import { CONNECTION_CANCELLED } from "@/lib/connectionAttempt.mjs";
 const PLAN_REVISION_SCHEMA = {
   type: "object",
   properties: {
@@ -86,18 +87,26 @@ export default function PlanView({
     return () => { unsubscribe(); };
   }, []);
   const [connectingTool, setConnectingTool] = useState(null);
+  const [connectionProgress, setConnectionProgress] = useState(null);
+  const connectionAttemptRef = useRef(null);
+  useEffect(() => () => connectionAttemptRef.current?.abort(new Error(CONNECTION_CANCELLED)), []);
   const [connectionErrors, setConnectionErrors] = useState({});
   const hasRequiredGrant = hasPlanConnectionGrant;
   const checkingRef = useRef(false);
   const connectingRef = useRef(false);
   const handleConnect = async (tool) => {
+    const controller = new AbortController();
+    connectionAttemptRef.current = controller;
     setConnectingTool(tool.name);
+    setConnectionProgress({ phase: "preparing" });
     setConnectionErrors((prev) => ({ ...prev, [tool.key]: "" }));
     try {
-      const res = await connectTool(tool.name, { provider: tool.provider });
-      if (res.connected) {
-        await hydrateConnections({ force: true });
-      }
+      const res = await connectTool(tool.name, {
+        provider: tool.provider, signal: controller.signal,
+        onProgress: (progress) => {
+          if (!controller.signal.aborted && connectionAttemptRef.current === controller) setConnectionProgress(progress);
+        },
+      });
       return res;
     } catch (e) {
       setConnectionErrors((prev) => ({
@@ -105,11 +114,16 @@ export default function PlanView({
         [tool.key]: e?.message || `AURA couldn't connect ${tool.name}. Your plan is unchanged.`,
       }));
     } finally {
-      setConnectingTool(null);
+      if (connectionAttemptRef.current === controller) {
+        connectionAttemptRef.current = null;
+        setConnectingTool(null);
+        setConnectionProgress(null);
+      }
     }
   };
 
   const handleConnectAll = async () => {
+    if (connectingRef.current) return;
     connectingRef.current = true;
     const recovered = [];
     const authorized = new Map();
@@ -173,6 +187,7 @@ export default function PlanView({
     if (!provider || !onRevisePlan || connectingRef.current) return;
     connectingRef.current = true;
     setConnectingTool(tool.name);
+    setConnectionProgress({ phase: "replanning" });
     setConnectionErrors((previous) => ({ ...previous, [tool.key]: "" }));
     try {
       const revision = planConnectionRevision(tool, provider, plan.connectionRoutes);
@@ -183,6 +198,7 @@ export default function PlanView({
     } finally {
       connectingRef.current = false;
       setConnectingTool(null);
+      setConnectionProgress(null);
     }
   };
 
@@ -431,6 +447,8 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         }))}
         connections={effectiveConnections}
         connectingTool={connectingTool}
+        progress={connectionProgress}
+        onCancel={() => connectionAttemptRef.current?.abort(new Error(CONNECTION_CANCELLED))}
         errors={connectionErrors}
         onConnectAll={handleConnectAll}
         onRecheck={handleRecheck}

@@ -2,6 +2,7 @@ import { replaceConnections } from "@/lib/connectionsStore";
 import { isVerifiedConnection, matchingConnections, selectConnection } from "@/lib/connectionSelection.mjs";
 import { clearAuthorizationNavigation, usesSameTabAuthorization } from "@/lib/connectionNavigation.mjs";
 import { googleAdsAccountDialog } from "@/lib/googleAdsAccountDialog";
+import { connectionTask, CONNECTION_REQUEST_TIMEOUT_MS } from "@/lib/connectionAttempt.mjs";
 import {
   authorizeConnectorBroker,
   disconnectPythonConnection,
@@ -38,7 +39,14 @@ export async function chooseGoogleAdsAccount(tool, { force = false } = {}) {
   return selected ? { ...tool, google_ads_account: selected } : tool;
 }
 
-export async function connectTool(toolName, opts = {}) {
+export function connectTool(toolName, opts = {}) {
+  return connectionTask((signal) => connectToolAttempt(toolName, { ...opts, signal }), {
+    signal: opts.signal, timeoutMs: opts.timeoutMs ?? 600000,
+    timeoutMessage: "Sign-in timed out. Click Connect to try again. Your plan is unchanged.",
+  });
+}
+
+async function connectToolAttempt(toolName, opts) {
   if (!pythonRuntimeEnabled) {
     throw new Error("AURA's secure connection service is not available right now.");
   }
@@ -47,6 +55,8 @@ export async function connectTool(toolName, opts = {}) {
   // Reserve a native consent window in the click's user gesture, before any
   // catalog/account request. Otherwise Safari can silently block Update access.
   let authorizationWindow = null;
+  const closeWindow = () => { if (authorizationWindow && !authorizationWindow.closed) authorizationWindow.close(); };
+  opts.signal.addEventListener("abort", closeWindow, { once: true });
   try {
     const knownEntry = catalogEntryFor(toolName);
     const knownRoute = knownEntry?.routes?.find((route) => route.provider === requestedProvider);
@@ -58,7 +68,8 @@ export async function connectTool(toolName, opts = {}) {
       && !["pipedream", "wordpress_plugin", "shopify_client_credentials"].includes(knownBackend)) {
       authorizationWindow = reserveAuthorizationWindow(knownProvider);
     }
-    const entry = await ensurePlanConnectionRoute(toolName, requestedProvider, searchConnectorBrokerApps);
+    const bounded = (operation) => connectionTask(operation, { signal: opts.signal, timeoutMs: CONNECTION_REQUEST_TIMEOUT_MS });
+    const entry = await bounded(() => ensurePlanConnectionRoute(toolName, requestedProvider, searchConnectorBrokerApps));
     if (!entry?.connectable || !entry.provider) {
       throw new Error(`${toolName} is not available as a verified one-click connector yet. ` +
         "Your work remains saved and no API key or MCP setup is required from you.");
@@ -70,12 +81,14 @@ export async function connectTool(toolName, opts = {}) {
       throw new Error(`${toolName} needs its exact plan connection. This connector route is not available for one-click access yet.`);
     }
     const provider = requestedRoute?.provider || entry.provider;
-    const existing = await getToolConnection(toolName, opts.connectionId, provider, {
+    const existing = await bounded((signal) => getToolConnection(toolName, opts.connectionId, provider, {
       // A fresh Connect action must keep the preferred provider shown on the
       // card. A broad Google Workspace entry is not a Google Sheets account
       // on that route. Explicit reconnects still retain their chosen account.
       exactProvider: Boolean(requestedProvider || (!opts.connectionId && entry.preferredConnection)),
-    });
+      signal,
+    }));
+    if (opts.signal.aborted) throw opts.signal.reason;
     const authorizationProvider = existing?.slug || provider;
     const backend = existing?.connection_backend || requestedRoute?.connectionBackend || entry.connectionBackend;
     const sameTab = usesSameTabAuthorization(authorizationProvider, existing);
@@ -85,17 +98,21 @@ export async function connectTool(toolName, opts = {}) {
       timeoutMs: 600000,
       reservedWindow: authorizationWindow,
       sameTab,
+      signal: opts.signal,
+      onProgress: opts.onProgress,
     });
 
     if (result.redirecting) {
       return { method: "oauth", connected: false, authorizationStarted: true, provider: authorizationProvider };
     }
     if (!result.tool?.id) throw new Error(`${toolName} access could not be verified.`);
-    const verification = await testPythonConnection(result.tool.id);
+    opts.onProgress?.({ phase: "verifying" });
+    const verification = await testPythonConnection(result.tool.id, { signal: opts.signal });
     if (!isVerifiedConnection(verification)) {
       throw new Error(`AURA is still restoring ${toolName} access. Your work is preserved.`);
     }
-    const refreshedTools = await hydrateConnections({ force: true });
+    const refreshedTools = await bounded(() => hydrateConnections({ force: true }));
+    if (opts.signal.aborted) throw opts.signal.reason;
     const connection = await chooseGoogleAdsAccount(
       refreshedTools.find((tool) => tool.id === result.tool.id) || result.tool,
     );
@@ -106,8 +123,10 @@ export async function connectTool(toolName, opts = {}) {
       connection,
     };
   } catch (error) {
-    if (authorizationWindow && !authorizationWindow.closed) authorizationWindow.close();
+    closeWindow();
     throw error;
+  } finally {
+    opts.signal.removeEventListener("abort", closeWindow);
   }
 }
 export async function hydrateConnections({ force = false } = {}) {
@@ -160,7 +179,7 @@ export async function hydrateConnections({ force = false } = {}) {
 }
 
 export async function getToolConnection(toolName, connectionId = null, providerOverride = null, options = {}) {
-  const tools = await listPythonTools();
+  const tools = await listPythonTools({ signal: options.signal });
   return selectConnection(tools, {
     toolName,
     provider: providerOverride || providerForTool(toolName),
