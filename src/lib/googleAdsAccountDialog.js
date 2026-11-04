@@ -9,7 +9,7 @@ export function googleAdsAccountDialog({ load, save, selected = null }) {
       <form class="space-y-4">
         <h2 id="aura-ads-title" class="text-lg font-semibold">Choose your Google Ads account</h2>
         <p class="text-sm text-white/70">Google sign-in is saved. Choose the advertising account AURA should use for new workflows.</p>
-        <label data-access class="block text-sm" hidden>Account access<select name="access" class="mt-1 block w-full rounded-lg border border-white/20 bg-[#151421] p-3"></select></label>
+        <label data-access class="text-sm" hidden>Account access<select name="access" class="mt-1 block w-full rounded-lg border border-white/20 bg-[#151421] p-3"></select></label>
         <label class="block text-sm">Find an account by name<input name="search" type="search" autocomplete="off" maxlength="100" placeholder="Search your ad accounts" class="mt-1 block w-full rounded-lg border border-white/20 bg-black/25 p-3"></label>
         <label class="block text-sm">Advertising account<select name="account" required class="mt-1 block w-full rounded-lg border border-white/20 bg-[#151421] p-3"></select></label>
         <p data-status role="status" class="text-sm text-white/70"></p>
