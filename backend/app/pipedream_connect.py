@@ -448,6 +448,10 @@ class PipedreamClient:
                     status_code=response.status_code,
                     upstream_code=upstream_code,
                 )
+            # Deleting a connected account succeeds with an empty 204 response.
+            # Do not report successful remote revocation as malformed JSON.
+            if method.upper() == "DELETE" and response.status_code == 204:
+                return {}
             try:
                 result = response.json()
             except ValueError as exc:

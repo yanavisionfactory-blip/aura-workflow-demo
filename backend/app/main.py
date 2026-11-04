@@ -3000,10 +3000,14 @@ async def create_connector_broker_session(
             "aud": "aura-broker-complete", "workspace_id": context.workspace_id,
             "sub": context.subject, "provider": provider,
             "environment": environment,
-            "connection_id": connection_id, "iat": datetime.now(UTC),
+            "connection_id": selected_tool.id if selected_tool else None, "iat": datetime.now(UTC),
             "exp": datetime.now(UTC) + timedelta(minutes=15),
         }, settings.session_signing_key, algorithm="HS256"),
-        "account_id": selected_tool.external_connection_id if selected_tool else None,
+        # Disconnect deletes the remote account. Older revoked rows can still
+        # contain its ID; passing it to Connect makes even fresh tokens fail
+        # validation with Pipedream's generic "session expired" message.
+        "account_id": _pipedream_account_id(selected_tool)
+        if selected_tool and selected_tool.enabled else None,
         "connection_id": selected_tool.id if selected_tool else None,
         "connection_strategy": strategy,
         "setup_hint": str(
@@ -4479,6 +4483,10 @@ async def disconnect_connection(
         for related in shared or [tool]:
             related.enabled = False
             related.encrypted_credentials = None
+            if revocation["ok"] and (related.config or {}).get("managed_by") == "pipedream":
+                related.external_connection_id = None
+                related.external_account_id = None
+                related.config = {**related.config, "account_id": ""}
             manifest = await session.scalar(
                 select(CapabilityManifest).where(CapabilityManifest.tool_id == related.id)
             )
