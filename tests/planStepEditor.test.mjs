@@ -8,6 +8,7 @@ import { JSDOM } from "jsdom";
 import React, { act } from "react";
 
 const repo = fileURLToPath(new URL("../", import.meta.url));
+const navigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
 let temporary, dom, PlanStep, createRoot, Simulate;
 before(async () => {
   temporary = fs.mkdtempSync(path.join(repo, ".plan-editor-"));
@@ -37,6 +38,7 @@ before(async () => {
     HTMLElement: dom.window.HTMLElement, SVGElement: dom.window.SVGElement,
     requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
     cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window), IS_REACT_ACT_ENVIRONMENT: true });
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: dom.window.navigator });
   ({ createRoot } = await import("react-dom/client"));
   ({ Simulate } = await import("react-dom/test-utils"));
   ({ PlanStep } = await import(pathToFileURL(path.join(temporary, "editor.mjs"))));
@@ -44,6 +46,8 @@ before(async () => {
 after(() => {
   dom?.window.close();
   for (const key of ["window", "document", "HTMLElement", "SVGElement", "requestAnimationFrame", "cancelAnimationFrame", "IS_REACT_ACT_ENVIRONMENT"]) delete globalThis[key];
+  if (navigatorDescriptor) Object.defineProperty(globalThis, "navigator", navigatorDescriptor);
+  else delete globalThis.navigator;
   if (temporary) fs.rmSync(temporary, { recursive: true, force: true });
 });
 
