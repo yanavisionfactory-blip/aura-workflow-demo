@@ -11,8 +11,8 @@ import { CATALOG, catalogEntryFor } from "@/lib/toolCatalog";
 import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
 import { connectTool, getToolConnection, hydrateConnections } from "@/lib/connectService";
 import { testPythonConnection } from "@/lib/auraApi";
-import { isVerifiedConnection, planConnectionKey, planConnectionRoute } from "@/lib/connectionSelection.mjs";
-import { buildPlanConnectionTools, resolveRequirementTool } from "@/lib/planConnections.mjs";
+import { isVerifiedConnection } from "@/lib/connectionSelection.mjs";
+import { hasPlanConnectionGrant, planConnectionRequirements, buildPlanConnectionTools, requirementTools } from "@/lib/planConnections.mjs";
 import { planningConnectionsEnabled } from "@/lib/planningFlow.mjs";
 import { removeStepInstruction } from "@/lib/planPresentation.mjs";
 const PLAN_REVISION_SCHEMA = {
@@ -65,6 +65,7 @@ export default function PlanView({
   omittedTools = [],
   onRevisePlan,
   onRetryPlan,
+  busy = false,
 }) {
   const [readinessPassed, setReadinessPassed] = useState(false);
   const [steps, setSteps] = useState(plan.steps);
@@ -85,17 +86,7 @@ export default function PlanView({
   }, []);
   const [connectingTool, setConnectingTool] = useState(null);
   const [connectionErrors, setConnectionErrors] = useState({});
-  const hasRequiredGrant = useCallback((tool, account) => Boolean(account)
-    && (!tool.provider || account.slug === tool.provider)
-    && (plan.connectionChecklist || [])
-      .filter((requirement) => requirement.status !== "satisfied"
-        && String(requirement.reason || "").startsWith("Authorize exact operations")
-        && (tool.provider
-          ? (requirement.provider_hint || requirement.capability) === tool.provider
-          : resolveRequirementTool(requirement.provider_hint || requirement.capability,
-            requirement.required_permissions) === tool.name))
-      .every((requirement) => (requirement.required_permissions || [])
-        .every((operation) => (account.allowed_operations || []).includes(operation))), [plan.connectionChecklist]);
+  const hasRequiredGrant = hasPlanConnectionGrant;
   const checkingRef = useRef(false);
   const connectingRef = useRef(false);
   const handleConnect = async (tool) => {
@@ -120,9 +111,12 @@ export default function PlanView({
   const handleConnectAll = async () => {
     connectingRef.current = true;
     const recovered = [];
+    const authorized = new Map();
     try {
       for (const tool of needed) {
-        const result = await handleConnect(tool);
+        const route = tool.provider || tool.key;
+        const result = authorized.get(route) || await handleConnect(tool);
+        if (result?.connected) authorized.set(route, result);
         if (!result?.connected) return;
         if (!hasRequiredGrant(tool, result.connection)) {
           setConnectionErrors((previous) => ({ ...previous, [tool.key]:
@@ -143,6 +137,7 @@ export default function PlanView({
   };
 
 
+  // Distinct external integrations the plan touches, with the reason each is needed.
   const planTools = useMemo(() => buildPlanConnectionTools(steps, plan),
     [steps, plan.connectionChecklist, plan.connectionRequirements]);
 
@@ -156,13 +151,8 @@ export default function PlanView({
     requiredReconnectTools.forEach((toolName) => {
       planTools.filter((tool) => tool.name === toolName).forEach((tool) => { next[tool.key] = false; });
     });
-    const authoritativeRequirements = plan.connectionChecklist?.length
-      ? plan.connectionChecklist.filter((requirement) => requirement.status !== "satisfied")
-      : (plan.connectionRequirements || []);
-    authoritativeRequirements.forEach((requirement) => {
-      const raw = planConnectionRoute(requirement);
-      const name = resolveRequirementTool(raw, requirement.required_permissions);
-      if (name) next[planConnectionKey(name, raw)] = false;
+    planConnectionRequirements(plan).forEach((requirement) => {
+      requirementTools(requirement, steps).forEach((tool) => { next[tool.key] = false; });
     });
     return next;
   }, [connections, requiredReconnectTools, plan.connectionChecklist, plan.connectionRequirements, planTools]);
@@ -178,7 +168,7 @@ export default function PlanView({
   const connectionsCanOpen = planningConnectionsEnabled(plan.compileState);
 
   const handleRecheck = useCallback(async (targetKey = "", silent = false) => {
-    if (!connectionsReady || !needed.length || checkingRef.current || connectingRef.current) return;
+    if (busy || !connectionsReady || !needed.length || checkingRef.current || connectingRef.current) return;
     checkingRef.current = true;
     if (!silent) setConnectingTool(needed.find((tool) => tool.key === targetKey)?.name || "accounts");
     try {
@@ -208,10 +198,10 @@ export default function PlanView({
       checkingRef.current = false;
       if (!silent) setConnectingTool(null);
     }
-  }, [connectionsReady, needed, onConnectionRecovered, hasRequiredGrant]);
+  }, [busy, connectionsReady, needed, onConnectionRecovered]);
 
   useEffect(() => {
-    if (!connectionsReady || !needed.length || !connectionsCanOpen) return undefined;
+    if (busy || !connectionsReady || !needed.length || !connectionsCanOpen) return undefined;
     // Consent may finish in another tab, browser or device. The plan checks
     // verified backend state while visible; it never infers consent from the
     // popup closing and never starts an external action automatically.
@@ -224,7 +214,7 @@ export default function PlanView({
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onFocus);
     };
-  }, [connectionsReady, needed.length, connectionsCanOpen, handleRecheck]);
+  }, [busy, connectionsReady, needed.length, connectionsCanOpen, handleRecheck]);
 
   const onDragEnd = (res) => {
     if (!res.destination || res.source.index === res.destination.index) return;
@@ -365,8 +355,8 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
 
       {omittedTools.length > 0 && (
         <div className="mb-4 rounded-xl border border-amber-400/25 bg-amber-400/5 p-3 text-xs text-amber-100">
-          New plan without {omittedTools.join(", ")}. Any dependent steps and links must be removed.
-          Review the revised plan before starting it.
+          This plan leaves out {omittedTools.join(", ")} and its dependent steps.
+          Review the updated plan before starting it.
         </div>
       )}
 
@@ -457,6 +447,11 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         </div>
       )}
 
+      {!busy && plan.compileState !== "blocked" && plan.appliedRevision && <div role="status" className="mb-4 rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-4 text-sm">
+        <p className="font-medium text-emerald-300">Plan updated</p>
+        <p className="mt-1 text-muted-foreground">{plan.appliedRevision}</p>
+      </div>}
+
       {!connectionOnly && !planningFailure && <>
 
       {/* Steps */}
@@ -465,7 +460,7 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
           {(provided) => (
             <div {...provided.droppableProps} ref={provided.innerRef} className="mb-2">
               {steps.map((step, i) => (
-                <Draggable key={i} draggableId={`step-${i}`} index={i}>
+                <Draggable key={step.key || i} draggableId={`step-${i}`} index={i} isDragDisabled={busy}>
                   {(p) => (
                     <PlanStep
                       step={step}
@@ -476,7 +471,7 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
                       onDelete={() => deleteStep(i)}
                       onRequestChange={onRevisePlan
                         ? (instruction) => onRevisePlan(
-                          `For “${step.title || step.action || `step ${i + 1}`}”: ${instruction}`
+                          `For step ${i + 1}${step.key ? ` (${step.key})` : ""}, “${step.title || step.action || "this step"}”: ${instruction}`
                         )
                         : undefined}
                       forceEdit={forceEditIndex === i}

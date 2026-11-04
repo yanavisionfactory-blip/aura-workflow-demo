@@ -117,7 +117,7 @@ test("the UI displays the validated backend LLM plan without a second browser pl
   assert.equal(source.includes("prompt: languageDraftPrompt("), false);
   assert.equal(source.includes("aura_visible_plan:"), false);
   assert.equal(source.includes("run.inputs?.aura_visible_plan"), false);
-  assert.equal(source.includes("const completedPlan = { ...uiPlanFromRun(run)"), true);
+  assert.equal(source.includes("...uiPlanFromRun(run), provisional: false, compileState: \"ready\""), true);
   assert.equal(source.includes("setPlan(completedPlan)"), true);
   assert.equal(source.includes("unmatchedWriteTools("), false);
   assert.equal(source.includes("AURA is repairing an invalid plan before execution."), false);

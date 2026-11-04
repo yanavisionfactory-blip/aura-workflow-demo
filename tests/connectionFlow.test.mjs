@@ -199,6 +199,20 @@ function googleConnectionSelection(tools, { name = "Google Sheets", provider = "
   return requests;
 }
 
+test("Update Sheets access reserves native consent before asynchronous account discovery", async () => {
+  const requests = googleConnectionSelection([{
+    id: "workspace", slug: "google", display_name: "Google Workspace",
+    connection_backend: "native", allowed_operations: ["sheets.read_range"],
+  }]);
+  const update = flow.connectTool("Google Sheets", { provider: "google" });
+  assert.equal(window.popups.length, 1, "consent window opens in the original click gesture");
+  assert.equal(requests.length, 0, "account discovery has not completed yet");
+  await assert.rejects(update, /Stop before consent/);
+  assert.equal(requests[0].pathname, "/v1/connector-broker/google/session");
+  assert.equal(requests[0].searchParams.get("connection_id"), "workspace");
+  assert.equal(window.popups[0].closed, true, "failed consent cleans up its preparation window");
+});
+
 for (const app of [
   { name: "Google Sheets", provider: "google-sheets", operation: "sheets.read_range" },
   { name: "Google Docs", provider: "google-docs", operation: "docs.create" },

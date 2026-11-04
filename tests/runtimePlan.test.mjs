@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { hasDurablePlan, planningRequestPrompt, restorablePlanningRun, savedRunResumeView, sameExecutablePlan, unmatchedWriteTools, shouldRestoreRememberedRun, savedRunActionLocation, workflowInputPrompt } from "../src/lib/runtimePlan.mjs";
+import { hasDurablePlan, planningRequestPrompt, planningRevisionOutcome, restorablePlanningRun, savedRunResumeView, sameExecutablePlan, unmatchedWriteTools, shouldRestoreRememberedRun, savedRunActionLocation, workflowInputPrompt } from "../src/lib/runtimePlan.mjs";
 
 test("a delayed remembered run cannot replace a newly selected workflow", async () => {
   let finishRead;
@@ -85,6 +85,31 @@ test("a planner that ignores a requested edit cannot be presented as a revised p
   const original = [{ tool_slug: "canva", operation: "canva.presentation.create", arguments: { phases: [{ title: "One" }] }, reason: "One slide" }];
   assert.equal(sameExecutablePlan(original, structuredClone(original)), true);
   assert.equal(sameExecutablePlan(original, [{ ...original[0], arguments: { phases: [{ title: "One" }, { title: "Two" }] } }]), false);
+});
+
+test("a revision waiting for a connection persists its updated intent for subsequent edits", () => {
+  const before = [{ key: "sheet", tool_slug: "google", operation: "sheets.create", arguments: { title: "Old" } }];
+  const after = [{ ...before[0], arguments: { title: "Marketing KPI Dashboard" } }];
+  const result = planningRevisionOutcome("Create a Google Sheet", {
+    instruction: "Name it Marketing KPI Dashboard", reviewedSteps: before,
+  }, after);
+  assert.equal(result.status, "applied");
+  const nextPrompt = planningRequestPrompt(result.interpretation, "Add a Leads tab", after);
+  assert.match(nextPrompt, /Name it Marketing KPI Dashboard/);
+  assert.match(nextPrompt, /Add a Leads tab/);
+  assert.match(nextPrompt, /"title":"Marketing KPI Dashboard"/);
+});
+
+test("cosmetic planner changes do not masquerade as applied execution changes", () => {
+  const before = [{ key: "sheet", tool_slug: "google", operation: "sheets.create",
+    arguments: { title: "Old", tabs: ["Revenue"] }, reason: "Create sheet" }];
+  const after = [{ ...before[0], key: "new_sheet", reason: "Create the revised sheet",
+    arguments: { tabs: ["Revenue"], title: "Old" }, expected_output: "Updated sheet" }];
+  assert.equal(sameExecutablePlan(before, after), true);
+  assert.equal(planningRevisionOutcome("Create a Sheet", {
+    instruction: "Name it New", reviewedSteps: before,
+  }, after).status, "unchanged");
+  assert.equal(planningRevisionOutcome("Create a Sheet", { instruction: "Name it New" }, []).status, "pending");
 });
 
 test("a hidden executable write cannot bypass the LLM plan the user reviewed", () => {

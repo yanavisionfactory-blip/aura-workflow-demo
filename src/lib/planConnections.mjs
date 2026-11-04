@@ -1,104 +1,82 @@
 import { CATALOG, catalogEntryFor } from "./toolCatalog.js";
 import { planConnectionKey, planConnectionRoute } from "./connectionSelection.mjs";
 
-const resolveTool = (raw) => {
-  if (!raw || typeof raw !== "string") return null;
-  const key = raw.trim().toLowerCase();
-  if (key === "aura intelligence") return null;
-  return catalogEntryFor(key)?.name || null;
+const GOOGLE_APPS = {
+  gmail: "Gmail",
+  calendar: "Google Calendar",
+  docs: "Google Docs",
+  sheets: "Google Sheets",
+  drive: "Google Drive",
 };
+const slugify = (value) => String(value || "").trim().toLowerCase()
+  .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+const resolveTool = (raw) => raw && raw !== "AURA Intelligence"
+  ? catalogEntryFor(raw)?.name || null : null;
+const googleApp = (operation) => GOOGLE_APPS[String(operation || "").split(".")[0]];
 
-const slugifyTool = (value) => String(value || "")
-  .trim()
-  .toLowerCase()
-  .replace(/[^a-z0-9]+/g, "-")
-  .replace(/^-|-$/g, "");
-
-const REQUIREMENT_ALIASES = {
-  google: "Google Drive",
-  "google-workspace": "Google Drive",
-  atlassian: "Jira",
-  jira: "Jira",
-};
-
-export const resolveRequirementTool = (raw, permissions = []) => {
-  const value = String(raw || "").trim();
-  if (["google", "google-workspace"].includes(slugifyTool(value))) {
-    if (permissions.some((operation) => operation.startsWith("gmail."))) return "Gmail";
-    if (permissions.some((operation) => operation.startsWith("calendar."))) return "Google Calendar";
-    if (permissions.some((operation) => operation.startsWith("docs."))) return "Google Docs";
-    if (permissions.some((operation) => operation.startsWith("sheets."))) return "Google Sheets";
-  }
-  const catalogMatch = catalogEntryFor(value);
-  if (catalogMatch) return catalogMatch.name;
-  const slug = slugifyTool(value);
-  if (REQUIREMENT_ALIASES[slug]) return REQUIREMENT_ALIASES[slug];
-  const exact = CATALOG.find(
-    (tool) => slugifyTool(tool.name) === slug || tool.name.toLowerCase() === value.toLowerCase()
-  );
-  if (exact) return exact.name;
-  const contained = CATALOG.find((tool) => value.toLowerCase().includes(tool.name.toLowerCase()));
-  return contained?.name || value;
-};
-
-const toolsForStep = (step) => {
-  const names = [step.tool, ...(step.flow || []).filter((item) => item.label === "Uses").map((item) => item.value)]
-    .map(resolveTool)
-    .filter(Boolean);
-  return [...new Set(names)];
-};
-
-// Recompute the checklist from this proposal so a revision cannot retain
-// account requirements that belonged to the previous plan.
-export function buildPlanConnectionTools(steps = [], plan = {}) {
-  const seen = new Set();
-  const out = [];
-  steps.forEach((s) => {
-    toolsForStep(s).forEach((t) => {
-      const provider = resolveTool(s.tool) === t ? s.toolSlug || s.tool_slug || null : null;
-      const key = planConnectionKey(t, provider);
-      if (!t || seen.has(key)) return;
-      seen.add(key);
-      const match = steps.find(
-        (st) =>
-          resolveTool(st.tool) === t ||
-          (st.flow || []).some((f) => f.label === "Uses" && resolveTool(f.value) === t)
-      );
-      out.push({ key, name: t, provider, reason: match ? match.iWill || match.action || "" : "" });
-    });
-  });
-  const requirements = plan.connectionChecklist?.length
-    ? plan.connectionChecklist.filter((requirement) => requirement.status !== "satisfied")
+export function planConnectionRequirements(plan = {}) {
+  return plan.connectionChecklist?.length
+    ? plan.connectionChecklist.filter((item) => item.status !== "satisfied")
     : (plan.connectionRequirements || []);
-  requirements.forEach((requirement) => {
-    const raw = planConnectionRoute(requirement);
-    const name = resolveRequirementTool(raw, requirement.required_permissions);
-    if (!name) return;
-    const provider = raw;
-    const key = planConnectionKey(name, provider);
-    const accessNeeded = typeof requirement === "object"
-      && String(requirement.reason || "").startsWith("Authorize exact operations");
-    const existing = out.find((item) => item.name === name
-      && (!item.provider || item.provider === provider));
-    if (existing) {
-      seen.delete(existing.key);
-      existing.key = key;
-      existing.provider = provider;
-      seen.add(key);
-      if (existing && accessNeeded) existing.accessNeeded = true;
-      return;
+}
+
+// A shared Google account is an execution route, not a request for Drive.
+// Label each required permission by its actual app, including mixed grants.
+export function requirementTools(requirement, steps = []) {
+  const provider = planConnectionRoute(requirement);
+  const permissions = requirement?.required_permissions || [];
+  let names;
+  if (["google", "google-workspace"].includes(slugify(provider))) {
+    const operations = permissions.length ? permissions : steps
+      .filter((step) => (step.toolSlug || step.tool_slug) === provider)
+      .map((step) => step.operation);
+    names = [...new Set(operations.map(googleApp).filter(Boolean))];
+    if (!names.length) names = ["Google Workspace"];
+  } else {
+    const name = resolveTool(provider)
+      || ({ atlassian: "Jira", jira: "Jira" })[slugify(provider)]
+      || CATALOG.find((tool) => slugify(tool.name) === slugify(provider))?.name
+      || provider;
+    names = name ? [name] : [];
+  }
+  return names.map((name) => ({
+    key: planConnectionKey(name, provider), name, provider,
+    accessNeeded: String(requirement?.reason || "").startsWith("Authorize exact operations"),
+    requiredPermissions: permissions.filter((operation) => !googleApp(operation) || googleApp(operation) === name),
+    reason: `AURA needs ${name} access for the actions in this plan`,
+  }));
+}
+
+export function buildPlanConnectionTools(steps = [], plan = {}) {
+  const tools = [];
+  for (const step of steps) {
+    const names = [step.tool, ...(step.flow || [])
+      .filter((item) => item.label === "Uses").map((item) => item.value)]
+      .map(resolveTool).filter(Boolean);
+    for (const name of new Set(names)) {
+      const provider = resolveTool(step.tool) === name ? step.toolSlug || step.tool_slug || null : null;
+      const key = planConnectionKey(name, provider);
+      if (!tools.some((tool) => tool.key === key)) tools.push({
+        key, name, provider, reason: step.iWill || step.action || "", requiredPermissions: [],
+      });
     }
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push({
-      key,
-      name,
-      provider,
-      accessNeeded,
-      reason: typeof requirement === "object" && requirement.reason
-        ? requirement.reason
-        : `AURA needs ${name} access to finish building this plan`,
-    });
-  });
-  return out;
+  }
+  for (const requirement of planConnectionRequirements(plan)) {
+    for (const tool of requirementTools(requirement, steps)) {
+      const existing = tools.find((item) => item.name === tool.name
+        && (!item.provider || item.provider === tool.provider));
+      if (existing) {
+        existing.key = tool.key;
+        existing.provider = tool.provider;
+        existing.accessNeeded ||= tool.accessNeeded;
+        existing.requiredPermissions = [...new Set([...existing.requiredPermissions, ...tool.requiredPermissions])];
+      } else tools.push(tool);
+    }
+  }
+  return tools;
+}
+
+export function hasPlanConnectionGrant(tool, account) {
+  return Boolean(account) && (!tool.provider || account.slug === tool.provider)
+    && (tool.requiredPermissions || []).every((operation) => (account.allowed_operations || []).includes(operation));
 }

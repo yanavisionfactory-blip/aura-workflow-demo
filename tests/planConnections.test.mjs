@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildPlanConnectionTools } from "../src/lib/planConnections.mjs";
+import { buildPlanConnectionTools, hasPlanConnectionGrant, requirementTools } from "../src/lib/planConnections.mjs";
 
 const sheets = { tool: "Google Sheets", toolSlug: "google", operation: "sheets.append",
   iWill: "update the spreadsheet", flow: [{ label: "Uses", value: "Google Sheets" }] };
@@ -68,3 +68,35 @@ for (const [name, operation] of [
     assert.deepEqual(tools.map((tool) => tool.name), [name]);
   });
 }
+
+test("a Sheets-only plan needing a shared Google grant has one Sheets row and no Drive requirement", () => {
+  const tools = buildPlanConnectionTools([sheets], {
+    connectionChecklist: [requirement(["sheets.kpi.create", "sheets.workbook.get"])],
+    connectionRequirements: ["google"],
+  });
+  assert.deepEqual(tools.map(({ name, provider, accessNeeded }) => ({ name, provider, accessNeeded })),
+    [{ name: "Google Sheets", provider: "google", accessNeeded: true }]);
+  assert.equal(hasPlanConnectionGrant(tools[0], { slug: "google", allowed_operations: ["sheets.kpi.create"] }), false);
+  assert.equal(hasPlanConnectionGrant(tools[0], { slug: "google", allowed_operations: ["sheets.kpi.create", "sheets.workbook.get"] }), true);
+  assert.equal(hasPlanConnectionGrant(tools[0], { slug: "google-sheets", allowed_operations: tools[0].requiredPermissions }), false);
+});
+
+test("mixed shared-account grants expose only the apps actually required", () => {
+  const tools = requirementTools(requirement(["sheets.append", "gmail.send", "calendar.get"]));
+  assert.deepEqual(tools.map((tool) => tool.name), ["Google Sheets", "Gmail", "Google Calendar"]);
+  assert.deepEqual(tools.map((tool) => tool.requiredPermissions), [["sheets.append"], ["gmail.send"], ["calendar.get"]]);
+  assert.equal(requirementTools(requirement(["drive.files.search"]))[0].name, "Google Drive");
+});
+
+test("legacy Google requirements use reviewed operations rather than inventing Drive access", () => {
+  assert.deepEqual(buildPlanConnectionTools([sheets], { connectionRequirements: ["google"] }).map((tool) => tool.name), ["Google Sheets"]);
+  assert.equal(requirementTools("google")[0].name, "Google Workspace");
+});
+
+test("rebuilding without Drive removes its row while preserving Sheets", () => {
+  const drive = { tool: "Google Drive", toolSlug: "google", operation: "drive.files.search" };
+  assert.deepEqual(buildPlanConnectionTools([drive, sheets]).map((tool) => tool.name), ["Google Drive", "Google Sheets"]);
+  assert.deepEqual(buildPlanConnectionTools([sheets], {
+    connectionChecklist: [{ ...requirement(["drive.files.search"]), status: "satisfied" }],
+  }).map((tool) => tool.name), ["Google Sheets"]);
+});

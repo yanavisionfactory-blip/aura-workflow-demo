@@ -74,15 +74,44 @@ export function savedRunResumeView(run = {}) {
 }
 
 export function sameExecutablePlan(before = [], after = []) {
-  const identity = (steps) => steps.map((step) => ({
-    tool_slug: step.tool_slug || step.tool,
-    operation: step.operation,
-    arguments: step.arguments,
-    reason: step.reason || step.action,
-    expected_output: step.expected_output || step.output,
-    depends_on: step.depends_on || [],
-  }));
+  const identity = (steps) => {
+    const positions = new Map(steps.filter((step) => step.key).map((step) => [step.key, steps.indexOf(step)]));
+    const normalize = (value) => {
+      if (typeof value === "string") return value.replace(/\{\{steps\.([a-z][a-z0-9_]*)\./g,
+        (match, key) => positions.has(key) ? `{{steps.${positions.get(key)}.` : match);
+      if (Array.isArray(value)) return value.map(normalize);
+      if (value && typeof value === "object") return Object.fromEntries(Object.keys(value).sort()
+        .map((key) => [key, normalize(value[key])]));
+      return value;
+    };
+    return steps.map((step) => normalize({
+      tool_slug: step.tool_slug || step.toolSlug || step.tool,
+      operation: step.operation,
+      arguments: step.arguments || {},
+      depends_on: (step.depends_on || []).map((key) => positions.get(key) ?? key).sort(),
+      dependency_mode: step.dependency_mode || "all_succeeded",
+      condition: step.condition || null,
+      optional: Boolean(step.optional),
+      consequential: step.consequential ?? step.riskLevel === "modify",
+      fallback_tool_slug: step.fallback_tool_slug || null,
+      fallback_operation: step.fallback_operation || null,
+      reduced_scope_arguments: step.reduced_scope_arguments || null,
+    }));
+  };
+  // Changed explanatory prose alone must not pass as an executable edit.
   return JSON.stringify(identity(before)) === JSON.stringify(identity(after));
+}
+
+// A compiled revision is still a revision when execution needs account access.
+// Persist its intent now so the next edit/retry starts from the reviewed scope.
+export function planningRevisionOutcome(intent, revision = {}, nextSteps = []) {
+  const instruction = String(revision.instruction || "").trim();
+  if (!instruction) return { status: "none", interpretation: intent };
+  if (!nextSteps.length) return { status: "pending", interpretation: intent };
+  if (revision.reviewedSteps?.length && sameExecutablePlan(revision.reviewedSteps, nextSteps)) {
+    return { status: "unchanged", error: "AURA returned the original plan without applying your change. Try a more specific edit." };
+  }
+  return { status: "applied", interpretation: `${intent}\n\n${instruction}`, instruction };
 }
 
 export function unmatchedWriteTools(visibleSteps = [], executableSteps = [], toolName = (step) => step.tool) {
