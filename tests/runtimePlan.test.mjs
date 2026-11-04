@@ -66,7 +66,8 @@ test("reloading a durable run restores the prepared approval or observes executi
     plan: { steps: [{ key: "send", operation: "gmail.send" }] },
     steps: [{ approval_status: "pending", approval_preview: { status: "ready",
       arguments: { to: "me", subject: "Today", body: "Prepared summary" } } }] };
-  assert.equal(savedRunResumeView(run), "preview");
+  assert.equal(savedRunResumeView(run), "execution", "restore keeps execution visible until preview is requested");
+  assert.equal(savedRunResumeView(run, { openPreview: true }), "preview");
   assert.equal(savedRunResumeView({ ...run, steps: [] }), "execution");
   assert.equal(savedRunResumeView({ ...run, status: "running" }), "execution");
   assert.equal(savedRunResumeView({ ...run, status: "recovering" }), "execution");
@@ -163,5 +164,6 @@ test("refresh restores a tool-output checkpoint before any later write approval"
   };
   assert.equal(savedRunResumeView(run), "execution");
   delete run.tool_output_review;
-  assert.equal(savedRunResumeView(run), "preview");
+  assert.equal(savedRunResumeView(run), "execution", "restore keeps execution visible until preview is requested");
+  assert.equal(savedRunResumeView(run, { openPreview: true }), "preview");
 });

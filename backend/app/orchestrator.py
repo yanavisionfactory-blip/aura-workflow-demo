@@ -811,6 +811,7 @@ async def _create_compiled_plan(
         for item in inventory
     }
     from .plan_connection_routes import (
+        prefer_connected_app_routes,
         route_bounded_inventory,
         selected_connection_routes,
         validate_plan_connection_routes,
@@ -818,6 +819,9 @@ async def _create_compiled_plan(
 
     connection_routes = selected_connection_routes(connection_routes, inventory)
     inventory = route_bounded_inventory(inventory, connection_routes)
+    inventory = prefer_connected_app_routes(
+        request_prompt or prompt, inventory, connected_inventory or [], manifests_by_slug,
+    )
     if excluded_tool_families:
         from .connection_families import capability_family
 
@@ -972,6 +976,13 @@ async def _create_compiled_plan(
         op for item in inventory for op in item.get("allowed_operations", [])
     }
     catalog_inventory = inventory
+    from .selected_tools import (
+        missing_selected_tools,
+        selected_tool_targets,
+        validate_selected_tools,
+    )
+
+    selected_targets = selected_tool_targets(requested_tool_names, catalog_inventory)
     from .campaign_report import workflow_recipe as campaign_report_recipe
     from .kpi_pilot import kpi_template
     from .workflow_templates import (
@@ -1018,6 +1029,9 @@ async def _create_compiled_plan(
             or weather_presentation_template(prompt, inventory)
             or notion_to_jira_template(prompt, inventory)
         )
+    if audited_plan is not None and missing_selected_tools(audited_plan, selected_targets):
+        # A generic recipe cannot silently discard the user's composer choices.
+        audited_plan = None
     if audited_plan is not None:
         reject_excluded_steps(audited_plan)
         _normalize_planned_steps(audited_plan, manifests_by_slug)
@@ -1059,6 +1073,13 @@ async def _create_compiled_plan(
         + ". Show its resolved arguments for approval before dispatch."
         for effect in required_effects
     ]
+    repair_requirements.extend(
+        "The user explicitly selected " + name
+        + ". Include a relevant required primary step for this app using its catalog operations on: "
+        + ", ".join(sorted({slug for slug, _ in targets}))
+        + ". Do not substitute another app or add unrelated writes."
+        for name, targets in selected_targets.items()
+    )
     from .audit_sources import AUDIT_SOURCE_MESSAGE, declared_audit_sources
 
     if declared_audit_sources(requested_text):
@@ -1099,6 +1120,7 @@ async def _create_compiled_plan(
             )
         try:
             reject_excluded_steps(plan)
+            validate_selected_tools(plan, selected_targets)
             requested = prompt.casefold()
             # A public forecast has a dedicated source. Never accept a plan
             # which substitutes a private document search for weather data.
@@ -1184,6 +1206,7 @@ def planning_error_message(exc: Exception) -> str:
     """Return a user-facing planning failure without leaking provider payloads."""
     from .audit_sources import AUDIT_SOURCE_MESSAGE, AuditSourceContractError
     from .proofing import ProofingSourceError
+    from .selected_tools import SelectedToolError
 
     # Recovery wrappers intentionally replace raw provider messages. Walk the
     # exception chain so operational categories such as quota exhaustion and
@@ -1196,6 +1219,8 @@ def planning_error_message(exc: Exception) -> str:
         if isinstance(current, AuditSourceContractError):
             return AUDIT_SOURCE_MESSAGE
         if isinstance(current, ProofingSourceError):
+            return str(current)
+        if isinstance(current, SelectedToolError):
             return str(current)
         chain.append(str(current))
         current = current.__cause__ or current.__context__
@@ -1817,6 +1842,9 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 plan = None
             if plan is not None:
                 try:
+                    from .selected_tools import selected_tool_targets, validate_selected_tools
+
+                    validate_selected_tools(plan, selected_tool_targets(requested_tools, inventory))
                     validate_requested_operations(
                         run.prompt, plan,
                         {op for item in inventory for op in item.get("allowed_operations", [])},
