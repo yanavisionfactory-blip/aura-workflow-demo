@@ -34,6 +34,44 @@ after(() => {
 const account = { id: "test-connection", slug: "agent-meta-ads-0123456789",
   display_name: "Meta Ads", canonical_provider: "meta-ads", connection_backend: "managed_mcp" };
 
+test("a forced refresh after consent waits for fresh permissions instead of returning an older in-flight snapshot", async () => {
+  setup();
+  let finishOldVerification, markOldVerificationStarted;
+  const oldVerification = new Promise((resolve) => { finishOldVerification = resolve; });
+  const oldVerificationStarted = new Promise((resolve) => { markOldVerificationStarted = resolve; });
+  let reads = 0;
+  let granted = ["sheets.read"];
+  globalThis.fetch = async (url) => {
+    const target = new URL(url);
+    if (target.pathname === "/v1/managed-connectors/status") return Response.json({});
+    if (target.pathname === "/v1/tools") {
+      reads += 1;
+      return Response.json([{ id: "google-account", slug: "google", kind: "oauth",
+        enabled: true, display_name: "Google Workspace", allowed_operations: granted }]);
+    }
+    if (target.pathname === "/v1/connections/google-account/test") {
+      if (reads === 1) {
+        markOldVerificationStarted();
+        await oldVerification;
+      }
+      return Response.json({ status: "verified", verification: { ok: true } });
+    }
+    throw new Error(`Unexpected request: ${target.pathname}`);
+  };
+
+  const background = flow.hydrateConnections({ force: true });
+  await oldVerificationStarted;
+  granted = ["sheets.read", "sheets.append"];
+  const afterConsent = flow.hydrateConnections({ force: true });
+  const concurrentRefresh = flow.hydrateConnections({ force: true });
+  finishOldVerification();
+  const [oldTools, updatedTools, concurrentTools] = await Promise.all([background, afterConsent, concurrentRefresh]);
+  assert.deepEqual(oldTools[0].allowed_operations, ["sheets.read"]);
+  assert.deepEqual(updatedTools[0].allowed_operations, ["sheets.read", "sheets.append"]);
+  assert.deepEqual(concurrentTools, updatedTools);
+  assert.equal(reads, 2);
+});
+
 function setup({ existing = false, failure = false } = {}) {
   const requests = [], navigations = [];
   const saved = new Map([["aura_python_workspace_id", "test-workspace"], ["aura_active_python_run_id", "saved-run"]]);

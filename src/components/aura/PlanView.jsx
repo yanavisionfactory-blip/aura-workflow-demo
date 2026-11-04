@@ -12,7 +12,7 @@ import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore"
 import { connectTool, getToolConnection, hydrateConnections } from "@/lib/connectService";
 import { testPythonConnection } from "@/lib/auraApi";
 import { isVerifiedConnection } from "@/lib/connectionSelection.mjs";
-import { hasPlanConnectionGrant, planConnectionRequirements, planConnectionTools, requirementTools } from "@/lib/planConnections.mjs";
+import { hasPlanConnectionGrant, planConnectionRequirements, buildPlanConnectionTools, requirementTools } from "@/lib/planConnections.mjs";
 import { planningConnectionsEnabled } from "@/lib/planningFlow.mjs";
 import { removeStepInstruction } from "@/lib/planPresentation.mjs";
 const PLAN_REVISION_SCHEMA = {
@@ -138,7 +138,7 @@ export default function PlanView({
 
 
   // Distinct external integrations the plan touches, with the reason each is needed.
-  const planTools = useMemo(() => planConnectionTools(steps, plan),
+  const planTools = useMemo(() => buildPlanConnectionTools(steps, plan),
     [steps, plan.connectionChecklist, plan.connectionRequirements]);
 
   // AURA handles connector discovery and setup. The only thing a user may need

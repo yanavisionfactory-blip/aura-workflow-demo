@@ -47,7 +47,7 @@ export function requirementTools(requirement, steps = []) {
   }));
 }
 
-export function planConnectionTools(steps = [], plan = {}) {
+export function buildPlanConnectionTools(steps = [], plan = {}) {
   const tools = [];
   for (const step of steps) {
     const names = [step.tool, ...(step.flow || [])

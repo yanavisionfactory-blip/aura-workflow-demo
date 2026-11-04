@@ -117,7 +117,14 @@ export async function hydrateConnections({ force = false } = {}) {
   if (!force && hydratedTools && Date.now() - hydratedAt < HYDRATION_TTL_MS) {
     return hydratedTools;
   }
-  if (hydrationPromise) return hydrationPromise;
+  if (hydrationPromise) {
+    if (!force) return hydrationPromise;
+    // Consent can finish while a background check still holds the old tool
+    // snapshot. Wait for it, then read again before checking the new grant.
+    await hydrationPromise.catch(() => null);
+    // Concurrent forced callers can share a refresh begun after that check.
+    if (hydrationPromise) return hydrationPromise;
+  }
 
   hydrationPromise = (async () => {
     const status = await getManagedConnectorStatus(force).catch(() => null);
