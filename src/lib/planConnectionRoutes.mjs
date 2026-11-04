@@ -4,9 +4,10 @@ export function alternativePlanConnection(tool, catalog = []) {
   const provider = APP_ROUTES[tool.name];
   if (!provider || !["google", "google-workspace"].includes(tool.provider)) return null;
   const entry = catalog.find((item) => item.name === tool.name);
-  if (!entry?.preferredConnection || !entry.connectable || entry.provider !== provider
-    || entry.connectionBackend !== "pipedream"
-    || !entry.routes?.some((route) => route.provider === provider && route.connectable)) return null;
+  // A verified alternative remains usable even when the catalog's default is
+  // the shared Google account. Search ranking is not a connection permission.
+  if (!entry?.connectable || !entry.routes?.some((route) => route.provider === provider
+    && route.connectionBackend === "pipedream" && route.connectable)) return null;
   return provider;
 }
 
