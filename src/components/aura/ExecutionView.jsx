@@ -40,7 +40,7 @@ export default function ExecutionView({ steps, currentStepIndex, isReal, verifyi
           </div>
           <div>
             <h2 className="text-lg font-semibold">
-              {approvalPending ? "Execution paused for approval" : review ? `${reviewTool} finished · execution paused` : failed ? "Workflow paused" : verifying ? "Checking the final result" : recovering
+              {approvalPending ? "Execution paused for approval" : review ? `${reviewTool} finished · review result` : failed ? "Workflow paused" : verifying ? "Checking the final result" : recovering
                 ? steps.some((step) => step.jiraTasks?.length) ? "Checking your Jira tasks" : "Checking your results"
                 : demo ? "Playing the prepared workflow" : "Running your workflow"}
             </h2>

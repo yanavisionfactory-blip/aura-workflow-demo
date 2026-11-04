@@ -70,6 +70,15 @@ immediate outline and refines it while the executable plan is compiled. Set
 `PLANNER_MODE=llm` is the default. A failed validation never turns a language
 outline into an executable plan.
 
+In the live workflow, **Start** authorizes the reviewed plan and runs its actions.
+Each completed tool's saved output is then available for review before the next
+tool runs. Generated Claude text can be edited at that checkpoint; the edited
+version feeds subsequent steps while the original provider response is retained.
+Google Sheets results link to the actual spreadsheet for editing. The API enables
+this flow with `execute_reviewed_plan` and `review_tool_outputs`; legacy clients
+retain staged action approvals. Plan integrity, connection permissions, runtime
+policy, exact dispatch arguments and protection against repeating writes still apply.
+
 ## Release validation
 
 For the Frame.io and PageProof content-approval pilot, see

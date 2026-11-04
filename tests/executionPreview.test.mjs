@@ -105,3 +105,45 @@ test("execution leads; saved output opens only on request and never continues or
   }
 });
 
+test("completed text can be edited after review; starting and viewing do not dispatch edits", async () => {
+  const steps = [{ id: "draft", key: "draft", tool: "anthropic", status: "completed",
+    action: "Prepare KPI layout", output: { operation: "anthropic.chat", critic: { action: "accept" },
+      outcome_check: { status: "verified" }, provider_result: {
+        ret: { content: [{ type: "text", text: "Original dashboard" }] },
+      } } }];
+  const review = { step_id: "draft", step_ids: ["draft"], tool_slug: "anthropic", next_tool_slug: "google-sheets" };
+  const calls = [];
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const render = (checkpoint) => React.createElement(ExecutionView, {
+    steps, currentStepIndex: 0, isReal: true, review: checkpoint,
+  }, React.createElement(ExecutionToolOutputs, { steps, review: checkpoint,
+    onContinue: (edits) => calls.push(edits),
+  }));
+  try {
+    await act(async () => root.render(render(null)));
+    assert.match(container.textContent, /Running your workflow/);
+    assert.doesNotMatch(container.textContent, /Open action preview|Execution paused for approval|Edit Claude result/);
+    await act(async () => root.render(render(review)));
+    const button = (label) => [...container.querySelectorAll("button")].find((item) => item.textContent === label);
+    assert.equal(container.querySelector("textarea"), null, "editing is optional after execution");
+    await act(async () => Simulate.click(button("Edit Claude result")));
+    const editor = container.querySelector("textarea");
+    assert.equal(editor.value, "Original dashboard");
+    await act(async () => Simulate.change(editor, { target: { value: "" } }));
+    assert.equal(button("Save edits and continue").disabled, true);
+    await act(async () => Simulate.change(editor, { target: { value: "Revised dashboard" } }));
+    assert.deepEqual(calls, []);
+    await act(async () => Simulate.click(button("Save edits and continue")));
+    assert.deepEqual(calls, [{ draft: "Revised dashboard" }]);
+    await act(async () => Simulate.click(button("Discard edits")));
+    assert.equal(container.querySelector("textarea"), null);
+    await act(async () => Simulate.click(button("Continue to Google Sheets")));
+    assert.deepEqual(calls, [{ draft: "Revised dashboard" }, null]);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+

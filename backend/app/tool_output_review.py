@@ -1,4 +1,4 @@
-"""Durable, opt-in review of completed tool output, independent of write approval."""
+"""Plan-scoped execution and durable review of completed tool output."""
 
 from copy import deepcopy
 
@@ -6,6 +6,43 @@ from .models import RunStatus, StepStatus, WorkflowRun
 from .run_supervisor import transition_run
 
 REVIEW_KEY = "__aura_tool_output_review__"
+
+
+def plan_authorizes_action(run, snapshot, step) -> bool:
+    """Start covers only actions in its exact approved plan and permission snapshot."""
+    state = (run.execution_context or {}).get(REVIEW_KEY, {})
+    planned = next((item for item in (run.plan or {}).get("steps", [])
+                    if item.get("key") == step.step_key), {})
+    return bool(
+        run.plan_approved and not run.cancellation_requested
+        and output_review_enabled(run) and state.get("execute_reviewed_plan")
+        and state.get("approved_plan_hash") == snapshot.plan_hash
+        and planned.get("tool_slug") == step.tool_slug
+        and planned.get("operation") == step.operation
+        and step.operation in snapshot.permission_snapshot.get(step.tool_slug, [])
+    )
+
+
+def editable_text_output(step) -> bool:
+    result = (step.output or {}).get("provider_result", {})
+    return bool(
+        step.status == StepStatus.completed
+        and step.operation in {"anthropic.chat", "intelligence.claude_backup"}
+        and isinstance(result, dict) and isinstance(result.get("ret"), dict)
+        and isinstance(result["ret"].get("content"), list)
+        and any(isinstance(part, dict) and part.get("type") == "text"
+                and isinstance(part.get("text"), str) for part in result["ret"]["content"])
+    )
+
+
+def reviewed_step_result(step):
+    """Use the user's saved text downstream while preserving the provider receipt."""
+    result = (step.output or {}).get("provider_result", step.output)
+    revision = (step.output or {}).get("user_revision", {})
+    if editable_text_output(step) and isinstance(revision.get("text"), str):
+        result = deepcopy(result)
+        result["ret"]["content"] = [{"type": "text", "text": revision["text"]}]
+    return result
 
 
 def output_review_enabled(run: WorkflowRun) -> bool:

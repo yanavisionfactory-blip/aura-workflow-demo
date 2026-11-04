@@ -747,8 +747,8 @@ class RunPreflightRequest(BaseModel):
 class PlanApproval(BaseModel):
     approved: bool
     edited_steps: list[PlanStep] | None = None
-    # Retained for older clients. Plan approval now starts preparation only;
-    # every consequential action needs its own completed preview and decision.
+    # Legacy flag remains inert. Clients explicitly choose execute_reviewed_plan
+    # below; otherwise each consequential action keeps its staged decision.
     approve_consequential: bool = False
     # The approval snapshot already grants operation-level read permissions.  This
     # flag lets AURA repair a failed read inside that exact permission envelope;
@@ -756,10 +756,14 @@ class PlanApproval(BaseModel):
     # a new human approval.
     allow_autonomous_read_repairs: bool = True
     review_tool_outputs: bool = False
+    # Start authorizes this immutable plan; review happens after each tool runs.
+    # Older clients keep staged action approval unless they explicitly opt in.
+    execute_reviewed_plan: bool = False
 
 
 class ToolOutputReviewDecision(BaseModel):
     step_id: str = Field(min_length=1)
+    edited_outputs: dict[str, str] | None = None
 
 
 class ResumeDecision(BaseModel):
