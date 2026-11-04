@@ -46,6 +46,7 @@ export function recoveryForRun(run = {}) {
       external_effect_uncertain: "AURA cannot safely repeat an external action.",
       recovery_budget_exhausted: "AURA couldn't complete the remaining step automatically.",
       no_safe_recovery: "AURA couldn't complete the remaining step automatically.",
+      claude_backup_failed: "Claude and AURA's backup could not finish the content step.",
       governed_derivative_retry_required: "Canva is taking longer than expected to prepare the finished presentation.",
       automatic_repair_stopped: "AURA stopped automatic repair for this run.",
       recorded_result_needs_review: "AURA needs to check the saved provider result.",
@@ -98,7 +99,11 @@ export function recoveryForRun(run = {}) {
       connectedAccount: blocker.connected_account || null,
       what: labels[blocker.code] || "AURA stopped at a required human decision.",
       why: blocker.message || "AURA cannot safely continue this run without this decision.",
-      fix: preparationRetry
+      fix: blocker.code === "claude_backup_failed"
+        ? blocker.retryable
+          ? "Retry this content step. AURA can use the approved backup if Claude is still unavailable. Later actions keep their existing review requirements."
+          : "This content step reached its retry limit. The generation failure needs repair; your plan and completed work are saved."
+        : preparationRetry
         ? "Retry preparation using the saved results. The action will still require review before anything is submitted."
         : incompleteCustomerRead
         ? "Build a new plan that reads customer conversations and sent history, then review it before starting. This run only read messages; it sent nothing."
@@ -114,7 +119,8 @@ export function recoveryForRun(run = {}) {
       canRestartReadPlan: incompleteCustomerRead,
       canRetry: connectionAction || retryAction || savedReadback || finalReviewRetry || websiteContentRetry || preparationRetry,
       canSkip: false,
-      buttonLabel: preparationRetry ? "Retry preparation" : websiteContentRetry
+      buttonLabel: blocker.code === "claude_backup_failed" ? "Retry content generation"
+        : preparationRetry ? "Retry preparation" : websiteContentRetry
         ? savedWebsiteContent ? "Recheck saved content" : "Retry content step"
         : savedReadback
         ? "Recheck saved result"
@@ -127,7 +133,9 @@ export function recoveryForRun(run = {}) {
         : blocker.action === "reconnect_account"
           ? "Reconnect account"
           : "Connect account",
-      subtitle: preparationRetry
+      subtitle: blocker.code === "claude_backup_failed"
+        ? "Your plan is saved. This step generates text; it has not created a spreadsheet or sent anything."
+        : preparationRetry
         ? "Completed work is saved. This action has not been submitted."
         : websiteContentRetry
         ? "Completed source reads are saved. This step prepares unapproved content and makes no CMS changes."

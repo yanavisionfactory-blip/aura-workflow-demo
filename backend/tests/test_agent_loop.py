@@ -43,7 +43,7 @@ from app.schemas import (
 from app.workflow_memory import select_memory_inputs
 
 
-@pytest.mark.parametrize("scenario", ["credit", "primary_ok", "backup_failed", "unapproved"])
+@pytest.mark.parametrize("scenario", ["credit", "primary_ok", "backup_failed", "backup_repaired", "unapproved"])
 @pytest.mark.parametrize("review_outputs", [False, True])
 async def test_claude_backup_preserves_plan_and_populates_dependent_write(runtime, monkeypatch, scenario, review_outputs):
     from unittest.mock import AsyncMock
@@ -110,7 +110,8 @@ async def test_claude_backup_preserves_plan_and_populates_dependent_write(runtim
         if operation == "anthropic.chat" and scenario != "primary_ok":
             raise PipedreamConnectError("credit_balance_exhausted: Insufficient API credits", retryable=False,
                                        status_code=400, upstream_code="credit_balance_exhausted")
-        if operation == BACKUP_OPERATION and scenario == "backup_failed":
+        if operation == BACKUP_OPERATION and (scenario == "backup_failed" or
+                (scenario == "backup_repaired" and [op for op, _ in calls].count(BACKUP_OPERATION) == 1)):
             raise ValueError("AURA Intelligence returned incomplete or empty content")
         if operation == "records.create":
             return {"id": "saved-table", "title": args["title"]}
@@ -128,7 +129,25 @@ async def test_claude_backup_preserves_plan_and_populates_dependent_write(runtim
     monkeypatch.setattr(orchestrator, "critique_step", review)
     monkeypatch.setattr(orchestrator, "check_provider_outcome", outcome)
     await orchestrator._execute_run("run", "w")
-    if review_outputs and scenario in {"credit", "primary_ok"}:
+    if scenario == "backup_repaired":
+        from app.schemas import ResumeDecision
+        async with runtime() as session:
+            run = await session.get(WorkflowRun, "run")
+            source = await session.get(RunStep, "step")
+            saved = await session.get(RunStep, "save")
+            assert run.status == RunStatus.waiting_for_action
+            assert source.output["fallback"]["status"] == "failed"
+            assert not saved.output
+            run.execution_context = {**run.execution_context,
+                "__aura_autonomy__": {"handoff_reason_code": "no_safe_recovery"}}
+            blocker = main._run_blocker(run, [source, saved], {}, [], {source.id})
+            assert blocker["code"] == "claude_backup_failed"
+            assert blocker["retryable"] is True
+            assert "insufficient credits" in blocker["message"]
+            await main.resume_run("run", ResumeDecision(action="retry", step_id="step"),
+                                  main.TenantContext("w", "alice", "owner"), session)
+        await orchestrator._execute_run("run", "w")
+    if review_outputs and scenario in {"credit", "primary_ok", "backup_repaired"}:
         async with runtime() as session:
             run = await session.get(WorkflowRun, "run")
             assert run.status == RunStatus.awaiting_approval
@@ -157,7 +176,7 @@ async def test_claude_backup_preserves_plan_and_populates_dependent_write(runtim
         assert run.status == RunStatus.awaiting_approval, run.error
         approval = await session.get(Approval, saved.approval_id)
         assert approval.preview["arguments"] == {"title": "Revenue\tTarget\tActual"}
-        if scenario == "credit":
+        if scenario in {"credit", "backup_repaired"}:
             assert source.tool_slug == "aura"
             assert source.output["fallback"]["requested_tool"] == "anthropic"
             assert source.output["fallback"]["status"] == "used"
@@ -178,7 +197,7 @@ async def test_claude_backup_preserves_plan_and_populates_dependent_write(runtim
         await orchestrator._execute_run("run", "w")
     assert [op for op, _ in calls].count("records.create") == 1
     assert [op for op, _ in calls].count("anthropic.chat") == 1
-    assert [op for op, _ in calls].count(BACKUP_OPERATION) == (1 if scenario == "credit" else 0)
+    assert [op for op, _ in calls].count(BACKUP_OPERATION) == (2 if scenario == "backup_repaired" else 1 if scenario == "credit" else 0)
 
 
 def make_step(key, **kwargs):
