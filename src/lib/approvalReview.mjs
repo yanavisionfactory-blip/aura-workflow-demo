@@ -155,6 +155,10 @@ export const hasImmediateActionPreview = (steps = [], autoApprove = false) => (
 );
 
 export const resolvedApprovalStep = (planned, runtime, toolName = "App") => {
+  planned = { ...planned, runtimeStep: runtime };
+  if (runtime?.status === "completed") {
+    return { ...planned, riskLevel: "read", preview: undefined, approvalPending: false };
+  }
   if (!runtime?.consequential) {
     if (runtime?.operation === "canva.export.create") {
       return { ...planned, riskLevel: "read", preview: undefined, approvalPending: false };

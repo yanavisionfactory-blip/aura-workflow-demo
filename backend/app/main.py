@@ -6153,6 +6153,44 @@ async def _run_view(session: AsyncSession, run: WorkflowRun) -> dict:
             )
         ).all()
     )
+    # Start authorizes this pinned text-generation request. Its provider response
+    # is the useful review, so let interactive clients complete only this input
+    # approval and then stop at the existing durable output checkpoint. Never
+    # infer this from a tool name or change a signed connector/approved plan.
+    from .text_preparation import is_text_preparation
+    from .tool_output_review import output_review_enabled
+
+    preparation_ids: set[str] = set()
+    if (run.plan_approved and run.status == RunStatus.awaiting_approval
+            and not run.cancellation_requested and output_review_enabled(run)
+            and not (run.execution_context or {}).get("__aura_tool_output_review__", {}).get("pending")):
+        candidates = [step for step in steps
+                      if step.tool_slug == "anthropic" and step.operation == "anthropic.chat"
+                      and step.status == StepStatus.awaiting_approval
+                      and step.id not in attempted_steps
+                      and "provider_result" not in (step.output or {})]
+        if candidates:
+            tool = await session.scalar(select(ToolConnection).where(
+                ToolConnection.workspace_id == run.workspace_id,
+                ToolConnection.slug == "anthropic", ToolConnection.enabled.is_(True),
+            ))
+            manifest = await session.scalar(select(CapabilityManifest).where(
+                CapabilityManifest.tool_id == tool.id, CapabilityManifest.status == "verified",
+            )) if tool and "anthropic.chat" in tool.allowed_operations else None
+            if manifest:
+                for step in candidates:
+                    approval = approvals_by_step.get(step.id)
+                    preview = (approval.preview or {}) if approval else {}
+                    if (approval and approval.status == "pending"
+                            and preview.get("status") == "ready"
+                            and preview.get("tool_slug") == step.tool_slug
+                            and preview.get("operation") == step.operation
+                            and not preview.get("group_id")
+                            and not preview.get("grouped_step_ids")
+                            and is_text_preparation(manifest.manifest, {
+                                "tool_slug": step.tool_slug, "operation": step.operation,
+                            }, preview.get("arguments") or {})):
+                        preparation_ids.add(step.id)
     blocker = _run_blocker(run, steps, approvals_by_step, requirements, attempted_steps)
     from .run_supervisor import public_run_projection
 
@@ -6210,6 +6248,7 @@ async def _run_view(session: AsyncSession, run: WorkflowRun) -> dict:
                 "output_variables": s.output_variables,
                 "status": s.status.value,
                 "consequential": s.consequential,
+                "preparation_only": s.id in preparation_ids,
                 "recovery": _step_recovery_state(run, s, attempted_steps),
                 "approval_id": s.approval_id,
                 "approval_status": approvals_by_step[s.id].status
