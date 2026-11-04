@@ -3,6 +3,55 @@
 from .connection_families import capability_family
 
 
+def prefer_connected_app_routes(prompt: str, inventory: list[dict], connected_inventory: list[dict],
+                                manifests: dict) -> list[dict]:
+    """Choose an already granted app route before constructing a new draft.
+
+    Display names and catalog availability never grant permission. Keep all
+    routes when none can satisfy the requested writes, or multiple can do so.
+    This only bounds planning; execution still checks every exact operation.
+    """
+    import re
+
+    from .request_contracts import requested_effects, user_request_text
+
+    grants = {item["slug"]: set(item.get("allowed_operations") or []) for item in connected_inventory}
+    effects = requested_effects(prompt, inventory, manifests)
+    routes = {}
+    for family in ("sheets", "docs"):
+        required = [effect for effect in effects if effect["effect"].startswith(family + " ")]
+        ready = []
+        for item in inventory:
+            slug = item["slug"]
+            app_operations = {
+                operation for operation in item.get("allowed_operations") or []
+                if capability_family(operation.split(".", 1)[0]) == family
+            }
+            granted = app_operations.intersection(grants.get(slug, set()))
+            if not granted:
+                continue
+            reads = {module.get("name") for module in manifests.get(slug, {}).get("capabilities", [])
+                     if module.get("permission_scope") == "read"}
+            if required and not granted.intersection(reads):
+                continue
+            if all(any(target["tool_slug"] == slug and target["operation"] in granted
+                       for target in effect["targets"]) for effect in required):
+                ready.append(slug)
+        if len(ready) != 1:
+            continue
+        chosen = ready[0]
+        # An exact operation named by the user takes precedence over a default.
+        other_exact_operation = any(
+            item["slug"] != chosen
+            and capability_family(operation.split(".", 1)[0]) == family
+            and re.search(r"(?<![\w.-])" + re.escape(operation) + r"(?![\w.-])", user_request_text(prompt))
+            for item in inventory for operation in item.get("allowed_operations") or []
+        )
+        if not other_exact_operation:
+            routes[family] = chosen
+    return route_bounded_inventory(inventory, routes)
+
+
 def selected_connection_routes(value, inventory: list[dict], *, plan=None) -> dict[str, str]:
     if value is None:
         return {}
