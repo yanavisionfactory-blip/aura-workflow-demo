@@ -141,7 +141,7 @@ test("switching a blocked Sheets plan recompiles for review without opening cons
     if (pathname === "/v1/managed-connectors/status") return Response.json({ marketplace: [
       { display_name: "Google Workspace", provider: "google", connection_backend: "nango", connectable: true },
       { display_name: "Google Sheets", provider: "google-sheets", connection_backend: "pipedream",
-        connectable: true, preferred_connection: true },
+        connectable: true },
     ] });
     if (pathname === "/v1/tools") return Response.json([{ id: "google-account", slug: "google",
       display_name: "Google Workspace", connection_backend: "nango", kind: "oauth", enabled: false }]);
