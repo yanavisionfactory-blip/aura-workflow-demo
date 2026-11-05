@@ -70,6 +70,13 @@ export function ToolOutputCards({ entries, activity, backendRunId, onOpen = unde
         appScreen={["spreadsheet", "ai_response"].includes(result.kind)} onExpand={onOpen ? () => onOpen(entry.id) : undefined}>
         <MainToolOutput entry={entry} result={result} activity={activity} backendRunId={backendRunId} />
       </ToolResultFrame>
+      {result.kind === "spreadsheet" && <details className="rounded-lg border border-white/10 px-4 py-3">
+        <summary className="cursor-pointer text-xs font-medium text-muted-foreground">Technical details</summary>
+        <div className="mt-3 space-y-4">{items.map((item) => <section key={item.id}>
+          <p className="mb-2 break-words text-xs text-muted-foreground">{item.operation}</p>
+          <EvidenceValue value={item.response} />
+        </section>)}</div>
+      </details>}
       {items.length > 1 && onOpen && <button type="button" onClick={() => onOpen(entry.id)} className="text-xs text-primary">View all {items.length} saved actions in {tool}</button>}
     </div>;
   })}</div>;

@@ -38,7 +38,7 @@ export function toolResultEntries(activity = []) {
   return toolEvidence(activity).map((entry, index) => {
     const step = activity[index];
     const output = { ...step.output, step_key: step.stepKey || step.key || step.output?.step_key,
-      step_id: step.id, provider_result: entry.response, resolved_arguments: entry.inputs };
+      step_id: step.id, operation: entry.operation, provider_result: entry.response, resolved_arguments: entry.inputs };
     const candidate = entry.status === "completed" && entry.hasResponse
       ? primaryResultFromOutputs([output], { title: entry.action }) : null;
     const backupNotice = intelligenceBackupNotice(step);
@@ -78,7 +78,7 @@ export function preferredToolOutcome(primary, activity = []) {
 export function toolOutputResult(entries, activity = []) {
   const outputs = entries.map((entry) => {
     const step = activity.find((item) => (item.id || item.stepKey || item.key) === entry.id);
-    return step?.output ? { ...step.output, step_id: entry.id, step_key: entry.stepKey,
+    return step?.output ? { ...step.output, step_id: entry.id, step_key: entry.stepKey, operation: entry.operation,
       provider_result: entry.response, resolved_arguments: entry.inputs } : null;
   }).filter(Boolean);
   const candidate = primaryResultFromOutputs(outputs, { title: entries.at(-1)?.action });
