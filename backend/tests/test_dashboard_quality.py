@@ -116,6 +116,20 @@ def test_formula_only_readback_cannot_verify_a_working_dashboard(field):
         validate_dashboard_plan(PROMPT, candidate)
 
 
+@pytest.mark.parametrize("headers", [None, True])
+def test_title_row_cannot_hide_formula_errors_in_header_mapped_readback(headers):
+    candidate = plan(good_rows())
+    read = candidate.steps[-1]
+    read.operation = "google-sheets.read-rows"
+    read.arguments = {"spreadsheetId": "existing_workbook", "sheetName": "Dashboard", "range": "A1:G20"}
+    if headers is not None:
+        read.arguments["hasHeaders"] = headers
+    with pytest.raises(ValueError, match="hasHeaders=false"):
+        validate_dashboard_plan(PROMPT, candidate)
+    read.arguments["hasHeaders"] = False
+    validate_dashboard_plan(PROMPT, candidate)
+
+
 def test_native_and_broker_cell_shapes_have_the_same_content_contract():
     assert sheet_rows({"rows": '[["Revenue","",""]]'}) == [["Revenue", "", ""]]
     assert sheet_rows({"body": {"sheets": [{"data": [{"rowData": [{"values": [

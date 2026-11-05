@@ -34,7 +34,9 @@ GUIDANCE = (
     "argument separators. Use numeric cells for benchmark targets, with labels in separate notes. "
     "Read back evaluated cell values as well as formulas before claiming the dashboard is ready. "
     "A FORMULA-only read cannot establish that calculations work; include a dependent "
-    "FORMATTED_VALUE or UNFORMATTED_VALUE read and repair any returned cell errors."
+    "FORMATTED_VALUE or UNFORMATTED_VALUE read and repair any returned cell errors. "
+    "For google-sheets.read-rows, use hasHeaders=false to preserve every cell: a dashboard "
+    "title row is not a table header, and object mapping can silently discard other columns."
 )
 
 
@@ -162,6 +164,11 @@ def validate_dashboard_plan(prompt, plan):
                    and str(step.arguments.get("valueRenderOption", step.arguments.get("value_render_option", ""))).upper() != "FORMULA"
                    for step in reads):
             raise ValueError("KPI template quality: read back evaluated cell values after writing, using FORMATTED_VALUE or UNFORMATTED_VALUE. A FORMULA-only read cannot verify calculations or detect formula parse errors.")
+        if not any(content_keys <= ancestors(step)
+                   and (step.operation != "google-sheets.read-rows" or step.arguments.get("hasHeaders") is False)
+                   and str(step.arguments.get("valueRenderOption", step.arguments.get("value_render_option", ""))).upper() != "FORMULA"
+                   for step in reads):
+            raise ValueError("KPI template quality: verify the full dashboard cell grid. For google-sheets.read-rows set hasHeaders=false; the title row is not a column header, and header-object mapping can silently omit formula errors and other cells.")
         if dashboard_public_research_requested(prompt):
             # Step labels, cited URLs and disconnected web calls are not observed
             # evidence. Follow the actual data references used to build cells.
