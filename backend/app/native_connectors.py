@@ -121,7 +121,10 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                     "report.compose", "search",
                     "Analyze supplied evidence and compose a complete sourced Markdown report "
                     "saved in AURA's workflow results. No external app, file or message is created. "
-                    "Use synthetic=true for fictional demo inputs.",
+                    "Use synthetic=true for fictional demo inputs. For a new KPI spreadsheet, supply dashboard "
+                    "with business_name, reporting_period, companies (business plus competitors), and the target workbook_metadata "
+                    "from get-spreadsheet-by-id. This returns validated rows_json and deterministic locale-correct formulas; "
+                    "write rows_json unchanged at A1, then read the evaluated cells back.",
                 ),
                 "input_schema": ReportRequest.model_json_schema(),
             },

@@ -7,6 +7,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .config import get_settings
+from .dashboard_builder import DashboardContext
 from .model_inputs import bounded_input, canonical_execution_evidence
 from .reliability import bounded_model_call
 from .schemas import WorkflowPlan
@@ -67,6 +68,7 @@ class ReportRequest(BaseModel):
     instructions: str = Field(min_length=1, max_length=10_000)
     sources: list[ReportSource] = Field(min_length=1, max_length=20)
     synthetic: bool = False
+    dashboard: DashboardContext | None = None
 
     @model_validator(mode="after")
     def distinct_sources(self):
@@ -86,6 +88,14 @@ async def compose_report(arguments: dict) -> dict:
     settings = get_settings()
     if not settings.openai_api_key:
         raise RuntimeError("AURA report generation is not configured")
+    if request.dashboard is not None:
+        from .dashboard_builder import compose_dashboard
+        if request.synthetic:
+            raise ValueError("Researched dashboards require real source evidence")
+        dashboard = await compose_dashboard(request)
+        return {**dashboard, "title": request.title, "status": "draft", "synthetic": False,
+                "sources": [source.model_dump() for source in request.sources],
+                "generated_at": datetime.now(UTC).isoformat()}
     payload = bounded_input(request.model_dump(mode="json"))
     async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=1) as client:
         response = await bounded_model_call(

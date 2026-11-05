@@ -1,16 +1,17 @@
-import React, { createContext, useCallback, useContext, useLayoutEffect, useMemo, useState } from "react";
-import { useAuth as useClerkAuth, useUser } from "@clerk/react";
+import React, { useCallback, useContext, useLayoutEffect, useMemo, useState } from "react";
+import { UserButton, useAuth as useClerkAuth, useUser } from "@clerk/react";
+import { AuthContext } from "@/lib/authState.mjs";
 
 import {
   bootstrapWorkspace,
   clearWorkspace,
   createPythonWorkspace,
   listPythonWorkspaces,
+  rememberedWorkspaceId,
   selectWorkspace,
   setAuraTokenProvider,
 } from "@/lib/auraApi";
 
-const AuthContext = createContext(null);
 const RECOVERY_DELAYS_MS = [0, 350, 900];
 
 function wait(ms) {
@@ -39,7 +40,8 @@ export const AuthProvider = ({ children }) => {
   }, [clerk.isLoaded, clerk.isSignedIn]);
 
   useLayoutEffect(() => {
-    if (!clerk.isLoaded || !clerk.isSignedIn) {
+    if (!clerk.isLoaded) return;
+    if (!clerk.isSignedIn) {
       clearWorkspace();
       setWorkspace(null);
       setWorkspaces([]);
@@ -51,6 +53,8 @@ export const AuthProvider = ({ children }) => {
     async function openWorkspace() {
       setIsLoadingWorkspace(true);
       setWorkspaceError(null);
+      setWorkspace(null);
+      const previousWorkspaceId = rememberedWorkspaceId();
       clearWorkspace();
 
       let lastError = null;
@@ -60,9 +64,14 @@ export const AuthProvider = ({ children }) => {
         try {
           const active = await bootstrapWorkspace("My AURA Workspace");
           if (cancelled) return;
-          setWorkspace(active);
           const rows = await listPythonWorkspaces();
-          if (!cancelled) setWorkspaces(rows);
+          if (cancelled) return;
+          const selected = rows.find((row) => row.workspace_id === previousWorkspaceId)
+            || rows.find((row) => row.workspace_id === active.workspace_id) || rows[0];
+          if (!selected) throw new Error("No workspace is available for this account");
+          selectWorkspace(selected.workspace_id);
+          setWorkspace(selected);
+          setWorkspaces(rows);
           return;
         } catch (error) {
           lastError = error;
@@ -80,7 +89,7 @@ export const AuthProvider = ({ children }) => {
     return () => {
       cancelled = true;
     };
-  }, [clerk.isLoaded, clerk.isSignedIn, reconnectSequence]);
+  }, [clerk.isLoaded, clerk.isSignedIn, clerk.userId, clerk.orgId, reconnectSequence]);
 
   const reconnectWorkspace = useCallback(() => {
     setReconnectSequence((value) => value + 1);
@@ -105,6 +114,7 @@ export const AuthProvider = ({ children }) => {
   }, [clerk]);
 
   const value = useMemo(() => ({
+    accountControl: <UserButton />,
     user,
     workspace,
     workspaces,

@@ -7079,6 +7079,7 @@ async def approve_plan(
     execution_context[REVIEW_KEY] = {
         "version": 1,
         "enabled": payload.review_tool_outputs,
+        "review_between_tools": payload.review_between_tools,
         "execute_reviewed_plan": payload.execute_reviewed_plan,
         "approved_plan_hash": plan_hash if payload.execute_reviewed_plan else None,
         "reviewed_step_ids": execution_context.get(REVIEW_KEY, {}).get("reviewed_step_ids", []),

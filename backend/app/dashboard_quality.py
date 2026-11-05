@@ -4,9 +4,22 @@ import json
 import re
 
 from .request_contracts import user_request_text
-from .workflow_context import referenced_paths, referenced_step_keys
+from .workflow_context import REFERENCE, referenced_paths, referenced_step_keys
 
 GUIDANCE = (
+    "For a NEW researched KPI workbook, use report.compose with its dashboard argument: business_name, "
+    "reporting_period, companies (the business and each named comparator), and workbook_metadata bound to "
+    "the completed google-sheets.get-spreadsheet-by-id output. Create the blank workbook, then read its metadata "
+    "before composing. Supply real web.search and product web.page.read outputs as report sources. "
+    "Search each requested company separately for its relevant product and reporting-period figures, "
+    "and search for applicable industry conversion/AOV benchmarks. Follow actual returned product URLs "
+    "with web.page.read; a generic home page alone often omits the price and size. "
+    "Use google-sheets.update-multiple-rows; bind its complete rows argument to {{steps.REPORT.rows_json}}, "
+    "unchanged, at range A1. That action already uses USER_ENTERED; do not add an unsupported inputOption. "
+    "This dashboard compiler produces the full cell matrix and correct guarded "
+    "formulas; do not ask a second model to rewrite it from prose. Read back the complete written grid with "
+    "hasHeaders=false. When the user waives formatting, omit formatting operations and formatting checks. "
+    "For partial edits of an existing workbook, preserve its layout and use the narrower existing edit path. "
     "For a KPI dashboard template, write a usable spreadsheet, not a description of one. "
     "Include the business name, requested reporting period, explicit Metric / Target / Actual "
     "headers, the requested metrics and categories, and working variance or attainment formulas. "
@@ -27,7 +40,8 @@ GUIDANCE = (
     "targets transparently from those benchmarks. Do not present current public prices as historical figures. "
     "For researched or upstream-generated content, plan real web.search/web.page.read steps, "
     "then a report.compose or requested model step consuming their observed outputs. Bind the "
-    "entire Sheets rows/values argument to that completed content using {{steps.KEY.body}} "
+    "entire Sheets rows/values argument to that completed content using {{steps.KEY.body}} for "
+    "ordinary prose transfers, or {{steps.KEY.rows_json}} for the compiled dashboard mode, "
     "or the catalog's actual output field. Content is prepared as concrete cells before approval; "
     "do not embed a large speculative workbook or unsupported per-cell references in the plan. "
     "Read workbook metadata including locale before generating formulas; respect its decimal and "
@@ -190,6 +204,32 @@ def validate_dashboard_plan(prompt, plan):
     steps = [step for step in plan.steps if step.operation.startswith(("sheets.", "google-sheets."))]
     if not steps:
         return
+    if dashboard_public_research_requested(prompt) and any(
+        step.operation == "google-sheets.new-spreadsheet" for step in steps
+    ) and not any(step.operation == "report.compose" and step.arguments.get("dashboard") for step in plan.steps):
+        raise ValueError("New researched KPI workbooks require report.compose with dashboard context and observed workbook metadata from google-sheets.get-spreadsheet-by-id; bind its rows_json unchanged to the write at A1.")
+    by_key = {step.key: step for step in plan.steps}
+    for source in plan.steps:
+        dashboard = source.arguments.get("dashboard") if source.operation == "report.compose" else None
+        if not isinstance(dashboard, dict):
+            continue
+        metadata = dashboard.get("workbook_metadata")
+        readers = [by_key[key] for key in referenced_step_keys(metadata) if key in by_key]
+        if len(readers) != 1 or readers[0].operation not in {"google-sheets.get-spreadsheet-by-id", "sheets.workbook.get"}:
+            raise ValueError("Dashboard workbook_metadata must reference an actual full metadata read including locale; never guess the workbook locale")
+    for step in steps:
+        for field in ("rows", "values"):
+            for path in referenced_paths(step.arguments.get(field)):
+                if not path.endswith(".rows_json"):
+                    continue
+                source = by_key.get(path.split(".")[1])
+                if not source or source.operation != "report.compose" or not source.arguments.get("dashboard"):
+                    raise ValueError("rows_json requires report.compose dashboard mode")
+                value = step.arguments[field]
+                if not isinstance(value, str) or not REFERENCE.fullmatch(value):
+                    raise ValueError("Bind the complete rows argument to rows_json unchanged, without a wrapper row")
+                if str(step.arguments.get("range", "")).split("!")[-1] != "A1":
+                    raise ValueError("Compiled dashboard rows must be written from A1 so formula references remain correct")
     rows = []
     dynamic = False
     for step in steps:
