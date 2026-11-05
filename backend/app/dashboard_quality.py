@@ -14,6 +14,9 @@ GUIDANCE = (
     "Search each requested company separately for its relevant product and reporting-period figures, "
     "and search for applicable industry conversion/AOV benchmarks. Follow actual returned product URLs "
     "with web.page.read; a generic home page alone often omits the price and size. "
+    "Also read an actual benchmark page returned by the benchmark search and include its complete "
+    "web.page.read output in report sources. Search result lists contain URLs, not verified metric "
+    "quotes; a benchmark search without a consumed page read is insufficient. "
     "Use google-sheets.update-multiple-rows; bind its complete rows argument to {{steps.REPORT.rows_json}}, "
     "unchanged, at range A1. That action already uses USER_ENTERED; do not add an unsupported inputOption. "
     "This dashboard compiler produces the full cell matrix and correct guarded "
@@ -217,6 +220,19 @@ def validate_dashboard_plan(prompt, plan):
         readers = [by_key[key] for key in referenced_step_keys(metadata) if key in by_key]
         if len(readers) != 1 or readers[0].operation not in {"google-sheets.get-spreadsheet-by-id", "sheets.workbook.get"}:
             raise ValueError("Dashboard workbook_metadata must reference an actual full metadata read including locale; never guess the workbook locale")
+        if dashboard_public_research_requested(prompt):
+            consumed = referenced_step_keys(source.arguments.get("sources"))
+            benchmark_searches = {
+                key for key in consumed if key in by_key and by_key[key].operation == "web.search"
+                and re.search(r"\bbenchmarks?\b", str(by_key[key].arguments.get("query", "")), re.IGNORECASE)
+            }
+            if benchmark_searches and not any(
+                step.key in consumed and step.operation == "web.page.read"
+                and not step.optional and step.condition is None
+                and referenced_step_keys(step.arguments.get("url")) & benchmark_searches
+                for step in plan.steps
+            ):
+                raise ValueError("Dashboard benchmark research must read an actual returned benchmark URL with web.page.read and consume the complete page output in report sources; search URL lists alone contain no verified metric quotes")
     for step in steps:
         for field in ("rows", "values"):
             for path in referenced_paths(step.arguments.get(field)):

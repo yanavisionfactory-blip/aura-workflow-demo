@@ -255,6 +255,29 @@ def test_researched_dashboard_accepts_consumed_evidence_without_changing_plan():
     assert candidate.model_dump() == original
 
 
+def test_dashboard_benchmark_search_requires_a_consumed_source_page():
+    candidate = researched_plan()
+    search, page, report = candidate.steps[:3]
+    search.arguments["query"] = "Skincare ecommerce conversion and AOV benchmarks"
+    metadata = PlanStep(key="metadata", agent="Sheets", tool_slug="google-sheets",
+        operation="google-sheets.get-spreadsheet-by-id", arguments={"sheetId": "existing_book"},
+        reason="Read locale", expected_output="Metadata")
+    candidate.steps.insert(0, metadata)
+    report.arguments["dashboard"] = {"workbook_metadata": "{{steps.metadata}}"}
+    with pytest.raises(ValueError, match="actual returned benchmark URL"):
+        validate_dashboard_plan(RESEARCH_PROMPT, candidate)
+    page.arguments["url"] = "{{steps.search.results[0].url}}"
+    page.depends_on = [search.key]
+    validate_dashboard_plan(RESEARCH_PROMPT, candidate)
+    page.optional = True
+    with pytest.raises(ValueError, match="actual returned benchmark URL"):
+        validate_dashboard_plan(RESEARCH_PROMPT, candidate)
+    page.optional = False
+    report.arguments["sources"] = [{"content": "{{steps.search.results}}"}]
+    with pytest.raises(ValueError, match="actual returned benchmark URL"):
+        validate_dashboard_plan(RESEARCH_PROMPT, candidate)
+
+
 def test_new_researched_workbook_requires_compiled_cells_with_stable_addresses():
     candidate = researched_plan()
     candidate.steps.insert(0, PlanStep(key="create", agent="Sheets", tool_slug="google-sheets",
