@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.dashboard_quality import (
+    dashboard_public_research_requested,
     dashboard_requirements,
     sheet_rows,
     validate_dashboard_plan,
@@ -131,6 +132,70 @@ def test_research_guidance_requires_sourced_numbers_and_separates_estimates():
     assert sheet_rows({"resource": {"values": good_rows()}}) == good_rows()
 
 
+RESEARCH_PROMPT = PROMPT + " Find values on the internet to fill this analysis."
+
+
+def researched_plan():
+    candidate = plan("{{steps.compose.body}}")
+    candidate.steps[0].depends_on = ["compose"]
+    source_steps = [
+        PlanStep(key="search", agent="AURA", tool_slug="aura", operation="web.search",
+                 arguments={"query": "Plantéa Dermalogica bskincaretx September 2026 revenue"},
+                 reason="Research public figures", expected_output="Search results"),
+        PlanStep(key="page", agent="AURA", tool_slug="aura", operation="web.page.read",
+                 arguments={"url": "https://planteaskin.com/products/nourishing-serum"},
+                 reason="Verify product evidence", expected_output="Page evidence"),
+        PlanStep(key="compose", agent="AURA", tool_slug="aura", operation="report.compose",
+                 arguments={"title": "Plantéa research", "instructions": RESEARCH_PROMPT,
+                            "sources": [
+                                {"id": "search", "title": "Public figures", "content": "{{steps.search}}"},
+                                {"id": "page", "title": "Product page", "content": "{{steps.page}}"},
+                            ]},
+                 depends_on=["search", "page"], reason="Compose from evidence", expected_output="Report body"),
+    ]
+    candidate.steps = source_steps + candidate.steps
+    return candidate
+
+
+def test_explicit_internet_request_cannot_be_replaced_by_static_sheet_content():
+    candidate = plan(good_rows())
+    candidate.steps[0].key = "research_and_compose_dashboard_content"
+    candidate.steps[-1].depends_on = [candidate.steps[0].key]
+    with pytest.raises(ValueError, match="real web.search and web.page.read"):
+        validate_dashboard_plan(RESEARCH_PROMPT, candidate)
+
+
+def test_researched_dashboard_accepts_consumed_evidence_without_changing_plan():
+    candidate = researched_plan()
+    original = candidate.model_dump()
+    validate_dashboard_plan(RESEARCH_PROMPT, candidate)
+    assert candidate.model_dump() == original
+
+
+@pytest.mark.parametrize("change", [
+    lambda p: p.steps[2].arguments.update(sources=[{"content": "https://planteaskin.com"}]),
+    lambda p: p.steps[0].model_copy(update={"optional": True}),
+])
+def test_unused_or_optional_search_does_not_count_as_research(change):
+    candidate = researched_plan()
+    changed = change(candidate)
+    if changed is not None:
+        candidate.steps[0] = changed
+    with pytest.raises(ValueError, match="real web.search and web.page.read"):
+        validate_dashboard_plan(RESEARCH_PROMPT, candidate)
+
+
+def test_supplied_data_and_formatting_only_recovery_do_not_force_web_research():
+    assert not dashboard_public_research_requested(PROMPT + " Do not search the internet.")
+    validate_dashboard_plan(PROMPT + " Use supplied data only.", plan(good_rows()))
+    candidate = plan([])
+    candidate.steps = [PlanStep(
+        key="format", agent="Sheets", tool_slug="google-sheets", operation="google-sheets.format-cells",
+        arguments={"range": "A1:D7"}, reason="Format an existing verified result", expected_output="Formatting",
+    )]
+    validate_dashboard_plan(RESEARCH_PROMPT, candidate)
+
+
 @pytest.mark.asyncio
 async def test_compiler_repairs_bad_template_before_review_or_provider_dispatch(monkeypatch):
     from app import llm_planner, orchestrator
@@ -149,4 +214,31 @@ async def test_compiler_repairs_bad_template_before_review_or_provider_dispatch(
     assert result is good
     assert create.await_count == 2
     assert any("unsupported zero" in requirement for requirement in create.await_args.args[4])
+    assert result.planning_artifacts["compiled_contracts"]
+
+
+@pytest.mark.asyncio
+async def test_compiler_repairs_sheet_only_plan_into_evidence_consuming_plan(monkeypatch):
+    from app import llm_planner, orchestrator
+    from app.config import get_settings
+    from app.native_connectors import native_manifest
+
+    monkeypatch.setattr(get_settings(), "planner_mode", "llm")
+    corrected = researched_plan()
+    create = AsyncMock(side_effect=[plan(good_rows()), corrected])
+    monkeypatch.setattr(llm_planner, "create_llm_plan", create)
+    inventory = [
+        {"slug": "google", "name": "Google Sheets", "connected": True,
+         "allowed_operations": ["sheets.append", "sheets.read"]},
+        {"slug": "aura", "name": "AURA", "connected": True,
+         "allowed_operations": ["web.search", "web.page.read", "report.compose"]},
+    ]
+    result = await orchestrator._create_compiled_plan(
+        RESEARCH_PROMPT, inventory, set(),
+        {"google": native_manifest("google"), "aura": native_manifest("aura")},
+        requested_tool_names=["Google Sheets"],
+    )
+    assert result is corrected
+    assert create.await_count == 2
+    assert any("real web.search and web.page.read" in item for item in create.await_args.args[4])
     assert result.planning_artifacts["compiled_contracts"]

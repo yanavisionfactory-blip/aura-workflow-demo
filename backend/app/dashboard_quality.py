@@ -4,7 +4,7 @@ import json
 import re
 
 from .request_contracts import user_request_text
-from .workflow_context import referenced_paths
+from .workflow_context import referenced_paths, referenced_step_keys
 
 GUIDANCE = (
     "For a KPI dashboard template, write a usable spreadsheet, not a description of one. "
@@ -42,6 +42,19 @@ def dashboard_template_requested(prompt):
 
 def dashboard_requirements(prompt):
     return [GUIDANCE] if dashboard_template_requested(prompt) else []
+
+
+def dashboard_public_research_requested(prompt):
+    """An external spreadsheet destination does not replace requested web evidence."""
+    if not dashboard_template_requested(prompt):
+        return False
+    for clause in re.split(r"[.!?;]\s+|\n", user_request_text(prompt).casefold()):
+        if re.search(r"\b(?:do not|don't|never|without|no)\s+(?:search|research|browse|web|internet)", clause):
+            continue
+        if (re.search(r"\b(?:research|search|find|look\s*up|browse|fetch|read|verify|gather|collect)\b", clause)
+                and re.search(r"\b(?:internet|online|web|websites?|public\s+(?:sources?|figures?|data))\b", clause)):
+            return True
+    return False
 
 
 def _cell(value):
@@ -141,6 +154,32 @@ def validate_dashboard_plan(prompt, plan):
         }]
         if not any(content_keys <= ancestors(step) for step in reads):
             raise ValueError("KPI template quality: read back the written cells and formulas after the content writes; a successful write receipt alone does not verify the dashboard.")
+        if dashboard_public_research_requested(prompt):
+            # Step labels, cited URLs and disconnected web calls are not observed
+            # evidence. Follow the actual data references used to build cells.
+            pending = list(set().union(*(
+                referenced_step_keys(step.arguments.get(key))
+                for step in steps for key in ("rows", "values", "data", "body")
+            )))
+            evidence, seen = set(), set()
+            while pending:
+                key = pending.pop()
+                if key in seen or key not in by_key:
+                    continue
+                seen.add(key)
+                source = by_key[key]
+                if source.optional or source.condition is not None:
+                    continue
+                if source.tool_slug == "aura":
+                    evidence.add(source.operation)
+                pending.extend(referenced_step_keys(source.arguments))
+            if not {"web.search", "web.page.read"} <= evidence:
+                raise ValueError(
+                    "KPI template quality: internet research requires real web.search and web.page.read "
+                    "outputs consumed by the written dashboard content. Use report.compose or the "
+                    "requested model with those sources, then bind Sheets rows/values to its completed "
+                    "output. A Sheets write named research or static source URLs do not perform research."
+                )
     if dynamic:
         return
     # Recovery may only adjust formatting after reading an existing workbook.

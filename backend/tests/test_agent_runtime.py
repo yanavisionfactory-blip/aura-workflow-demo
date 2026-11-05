@@ -2,6 +2,8 @@ import asyncio
 from datetime import UTC
 from types import SimpleNamespace
 
+import pytest
+
 from app import agent_runtime
 from app.agent_runtime import (
     autonomous_resource_resolution_context,
@@ -181,6 +183,22 @@ def test_public_web_sources_remain_available_for_a_sheets_destination():
     assert intent_bounded_tool_inventory(
         "Research public websites and save the comparison to Google Sheets", inventory,
     ) == inventory
+
+
+@pytest.mark.parametrize("research", [
+    "Find values on the internet to fill the analysis.",
+    "Look up online revenue and conversion benchmarks.",
+    "Research public figures for the comparison.",
+])
+def test_selected_sheets_keeps_internet_research_and_composition(research):
+    inventory = [
+        {"slug": "aura", "allowed_operations": ["web.search", "web.page.read", "report.compose"]},
+        {"slug": "google-sheets", "name": "Google Sheets", "allowed_operations": [
+            "google-sheets.add-multiple-rows"]},
+        {"slug": "gmail", "name": "Gmail", "allowed_operations": ["gmail.send"]},
+    ]
+    prompt = "Create a KPI dashboard template for Plantéa in Google Sheets. " + research
+    assert intent_bounded_tool_inventory(prompt, inventory, ["Google Sheets"]) == inventory[:2]
 
 
 def test_google_ads_does_not_select_workspace_identity_or_gmail() -> None:

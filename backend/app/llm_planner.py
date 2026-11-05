@@ -262,6 +262,15 @@ def _bounded_planning_catalog(payload: dict) -> dict:
         for operation in item.get("allowed_operations") or []
         if re.search(r"(?<![\w.-])" + re.escape(operation.casefold()) + r"(?![\w-]|\.\w)", request)
     )
+    from .dashboard_quality import dashboard_public_research_requested
+
+    if dashboard_public_research_requested(payload["request"]):
+        required.update(
+            (item["slug"], operation)
+            for item in catalog if item.get("slug") == "aura"
+            for operation in item.get("allowed_operations") or []
+            if operation in {"web.search", "web.page.read", "report.compose"}
+        )
     words = set(re.findall(r"[a-z0-9]{3,}", payload["request"].casefold()))
     from .selected_tools import selected_tool_targets
 

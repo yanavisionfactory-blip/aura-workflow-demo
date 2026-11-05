@@ -411,6 +411,30 @@ def test_large_selected_catalog_retains_exact_requested_generation_and_reads():
     assert len(offered) < 82
 
 
+def test_selected_sheets_catalog_cannot_crowd_out_required_internet_research():
+    distractors = [{
+        "name": f"google-sheets.dashboard-template-{index}", "description": str(index) + "X" * 5000,
+        "permission_scope": "write", "input_schema": {"type": "object", "properties": {}},
+    } for index in range(60)]
+    research = [{"name": operation, "description": "Research evidence", "permission_scope": "read",
+                 "input_schema": {"type": "object", "properties": {}}}
+                for operation in ["web.search", "web.page.read", "report.compose"]]
+    packed = llm_planner._bounded_planning_catalog({
+        "request": "Create a KPI dashboard template in Google Sheets. Find values on the internet.",
+        "selected_tools": ["Google Sheets"], "required_actions": [],
+        "operations": [
+            {"slug": "google-sheets", "name": "Google Sheets", "allowed_operations": [m["name"] for m in distractors],
+             "operation_contracts": distractors},
+            {"slug": "aura", "allowed_operations": [m["name"] for m in research], "operation_contracts": research},
+        ],
+    })
+    offered = {(item["slug"], operation) for item in packed["operations"]
+               for operation in item["allowed_operations"]}
+    assert {("aura", operation) for operation in ["web.search", "web.page.read", "report.compose"]} <= offered
+    assert any(slug == "google-sheets" for slug, _ in offered)
+    assert len(offered) < 63
+
+
 def test_exact_requested_contract_that_cannot_fit_fails_instead_of_substituting():
     from app.model_inputs import ModelInputTooLarge
 

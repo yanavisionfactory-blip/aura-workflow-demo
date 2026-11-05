@@ -274,7 +274,10 @@ def intent_bounded_tool_inventory(
     # Web evidence is a supporting capability even when the destination is a
     # named external app. Otherwise an incidental Sheets mention can hide the
     # built-in reader and tempt the planner to substitute an SEO overview.
-    if re.search(r"\b(?:public web|web pages?|websites?|public sources?)\b", text):
+    from .dashboard_quality import dashboard_public_research_requested
+
+    if (re.search(r"\b(?:public web|web pages?|websites?|public sources?)\b", text)
+            or dashboard_public_research_requested(prompt)):
         selected.update(index for index, item in enumerate(inventory)
                         if item.get("slug") == "aura" and
                         {"web.search", "web.page.read"}.intersection(
