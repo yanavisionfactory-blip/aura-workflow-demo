@@ -32,6 +32,14 @@ export const toolResultStatus = (entry) => ({ completed: "Completed", failed: "F
   running: "Running", recovering: "Checking response", skipped: "Skipped",
   awaiting_approval: "Awaiting review" })[entry.status] || entry.status;
 
+function savedSourceLink(entry) {
+  if (entry.operation !== "web.page.read" || entry.status !== "completed") return null;
+  try {
+    const url = new URL(entry.response?.url);
+    return ["https:", "http:"].includes(url.protocol) && !url.username && !url.password ? url.href : null;
+  } catch { return null; }
+}
+
 // Only persisted steps become tool actions. Report prose and source packets do
 // not become invented provider calls, including when a report names other apps.
 export function toolResultEntries(activity = []) {
@@ -49,7 +57,8 @@ export function toolResultEntries(activity = []) {
     return { ...entry, tool, actualTool, backupNotice,
       stepKey: step.stepKey || step.key || output.step_key,
       preview: candidate?.kind && candidate.kind !== "result" ? { ...candidate, displayProvider: tool } : null,
-      link: candidate?.link || null,
+      link: candidate?.link || savedSourceLink(entry),
+      linkLabel: candidate?.linkLabel || (entry.operation === "web.page.read" ? "Open source" : `Open in ${tool}`),
       source: entry.operation === "weekly.source.analyze" ? entry.response?.source : null,
       synthetic: entry.response?.synthetic === true || entry.response?.receipt?.synthetic === true,
     };
