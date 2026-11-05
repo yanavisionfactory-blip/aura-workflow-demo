@@ -30,13 +30,17 @@ GUIDANCE = (
     "entire Sheets rows/values argument to that completed content using {{steps.KEY.body}} "
     "or the catalog's actual output field. Content is prepared as concrete cells before approval; "
     "do not embed a large speculative workbook or unsupported per-cell references in the plan. "
-    "Read back the completed cells and formulas before claiming that the requested dashboard is ready."
+    "Read workbook metadata including locale before generating formulas; respect its decimal and "
+    "argument separators. Use numeric cells for benchmark targets, with labels in separate notes. "
+    "Read back evaluated cell values as well as formulas before claiming the dashboard is ready. "
+    "A FORMULA-only read cannot establish that calculations work; include a dependent "
+    "FORMATTED_VALUE or UNFORMATTED_VALUE read and repair any returned cell errors."
 )
 
 
 def dashboard_template_requested(prompt):
     text = user_request_text(prompt)
-    return bool(re.search(r"\btemplate\b", text, re.IGNORECASE)
+    return bool(re.search(r"\b(?:template|spreadsheet|workbook|sheets)\b", text, re.IGNORECASE)
                 and re.search(r"\b(?:kpis?|dashboard)\b", text, re.IGNORECASE))
 
 
@@ -154,6 +158,10 @@ def validate_dashboard_plan(prompt, plan):
         }]
         if not any(content_keys <= ancestors(step) for step in reads):
             raise ValueError("KPI template quality: read back the written cells and formulas after the content writes; a successful write receipt alone does not verify the dashboard.")
+        if not any(content_keys <= ancestors(step)
+                   and str(step.arguments.get("valueRenderOption", step.arguments.get("value_render_option", ""))).upper() != "FORMULA"
+                   for step in reads):
+            raise ValueError("KPI template quality: read back evaluated cell values after writing, using FORMATTED_VALUE or UNFORMATTED_VALUE. A FORMULA-only read cannot verify calculations or detect formula parse errors.")
         if dashboard_public_research_requested(prompt):
             # Step labels, cited URLs and disconnected web calls are not observed
             # evidence. Follow the actual data references used to build cells.
@@ -184,6 +192,12 @@ def validate_dashboard_plan(prompt, plan):
         return
     # Recovery may only adjust formatting after reading an existing workbook.
     if not rows and not any("create" in step.operation or "new-spreadsheet" in step.operation for step in steps):
+        return
+    # A partial edit of an existing dashboard still needs value safety and
+    # evaluated readback, but need not repeat every untouched table/header.
+    if not re.search(r"\btemplate\b", user_request_text(prompt), re.IGNORECASE) and not any(
+        step.operation in {"google-sheets.new-spreadsheet", "sheets.kpi.create"} for step in steps
+    ):
         return
     text = " ".join(str(cell) for row in rows for cell in row).casefold()
     failures = []

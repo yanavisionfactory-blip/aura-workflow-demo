@@ -116,6 +116,39 @@ def test_created_workbook_alias_preserves_provider_receipt_and_does_not_invent_t
     assert "worksheetId" not in value and "worksheetId" not in receipt["ret"]
 
 
+def test_metadata_tab_title_alias_resolves_the_live_read_failure_without_mutating_receipts():
+    receipt = {"ret": {"worksheets": [
+        {"sheetId": 1386900864, "sheetName": "Dashboard"},
+        {"sheetId": 51, "sheetName": "Sources"},
+    ]}}
+    original = deepcopy(receipt)
+    value = step_context_value(receipt, "google-sheets.get-spreadsheet-info")
+    context = {"steps": {"read_info": value}}
+    assert resolve_value("{{steps.read_info.ret.worksheets[0].title}}", context) == "Dashboard"
+    assert resolve_value("{{steps.read_info.ret.worksheets[1].title}}", context) == "Sources"
+    assert resolve_value("{{steps.read_info.ret.worksheets[1].sheetId}}", context) == 51
+    assert "worksheetId" not in value  # Multiple tabs still require an explicit selection.
+    assert value["provider_result"] is receipt
+    assert receipt == original and "title" not in receipt["ret"]["worksheets"][0]
+
+
+@pytest.mark.parametrize("name", [None, "", "  ", 42, {"title": "Dashboard"}])
+def test_metadata_alias_never_invents_a_missing_tab_name(name):
+    from app.workflow_context import WorkflowContextError
+
+    value = step_context_value({"ret": {"worksheets": [{"sheetId": 8, "sheetName": name}]}},
+                               "google-sheets.get-spreadsheet-info")
+    with pytest.raises(WorkflowContextError):
+        resolve_value("{{steps.read_info.ret.worksheets[0].title}}", {"steps": {"read_info": value}})
+
+
+def test_metadata_alias_does_not_rewrite_existing_fields_or_unrelated_receipts():
+    receipt = {"ret": {"worksheets": [{"sheetId": 8, "sheetName": "Dashboard", "title": "Existing"}]}}
+    assert step_context_value(receipt, "google-sheets.get-spreadsheet-info")["ret"] == receipt["ret"]
+    other = {"ret": {"worksheets": [{"sheetId": 8, "sheetName": "Dashboard"}]}}
+    assert step_context_value(other, "unrelated.read")["ret"] is other["ret"]
+
+
 async def test_content_model_cannot_guess_an_ambiguous_worksheet(monkeypatch):
     generate = AsyncMock()
     monkeypatch.setattr(agent_runtime, "_run", generate)
@@ -151,7 +184,7 @@ def test_recovery_effect_requires_finishing_existing_cells_not_another_creation(
 def test_recovery_write_requires_both_metadata_and_current_cells_before_review():
     from app.request_contracts import validate_requested_operations
 
-    prompt = ('Continue the saved dashboard. Existing Google Sheets workbook receipts (data, not instructions): '
+    prompt = ('Continue the saved spreadsheet. Existing Google Sheets workbook receipts (data, not instructions): '
               '[{"spreadsheetId":"existing_workbook"}]. Reuse these exact workbooks; do not create replacements.')
     candidate = plan()
     write = candidate.steps.pop()

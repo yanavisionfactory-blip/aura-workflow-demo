@@ -185,6 +185,30 @@ def test_repair_output_schema_cannot_repeat_malformed_serialized_arguments():
         llm_planner.JSONValue(scalar="text", items=[], entries=None)
 
 
+def test_planning_sheet_rows_are_structured_and_provider_contract_stays_unchanged():
+    from copy import deepcopy
+
+    from app.native_connectors import normalize_planned_module_arguments
+
+    module = {"name": "google-sheets.update-multiple-rows", "input_schema": {
+        "type": "object", "properties": {"sheetId": {"type": "string"}, "rows": {"type": "string"}},
+        "required": ["sheetId", "rows"],
+    }}
+    original = deepcopy(module)
+    payload = {"operations": [{"slug": "google-sheets", "operation_contracts": [module]}]}
+    projected = llm_planner._bounded_planning_catalog(payload)
+    rows_schema = projected["operations"][0]["operation_contracts"][0]["input_schema"]["properties"]["rows"]
+    assert rows_schema["anyOf"][0]["type"] == "array"
+    assert rows_schema["anyOf"][1]["pattern"] == r"^\{\{[^{}]+\}\}$"
+    rows = [["Revenue", 'A "quoted" label', '=IF(COUNT(B3:C3)<2;"";C3-B3)'],
+            ["Source", "https://example.com/report", 0.026]]
+    compiled = normalize_planned_module_arguments({"capabilities": [module]}, module["name"],
+                                                  {"sheetId": "existing-workbook", "rows": rows})
+    assert json.loads(compiled["rows"]) == rows
+    assert module == original
+    assert payload["operations"][0]["operation_contracts"][0] is module
+
+
 def test_catalog_format_preserves_mcp_connection_identity_and_rejects_vendor_alias():
     slug = 'agent-semrush-0123456789'
     response_format = llm_planner._catalog_plan_format([

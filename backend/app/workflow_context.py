@@ -302,12 +302,13 @@ def step_context_value(
     evidence = result
     if (operation or "").startswith("notion."):
         result = _notion_context_value(result)
+    from .sheets_targets import DISCOVERY, worksheet_identity, worksheet_metadata_context
+
+    result = worksheet_metadata_context(result, operation)
     if not isinstance(result, dict):
         value = {"output": result, "result": result, "provider_result": result}
     else:
         value = dict(result)
-        from .sheets_targets import DISCOVERY, worksheet_identity
-
         worksheet = worksheet_identity(result, operation, planned_steps, step_key)
         if operation in DISCOVERY:
             value["__aura_worksheet_metadata__"] = True
