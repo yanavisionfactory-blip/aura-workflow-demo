@@ -184,7 +184,8 @@ def intent_bounded_tool_inventory(
     )
     from .request_contracts import user_request_text
 
-    offline = synthetic_source_families(user_request_text(prompt))
+    prompt = user_request_text(prompt)
+    offline = synthetic_source_families(prompt)
     inventory = [item for item in inventory if not is_synthetic_source(item, offline)]
 
     builtin_openai = uses_builtin_openai(prompt, inventory)
