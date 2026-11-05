@@ -979,7 +979,7 @@ _SCHEMA_ALIAS_GROUPS = (
 )
 
 
-def _schema_argument_target(key: str, properties: dict[str, Any]) -> str:
+def _schema_argument_target(key: str, properties: dict[str, Any], operation: str = "") -> str:
     if key in properties:
         return key
 
@@ -995,6 +995,15 @@ def _schema_argument_target(key: str, properties: dict[str, Any]) -> str:
     ]
     if len(compact_matches) == 1:
         return compact_matches[0]
+
+    if operation.startswith("google-sheets.") and compact_key in {"sheetid", "spreadsheetid"}:
+        # Broker operations use both names for the workbook. Only alias to a
+        # single string field; worksheetId and numeric tab IDs never qualify.
+        candidates = [name for name, schema in properties.items()
+                      if re.sub(r"[^a-z]", "", name.lower()) in {"sheetid", "spreadsheetid"}
+                      and schema.get("type") == "string"]
+        if len(candidates) == 1:
+            return candidates[0]
 
     for aliases in _SCHEMA_ALIAS_GROUPS:
         if key not in aliases:
@@ -1024,7 +1033,7 @@ def _normalize_module_arguments(
     normalized: dict[str, Any] = {}
     for key, value in arguments.items():
         snake_key = re.sub(r"(?<!^)(?=[A-Z])", "_", key).lower()
-        target = _schema_argument_target(snake_key, properties)
+        target = _schema_argument_target(snake_key, properties, operation)
         property_schema = properties.get(target, {})
         if (normalize_generated_text and value is None and target not in required
                 and _non_nullable_schema(property_schema)):

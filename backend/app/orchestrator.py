@@ -556,9 +556,10 @@ async def ensure_aura_intelligence(session, workspace_id: str) -> ToolConnection
     return tool
 
 
-def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict]) -> None:
-    from .sheets_targets import bind_created_worksheets
+def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict], request_prompt: str = "") -> None:
+    from .sheets_targets import bind_created_worksheets, bind_requested_sheet_reads
 
+    bind_requested_sheet_reads(plan, request_prompt)
     bind_created_worksheets(plan, manifests_by_slug)
     for planned_step in plan.steps:
         manifest = _current_capability_manifest(
@@ -1048,7 +1049,7 @@ async def _create_compiled_plan(
         audited_plan = None
     if audited_plan is not None:
         reject_excluded_steps(audited_plan)
-        _normalize_planned_steps(audited_plan, manifests_by_slug)
+        _normalize_planned_steps(audited_plan, manifests_by_slug, request_prompt or prompt)
         from .intelligence_backup import add_intelligence_backups
 
         add_intelligence_backups(audited_plan, catalog_inventory, objective, excluded_tool_families)
@@ -1174,7 +1175,7 @@ async def _create_compiled_plan(
                     connection_routes=connection_routes,
                 )
             apply_account_defaults(plan, inventory, manifests_by_slug)
-            _normalize_planned_steps(plan, manifests_by_slug)
+            _normalize_planned_steps(plan, manifests_by_slug, request_prompt or prompt)
             from .intelligence_backup import add_intelligence_backups
 
             add_intelligence_backups(plan, catalog_inventory, objective, excluded_tool_families)
