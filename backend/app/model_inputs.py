@@ -233,8 +233,36 @@ def canonical_execution_evidence(context):
     return {"inputs": context.get("inputs", {}), "vars": context.get("vars", {}), "steps": steps}
 
 
+def _report_source_evidence(value):
+    """Expose exact canonical JSON sources to lossless subtree interning.
+
+    ReportSource stores structured reads as JSON text. The same text is also
+    present in the original read receipts, but a serialized object hides those
+    duplicates from pack(). Decode only exact round-trippable canonical JSON;
+    arbitrary prose, duplicate JSON keys and noncanonical strings stay intact.
+    """
+    if not isinstance(value, dict) or not isinstance(value.get("sources"), list):
+        return value
+    sources = []
+    for source in value["sources"]:
+        if not isinstance(source, dict) or not isinstance(source.get("content"), str):
+            sources.append(source)
+            continue
+        content = source["content"]
+        try:
+            decoded = json.loads(content)
+        except (ValueError, RecursionError):
+            sources.append(source)
+            continue
+        if isinstance(decoded, (dict, list)) and encoded(decoded) == content:
+            sources.append({**source, "content": decoded, "content_encoding": "canonical_json"})
+        else:
+            sources.append(source)
+    return {**value, "sources": sources}
+
+
 def canonical_review_artifacts(artifacts):
-    """Use one full Google Docs text copy in final model review.
+    """Use one complete representation of repeated source content for review.
 
     Pipedream's Get Document receipt contains `textContent` as well as a
     structural `body`/`tabs` tree with the same text. The durable receipt and
@@ -246,6 +274,11 @@ def canonical_review_artifacts(artifacts):
         if not isinstance(artifact, dict):
             projected.append(artifact)
             continue
+        if artifact.get("operation") == "report.compose":
+            artifact = {**artifact, **{
+                key: _report_source_evidence(artifact[key])
+                for key in ("provider_result", "resolved_arguments") if key in artifact
+            }}
         receipt = artifact.get("provider_result")
         document = receipt.get("ret") if isinstance(receipt, dict) else None
         if not (isinstance(document, dict) and isinstance(document.get("textContent"), str)):

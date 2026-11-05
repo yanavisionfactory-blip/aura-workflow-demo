@@ -1,8 +1,10 @@
 import copy
+import json
 
 import pytest
 
 from app import agent_runtime
+from app.model_inputs import ModelInputTooLarge, bounded_input, canonical_review_artifacts, encoded
 from app.reliability import BudgetExceeded
 
 
@@ -104,6 +106,48 @@ async def test_eight_docs_final_review_keeps_full_text_and_completed_write(monke
     assert evidence[-1]["provider_result"] == original[-1]["provider_result"]
     assert evidence[-1]["outcome_check"]["status"] == "verified"
     assert artifacts == original
+
+
+async def test_researched_report_review_interns_json_sources_without_losing_evidence(monkeypatch):
+    pages = [{"url": f"https://example.com/product-{index}",
+              "text": f"Product {index} full factual evidence. " * 600,
+              "last_fact": f"Unique final fact {index}"} for index in range(3)]
+    artifacts = [{"step_id": f"read-{index}", "operation": "web.page.read",
+                  "critic": {"action": "accept"}, "outcome_check": {"status": "verified"},
+                  "provider_result": page} for index, page in enumerate(pages)]
+    sources = [{"id": f"source_{index}", "title": f"Product {index}", "content": encoded(page)}
+               for index, page in enumerate(pages)]
+    artifacts.append({"step_id": "report", "operation": "report.compose",
+                      "critic": {"action": "accept"}, "outcome_check": {"status": "verified"},
+                      "resolved_arguments": {"sources": sources},
+                      "provider_result": {"body": "Full report with all citations and limitations.",
+                                          "status": "draft", "sources": sources}})
+    original = copy.deepcopy(artifacts)
+    with pytest.raises(ModelInputTooLarge):
+        bounded_input({"accepted_artifacts": artifacts})
+
+    async def unexpected(*args, **kwargs):
+        raise AssertionError("Duplicate JSON encodings should not require evidence readers")
+
+    monkeypatch.setattr(agent_runtime, "_run", unexpected)
+    evidence, _, _ = await agent_runtime.prepare_final_review("Compare the products", {}, artifacts)
+    for index, source in enumerate(evidence[-1]["provider_result"]["sources"]):
+        assert encoded(source["content"]) == original[-1]["provider_result"]["sources"][index]["content"]
+        assert source["content"] == pages[index]
+        assert source["content_encoding"] == "canonical_json"
+    assert evidence[:-1] == original[:-1]
+    assert evidence[-1]["provider_result"]["body"] == original[-1]["provider_result"]["body"]
+    assert evidence[-1]["outcome_check"] == {"status": "verified"}
+    assert artifacts == original
+
+
+def test_final_report_projection_preserves_noncanonical_and_unrelated_sources():
+    for content in ["Plain source text", '{"fact":1,"fact":2}', '{ "fact": 1 }', '"text"']:
+        artifact = {"operation": "report.compose", "provider_result": {"sources": [{"content": content}]}}
+        assert canonical_review_artifacts([artifact]) == [artifact]
+    artifact = {"operation": "sheets.append", "resolved_arguments": {
+        "sources": [{"content": json.dumps({"fact": "exact write value"})}]}}
+    assert canonical_review_artifacts([artifact]) == [artifact]
 
 
 @pytest.mark.parametrize("status", [400, 401, 403, 404])
