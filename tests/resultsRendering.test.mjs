@@ -225,7 +225,7 @@ const run = { id: "saved-run", status: "completed", plan: { name: "Roofing campa
   } },
 };
 
-test("summary actions and tools precede the expandable actual result", () => {
+test("summary actions and tools precede the visible actual result with supporting details collapsed", () => {
   const html = render(run);
   const main = html.indexOf('aria-label="Main workflow result"');
   const actions = html.indexOf('aria-label="Supporting workflow actions"');
@@ -244,7 +244,9 @@ test("summary actions and tools precede the expandable actual result", () => {
   assert.match(content, /Open tool view/);
   assert.match(content, /max-h-\[30rem\]/);
   assert.match(html, /aria-label="View Google Ads results"/);
-  assert.doesNotMatch(html.slice(tools), /<details[^>]*\bopen(?:=|[ >])/);
+  const openDetails = [...html.matchAll(/<details[^>]*\bopen(?:=|[ >])[^>]*>/g)];
+  assert.equal(openDetails.length, 1);
+  assert.match(openDetails[0][0], /aria-label="Main workflow result"/);
 });
 
 test("a blocked run retains actual saved content and failed action evidence without a completion claim", () => {
@@ -437,7 +439,7 @@ test("an incomplete broker workflow summarizes completed work and previews the e
   assert.match(html, />37<\/p>/);
   assert.match(html, /web page read/);
   assert.match(html, /Tools used/);
-  assert.match(html, /<details aria-label="Main workflow result" class="group mb-6">/);
+  assert.match(html, /<details aria-label="Main workflow result" open="" class="group mb-6">/);
   assert.ok(html.indexOf("What happened") < html.indexOf("Tools used"));
   assert.ok(html.indexOf("Tools used") < html.indexOf('aria-label="Main workflow result"'));
   assert.match(html, /Saved Google Sheets cells/);
@@ -452,7 +454,7 @@ test("an incomplete broker workflow summarizes completed work and previews the e
   assert.ok(html.indexOf("Research and preparation") < html.indexOf("Intermediate planning report"));
 });
 
-test("the overview stays in place while result, report and activity controls open inline dropdowns", async () => {
+test("the sheet is visible on load while supporting reports and activity open inline dropdowns", async () => {
   const dom = new JSDOM("<!doctype html><body><div id='app'></div></body>", { pretendToBeVisual: true, url: "https://aura.example.invalid" });
   const globals = { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
     Element: dom.window.Element, SVGElement: dom.window.SVGElement, navigator: dom.window.navigator,
@@ -477,10 +479,15 @@ test("the overview stays in place while result, report and activity controls ope
     await act(async () => root.render(React.createElement(ResultsTestView, { run: saved })));
     const overview = byLabel("Supporting workflow actions"), main = byLabel("Main workflow result");
     const toolLink = main.querySelector("summary > a");
-    assert.equal(main.open, false);
+    assert.equal(main.open, true, "the primary output must be visible without a click");
+    assert.match(byLabel("Saved Google Sheets cells").textContent, /Not publicly reported/);
+    assert.ok([...app.querySelectorAll("details")].filter((details) => details !== main).every((details) => !details.open), "supporting details start collapsed");
+    assert.equal(byLabel("Inline tool result"), null);
     assert.equal(toolLink.href, "https://docs.google.com/spreadsheets/d/exact-workbook/edit#gid=173&range=A1%3AC2");
     assert.equal(toolLink.target, "_blank");
     assert.equal(app.querySelector('[role="dialog"]'), null);
+    await click(main.querySelector("summary"));
+    assert.equal(main.open, false);
     await click(byLabel("View result: rows saved to Google Sheets"));
     assert.equal(main.open, true);
     assert.match(byLabel("Saved Google Sheets cells").textContent, /Not publicly reported/);
