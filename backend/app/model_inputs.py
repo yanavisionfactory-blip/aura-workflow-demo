@@ -282,9 +282,14 @@ def sheet_transfer_evidence(context, step):
     )
 
     canonical = canonical_execution_evidence(context)
-    value = (step.get("arguments") or {}).get("values")
+    operation = step.get("operation")
+    content_field = {"sheets.append": "values", "google-sheets.add-multiple-rows": "rows",
+                     "google-sheets.update-multiple-rows": "rows"}.get(operation)
+    if not content_field:
+        return canonical
+    value = (step.get("arguments") or {}).get(content_field)
     match = REFERENCE.fullmatch(value) if isinstance(value, str) else None
-    if step.get("operation") != "sheets.append" or not match:
+    if not match:
         return canonical
     path = normalize_reference_path(match.group(1)).split(".")
     if len(path) < 3 or path[0] != "steps" or path[2:] not in (

@@ -32,7 +32,10 @@ def validate_row_payload(operation: str, arguments: dict) -> None:
                              "The row write has not been dispatched.") from exc
     if (not isinstance(rows, list) or not rows or not all(isinstance(row, list) for row in rows)
             or any(isinstance(cell, (dict, list)) for row in rows for cell in row)):
-        raise ValueError("Google Sheets rows must contain a nonempty JSON array of row arrays with scalar cells")
+        raise ValueError("Google Sheets rows must contain a nonempty JSON array of row arrays with scalar cells. "
+                         "If rows depend on upstream research, bind the whole rows field directly to the "
+                         "completed report body reference, such as {{steps.report.body}}, for runtime preparation; "
+                         "do not insert empty or nested-object placeholders.")
 
 
 def normalize_report_annotations(plan) -> None:

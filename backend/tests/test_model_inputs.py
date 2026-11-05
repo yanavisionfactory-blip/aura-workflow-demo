@@ -28,8 +28,15 @@ def report_transfer_fixture():
     return context, step, report
 
 
-def test_report_transfer_preserves_complete_report_and_headers_without_reprocessing_research():
+@pytest.mark.parametrize("operation,field", [
+    ("sheets.append", "values"), ("google-sheets.add-multiple-rows", "rows"),
+    ("google-sheets.update-multiple-rows", "rows"),
+])
+def test_report_transfer_preserves_complete_report_and_headers_without_reprocessing_research(operation, field):
     context, step, report = report_transfer_fixture()
+    content = step["arguments"].pop("values")
+    step["operation"] = operation
+    step["arguments"][field] = content
     before = json.dumps(context)
     projected = sheet_transfer_evidence(context, step)
     assert set(projected["steps"]) == {"comparison", "headers"}

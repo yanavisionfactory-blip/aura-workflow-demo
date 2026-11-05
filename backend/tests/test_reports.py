@@ -82,6 +82,46 @@ def test_report_receipt_coercion_does_not_truncate_oversized_evidence():
         coerce_module_arguments(native_manifest("aura"), "report.compose", oversized)
 
 
+def test_whole_web_step_source_preserves_evidence_once_before_the_source_limit():
+    import json
+    from copy import deepcopy
+
+    from app.workflow_context import step_context_value
+
+    receipt = {"url": "https://brand.example/product", "title": "Serum",
+               "text": "Observed product evidence. " * 700 + "Final price: $39.99",
+               "links": [{"text": "Ingredients", "url": "https://brand.example/ingredients"}]}
+    context = step_context_value(receipt, "web.page.read")
+    before = deepcopy(context)
+    assert len(json.dumps(context)) > 30000
+    request = {**PACKET, "sources": [{"id": "page", "title": "Product page", "content": context}]}
+    prepared = coerce_module_arguments(native_manifest("aura"), "report.compose", request)
+    source = json.loads(prepared["sources"][0]["content"])
+    for field, value in receipt.items():
+        assert source[field] == value
+    assert source["__aura_context_aliases__"] == {
+        "provider_result": ".", "output": ".", "result": ".", "page": ".", "read": ".",
+    }
+    assert context == before
+    assert prepared["sources"][0]["content"].count("Final price: $39.99") == 1
+
+
+def test_duplicate_removal_does_not_hide_errors_or_truncate_genuinely_large_sources():
+    import json
+
+    from app.workflow_context import step_context_value
+
+    failure = {"is_error": True, "error": "Read was denied", "url": "https://brand.example"}
+    request = {**PACKET, "sources": [{"id": "page", "title": "Failed read",
+                                      "content": step_context_value(failure)}]}
+    prepared = coerce_module_arguments(native_manifest("aura"), "report.compose", request)
+    source = json.loads(prepared["sources"][0]["content"])
+    assert source["is_error"] is True and source["error"] == "Read was denied"
+    request["sources"][0]["content"] = step_context_value({"text": "x" * 30001})
+    with pytest.raises(ValueError):
+        coerce_module_arguments(native_manifest("aura"), "report.compose", request)
+
+
 def test_live_sheet_values_can_feed_the_report_and_written_body_readback():
     from app.plan_preflight import preflight_plan
 
