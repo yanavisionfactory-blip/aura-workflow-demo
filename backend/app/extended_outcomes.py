@@ -4,6 +4,7 @@ import hashlib
 from dataclasses import replace
 
 EXTRA_READBACK = {
+    "google-sheets.new-spreadsheet": "google-sheets.get-spreadsheet-info",
     "x.posts.create": "x.posts.get",
     "sheets.campaign_report.create": "sheets.campaign_report.get",
     "sheets.kpi.create": "sheets.workbook.get",
@@ -22,6 +23,9 @@ EXTRA_READBACK = {
 
 def build_extended(operation, a, receipt):
     from .outcome_checks import OutcomeCheck
+    if operation == "google-sheets.new-spreadsheet":
+        from .sheets_outcomes import creation_check
+        return creation_check(a, receipt)
     read = EXTRA_READBACK.get(operation)
     if not read:
         return None
@@ -133,6 +137,9 @@ def leaves(check):
 
 
 def evaluate_extended(check, observed):
+    if check.kind == "broker_sheets_create":
+        from .sheets_outcomes import evaluate_creation
+        return evaluate_creation(check, observed)
     if check.kind == "campaign_report":
         from .campaign_report import verify_workbook
         return verify_workbook(check.expected, observed, check.resource_id)

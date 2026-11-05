@@ -171,32 +171,36 @@ async def _check_provider_outcome(session, run, step, snapshot) -> dict:
     }
     for attempt in range(3):
         try:
-            vault = CredentialVault()
-            if tool.config.get("managed_by") == "nango":
-                credentials = await managed_connector_client().get_credentials(
-                    managed_connection_reference(tool) or tool.config["connection_id"],
-                    tool.config["integration_id"],
-                )
-                if tool.slug == "jira" and not credentials.get("cloud_id"):
-                    identity = await verify_oauth_credentials("jira", credentials)
-                    credentials["cloud_id"] = identity.get("identity", {}).get("id")
+            if tool.config.get("managed_by") == "pipedream":
+                from .broker_readback import readback_executor
+                executor = await readback_executor(session, tool, required)
             else:
-                credentials = vault.decrypt(tool.encrypted_credentials)
-                if tool.kind.value == "oauth":
-                    credentials, changed = await refresh_oauth_credentials(
-                        get_settings(), tool.slug, credentials, tool.config
+                vault = CredentialVault()
+                if tool.config.get("managed_by") == "nango":
+                    credentials = await managed_connector_client().get_credentials(
+                        managed_connection_reference(tool) or tool.config["connection_id"],
+                        tool.config["integration_id"],
                     )
-                    if changed:
-                        tool.encrypted_credentials = vault.encrypt(credentials)
-            executor = ProviderExecutor(
-                credentials,
-                tool.base_url,
-                provider_kind=tool.kind.value,
-                timeout_seconds=20,
-                capability_manifest=current_capability_manifest(
-                    tool.slug, stored.manifest
-                ),
-            )
+                    if tool.slug == "jira" and not credentials.get("cloud_id"):
+                        identity = await verify_oauth_credentials("jira", credentials)
+                        credentials["cloud_id"] = identity.get("identity", {}).get("id")
+                else:
+                    credentials = vault.decrypt(tool.encrypted_credentials)
+                    if tool.kind.value == "oauth":
+                        credentials, changed = await refresh_oauth_credentials(
+                            get_settings(), tool.slug, credentials, tool.config
+                        )
+                        if changed:
+                            tool.encrypted_credentials = vault.encrypt(credentials)
+                executor = ProviderExecutor(
+                    credentials,
+                    tool.base_url,
+                    provider_kind=tool.kind.value,
+                    timeout_seconds=20,
+                    capability_manifest=current_capability_manifest(
+                        tool.slug, stored.manifest
+                    ),
+                )
             observed = await asyncio.wait_for(
                 observe_check(executor, check),
                 timeout=40 if step.operation == "jira.issues.create_from_blocks" else 20,
