@@ -322,6 +322,11 @@ def step_context_value(
         value.setdefault("result", result)
         value.setdefault("provider_result", evidence)
         if "ret" in result or "exports" in result:
+            if operation == "google-sheets.new-spreadsheet":
+                workbook = result.get("ret")
+                spreadsheet_id = workbook.get("spreadsheetId") if isinstance(workbook, dict) else None
+                if isinstance(spreadsheet_id, str) and re.fullmatch(r"[A-Za-z0-9_-]+", spreadsheet_id):
+                    value.setdefault("spreadsheetId", spreadsheet_id)
             if operation == "google-ads.list-account-id-options":
                 account_id = _unique_google_ads_account(result)
                 if account_id:

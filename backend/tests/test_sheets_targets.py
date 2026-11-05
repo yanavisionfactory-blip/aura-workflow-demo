@@ -108,6 +108,14 @@ def test_named_tab_can_be_selected_from_multiple_verified_tabs():
     assert "worksheetId" not in ambiguous
 
 
+def test_created_workbook_alias_preserves_provider_receipt_and_does_not_invent_tab_id():
+    receipt = {"ret": {"spreadsheetId": "real_workbook", "worksheetName": "Dashboard"}}
+    value = step_context_value(receipt, "google-sheets.new-spreadsheet")
+    assert resolve_value("{{steps.create.spreadsheetId}}", {"steps": {"create": value}}) == "real_workbook"
+    assert value["provider_result"] is receipt
+    assert "worksheetId" not in value and "worksheetId" not in receipt["ret"]
+
+
 async def test_content_model_cannot_guess_an_ambiguous_worksheet(monkeypatch):
     generate = AsyncMock()
     monkeypatch.setattr(agent_runtime, "_run", generate)
