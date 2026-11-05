@@ -12,6 +12,28 @@ DISCOVERY = {
 }
 
 
+def bind_requested_sheet_reads(plan, prompt):
+    """Bind a missing read-only workbook input to one explicit user URL.
+
+    Never derive a destination from report text, choose among multiple books,
+    infer a tab ID, or fill an external write's missing target.
+    """
+    from .request_contracts import user_request_text
+
+    identifiers = set(re.findall(r"https://docs\.google\.com/spreadsheets/d/([A-Za-z0-9_-]{10,200})(?:[/#?\s]|$)",
+                                 user_request_text(prompt)))
+    if len(identifiers) != 1 or any(step.operation == "google-sheets.new-spreadsheet" for step in plan.steps):
+        return
+    for step in plan.steps:
+        if step.operation != "google-sheets.read-rows":
+            continue
+        provided = {re.sub(r"[^a-z]", "", key.lower()): value for key, value in step.arguments.items()}
+        if not any(provided.get(key) not in (None, "") for key in ("spreadsheetid", "sheetid")):
+            step.arguments = {**{key: value for key, value in step.arguments.items()
+                                 if re.sub(r"[^a-z]", "", key.lower()) not in {"spreadsheetid", "sheetid"}},
+                              "spreadsheetId": next(iter(identifiers))}
+
+
 def worksheet_metadata_context(result, operation):
     """Expose the provider's tab-name synonym without changing its receipt.
 

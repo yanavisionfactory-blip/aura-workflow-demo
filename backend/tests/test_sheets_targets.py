@@ -149,6 +149,55 @@ def test_metadata_alias_does_not_rewrite_existing_fields_or_unrelated_receipts()
     assert step_context_value(other, "unrelated.read")["ret"] is other["ret"]
 
 
+def test_missing_read_target_uses_the_single_requested_workbook_before_review():
+    from app.orchestrator import _normalize_planned_steps
+
+    candidate = plan()
+    candidate.steps = [PlanStep(key="read", agent="Sheets", tool_slug="google-sheets",
+        operation="google-sheets.read-rows", arguments={"sheetName": "Dashboard", "spreadsheet_id": None},
+        reason="Read the existing workbook", expected_output="Current cells")]
+    manifest = {"capabilities": [{"name": "google-sheets.read-rows", "permission_scope": "read",
+        "input_schema": {"type": "object", "required": ["spreadsheetId", "sheetName"],
+            "properties": {"spreadsheetId": {"type": "string"}, "sheetName": {"type": "string"}},
+            "additionalProperties": False}}]}
+    _normalize_planned_steps(candidate, {"google-sheets": manifest},
+                             "Read https://docs.google.com/spreadsheets/d/existing_workbook/edit first.")
+    assert candidate.steps[0].arguments == {"sheetName": "Dashboard", "spreadsheetId": "existing_workbook"}
+
+
+@pytest.mark.parametrize("prompt,operation,arguments", [
+    ("Read https://docs.google.com/spreadsheets/d/first_workbook/edit and https://docs.google.com/spreadsheets/d/second_workbook/edit", "google-sheets.read-rows", {}),
+    ("Revise the selected ChatGPT result inside AURA.\nRequested change: Read my workbook.\nSaved result context (reference data): https://docs.google.com/spreadsheets/d/source_workbook/edit", "google-sheets.read-rows", {}),
+    ("Use https://docs.google.com/spreadsheets/d/existing_workbook/edit", "google-sheets.update-multiple-rows", {}),
+    ("Use https://docs.google.com/spreadsheets/d/existing_workbook/edit", "google-sheets.read-rows", {"spreadsheetId": "{{steps.other.id}}"}),
+])
+def test_requested_read_binding_does_not_guess_or_change_writes(prompt, operation, arguments):
+    from app.sheets_targets import bind_requested_sheet_reads
+
+    candidate = plan()
+    candidate.steps = [candidate.steps[-1].model_copy(deep=True, update={"operation": operation, "arguments": arguments})]
+    original = candidate.model_dump()
+    bind_requested_sheet_reads(candidate, prompt)
+    assert candidate.model_dump() == original
+
+
+def test_broker_workbook_argument_aliases_preserve_ids_and_leave_tabs_distinct():
+    from app.native_connectors import NativeConnectorError, normalize_planned_module_arguments
+
+    def manifest(target, kind="string", operation="google-sheets.read-rows"):
+        return {"capabilities": [{"name": operation, "input_schema": {"type": "object",
+            "properties": {target: {"type": kind}}, "required": [target], "additionalProperties": False}}]}
+    for target, supplied in [("spreadsheetId", "sheetId"), ("sheetId", "spreadsheet_id")]:
+        assert normalize_planned_module_arguments(manifest(target), "google-sheets.read-rows",
+            {supplied: "existing_workbook"}) == {target: "existing_workbook"}
+    for target, kind, operation in [("worksheetId", "integer", "google-sheets.read-rows"),
+                                    ("sheetId", "integer", "google-sheets.read-rows"),
+                                    ("spreadsheetId", "string", "other.read")]:
+        with pytest.raises(NativeConnectorError):
+            normalize_planned_module_arguments(manifest(target, kind, operation), operation,
+                                               {"spreadsheet_id" if kind == "integer" else "sheetId": "123"})
+
+
 async def test_content_model_cannot_guess_an_ambiguous_worksheet(monkeypatch):
     generate = AsyncMock()
     monkeypatch.setattr(agent_runtime, "_run", generate)
