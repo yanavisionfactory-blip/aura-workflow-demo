@@ -603,6 +603,9 @@ def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict]) -> None:
 
     normalize_bound_email_inputs(plan)
     normalize_planner_evidence_roles(plan, manifests_by_slug)
+    from .sheet_quality import normalize_report_annotations
+
+    normalize_report_annotations(plan)
     from .reports import preserve_web_source_provenance
 
     preserve_web_source_provenance(plan)
@@ -1300,10 +1303,15 @@ def _connected_capability_families(inventory: list[dict]) -> set[str]:
 
 def explicit_disconnected_capabilities(prompt: str, inventory: list[dict]) -> list[str]:
     """Find every explicitly named, disconnected provider account family."""
-    from .connection_families import uses_builtin_openai
+    from .connection_families import (
+        is_synthetic_source,
+        synthetic_source_families,
+        uses_builtin_openai,
+    )
     from .request_contracts import user_request_text
 
     prompt = user_request_text(prompt)
+    offline = synthetic_source_families(prompt)
     builtin_openai = uses_builtin_openai(prompt, inventory)
     # This intake section is a list of candidate CMS platforms, not four
     # mandatory connected accounts. Actual planned operations still undergo
@@ -1317,6 +1325,7 @@ def explicit_disconnected_capabilities(prompt: str, inventory: list[dict]) -> li
         family = _connection_family(item)
         if (
             item.get("connected", False)
+            or is_synthetic_source(item, offline)
             or (builtin_openai and family == "openai")
             or not family
             or family in connected_families
@@ -1409,6 +1418,12 @@ def complete_connection_requirements(
     """
     explicit = explicit_disconnected_capabilities(prompt, inventory)
     planned = actionable_connection_capabilities(planner_reported, inventory)
+    if compiled_plan is None:
+        from .connection_families import is_synthetic_source, synthetic_source_families
+        from .request_contracts import user_request_text
+
+        offline = synthetic_source_families(user_request_text(prompt))
+        planned = [family for family in planned if not is_synthetic_source({"slug": family}, offline)]
     missing = list(dict.fromkeys([*explicit, *planned]))
     if compiled_plan is None:
         return missing
@@ -2280,6 +2295,11 @@ def _partial_result(outputs: list[dict], step: RunStep, error: str) -> dict:
 async def review_recorded_result(session, run, step, snapshot, contract, result):
     from .completeness import incomplete_evidence
     from .operation_contracts import output_errors
+    from .sheet_quality import post_write_cell_errors
+
+    cell_errors = post_write_cell_errors(step.operation, contract, result, getattr(run, "plan", None) or {})
+    if cell_errors:
+        return CriticDecision(action="escalate", reasons=cell_errors)
 
     errors = (
         []

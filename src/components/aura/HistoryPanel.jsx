@@ -264,14 +264,14 @@ export default function HistoryPanel({ open, onClose, onRerun, onEditRun, onOpen
   // Live updates
   useEffect(() => {
     const unsubWf = aura.entities.Workflow.subscribe((event) => {
-      if (event.type === "create") setWorkflows((p) => [event.data, ...p]);
+      if (event.type === "create") setWorkflows((p) => upsertHistoryRecord(p, event.data));
       else if (event.type === "update") {
         setWorkflows((p) => p.map((w) => (w.id === event.id ? event.data : w)));
         setSelectedWorkflow((prev) => (prev?.id === event.id ? event.data : prev));
       }
     });
     const unsubRun = aura.entities.WorkflowRun.subscribe((event) => {
-      if (event.type === "create") setRuns((p) => [event.data, ...p]);
+      if (event.type === "create") setRuns((p) => upsertHistoryRecord(p, event.data));
       else if (event.type === "update") {
         setRuns((p) => p.map((r) => (r.id === event.id ? event.data : r)));
         setSelectedRun((prev) => (prev?.id === event.id ? event.data : prev));

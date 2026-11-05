@@ -17,15 +17,34 @@ PRESENTATION_SCHEMA = {"type": "object", "additionalProperties": False,
         "title": {"type": "string", "minLength": 1, "maxLength": 50},
         "subtitle": {"type": "string", "maxLength": 120},
         "layout": {"type": "string", "enum": ["timeline", "slides", "creative"],
-                   "description": "Use creative for one populated campaign asset, slides for a deck, or timeline for a roadmap."},
+                   "description": "Use timeline for a one-page report or roadmap, slides for a deck. Creative requires exactly one phase with two items: service line and CTA."},
         "canvas": {"type": "string", "enum": ["square", "landscape"],
                    "description": "For creative layouts: square social asset or 16:9 landscape screen asset."},
         "phases": {"type": "array", "minItems": 1, "maxItems": 4, "items": PHASE_SCHEMA}}}
 
 
+def validate_presentation_layout(arguments: dict) -> None:
+    """Check the renderable shape before an approved operation is dispatched."""
+    if arguments.get("layout") != "creative":
+        return
+    phases = arguments.get("phases")
+    # References are checked after resolution by the same execution preflight.
+    if isinstance(phases, str) and phases.startswith("{{"):
+        return
+    if isinstance(phases, list) and len(phases) == 1:
+        items = phases[0].get("items") if isinstance(phases[0], dict) else None
+        if isinstance(items, str) and items.startswith("{{"):
+            return
+        if isinstance(items, list) and len(items) == 2:
+            return
+    raise ValueError("Canva creative requires exactly one phase and two items (service line and CTA). "
+                     "Use layout=timeline for a multi-section report, or layout=slides for a deck.")
+
+
 def render_timeline(arguments: dict) -> bytes:
     from jsonschema import validate
     validate(arguments, PRESENTATION_SCHEMA)
+    validate_presentation_layout(arguments)
     if arguments.get('layout') == 'creative':
         return _render_creative(arguments)
     deck = Presentation()

@@ -7886,11 +7886,16 @@ UI_RECORD_TYPES = {"workflow", "workflow_run", "schedule", "access_request", "cr
 
 def _record_view(record: WorkspaceRecord) -> dict:
     return {
-        "id": record.id,
         **record.data,
+        "id": record.id,
         "created_date": record.created_at.isoformat(),
         "updated_date": record.updated_at.isoformat(),
     }
+
+
+def _record_data(data: dict) -> dict:
+    return {key: value for key, value in data.items()
+            if key not in {"id", "created_date", "updated_date"}}
 
 
 def _record_type(value: str) -> str:
@@ -7932,7 +7937,7 @@ async def create_workspace_record(
     record = WorkspaceRecord(
         workspace_id=context.workspace_id,
         record_type=_record_type(record_type),
-        data=payload.data,
+        data=_record_data(payload.data),
     )
     session.add(record)
     await session.commit()
@@ -7971,7 +7976,7 @@ async def update_workspace_record(
         or record.record_type != _record_type(record_type)
     ):
         raise HTTPException(404, "Workspace record not found")
-    record.data = {**record.data, **payload.data}
+    record.data = _record_data({**record.data, **payload.data})
     record.updated_at = datetime.now(UTC)
     await session.commit()
     return _record_view(record)

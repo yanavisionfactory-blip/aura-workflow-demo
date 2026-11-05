@@ -228,3 +228,22 @@ test("duplicate saved associations do not hide a completed run from either workf
   assert.equal(workflowRollup("original-workflow", records).run_count, 1);
   assert.equal(workflowRollup("original-workflow", records).last_run_status, "completed");
 });
+
+test("verified mixed report keeps both live Sheets and Canva links in history", () => {
+  const outputs = [
+    { operation: "google-sheets.new-spreadsheet", critic: { action: "accept" }, outcome_check: { status: "verified" },
+      resolved_arguments: { title: "Synthetic social report", sheetName: "Summary" },
+      provider_result: { ret: { spreadsheetId: "social-sheet", title: "Synthetic social report", worksheetName: "Summary" } } },
+    { operation: "canva.presentation.create", critic: { action: "accept" }, outcome_check: { status: "verified" },
+      resolved_arguments: { title: "Synthetic social report" },
+      provider_result: { job: { status: "success", result: { designs: [{ id: "design-1", title: "Synthetic social report",
+        urls: { edit_url: "https://www.canva.com/design/design-1/edit" } }] } } } },
+  ];
+  const run = { ...backendRun, result: { verification: { status: "verified" }, outputs } };
+  const projection = backendRunHistoryProjection(run);
+  assert.deepEqual(projection.run.outcomes.map((o) => o.type), ["spreadsheet", "presentation"]);
+  assert.match(projection.run.outcomes[0].link, /social-sheet/);
+  assert.match(projection.run.outcomes[1].link, /design-1/);
+  assert.deepEqual(backendRunHistoryProjection({ ...run, status: "blocked" }).run.outcomes, []);
+  assert.deepEqual(backendRunHistoryProjection({ ...run, result: { ...run.result, verification: { status: "unverified" } } }).run.outcomes, []);
+});

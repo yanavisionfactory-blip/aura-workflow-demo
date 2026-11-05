@@ -831,6 +831,13 @@ def validate_module_arguments(manifest: dict[str, Any], operation: str, argument
     if not module:
         raise NativeConnectorError(f"Module {operation!r} is not declared")
     _validate_value(module.get("input_schema", {"type": "object"}), arguments, operation)
+    if operation == "canva.presentation.create":
+        from .presentation_content import validate_presentation_layout
+
+        try:
+            validate_presentation_layout(arguments)
+        except ValueError as exc:
+            raise NativeConnectorError(str(exc)) from exc
 
 
 def _coerce_value(schema: dict[str, Any], value: Any) -> Any:

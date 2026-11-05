@@ -66,13 +66,18 @@ export function supportingToolOutputs(entries, primary = {}, presentation = {}) 
 }
 
 export function preferredToolOutcome(primary, activity = []) {
-  if (!["ai_response", "report"].includes(primary.kind)) return primary;
+  if (!["ai_response", "report", "result"].includes(primary.kind)) return primary;
   const outputs = activity.filter((step) => step.status === "completed").map((step) => ({
     ...step.output, step_id: step.id, step_key: step.stepKey || step.key,
     operation: step.output?.operation || step.operation,
   }));
   // A saved spreadsheet is the deliverable; a source-only read stays secondary.
-  return googleSheetsResult(outputs, { title: primary.title }) || primary;
+  const sheet = googleSheetsResult(outputs, { title: primary.title });
+  if (sheet) return sheet;
+  const canva = primaryResultFromOutputs(outputs.filter((output) =>
+    output.operation === "canva.presentation.create" && output.critic?.action === "accept"
+    && output.outcome_check?.status === "verified"), { title: primary.title });
+  return canva?.kind === "presentation" && canva.designId ? canva : primary;
 }
 
 export function toolOutputResult(entries, activity = []) {

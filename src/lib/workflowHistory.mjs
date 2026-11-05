@@ -114,14 +114,18 @@ export function backendRunHistoryProjection(run = {}) {
   const completedCount = Number(run.result?.completed_steps || 0);
   const steps = historyStepsForBackendRun(run);
   const runDate = run.updated_at || run.created_at || new Date().toISOString();
-  const createdDoc = status === "completed" && run.result?.verification?.status === "verified"
-    ? (run.result?.outputs || []).find((output) =>
-    ["docs.create", "google-docs.create-document"].includes(output.operation)
-    && output.critic?.action === "accept"
-  ) : null;
-  const documentResult = createdDoc ? primaryResultFromOutputs([createdDoc], {
-    title: createdDoc.resolved_arguments?.title || title,
-  }) : null;
+  const outputs = status === "completed" && run.result?.verification?.status === "verified"
+    ? (run.result?.outputs || []).filter((output) => output.critic?.action === "accept") : [];
+  const artifacts = [];
+  for (const provider of ["docs", "sheets", "canva"]) {
+    const group = outputs.filter((output) => {
+      const operation = String(output.operation || "");
+      return operation.startsWith(`${provider}.`) || operation.startsWith(`google-${provider}.`);
+    });
+    const artifact = primaryResultFromOutputs(group, { title });
+    if (artifact?.link && ["document", "spreadsheet", "presentation"].includes(artifact.kind)
+      && !artifacts.some((item) => item.link === artifact.link)) artifacts.push(artifact);
+  }
 
   return {
     workflow: {
@@ -142,13 +146,13 @@ export function backendRunHistoryProjection(run = {}) {
       metrics: completedCount > 0
         ? [{ value: String(completedCount), label: completedCount === 1 ? "step completed" : "steps completed" }]
         : [],
-      outcomes: documentResult?.link ? [{
-        type: "document",
-        title: documentResult.preview?.title || documentResult.title,
-        detail: "Google Doc created",
-        link: documentResult.link,
-        linkLabel: "Open in Google Docs",
-      }] : [],
+      outcomes: artifacts.map((artifact) => ({
+        type: artifact.kind,
+        title: artifact.preview?.title || artifact.title,
+        detail: artifact.kind === "document" ? "Google Doc created" : `Saved in ${artifact.provider}`,
+        link: artifact.link,
+        linkLabel: artifact.kind === "document" ? "Open in Google Docs" : artifact.linkLabel || "Open result",
+      })),
       nextSteps: normalizeResultSuggestions(run.result?.unified_deliverable?.next_steps),
       steps,
       duration_seconds: durationSeconds(run),
