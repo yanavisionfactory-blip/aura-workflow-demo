@@ -27,6 +27,36 @@ def capability_family(value: object) -> str:
     return GOOGLE_APP_FAMILIES.get(normalized, PROVIDER_FAMILIES.get(normalized, normalized))
 
 
+def synthetic_source_families(prompt: str) -> set[str]:
+    """Recognize explicit synthetic social inputs without suppressing live actions.
+
+    This only narrows planning candidates. Exact operations still require normal
+    connection and policy preflight. A later live-action clause takes precedence.
+    """
+    aliases = {"x": r"\b(?:x|twitter)\b", "tiktok": r"\btiktok\b",
+               "meta-ads": r"\b(?:meta(?: ads)?|facebook ads)\b"}
+    synthetic, live = set(), set()
+    for clause in re.split(r"[.;\n]|\bbut\b", prompt.casefold()):
+        families = {family for family, pattern in aliases.items() if re.search(pattern, clause)}
+        if not families:
+            continue
+        if re.search(r"\b(?:synthetic|fake|mock|simulated)\b", clause) and re.search(
+            r"\b(?:data|inputs?|outcomes?|metrics|results?|fixtures?|exports?)\b", clause
+        ):
+            synthetic.update(families)
+        if re.search(r"\b(?:connect|reconnect|authorize|publish|post|launch|send|fetch|pull|read|retrieve)\b",
+                     clause) and not re.search(r"\b(?:no|never|without|do not|don.t)\b", clause):
+            live.update(families)
+    return synthetic - live
+
+
+def is_synthetic_source(item: dict, families: set[str]) -> bool:
+    candidates = {str(item.get(key) or "").casefold() for key in ("slug", "canonical_provider", "provider")}
+    aliases = {"x": {"x", "twitter"}, "tiktok": {"tiktok", "tiktok-ads", "tiktok-business"},
+               "meta-ads": {"meta", "meta-ads", "facebook-ads", "facebook-marketing"}}
+    return any(candidates.intersection(aliases[family]) for family in families)
+
+
 def uses_builtin_openai(prompt: str, inventory: list[dict]) -> bool:
     """An AURA implementation detail is not a separate provider account request."""
     if not any(item.get("slug") == "aura" and "report.compose" in

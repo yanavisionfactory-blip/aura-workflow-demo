@@ -176,7 +176,16 @@ def intent_bounded_tool_inventory(
     requested_tool_names: list[str] | tuple[str, ...] | set[str] = (),
 ) -> list[dict]:
     """Bound clear requests to relevant tools before model-based planning."""
-    from .connection_families import capability_family, uses_builtin_openai
+    from .connection_families import (
+        capability_family,
+        is_synthetic_source,
+        synthetic_source_families,
+        uses_builtin_openai,
+    )
+    from .request_contracts import user_request_text
+
+    offline = synthetic_source_families(user_request_text(prompt))
+    inventory = [item for item in inventory if not is_synthetic_source(item, offline)]
 
     builtin_openai = uses_builtin_openai(prompt, inventory)
     text = _intent_words(prompt)

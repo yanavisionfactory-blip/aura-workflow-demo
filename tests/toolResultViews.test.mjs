@@ -107,3 +107,14 @@ test("Claude fallback remains one selected-tool output with honest execution det
   delete withoutReceipt.output.fallback;
   assert.equal(toolResultEntries([withoutReceipt])[0].tool, "AURA Intelligence");
 });
+
+test("verified Canva report leads a generic completion summary without manual selection", async () => {
+  const { preferredToolOutcome } = await import("../src/lib/toolResultViews.mjs");
+  const primary = { kind: "result", title: "Workflow summary" };
+  const output = { operation: "canva.presentation.create", critic: { action: "accept" },
+    outcome_check: { status: "verified" }, resolved_arguments: { title: "Synthetic report" },
+    provider_result: { job: { status: "success", result: { designs: [{ id: "report-1" }] } } } };
+  const activity = [{ id: "canva", key: "canva", status: "completed", output }];
+  assert.equal(preferredToolOutcome(primary, activity).designId, "report-1");
+  assert.deepEqual(preferredToolOutcome(primary, [{ ...activity[0], output: { ...output, outcome_check: { status: "unverified" } } }]), primary);
+});
