@@ -99,24 +99,21 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
 
   if (primaryResult.kind === "marketing_tools") return <div className="mx-auto w-full max-w-3xl pb-8"><ResultPreview result={primaryResult} results={results} activity={activity} backendRunId={backendRunId} /></div>;
 
+  const resultSummary = <>
+    <ResultsHeading centered={summaryFirst} title={sheetSummary?.title ? `${sheetSummary.title}${isFailure ? " — review needed" : ""}` : primaryResult.completionTitle || results.title || "Workflow complete"} summary={sheetSummary?.summary || primaryResult.completionSummary || results.summary} isFailure={isFailure} />
+    <ResultsMetrics metrics={metrics} compact />
+  </>;
+  const revisionComposer = <ResultRevisionComposer onSubmit={onStartWorkflow ? (instruction) => onStartWorkflow(resultRevisionPrompt({ instruction, result: displayedResult, tool: outputEntry?.tool, entry: outputEntry, runId: backendRunId })) : null}
+    placeholder={primaryResult.kind === "frameio_review" ? "e.g. Refresh comments and make the revision checklist more concise…" : "Describe what to change in this tool’s result…"} />;
+
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`mx-auto w-full pb-8 ${summaryFirst ? "max-w-3xl" : ["website_content", "spreadsheet", "frameio_review"].includes(primaryResult.kind) ? "max-w-6xl" : "max-w-5xl"}`}>
-      {!nativeResult && <ResultsHeading centered={summaryFirst} title={sheetSummary?.title ? `${sheetSummary.title}${isFailure ? " — review needed" : ""}` : primaryResult.completionTitle || results.title || "Workflow complete"} summary={sheetSummary?.summary || primaryResult.completionSummary || results.summary} isFailure={isFailure} />}
-      {!nativeResult && <ResultsMetrics metrics={metrics} compact />}
-
-
+      {!nativeResult && !summaryFirst && resultSummary}
       {nativeResult && <ResultPreview result={primaryResult} results={results} activity={activity} backendRunId={backendRunId} />}
-
-
-
-
       {nativeResult && !nativeAudit && primaryResult.kind !== "website_content" && <ResultsByTool entries={toolEntries} onOpen={openTool} />}
 
-
-      {summaryFirst && <><WorkflowOutcomeList actions={actions} onOpen={openTool} onOpenRun={onOpenRun} /><ResultsByTool entries={toolEntries} selectedTool={outputEntry?.tool || displayedResult.provider} onOpen={openTool} compact /></>}
-
       {!nativeResult && <MainResultContainer ref={resultRef} aria-label="Main workflow result" open={summaryFirst || undefined} className="group mb-6">
-        <MainResultHeading className="mb-4 flex cursor-pointer list-none flex-wrap items-center gap-2 text-sm font-semibold [&::-webkit-details-marker]:hidden"><BarChart3 className="h-4 w-4 text-violet-400" />Results<span className="text-[11px] font-normal text-muted-foreground">— the actual output</span>{summaryFirst && <ChevronDown className="h-3.5 w-3.5 text-muted-foreground group-open:rotate-180" />}
+        <MainResultHeading className="mb-4 flex cursor-pointer list-none flex-wrap items-center gap-2 text-sm font-semibold [&::-webkit-details-marker]:hidden"><BarChart3 className="h-4 w-4 text-violet-400" />Main result<span className="text-[11px] font-normal text-muted-foreground">— the actual output</span>{summaryFirst && <ChevronDown className="h-3.5 w-3.5 text-muted-foreground group-open:rotate-180" />}
           {summaryFirst && primaryResult.link && <a href={primaryResult.link} target="_blank" rel="noopener noreferrer" onClick={(event) => event.stopPropagation()} className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-cyan-400/25 px-3 py-1.5 text-[11px] font-medium text-cyan-300 hover:bg-cyan-400/10"><ExternalLink className="h-3 w-3" />{primaryResult.linkLabel || `Open in ${mainEntry?.tool || toolResultName(primaryResult.provider)}`}</a>}
         </MainResultHeading>
         {!summaryFirst && <ResultsByTool entries={toolEntries} selectedTool={outputEntry?.tool || toolResultName(displayedResult.provider)} onOpen={openTool} />}
@@ -143,12 +140,22 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
         </ToolResultFrame> : <ResultPreview result={primaryResult} results={results} />}
           {artifactDelivery && <p className="flex flex-wrap justify-between gap-2 text-xs text-muted-foreground"><span>Presentation · {primaryResult.artifact?.title || primaryResult.title}</span><span className="text-emerald-400">{artifactDelivery.artifactDelivered ? "Attached and delivered" : "Created in Canva"}</span></p>}
         </div>
-        {summaryFirst && supportingOutputs.length > 0 && <details className="mt-4 rounded-xl border border-white/10 p-4"><summary className="cursor-pointer text-xs font-medium text-muted-foreground">Research and preparation</summary><div className="mt-4"><ToolOutputCards entries={supportingOutputs} activity={activity} backendRunId={backendRunId} onOpen={openTool} collapsible /></div></details>}
-        <ResultRevisionComposer onSubmit={onStartWorkflow ? (instruction) => onStartWorkflow(resultRevisionPrompt({ instruction, result: displayedResult, tool: outputEntry?.tool, entry: outputEntry, runId: backendRunId })) : null}
-          placeholder={primaryResult.kind === "frameio_review" ? "e.g. Refresh comments and make the revision checklist more concise…" : "Describe what to change in this tool’s result…"} />
+        {!summaryFirst && revisionComposer}
       </MainResultContainer>}
 
+      {summaryFirst && supportingOutputs.length > 0 && <section aria-label="Supporting tool outputs" className="mb-7 space-y-4">
+        <h2 className="text-sm font-semibold">Other tool outputs</h2>
+        <ToolOutputCards entries={supportingOutputs} activity={activity} backendRunId={backendRunId} onOpen={openTool} collapsible />
+      </section>}
+
+      {summaryFirst && <section aria-label="Workflow summary" className="mt-7">
+        {resultSummary}
+        <WorkflowOutcomeList actions={actions} onOpen={openTool} onOpenRun={onOpenRun} />
+        <ResultsByTool entries={toolEntries} selectedTool={outputEntry?.tool || displayedResult.provider} onOpen={openTool} compact />
+      </section>}
+
       {summaryFirst && <ToolResultDialog inline request={toolView} onClose={() => setToolView(null)} entries={toolEntries} primary={primaryResult} mainEntry={mainEntry} hasMainOutput={hasMainOutput} results={results} activity={activity || []} backendRunId={backendRunId} />}
+      {summaryFirst && revisionComposer}
 
       {!summaryFirst && supportingOutputs.length > 0 && <section aria-label="Supporting tool outputs" className="mb-7 space-y-4">
         <h2 className="text-sm font-semibold">More outputs from this workflow</h2>
