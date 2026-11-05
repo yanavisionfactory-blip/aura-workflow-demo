@@ -101,6 +101,36 @@ def test_native_and_broker_cell_shapes_have_the_same_content_contract():
         validate_dashboard_values(PROMPT, "sheets.append", {"values": [["Revenue", 0, 0]]})
 
 
+@pytest.mark.parametrize("content", [
+    {"body": {"requests": [{"updateCells": {"rows": "{{steps.draft.body}}"}}]}},
+    {"rows": '["{{steps.draft.body}}"]'},
+    {"values": [["{{steps.draft.body}}"]]},
+])
+def test_researched_content_can_be_materialized_after_nested_upstream_reads(content):
+    candidate = plan([])
+    candidate.steps[0].arguments.update(content)
+    validate_dashboard_plan(PROMPT, candidate)
+    # Deferred content still requires a dependent read of the completed workbook.
+    candidate.steps[1].depends_on = []
+    with pytest.raises(ValueError, match="read back"):
+        validate_dashboard_plan(PROMPT, candidate)
+
+
+def test_only_destination_references_do_not_skip_content_checks():
+    candidate = plan([["Incomplete dashboard"]])
+    candidate.steps[0].arguments["spreadsheet_id"] = "{{steps.create.spreadsheetId}}"
+    with pytest.raises(ValueError, match="headers"):
+        validate_dashboard_plan(PROMPT, candidate)
+
+
+def test_research_guidance_requires_sourced_numbers_and_separates_estimates():
+    guidance = dashboard_requirements(PROMPT + " Find values on the internet.")[0]
+    for requirement in ("web.search", "web.page.read", "third-party estimates", "industry benchmarks",
+                        "observation dates", "reporting-period", "{{steps.KEY.body}}"):
+        assert requirement in guidance
+    assert sheet_rows({"resource": {"values": good_rows()}}) == good_rows()
+
+
 @pytest.mark.asyncio
 async def test_compiler_repairs_bad_template_before_review_or_provider_dispatch(monkeypatch):
     from app import llm_planner, orchestrator

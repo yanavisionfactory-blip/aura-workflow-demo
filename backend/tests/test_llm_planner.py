@@ -15,6 +15,14 @@ from app.request_contracts import requested_effects
 from app.schemas import PlanStep, WorkflowPlan
 
 
+def json_entries(value):
+    def node(item):
+        return {"scalar": item if not isinstance(item, (dict, list)) else None,
+                "items": [node(child) for child in item] if isinstance(item, list) else None,
+                "entries": json_entries(item) if isinstance(item, dict) else None}
+    return [{"key": key, "value": node(item)} for key, item in value.items()]
+
+
 @pytest.fixture
 def malformed_plan_client(monkeypatch):
     compact = CompactWorkflowPlan.model_validate({
@@ -52,7 +60,7 @@ def malformed_plan_client(monkeypatch):
 async def test_malformed_arguments_get_one_scoped_serialization_repair(malformed_plan_client):
     compact, parse = malformed_plan_client
     repair = llm_planner.PlanJSONRepairs(repairs=[llm_planner.ArgumentJSONRepair(
-        step_key="save", arguments_json='{"post_id":107,"title":"Demo"}',
+        step_key="save", arguments=json_entries({"post_id": 107, "title": "Demo"}),
     )])
     parse.side_effect = [SimpleNamespace(output_parsed=compact), SimpleNamespace(output_parsed=repair)]
     schema = {"type": "object", "properties": {"post_id": {"type": "integer"}}}
@@ -81,11 +89,10 @@ async def test_malformed_arguments_get_one_scoped_serialization_repair(malformed
 @pytest.mark.asyncio
 @pytest.mark.parametrize("repairs", [
     [],
-    [{"step_key": "other", "arguments_json": "{}"}],
-    [{"step_key": "save", "arguments_json": "{}"},
-     {"step_key": "save", "arguments_json": "{}"}],
-    [{"step_key": "save", "arguments_json": "{bad}"}],
-    [{"step_key": "save", "arguments_json": "[]"}],
+    [{"step_key": "other", "arguments": []}],
+    [{"step_key": "save", "arguments": []},
+     {"step_key": "save", "arguments": []}],
+    [{"step_key": "save", "arguments": json_entries({"title": "First"}) + json_entries({"title": "Second"})}],
 ])
 async def test_invalid_repairs_stop_after_one_attempt(malformed_plan_client, repairs):
     compact, parse = malformed_plan_client
@@ -102,7 +109,7 @@ async def test_json_repair_cannot_bypass_normal_schema_validation(malformed_plan
     compact, parse = malformed_plan_client
     parse.side_effect = [SimpleNamespace(output_parsed=compact), SimpleNamespace(
         output_parsed=llm_planner.PlanJSONRepairs.model_validate({"repairs": [{
-            "step_key": "save", "arguments_json": '{"unexpected":"still invalid"}',
+            "step_key": "save", "arguments": json_entries({"unexpected": "still invalid"}),
         }]}),
     )]
     plan = await llm_planner.create_llm_plan("Update my draft", [], set())
@@ -143,6 +150,39 @@ def test_planner_schema_only_describes_a_plan():
     assert set(CompactWorkflowPlan.model_json_schema()["required"]) == {
         "name", "interpretation", "steps",
     }
+
+
+@pytest.mark.asyncio
+async def test_structured_repair_preserves_sheet_formulas_sources_and_targets(malformed_plan_client):
+    compact, parse = malformed_plan_client
+    expected = {"sheetId": "{{steps.create.ret.spreadsheetId}}", "worksheetId": 346,
+                "rows": [["Revenue", None, 0, '=IF(COUNT(B3:C3)<2,"",C3-B3)'],
+                         ["Source", "https://example.com/serum", 'Quoted "name"\nNext line']],
+                "options": {"enabled": True, "ratio": 0.026, "empty": [], "object": {}}}
+    compact.steps[1].arguments_json = '{"sheetId":"{{steps.create.ret.spreadsheetId}}", rows:[]}'
+    parse.side_effect = [SimpleNamespace(output_parsed=compact), SimpleNamespace(
+        output_parsed=llm_planner.PlanJSONRepairs.model_validate({"repairs": [{
+            "step_key": "save", "arguments": json_entries(expected),
+        }]}))]
+    result = await llm_planner.create_llm_plan("Prepare a sheet", [], set())
+    assert result.steps[1].arguments == expected
+    assert parse.await_count == 2
+    assert isinstance(result.steps[1].arguments["options"]["enabled"], bool)
+    assert isinstance(result.steps[1].arguments["worksheetId"], int)
+
+
+def test_repair_output_schema_cannot_repeat_malformed_serialized_arguments():
+    from openai.lib._pydantic import to_strict_json_schema
+
+    schema = to_strict_json_schema(llm_planner.PlanJSONRepairs)
+    repair = schema["$defs"]["ArgumentJSONRepair"]
+    assert repair["properties"]["arguments"]["type"] == "array"
+    assert "arguments_json" not in repair["properties"]
+    for definition in schema["$defs"].values():
+        assert definition["additionalProperties"] is False
+        assert set(definition["required"]) == set(definition["properties"])
+    with pytest.raises(ValueError, match="one representation"):
+        llm_planner.JSONValue(scalar="text", items=[], entries=None)
 
 
 def test_catalog_format_preserves_mcp_connection_identity_and_rejects_vendor_alias():
