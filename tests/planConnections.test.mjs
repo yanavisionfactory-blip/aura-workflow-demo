@@ -70,7 +70,7 @@ for (const [name, operation] of [
 }
 
 test("a Sheets-only plan needing a shared Google grant has one Sheets row and no Drive requirement", () => {
-  const tools = buildPlanConnectionTools([sheets], {
+  const tools = buildPlanConnectionTools([{ ...sheets, operation: "sheets.kpi.create" }], {
     connectionChecklist: [requirement(["sheets.kpi.create", "sheets.workbook.get"])],
     connectionRequirements: ["google"],
   });

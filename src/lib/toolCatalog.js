@@ -272,19 +272,20 @@ export function replaceToolCatalog(status = {}) {
   replace(CATALOG, marketplace.filter((item) => item.connectable));
 }
 
-export function catalogEntryFor(toolName) {
+export function catalogEntryFor(toolName, { allowAliases = true, includeUnavailable = false } = {}) {
   const key = String(toolName || "").trim().toLowerCase();
   if (!key) return null;
   const canonicalKey = canonicalProvider(key);
   // Resolve identities before search aliases. A broad connector can mention
   // Google Sheets without being the Google Sheets card the customer selected.
+  const catalog = includeUnavailable ? MARKETPLACE : CATALOG;
   for (const matches of [
     (item) => item.name.toLowerCase() === key,
     (item) => item.provider === key || item.routes?.some((route) => route.provider === key),
     (item) => item.canonicalProvider === canonicalKey,
-    (item) => item.aliases?.some((alias) => alias.toLowerCase() === key),
+    ...(allowAliases ? [(item) => item.aliases?.some((alias) => alias.toLowerCase() === key)] : []),
   ]) {
-    const candidates = CATALOG.filter(matches);
+    const candidates = catalog.filter(matches);
     if (candidates.length) return candidates.length === 1 ? candidates[0] : null;
   }
   return null;
