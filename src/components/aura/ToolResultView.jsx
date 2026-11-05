@@ -59,7 +59,7 @@ export function MainToolOutput({ entry, result, results = {}, activity, backendR
   return <ResultPreview result={{ ...result, displayProvider: entry?.tool || result.displayProvider }} results={results} activity={activity} backendRunId={backendRunId} />;
 }
 
-export function ToolOutputCards({ entries, activity, backendRunId, onOpen }) {
+export function ToolOutputCards({ entries, activity, backendRunId, onOpen = undefined }) {
   return <div className="space-y-5">{toolResultGroups(entries.filter((entry) => entry.status === "completed" && entry.hasResponse)).map(({ tool, entries: items }) => {
     const combined = toolOutputResult(items, activity);
     const entry = mainToolEntry(items, combined || {}) || [...items].reverse().find((item) => item.preview) || items.at(-1);

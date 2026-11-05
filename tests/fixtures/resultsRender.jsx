@@ -7,7 +7,7 @@ import SheetActionReview, { PreparedReports, SheetReviewCard } from "../../src/c
 import PreviewView from "../../src/components/aura/PreviewView";
 import ToolActionScreen from "../../src/components/aura/ToolActionScreen";
 import ExecutionView from "../../src/components/aura/ExecutionView";
-import ExecutionToolOutputs from "../../src/components/aura/ExecutionToolOutputs";
+import ToolOutputReview from "../../src/components/aura/ToolOutputReview";
 import PlanView from "../../src/components/aura/PlanView";
 import { plannedApprovalStep } from "../../src/lib/approvalReview.mjs";
 
@@ -16,7 +16,8 @@ export function renderActionScreen(step, editing = false) {
 }
 
 export function renderExecution(steps, review = null) {
-  return renderToStaticMarkup(<ExecutionView steps={steps} review={review} currentStepIndex={0} isReal><ExecutionToolOutputs steps={steps} review={review} onContinue={() => {}} /></ExecutionView>);
+  return renderToStaticMarkup(review ? <ToolOutputReview steps={steps} review={review} onApprove={() => {}} />
+    : <ExecutionView steps={steps} currentStepIndex={0} isReal />);
 }
 
 export function renderPlan(steps) {

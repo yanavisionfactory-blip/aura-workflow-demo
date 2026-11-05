@@ -64,19 +64,18 @@ test("Frame.io review opens the file workspace with an editable brief and contex
   assert.match(html, /Open in Frame.io/);
 });
 
-test("execution waits on saved tool output and does not invent previews for pending steps", () => {
+test("result review shows completed output on its own page without previews for pending steps", () => {
   const pending = { id: "save", tool: "Google Sheets", operation: "sheets.append", action: "Save dashboard", status: "pending" };
   const before = renderExecution([pending]);
-  assert.doesNotMatch(before, /output preview|Saved Google Sheets cells|Tool output checkpoint/);
+  assert.doesNotMatch(before, /output preview|Saved Google Sheets cells|Tool result review/);
   const draft = { id: "draft", key: "draft", tool: "Claude", operation: "anthropic.chat", action: "Prepare comparison", status: "completed",
     output: { operation: "anthropic.chat", critic: { action: "accept" }, outcome_check: { status: "verified" },
       provider_result: { ret: { content: [{ type: "text", text: "## September 2026\nRevenue, targets and actuals." }] } } } };
   const html = renderExecution([draft, pending], { step_id: "draft", step_ids: ["draft"], tool_slug: "anthropic", operation: "anthropic.chat", next_tool_slug: "google", next_operation: "sheets.append", is_final: false });
-  for (const text of ["Tool output checkpoint", "Preview Claude", "Continue to Google Sheets", "paused until you continue", "Your place is saved"]) assert.ok(html.includes(text), text);
-  assert.doesNotMatch(html, /output preview|September 2026|Saved Google Sheets cells/);
-  assert.ok(html.indexOf('aria-label="Execution steps"') < html.indexOf('aria-label="Tool output checkpoint"'));
+  for (const text of ["Tool result review", "Review Claude result", "September 2026", "Revenue, targets and actuals.", "Approve result", "Your place is saved"]) assert.ok(html.includes(text), text);
+  assert.doesNotMatch(html, /Execution steps|Preview Claude|Continue to|Saved Google Sheets cells/);
   const final = renderExecution([draft], { step_id: "draft", step_ids: ["draft"], is_final: true });
-  assert.match(final, /Continue to results/);
+  assert.match(final, /Approve and finish/);
 });
 
 test("completed preparation displays the saved response instead of the input prompt", () => {

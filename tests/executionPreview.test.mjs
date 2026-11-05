@@ -10,7 +10,7 @@ import React, { act } from "react";
 const repo = fileURLToPath(new URL("../", import.meta.url));
 const originalFetch = globalThis.fetch;
 const navigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
-let temporary, dom, ExecutionView, ExecutionToolOutputs, createRoot, Simulate;
+let temporary, dom, ExecutionView, ToolOutputReview, createRoot, Simulate;
 before(async () => {
   temporary = fs.mkdtempSync(path.join(repo, ".execution-preview-"));
   await build({
@@ -45,7 +45,7 @@ before(async () => {
   ({ createRoot } = await import("react-dom/client"));
   ({ Simulate } = await import("react-dom/test-utils"));
   const fixture = await import(pathToFileURL(path.join(temporary, "wait.mjs")));
-  ({ ExecutionView, ExecutionToolOutputs } = fixture);
+  ({ ExecutionView, ToolOutputReview } = fixture);
 });
 after(async () => {
   await new Promise((resolve) => setTimeout(resolve, 30));
@@ -57,89 +57,57 @@ after(async () => {
   if (temporary) fs.rmSync(temporary, { recursive: true, force: true });
 });
 
-test("execution leads; saved output opens only on request and never continues or approves the run", async () => {
-  const steps = [{ id: "draft", key: "draft", tool: "anthropic", status: "completed",
-    action: "Prepare KPI layout", output: { operation: "anthropic.generate", provider_result: {
-      text: "Plantea September 2026 KPI layout: revenue, sales and conversions.",
-    } } }, { id: "sheet", key: "sheet", tool: "google-sheets", status: "pending", action: "Create workbook" }];
-  const review = { step_id: "draft", step_ids: ["draft"], tool_slug: "anthropic", next_tool_slug: "google-sheets" };
-  let continued = 0, previewRequested = 0;
-  const container = document.createElement("div");
-  document.body.append(container);
-  const root = createRoot(container);
-  globalThis.fetch = async () => { throw new Error("Viewing outputs must not dispatch an action"); };
-  const render = (approvalPending = false) => React.createElement(ExecutionView, {
-    steps, currentStepIndex: 1, isReal: true, review: approvalPending ? null : review, approvalPending,
-    onOpenPreview: () => { previewRequested += 1; },
-  }, React.createElement(ExecutionToolOutputs, {
-    steps, review: approvalPending ? null : review, onContinue: () => { continued += 1; },
-  }));
-  try {
-    await act(async () => root.render(render()));
-    assert.equal(document.querySelector('[role="dialog"]'), null);
-    assert.doesNotMatch(container.textContent, /Plantea September 2026 KPI layout/);
-    const timeline = container.querySelector('[aria-label="Execution steps"]');
-    const checkpoint = container.querySelector('[aria-label="Tool output checkpoint"]');
-    assert.ok(timeline.compareDocumentPosition(checkpoint) & window.Node.DOCUMENT_POSITION_FOLLOWING);
-    const preview = [...container.querySelectorAll("button")].find((button) => button.textContent.startsWith("Preview Claude"));
-    assert.ok(preview);
-    await act(async () => Simulate.click(preview));
-    assert.match(document.querySelector('[role="dialog"]').textContent, /Plantea September 2026 KPI layout/);
-    assert.equal(continued, 0);
-    assert.equal(previewRequested, 0);
-    const close = [...document.querySelector('[role="dialog"]').querySelectorAll("button")].find((button) => button.textContent === "Close");
-    await act(async () => Simulate.click(close));
-    assert.equal(document.querySelector('[role="dialog"]'), null);
+const draft = { id: "draft", key: "draft", tool: "anthropic", status: "completed",
+  action: "Prepare KPI layout", output: { operation: "anthropic.chat", critic: { action: "accept" },
+    outcome_check: { status: "verified" }, provider_result: {
+      ret: { content: [{ type: "text", text: "Original dashboard" }] },
+    } } };
+const review = { step_id: "draft", step_ids: ["draft"], tool_slug: "anthropic", next_tool_slug: "google-sheets" };
 
-    await act(async () => root.render(render(true)));
-    assert.match(container.textContent, /Execution paused for approval/);
-    assert.doesNotMatch(container.textContent, /Plantea September 2026 KPI layout/);
-    assert.equal(previewRequested, 0, "arriving at approval does not open preview automatically");
-    const open = [...container.querySelectorAll("button")].find((button) => button.textContent === "Open action preview");
-    await act(async () => Simulate.click(open));
-    assert.equal(previewRequested, 1);
-    assert.equal(continued, 0, "opening preview never approves the write");
-  } finally {
-    await act(async () => root.unmount());
-    container.remove();
-  }
-});
-
-test("completed text can be edited after review; starting and viewing do not dispatch edits", async () => {
-  const steps = [{ id: "draft", key: "draft", tool: "anthropic", status: "completed",
-    action: "Prepare KPI layout", output: { operation: "anthropic.chat", critic: { action: "accept" },
-      outcome_check: { status: "verified" }, provider_result: {
-        ret: { content: [{ type: "text", text: "Original dashboard" }] },
-      } } }];
-  const review = { step_id: "draft", step_ids: ["draft"], tool_slug: "anthropic", next_tool_slug: "google-sheets" };
+test("result preview is a separate page; edits persist on failure and approval is the only handoff", async () => {
   const calls = [];
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  const render = (checkpoint) => React.createElement(ExecutionView, {
-    steps, currentStepIndex: 0, isReal: true, review: checkpoint,
-  }, React.createElement(ExecutionToolOutputs, { steps, review: checkpoint,
-    onContinue: (edits) => calls.push(edits),
-  }));
+  globalThis.fetch = async () => { throw new Error("Review must not dispatch a provider action"); };
+  const render = (props = {}) => React.createElement(ToolOutputReview, {
+    steps: [draft], review, onApprove: (edits) => calls.push(edits), ...props,
+  });
+  const button = (label) => [...container.querySelectorAll("button")].find((item) => item.textContent === label);
   try {
-    await act(async () => root.render(render(null)));
+    await act(async () => root.render(React.createElement(ExecutionView, {
+      steps: [{ ...draft, status: "running" }], currentStepIndex: 0, isReal: true,
+    })));
     assert.match(container.textContent, /Running your workflow/);
-    assert.doesNotMatch(container.textContent, /Open action preview|Execution paused for approval|Edit Claude result/);
-    await act(async () => root.render(render(review)));
-    const button = (label) => [...container.querySelectorAll("button")].find((item) => item.textContent === label);
-    assert.equal(container.querySelector("textarea"), null, "editing is optional after execution");
+    assert.equal(container.querySelector('[aria-label="Tool result review"]'), null);
+    await act(async () => root.render(render()));
+    assert.match(container.textContent, /Review Claude result/);
+    assert.match(container.textContent, /Original dashboard/);
+    assert.equal(document.activeElement, container.querySelector("h2"));
+    assert.equal(container.querySelector('[aria-label="Execution steps"]'), null);
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.doesNotMatch(container.textContent, /Preview Claude|Continue to|Open tool view|Open action preview/);
+    assert.equal(container.querySelector("textarea"), null);
+    assert.deepEqual(calls, [], "opening the result does not approve anything");
+
     await act(async () => Simulate.click(button("Edit Claude result")));
     const editor = container.querySelector("textarea");
     assert.equal(editor.value, "Original dashboard");
     await act(async () => Simulate.change(editor, { target: { value: "" } }));
-    assert.equal(button("Save edits and continue").disabled, true);
+    assert.equal(button("Approve result").disabled, true);
     await act(async () => Simulate.change(editor, { target: { value: "Revised dashboard" } }));
-    assert.deepEqual(calls, []);
-    await act(async () => Simulate.click(button("Save edits and continue")));
+    await act(async () => Simulate.click(button("Approve result")));
     assert.deepEqual(calls, [{ draft: "Revised dashboard" }]);
+    await act(async () => root.render(render({ busy: true })));
+    assert.equal(button("Approving…").disabled, true);
+    assert.equal(editor.disabled, true);
+    await act(async () => root.render(render({ error: "Could not save. Please retry." })));
+    assert.match(container.querySelector('[role="alert"]').textContent, /Could not save/);
+    assert.equal(editor.value, "Revised dashboard", "failed approvals retain unsaved edits");
     await act(async () => Simulate.click(button("Discard edits")));
     assert.equal(container.querySelector("textarea"), null);
-    await act(async () => Simulate.click(button("Continue to Google Sheets")));
+    assert.match(container.textContent, /Original dashboard/);
+    await act(async () => Simulate.click(button("Approve result")));
     assert.deepEqual(calls, [{ draft: "Revised dashboard" }, null]);
   } finally {
     await act(async () => root.unmount());
@@ -147,3 +115,30 @@ test("completed text can be edited after review; starting and viewing do not dis
   }
 });
 
+test("review cannot approve missing output; a new checkpoint starts with its own result", async () => {
+  const calls = [];
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  const render = (steps, checkpoint = review) => React.createElement(ToolOutputReview, {
+    steps, review: checkpoint, onApprove: (edits) => calls.push(edits),
+  });
+  const button = (label) => [...container.querySelectorAll("button")].find((item) => item.textContent === label);
+  try {
+    await act(async () => root.render(render([{ ...draft, status: "pending", output: null }])));
+    assert.equal(button("Approve result").disabled, true);
+    assert.doesNotMatch(container.textContent, /Original dashboard/);
+    await act(async () => root.render(render([draft])));
+    await act(async () => Simulate.click(button("Edit Claude result")));
+    await act(async () => Simulate.change(container.querySelector("textarea"), { target: { value: "Unsaved first result" } }));
+    const final = { ...draft, id: "last", key: "last" };
+    await act(async () => root.render(render([final], { ...review, step_id: "last", step_ids: ["last"], is_final: true })));
+    assert.equal(container.querySelector("textarea"), null);
+    assert.doesNotMatch(container.textContent, /Unsaved first result/);
+    assert.match(container.textContent, /Original dashboard/);
+    await act(async () => Simulate.click(button("Approve and finish")));
+    assert.deepEqual(calls, [null]);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
