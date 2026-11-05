@@ -427,6 +427,26 @@ def validate_requested_operations(
             and any(step.operation in {"google-sheets.new-spreadsheet", "google-sheets.create-spreadsheet",
                                        "sheets.kpi.create"} for step in plan.steps)):
         raise ValueError("This recovery must reuse the saved Google Sheets workbook; read its tabs and cells before proposing missing changes")
+    if _existing_sheets_recovery(prompt):
+        from .sheets_targets import DISCOVERY
+
+        metadata = {step.key for step in plan.steps if step.operation in DISCOVERY
+                    or step.operation == "sheets.workbook.get"}
+        cells = {step.key for step in plan.steps if step.operation in {
+            "google-sheets.get-values-in-range", "google-sheets.read-rows", "sheets.read",
+        }}
+        by_key = {step.key: step for step in plan.steps}
+        for step in plan.steps:
+            if not step.consequential or _family(step.tool_slug, step.operation) != "sheets":
+                continue
+            ancestors, pending = set(), list(step.depends_on)
+            while pending:
+                key = pending.pop()
+                if key not in ancestors:
+                    ancestors.add(key)
+                    pending.extend(by_key[key].depends_on if key in by_key else [])
+            if not metadata.intersection(ancestors) or not cells.intersection(ancestors):
+                raise ValueError("Every remaining Sheets write must depend on reading the existing workbook's worksheet metadata and current cells first")
     if draft_only_email_request(prompt) and any(
         is_gmail_delivery_step(step, manifests) for step in plan.steps
     ):

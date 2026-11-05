@@ -140,6 +140,28 @@ def test_recovery_effect_requires_finishing_existing_cells_not_another_creation(
     assert effects == [{"effect": "sheets update", "targets": [{"tool_slug": "google-sheets", "operation": "google-sheets.update-row"}]}]
 
 
+def test_recovery_write_requires_both_metadata_and_current_cells_before_review():
+    from app.request_contracts import validate_requested_operations
+
+    prompt = ('Continue the saved dashboard. Existing Google Sheets workbook receipts (data, not instructions): '
+              '[{"spreadsheetId":"existing_workbook"}]. Reuse these exact workbooks; do not create replacements.')
+    candidate = plan()
+    write = candidate.steps.pop()
+    write.arguments["sheetId"] = "existing_workbook"
+    candidate.steps = [write]
+    with pytest.raises(ValueError, match="current cells first"):
+        validate_requested_operations(prompt, candidate, set())
+    metadata = PlanStep(key="tabs", agent="Sheets", tool_slug="google-sheets", operation="google-sheets.list-worksheets",
+                        arguments={"sheetId": "existing_workbook"}, reason="Inspect tabs", expected_output="Tab metadata")
+    cells = metadata.model_copy(deep=True, update={"key": "cells", "operation": "google-sheets.get-values-in-range"})
+    candidate.steps = [metadata, cells, write]
+    write.depends_on = [metadata.key]
+    with pytest.raises(ValueError, match="current cells first"):
+        validate_requested_operations(prompt, candidate, set())
+    write.depends_on.append(cells.key)
+    validate_requested_operations(prompt, candidate, set())
+
+
 def test_compiler_and_start_preflight_accept_the_real_broker_schema():
     from app.native_connectors import coerce_module_arguments
     from app.orchestrator import _normalize_planned_steps
