@@ -1,7 +1,7 @@
 """Prefetch only ready, typed native reads; all database work remains sequential."""
 import asyncio
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
@@ -142,6 +142,10 @@ async def prefetch_ready_reads(session, run, steps, position, snapshot, context,
             attempt.status = "failed"
             attempt.error = f"[{failure.category}] Parallel read failed"
             step.status = StepStatus.pending
+            if failure.category == "rate_limited":
+                step.output = {**(step.output or {}), "provider_retry_at": (
+                    datetime.now(UTC) + timedelta(seconds=max(60, failure.retry_after))
+                ).isoformat()}
             if _failure_impacts_trust(error):
                 _update_trust(trust, succeeded=False, timed_out=failure.category == "timeout", latency_ms=latency)
         await session.commit()  # Preserve each receipt before any model review.

@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import Settings, get_settings
 from .models import BrokerCapabilityPack
+from .provider_rate_limits import error_retry_seconds, retry_seconds
 
 _SAFE_TOKEN = re.compile(r"[^a-z0-9]+")
 _OAUTH_AUTH_TYPES = {"oauth", "oauth2", "oauth_2", "oauth-2", "oauth 2"}
@@ -73,11 +74,13 @@ class PipedreamConnectError(RuntimeError):
         status_code: int | None = None,
         upstream_code: str | None = None,
         effect_uncertain: bool = False,
+        retry_after: float = 0,
     ):
         self.retryable = retryable
         self.status_code = status_code
         self.upstream_code = upstream_code
         self.effect_uncertain = effect_uncertain
+        self.retry_after = retry_seconds(retry_after)
         super().__init__(message)
 
 
@@ -142,10 +145,12 @@ def _check_action_result(result: dict[str, Any], *, provider: str = "") -> None:
         from .google_ads_errors import diagnose, message
 
         code, ads_status = diagnose(errors)
+        status = status or ads_status or (429 if code == "RESOURCE_EXHAUSTED" else None)
         raise PipedreamConnectError(
             f"[google_ads:{code}] {message(code)}",
-            retryable=(status or ads_status) in _RETRYABLE_STATUS,
-            status_code=status or ads_status, upstream_code=f"google_ads:{code}",
+            retryable=status in _RETRYABLE_STATUS,
+            status_code=status, upstream_code=f"google_ads:{code}",
+            retry_after=error_retry_seconds(errors),
             # An error wrapped inside an action is not proof that an earlier
             # provider call did not mutate anything. Preserve write uncertainty.
             effect_uncertain=True,
@@ -155,6 +160,7 @@ def _check_action_result(result: dict[str, Any], *, provider: str = "") -> None:
         if status in {400, 422} else "The connected app failed to complete this action.",
         retryable=status in _RETRYABLE_STATUS,
         status_code=status, upstream_code="action_failed",
+        retry_after=error_retry_seconds(errors),
         # A broker action can contain several provider calls. An embedded
         # rejection alone does not prove an earlier mutation had no effect.
         effect_uncertain=embedded_status or result.get("ret") is not None,
@@ -451,7 +457,9 @@ class PipedreamClient:
                     continue
                 raise PipedreamConnectError("The connector network is temporarily unavailable") from exc
             last_status = response.status_code
-            if response.status_code in _RETRYABLE_STATUS and attempt < 2:
+            # The durable run scheduler owns rate-limit retries. Never spend
+            # three requests inside this adapter before it sees Retry-After.
+            if response.status_code in _RETRYABLE_STATUS - {429} and attempt < 2:
                 await asyncio.sleep(0.15 * (2**attempt))
                 continue
             if not response.is_success:
@@ -472,6 +480,8 @@ class PipedreamClient:
                     retryable=response.status_code in _RETRYABLE_STATUS,
                     status_code=response.status_code,
                     upstream_code=upstream_code,
+                    retry_after=max(retry_seconds(response.headers.get("retry-after")),
+                                    error_retry_seconds(error_payload)),
                 )
             # Deleting a connected account succeeds with an empty 204 response.
             # Do not report successful remote revocation as malformed JSON.

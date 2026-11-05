@@ -81,7 +81,11 @@ def diagnose(errors):
 
 
 def message(code):
-    if code in AUTH_CODES:
+    if code == "RESOURCE_EXHAUSTED":
+        detail = ("Google Ads API quota is temporarily exhausted. AURA preserves the connection "
+                  "and waits before retrying the read. Persistent quota limits need review in "
+                  "the OAuth application's Google Cloud project; signing in again does not raise them.")
+    elif code in AUTH_CODES:
         detail = "Google rejected the saved authorization. Reauthorize the same Google Ads account."
     elif code in CONFIG_CODES:
         detail = "The Google Ads API configuration needs repair by the connector operator; signing in again will not fix this error."

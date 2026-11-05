@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from sqlalchemy import select
@@ -32,6 +33,41 @@ from app.models import (
 from app.policy import canonical_plan_hash
 from app.run_supervisor import transition_run
 from app.schemas import AutonomousRecoveryOption, CriticDecision, PlanStep, WorkflowPlan
+
+
+async def test_quota_deadline_survives_recovery_and_early_worker_delivery(runtime, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
+    decision = AsyncMock(side_effect=AssertionError("Quota wait needs no model or reconnect"))
+    monkeypatch.setattr(autonomous_delivery, "supervise_recovery", decision)
+    await _failed_read(runtime, "[rate_limited] Google Ads [RESOURCE_EXHAUSTED]")
+    deadline = datetime.now(UTC) + timedelta(hours=17)
+    async with runtime() as session:
+        step = await session.get(RunStep, "step")
+        step.output = {"provider_retry_at": deadline.isoformat()}
+        await session.commit()
+    assert await autonomously_recover_run("run", "w") == "scheduled"
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        assert run.status == RunStatus.recovering
+        assert run.execution_context["__aura_autonomy__"]["next_attempt_at"] == deadline.isoformat()
+        intent = await session.scalar(select(DispatchIntent).where(DispatchIntent.kind == "execute"))
+        assert intent.available_at.replace(tzinfo=UTC) == deadline
+        # Simulate a duplicate worker consuming an old delivery too early.
+        intent.status = "completed"
+        await session.commit()
+    provider = AsyncMock(side_effect=AssertionError("Must not call provider before its deadline"))
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", provider)
+    await orchestrator._execute_run("run", "w")
+    async with runtime() as session:
+        pending = (await session.scalars(select(DispatchIntent).where(
+            DispatchIntent.kind == "execute", DispatchIntent.status == "pending"))).all()
+        assert len(pending) == 1
+        assert pending[0].available_at.replace(tzinfo=UTC) == deadline
+        assert (await session.get(WorkflowRun, "run")).status == RunStatus.recovering
+    provider.assert_not_called()
+    decision.assert_not_called()
 
 
 async def _failed_read(runtime, error="[timeout] provider timed out"):
@@ -909,3 +945,66 @@ async def test_diagnostician_and_incident_commander_collaborate(monkeypatch):
     assert selected == option
     assert source == "agent_team"
     assert "provider contract changed" in reason
+
+
+async def test_real_execution_path_pauses_one_quota_attempt_and_resumes_read(runtime, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from app.pipedream_connect import PipedreamConnectError
+
+    monkeypatch.setattr(autonomous_delivery, "SessionLocal", runtime)
+    provider = AsyncMock(side_effect=[
+        PipedreamConnectError("Google Ads [RESOURCE_EXHAUSTED]", status_code=429,
+                              upstream_code="google_ads:RESOURCE_EXHAUSTED", retry_after=7200),
+        {"items": [{"id": "live-report"}]},
+    ])
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", provider)
+    monkeypatch.setattr(orchestrator, "critique_step", AsyncMock(return_value=CriticDecision(action="accept")))
+    monkeypatch.setattr(execution_preflight, "preflight_approved_run",
+                        AsyncMock(return_value=execution_preflight.PreflightOutcome("passed")))
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        plan = deepcopy(run.plan)
+        plan["steps"][0].update(operation="records.list", consequential=False)
+        run.plan = plan
+        digest = canonical_plan_hash(plan)
+        version = await session.get(PlanVersion, "version")
+        version.plan, version.plan_hash = plan, digest
+        snapshot = await session.get(ApprovalSnapshot, "snapshot")
+        snapshot.plan_hash = digest
+        snapshot.permission_snapshot = {"test": ["records.list"]}
+        step = await session.get(RunStep, "step")
+        step.operation, step.consequential, step.status = "records.list", False, StepStatus.pending
+        (await session.get(ToolConnection, "tool")).allowed_operations = ["records.list"]
+        manifest = await session.get(CapabilityManifest, "manifest")
+        module = deepcopy(manifest.manifest["capabilities"][0])
+        module.update(name="records.list", permission_scope="read", requires_approval=False)
+        manifest.manifest = {"capabilities": [module]}
+        await session.commit()
+    started = datetime.now(UTC)
+    await orchestrator._execute_run("run", "w")
+    assert provider.await_count == 1
+    async with runtime() as session:
+        step = await session.get(RunStep, "step")
+        assert step.status == StepStatus.failed
+        assert datetime.fromisoformat(step.output["provider_retry_at"]) >= started + timedelta(hours=2)
+    assert await autonomously_recover_run("run", "w") == "scheduled"
+    await orchestrator._execute_run("run", "w")
+    assert provider.await_count == 1
+    async with runtime() as session:
+        # Advance the persisted deadline to model quota availability. No sleeps
+        # or real provider calls are used in this regression test.
+        run = await session.get(WorkflowRun, "run")
+        state = deepcopy(run.execution_context)
+        state["__aura_autonomy__"]["next_attempt_at"] = (started - timedelta(seconds=1)).isoformat()
+        run.execution_context = state
+        await session.commit()
+    await orchestrator._execute_run("run", "w")
+    assert provider.await_count == 2
+    async with runtime() as session:
+        step = await session.get(RunStep, "step")
+        assert step.output["provider_result"] == {"items": [{"id": "live-report"}]}
+        attempts = (await session.scalars(select(StepAttempt).where(StepAttempt.step_id == "step")
+                                         .order_by(StepAttempt.attempt_number))).all()
+        assert [a.status for a in attempts] == ["failed", "succeeded"]
+        assert "provider_retry_at" not in step.output

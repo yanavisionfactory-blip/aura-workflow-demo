@@ -2,11 +2,11 @@
 import asyncio
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from email.utils import parsedate_to_datetime
 from time import monotonic
 
 import httpx
+
+from .provider_rate_limits import retry_seconds
 
 
 class BudgetExceeded(RuntimeError):
@@ -54,21 +54,15 @@ def classify_failure(exc: Exception, *, read: bool) -> Failure:
         return Failure("invalid_request", False)
     if not read:
         return Failure("uncertain_write", False)
+    if status == 429:
+        delay = max(retry_seconds(getattr(exc, "retry_after", 0)),
+                    retry_seconds(getattr(response, "headers", {}).get("retry-after")))
+        return Failure("rate_limited", True, max(1, delay))
     if exc.__class__.__name__ in {"ManagedConnectorError", "ConnectorConfigurationError"}:
         return Failure(
             "provider_unavailable" if getattr(exc, "retryable", False) else "authorization_required",
             bool(getattr(exc, "retryable", False)),
         )
-    if status == 429:
-        value = getattr(response, "headers", {}).get("retry-after", "1")
-        try:
-            delay = float(value)
-        except (ValueError, TypeError):
-            try:
-                delay = (parsedate_to_datetime(value) - datetime.now(UTC)).total_seconds()
-            except (ValueError, TypeError, OverflowError):
-                delay = 1
-        return Failure("rate_limited", True, max(1, delay))
     if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
         return Failure("timeout", True)
     if isinstance(exc, httpx.TransportError) or (status and status >= 500):

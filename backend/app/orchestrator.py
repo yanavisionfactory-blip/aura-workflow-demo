@@ -4,7 +4,7 @@ import logging
 import re
 import time
 from copy import deepcopy
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from jsonschema import Draft202012Validator
@@ -266,7 +266,7 @@ async def refresh_browser_connection_contract(
 
 def _failure_impacts_trust(exc: Exception) -> bool:
     """Only provider availability failures should affect connector reliability."""
-    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in {401, 403}:
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in {401, 403, 429}:
         return False
     return isinstance(exc, (asyncio.TimeoutError, httpx.HTTPError))
 
@@ -2650,6 +2650,13 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             return
         autonomy = deepcopy((run.execution_context or {}).get("__aura_autonomy__") or {})
         if run.status == RunStatus.recovering and autonomy.get("next_attempt_at"):
+            from .provider_rate_limits import preserve_retry_dispatch, retry_deadline
+
+            available_at = retry_deadline(autonomy.get("next_attempt_at"))
+            if available_at and available_at > datetime.now(UTC):
+                await preserve_retry_dispatch(session, run, available_at)
+                await session.commit()
+                return
             autonomy["next_attempt_at"] = None
             autonomy["last_started_at"] = datetime.now(UTC).isoformat()
             run.execution_context = {
@@ -4190,6 +4197,13 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     attempt.error = last_error
                     attempt.latency_ms = latency
                     attempt.completed_at = datetime.now(UTC)
+                    if failure.category == "rate_limited" and not consequential:
+                        # Persist the provider deadline before returning control
+                        # to the durable scheduler. Never sleep through an hours-
+                        # long quota window or discard it as an exhausted budget.
+                        step.output = {**(step.output or {}), "provider_retry_at": (
+                            datetime.now(UTC) + timedelta(seconds=max(60, failure.retry_after))
+                        ).isoformat()}
                     if failure_impacts_trust:
                         _update_trust(
                             active_trust,
@@ -4198,6 +4212,8 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             latency_ms=latency,
                         )
                     await session.commit()
+                    if failure.category == "rate_limited":
+                        break
                     if not failure.retryable:
                         break
                     retry_after = failure.retry_after
@@ -4265,6 +4281,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             fallback_slug = approved_step.get("fallback_tool_slug")
             fallback_operation = approved_step.get("fallback_operation")
             recovery_blocked_prefixes = (
+                "[rate_limited]",
                 "[authorization_required]",
                 "[uncertain_write]",
                 "[budget_exhausted]",
