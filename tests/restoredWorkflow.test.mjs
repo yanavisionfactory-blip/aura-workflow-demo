@@ -150,7 +150,7 @@ for (const failFirst of [false, true]) test(`history edit compiles a fresh durab
     await waitUntil(() => container.textContent.includes("Running your workflow"));
     assert.equal(creations, failFirst ? 2 : 1, "confirmation approves the reviewed run without replanning");
     assert.deepEqual(calls.filter((call) => call.name === "approvePythonPlan").map((call) => call.args), [
-      ["new-durable-run", null, false, { reviewToolOutputs: true, executeReviewedPlan: true }],
+      ["new-durable-run", null, false, { reviewToolOutputs: true, executeReviewedPlan: true, reviewBetweenTools: false }],
     ]);
     assert.doesNotMatch(container.textContent, /not attached to a durable/);
   } finally {

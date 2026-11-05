@@ -7,19 +7,28 @@ import { savedRunResults } from "@/lib/savedRunResults.mjs";
 import { operationStepTitle } from "@/lib/planPresentation.mjs";
 import { savedRunActionLocation } from "@/lib/runtimePlan.mjs";
 import { toolResultName } from "@/lib/toolResultViews.mjs";
+import { useAuth } from "@/lib/AuthContext";
 
 export default function SavedRunResults() {
   const { runId } = useParams();
   const navigate = useNavigate();
+  const { workspace, user, isLoadingWorkspace, workspaceError } = useAuth();
   const [run, setRun] = useState(null);
   const [error, setError] = useState("");
+  const [retry, setRetry] = useState(0);
   useEffect(() => {
     let active = true;
     setRun(null); setError("");
+    if (!workspace || isLoadingWorkspace) return () => { active = false; };
     getPythonRun(runId).then((value) => { if (active) setRun(value); })
-      .catch(() => { if (active) setError("These saved results are unavailable in this workspace. Open My workflows to choose an accessible run."); });
+      .catch((failure) => { if (active) setError(
+        failure.status === 404 || failure.status === 403
+          ? "This saved run is not available in your current workspace. Check Account to confirm your sign-in and workspace. A run link does not grant access."
+          : failure.status === 401 ? "Your session could not be verified. Open Account to sign in again."
+            : "AURA could not load the saved results. Retry when your connection is available."
+      ); });
     return () => { active = false; };
-  }, [runId]);
+  }, [runId, workspace?.workspace_id, isLoadingWorkspace, retry]);
   const activity = (run?.steps || []).map((step) => {
     const tool = toolResultName(step.tool_slug, step.operation);
     return { id: step.id, stepKey: step.key, tool, status: step.status,
@@ -47,7 +56,11 @@ export default function SavedRunResults() {
           const next = savedRunActionLocation(prompt);
           navigate(next.pathname, { state: next.state });
         }} />
-        : <p role={error ? "alert" : "status"} className="py-14 text-center text-sm text-muted-foreground">{error || "Opening your saved workflow results…"}</p>}
+        : <section className="py-14 text-center text-sm text-muted-foreground">
+          <p role={error || workspaceError ? "alert" : "status"}>{error || (workspaceError ? "Your workspace could not be loaded. Use Retry now below." : "Opening your saved workflow results…")}</p>
+          {error && <><p className="mt-3">Signed in as {user?.primaryEmailAddress?.emailAddress || "your current account"} · {workspace?.name}</p>
+            <button type="button" onClick={() => setRetry((value) => value + 1)} className="mt-4 rounded-lg border border-primary/30 px-4 py-2 text-primary">Retry loading results</button></>}
+        </section>}
     </main>
   </WorkspaceShell>;
 }

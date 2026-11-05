@@ -108,6 +108,8 @@ KNOWN = {
             "title": TEXT, "summary": TEXT, "body": {"type": "string", "minLength": 100},
             "status": {"const": "draft"}, "synthetic": {"type": "boolean"},
             "sources": {"type": "array", "minItems": 1, "items": OBJECT},
+            "rows_json": TEXT, "row_count": {"type": "integer"}, "column_count": {"type": "integer"},
+            "locale": TEXT, "facts": OBJECT,
         },
     }, ["report_body", "supplied_source_evidence"]),
     "notion.search": ({**COLLECTION, "properties": {**COLLECTION["properties"],

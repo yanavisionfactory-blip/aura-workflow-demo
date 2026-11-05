@@ -756,6 +756,9 @@ class PlanApproval(BaseModel):
     # a new human approval.
     allow_autonomous_read_repairs: bool = True
     review_tool_outputs: bool = False
+    # Keep older clients' per-tool pauses; new clients can review the final
+    # result after all actions in the approved plan have been verified.
+    review_between_tools: bool = True
     # Start authorizes this immutable plan; review happens after each tool runs.
     # Older clients keep staged action approval unless they explicitly opt in.
     execute_reviewed_plan: bool = False

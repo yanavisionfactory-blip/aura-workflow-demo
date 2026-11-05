@@ -85,6 +85,18 @@ def pending_output_review(run, steps):
     if state.get("pending"):
         return state["pending"]
     reviewed = set(state.get("reviewed_step_ids", []))
+    if state.get("review_between_tools", True) is False:
+        ordered = sorted(steps, key=lambda item: item.position)
+        if not ordered or any(step.status not in {StepStatus.completed, StepStatus.skipped} for step in ordered):
+            return None
+        completed = [step for step in ordered if step.status == StepStatus.completed
+                     and step.id not in reviewed and "provider_result" in (step.output or {})]
+        if not completed:
+            return None
+        last = completed[-1]
+        return {"step_id": last.id, "step_ids": [step.id for step in completed],
+                "tool_slug": last.tool_slug, "operation": last.operation,
+                "next_tool_slug": None, "next_operation": None, "is_final": True}
     groups = []
     for step in sorted(steps, key=lambda item: item.position):
         key, slug, operation = requested_tool(run, step)

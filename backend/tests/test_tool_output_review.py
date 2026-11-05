@@ -72,6 +72,21 @@ def test_groups_requested_tools_and_waits_for_all_sheet_actions():
     assert pending_output_review(run, steps)["is_final"]
 
 
+def test_final_review_mode_runs_all_approved_tools_before_one_durable_review():
+    run, steps = grouped_run()
+    state = run.execution_context[REVIEW_KEY]
+    state["review_between_tools"] = False
+    steps[-1].status = StepStatus.pending
+    assert pending_output_review(run, steps) is None
+    steps[-1].status = StepStatus.failed
+    assert pending_output_review(run, steps) is None
+    steps[-1].status = StepStatus.completed
+    pending = pending_output_review(run, steps)
+    assert pending["is_final"] and pending["step_ids"] == ["0", "1", "2", "3"]
+    state["reviewed_step_ids"] = pending["step_ids"]
+    assert pending_output_review(run, steps) is None
+
+
 @pytest.mark.parametrize("mode", ["disabled", "unattended", "cancelled", "unapproved"])
 def test_reviews_do_not_block_unattended_or_unapproved_runs(mode):
     run, steps = grouped_run()

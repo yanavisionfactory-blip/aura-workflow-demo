@@ -23,6 +23,10 @@ export function selectWorkspace(workspaceId) {
   localStorage.setItem(WORKSPACE_KEY, workspaceId);
 }
 
+export function rememberedWorkspaceId() {
+  return localStorage.getItem(WORKSPACE_KEY);
+}
+
 function messageFrom(data, status) {
   const detail = data?.detail ?? data?.error;
   if (typeof detail === "string") return detail;
@@ -755,9 +759,9 @@ export async function getResumablePythonRun() {
   return latest || null;
 }
 
-export async function approvePythonPlan(runId, editedSteps = null, approveConsequential = false, { reviewToolOutputs = false, executeReviewedPlan = false } = {}) {
+export async function approvePythonPlan(runId, editedSteps = null, approveConsequential = false, { reviewToolOutputs = false, executeReviewedPlan = false, reviewBetweenTools = true } = {}) {
   await ensureWorkspace();
-  return request(`/v1/runs/${runId}/approve-plan`, { method: "POST", body: JSON.stringify({ approved: true, edited_steps: editedSteps, approve_consequential: approveConsequential, review_tool_outputs: reviewToolOutputs, execute_reviewed_plan: executeReviewedPlan }) });
+  return request(`/v1/runs/${runId}/approve-plan`, { method: "POST", body: JSON.stringify({ approved: true, edited_steps: editedSteps, approve_consequential: approveConsequential, review_tool_outputs: reviewToolOutputs, execute_reviewed_plan: executeReviewedPlan, review_between_tools: reviewBetweenTools }) });
 }
 
 export async function reviewPythonToolOutput(runId, stepId, editedOutputs = null) {

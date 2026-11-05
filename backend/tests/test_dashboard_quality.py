@@ -255,6 +255,29 @@ def test_researched_dashboard_accepts_consumed_evidence_without_changing_plan():
     assert candidate.model_dump() == original
 
 
+def test_new_researched_workbook_requires_compiled_cells_with_stable_addresses():
+    candidate = researched_plan()
+    candidate.steps.insert(0, PlanStep(key="create", agent="Sheets", tool_slug="google-sheets",
+        operation="google-sheets.new-spreadsheet", arguments={"title": "Dashboard"},
+        reason="Create requested workbook", expected_output="Workbook ID"))
+    with pytest.raises(ValueError, match="require report.compose with dashboard"):
+        validate_dashboard_plan(RESEARCH_PROMPT, candidate)
+    report = next(step for step in candidate.steps if step.key == "compose")
+    report.arguments["dashboard"] = {"business_name": "Plantea", "reporting_period": "September 2026",
+        "companies": ["Plantea", "Dermalogica", "b.Skincare"], "workbook_metadata": "{{steps.metadata}}"}
+    with pytest.raises(ValueError, match="actual full metadata read"):
+        validate_dashboard_plan(RESEARCH_PROMPT, candidate)
+    candidate.steps.insert(1, PlanStep(key="metadata", agent="Sheets", tool_slug="google-sheets",
+        operation="google-sheets.get-spreadsheet-by-id", arguments={"sheetId": "{{steps.create.ret.spreadsheetId}}"},
+        depends_on=["create"], reason="Read locale", expected_output="Full workbook metadata"))
+    writer = next(step for step in candidate.steps if step.key == "rows")
+    writer.arguments["values"] = "{{steps.compose.rows_json}}"
+    validate_dashboard_plan(RESEARCH_PROMPT, candidate)
+    writer.arguments["range"] = "Dashboard!A3"
+    with pytest.raises(ValueError, match="written from A1"):
+        validate_dashboard_plan(RESEARCH_PROMPT, candidate)
+
+
 @pytest.mark.parametrize("change", [
     lambda p: p.steps[2].arguments.update(sources=[{"content": "https://planteaskin.com"}]),
     lambda p: p.steps[0].model_copy(update={"optional": True}),

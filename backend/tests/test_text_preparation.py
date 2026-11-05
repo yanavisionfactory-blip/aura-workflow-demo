@@ -284,7 +284,7 @@ async def test_legacy_resume_cannot_expand_authority_or_replay_an_uncertain_acti
     dispatch.assert_not_awaited()
 
 
-async def start_with_result_review(factory, monkeypatch):
+async def start_with_result_review(factory, monkeypatch, review_between_tools=True):
     monkeypatch.setattr(main, "dispatch_pending", AsyncMock())
     async with factory() as session:
         run = await session.get(WorkflowRun, "run")
@@ -303,6 +303,7 @@ async def start_with_result_review(factory, monkeypatch):
         await session.commit()
         await main.approve_plan("run", PlanApproval(
             approved=True, review_tool_outputs=True, execute_reviewed_plan=True,
+            review_between_tools=review_between_tools,
         ), main.TenantContext("w", "alice", "owner"), session)
         # The test connections have no external credentials. Seed the same
         # readiness proof for the normalized plan that production probes supply.
@@ -310,6 +311,29 @@ async def start_with_result_review(factory, monkeypatch):
             **run.execution_context["__aura_preflight__"], "plan_hash": canonical_plan_hash(run.plan),
         }}
         await session.commit()
+
+
+async def test_start_can_prepare_write_and_verify_without_intermediate_user_edits(text_run, monkeypatch):
+    execute = AsyncMock(side_effect=[
+        {"ret": {"content": [{"type": "text", "text": "AURA generated dashboard"}]}},
+        {"id": "saved", "title": "AURA generated dashboard"},
+    ])
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", execute)
+    monkeypatch.setattr(orchestrator, "critique_step", AsyncMock(return_value=CriticDecision(action="accept")))
+    monkeypatch.setattr(orchestrator, "check_provider_outcome", AsyncMock(return_value={"status": "verified"}))
+    await start_with_result_review(text_run, monkeypatch, review_between_tools=False)
+    await orchestrator._execute_run("run", "w")
+    assert execute.await_count == 2
+    async with text_run() as session:
+        run = await session.get(WorkflowRun, "run")
+        view = await main._run_view(session, run)
+        assert view["tool_output_review"]["is_final"]
+        assert view["tool_output_review"]["step_ids"] == ["step", "save"]
+        saved = await session.get(RunStep, "save")
+        assert saved.output["resolved_arguments"] == {"title": "AURA generated dashboard"}
+        assert (await session.get(Approval, "save-approval")).status == "approved"
+    await orchestrator._execute_run("run", "w")
+    assert execute.await_count == 2, "Final review must not replay any completed writes"
 
 
 async def test_start_executes_then_reviews_and_edits_saved_output_without_replay(text_run, monkeypatch):

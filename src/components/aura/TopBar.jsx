@@ -1,5 +1,6 @@
 import { motion } from "framer-motion";
 import ConnectionsPill from "./ConnectionsPill";
+import WorkspaceIdentity from "./WorkspaceIdentity";
 import { ArrowLeft, Sparkles, History } from "lucide-react";
 
 export default function TopBar({ onHistoryOpen, onBack, backLabel = "Back" }) {
@@ -29,6 +30,7 @@ export default function TopBar({ onHistoryOpen, onBack, backLabel = "Back" }) {
         </span>
       </div>
       <div className="flex items-center gap-4">
+        <WorkspaceIdentity />
         <ConnectionsPill />
         <button
           onClick={onHistoryOpen}

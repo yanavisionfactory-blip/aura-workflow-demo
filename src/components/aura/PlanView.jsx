@@ -60,6 +60,8 @@ export default function PlanView({
   backendPlan,
   onApprove,
   approveLabel = "Start",
+  reviewBetweenTools = false,
+  onReviewBetweenToolsChange,
   requiredReconnectTools = [],
   onConnectionRecovered,
   onSkipTool,
@@ -692,7 +694,11 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
           />
         </div>
         <div className="flex items-center justify-end gap-3">
-          {backendRunId && <p className="max-w-sm text-right text-xs text-muted-foreground">Start runs the reviewed plan. Review each tool’s result and edit it if needed.</p>}
+          {backendRunId && <div className="max-w-sm text-xs text-muted-foreground">
+            <label className="flex items-center gap-2"><input type="checkbox" checked={reviewBetweenTools}
+              onChange={(event) => onReviewBetweenToolsChange?.(event.target.checked)} />Pause for review after each tool</label>
+            <p className="mt-2">{reviewBetweenTools ? "Review each tool’s result before AURA continues." : "Start lets AURA carry out the approved plan and verify the results. Review the finished outcome."}</p>
+          </div>}
           <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}

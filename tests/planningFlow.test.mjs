@@ -159,11 +159,11 @@ test("Start opts into reviewed-plan execution and completed tool output review",
   assert.equal(source.includes("VITE_STAGED_ACTION_REVIEW_ENABLED"), false);
   assert.equal(source.includes("startPythonPreparation"), false);
   assert.equal(source.includes("hasImmediateActionPreview(steps, autoApprove)"), false);
-  assert.equal(source.includes("approvePythonPlan(runId, editedSteps, false, { reviewToolOutputs: true, executeReviewedPlan: true })"), true);
+  assert.equal(source.includes("approvePythonPlan(runId, editedSteps, false, { reviewToolOutputs: true, executeReviewedPlan: true, reviewBetweenTools })"), true);
   assert.equal(source.includes("const editedSteps = editedUiSteps?.length"), true);
   assert.equal(source.includes('setPhase("preview")'), true);
   assert.equal(source.includes("startPythonExecution(editedSteps, prepared)"), true);
-  assert.match(api, /approvePythonPlan\(runId, editedSteps = null, approveConsequential = false, \{ reviewToolOutputs = false, executeReviewedPlan = false \} = \{\}\)/);
+  assert.match(api, /approvePythonPlan\(runId, editedSteps = null, approveConsequential = false, \{ reviewToolOutputs = false, executeReviewedPlan = false, reviewBetweenTools = true \} = \{\}\)/);
 });
 
 test("the combined preview has a renderer for every supported action family", () => {

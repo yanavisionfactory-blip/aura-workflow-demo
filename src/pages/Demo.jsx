@@ -318,6 +318,7 @@ export default function Demo() {
   const [toolReview, setToolReview] = useState(null);
   const [toolReviewBusy, setToolReviewBusy] = useState(false);
   const [toolReviewError, setToolReviewError] = useState("");
+  const [reviewBetweenTools, setReviewBetweenTools] = useState(false);
   const toolReviewPendingRef = useRef(false);
   const [currentStepIdx, setCurrentStepIdx] = useState(0);
   const [approvedSteps, setApprovedSteps] = useState([]);
@@ -1338,7 +1339,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
           );
         }
       } else {
-        await approvePythonPlan(runId, editedSteps, false, { reviewToolOutputs: true, executeReviewedPlan: true });
+        await approvePythonPlan(runId, editedSteps, false, { reviewToolOutputs: true, executeReviewedPlan: true, reviewBetweenTools });
       }
       // The backend run is durable. Synchronize the optional history view
       // after dispatch so its extra data requests cannot gate execution.
@@ -1892,6 +1893,8 @@ Generate a results summary in plain, human-friendly language (not technical).
                         omittedTools={plan.omittedTools || []}
                         onBack={originalPrompt.startsWith("AURA_PILOT_V1\n") ? handlePilotRevision : () => setPhase("confirm")}
                         approveLabel={editRunMode ? "Review changes" : "Start"}
+                        reviewBetweenTools={reviewBetweenTools}
+                        onReviewBetweenToolsChange={setReviewBetweenTools}
                       />
                     </fieldset>
                   </div>
