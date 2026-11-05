@@ -11,7 +11,7 @@ import ConfirmView from "@/components/aura/ConfirmView";
 import PlanView from "@/components/aura/PlanView";
 import PreviewView from "@/components/aura/PreviewView";
 import ExecutionView from "@/components/aura/ExecutionView";
-import ExecutionToolOutputs from "@/components/aura/ExecutionToolOutputs";
+import ToolOutputReview from "@/components/aura/ToolOutputReview";
 import ErrorView from "@/components/aura/ErrorView";
 import ResultsView from "@/components/aura/ResultsView";
 import HistoryPanel from "@/components/aura/HistoryPanel";
@@ -574,9 +574,10 @@ export default function Demo() {
     if (phase === "confirm") reset();
     else if (phase === "plan") setPhase("confirm");
     else if (phase === "preview") {
-      if (preparedActionPreviewRef.current) setPhase("executing");
+      if (preparedActionPreviewRef.current) reset();
       else setPhase("plan");
     }
+    else if (phase === "tool-preview") reset();
     else if (phase === "executing" || phase === "error") {
       setPhase("plan");
     }
@@ -1351,6 +1352,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
           setVerifyingResult(false);
           const reviewIndex = (run.steps || []).findIndex((step) => step.id === run.tool_output_review.step_id);
           if (reviewIndex >= 0) setCurrentStepIdx(reviewIndex);
+          setPhase("tool-preview");
           return;
         }
         setVerifyingResult(
@@ -1457,7 +1459,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
           approvedStepsRef.current = preparedSteps;
           setApprovedSteps(preparedSteps);
           preparedActionPreviewRef.current = true;
-          setPhase("executing");
+          setPhase("preview");
           return;
         }
         if (run.automation_state?.status === "blocked") {
@@ -1507,7 +1509,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
 
   startPythonExecutionRef.current = startPythonExecution;
 
-  const handleContinueToolReview = async (editedOutputs = null) => {
+  const handleApproveToolResult = async (editedOutputs = null) => {
     if (!toolReview?.step_id || toolReviewPendingRef.current) return;
     const runId = pythonRunIdRef.current;
     const checkpointId = toolReview.step_id;
@@ -1518,7 +1520,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
       await reviewPythonToolOutput(runId, checkpointId, editedOutputs);
       if (pythonRunIdRef.current === runId) void startPythonExecution(null, false, true);
     } catch (error) {
-      if (pythonRunIdRef.current === runId) setToolReviewError(error.message || "Couldn't continue yet. Your completed output is saved; try again.");
+      if (pythonRunIdRef.current === runId) setToolReviewError(error.message || "Couldn't approve yet. Your completed output is saved; try again.");
     } finally {
       toolReviewPendingRef.current = false;
       setToolReviewBusy(false);
@@ -1911,14 +1913,16 @@ Generate a results summary in plain, human-friendly language (not technical).
               >
                 <ExecutionView steps={execSteps} currentStepIndex={currentStepIdx} isReal={!mock}
                   verifying={verifyingResult}
-                  review={toolReview}
-                  approvalPending={preparedActionPreviewRef.current}
-                  onOpenPreview={() => setPhase("preview")}
                   onCancel={pythonRunIdRef.current ? () => cancelSavedRun({ id: pythonRunIdRef.current }) : undefined}
-                  cancelBusy={recoveryBusy} cancelError={recoveryMessage} >
-                  <ExecutionToolOutputs steps={execSteps} review={toolReview} reviewBusy={toolReviewBusy} reviewError={toolReviewError}
-                    onContinue={handleContinueToolReview} backendRunId={pythonRunIdRef.current} />
-                </ExecutionView>
+                  cancelBusy={recoveryBusy} cancelError={recoveryMessage} />
+              </motion.div>
+            )}
+
+            {phase === "tool-preview" && toolReview && (
+              <motion.div key="tool-preview" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }} transition={{ duration: 0.3 }} className="w-full">
+                <ToolOutputReview steps={execSteps} review={toolReview} busy={toolReviewBusy} error={toolReviewError}
+                  onApprove={handleApproveToolResult} backendRunId={pythonRunIdRef.current} />
               </motion.div>
             )}
 
