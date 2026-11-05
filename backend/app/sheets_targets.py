@@ -35,13 +35,41 @@ def bind_requested_sheet_reads(plan, prompt):
 
 
 def worksheet_metadata_context(result, operation):
-    """Expose the provider's tab-name synonym without changing its receipt.
+    """Expose metadata field aliases without changing the provider receipt.
 
-    get-spreadsheet-info calls the title sheetName, while the other Sheets
-    metadata operations call it title. Both describe the same returned tab;
-    adding that alias does not select a tab or invent a worksheet identity.
+    Sheets actions use different envelopes and tab-name fields. Compatibility
+    aliases copy verified identities in provider order; they never select a tab.
     """
-    if operation != "google-sheets.get-spreadsheet-info" or not isinstance(result, dict):
+    if not isinstance(result, dict):
+        return result
+    if operation == "google-sheets.get-spreadsheet-by-id":
+        returned = result.get("ret")
+        rows = returned.get("sheets") if isinstance(returned, dict) else None
+        if not isinstance(rows, list) or not rows:
+            return result
+        tabs = []
+        for row in rows:
+            properties = row.get("properties") if isinstance(row, dict) else None
+            if not isinstance(properties, dict):
+                return result
+            tab_id, title = properties.get("sheetId"), properties.get("title")
+            if (type(tab_id) is not int or not 0 <= tab_id <= 2147483647
+                    or not isinstance(title, str) or not title.strip()):
+                return result
+            tabs.append({"sheetId": tab_id, "title": title, "sheetName": title})
+        if (len({tab["sheetId"] for tab in tabs}) != len(tabs)
+                or len({tab["title"] for tab in tabs}) != len(tabs)):
+            return result
+        # Full metadata and the lighter info action describe the same ordered
+        # tabs with different envelopes. Expose that compatibility collection
+        # from actual provider identities, including when replaying saved runs.
+        # Do not select a tab or alter the stored receipt/approval arguments.
+        normalized = {**returned}
+        normalized.setdefault("worksheets", tabs)
+        value = {**result, "ret": normalized}
+        value.setdefault("worksheets", tabs)
+        return value
+    if operation != "google-sheets.get-spreadsheet-info":
         return result
     returned = result.get("ret")
     rows = returned.get("worksheets") if isinstance(returned, dict) else None
