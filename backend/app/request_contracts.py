@@ -9,13 +9,14 @@ from .connection_families import capability_family
 
 _ACTION = re.compile(
     r"\b(send|email|deliver|forward|post|publish|create|make|schedule|add|"
-    r"upload|append|update|edit|modify|delete|remove|archive|cancel|share)\b",
+    r"upload|append|update|edit|modify|format|style|delete|remove|archive|cancel|share)\b",
     re.IGNORECASE,
 )
 _VERBS = {
     "send": {"send", "email", "deliver", "forward", "post", "publish"},
     "create": {"create", "make", "schedule", "add", "upload", "append"},
     "update": {"update", "edit", "modify"},
+    "format": {"format", "style"},
     "delete": {"delete", "remove", "archive", "cancel"},
     "share": {"share"},
 }
@@ -23,6 +24,7 @@ _OPERATION_VERBS = {
     "send": {"send", "post", "publish", "deliver", "forward"},
     "create": {"create", "schedule", "add", "upload", "append", "insert"},
     "update": {"update", "edit", "modify", "append"},
+    "format": {"format", "formatting", "style"},
     "delete": {"delete", "remove", "archive", "cancel", "revoke"},
     "share": {"share"},
 }
@@ -173,6 +175,12 @@ def _aliases(family: str, item: dict) -> set[str]:
 def _operation_matches(kind: str, module: dict) -> bool:
     if module.get("permission_scope") not in {"write", "destructive"}:
         return False
+    if kind == "format":
+        # Formatting permission is deliberately narrower than arbitrary content
+        # writes, creation, sharing, deletion, or a provider's batch endpoint.
+        return module.get("permission_scope") == "write" and module.get("name") in {
+            "google-sheets.format-cells", "google-sheets.format-worksheet",
+        }
     words = re.findall(
         r"[a-z]+", (str(module.get("name") or "") + " "
                  + str(module.get("description") or "")).casefold()
@@ -233,6 +241,12 @@ def requested_effects(prompt: str, inventory: list[dict], manifests: dict) -> li
                 continue
             kind = next(k for k, verbs in _VERBS.items() if action.group() in verbs)
             tail = clause[action.end():actions[index + 1].start() if index + 1 < len(actions) else None]
+            if action.group() == "add" and re.search(
+                r"\bgoogle\s+sheets?\s+formatting\b", tail,
+            ):
+                # "Add Google Sheets formatting actions" requests presentation
+                # updates, not a new workbook or merely a new read step.
+                kind = "format"
             # Editing the workflow structure is not permission to create a
             # provider resource. "Add Google Calendar as the first step" means
             # read that source, while "add an event in Calendar" remains a write.
