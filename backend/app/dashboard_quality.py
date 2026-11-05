@@ -4,20 +4,32 @@ import json
 import re
 
 from .request_contracts import user_request_text
+from .workflow_context import referenced_paths
 
 GUIDANCE = (
     "For a KPI dashboard template, write a usable spreadsheet, not a description of one. "
     "Include the business name, requested reporting period, explicit Metric / Target / Actual "
     "headers, the requested metrics and categories, and working variance or attainment formulas. "
-    "Unknown targets and actuals must be empty input cells, never 0, $0.00 or 0%. "
+    "Research requested public figures before writing. Unknown actuals must be blank or labeled "
+    "Not publicly reported, never 0, $0.00 or 0%. Fill available public values rather than "
+    "delivering an empty template when the user requests analysis. "
     "Preserve genuine supplied zero values. Only include sample numbers when explicitly requested "
     "and label them illustrative. Guard formulas with COUNT/ISNUMBER or blank checks so missing "
     "inputs display blank or Awaiting input; IFERROR(...,0) conceals missing data. "
     "Format currency, counts and rates appropriately; distinguish editable inputs from formulas. "
     "A requested competitor comparison needs side-by-side columns and comparison rows, not "
     "a label saying compare the websites. Read the named public sites for product context, "
-    "preserve source URLs and observation dates, and mark unavailable private revenue/orders/"
-    "conversion KPIs Not available. Do not present current public prices as historical figures. "
+    "preserve source URLs and observation dates. Search for the requested reporting-period "
+    "revenue/orders/conversion figures; distinguish reported actuals, third-party estimates, "
+    "industry benchmarks and calculated scenarios in separate labeled cells. A public estimate "
+    "is not company-reported performance. If company-specific data is unavailable, provide "
+    "sourced product prices and relevant benchmarks, not fabricated sales. Derive recommended "
+    "targets transparently from those benchmarks. Do not present current public prices as historical figures. "
+    "For researched or upstream-generated content, plan real web.search/web.page.read steps, "
+    "then a report.compose or requested model step consuming their observed outputs. Bind the "
+    "entire Sheets rows/values argument to that completed content using {{steps.KEY.body}} "
+    "or the catalog's actual output field. Content is prepared as concrete cells before approval; "
+    "do not embed a large speculative workbook or unsupported per-cell references in the plan. "
     "Read back the completed cells and formulas before claiming that the requested dashboard is ready."
 )
 
@@ -50,7 +62,7 @@ def sheet_rows(value):
         return []
     if isinstance(value, dict):
         rows = []
-        for key in ("rows", "values", "rowData", "data", "sheets", "requests", "updateCells", "appendCells", "body"):
+        for key in ("rows", "values", "rowData", "data", "sheets", "requests", "updateCells", "appendCells", "body", "resource"):
             if key in value:
                 rows.extend(sheet_rows(value[key]))
         return rows
@@ -112,7 +124,7 @@ def validate_dashboard_plan(prompt, plan):
         # An upstream content generator must be checked after materialization.
         for key in ("rows", "values", "data", "body"):
             value = step.arguments.get(key)
-            dynamic |= isinstance(value, str) and value.strip().startswith("{{")
+            dynamic |= bool(referenced_paths(value))
     content_keys = {step.key for step in steps if any(key in step.arguments for key in ("rows", "values", "data", "body"))}
     if content_keys:
         by_key = {step.key: step for step in plan.steps}
