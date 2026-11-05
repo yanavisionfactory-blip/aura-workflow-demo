@@ -52,6 +52,7 @@ def catalog():
         ("update-cells", "Update cells", "write"),
         ("get-spreadsheet", "Read a spreadsheet", "read"),
         ("get-spreadsheet-info", "Verify the created workbook and headers", "read"),
+        ("get-values-in-range", "Read saved cells", "read"),
         ("delete-spreadsheet", "Delete a spreadsheet", "destructive"),
         ("share-spreadsheet", "Share a spreadsheet", "write"),
     ]]}
@@ -64,7 +65,7 @@ def catalog():
 
 
 def revision(operation="sheets.kpi.create"):
-    return ("Prepare a Google Sheets KPI dashboard template."
+    return ("Prepare a Google Sheets workbook."
             "\n\nThe user reviewed the proposed workflow and requested this change: "
             "Use the dedicated Google Sheets connection and preserve the reviewed result."
             "\nCurrent reviewed steps (preserve unchanged steps and dependencies): "
@@ -184,7 +185,22 @@ async def test_kpi_request_uses_existing_dedicated_sheets_grants_before_planning
     inventory[1]["connected"] = True
     grants = [{"slug": "google", "allowed_operations": ["gmail.get"]}, inventory[1]]
     original = deepcopy(inventory)
-    create = AsyncMock(return_value=plan())
+    candidate = plan()
+    candidate.steps.extend([
+        PlanStep(key="rows", agent="Sheets", tool_slug="google-sheets", operation="google-sheets.update-cells",
+                 arguments={"spreadsheetId": "{{steps.workbook.id}}", "values": [
+                     ["Metric", "Target", "Actual", "Variance"],
+                     ["Revenue", "", "", '=IF(COUNT(B2:C2)<2,"",C2-B2)'],
+                     ["Sales", "", ""], ["Conversions", "", ""],
+                     ["Comparison", "Dermalogica", "b.Skincare"],
+                     ["September revenue", "Not available", "Not available"],
+                 ]}, depends_on=["workbook"], consequential=True,
+                 reason="Write requested KPI template", expected_output="Saved rows"),
+        PlanStep(key="verify", agent="Sheets", tool_slug="google-sheets", operation="google-sheets.get-values-in-range",
+                 arguments={"spreadsheetId": "{{steps.workbook.id}}", "range": "A1:D6"}, depends_on=["workbook", "rows"],
+                 reason="Read back the saved cells", expected_output="Actual saved rows"),
+    ])
+    create = AsyncMock(return_value=candidate)
     monkeypatch.setattr(llm_planner, "create_llm_plan", create)
     compiled = await orchestrator._create_compiled_plan(
         KPI_PROMPT, inventory, set(), manifests, requested_tool_names=["Google Sheets"],

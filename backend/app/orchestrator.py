@@ -1080,6 +1080,9 @@ async def _create_compiled_plan(
         + ". Show its resolved arguments for approval before dispatch."
         for effect in required_effects
     ]
+    from .dashboard_quality import dashboard_requirements
+
+    repair_requirements.extend(dashboard_requirements(objective))
     repair_requirements.extend(
         "The user explicitly selected " + name
         + ". Include a relevant required primary step for this app using its catalog operations on: "

@@ -563,6 +563,8 @@ export default function Demo() {
     setStartTime(null);
     setWorkflowName("");
     setEditRunMode(false);
+    setEditReviewOpen(false);
+    setEditRun(null);
     setPilotOpen(false);
     setPilotDraft(null);
     editOriginalStepsRef.current = [];
@@ -1038,13 +1040,14 @@ Write ONE clear, conversational sentence restating what they want — but offer 
     approvedStepsRef.current = executionSteps;
     setApprovedSteps(executionSteps);
     setWorkflowName(name);
-    if (editRunMode) {
-      setEditFlag(detectNewConsequential(editOriginalStepsRef.current, steps));
-      setEditReviewOpen(true);
-      return;
-    }
     if (!hasDurablePlan(pythonRunIdRef.current, pythonPlanRef.current)) {
       keepPlanInReview();
+      return;
+    }
+    if (editRunMode) {
+      setEditFlag(detectNewConsequential(editOriginalStepsRef.current, steps));
+      setEditRun((previous) => ({ ...previous, title: name, steps: executionSteps }));
+      setEditReviewOpen(true);
       return;
     }
     startPythonExecution();
@@ -1729,7 +1732,7 @@ Generate a results summary in plain, human-friendly language (not technical).
         return;
       }
       const repeatPrompt = campaignRepeatPrompt(workflow.prompt, workflow.steps);
-      const confirmedIntent = repeatPrompt || workflow.interpretation || workflow.prompt;
+      const confirmedIntent = repeatPrompt || workflow.prompt || workflow.interpretation;
       reset();
       currentWorkflowIdRef.current = workflow.id || null;
       setOriginalPrompt(repeatPrompt || workflow.prompt);
@@ -1756,24 +1759,31 @@ Generate a results summary in plain, human-friendly language (not technical).
 
   const handleEditRun = (workflow, approval) => {
     if (!workflow) return;
+    const confirmedIntent = campaignRepeatPrompt(workflow.prompt, workflow.steps)
+      || workflow.prompt || workflow.interpretation;
+    reset();
     setEditRun({ ...workflow, title: workflow.name });
     setEditApproval(approval || "writes");
     setEditFlag(null);
-    reset();
     setEditRunMode(true);
     currentWorkflowIdRef.current = workflow.id || null;
-    setOriginalPrompt(workflow.prompt);
-    originalPromptRef.current = workflow.prompt;
-    setInterpretation(workflow.interpretation || workflow.prompt);
+    setOriginalPrompt(confirmedIntent);
+    originalPromptRef.current = confirmedIntent;
     editOriginalStepsRef.current = workflow.steps || [];
     setWorkflowName(workflow.name || "");
-    setPlan({ steps: workflow.steps || [], interpretation: workflow.interpretation || workflow.prompt, workflowName: workflow.name || "", estimatedTime: "" });
-    setPlanLoading(false);
-    setPhase("plan");
+    // History stores display steps, not a runnable backend plan. Compile the
+    // complete saved request (including prior revisions) before enabling review.
+    setPlan({ steps: workflow.steps || [], interpretation: workflow.interpretation || confirmedIntent,
+      workflowName: workflow.name || "", estimatedTime: "", provisional: true, compileState: "planning" });
+    void handleConfirm(confirmedIntent);
   };
 
   const handleEditReviewRun = () => {
     setEditReviewOpen(false);
+    if (!hasDurablePlan(pythonRunIdRef.current, pythonPlanRef.current)) {
+      keepPlanInReview();
+      return;
+    }
     setEditRunMode(false);
     // The edited plan was already compiled and reviewed. Approve that same
     // durable run; replanning here can replace its steps just before Start.
