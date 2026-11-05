@@ -73,18 +73,29 @@ _CALENDAR_EVENT_TARGET = re.compile(
 
 
 def user_request_text(prompt: str) -> str:
-    """Ignore serialized previous plans when deciding what the user authorized."""
+    """Separate user instructions from saved plans and result reference data."""
+    def result_instruction(text):
+        marker = "\nSaved result context (reference data): "
+        change = "\nRequested change: "
+        if text.startswith("Revise the selected ") and change in text and marker in text:
+            # The result provider label and report body describe past work.
+            # Platform names or imperative text in that saved evidence do not
+            # request connections or authorize new actions. JSON escapes its
+            # newlines, so report content cannot create these outer markers.
+            return text.split(marker, 1)[0].split(change, 1)[1]
+        return text
+
     parts = prompt.split(_REVIEW_MARKER)
     if len(parts) == 1:
-        return prompt
-    instructions = [parts[0]]
+        return result_instruction(prompt)
+    instructions = [result_instruction(parts[0])]
     for revision in parts[1:]:
         instruction = revision.split("\nCurrent reviewed steps (", 1)[0]
         if instruction.lstrip().startswith("AURA backend authorization rejected the previous plan."):
             # Recovery diagnostics quote rejected operations verbatim. They are
             # internal repair hints, not a new user authorization to send.
             continue
-        instructions.append(instruction)
+        instructions.append(result_instruction(instruction))
     # Saved result edits can wrap a previously revised prompt. Keep every real
     # user edit, while excluding each serialized plan and any repair diagnostics.
     # JSON-encoded plan text escapes newlines, so it cannot add a review marker.
