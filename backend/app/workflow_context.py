@@ -16,6 +16,10 @@ class WorkflowContextError(ValueError):
     pass
 
 
+class WorksheetIdentityError(WorkflowContextError):
+    """Missing provider identity cannot be repaired by generating an ID."""
+
+
 def referenced_paths(value: Any) -> set[str]:
     if isinstance(value, dict):
         return set().union(*(referenced_paths(item) for item in value.values()))
@@ -86,6 +90,9 @@ def _lookup(context: dict[str, Any], path: str) -> Any:
     normalized_path = BRACKET_INDEX.sub(lambda match: f".{match.group(1)}", normalized_path)
     value: Any = context
     for part in normalized_path.split("."):
+        if (isinstance(value, dict) and value.get("__aura_worksheet_metadata__") is True
+                and part == "worksheetId" and part not in value):
+            raise WorksheetIdentityError("Google Sheets did not return one matching worksheet; choose the exact tab before writing")
         if isinstance(value, dict) and part in value:
             value = value[part]
             continue
@@ -299,6 +306,13 @@ def step_context_value(
         value = {"output": result, "result": result, "provider_result": result}
     else:
         value = dict(result)
+        from .sheets_targets import DISCOVERY, worksheet_identity
+
+        worksheet = worksheet_identity(result, operation, planned_steps, step_key)
+        if operation in DISCOVERY:
+            value["__aura_worksheet_metadata__"] = True
+        if worksheet:
+            value.update(worksheet)
         if (operation == "wordpress-org.search-posts"
                 and result.get("aura_transport") == "authenticated_wordpress_rest"):
             from .wordpress_rest import post_collection_evidence
@@ -308,6 +322,11 @@ def step_context_value(
         value.setdefault("result", result)
         value.setdefault("provider_result", evidence)
         if "ret" in result or "exports" in result:
+            if operation == "google-sheets.new-spreadsheet":
+                workbook = result.get("ret")
+                spreadsheet_id = workbook.get("spreadsheetId") if isinstance(workbook, dict) else None
+                if isinstance(spreadsheet_id, str) and re.fullmatch(r"[A-Za-z0-9_-]+", spreadsheet_id):
+                    value.setdefault("spreadsheetId", spreadsheet_id)
             if operation == "google-ads.list-account-id-options":
                 account_id = _unique_google_ads_account(result)
                 if account_id:

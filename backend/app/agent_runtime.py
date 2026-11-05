@@ -417,6 +417,11 @@ def build_agents() -> dict[str, Agent]:
             Do not turn a named resource into a required user input merely because a later API needs
             an ID. If an exact match cannot be established at execution time, pause with the preserved
             search evidence instead of asking the user to look up an implementation identifier.
+            Google Sheets worksheetId is an opaque numeric tab ID, never a one-based index.
+            new-spreadsheet returns spreadsheetId and worksheetName, not worksheetId. Read the
+            workbook's worksheet metadata before binding a downstream worksheetId. Never guess
+            0 or 1. For a recovery request containing an existing workbook receipt, reuse that
+            workbook and read its current cells before proposing only the missing changes.
             Notion search and notion.page.get return metadata, not page body content. When a
             request requires summarizing page content, include a dependent notion.blocks.children.list
             call using the returned page ID. A metadata-only step must not promise body content.
@@ -1889,6 +1894,15 @@ async def materialize_action_arguments(
     from .composed_content import preserve_action_targets, validate_composed_content
 
     planned_arguments = step.get("arguments") or {}
+    sheet_targets = {}
+    if operation.startswith("google-sheets."):
+        from .workflow_context import resolve_value
+
+        # Content generation cannot invent or switch a workbook/tab identity.
+        # Resolve these before calling the model, including ambiguous metadata.
+        sheet_targets = {field: resolve_value(planned_arguments[field], execution_context)
+                         for field in ("sheetId", "spreadsheetId", "worksheetId", "sheetName")
+                         if field in planned_arguments}
     composed_fields = {
         field for field in ("body", "content", "text", "message", "description")
         if field in planned_arguments
@@ -1945,6 +1959,7 @@ async def materialize_action_arguments(
                 raw = {"arguments": raw}
             resolved = MaterializedActionArguments.model_validate(raw).arguments
             resolved = preserve_action_targets(planned_arguments, resolved)
+            resolved.update(sheet_targets)
             resolved = canonical_action_arguments(operation, resolved, execution_context)
             if referenced_paths(resolved):
                 raise ValueError("Approval arguments still contain workflow references")

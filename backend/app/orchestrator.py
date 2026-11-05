@@ -310,6 +310,10 @@ def _provider_rejection_detail(exc: Exception) -> str | None:
 
 def _friendly_execution_error(error: str | None) -> str:
     detail = (error or "").lower()
+    if "google sheets did not return one matching worksheet" in detail:
+        return "Google Sheets returned no unambiguous matching tab. Choose the exact worksheet before writing."
+    if "the connected app rejected this action's inputs" in detail:
+        return "The connected app rejected the target or values for this step. Review the saved action before trying again."
     if "credit_balance_exhausted" in detail:
         return (
             "The API account for this app has insufficient credits. "
@@ -549,6 +553,9 @@ async def ensure_aura_intelligence(session, workspace_id: str) -> ToolConnection
 
 
 def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict]) -> None:
+    from .sheets_targets import bind_created_worksheets
+
+    bind_created_worksheets(plan, manifests_by_slug)
     for planned_step in plan.steps:
         manifest = _current_capability_manifest(
             planned_step.tool_slug,
@@ -2964,7 +2971,9 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     context,
                 )
             except WorkflowContextError as exc:
-                if step.status == StepStatus.awaiting_approval:
+                from .workflow_context import WorksheetIdentityError
+
+                if step.status == StepStatus.awaiting_approval and not isinstance(exc, WorksheetIdentityError):
                     try:
                         # Dynamic connectors have no native catalog contract.
                         # Give the bounded resolver the verified connection's

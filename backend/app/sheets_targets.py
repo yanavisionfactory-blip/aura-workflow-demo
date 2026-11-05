@@ -1,0 +1,118 @@
+"""Bind newly created Sheets tabs to provider metadata, never guessed indices."""
+
+import re
+
+from .schemas import MAX_WORKFLOW_STEPS, PlanStep
+from .workflow_context import REFERENCE, referenced_paths
+
+DISCOVERY = {
+    "google-sheets.list-worksheets": "sheetId",
+    "google-sheets.get-spreadsheet-by-id": "sheetId",
+    "google-sheets.get-spreadsheet-info": "spreadsheetId",
+}
+
+
+def created_workbook_source(arguments, steps):
+    target = arguments.get("sheetId", arguments.get("spreadsheetId"))
+    paths = referenced_paths(target)
+    if len(paths) != 1 or not isinstance(target, str) or not REFERENCE.fullmatch(target):
+        return None
+    path = next(iter(paths))
+    for step in steps:
+        if (step.operation == "google-sheets.new-spreadsheet"
+                and path in {f"steps.{step.key}.ret.spreadsheetId", f"steps.{step.key}.spreadsheetId"}):
+            return step
+    return None
+
+
+def needs_worksheet_binding(step, steps):
+    if not step.operation.startswith("google-sheets.") or "worksheetId" not in step.arguments:
+        return None
+    source = created_workbook_source(step.arguments, steps)
+    if not source or source.tool_slug != step.tool_slug:
+        return None
+    paths = referenced_paths(step.arguments["worksheetId"])
+    # A different worksheet created/read by a real earlier step already has a
+    # binding. new-spreadsheet itself never returns a numeric worksheet ID.
+    if paths and all(not path.startswith(f"steps.{source.key}.") for path in paths):
+        return None
+    return source
+
+
+def bind_created_worksheets(plan, manifests):
+    """Compile the metadata read into the plan before review/approval hashing."""
+    for step in tuple(plan.steps):
+        source = needs_worksheet_binding(step, plan.steps[:plan.steps.index(step)])
+        if not source:
+            continue
+        capabilities = {item["name"]: item for item in
+                        manifests.get(step.tool_slug, {}).get("capabilities", [])}
+        operation = next((name for name in DISCOVERY if name in capabilities
+                          and capabilities[name].get("permission_scope") == "read"
+                          and not capabilities[name].get("requires_approval")), None)
+        if not operation:
+            raise ValueError("The created Google Sheets tab requires a verified worksheet metadata read")
+        target = f"{{{{steps.{source.key}.ret.spreadsheetId}}}}"
+        reader = next((item for item in plan.steps[:plan.steps.index(step)]
+                       if item.tool_slug == source.tool_slug and item.operation in DISCOVERY
+                       and created_workbook_source(item.arguments, [source]) is source), None)
+        if reader is None:
+            if len(plan.steps) >= MAX_WORKFLOW_STEPS:
+                raise ValueError("Worksheet metadata read exceeds the workflow step limit")
+            key = f"{source.key[:100]}_worksheets"
+            if any(item.key == key for item in plan.steps):
+                raise ValueError("Worksheet metadata step key is already in use")
+            reader = PlanStep(
+                key=key, agent="Google Sheets", tool_slug=source.tool_slug,
+                operation=operation, arguments={DISCOVERY[operation]: target},
+                reason="Read the created workbook's actual tab ID before adding rows or formatting",
+                expected_output="Verified worksheet names and IDs from Google Sheets",
+                depends_on=[source.key],
+            )
+            plan.steps.insert(plan.steps.index(source) + 1, reader)
+        step.arguments = {**step.arguments, "worksheetId": f"{{{{steps.{reader.key}.worksheetId}}}}"}
+        if source.key not in step.depends_on:
+            step.depends_on.append(source.key)
+        if reader.key not in step.depends_on:
+            step.depends_on.append(reader.key)
+        if isinstance(step.reduced_scope_arguments, dict) and "worksheetId" in step.reduced_scope_arguments:
+            step.reduced_scope_arguments = {**step.reduced_scope_arguments,
+                                            "worksheetId": step.arguments["worksheetId"]}
+
+
+def worksheet_identity(result, operation, planned_steps=None, step_key=None):
+    """Return only an exact named match or a single verified tab; retain raw evidence."""
+    if operation not in DISCOVERY or not isinstance(result, dict):
+        return None
+    returned = result.get("ret")
+    rows = returned if operation == "google-sheets.list-worksheets" else (
+        returned.get("worksheets" if operation == "google-sheets.get-spreadsheet-info" else "sheets")
+        if isinstance(returned, dict) else None
+    )
+    if not isinstance(rows, list) or not rows:
+        return None
+    tabs = []
+    for row in rows:
+        if not isinstance(row, dict):
+            return None
+        properties = row if operation == "google-sheets.get-spreadsheet-info" else row.get("properties")
+        if not isinstance(properties, dict):
+            return None
+        tab_id = properties.get("sheetId")
+        name = properties.get("sheetName" if operation == "google-sheets.get-spreadsheet-info" else "title")
+        if type(tab_id) is not int or not 0 <= tab_id <= 2147483647 or not isinstance(name, str) or not name:
+            return None
+        tabs.append((tab_id, name))
+    if len({tab[0] for tab in tabs}) != len(tabs) or len({tab[1] for tab in tabs}) != len(tabs):
+        return None
+    steps = planned_steps or []
+    reader = next((step for step in steps if step.get("key") == step_key), {})
+    path = (reader.get("arguments") or {}).get(DISCOVERY[operation], "")
+    match = re.fullmatch(r"\{\{\s*steps\.([a-z][a-z0-9_]*)\.(?:ret\.)?spreadsheetId\s*\}\}", str(path))
+    source = next((step for step in steps if match and step.get("key") == match[1]
+                   and step.get("tool_slug") == reader.get("tool_slug")
+                   and step.get("operation") == "google-sheets.new-spreadsheet"), {})
+    name = (source.get("arguments") or {}).get("sheetName")
+    if isinstance(name, str) and name and "{{" not in name:
+        tabs = [tab for tab in tabs if tab[1] == name]
+    return {"worksheetId": tabs[0][0], "worksheetName": tabs[0][1]} if len(tabs) == 1 else None

@@ -72,10 +72,12 @@ class PipedreamConnectError(RuntimeError):
         retryable: bool = True,
         status_code: int | None = None,
         upstream_code: str | None = None,
+        effect_uncertain: bool = False,
     ):
         self.retryable = retryable
         self.status_code = status_code
         self.upstream_code = upstream_code
+        self.effect_uncertain = effect_uncertain
         super().__init__(message)
 
 
@@ -93,6 +95,7 @@ def _check_action_result(result: dict[str, Any]) -> None:
         return
 
     status = None
+    embedded_status = False
     billing_required = False
     for error in errors:
         if not isinstance(error, dict):
@@ -112,6 +115,12 @@ def _check_action_result(result: dict[str, Any]) -> None:
         payload = payload if isinstance(payload, dict) else {}
         detail = payload.get("error", payload)
         detail = detail if isinstance(detail, dict) else {}
+        # Google errors often survive the broker only as JSON in message.
+        # Preserve their explicit HTTP rejection without exposing the body.
+        candidate = detail.get("code")
+        if status is None and type(candidate) is int and 400 <= candidate <= 599:
+            status = candidate
+            embedded_status = True
         evidence = " ".join(str(value or "") for value in (
             message, error.get("type"), error.get("code"),
             detail.get("message"), detail.get("type"), detail.get("code"),
@@ -130,9 +139,13 @@ def _check_action_result(result: dict[str, Any]) -> None:
             upstream_code="credit_balance_exhausted",
         )
     raise PipedreamConnectError(
-        "The connected app failed to complete this action.",
+        "The connected app rejected this action's inputs. Review the target and values."
+        if status in {400, 422} else "The connected app failed to complete this action.",
         retryable=status in _RETRYABLE_STATUS,
         status_code=status, upstream_code="action_failed",
+        # A broker action can contain several provider calls. An embedded
+        # rejection alone does not prove an earlier mutation had no effect.
+        effect_uncertain=embedded_status or result.get("ret") is not None,
     )
 
 

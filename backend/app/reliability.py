@@ -35,6 +35,8 @@ def classify_failure(exc: Exception, *, read: bool) -> Failure:
         return Failure("authorization_required", False)
     if isinstance(exc, BudgetExceeded):
         return Failure("budget_exhausted", False)
+    if not read and getattr(exc, "effect_uncertain", False):
+        return Failure("uncertain_write", False)
     # These responses prove the provider rejected the request before accepting
     # the requested mutation. A changed payload may therefore be proposed for a
     # fresh human approval without treating the original write as uncertain.
