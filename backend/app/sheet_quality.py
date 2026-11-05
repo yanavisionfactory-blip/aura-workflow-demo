@@ -14,6 +14,27 @@ CELL_ERRORS = {"#ERROR!", "#REF!", "#DIV/0!", "#VALUE!", "#NAME?", "#NUM!", "#N/
 TEXT_HEADERS = {"notes", "note", "source", "formula / source", "formula description", "description"}
 
 
+def validate_row_payload(operation: str, arguments: dict) -> None:
+    """Pipedream declares JSON rows as a string; validate its inner contract too."""
+    if operation not in {"google-sheets.add-multiple-rows", "google-sheets.update-multiple-rows"}:
+        return
+    from .workflow_context import REFERENCE
+
+    rows = arguments.get("rows")
+    if isinstance(rows, str) and REFERENCE.fullmatch(rows):
+        return  # Resolved arguments pass through this check again before dispatch.
+    if isinstance(rows, str):
+        try:
+            rows = json.loads(rows)
+        except ValueError as exc:
+            raise ValueError("Google Sheets rows must be valid JSON: an array of row arrays. "
+                             "Escape quotes inside formula strings, or provide row arrays for JSON serialization. "
+                             "The row write has not been dispatched.") from exc
+    if (not isinstance(rows, list) or not rows or not all(isinstance(row, list) for row in rows)
+            or any(isinstance(cell, (dict, list)) for row in rows for cell in row)):
+        raise ValueError("Google Sheets rows must contain a nonempty JSON array of row arrays with scalar cells")
+
+
 def normalize_report_annotations(plan) -> None:
     """Escape annotations only when the same newly created tab declares text headers.
 
