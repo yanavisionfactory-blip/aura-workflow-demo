@@ -319,12 +319,14 @@ test("uncertain external effects never expose a replay button", () => {
 });
 
 
-test('a repaired read-only website composition can continue its saved run without enabling writes', () => {
+for (const operation of ['website.content.prepare', 'report.compose']) {
+for (const blockerCode of ['no_safe_recovery', 'recovery_budget_exhausted']) {
+test(`a repaired ${operation} can continue its saved run after ${blockerCode} without enabling writes`, () => {
   const blocked = {
     status: 'waiting_for_action',
-    blocker: { code: 'no_safe_recovery', action: 'inspect_run', step_id: 'content', retryable: false },
+    blocker: { code: blockerCode, action: 'inspect_run', step_id: 'content', retryable: false },
     steps: [{ id: 'source', status: 'completed', consequential: false },
-      { id: 'content', status: 'failed', operation: 'website.content.prepare', consequential: false }],
+      { id: 'content', status: 'failed', operation, consequential: false }],
   };
   const retry = recoveryForRun(blocked);
   assert.equal(retry.canRetry, true);
@@ -341,3 +343,6 @@ test('a repaired read-only website composition can continue its saved run withou
     assert.equal(recoveryForRun(unsafe).canRetry, false);
   }
 });
+
+}
+}

@@ -7,7 +7,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .config import get_settings
-from .model_inputs import bounded_input
+from .model_inputs import bounded_input, canonical_execution_evidence
 from .reliability import bounded_model_call
 from .schemas import WorkflowPlan
 from .workflow_context import referenced_paths
@@ -51,6 +51,11 @@ class ReportSource(BaseModel):
     @field_validator("content", mode="before")
     @classmethod
     def preserve_structured_receipt(cls, value):
+        if isinstance(value, dict) and "provider_result" in value:
+            # Whole-step references include output/result/provider_result aliases.
+            # They are compatibility copies, not additional source evidence. Keep
+            # the complete canonical receipt before applying the source-size limit.
+            value = canonical_execution_evidence({"steps": {"source": value}})["steps"]["source"]
         if isinstance(value, (dict, list)):
             return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
         return value
