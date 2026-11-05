@@ -197,6 +197,31 @@ def test_metadata_alias_does_not_rewrite_existing_fields_or_unrelated_receipts()
     assert step_context_value(other, "unrelated.read")["ret"] is other["ret"]
 
 
+@pytest.mark.parametrize("tab_id", [0, 1386900864])
+def test_saved_full_metadata_resolves_reviewed_worksheet_collection_paths(tab_id):
+    receipt = {"ret": {"spreadsheetId": "real_book", "properties": {"locale": "ru_RU"},
+                       "sheets": [{"properties": {"sheetId": tab_id, "title": "Dashboard"}},
+                                  {"properties": {"sheetId": 51, "title": "Sources"}}]}}
+    original = deepcopy(receipt)
+    value = step_context_value(receipt, "google-sheets.get-spreadsheet-by-id")
+    context = {"steps": {"read_book_meta": value}}
+    assert resolve_value("{{steps.read_book_meta.worksheets[0].sheetId}}", context) == tab_id
+    assert resolve_value("{{steps.read_book_meta.ret.worksheets[1].title}}", context) == "Sources"
+    assert resolve_value("{{steps.read_book_meta.worksheets[1].sheetName}}", context) == "Sources"
+    assert "worksheetId" not in value  # No automatic selection among multiple tabs.
+    assert value["provider_result"] is receipt and receipt == original
+
+
+@pytest.mark.parametrize("properties", [None, {}, {"sheetId": True, "title": "Dashboard"},
+    {"sheetId": "8", "title": "Dashboard"}, {"sheetId": -1, "title": "Dashboard"},
+    {"sheetId": 8, "title": " "}])
+def test_full_metadata_collection_alias_requires_real_provider_tab_identity(properties):
+    receipt = {"ret": {"sheets": [{"properties": properties}]}}
+    value = step_context_value(receipt, "google-sheets.get-spreadsheet-by-id")
+    assert "worksheets" not in value and "worksheets" not in value["ret"]
+    assert value["provider_result"] is receipt
+
+
 def test_missing_read_target_uses_the_single_requested_workbook_before_review():
     from app.orchestrator import _normalize_planned_steps
 
