@@ -18,6 +18,7 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
   const [manualTools, setManualTools] = useState(() => [...new Set(initialTools || [])]);
   const [removedTools, setRemovedTools] = useState([]);
   const [documents, setDocuments] = useState(getAttachedDocuments);
+  const [attachingDocuments, setAttachingDocuments] = useState(false);
   const [showComposer, setShowComposer] = useState(false);
   const [examplesCollapsed, setExamplesCollapsed] = useState(false);
   const inputRef = useRef(null);
@@ -51,7 +52,7 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
 
   const handleSubmit = () => {
     const text = value.trim();
-    if (text && !disabled) {
+    if (text && !disabled && !attachingDocuments) {
       const requestedTools = selectedTools.filter(
         (label) => catalogEntryFor(label) || manualTools.includes(label),
       );
@@ -185,10 +186,8 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
                     setRemovedTools((prev) => prev.filter((r) => r !== name));
                     setShowComposer(false);
                   }}
-                  onAddDocument={(doc) => {
-                    attachDocument(doc);
-                    setShowComposer(false);
-                  }}
+                  onAddDocument={attachDocument}
+                  onDocumentUploadChange={setAttachingDocuments}
                 />
               </div>
             </motion.div>
@@ -201,7 +200,7 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             onClick={handleSubmit}
-            disabled={disabled || !value.trim()}
+            disabled={disabled || attachingDocuments || !value.trim()}
             className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-primary to-primary/80 text-primary-foreground text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-40"
           >
             Create plan
