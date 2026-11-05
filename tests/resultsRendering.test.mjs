@@ -7,6 +7,8 @@ import { build } from "vite";
 import { executeMarketingSimulation } from "../src/lib/marketingToolSimulation.mjs";
 import { frameioOutputs } from "./fixtures/frameioReview.mjs";
 import { resolvedApprovalStep } from "../src/lib/approvalReview.mjs";
+import { JSDOM } from "jsdom";
+import React, { act } from "react";
 
 const repo = fileURLToPath(new URL("../", import.meta.url));
 let temporary;
@@ -18,6 +20,7 @@ let renderActionScreen;
 let renderApproval;
 let renderExecution;
 let renderPlan;
+let ResultsTestView;
 before(async () => {
   temporary = fs.mkdtempSync(path.join(repo, ".results-render-"));
   await build({
@@ -46,7 +49,7 @@ before(async () => {
       emptyOutDir: true, rollupOptions: { output: { entryFileNames: "render.mjs" } } },
     ssr: { noExternal: ["lucide-react"] },
   });
-  ({ render, renderToolWorkspace, renderSheetReview, renderSheetCard, renderActionScreen, renderApproval, renderExecution, renderPlan } = await import(pathToFileURL(path.join(temporary, "render.mjs"))));
+  ({ render, renderToolWorkspace, renderSheetReview, renderSheetCard, renderActionScreen, renderApproval, renderExecution, renderPlan, ResultsTestView } = await import(pathToFileURL(path.join(temporary, "render.mjs"))));
 });
 after(() => { if (temporary) fs.rmSync(temporary, { recursive: true, force: true }); });
 
@@ -260,7 +263,7 @@ test("a primary provider read shows its returned rows in the tool screen rather 
   const html = render({ ...run, steps: [keywords], result: { result_presentation: { primary_step_key: "keywords" } } });
   assert.match(html, /Google Ads output preview/);
   assert.match(html, /roof repair/);
-  assert.match(html, /Open tool view/);
+  assert.match(html, /<details aria-label="Main workflow result"/);
   assert.doesNotMatch(html, /Google Docs output preview/);
 });
 
@@ -319,7 +322,8 @@ test("a completed campaign stays native in AURA with channel views and actual pe
   assert.match(main, /aria-label="Campaign launch package"/);
   for (const label of ["Google Ads", "Social ads", "Business Profile", "Indoor screens", "Assets", "Approvals and handoff", "Tool outputs"]) assert.ok(main.includes(label));
   assert.match(main, /Saved draft copy with pending client approvals/);
-  assert.doesNotMatch(main, /Open in Google Docs|Checked in Google Docs/);
+  assert.doesNotMatch(main.slice(0, main.indexOf("Research and preparation")), /Open in Google Docs|Checked in Google Docs/);
+  assert.match(main, /<details aria-label="Google Docs result dropdown"/);
   assert.match(html, /Read keyword ideas/);
   assert.match(html, /aria-label="View Google Ads results"/);
 });
@@ -446,4 +450,75 @@ test("an incomplete broker workflow summarizes completed work and previews the e
   assert.doesNotMatch(html, /<iframe|Unsaved proposal|Empty list returned|Workflow complete<\/|Schedule<\/button>/);
   assert.ok(html.indexOf("Saved Google Sheets cells") < html.indexOf("Research and preparation"));
   assert.ok(html.indexOf("Research and preparation") < html.indexOf("Intermediate planning report"));
+});
+
+test("the overview stays in place while result, report and activity controls open inline dropdowns", async () => {
+  const dom = new JSDOM("<!doctype html><body><div id='app'></div></body>", { pretendToBeVisual: true, url: "https://aura.example.invalid" });
+  const globals = { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
+    Element: dom.window.Element, SVGElement: dom.window.SVGElement, navigator: dom.window.navigator,
+    requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window), cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
+    IS_REACT_ACT_ENVIRONMENT: true };
+  const descriptors = Object.fromEntries(Object.keys(globals).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+  dom.window.HTMLElement.prototype.scrollIntoView = () => {};
+  const { createRoot } = await import("react-dom/client");
+  const app = document.getElementById("app"), root = createRoot(app);
+  const click = async (element) => { assert.ok(element); await act(async () => element.click()); };
+  const byLabel = (label) => app.querySelector(`[aria-label="${label}"]`);
+  const byText = (text) => [...app.querySelectorAll("button")].find((button) => button.textContent === text);
+  const saved = { ...run, id: "dropdown-run", steps: [
+    { id: "web", key: "web", tool_slug: "web", status: "completed", output: { operation: "web.page.read", provider_result: { url: "https://example.com/serum", text: "Retrieved source" } } },
+    { id: "report", key: "report", tool_slug: "aura", status: "completed", output: { operation: "report.compose", provider_result: { body: "Saved research report" } } },
+    { id: "save", key: "save", tool_slug: "google-sheets", operation: "google-sheets.update-multiple-rows", status: "completed",
+      output: { resolved_arguments: { worksheetId: 173 }, provider_result: { ret: { spreadsheetId: "exact-workbook", updatedRange: "Dashboard!A1:C2", updatedRows: 2 } },
+        outcome_check: { status: "verified", observed: { range: "Dashboard!A1:C2", values: [["Company", "September 2026"], ["Revenue", "", "Not publicly reported"]] } } } },
+  ], result: {} };
+  try {
+    await act(async () => root.render(React.createElement(ResultsTestView, { run: saved })));
+    const overview = byLabel("Supporting workflow actions"), main = byLabel("Main workflow result");
+    const toolLink = main.querySelector("summary > a");
+    assert.equal(main.open, false);
+    assert.equal(toolLink.href, "https://docs.google.com/spreadsheets/d/exact-workbook/edit#gid=173&range=A1%3AC2");
+    assert.equal(toolLink.target, "_blank");
+    assert.equal(app.querySelector('[role="dialog"]'), null);
+    await click(byLabel("View result: rows saved to Google Sheets"));
+    assert.equal(main.open, true);
+    assert.match(byLabel("Saved Google Sheets cells").textContent, /Not publicly reported/);
+    await click(main.querySelector("summary"));
+    assert.equal(main.open, false);
+    await click(toolLink);
+    assert.equal(main.open, false, "native-tool link must not toggle its dropdown");
+    await click(byLabel("View report: report prepared with ChatGPT"));
+    let panel = byLabel("Inline tool result");
+    assert.equal(panel.open, true);
+    assert.match(panel.textContent, /Saved research report/);
+    assert.equal(byLabel("Supporting workflow actions"), overview);
+    assert.equal(main.open, false);
+    assert.equal(app.querySelector('[role="dialog"]'), null);
+    await click(panel.querySelector("summary"));
+    assert.equal(panel.open, false);
+    await click(byLabel("View report: report prepared with ChatGPT"));
+    assert.equal(panel.open, true, "a closed result must reopen from its overview control");
+    await click(byLabel("View sources: public web page researched"));
+    panel = byLabel("Inline tool result");
+    assert.equal(panel.querySelector("summary > a").href, "https://example.com/serum");
+    assert.match(panel.querySelector("summary").textContent, /Open source/);
+    await click(panel.querySelector("summary"));
+    assert.equal(panel.open, false);
+    assert.ok(panel.querySelector("summary > a"), "the source link remains on the collapsed header");
+    await click(byText("View activity"));
+    assert.equal(byLabel("Inline tool result").open, true);
+    assert.match(byLabel("Inline tool result").querySelector("summary").textContent, /Workflow activity/);
+    assert.equal(byLabel("Supporting workflow actions"), overview);
+    assert.equal(app.querySelector('[role="dialog"]'), null);
+    await click(byLabel("View Google Sheets results"));
+    assert.equal(main.open, true);
+    assert.equal(toolLink.href, "https://docs.google.com/spreadsheets/d/exact-workbook/edit#gid=173&range=A1%3AC2");
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+    for (const [key, descriptor] of Object.entries(descriptors)) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key];
+    }
+  }
 });

@@ -118,3 +118,13 @@ test("verified Canva report leads a generic completion summary without manual se
   assert.equal(preferredToolOutcome(primary, activity).designId, "report-1");
   assert.deepEqual(preferredToolOutcome(primary, [{ ...activity[0], output: { ...output, outcome_check: { status: "unverified" } } }]), primary);
 });
+test("source links come only from completed web reads and generated reports do not invent a native conversation", () => {
+  const entry = (operation, url, status = "completed") => toolResultEntries([{ id: "source", tool: "aura", operation, status,
+    output: { operation, provider_result: { url, text: "Saved source" } } }])[0];
+  assert.equal(entry("web.page.read", "https://example.com/serum").link, "https://example.com/serum");
+  assert.equal(entry("web.page.read", "https://example.com/serum").linkLabel, "Open source");
+  for (const url of ["javascript:alert(1)", "https://user:password@example.com/", "invalid"])
+    assert.equal(entry("web.page.read", url).link, null);
+  assert.equal(entry("web.page.read", "https://example.com/", "failed").link, null);
+  assert.equal(entry("report.compose", "https://chatgpt.com/").link, null);
+});

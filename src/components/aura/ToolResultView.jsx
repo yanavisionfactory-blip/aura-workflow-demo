@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
-import { Activity, AlertTriangle, ArrowUpRight, Check, CheckCircle2, Clock, FileText, Maximize2, Wrench } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Activity, AlertTriangle, ArrowUpRight, Check, CheckCircle2, ChevronDown, Clock, FileText, Maximize2, Wrench } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { mainToolEntry, toolOutputResult, toolResultGroups, toolResultName, toolResultStatus } from "@/lib/toolResultViews.mjs";
 import ResultPreview from "./ResultPreview";
 import ToolEvidence, { EvidenceValue } from "./ToolEvidence";
 
-export function ToolResultFrame({ tool, title, synthetic = false, onExpand, children, expanded = false, appScreen = false, backupNotice, userEdited = false }) {
+export function ToolResultFrame({ tool, title, synthetic = false, onExpand, link, children, expanded = false, appScreen = false, backupNotice, userEdited = false }) {
   return <section aria-label={`${toolResultName(tool)} output preview`} className="overflow-hidden rounded-xl border border-white/15 bg-[#0b1320]">
     <header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-white/[0.03] px-4 py-3">
       <div className="flex min-w-0 items-center gap-3">
@@ -16,6 +16,7 @@ export function ToolResultFrame({ tool, title, synthetic = false, onExpand, chil
         {synthetic && <span className="rounded-full border border-violet-400/25 px-2 py-1 text-[10px] text-violet-200">Synthetic data</span>}
         {userEdited && <span className="text-[11px] text-primary">Edited result</span>}
         {backupNotice && <span className="text-[11px] text-amber-200">Backup used</span>}
+        {link && <a href={link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-xs font-medium text-cyan-300">Open in {toolResultName(tool)}<ArrowUpRight className="h-3.5 w-3.5" /></a>}
         {onExpand && <button type="button" onClick={onExpand} className="inline-flex items-center gap-1.5 text-xs font-medium text-primary"><Maximize2 className="h-3.5 w-3.5" />Open tool view</button>}
       </div>
     </header>
@@ -60,12 +61,12 @@ export function MainToolOutput({ entry, result, results = {}, activity, backendR
   return <ResultPreview result={{ ...result, displayProvider: entry?.tool || result.displayProvider }} results={results} activity={activity} backendRunId={backendRunId} />;
 }
 
-export function ToolOutputCards({ entries, activity, backendRunId, onOpen = undefined }) {
+export function ToolOutputCards({ entries, activity, backendRunId, onOpen = undefined, collapsible = false }) {
   return <div className="space-y-5">{toolResultGroups(entries.filter((entry) => entry.status === "completed" && entry.hasResponse)).map(({ tool, entries: items }) => {
     const combined = toolOutputResult(items, activity);
     const entry = mainToolEntry(items, combined || {}) || [...items].reverse().find((item) => item.preview) || items.at(-1);
     const result = combined || entry.preview || { kind: "result", title: entry.action, provider: tool };
-    return <div key={tool} className="space-y-2">
+    const content = <div className="space-y-2">
       <ToolResultFrame tool={tool} title={result.title || entry.action} synthetic={entry.synthetic} backupNotice={entry.backupNotice} userEdited={items.some((item) => item.userEdited)}
         appScreen={["spreadsheet", "ai_response"].includes(result.kind)} onExpand={onOpen ? () => onOpen(entry.id) : undefined}>
         <MainToolOutput entry={entry} result={result} activity={activity} backendRunId={backendRunId} />
@@ -79,12 +80,26 @@ export function ToolOutputCards({ entries, activity, backendRunId, onOpen = unde
       </details>}
       {items.length > 1 && onOpen && <button type="button" onClick={() => onOpen(entry.id)} className="text-xs text-primary">View all {items.length} saved actions in {tool}</button>}
     </div>;
+    if (!collapsible) return <div key={tool}>{content}</div>;
+    const link = result.link || entry.link;
+    return <details key={tool} aria-label={`${tool} result dropdown`} className="rounded-xl border border-white/10 p-3">
+      <summary className="flex cursor-pointer list-none flex-wrap items-center gap-2 text-xs font-semibold [&::-webkit-details-marker]:hidden"><ChevronDown className="h-3.5 w-3.5 text-violet-400" />{tool}<span className="font-normal text-muted-foreground">{result.title || entry.action}</span>
+        {link && <a href={link} target="_blank" rel="noopener noreferrer" onClick={(event) => event.stopPropagation()} className="ml-auto inline-flex items-center gap-1 text-cyan-300">{result.linkLabel || entry.linkLabel || `Open in ${tool}`}<ArrowUpRight className="h-3.5 w-3.5" /></a>}
+      </summary><div className="mt-3">{content}</div>
+    </details>;
   })}</div>;
 }
 
-export default function ToolResultDialog({ request, onClose, entries, primary, mainEntry, hasMainOutput, results, activity, backendRunId }) {
+export default function ToolResultDialog({ request, onClose, entries, primary, mainEntry, hasMainOutput, results, activity, backendRunId, inline = false }) {
   const [selected, setSelected] = useState(request?.id || "main");
+  const inlineRef = useRef(null);
   useEffect(() => { if (request) setSelected(request.id); }, [request]);
+  useEffect(() => {
+    if (!inline || !request || !inlineRef.current) return;
+    inlineRef.current.open = true;
+    inlineRef.current.querySelector("summary")?.focus({ preventScroll: true });
+    inlineRef.current.scrollIntoView({ block: "nearest" });
+  }, [inline, request]);
   const entry = entries.find((item) => item.id === selected);
   const isMain = selected === "main";
   const isActivity = selected === "activity";
@@ -92,11 +107,9 @@ export default function ToolResultDialog({ request, onClose, entries, primary, m
   const title = isMain ? primary.title || results.title : entry?.action || "Workflow activity";
   const group = entries.filter((item) => item.tool === tool);
   const link = isMain ? primary.link : entry?.link;
-  return <Dialog open={Boolean(request)} onOpenChange={(open) => { if (!open) onClose(); }}>
-    <DialogContent className="flex h-[90dvh] w-[calc(100vw-2rem)] max-w-6xl flex-col gap-0 overflow-hidden rounded-2xl border-white/15 bg-[#0a111d] p-0">
-      <div className="border-b border-white/10 px-5 py-4 pr-12"><DialogTitle>Tool results</DialogTitle><DialogDescription className="mt-1.5">Review the main output and the saved actions from each tool.</DialogDescription></div>
-      <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
-        <nav aria-label="Tool result navigation" className="flex shrink-0 gap-2 overflow-auto border-b border-white/10 p-3 sm:w-56 sm:flex-col sm:border-b-0 sm:border-r">
+  const linkLabel = (isMain ? primary.linkLabel : entry?.linkLabel) || `Open in ${tool}`;
+  const content = <div className={`flex min-h-0 flex-1 flex-col ${inline ? "" : "sm:flex-row"}`}>
+        <nav aria-label="Tool result navigation" className={`flex shrink-0 gap-2 overflow-auto border-b border-white/10 p-3 ${inline ? "" : "sm:w-56 sm:flex-col sm:border-b-0 sm:border-r"}`}>
           {hasMainOutput && <button type="button" aria-current={isMain ? "page" : undefined} onClick={() => setSelected("main")} className={`shrink-0 rounded-lg px-3 py-2.5 text-left text-xs ${isMain ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-white/5"}`}>Main output</button>}
           {toolResultGroups(entries).map(({ tool: name, entries: items }) => <button type="button" key={name} aria-current={!isMain && !isActivity && tool === name ? "page" : undefined} onClick={() => setSelected(items[0].id)} className={`flex shrink-0 items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-left text-xs ${!isMain && tool === name ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-white/5"}`}><span>{name}</span><span>{items.length}</span></button>)}
           <button type="button" aria-current={isActivity ? "page" : undefined} onClick={() => setSelected("activity")} className={`shrink-0 rounded-lg px-3 py-2.5 text-left text-xs ${isActivity ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-white/5"}`}>Workflow activity</button>
@@ -106,7 +119,7 @@ export default function ToolResultDialog({ request, onClose, entries, primary, m
             {entry && <div aria-label={`${tool} actions`} className="mb-4 flex flex-wrap gap-2">{group.map((item) => <button type="button" key={item.id} aria-pressed={selected === item.id} onClick={() => setSelected(item.id)} className={`rounded-lg border px-3 py-2 text-left text-xs ${selected === item.id ? "border-primary/40 bg-primary/10 text-primary" : "border-white/10 text-muted-foreground"}`}>{item.action}<span className="mt-1 block opacity-70">{toolResultStatus(item)}</span></button>)}</div>}
             <div className="mb-4 flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><p className="mb-1 text-xs text-primary">{tool}</p><h3 className="break-words text-lg font-semibold">{title}</h3></div>
               {entry && <span className="flex items-center gap-1.5 text-xs text-muted-foreground">{entry.status === "completed" ? <CheckCircle2 className="h-4 w-4 text-emerald-400" /> : <AlertTriangle className="h-4 w-4 text-amber-300" />}{toolResultStatus(entry)}</span>}
-              {link && <a href={link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-primary">Open in {tool}<ArrowUpRight className="h-3.5 w-3.5" /></a>}
+              {link && <a href={link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-primary">{linkLabel}<ArrowUpRight className="h-3.5 w-3.5" /></a>}
             </div>
             {isMain ? <ToolResultFrame tool={tool} title={title} synthetic={mainEntry?.synthetic} backupNotice={mainEntry?.backupNotice} userEdited={mainEntry?.userEdited || primary.userEdited} expanded><MainToolOutput entry={mainEntry} result={primary} results={results} activity={activity} backendRunId={backendRunId} /></ToolResultFrame> : entry ? <>
               {entry.backupNotice && <p className="mb-3 text-xs text-amber-200">Backup used · details below</p>}
@@ -117,7 +130,16 @@ export default function ToolResultDialog({ request, onClose, entries, primary, m
             </> : <p className="text-sm text-muted-foreground">This action is not available in the saved workflow.</p>}
           </>}
         </div>
-      </div>
+      </div>;
+  if (inline) return request ? <details ref={inlineRef} open aria-label="Inline tool result" className="mb-6 overflow-hidden rounded-xl border border-white/10 bg-[#0c121e]/65">
+    <summary className="flex cursor-pointer list-none flex-wrap items-center gap-2 p-4 text-sm font-semibold [&::-webkit-details-marker]:hidden"><ChevronDown className="h-4 w-4 text-violet-400" />{isActivity ? "Workflow activity" : `${tool || "Saved"} result`}
+      {link && <a href={link} target="_blank" rel="noopener noreferrer" onClick={(event) => event.stopPropagation()} className="ml-auto inline-flex items-center gap-1.5 text-xs font-medium text-cyan-300">{linkLabel}<ArrowUpRight className="h-3.5 w-3.5" /></a>}
+    </summary>{content}
+  </details> : null;
+  return <Dialog open={Boolean(request)} onOpenChange={(open) => { if (!open) onClose(); }}>
+    <DialogContent className="flex h-[90dvh] w-[calc(100vw-2rem)] max-w-6xl flex-col gap-0 overflow-hidden rounded-2xl border-white/15 bg-[#0a111d] p-0">
+      <div className="border-b border-white/10 px-5 py-4 pr-12"><DialogTitle>Tool results</DialogTitle><DialogDescription className="mt-1.5">Review the main output and the saved actions from each tool.</DialogDescription></div>
+      {content}
     </DialogContent>
   </Dialog>;
 }

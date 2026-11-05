@@ -1,5 +1,5 @@
 import RunSupportAccess from "./RunSupportAccess";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { Activity, ArrowRight, BarChart3, CalendarClock, Check, ChevronDown, ExternalLink, FileDown, Plus, RefreshCw, Share2, Zap } from "lucide-react";
@@ -27,6 +27,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   const [copied, setCopied] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
   const [toolView, setToolView] = useState(null);
+  const resultRef = useRef(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const visualChoices = useMemo(() => visualResultChoices(activity || [], { title: results.title, summary: results.summary }), [activity, results]);
   const selectedVisual = visualChoices.find((choice) => choice.key === searchParams.get("main"));
@@ -37,18 +38,24 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   const displayedResult = primaryResult;
   const supportingOutputs = supportingToolOutputs(toolEntries, primaryResult, results.resultPresentation).flatMap((group) => group.entries);
   const hasMainOutput = Boolean((primaryResult.kind && primaryResult.kind !== "result") || primaryResult.provider || mainEntry?.hasResponse || results.breakdown || primaryResult.items?.length);
-  const openTool = (id) => setToolView({ id });
   const nativeAudit = primaryResult.kind === "seo_audit";
   const approvedWeekly = primaryResult.kind === "weekly_review" && (primaryResult.packet?.version === 2 || primaryResult.packet?.provenance === "approved_export");
   const nativeResult = nativeAudit || ["weekly_review", "executive_review", "website_content", "marketing_tools"].includes(primaryResult.kind);
   const summaryFirst = !nativeResult && primaryResult.kind !== "frameio_review";
+  const openTool = (id) => {
+    if (summaryFirst && id === "main") {
+      resultRef.current.open = true;
+      resultRef.current.querySelector("summary")?.focus({ preventScroll: true });
+      resultRef.current.scrollIntoView({ block: "nearest" });
+    } else setToolView({ id });
+  };
   const MainResultContainer = summaryFirst ? "details" : "section";
   const MainResultHeading = summaryFirst ? "summary" : "div";
   const sheetSummary = useMemo(() => sheetWorkflowSummary(toolEntries, primaryResult), [toolEntries, primaryResult]);
   const metrics = useMemo(() => sheetSummary?.metrics.length ? sheetSummary.metrics : isFailure ? [] : resultMetrics(results.metrics || [], activity || []), [results.metrics, activity, isFailure, sheetSummary]);
   const receipts = useMemo(() => supportingReceipts(results, activity || [], primaryResult, results.resultPresentation, mainEntry?.id), [activity, primaryResult, results, mainEntry]);
   const actions = sheetSummary?.actions.length ? [...sheetSummary.actions] : [
-    ...(hasMainOutput ? [{ key: "primary", title: mainEntry?.action || primaryResult.title || "Workflow output saved", detail: mainEntry?.tool || toolResultName(primaryResult.provider), actionId: "main", actionLabel: "View result", icon: "report" }] : []),
+    ...(hasMainOutput ? [{ key: "primary", title: mainEntry?.action || primaryResult.title || "Workflow output saved", detail: mainEntry?.tool || toolResultName(primaryResult.provider), actionId: "main", actionLabel: "View result", icon: "report", link: primaryResult.link, linkLabel: primaryResult.linkLabel || `Open in ${mainEntry?.tool || toolResultName(primaryResult.provider)}` }] : []),
     ...receipts.map((receipt) => ({ ...receipt, detail: toolResultName(receipt.tool), actionLabel: "View action" })),
   ];
   for (const entry of toolEntries.filter((item) => ["failed", "blocked", "provider_error"].includes(item.status))) {
@@ -108,8 +115,10 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
 
       {summaryFirst && <><WorkflowOutcomeList actions={actions} onOpen={openTool} onOpenRun={onOpenRun} /><ResultsByTool entries={toolEntries} selectedTool={outputEntry?.tool || displayedResult.provider} onOpen={openTool} compact /></>}
 
-      {!nativeResult && <MainResultContainer aria-label="Main workflow result" className="group mb-6">
-        <MainResultHeading className="mb-4 flex cursor-pointer list-none flex-wrap items-center gap-2 text-sm font-semibold [&::-webkit-details-marker]:hidden"><BarChart3 className="h-4 w-4 text-violet-400" />Results<span className="text-[11px] font-normal text-muted-foreground">— the actual output</span>{summaryFirst && <ChevronDown className="h-3.5 w-3.5 text-muted-foreground group-open:rotate-180" />}</MainResultHeading>
+      {!nativeResult && <MainResultContainer ref={resultRef} aria-label="Main workflow result" className="group mb-6">
+        <MainResultHeading className="mb-4 flex cursor-pointer list-none flex-wrap items-center gap-2 text-sm font-semibold [&::-webkit-details-marker]:hidden"><BarChart3 className="h-4 w-4 text-violet-400" />Results<span className="text-[11px] font-normal text-muted-foreground">— the actual output</span>{summaryFirst && <ChevronDown className="h-3.5 w-3.5 text-muted-foreground group-open:rotate-180" />}
+          {summaryFirst && primaryResult.link && <a href={primaryResult.link} target="_blank" rel="noopener noreferrer" onClick={(event) => event.stopPropagation()} className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-cyan-400/25 px-3 py-1.5 text-[11px] font-medium text-cyan-300 hover:bg-cyan-400/10"><ExternalLink className="h-3 w-3" />{primaryResult.linkLabel || `Open in ${mainEntry?.tool || toolResultName(primaryResult.provider)}`}</a>}
+        </MainResultHeading>
         {!summaryFirst && <ResultsByTool entries={toolEntries} selectedTool={outputEntry?.tool || toolResultName(displayedResult.provider)} onOpen={openTool} />}
         <div className="mt-4 space-y-4">
 
@@ -129,15 +138,17 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
           {primaryResult.link && !["spreadsheet", "frameio_review"].includes(primaryResult.kind) && <a href={primaryResult.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white hover:bg-primary/90"><ExternalLink className="h-4 w-4" />{primaryResult.linkLabel || "Open result"}</a>}
           {primaryResult.artifact?.link && <a href={primaryResult.artifact.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl border border-primary/30 px-4 py-2.5 text-sm font-medium text-primary hover:bg-primary/10"><ExternalLink className="h-4 w-4" />{primaryResult.artifact.linkLabel || "Open presentation"}</a>}
         </div>}
-        {displayedResult.kind === "frameio_review" ? <MainToolOutput entry={outputEntry} result={displayedResult} results={results} activity={activity} backendRunId={backendRunId} /> : hasMainOutput ? <ToolResultFrame tool={outputEntry?.tool || displayedResult.provider} backupNotice={outputEntry?.backupNotice} userEdited={outputEntry?.userEdited || displayedResult.userEdited} title={displayedResult.title || results.title || "Main output"} synthetic={outputEntry?.synthetic} appScreen={["spreadsheet", "ai_response"].includes(displayedResult.kind)} onExpand={() => openTool("main")}>
+        {displayedResult.kind === "frameio_review" ? <MainToolOutput entry={outputEntry} result={displayedResult} results={results} activity={activity} backendRunId={backendRunId} /> : hasMainOutput ? <ToolResultFrame tool={outputEntry?.tool || displayedResult.provider} backupNotice={outputEntry?.backupNotice} userEdited={outputEntry?.userEdited || displayedResult.userEdited} title={displayedResult.title || results.title || "Main output"} synthetic={outputEntry?.synthetic} appScreen={["spreadsheet", "ai_response"].includes(displayedResult.kind)} onExpand={summaryFirst ? undefined : () => openTool("main")} link={summaryFirst ? primaryResult.link : null}>
           <MainToolOutput entry={outputEntry} result={displayedResult} results={results} activity={activity} backendRunId={backendRunId} />
         </ToolResultFrame> : <ResultPreview result={primaryResult} results={results} />}
           {artifactDelivery && <p className="flex flex-wrap justify-between gap-2 text-xs text-muted-foreground"><span>Presentation · {primaryResult.artifact?.title || primaryResult.title}</span><span className="text-emerald-400">{artifactDelivery.artifactDelivered ? "Attached and delivered" : "Created in Canva"}</span></p>}
         </div>
-        {summaryFirst && supportingOutputs.length > 0 && <details className="mt-4 rounded-xl border border-white/10 p-4"><summary className="cursor-pointer text-xs font-medium text-muted-foreground">Research and preparation</summary><div className="mt-4"><ToolOutputCards entries={supportingOutputs} activity={activity} backendRunId={backendRunId} onOpen={openTool} /></div></details>}
+        {summaryFirst && supportingOutputs.length > 0 && <details className="mt-4 rounded-xl border border-white/10 p-4"><summary className="cursor-pointer text-xs font-medium text-muted-foreground">Research and preparation</summary><div className="mt-4"><ToolOutputCards entries={supportingOutputs} activity={activity} backendRunId={backendRunId} onOpen={openTool} collapsible /></div></details>}
         <ResultRevisionComposer onSubmit={onStartWorkflow ? (instruction) => onStartWorkflow(resultRevisionPrompt({ instruction, result: displayedResult, tool: outputEntry?.tool, entry: outputEntry, runId: backendRunId })) : null}
           placeholder={primaryResult.kind === "frameio_review" ? "e.g. Refresh comments and make the revision checklist more concise…" : "Describe what to change in this tool’s result…"} />
       </MainResultContainer>}
+
+      {summaryFirst && <ToolResultDialog inline request={toolView} onClose={() => setToolView(null)} entries={toolEntries} primary={primaryResult} mainEntry={mainEntry} hasMainOutput={hasMainOutput} results={results} activity={activity || []} backendRunId={backendRunId} />}
 
       {!summaryFirst && supportingOutputs.length > 0 && <section aria-label="Supporting tool outputs" className="mb-7 space-y-4">
         <h2 className="text-sm font-semibold">More outputs from this workflow</h2>
@@ -174,7 +185,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
       {!backendRunId && <AccessRequestModal open={showModal} onClose={() => setShowModal(false)} workflowPrompt={workflowPrompt} />}
       <RunSupportAccess runId={backendRunId} compact />
       <ScheduleModal open={showSchedule} onClose={() => setShowSchedule(false)} title={scheduleTitle || results.title} backendRunId={backendRunId} historyWorkflowId={historyWorkflowId} />
-      <ToolResultDialog request={toolView} onClose={() => setToolView(null)} entries={toolEntries} primary={primaryResult} mainEntry={mainEntry} hasMainOutput={hasMainOutput} results={results} activity={activity || []} backendRunId={backendRunId} />
+      {!summaryFirst && <ToolResultDialog request={toolView} onClose={() => setToolView(null)} entries={toolEntries} primary={primaryResult} mainEntry={mainEntry} hasMainOutput={hasMainOutput} results={results} activity={activity || []} backendRunId={backendRunId} />}
     </motion.div>
   );
 }
