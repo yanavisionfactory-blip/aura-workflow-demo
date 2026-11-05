@@ -135,7 +135,7 @@ test("backup results disclose the actual generator and preserve its saved respon
     },
   }] });
   for (const expected of ["Claude response", "Backup used", "insufficient credits", "September 2026", "What happened", "Results by tool"]) assert.ok(html.includes(expected), expected);
-  assert.ok(html.indexOf("What happened") < html.indexOf("Main workflow result"));
+  assert.ok(html.indexOf("Main workflow result") < html.indexOf("What happened"));
   assert.match(html, /<details aria-label="Main workflow result"/);
   assert.doesNotMatch(html, /Generated with Claude|AURA Intelligence output preview/);
   assert.match(html, /<details[^>]*><summary[^>]*>Execution details · backup used/);
@@ -225,12 +225,14 @@ const run = { id: "saved-run", status: "completed", plan: { name: "Roofing campa
   } },
 };
 
-test("summary actions and tools precede the visible actual result with supporting details collapsed", () => {
+test("the main result comes first, followed by collapsed tool outputs and the workflow summary", () => {
   const html = render(run);
   const main = html.indexOf('aria-label="Main workflow result"');
   const actions = html.indexOf('aria-label="Supporting workflow actions"');
   const tools = html.indexOf('aria-label="Results by tool"');
-  assert.ok(actions > 0 && actions < tools && tools < main);
+  const supporting = html.indexOf('aria-label="Supporting tool outputs"');
+  const summary = html.indexOf('aria-label="Workflow summary"');
+  assert.ok(main > 0 && main < supporting && supporting < summary && summary < actions && actions < tools);
   assert.match(html, /<details aria-label="Main workflow result"/);
   const content = html.slice(main, html.indexOf("What would you like to do next?"));
   for (const text of ["Sourced campaign brief", "Get a Free Estimate", "Final review remains pending."]) assert.ok(content.includes(text));
@@ -293,7 +295,7 @@ test("the expandable Results section contains final Sheets cells, exact link and
   assert.match(html, /report prepared with ChatGPT/);
   assert.match(html, /rows saved to Google Sheets/);
   assert.match(html, /<details aria-label="Main workflow result"/);
-  assert.ok(html.indexOf('aria-label="Results by tool"') < html.indexOf('aria-label="Google Sheets result screen"'));
+  assert.ok(html.indexOf('aria-label="Google Sheets result screen"') < html.indexOf('aria-label="Results by tool"'));
   assert.match(html, /aria-label="View ChatGPT results"/);
   assert.doesNotMatch(html, /AURA Intelligence|Earlier source|majorDimension|~12 min|time saved|Campaign report sent/);
 });
@@ -324,7 +326,7 @@ test("a completed campaign stays native in AURA with channel views and actual pe
   assert.match(main, /aria-label="Campaign launch package"/);
   for (const label of ["Google Ads", "Social ads", "Business Profile", "Indoor screens", "Assets", "Approvals and handoff", "Tool outputs"]) assert.ok(main.includes(label));
   assert.match(main, /Saved draft copy with pending client approvals/);
-  assert.doesNotMatch(main.slice(0, main.indexOf("Research and preparation")), /Open in Google Docs|Checked in Google Docs/);
+  assert.doesNotMatch(main.slice(0, main.indexOf("Other tool outputs")), /Open in Google Docs|Checked in Google Docs/);
   assert.match(main, /<details aria-label="Google Docs result dropdown"/);
   assert.match(html, /Read keyword ideas/);
   assert.match(html, /aria-label="View Google Ads results"/);
@@ -441,7 +443,7 @@ test("an incomplete broker workflow summarizes completed work and previews the e
   assert.match(html, /Tools used/);
   assert.match(html, /<details aria-label="Main workflow result" open="" class="group mb-6">/);
   assert.ok(html.indexOf("What happened") < html.indexOf("Tools used"));
-  assert.ok(html.indexOf("Tools used") < html.indexOf('aria-label="Main workflow result"'));
+  assert.ok(html.indexOf('aria-label="Main workflow result"') < html.indexOf("Tools used"));
   assert.match(html, /Saved Google Sheets cells/);
   assert.match(html, /Cell A1/);
   assert.match(html, /Partial saved preview:/);
@@ -450,8 +452,9 @@ test("an incomplete broker workflow summarizes completed work and previews the e
   assert.match(html, /Awaiting input/);
   assert.match(html, /https:\/\/docs.google.com\/spreadsheets\/d\/final-workbook\/edit#gid=173&amp;range=A1%3AG37/);
   assert.doesNotMatch(html, /<iframe|Unsaved proposal|Empty list returned|Workflow complete<\/|Schedule<\/button>/);
-  assert.ok(html.indexOf("Saved Google Sheets cells") < html.indexOf("Research and preparation"));
-  assert.ok(html.indexOf("Research and preparation") < html.indexOf("Intermediate planning report"));
+  assert.ok(html.indexOf("Saved Google Sheets cells") < html.indexOf("Other tool outputs"));
+  assert.ok(html.indexOf("Other tool outputs") < html.indexOf("Intermediate planning report"));
+  assert.ok(html.indexOf("Intermediate planning report") < html.indexOf('aria-label="Workflow summary"'));
 });
 
 test("the sheet is visible on load while supporting reports and activity open inline dropdowns", async () => {
@@ -478,6 +481,9 @@ test("the sheet is visible on load while supporting reports and activity open in
   try {
     await act(async () => root.render(React.createElement(ResultsTestView, { run: saved })));
     const overview = byLabel("Supporting workflow actions"), main = byLabel("Main workflow result");
+    assert.equal(main.parentElement.firstElementChild, main, "the main output must be the first screen");
+    assert.equal(main.nextElementSibling, byLabel("Supporting tool outputs"));
+    assert.equal(byLabel("Supporting tool outputs").nextElementSibling, byLabel("Workflow summary"));
     const toolLink = main.querySelector("summary > a");
     assert.equal(main.open, true, "the primary output must be visible without a click");
     assert.match(byLabel("Saved Google Sheets cells").textContent, /Not publicly reported/);
