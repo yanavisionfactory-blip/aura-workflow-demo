@@ -57,6 +57,85 @@ after(async () => {
   if (temporary) fs.rmSync(temporary, { recursive: true, force: true });
 });
 
+test("opening a saved connection gate reuses refreshed exact grants without opening consent", async () => {
+  localStorage.setItem("aura_python_workspace_id", "test-workspace");
+  const recovered = [], requests = [];
+  let checks = 0;
+  window.open = () => { throw new Error("A healthy account must not open OAuth"); };
+  globalThis.fetch = async (url) => {
+    const { pathname } = new URL(url);
+    requests.push(pathname);
+    if (pathname === "/v1/managed-connectors/status") return Response.json({ marketplace: [
+      { display_name: "Google Sheets", provider: "google-sheets", connection_backend: "pipedream", connectable: true },
+    ] });
+    if (pathname === "/v1/tools") return Response.json([{ id: "existing-sheets", slug: "google-sheets",
+      display_name: "Google Sheets", kind: "oauth", enabled: true,
+      allowed_operations: checks >= 2 ? ["google-sheets.new-spreadsheet", "google-sheets.get-spreadsheet"] : [] }]);
+    if (pathname === "/v1/connections/existing-sheets/test") {
+      checks += 1;
+      return Response.json({ status: "verified", verification: { ok: true } });
+    }
+    throw new Error(`Unexpected request: ${pathname}`);
+  };
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(React.createElement(PlanView, {
+      plan: { steps: [], compileState: "waiting_for_connection", connectionRequirements: ["google-sheets"],
+        connectionChecklist: [{ id: "saved-requirement", provider_hint: "google-sheets", status: "pending",
+          required_permissions: ["google-sheets.new-spreadsheet", "google-sheets.get-spreadsheet"] }] },
+      onConnectionRecovered: (accounts) => recovered.push(accounts),
+    })));
+    assert.deepEqual(recovered, [[{ name: "Google Sheets", connectionId: "existing-sheets" }]]);
+    assert.ok(requests.every((path) => !path.endsWith("/session")));
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
+for (const scenario of ["missing readback", "different route", "disabled", "unverified"]) {
+  test(`automatic connection reuse keeps the gate closed for ${scenario}`, async () => {
+    localStorage.setItem("aura_python_workspace_id", "test-workspace");
+    const recovered = [];
+    let consent = 0;
+    window.open = () => { consent += 1; throw new Error("Checking must not request consent"); };
+    globalThis.fetch = async (url) => {
+      const { pathname } = new URL(url);
+      if (pathname === "/v1/managed-connectors/status") return Response.json({ marketplace: [
+        { display_name: "Google Sheets", provider: "google-sheets", connectable: true },
+      ] });
+      if (pathname === "/v1/tools") return Response.json([{ id: "existing-sheets",
+        slug: scenario === "different route" ? "google" : "google-sheets", display_name: "Google Sheets",
+        kind: "oauth", enabled: scenario !== "disabled", allowed_operations: scenario === "missing readback"
+          ? ["google-sheets.new-spreadsheet"] : ["google-sheets.new-spreadsheet", "google-sheets.get-spreadsheet"] }]);
+      if (pathname === "/v1/connections/existing-sheets/test") return Response.json({
+        status: scenario === "unverified" ? "failed" : "verified", verification: { ok: scenario !== "unverified" },
+      });
+      throw new Error(`Unexpected request: ${pathname}`);
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(React.createElement(PlanView, {
+        plan: { steps: [], compileState: "waiting_for_connection", connectionRequirements: ["google-sheets"],
+          connectionChecklist: [{ provider_hint: "google-sheets", status: "pending",
+            required_permissions: ["google-sheets.new-spreadsheet", "google-sheets.get-spreadsheet"] }] },
+        onConnectionRecovered: (accounts) => recovered.push(accounts),
+      })));
+      assert.deepEqual(recovered, []);
+      assert.equal(consent, 0);
+      assert.match(container.textContent, /AURA connection checklist/);
+      assert.ok(![...container.querySelectorAll("button")].some((button) => button.textContent === "Start"));
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+    }
+  });
+}
+
 test("an older blocked plan offers its existing Sheets account without another consent flow", async () => {
   localStorage.setItem("aura_python_workspace_id", "test-workspace");
   const revisions = [], approvals = [], requests = [];

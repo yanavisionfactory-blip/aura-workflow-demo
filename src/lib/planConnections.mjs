@@ -1,4 +1,4 @@
-import { CATALOG, catalogEntryFor } from "./toolCatalog.js";
+import { catalogEntryFor } from "./toolCatalog.js";
 import { planConnectionKey, planConnectionRoute } from "./connectionSelection.mjs";
 
 const GOOGLE_APPS = {
@@ -11,7 +11,7 @@ const GOOGLE_APPS = {
 const slugify = (value) => String(value || "").trim().toLowerCase()
   .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 const resolveTool = (raw) => raw && raw !== "AURA Intelligence"
-  ? catalogEntryFor(raw)?.name || null : null;
+  ? catalogEntryFor(raw, { allowAliases: false, includeUnavailable: true })?.name || null : null;
 const googleApp = (operation) => GOOGLE_APPS[String(operation || "").split(".")[0]];
 
 export function planConnectionRequirements(plan = {}) {
@@ -34,8 +34,8 @@ export function requirementTools(requirement, steps = []) {
     if (!names.length) names = ["Google Workspace"];
   } else {
     const name = resolveTool(provider)
+      || GOOGLE_APPS[slugify(provider).replace(/^google-/, "")]
       || ({ atlassian: "Jira", jira: "Jira" })[slugify(provider)]
-      || CATALOG.find((tool) => slugify(tool.name) === slugify(provider))?.name
       || provider;
     names = name ? [name] : [];
   }
@@ -50,14 +50,32 @@ export function requirementTools(requirement, steps = []) {
 export function buildPlanConnectionTools(steps = [], plan = {}) {
   const tools = [];
   for (const step of steps) {
+    const provider = step.toolSlug || step.tool_slug;
+    // An executable route is authoritative. Display copy and marketplace
+    // search aliases cannot add another app or turn built-in report.compose
+    // (displayed as ChatGPT) into an external account requirement.
+    if (provider) {
+      if (provider === "aura") continue;
+      for (const tool of requirementTools({ provider_hint: provider,
+        required_permissions: step.operation ? [step.operation] : [] }, steps)) {
+        // Custom account routes can be absent from the public app catalog.
+        // Only an authoritative missing requirement should gate those routes.
+        if (tool.name === provider && !resolveTool(provider)) continue;
+        const existing = tools.find((item) => item.key === tool.key);
+        if (existing) existing.requiredPermissions = [...new Set([
+          ...existing.requiredPermissions, ...tool.requiredPermissions,
+        ])];
+        else tools.push({ ...tool, reason: step.iWill || step.action || "" });
+      }
+      continue;
+    }
     const names = [step.tool, ...(step.flow || [])
       .filter((item) => item.label === "Uses").map((item) => item.value)]
       .map(resolveTool).filter(Boolean);
     for (const name of new Set(names)) {
-      const provider = resolveTool(step.tool) === name ? step.toolSlug || step.tool_slug || null : null;
-      const key = planConnectionKey(name, provider);
+      const key = planConnectionKey(name, null);
       if (!tools.some((tool) => tool.key === key)) tools.push({
-        key, name, provider, reason: step.iWill || step.action || "", requiredPermissions: [],
+        key, name, provider: null, reason: step.iWill || step.action || "", requiredPermissions: [],
       });
     }
   }

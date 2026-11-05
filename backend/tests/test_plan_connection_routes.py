@@ -40,6 +40,14 @@ KPI_PROMPT = ("Create a simple KPI dashboard template including revenue, sales a
               "Make it clean, with business name, reporting period September 2026, key metrics, "
               "target values and actual performance.")
 
+REPORT_SHELL_PROMPT = (
+    "Build a new Excel-like Google Sheets campaign report comparing Meta Ads performance for "
+    "Aug 1–Sep 20 vs Sep 21–Oct 25 using the provided Google Sheets workflow. Since no approved "
+    "export rows are attached in the request, first create the report shell as a spreadsheet with "
+    "the comparison period specified in the title, then rely on the report tool's required "
+    "saved-input/readback flow when source rows are supplied."
+)
+
 
 def catalog():
     broker = {"capabilities": [{
@@ -96,6 +104,36 @@ def test_choice_removes_only_competing_app_operations_without_changing_grants():
     assert {item["slug"] for item in intent_bounded_tool_inventory(
         "Read Gmail and prepare a Google Sheets workbook", bounded,
     )} == {"google", "google-sheets"}
+
+
+@pytest.mark.asyncio
+async def test_meta_report_shell_reuses_sheets_without_social_connections_or_invented_rows(monkeypatch):
+    monkeypatch.setattr(get_settings(), "planner_mode", "llm")
+    inventory, manifests = catalog()
+    inventory[1]["connected"] = True
+    for provider, name in [("meta-ads", "Meta Ads"), ("tiktok", "TikTok"), ("tiktok-zernio", "TikTok")]:
+        operation = f"{provider}.insights.read"
+        inventory.append({"slug": provider, "name": name, "connected": False, "allowed_operations": [operation]})
+        manifests[provider] = {"capabilities": [{"name": operation, "permission_scope": "read",
+            "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}]}
+    candidate = plan()
+    title = "Meta Ads Campaign Report — Aug 1–Sep 20 vs Sep 21–Oct 25"
+    candidate.steps[0].arguments = {"title": title}
+    create = AsyncMock(return_value=candidate)
+    monkeypatch.setattr(llm_planner, "create_llm_plan", create)
+    compiled = await orchestrator._create_compiled_plan(
+        REPORT_SHELL_PROMPT, inventory, set(), manifests, requested_tool_names=["Google Sheets"],
+        connected_inventory=[inventory[1]],
+    )
+    offered = {item["slug"] for item in create.await_args.args[1]}
+    assert not offered.intersection({"tiktok", "tiktok-zernio", "google"})
+    assert [(step.tool_slug, step.operation, step.arguments) for step in compiled.steps] == [
+        ("google-sheets", "google-sheets.new-spreadsheet", {"title": title}),
+    ]
+    assert preflight_plan(compiled, inventory, manifests, set(), [inventory[1]]).missing_grants == {}
+    assert orchestrator.complete_connection_requirements(
+        REPORT_SHELL_PROMPT, ["meta-ads"], inventory, compiled_plan=compiled,
+    ) == []
 
 
 @pytest.mark.parametrize("value", [

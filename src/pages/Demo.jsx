@@ -105,7 +105,8 @@ const planToolName = (step) => {
     hypeauditor: "HypeAuditor",
     "creator-approvals": "Creator Approvals",
   };
-  return catalogEntryFor(step.tool_slug)?.name || names[step.tool_slug] || step.tool_slug;
+  return catalogEntryFor(step.tool_slug, { allowAliases: false, includeUnavailable: true })?.name
+    || names[step.tool_slug] || step.tool_slug;
 };
 
 const cleanSentence = (value, fallback = "Complete this step") => {

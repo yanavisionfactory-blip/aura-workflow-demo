@@ -95,6 +95,8 @@ export default function PlanView({
   const [connectionErrors, setConnectionErrors] = useState({});
   const hasRequiredGrant = hasPlanConnectionGrant;
   const checkingRef = useRef(false);
+  const [checkingConnections, setCheckingConnections] = useState(false);
+  const checkedRequirementsRef = useRef("");
   const connectingRef = useRef(false);
   const handleConnect = async (tool) => {
     const controller = new AbortController();
@@ -125,7 +127,7 @@ export default function PlanView({
   };
 
   const handleConnectAll = async () => {
-    if (connectingRef.current) return;
+    if (connectingRef.current || checkingRef.current) return;
     const reusable = needed.find((tool) => connectedAlternatives[tool.key]);
     if (reusable) return handleSwitchConnection(reusable);
     connectingRef.current = true;
@@ -157,9 +159,9 @@ export default function PlanView({
 
 
   // Distinct external integrations the plan touches, with the reason each is needed.
+  const [connectionCatalogRevision, refreshConnectionRoutes] = useState(0);
   const planTools = useMemo(() => buildPlanConnectionTools(steps, plan),
-    [steps, plan.connectionChecklist, plan.connectionRequirements]);
-  const [, refreshConnectionRoutes] = useState(0);
+    [steps, plan.connectionChecklist, plan.connectionRequirements, connectionsReady, connectionCatalogRevision]);
   const connectionRouteLookup = connectionsReady && onRevisePlan
     ? [...new Set(planTools.filter((tool) => ["google", "google-workspace"].includes(tool.provider)
       && ["Google Sheets", "Google Docs"].includes(tool.name)).map((tool) => tool.name))].sort().join("|")
@@ -226,8 +228,8 @@ export default function PlanView({
   const missingTools = connectionsReady
     ? planTools.filter((tool) => !effectiveConnections[tool.key])
     : [];
-  const needed = missingTools.filter((tool) => catalogEntryFor(tool.name));
-  const backstageOnly = missingTools.filter((tool) => !catalogEntryFor(tool.name));
+  const needed = missingTools.filter((tool) => catalogEntryFor(tool.name, { allowAliases: false }));
+  const backstageOnly = missingTools.filter((tool) => !catalogEntryFor(tool.name, { allowAliases: false }));
   const connectionOnly = steps.length === 0 && (plan.connectionRequirements || []).length > 0;
   const connectionCount = needed.length || planTools.length;
   const planningFailure = steps.length === 0 && Boolean(plan.error) && !connectionOnly;
@@ -256,6 +258,7 @@ export default function PlanView({
   const handleRecheck = useCallback(async (targetKey = "", silent = false) => {
     if (busy || !connectionsReady || !needed.length || checkingRef.current || connectingRef.current) return;
     checkingRef.current = true;
+    setCheckingConnections(true);
     if (!silent) setConnectingTool(needed.find((tool) => tool.key === targetKey)?.name || "accounts");
     try {
       const recovered = [];
@@ -263,8 +266,14 @@ export default function PlanView({
         const account = await getToolConnection(tool.name, null, tool.provider, {
           exactProvider: Boolean(tool.provider),
         });
-        if (!account?.id || !hasRequiredGrant(tool, account)
+        if (!account?.id || !account.enabled
           || !isVerifiedConnection(await testPythonConnection(account.id))) continue;
+        // A successful probe can refresh the server's operation grants.
+        // Re-read that exact account before deciding it needs consent again.
+        const refreshed = await getToolConnection(tool.name, account.id, tool.provider, {
+          exactProvider: Boolean(tool.provider),
+        });
+        if (!refreshed?.enabled || !hasRequiredGrant(tool, refreshed)) continue;
         recovered.push({ name: tool.name, connectionId: account.id });
       }
       if (recovered.length) {
@@ -282,16 +291,26 @@ export default function PlanView({
       }));
     } finally {
       checkingRef.current = false;
+      setCheckingConnections(false);
       if (!silent) setConnectingTool(null);
     }
   }, [busy, connectionsReady, needed, onConnectionRecovered]);
 
   useEffect(() => {
+    if (!needed.length) checkedRequirementsRef.current = "";
     if (busy || !connectionsReady || !needed.length || !connectionsCanOpen) return undefined;
     // Consent may finish in another tab, browser or device. The plan checks
     // verified backend state while visible; it never infers consent from the
     // popup closing and never starts an external action automatically.
     const onFocus = () => { if (document.visibilityState === "visible") void handleRecheck("", true); };
+    const requirementsKey = JSON.stringify([
+      needed.map((tool) => [tool.key, tool.requiredPermissions]),
+      plan.connectionChecklist?.map((item) => [item.id, item.status]),
+    ]);
+    if (checkedRequirementsRef.current !== requirementsKey && !checkingRef.current && !connectingRef.current) {
+      checkedRequirementsRef.current = requirementsKey;
+      void handleRecheck("", true);
+    }
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onFocus);
     const timer = window.setInterval(onFocus, 5000);
@@ -300,7 +319,7 @@ export default function PlanView({
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onFocus);
     };
-  }, [busy, connectionsReady, needed.length, connectionsCanOpen, handleRecheck]);
+  }, [busy, connectionsReady, needed.length, connectionsCanOpen, handleRecheck, plan.connectionChecklist]);
 
   const onDragEnd = (res) => {
     if (!res.destination || res.source.index === res.destination.index) return;
@@ -508,7 +527,7 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         onReplaceTool={onReplaceTool}
         onSwitchConnection={handleSwitchConnection}
         replacements={CATALOG.filter((entry) => connections[entry.name]).map((entry) => entry.name)}
-        connectionEnabled={connectionsCanOpen}
+        connectionEnabled={connectionsCanOpen && !checkingConnections}
       />
 
       {backstageOnly.length > 0 && (
