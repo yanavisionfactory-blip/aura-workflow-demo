@@ -38,19 +38,8 @@ export default function SavedRunResults() {
   });
   return <WorkspaceShell onBack={() => navigate("/")} onHistoryOpen={() => navigate("/", { state: { openHistory: true } })}>
     <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 md:py-10">
-      {run && run.status !== "completed" && <section aria-label="Current run status" className="mb-6 rounded-2xl border border-amber-300/20 bg-amber-300/5 p-5 text-sm">
-        <h2 className="font-semibold">Current status: {run.status.replaceAll("_", " ")}</h2>
-        <button type="button" onClick={() => navigate("/", { state: { resumeRunId: run.id } })} className="mt-3 rounded-lg border border-primary/30 px-3 py-2 text-xs font-semibold text-primary">Open live workflow</button>
-        {run.blocker?.message && <p className="mt-2">{run.blocker.message}</p>}
-        {run.error && <p className="mt-2">{run.error}</p>}
-        {run.automation_state && <div className="mt-3 space-y-2 text-muted-foreground">
-          <p>Connection checks: {run.automation_state.status || "pending"}{run.automation_state.attempt ? ` · attempt ${run.automation_state.attempt}` : ""}</p>
-          {run.automation_state.message && <p>{run.automation_state.message}</p>}
-          {run.automation_state.next_attempt_at && <p>Next check: {run.automation_state.next_attempt_at}</p>}
-          {(run.automation_state.checks || []).map((check, index) => <p key={index}>{check.tool_slug || check.type}: {check.status}{check.connected_account ? ` · ${check.connected_account}` : ""}</p>)}
-        </div>}
-      </section>}
       {run ? <ResultsView results={savedRunResults(run)} activity={activity} prompt={run.prompt} backendRunId={run.id}
+        onOpenRun={() => navigate("/", { state: { resumeRunId: run.id } })}
         onNewWorkflow={() => navigate("/", { state: { newWorkflow: true } })}
         onStartWorkflow={(prompt) => {
           const next = savedRunActionLocation(prompt);
@@ -61,6 +50,16 @@ export default function SavedRunResults() {
           {error && <><p className="mt-3">Signed in as {user?.primaryEmailAddress?.emailAddress || "your current account"} · {workspace?.name}</p>
             <button type="button" onClick={() => setRetry((value) => value + 1)} className="mt-4 rounded-lg border border-primary/30 px-4 py-2 text-primary">Retry loading results</button></>}
         </section>}
+      {run && run.status !== "completed" && <details aria-label="Current run status" className="mx-auto max-w-3xl rounded-xl border border-white/10 p-4 text-xs text-muted-foreground">
+        <summary className="cursor-pointer font-medium">Run details</summary>
+        <div className="mt-3 space-y-2">
+          <p>Current status: {run.status.replaceAll("_", " ")}</p>
+          {run.blocker?.message && <p>{run.blocker.message}</p>}
+          {run.error && <p>{run.error}</p>}
+          {run.automation_state?.message && <p>{run.automation_state.message}</p>}
+          <button type="button" onClick={() => navigate("/", { state: { resumeRunId: run.id } })} className="rounded-lg border border-primary/30 px-3 py-2 font-semibold text-primary">Open live workflow</button>
+        </div>
+      </details>}
     </main>
   </WorkspaceShell>;
 }

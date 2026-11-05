@@ -1,23 +1,22 @@
-import { sheetRange } from "./googleSheetsResult.mjs";
-
-const writes = new Set(["sheets.append", "sheets.kpi.create", "sheets.campaign_report.create"]);
-const reads = new Set(["sheets.read", "sheets.workbook.get", "sheets.campaign_report.get"]);
-const completed = (entry) => entry.status === "completed" && entry.hasResponse;
+import { isSheetsRead, isSheetsWrite, sheetRange, sheetReceipt } from "./googleSheetsResult.mjs";
+const completed = (entry) => entry.status === "completed" && entry.hasResponse
+  && !entry.response?.error && !entry.response?.isError && !entry.response?.is_error && entry.response?.success !== false;
 const plural = (count, singular, multiple = `${singular}s`) => count === 1 ? singular : multiple;
 
 // Summarize saved provider receipts, never planned arguments or sample metrics.
 export function sheetWorkflowSummary(entries, primary) {
   if (primary.kind !== "spreadsheet") return null;
-  const matchingWrites = entries.filter((entry) => completed(entry) && writes.has(entry.operation)
+  entries = entries.map((entry) => ({ ...entry, hasResponse: completed(entry), response: sheetReceipt({ provider_result: entry.response }) }));
+  const matchingWrites = entries.filter((entry) => completed(entry) && isSheetsWrite(entry.operation)
     && entry.response?.spreadsheetId === primary.spreadsheetId);
   const write = matchingWrites.at(-1);
-  const firstWrite = entries.findIndex((entry) => writes.has(entry.operation));
+  const firstWrite = entries.findIndex((entry) => isSheetsWrite(entry.operation));
   const firstReport = entries.findIndex((entry) => completed(entry) && entry.operation === "report.compose");
   const preceding = entries.slice(0, firstReport >= 0 ? firstReport : firstWrite < 0 ? entries.length : firstWrite);
   const pages = [...new Map(preceding.filter((entry) => completed(entry) && entry.operation === "web.page.read")
     .map((entry) => [entry.response?.url || entry.inputs?.url || entry.id, entry])).values()];
   const sourceEntries = preceding
-    .filter((entry) => completed(entry) && reads.has(entry.operation));
+    .filter((entry) => completed(entry) && isSheetsRead(entry.operation));
   const tabs = [...new Map(sourceEntries.flatMap((entry) => {
     const tab = sheetRange(entry.response?.range)?.tab;
     if (!tab) return [];
@@ -26,7 +25,7 @@ export function sheetWorkflowSummary(entries, primary) {
   })).values()];
   const reports = entries.filter((entry) => completed(entry) && entry.operation === "report.compose"
     && typeof entry.response?.body === "string" && entry.response.body.trim());
-  const updated = write?.response?.updates;
+  const updated = write?.response?.updates || write?.response;
   const coordinates = updated?.updatedRange?.split("!").at(-1).match(/^\$?[A-Z]+\$?(\d+)(?::\$?[A-Z]+\$?(\d+))?$/i);
   const rows = Number.isInteger(updated?.updatedRows) && updated.updatedRows >= 0 ? updated.updatedRows
     : coordinates ? Number(coordinates[2] || coordinates[1]) - Number(coordinates[1]) + 1 : null;
@@ -49,12 +48,12 @@ export function sheetWorkflowSummary(entries, primary) {
   if (write) {
     if (rows !== null) metrics.push({ value: rows, label: `${plural(rows, "row")} saved` });
     actions.push({ key: "sheet-output", count: rows ?? undefined, title: rows === null ? "Saved to Google Sheets" : `${plural(rows, "row")} saved to Google Sheets`,
-      detail: [sheetRange(updated?.updatedRange)?.tab, primary.verified ? "Saved cells verified" : "Write receipt saved"].filter(Boolean).join(" · "),
-      icon: "sheet", actionId: "main", actionLabel: "View result" });
+      detail: [sheetRange(updated?.updatedRange)?.tab, primary.verified ? "Saved cells verified" : primary.readBack ? "Saved cells read back" : "Write receipt saved"].filter(Boolean).join(" · "),
+      icon: "sheet", actionId: "main", actionLabel: "View result", link: primary.link, linkLabel: "Open in Google Sheets" });
   }
   const sources = [pages.length ? `${pages.length} ${plural(pages.length, "public web page")}` : "",
     tabs.length ? `${tabs.length} ${plural(tabs.length, "source tab")}` : ""].filter(Boolean).join(" and ");
   return { metrics, actions,
     title: write ? reports.length ? "Report saved to Google Sheets" : "Results saved to Google Sheets" : undefined,
-    summary: write ? `${reports.length ? "ChatGPT prepared the report" : "The workflow saved its results"}${sources ? ` using ${sources}` : ""}. ${primary.verified ? "The saved Google Sheets cells were read back and verified." : "Open the result below to review the saved output."}` : undefined };
+    summary: write ? `${reports.length ? "AURA prepared the report" : "AURA saved its results"}${sources ? ` using ${sources}` : ""}. ${primary.verified ? "The saved Google Sheets cells were read back and verified." : primary.readBack ? "The saved cells were read back from Google Sheets." : "Open the result below to review the saved output."}` : undefined };
 }

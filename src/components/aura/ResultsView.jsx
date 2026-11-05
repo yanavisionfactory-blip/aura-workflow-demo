@@ -2,7 +2,7 @@ import RunSupportAccess from "./RunSupportAccess";
 import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
-import { Activity, AlertTriangle, ArrowRight, BarChart3, CalendarClock, Check, ExternalLink, FileDown, FileText, Plus, RefreshCw, Share2, Table2, Zap } from "lucide-react";
+import { Activity, ArrowRight, BarChart3, CalendarClock, Check, ChevronDown, ExternalLink, FileDown, Plus, RefreshCw, Share2, Zap } from "lucide-react";
 import AccessRequestModal from "./AccessRequestModal";
 import ScheduleModal from "./ScheduleModal";
 import CreatorApprovalList from "./CreatorApprovalList";
@@ -16,12 +16,12 @@ import { sheetWorkflowSummary } from "@/lib/workflowResultSummary.mjs";
 import { campaignRepeatPrompt } from "@/lib/runtimePlan.mjs";
 import { resultRevisionPrompt } from "@/lib/frameioResult.mjs";
 import ResultRevisionComposer from "./ResultRevisionComposer";
+import WorkflowOutcomeList from "./WorkflowOutcomeList";
 
-const smallButton = "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full border border-cyan-400/25 px-3 py-1.5 text-[11px] font-medium text-cyan-300 transition hover:bg-cyan-400/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-cyan-300";
 const outlineButton = "inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium transition hover:bg-white/10";
 const footerButton = "inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 hover:bg-white/5";
 
-export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, workflowPrompt, activity, prompt, interpretation, backendRunId, historyWorkflowId, scheduleTitle }) {
+export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, workflowPrompt, activity, prompt, interpretation, backendRunId, historyWorkflowId, scheduleTitle, onOpenRun }) {
   const isFailure = results.status === "failed" || results.status === "needs_attention";
   const [showModal, setShowModal] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -38,13 +38,14 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   const supportingOutputs = supportingToolOutputs(toolEntries, primaryResult, results.resultPresentation).flatMap((group) => group.entries);
   const hasMainOutput = Boolean((primaryResult.kind && primaryResult.kind !== "result") || primaryResult.provider || mainEntry?.hasResponse || results.breakdown || primaryResult.items?.length);
   const openTool = (id) => setToolView({ id });
-  const MainResultContainer = "section";
-  const MainResultHeading = "div";
   const nativeAudit = primaryResult.kind === "seo_audit";
   const approvedWeekly = primaryResult.kind === "weekly_review" && (primaryResult.packet?.version === 2 || primaryResult.packet?.provenance === "approved_export");
   const nativeResult = nativeAudit || ["weekly_review", "executive_review", "website_content", "marketing_tools"].includes(primaryResult.kind);
+  const summaryFirst = !nativeResult && primaryResult.kind !== "frameio_review";
+  const MainResultContainer = summaryFirst ? "details" : "section";
+  const MainResultHeading = summaryFirst ? "summary" : "div";
   const sheetSummary = useMemo(() => sheetWorkflowSummary(toolEntries, primaryResult), [toolEntries, primaryResult]);
-  const metrics = useMemo(() => isFailure ? [] : sheetSummary?.metrics.length ? sheetSummary.metrics : resultMetrics(results.metrics || [], activity || []), [results.metrics, activity, isFailure, sheetSummary]);
+  const metrics = useMemo(() => sheetSummary?.metrics.length ? sheetSummary.metrics : isFailure ? [] : resultMetrics(results.metrics || [], activity || []), [results.metrics, activity, isFailure, sheetSummary]);
   const receipts = useMemo(() => supportingReceipts(results, activity || [], primaryResult, results.resultPresentation, mainEntry?.id), [activity, primaryResult, results, mainEntry]);
   const actions = sheetSummary?.actions.length ? [...sheetSummary.actions] : [
     ...(hasMainOutput ? [{ key: "primary", title: mainEntry?.action || primaryResult.title || "Workflow output saved", detail: mainEntry?.tool || toolResultName(primaryResult.provider), actionId: "main", actionLabel: "View result", icon: "report" }] : []),
@@ -53,6 +54,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   for (const entry of toolEntries.filter((item) => ["failed", "blocked", "provider_error"].includes(item.status))) {
     if (!actions.some((action) => action.actionId === entry.id)) actions.push({ key: `issue-${entry.id}`, title: entry.action, detail: `${entry.tool} · Needs attention`, actionId: entry.id, actionLabel: "View issue", issue: true });
   }
+  if (isFailure && !actions.some((action) => action.issue)) actions.push({ key: "final-review", title: "Final review needs attention", detail: "Your completed work is saved. AURA has not verified the full requested outcome.", issue: true, resume: Boolean(onOpenRun), actionId: onOpenRun ? null : "activity", actionLabel: "View issue" });
   const creatorsOutcome = (results.outcomes || []).find((outcome) => outcome.type === "creators" && outcome.items?.length > 0);
   const nextSteps = primaryResult.kind === "website_content" ? [
     "Review the changes to each page.",
@@ -87,8 +89,8 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   if (primaryResult.kind === "marketing_tools") return <div className="mx-auto w-full max-w-3xl pb-8"><ResultPreview result={primaryResult} results={results} activity={activity} backendRunId={backendRunId} /></div>;
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`mx-auto w-full pb-8 ${["website_content", "spreadsheet", "frameio_review"].includes(primaryResult.kind) ? "max-w-6xl" : "max-w-5xl"}`}>
-      {!nativeResult && <ResultsHeading title={(!isFailure && sheetSummary?.title) || primaryResult.completionTitle || results.title || "Workflow complete"} summary={(!isFailure && sheetSummary?.summary) || primaryResult.completionSummary || results.summary} isFailure={isFailure} />}
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`mx-auto w-full pb-8 ${summaryFirst ? "max-w-3xl" : ["website_content", "spreadsheet", "frameio_review"].includes(primaryResult.kind) ? "max-w-6xl" : "max-w-5xl"}`}>
+      {!nativeResult && <ResultsHeading centered={summaryFirst} title={sheetSummary?.title ? `${sheetSummary.title}${isFailure ? " — review needed" : ""}` : primaryResult.completionTitle || results.title || "Workflow complete"} summary={sheetSummary?.summary || primaryResult.completionSummary || results.summary} isFailure={isFailure} />}
       {!nativeResult && <ResultsMetrics metrics={metrics} compact />}
 
 
@@ -100,9 +102,11 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
       {nativeResult && !nativeAudit && primaryResult.kind !== "website_content" && <ResultsByTool entries={toolEntries} onOpen={openTool} />}
 
 
-      {!nativeResult && <MainResultContainer aria-label="Main workflow result" className="group mb-7">
-        <MainResultHeading className="mb-4 flex flex-wrap items-center gap-2 text-sm font-semibold"><BarChart3 className="h-4 w-4 text-violet-400" />Your result<span className="text-[11px] font-normal text-muted-foreground">{mainEntry?.tool || toolResultName(primaryResult.provider)} workspace</span></MainResultHeading>
-        <ResultsByTool entries={toolEntries} selectedTool={outputEntry?.tool || toolResultName(displayedResult.provider)} onOpen={openTool} />
+      {summaryFirst && <><WorkflowOutcomeList actions={actions} onOpen={openTool} onOpenRun={onOpenRun} /><ResultsByTool entries={toolEntries} selectedTool={outputEntry?.tool || displayedResult.provider} onOpen={openTool} compact /></>}
+
+      {!nativeResult && <MainResultContainer aria-label="Main workflow result" className="group mb-6">
+        <MainResultHeading className="mb-4 flex cursor-pointer list-none flex-wrap items-center gap-2 text-sm font-semibold [&::-webkit-details-marker]:hidden"><BarChart3 className="h-4 w-4 text-violet-400" />Results<span className="text-[11px] font-normal text-muted-foreground">— the actual output</span>{summaryFirst && <ChevronDown className="h-3.5 w-3.5 text-muted-foreground group-open:rotate-180" />}</MainResultHeading>
+        {!summaryFirst && <ResultsByTool entries={toolEntries} selectedTool={outputEntry?.tool || toolResultName(displayedResult.provider)} onOpen={openTool} />}
         <div className="mt-4 space-y-4">
 
       {visualChoices.length > 0 && <label className="mb-5 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
@@ -126,34 +130,17 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
         </ToolResultFrame> : <ResultPreview result={primaryResult} results={results} />}
           {artifactDelivery && <p className="flex flex-wrap justify-between gap-2 text-xs text-muted-foreground"><span>Presentation · {primaryResult.artifact?.title || primaryResult.title}</span><span className="text-emerald-400">{artifactDelivery.artifactDelivered ? "Attached and delivered" : "Created in Canva"}</span></p>}
         </div>
+        {summaryFirst && supportingOutputs.length > 0 && <details className="mt-4 rounded-xl border border-white/10 p-4"><summary className="cursor-pointer text-xs font-medium text-muted-foreground">Research and preparation</summary><div className="mt-4"><ToolOutputCards entries={supportingOutputs} activity={activity} backendRunId={backendRunId} onOpen={openTool} /></div></details>}
         <ResultRevisionComposer onSubmit={onStartWorkflow ? (instruction) => onStartWorkflow(resultRevisionPrompt({ instruction, result: displayedResult, tool: outputEntry?.tool, entry: outputEntry, runId: backendRunId })) : null}
           placeholder={primaryResult.kind === "frameio_review" ? "e.g. Refresh comments and make the revision checklist more concise…" : "Describe what to change in this tool’s result…"} />
       </MainResultContainer>}
 
-      {supportingOutputs.length > 0 && <section aria-label="Supporting tool outputs" className="mb-7 space-y-4">
+      {!summaryFirst && supportingOutputs.length > 0 && <section aria-label="Supporting tool outputs" className="mb-7 space-y-4">
         <h2 className="text-sm font-semibold">More outputs from this workflow</h2>
         <ToolOutputCards entries={supportingOutputs} activity={activity} backendRunId={backendRunId} onOpen={openTool} />
       </section>}
 
-      {!nativeResult && actions.length > 0 && <details aria-label="Supporting workflow actions" className="mb-6 rounded-xl border border-white/10 p-4">
-        <summary className="mb-3 cursor-pointer text-sm font-semibold">What happened · {actions.length} saved actions</summary>
-        <div className="space-y-2">
-          {actions.map((action) => {
-            const Icon = action.issue ? AlertTriangle : action.icon === "sources" ? BarChart3 : action.icon === "sheet" ? Table2 : FileText;
-            return <div key={action.key} className={`flex flex-wrap items-center gap-3 rounded-xl border px-3 py-3 sm:flex-nowrap ${action.issue ? "border-amber-400/30 bg-amber-400/[0.04]" : "border-white/10 bg-[#0c121e]/65"}`}>
-              <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-xl ${action.issue ? "bg-amber-400/10 text-amber-400" : "bg-violet-400/10 text-violet-400"}`}><Icon className="h-4 w-4" /></span>
-              <div className="min-w-0 flex-1"><p className="text-sm font-medium">{action.count !== undefined && <strong className="mr-1.5 text-lg font-bold">{action.count}</strong>}{action.title}</p>
-                <p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">{action.detail}</p>
-                {action.preview?.length > 0 && <div className="mt-2 space-y-1 text-xs text-muted-foreground">{action.preview.map((audience, index) => <p key={index}>{audience.name}{audience.contacts !== null && ` · ${audience.contacts.toLocaleString("en-US")} contacts`}</p>)}</div>}
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {action.actionId && <button type="button" aria-label={`${action.actionLabel}: ${action.title}`} onClick={() => openTool(action.actionId)} className={`${smallButton} ${action.issue ? "border-amber-400/30 text-amber-300 hover:bg-amber-400/10" : ""}`}>{action.actionLabel}</button>}
-                {action.link && <a href={action.link} target="_blank" rel="noopener noreferrer" className={smallButton}><ExternalLink className="h-3 w-3" />{action.linkLabel || `Open ${action.tool}`}</a>}
-              </div>
-            </div>;
-          })}
-        </div>
-      </details>}
+      {!nativeResult && !summaryFirst && <WorkflowOutcomeList actions={actions} onOpen={openTool} onOpenRun={onOpenRun} />}
 
       {creatorsOutcome && <CreatorApprovalList items={creatorsOutcome.items} />}
       {!isFailure && (nextSteps.length > 0 || results.suggestionsLoading) && <section className="mb-6" aria-live="polite">
@@ -165,7 +152,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
       <section className="rounded-2xl border border-violet-400/15 bg-violet-400/[0.035] p-4">
         <h3 className="text-sm font-semibold">What would you like to do next?</h3>
         <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{approvedWeekly ? "This review uses fixed reporting dates and individually labelled source inputs. Start a new review with fresh inputs for the next week." : isFailure ? "Your completed work is saved. Try again or start a new workflow." : "Run it again, automate it for later, or start something new."}</p>
-        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+        <div className={`mt-3 grid gap-2 ${!isFailure && !approvedWeekly && backendRunId ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
           <button type="button" onClick={() => { if (approvedWeekly) { setSearchParams({ weekly: "1" }); onNewWorkflow(); } else onStartWorkflow(campaignRepeatPrompt(prompt, activity) || prompt); }} className={outlineButton}><RefreshCw className="h-4 w-4" />{approvedWeekly ? "New review with fresh exports" : "Run again"}</button>
           {!isFailure && !approvedWeekly && backendRunId && <button type="button" onClick={() => setShowSchedule(true)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-violet-500 to-sky-400 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_5px_20px_rgba(139,92,246,0.15)]"><CalendarClock className="h-4 w-4" />Schedule</button>}
           <button type="button" onClick={onNewWorkflow} className={outlineButton}><Plus className="h-4 w-4" />New workflow</button>
