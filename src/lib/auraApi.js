@@ -767,6 +767,11 @@ export async function reviewPythonToolOutput(runId, stepId, editedOutputs = null
   });
 }
 
+export async function resumePythonReviewedPlan(runId) {
+  await ensureWorkspace();
+  return request(`/v1/runs/${runId}/resume-reviewed-plan`, { method: "POST" });
+}
+
 export async function decidePythonApproval(approvalId, approved, editedArguments = null) {
   await ensureWorkspace();
   return request(`/v1/approvals/${approvalId}`, {

@@ -3,11 +3,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import func, select
 
 from app import main, orchestrator
 from app.models import (
     Approval,
     ApprovalSnapshot,
+    AuditEvent,
     CapabilityManifest,
     PlanVersion,
     RunStatus,
@@ -153,6 +155,133 @@ async def test_saved_text_request_generates_once_then_reviews_output_before_any_
         assert view["steps"][1]["approval_preview"]["status"] == "ready", view
         assert view["steps"][1]["preparation_only"] is False
     assert execute.await_count == 1  # external write still requires review
+
+
+@pytest.mark.parametrize("had_result_reviews", [False, True])
+async def test_legacy_start_resumes_once_then_reviews_each_completed_tool(text_run, monkeypatch, had_result_reviews):
+    execute = AsyncMock(side_effect=[
+        {"ret": {"content": [{"type": "text", "text": "Saved dashboard"}]}},
+        {"id": "record", "title": "Example"},
+    ])
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", execute)
+    monkeypatch.setattr(orchestrator, "critique_step", AsyncMock(return_value=CriticDecision(action="accept")))
+    monkeypatch.setattr(orchestrator, "check_provider_outcome", AsyncMock(return_value={"status": "verified"}))
+    dispatch = AsyncMock()
+    monkeypatch.setattr(main, "dispatch_pending", dispatch)
+    actor = main.TenantContext("w", "alice", "owner")
+    async with text_run() as session:
+        run = await session.get(WorkflowRun, "run")
+        if not had_result_reviews:
+            run.execution_context = {key: value for key, value in run.execution_context.items() if key != REVIEW_KEY}
+            await session.commit()
+        original_plan = deepcopy(run.plan)
+    # Reproduce the screenshot: an old Start stops at 0 completed actions.
+    await orchestrator._execute_run("run", "w")
+    execute.assert_not_awaited()
+    async with text_run() as session:
+        run = await session.get(WorkflowRun, "run")
+        assert run.status == RunStatus.awaiting_approval
+        assert (await main._run_view(session, run))["steps"][0]["approval_preview"]["status"] == "ready"
+        assert (await main.resume_reviewed_plan("run", actor, session))["status"] == "running"
+        assert (await main.resume_reviewed_plan("run", actor, session))["already_resumed"]
+        assert run.plan == original_plan
+        assert await session.scalar(select(func.count()).select_from(ApprovalSnapshot)) == 1
+        assert (await session.get(Approval, "approval")).status == "pending"
+        assert (await session.get(Approval, "save-approval")).status == "pending"
+        assert await session.scalar(select(func.count()).select_from(AuditEvent).where(
+            AuditEvent.event_type == "run.reviewed_plan_execution_resumed")) == 1
+    dispatch.assert_awaited_once_with("w", run_id="run")
+    await orchestrator._execute_run("run", "w")
+    assert execute.await_count == 1
+    async with text_run() as session:
+        run = await session.get(WorkflowRun, "run")
+        assert (await main._run_view(session, run))["tool_output_review"]["step_id"] == "step"
+        # A refresh or delayed migration request cannot release this result.
+        assert (await main.resume_reviewed_plan("run", actor, session))["already_resumed"]
+        assert run.status == RunStatus.awaiting_approval
+        assert dispatch.await_count == 1
+        await main.review_tool_output("run", ToolOutputReviewDecision(step_id="step"), actor, session)
+    await orchestrator._execute_run("run", "w")
+    assert execute.await_count == 2
+    async with text_run() as session:
+        run = await session.get(WorkflowRun, "run")
+        assert (await main._run_view(session, run))["tool_output_review"]["step_id"] == "save"
+        assert run.plan == original_plan
+        await main.review_tool_output("run", ToolOutputReviewDecision(step_id="save"), actor, session)
+    await orchestrator._execute_run("run", "w")
+    assert execute.await_count == 2
+    async with text_run() as session:
+        assert (await session.get(WorkflowRun, "run")).status == RunStatus.completed
+
+
+@pytest.mark.parametrize("had_checkpoint", [False, True])
+async def test_migrating_a_saved_result_preserves_it_and_waits_for_review(text_run, monkeypatch, had_checkpoint):
+    execute = AsyncMock(return_value={"ret": {"content": [{"type": "text", "text": "Existing result"}]}})
+    monkeypatch.setattr(orchestrator.ProviderExecutor, "execute", execute)
+    monkeypatch.setattr(orchestrator, "critique_step", AsyncMock(return_value=CriticDecision(action="accept")))
+    monkeypatch.setattr(orchestrator, "check_provider_outcome", AsyncMock(return_value={"status": "verified"}))
+    dispatch = AsyncMock()
+    monkeypatch.setattr(main, "dispatch_pending", dispatch)
+    actor = main.TenantContext("w", "alice", "owner")
+    async with text_run() as session:
+        if not had_checkpoint:
+            run = await session.get(WorkflowRun, "run")
+            run.execution_context = {key: value for key, value in run.execution_context.items() if key != REVIEW_KEY}
+            await session.commit()
+    await orchestrator._execute_run("run", "w")
+    async with text_run() as session:
+        await main.decide_approval("approval", ApprovalDecision(approved=True), actor, session)
+    await orchestrator._execute_run("run", "w")
+    dispatch.reset_mock()
+    async with text_run() as session:
+        run = await session.get(WorkflowRun, "run")
+        receipt = deepcopy((await session.get(RunStep, "step")).output)
+        assert (await main.resume_reviewed_plan("run", actor, session))["status"] == "awaiting_approval"
+        assert (await main._run_view(session, run))["tool_output_review"]["step_id"] == "step"
+        assert (await session.get(RunStep, "step")).output == receipt
+        assert (await session.get(RunStep, "save")).status == StepStatus.awaiting_approval
+    dispatch.assert_not_awaited()
+    await orchestrator._execute_run("run", "w")
+    assert execute.await_count == 1
+
+
+@pytest.mark.parametrize("change", [
+    "wrong_tenant", "unapproved", "cancelled", "unattended", "plan_changed", "version_changed",
+    "permissions_changed", "pending_attempt", "pending_receipt", "needs_reapproval",
+])
+async def test_legacy_resume_cannot_expand_authority_or_replay_an_uncertain_action(text_run, monkeypatch, change):
+    dispatch = AsyncMock()
+    monkeypatch.setattr(main, "dispatch_pending", dispatch)
+    await orchestrator._execute_run("run", "w")
+    actor = main.TenantContext("other" if change == "wrong_tenant" else "w", "alice", "owner")
+    async with text_run() as session:
+        run = await session.get(WorkflowRun, "run")
+        if change == "unapproved":
+            run.plan_approved = False
+        elif change == "cancelled":
+            run.cancellation_requested = True
+        elif change == "unattended":
+            run.execution_context = {**run.execution_context, "execution_mode": "unattended"}
+        elif change == "plan_changed":
+            run.plan = {**run.plan, "interpretation": "A different plan"}
+        elif change == "version_changed":
+            (await session.get(PlanVersion, "version")).plan_hash = "different"
+        elif change == "permissions_changed":
+            (await session.get(ApprovalSnapshot, "snapshot")).permission_snapshot = {}
+        elif change == "pending_attempt":
+            session.add(StepAttempt(workspace_id="w", run_id="run", step_id="step", attempt_number=1,
+                                    status="running", tool_slug="anthropic", operation="anthropic.chat"))
+        elif change == "pending_receipt":
+            (await session.get(RunStep, "step")).output = {"provider_result": {"id": "already-sent"}}
+        elif change == "needs_reapproval":
+            transition_run(run, RunStatus.waiting_for_action, reason="plan_changed", dispatch=None,
+                           blocker={"code": "plan_approval_required"})
+        await session.commit()
+        with pytest.raises(HTTPException) as rejected:
+            await main.resume_reviewed_plan("run", actor, session)
+        assert rejected.value.status_code == (404 if change == "wrong_tenant" else 409)
+        assert not run.execution_context.get(REVIEW_KEY, {}).get("execute_reviewed_plan")
+    dispatch.assert_not_awaited()
 
 
 async def start_with_result_review(factory, monkeypatch):
