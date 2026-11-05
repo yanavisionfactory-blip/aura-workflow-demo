@@ -3,6 +3,21 @@
 import re
 
 
+def has_saved_creation(arguments, output):
+    """Identify a receipt that can be rechecked, without accepting or replaying it."""
+    if not isinstance(output, dict):
+        return False
+    receipt = output.get("provider_result")
+    resolved = output.get("resolved_arguments", arguments)
+    if not isinstance(receipt, dict) or not isinstance(resolved, dict):
+        return False
+    try:
+        creation_check(resolved, receipt)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 def creation_check(arguments, receipt):
     from .outcome_checks import OutcomeCheck
 
