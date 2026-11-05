@@ -442,6 +442,8 @@ async def create_llm_plan(
         "Keep those inputs visibly labeled synthetic while executing requested Sheets and Canva actions live. "
         "In Sheets, put actual formulas only in calculated cells. Formula descriptions, source labels and notes "
         "must be literal text (write 'spend divided by purchases', not '=spend/purchases'). "
+        "When rows is a JSON-encoded string, escape all quotes inside formulas; validate the complete JSON "
+        "array of row arrays before returning it. Actual row arrays can be serialized by AURA. "
         "For bounded existing-cell repairs prefer google-sheets.update-multiple-rows when available, "
         "using its exact range, numeric worksheetId and JSON array-of-arrays rows schema. "
         "For populated Canva social or indoor-screen creatives use the same operation "

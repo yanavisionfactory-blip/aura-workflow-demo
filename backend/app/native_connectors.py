@@ -831,6 +831,13 @@ def validate_module_arguments(manifest: dict[str, Any], operation: str, argument
     if not module:
         raise NativeConnectorError(f"Module {operation!r} is not declared")
     _validate_value(module.get("input_schema", {"type": "object"}), arguments, operation)
+    if operation in {"google-sheets.add-multiple-rows", "google-sheets.update-multiple-rows"}:
+        from .sheet_quality import validate_row_payload
+
+        try:
+            validate_row_payload(operation, arguments)
+        except ValueError as exc:
+            raise NativeConnectorError(str(exc)) from exc
     if operation == "canva.presentation.create":
         from .presentation_content import validate_presentation_layout
 
@@ -1061,6 +1068,13 @@ def normalize_planned_module_arguments(
     manifest: dict[str, Any], operation: str, arguments: dict[str, Any]
 ) -> dict[str, Any]:
     """Fit safe generated prose to connector limits before review and approval."""
+    if operation in {"google-sheets.add-multiple-rows", "google-sheets.update-multiple-rows"}:
+        module = next((item for item in manifest.get("capabilities", [])
+                       if item.get("name") == operation), {})
+        schema = module.get("input_schema", {}).get("properties", {}).get("rows", {})
+        if schema.get("type") == "string" and isinstance(arguments.get("rows"), list):
+            # Encode structured model output once, before the reviewed plan is hashed.
+            arguments = {**arguments, "rows": json.dumps(arguments["rows"], ensure_ascii=False)}
     if operation == "gmail.list":
         # Models sometimes attach Gmail GET response selectors to the list
         # request. List returns message IDs; it cannot accept these selectors.
