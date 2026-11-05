@@ -5926,6 +5926,27 @@ def _run_blocker(
                 "action": "retry_step", "retryable": attempts < 3,
                 "tool_slug": failed_backup.tool_slug, "step_id": failed_backup.id,
             }
+    if (run.status in {RunStatus.waiting_for_action, RunStatus.failed}
+            and run.plan_approved
+            and (not stored or stored.get("action") in {"inspect_run", "recheck_saved_result"})):
+        from .sheets_outcomes import has_saved_creation
+
+        saved_sheet = next((step for step in steps
+            if step.status in {StepStatus.failed, StepStatus.running}
+            and step.tool_slug == "google-sheets"
+            and step.operation == "google-sheets.new-spreadsheet"
+            and has_saved_creation(step.arguments, step.output)), None)
+        if saved_sheet:
+            # Automatic recovery may already have handed off this older run.
+            # The resume endpoint retains the receipt and rechecks the existing
+            # workbook through approved reads; it must not repeat creation.
+            return {
+                "code": "recorded_result_needs_review", "kind": "operator_action",
+                "message": "Google Sheets returned a workbook receipt. Recheck the saved "
+                    "workbook to continue without creating it again.",
+                "action": "recheck_saved_result", "retryable": True,
+                "tool_slug": saved_sheet.tool_slug, "step_id": saved_sheet.id,
+            }
     if (run.status in {RunStatus.waiting_for_action, RunStatus.failed, RunStatus.blocked}
             and run.plan_approved
             and (not stored or stored.get("action") in {"inspect_run", "recheck_saved_result"})):
