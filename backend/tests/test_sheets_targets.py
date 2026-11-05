@@ -208,6 +208,10 @@ def test_saved_full_metadata_resolves_reviewed_worksheet_collection_paths(tab_id
     assert resolve_value("{{steps.read_book_meta.worksheets[0].sheetId}}", context) == tab_id
     assert resolve_value("{{steps.read_book_meta.ret.worksheets[1].title}}", context) == "Sources"
     assert resolve_value("{{steps.read_book_meta.worksheets[1].sheetName}}", context) == "Sources"
+    # A saved verification step can retain the full-metadata properties envelope
+    # while addressing the compatibility worksheets collection.
+    assert resolve_value("{{steps.read_book_meta.worksheets[0].properties.title}}", context) == "Dashboard"
+    assert resolve_value("{{steps.read_book_meta.ret.worksheets[1].properties.sheetId}}", context) == 51
     assert "worksheetId" not in value  # No automatic selection among multiple tabs.
     assert value["provider_result"] is receipt and receipt == original
 

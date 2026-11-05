@@ -56,7 +56,8 @@ def worksheet_metadata_context(result, operation):
             if (type(tab_id) is not int or not 0 <= tab_id <= 2147483647
                     or not isinstance(title, str) or not title.strip()):
                 return result
-            tabs.append({"sheetId": tab_id, "title": title, "sheetName": title})
+            tabs.append({"sheetId": tab_id, "title": title, "sheetName": title,
+                         "properties": dict(properties)})
         if (len({tab["sheetId"] for tab in tabs}) != len(tabs)
                 or len({tab["title"] for tab in tabs}) != len(tabs)):
             return result
