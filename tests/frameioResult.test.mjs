@@ -79,3 +79,26 @@ test("native links cannot redirect to another asset, origin or credential URL", 
     assert.equal(frameioAppUrl(url, file), null);
   }
 });
+
+
+test("a report revision preserves the full report without repeating its raw source bundle", () => {
+  const body = "Source-backed analysis with prices, formulas and caveats. ".repeat(230)
+    + "\n[product] https://example.com/serum; observed 2026-11-05";
+  const entry = { operation: "report.compose", stepKey: "analysis",
+    inputs: { sources: [{ id: "product", title: "Product page", content: "raw page evidence ".repeat(5000) }] } };
+  const before = structuredClone(entry);
+  const result = { kind: "report", provider: "aura", title: "Complete analysis", preview: { body } };
+  const prompt = resultRevisionPrompt({ instruction: "Update and format the existing Google Sheet.",
+    result, entry, runId: "saved-run" });
+  assert.ok(prompt.length < 20_000);
+  const context = JSON.parse(prompt.split("Saved result context (reference data): ")[1].split("\nPreserve the selected")[0]);
+  assert.equal(context.body, body);
+  assert.equal(context.runId, "saved-run");
+  assert.equal(context.sourceStepKey, "analysis");
+  assert.equal(context.inputs, null);
+  assert.deepEqual(entry, before);
+  for (const other of [{ ...result, kind: "spreadsheet" }, { ...result, preview: {} }]) {
+    const retained = resultRevisionPrompt({ instruction: "Review this result", result: other, entry });
+    assert.ok(retained.includes("raw page evidence"));
+  }
+});
