@@ -5915,6 +5915,17 @@ def _run_blocker(
     stored = (run.execution_context or {}).get("__aura_blocker__") or (run.result or {}).get(
         "blocker"
     )
+    if (run.status in {RunStatus.waiting_for_action, RunStatus.failed, RunStatus.blocked}
+            and (not stored or stored.get("action") == "inspect_run")):
+        from .google_ads_errors import public_message
+
+        ads_failure = next((step for step in steps
+            if step.status == StepStatus.failed and step.tool_slug == "google-ads"
+            and public_message(step.error)), None)
+        if ads_failure:
+            return {**(stored or {}), "code": "no_safe_recovery", "kind": "operator_action",
+                    "message": public_message(ads_failure.error), "action": "inspect_run",
+                    "retryable": False, "step_id": ads_failure.id, "tool_slug": "google-ads"}
     if not stored or stored.get("action") == "inspect_run":
         failed_backup = next((step for step in steps if _failed_claude_text_backup(run, step)), None)
         if failed_backup:

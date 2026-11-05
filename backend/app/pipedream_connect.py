@@ -81,7 +81,7 @@ class PipedreamConnectError(RuntimeError):
         super().__init__(message)
 
 
-def _check_action_result(result: dict[str, Any]) -> None:
+def _check_action_result(result: dict[str, Any], *, provider: str = "") -> None:
     """HTTP success only confirms the broker ran the action, not that it succeeded."""
     errors = [result["error"]] if result.get("error") else []
     observations = result.get("os")
@@ -137,6 +137,18 @@ def _check_action_result(result: dict[str, Any]) -> None:
             "credit_balance_exhausted: The connected app has insufficient API credits.",
             retryable=False, status_code=status or 400,
             upstream_code="credit_balance_exhausted",
+        )
+    if provider == "google-ads":
+        from .google_ads_errors import diagnose, message
+
+        code, ads_status = diagnose(errors)
+        raise PipedreamConnectError(
+            f"[google_ads:{code}] {message(code)}",
+            retryable=(status or ads_status) in _RETRYABLE_STATUS,
+            status_code=status or ads_status, upstream_code=f"google_ads:{code}",
+            # An error wrapped inside an action is not proof that an earlier
+            # provider call did not mutate anything. Preserve write uncertainty.
+            effect_uncertain=True,
         )
     raise PipedreamConnectError(
         "The connected app rejected this action's inputs. Review the target and values."
@@ -960,7 +972,7 @@ class PipedreamClient:
         )
         if not isinstance(result, dict):
             raise PipedreamConnectError("The connector action returned an invalid response")
-        _check_action_result(result)
+        _check_action_result(result, provider=provider)
         return result
 
     async def delete_account(self, account_id: str) -> None:

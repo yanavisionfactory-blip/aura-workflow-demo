@@ -309,6 +309,11 @@ def _provider_rejection_detail(exc: Exception) -> str | None:
 
 
 def _friendly_execution_error(error: str | None) -> str:
+    from .google_ads_errors import public_message
+
+    ads_error = public_message(error)
+    if ads_error:
+        return ads_error
     detail = (error or "").lower()
     if "public web search returned no usable sources" in detail:
         return "AURA's web search found no usable sources. Simplify the search or use the supplied website URLs. Missing research is not zero performance."

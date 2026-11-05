@@ -29,6 +29,16 @@ class Failure:
 def classify_failure(exc: Exception, *, read: bool) -> Failure:
     response = getattr(exc, "response", None)
     status = getattr(exc, "status_code", None) or getattr(response, "status_code", None)
+    code = getattr(exc, "upstream_code", "") or ""
+    if code.startswith("google_ads:"):
+        from .google_ads_errors import AUTH_CODES, CONFIG_CODES
+
+        if not read and getattr(exc, "effect_uncertain", False):
+            return Failure("uncertain_write", False)
+        if code.removeprefix("google_ads:") in CONFIG_CODES:
+            return Failure("connector_configuration", False)
+        if code.removeprefix("google_ads:") in AUTH_CODES:
+            return Failure("authorization_required", False)
     if getattr(exc, "upstream_code", None) == "credit_balance_exhausted":
         return Failure("budget_exhausted", False)
     if status in (401, 403):

@@ -74,6 +74,21 @@ async def test_accounts_are_discovered_by_oauth_and_managers_are_not_ad_destinat
     assert "google_ads_account" not in tool.config
 
 
+@pytest.mark.parametrize("message,expected", [
+    ("[google_ads:DEVELOPER_TOKEN_INVALID] PRIVATE", "signing in again will not fix"),
+    ("[google_ads:OAUTH_TOKEN_REVOKED] PRIVATE", "Reauthorize the same Google Ads account"),
+    ("PRIVATE", "inspect the provider error before reconnecting"),
+])
+async def test_discovery_does_not_prescribe_reconnect_for_every_error(account_runtime, message, expected):
+    session, tool, _, client = account_runtime
+    client.run_action.side_effect = pipedream_connect.PipedreamConnectError(message)
+    with pytest.raises(ads.AccountDiscoveryError) as raised:
+        await ads.discover_accounts(session, tool)
+    assert expected in str(raised.value)
+    assert "PRIVATE" not in str(raised.value)
+    assert tool.enabled
+
+
 async def test_selected_account_is_verified_and_saved_only_in_its_workspace(account_runtime):
     session, tool, _, client = account_runtime
     payload = ads.AccountSelection(login_customer_id=ROOT, customer_id=CUSTOMER)
