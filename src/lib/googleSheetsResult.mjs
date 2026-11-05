@@ -86,7 +86,7 @@ function grids(receipt, output) {
   }).filter(Boolean));
 }
 
-function coversRange(grid, target) {
+function matchesRange(grid, target, allowPartial = false) {
   const source = sheetRange(grid.range), destination = sheetRange(target);
   if (!source || !destination || source.tab !== destination.tab) return false;
   const end = (range, origin, values = []) => {
@@ -95,7 +95,10 @@ function coversRange(grid, target) {
       column: origin.column + Math.max(1, ...values.map((row) => row.length)) - 1 };
   };
   const lastSource = end(grid.range, source, grid.values), lastTarget = end(target, destination);
-  return lastSource && lastTarget && source.row <= destination.row && source.column <= destination.column
+  if (!lastSource || !lastTarget) return false;
+  if (allowPartial) return source.row <= lastTarget.row && source.column <= lastTarget.column
+    && lastSource.row >= destination.row && lastSource.column >= destination.column;
+  return source.row <= destination.row && source.column <= destination.column
     && lastSource.row >= lastTarget.row && lastSource.column >= lastTarget.column;
 }
 
@@ -112,7 +115,7 @@ export function googleSheetsResult(outputs, context = {}, explicitPrimary = null
   const targetRange = writtenRange(write);
   const read = [...matching].reverse().find((output) => isRead(output.operation)
     && spreadsheetId(output) === id && (!write || matching.indexOf(output) > matching.indexOf(write))
-    && (!targetRange || grids(resultOf(output), output).some((grid) => coversRange(grid, targetRange))));
+    && (!targetRange || grids(resultOf(output), output).some((grid) => matchesRange(grid, targetRange, true))));
   const checked = write?.outcome_check?.status === "verified";
   // Display actual provider reads, never the requested write values as proof.
   const receipt = read ? resultOf(read) : checked ? resultOf({ provider_result: write.outcome_check.observed }) : {};
@@ -135,5 +138,6 @@ export function googleSheetsResult(outputs, context = {}, explicitPrimary = null
     title: resultOf(named).properties?.title || resultOf(named).title || origin?.tab || context.title || "Google Sheets result",
     sourceStepKey: source?.step_key, sourceStepId: source?.step_id, sourceOperation: source?.operation,
     spreadsheetId: id, range, ranges, headers, sheetId: gid, verified: Boolean(checked), readBack: Boolean(read && ranges.length),
+    partialReadBack: Boolean(read && targetRange && !ranges.some((grid) => matchesRange(grid, targetRange))),
     ...sheetAppLinks(id, range, gid), linkLabel: "Open in Google Sheets", downloadUrl: null };
 }

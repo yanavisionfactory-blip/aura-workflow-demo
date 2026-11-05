@@ -107,6 +107,7 @@ test("broker read-rows displays evaluated cells from the same written workbook a
   const result = googleSheetsResult(outputs);
   assert.equal(result.sourceStepKey, "verify");
   assert.equal(result.readBack, true);
+  assert.equal(result.partialReadBack, false);
   assert.equal(result.verified, false);
   assert.equal(result.spreadsheetId, "broker-workbook");
   assert.equal(result.sheetId, 173);
@@ -115,10 +116,10 @@ test("broker read-rows displays evaluated cells from the same written workbook a
   assert.deepEqual(outputs, before);
 });
 
-test("broker readback rejects stale, other-workbook, other-tab, incomplete-range and header-object responses", () => {
+test("broker readback rejects stale, other-workbook, other-tab, unrelated-range and header-object responses", () => {
   assert.deepEqual(googleSheetsResult([brokerRead(), brokerWrite()]).ranges, []);
-  for (const args of [{ spreadsheetId: "other-workbook" }, { sheetName: "Other" }, { range: "A1:F8" },
-    { range: "A2:G8" }, { range: "Other!A1:G8" }, { hasHeaders: true }, { hasHeaders: undefined }]) {
+  for (const args of [{ spreadsheetId: "other-workbook" }, { sheetName: "Other" }, { range: "H1:J8" },
+    { range: "A9:G20" }, { range: "Other!A1:G8" }, { hasHeaders: true }, { hasHeaders: undefined }]) {
     const read = brokerRead();
     read.resolved_arguments = { ...read.resolved_arguments, ...args };
     assert.deepEqual(googleSheetsResult([brokerWrite(), read]).ranges, [], JSON.stringify(args));
@@ -195,4 +196,16 @@ test("broker workbook creations keep their provider title and never invent cell 
   assert.equal(result.title, "September KPI dashboard");
   assert.equal(result.spreadsheetId, "new-workbook");
   assert.deepEqual(result.ranges, []);
+});
+
+
+test("a partial read of the written range remains visible without claiming a complete preview", () => {
+  const read = brokerRead();
+  read.resolved_arguments.range = "A1:F200";
+  const result = googleSheetsResult([brokerWrite(), read]);
+  assert.equal(result.readBack, true);
+  assert.equal(result.partialReadBack, true);
+  assert.equal(result.range, "Dashboard!A1:G8");
+  assert.equal(result.ranges[0].range, "'Dashboard'!A1:F200");
+  assert.deepEqual(result.ranges[0].values, read.provider_result.ret.rows);
 });

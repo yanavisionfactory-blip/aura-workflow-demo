@@ -54,13 +54,17 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   for (const entry of toolEntries.filter((item) => ["failed", "blocked", "provider_error"].includes(item.status))) {
     if (!actions.some((action) => action.actionId === entry.id)) actions.push({ key: `issue-${entry.id}`, title: entry.action, detail: `${entry.tool} · Needs attention`, actionId: entry.id, actionLabel: "View issue", issue: true });
   }
-  if (isFailure && !actions.some((action) => action.issue)) actions.push({ key: "final-review", title: "Final review needs attention", detail: "Your completed work is saved. AURA has not verified the full requested outcome.", issue: true, resume: Boolean(onOpenRun), actionId: onOpenRun ? null : "activity", actionLabel: "View issue" });
+  if (isFailure && !actions.some((action) => action.issue)) actions.push({ key: "final-review", title: toolEntries.length && toolEntries.every((entry) => entry.status === "completed") ? "Final review needs attention" : "Workflow needs attention", detail: "Your completed work is saved. AURA has not verified the full requested outcome.", issue: true, resume: Boolean(onOpenRun), actionId: onOpenRun ? null : "activity", actionLabel: "View issue" });
   const creatorsOutcome = (results.outcomes || []).find((outcome) => outcome.type === "creators" && outcome.items?.length > 0);
   const nextSteps = primaryResult.kind === "website_content" ? [
     "Review the changes to each page.",
     "Check image permissions and choose a reviewer.",
     "Prepare a developer handoff after the pages are approved.",
   ] : results.nextSteps || [];
+  const savedSuggestions = isFailure && sheetSummary?.actions.length ? [
+    { label: "Review the saved dashboard", open: () => openTool("main") },
+    { label: "Review what still needs attention", open: onOpenRun || (() => openTool("activity")) },
+  ] : [];
   const artifactDelivery = primaryResult.delivery || (primaryResult.artifact ? primaryResult : null);
   const summaryArgs = { title: results.title, summary: results.summary, metrics, outcomes: results.outcomes, activity, prompt, interpretation, nextSteps };
 
@@ -143,9 +147,9 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
       {!nativeResult && !summaryFirst && <WorkflowOutcomeList actions={actions} onOpen={openTool} onOpenRun={onOpenRun} />}
 
       {creatorsOutcome && <CreatorApprovalList items={creatorsOutcome.items} />}
-      {!isFailure && (nextSteps.length > 0 || results.suggestionsLoading) && <section className="mb-6" aria-live="polite">
+      {(savedSuggestions.length > 0 || !isFailure && (nextSteps.length > 0 || results.suggestionsLoading)) && <section className="mb-6" aria-live="polite">
         <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold"><ArrowRight className="h-4 w-4 text-primary" />Suggested next</h3>
-        {nextSteps.length > 0
+        {savedSuggestions.length > 0 ? <div className="flex flex-wrap gap-2">{savedSuggestions.map((item) => <button key={item.label} type="button" onClick={item.open} className="rounded-full border border-violet-400/20 px-3 py-1.5 text-xs text-violet-400 hover:bg-violet-400/10">{item.label}</button>)}</div> : nextSteps.length > 0
           ? <div className="flex flex-wrap gap-2">{nextSteps.map((step, index) => <button key={index} type="button" onClick={() => onStartWorkflow(primaryResult.kind === "frameio_review" ? resultRevisionPrompt({ instruction: step, result: primaryResult }) : step)} className="rounded-full border border-violet-400/20 px-3 py-1.5 text-xs text-violet-400 hover:bg-violet-400/10">{step}</button>)}</div>
           : <p className="text-sm text-muted-foreground">{results.suggestionsLoading ? "Finding useful follow-ups…" : "No follow-up suggestions are available for this result."}</p>}
       </section>}

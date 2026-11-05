@@ -423,7 +423,7 @@ test("an incomplete broker workflow summarizes completed work and previews the e
       output: { resolved_arguments: { sheetId: "final-workbook", worksheetId: 173, rows: '[["Unsaved proposal"]]' },
         provider_result: { os: [], ret: { spreadsheetId: "final-workbook", updatedRange: "Dashboard!A1:G37", updatedRows: 37 } } } },
     { id: "verify", key: "verify", tool_slug: "google-sheets", operation: "google-sheets.read-rows", status: "completed",
-      output: { resolved_arguments: { spreadsheetId: "final-workbook", sheetName: "Dashboard", range: "A1:G37", hasHeaders: false },
+      output: { resolved_arguments: { spreadsheetId: "final-workbook", sheetName: "Dashboard", range: "A1:F200", hasHeaders: false },
         provider_result: { os: [], ret: { rows: [["Plantéa", "September 2026"], ["Revenue", "", "Not publicly reported", "Awaiting input"]], rowCount: 2 } } } },
   ];
   const html = render({ id: "broker-saved-run", status: "waiting_for_action", plan: { name: "KPI dashboard" }, steps, result: {} });
@@ -438,6 +438,8 @@ test("an incomplete broker workflow summarizes completed work and previews the e
   assert.ok(html.indexOf("Tools used") < html.indexOf('aria-label="Main workflow result"'));
   assert.match(html, /Saved Google Sheets cells/);
   assert.match(html, /Cell A1/);
+  assert.match(html, /Partial saved preview:/);
+  assert.match(html, /Dashboard&#x27;!A1:F200/);
   assert.match(html, /Not publicly reported/);
   assert.match(html, /Awaiting input/);
   assert.match(html, /https:\/\/docs.google.com\/spreadsheets\/d\/final-workbook\/edit#gid=173&amp;range=A1%3AG37/);

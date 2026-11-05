@@ -48,12 +48,12 @@ export function sheetWorkflowSummary(entries, primary) {
   if (write) {
     if (rows !== null) metrics.push({ value: rows, label: `${plural(rows, "row")} saved` });
     actions.push({ key: "sheet-output", count: rows ?? undefined, title: rows === null ? "Saved to Google Sheets" : `${plural(rows, "row")} saved to Google Sheets`,
-      detail: [sheetRange(updated?.updatedRange)?.tab, primary.verified ? "Saved cells verified" : primary.readBack ? "Saved cells read back" : "Write receipt saved"].filter(Boolean).join(" · "),
+      detail: [sheetRange(updated?.updatedRange)?.tab, primary.partialReadBack ? "Saved preview read back (partial)" : primary.verified ? "Saved cells verified" : primary.readBack ? "Saved cells read back" : "Write receipt saved"].filter(Boolean).join(" · "),
       icon: "sheet", actionId: "main", actionLabel: "View result", link: primary.link, linkLabel: "Open in Google Sheets" });
   }
   const sources = [pages.length ? `${pages.length} ${plural(pages.length, "public web page")}` : "",
     tabs.length ? `${tabs.length} ${plural(tabs.length, "source tab")}` : ""].filter(Boolean).join(" and ");
   return { metrics, actions,
     title: write ? reports.length ? "Report saved to Google Sheets" : "Results saved to Google Sheets" : undefined,
-    summary: write ? `${reports.length ? "AURA prepared the report" : "AURA saved its results"}${sources ? ` using ${sources}` : ""}. ${primary.verified ? "The saved Google Sheets cells were read back and verified." : primary.readBack ? "The saved cells were read back from Google Sheets." : "Open the result below to review the saved output."}` : undefined };
+    summary: write ? `${reports.length ? "AURA prepared the report" : "AURA saved its results"}${sources ? ` using ${sources}` : ""}. ${primary.partialReadBack ? "A saved preview is available; open Google Sheets for the complete workbook." : primary.verified ? "The saved Google Sheets cells were read back and verified." : primary.readBack ? "The saved cells were read back from Google Sheets." : "Open the result below to review the saved output."}` : undefined };
 }
