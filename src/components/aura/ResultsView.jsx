@@ -115,7 +115,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
 
       {summaryFirst && <><WorkflowOutcomeList actions={actions} onOpen={openTool} onOpenRun={onOpenRun} /><ResultsByTool entries={toolEntries} selectedTool={outputEntry?.tool || displayedResult.provider} onOpen={openTool} compact /></>}
 
-      {!nativeResult && <MainResultContainer ref={resultRef} aria-label="Main workflow result" className="group mb-6">
+      {!nativeResult && <MainResultContainer ref={resultRef} aria-label="Main workflow result" open={summaryFirst || undefined} className="group mb-6">
         <MainResultHeading className="mb-4 flex cursor-pointer list-none flex-wrap items-center gap-2 text-sm font-semibold [&::-webkit-details-marker]:hidden"><BarChart3 className="h-4 w-4 text-violet-400" />Results<span className="text-[11px] font-normal text-muted-foreground">— the actual output</span>{summaryFirst && <ChevronDown className="h-3.5 w-3.5 text-muted-foreground group-open:rotate-180" />}
           {summaryFirst && primaryResult.link && <a href={primaryResult.link} target="_blank" rel="noopener noreferrer" onClick={(event) => event.stopPropagation()} className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-cyan-400/25 px-3 py-1.5 text-[11px] font-medium text-cyan-300 hover:bg-cyan-400/10"><ExternalLink className="h-3 w-3" />{primaryResult.linkLabel || `Open in ${mainEntry?.tool || toolResultName(primaryResult.provider)}`}</a>}
         </MainResultHeading>
