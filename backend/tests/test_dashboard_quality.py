@@ -91,6 +91,31 @@ def test_readback_must_follow_the_write_not_precede_it():
         validate_dashboard_plan(PROMPT, candidate)
 
 
+@pytest.mark.parametrize("prompt", [
+    "Update the KPI dashboard in Google Sheets using the saved report.",
+    "Repair the existing KPI workbook and verify its calculations.",
+])
+def test_saved_dashboard_updates_keep_quality_requirements_without_template_keyword(prompt):
+    assert dashboard_requirements(prompt)
+    with pytest.raises(ValueError, match="unsupported zero"):
+        validate_dashboard_values(prompt, "google-sheets.update-multiple-rows", {"rows": '[["Revenue",0,0]]'})
+
+
+@pytest.mark.parametrize("field", ["valueRenderOption", "value_render_option"])
+def test_formula_only_readback_cannot_verify_a_working_dashboard(field):
+    candidate = plan(good_rows())
+    candidate.steps[-1].arguments[field] = "FORMULA"
+    with pytest.raises(ValueError, match="evaluated cell values"):
+        validate_dashboard_plan(PROMPT, candidate)
+    candidate.steps.append(candidate.steps[-1].model_copy(deep=True, update={
+        "key": "evaluated", "arguments": {**candidate.steps[-1].arguments, field: "UNFORMATTED_VALUE"},
+    }))
+    validate_dashboard_plan(PROMPT, candidate)
+    candidate.steps[-1].depends_on = []
+    with pytest.raises(ValueError, match="evaluated cell values"):
+        validate_dashboard_plan(PROMPT, candidate)
+
+
 def test_native_and_broker_cell_shapes_have_the_same_content_contract():
     assert sheet_rows({"rows": '[["Revenue","",""]]'}) == [["Revenue", "", ""]]
     assert sheet_rows({"body": {"sheets": [{"data": [{"rowData": [{"values": [

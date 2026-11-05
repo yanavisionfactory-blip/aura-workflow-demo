@@ -221,12 +221,33 @@ def _compact_schema(schema):
     }
 
 
+def _planning_operation(module):
+    """Advertise the structured rows the compiler already serializes safely."""
+    schema = module.get("input_schema", {})
+    properties = schema.get("properties", {})
+    if (module.get("name") not in {"google-sheets.add-multiple-rows", "google-sheets.update-multiple-rows"}
+            or properties.get("rows", {}).get("type") != "string"):
+        return module
+    rows = {"anyOf": [
+        {"type": "array", "minItems": 1, "items": {"type": "array", "items": {
+            "type": ["string", "number", "boolean", "null"],
+        }}},
+        {"type": "string", "pattern": r"^\{\{[^{}]+\}\}$"},
+    ], "description": "Provide row arrays, or one whole upstream content reference. AURA serializes arrays for the provider; never JSON-encode the rows yourself."}
+    return {**module, "input_schema": {**schema, "properties": {**properties, "rows": rows}}}
+
+
 def _bounded_planning_catalog(payload: dict) -> dict:
     """Pack large connector catalogs before the one LLM call, with no retry loop.
 
     Request text and required actions are never shortened. Full operation
     contracts remain with the caller for validation and execution.
     """
+    payload = {**payload, "operations": [
+        {**item, "operation_contracts": [_planning_operation(module)
+                                        for module in item.get("operation_contracts", [])]}
+        if "operation_contracts" in item else item for item in payload["operations"]
+    ]}
     try:
         bounded_input(payload)
         return payload
@@ -382,6 +403,9 @@ async def create_llm_plan(
         "Google Sheets worksheetId is the actual numeric tab ID, not its position: never guess 0 or 1. "
         "new-spreadsheet returns spreadsheetId and worksheetName, not worksheetId. Use a listed "
         "worksheet metadata read and bind the returned tab ID before writing rows. "
+        "For add-multiple-rows/update-multiple-rows, provide rows as actual JSON row arrays, "
+        "not a JSON-encoded string. The compiler serializes them once for the provider. "
+        "A whole upstream content reference is also supported; do not nest it in empty row placeholders. "
         "When recovery includes an existing workbook receipt, reuse that workbook, read its "
         "current tabs and cells, and propose only missing changes; do not recreate it or blindly append. "
         "For Google Ads, use the connector's google_ads_account selection for accountId "

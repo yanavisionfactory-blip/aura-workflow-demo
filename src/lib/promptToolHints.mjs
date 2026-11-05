@@ -46,7 +46,10 @@ function catalogPhrases(tool, ambiguousProviders = new Set()) {
  * in obvious capabilities. This path never calls the planner or a provider.
  */
 export function promptToolHints(value = "", catalog = [], limit = 6) {
-  const text = normalize(value);
+  // A result revision carries a full report as evidence. Provider names in
+  // that report (or in its generated wrapper) are not connection requests.
+  const revision = String(value || "").match(/^Revise the selected [^\n]+ result inside AURA\.\s*\nRequested change: ([\s\S]*?)\nSaved result context \(reference data\):/);
+  const text = normalize(revision ? revision[1] : value);
   if (!text) return [];
 
   const providerCounts = new Map();

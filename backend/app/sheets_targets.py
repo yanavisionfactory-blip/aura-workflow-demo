@@ -12,6 +12,27 @@ DISCOVERY = {
 }
 
 
+def worksheet_metadata_context(result, operation):
+    """Expose the provider's tab-name synonym without changing its receipt.
+
+    get-spreadsheet-info calls the title sheetName, while the other Sheets
+    metadata operations call it title. Both describe the same returned tab;
+    adding that alias does not select a tab or invent a worksheet identity.
+    """
+    if operation != "google-sheets.get-spreadsheet-info" or not isinstance(result, dict):
+        return result
+    returned = result.get("ret")
+    rows = returned.get("worksheets") if isinstance(returned, dict) else None
+    if not isinstance(rows, list):
+        return result
+    return {**result, "ret": {**returned, "worksheets": [
+        {**row, "title": row["sheetName"]}
+        if isinstance(row, dict) and "title" not in row
+        and isinstance(row.get("sheetName"), str) and row["sheetName"].strip()
+        else row for row in rows
+    ]}}
+
+
 def created_workbook_source(arguments, steps):
     target = arguments.get("sheetId", arguments.get("spreadsheetId"))
     paths = referenced_paths(target)

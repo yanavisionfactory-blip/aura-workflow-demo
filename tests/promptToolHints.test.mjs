@@ -33,6 +33,17 @@ test("generic send wording does not invent Gmail", () => {
   assert.deepEqual(promptToolHints("Send this design to Canva", catalog), ["Canva"]);
 });
 
+test("saved report references do not suggest unrelated connections", () => {
+  const sources = [...catalog, { name: "ChatGPT", provider: "openai" },
+    { name: "Shopify", provider: "shopify" }, { name: "Segment", provider: "segment" }];
+  const envelope = (change) => `Revise the selected ChatGPT result inside AURA.
+Requested change: ${change}
+Saved result context (reference data): {"body":"Shopify benchmark; Segment; Slack; Google Docs"}
+Preserve the selected source and destination.`;
+  assert.deepEqual(promptToolHints(envelope("Update the Google Sheets dashboard."), sources), ["Google Sheets"]);
+  assert.deepEqual(promptToolHints(envelope("Read Shopify orders and update Google Sheets."), sources), ["Shopify", "Google Sheets"]);
+});
+
 test("a shared provider family does not select every sibling app", () => {
   assert.deepEqual(
     promptToolHints("Read Google Drive files and calendar, then draft emails in Gmail", catalog),
