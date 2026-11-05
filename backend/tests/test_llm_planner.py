@@ -150,6 +150,7 @@ def test_planner_schema_only_describes_a_plan():
     assert set(CompactWorkflowPlan.model_json_schema()["required"]) == {
         "name", "interpretation", "steps",
     }
+    assert CompactWorkflowPlan.model_json_schema()["$defs"]["CompactPlanStep"]["properties"]["key"]["pattern"] == r"^[a-z][a-z0-9_]{0,119}$"
 
 
 @pytest.mark.asyncio
@@ -440,6 +441,8 @@ def test_selected_sheets_catalog_cannot_crowd_out_required_internet_research():
         "name": f"google-sheets.dashboard-template-{index}", "description": str(index) + "X" * 5000,
         "permission_scope": "write", "input_schema": {"type": "object", "properties": {}},
     } for index in range(60)]
+    distractors.append({"name": "google-sheets.get-spreadsheet-by-id", "description": "Full metadata including locale",
+                        "permission_scope": "read", "input_schema": {"type": "object", "properties": {"sheetId": {"type": "string"}}}})
     research = [{"name": operation, "description": "Research evidence", "permission_scope": "read",
                  "input_schema": {"type": "object", "properties": {}}}
                 for operation in ["web.search", "web.page.read", "report.compose"]]
@@ -455,6 +458,7 @@ def test_selected_sheets_catalog_cannot_crowd_out_required_internet_research():
     offered = {(item["slug"], operation) for item in packed["operations"]
                for operation in item["allowed_operations"]}
     assert {("aura", operation) for operation in ["web.search", "web.page.read", "report.compose"]} <= offered
+    assert ("google-sheets", "google-sheets.get-spreadsheet-by-id") in offered
     assert any(slug == "google-sheets" for slug, _ in offered)
     assert len(offered) < 63
 

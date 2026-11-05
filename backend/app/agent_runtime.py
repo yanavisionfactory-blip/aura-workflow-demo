@@ -83,7 +83,7 @@ class CompactPlanStep(BaseModel):
     """Closed planner output; provider arguments remain JSON text until validated."""
 
     model_config = ConfigDict(extra="forbid")
-    key: str
+    key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,119}$")
     agent: str
     tool_slug: str
     operation: str

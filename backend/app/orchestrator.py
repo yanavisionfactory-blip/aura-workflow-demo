@@ -562,9 +562,14 @@ async def ensure_aura_intelligence(session, workspace_id: str) -> ToolConnection
 
 
 def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict], request_prompt: str = "") -> None:
-    from .sheets_targets import bind_created_worksheets, bind_requested_sheet_reads
+    from .sheets_targets import (
+        bind_created_worksheets,
+        bind_dashboard_metadata,
+        bind_requested_sheet_reads,
+    )
 
     bind_requested_sheet_reads(plan, request_prompt)
+    bind_dashboard_metadata(plan, manifests_by_slug)
     bind_created_worksheets(plan, manifests_by_slug)
     for planned_step in plan.steps:
         manifest = _current_capability_manifest(

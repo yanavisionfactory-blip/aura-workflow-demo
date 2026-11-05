@@ -123,6 +123,53 @@ def bind_created_worksheets(plan, manifests):
                                             "worksheetId": step.arguments["worksheetId"]}
 
 
+def bind_dashboard_metadata(plan, manifests):
+    """Bind the compiler to the same new workbook before plan review.
+
+    A planner may choose the lighter info action, which omits locale. Add the
+    catalog's full metadata read for this exact created workbook; do not guess
+    locale, use another account, or read a different existing workbook.
+    """
+    from .workflow_context import referenced_step_keys
+
+    operation = "google-sheets.get-spreadsheet-by-id"
+    for report in tuple(plan.steps):
+        dashboard = report.arguments.get("dashboard") if report.operation == "report.compose" else None
+        if not isinstance(dashboard, dict):
+            continue
+        writers = [step for step in plan.steps if step.operation == "google-sheets.update-multiple-rows"
+                   and referenced_step_keys(step.arguments.get("rows")) == {report.key}]
+        if len(writers) != 1:
+            continue
+        writer = writers[0]
+        source = created_workbook_source(writer.arguments, plan.steps)
+        if source is None or source.tool_slug != writer.tool_slug:
+            continue
+        if plan.steps.index(source) > plan.steps.index(report):
+            raise ValueError("Create the blank KPI workbook before composing dashboard cells so its actual locale can be read")
+        capability = next((item for item in manifests.get(writer.tool_slug, {}).get("capabilities", [])
+                           if item.get("name") == operation), {})
+        if capability.get("permission_scope") != "read" or capability.get("requires_approval"):
+            raise ValueError("The researched dashboard requires the full Google Sheets metadata read in its catalog")
+        reader = next((step for step in plan.steps[:plan.steps.index(report)]
+                       if step.operation == operation and step.tool_slug == writer.tool_slug
+                       and created_workbook_source(step.arguments, [source]) is source), None)
+        if reader is None:
+            if len(plan.steps) >= MAX_WORKFLOW_STEPS:
+                raise ValueError("Dashboard metadata read exceeds the workflow step limit")
+            key = f"{source.key[:90]}_dashboard_metadata"
+            if any(step.key == key for step in plan.steps):
+                raise ValueError("Dashboard metadata step key is already in use")
+            reader = PlanStep(key=key, agent="Google Sheets", tool_slug=writer.tool_slug,
+                operation=operation, arguments={"sheetId": f"{{{{steps.{source.key}.ret.spreadsheetId}}}}"},
+                depends_on=[source.key], reason="Read the new workbook's actual locale before generating formulas",
+                expected_output="Workbook identity, locale and worksheet metadata")
+            plan.steps.insert(plan.steps.index(source) + 1, reader)
+        report.arguments = {**report.arguments, "dashboard": {**dashboard, "workbook_metadata": f"{{{{steps.{reader.key}}}}}"}}
+        if reader.key not in report.depends_on:
+            report.depends_on.append(reader.key)
+
+
 def worksheet_identity(result, operation, planned_steps=None, step_key=None):
     """Return only an exact named match or a single verified tab; retain raw evidence."""
     if operation not in DISCOVERY or not isinstance(result, dict):

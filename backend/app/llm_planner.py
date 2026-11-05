@@ -292,6 +292,12 @@ def _bounded_planning_catalog(payload: dict) -> dict:
             for operation in item.get("allowed_operations") or []
             if operation in {"web.search", "web.page.read", "report.compose"}
         )
+        required.update(
+            (item["slug"], operation)
+            for item in catalog
+            for operation in item.get("allowed_operations") or []
+            if operation == "google-sheets.get-spreadsheet-by-id"
+        )
     words = set(re.findall(r"[a-z0-9]{3,}", payload["request"].casefold()))
     from .selected_tools import selected_tool_targets
 

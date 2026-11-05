@@ -6,7 +6,12 @@ import pytest
 from app import agent_runtime
 from app.agent_runtime import deterministic_plan_fixes, materialize_action_arguments
 from app.schemas import PlanStep, WorkflowPlan
-from app.sheets_targets import DISCOVERY, bind_created_worksheets, needs_worksheet_binding
+from app.sheets_targets import (
+    DISCOVERY,
+    bind_created_worksheets,
+    bind_dashboard_metadata,
+    needs_worksheet_binding,
+)
 from app.workflow_context import WorksheetIdentityError, resolve_value, step_context_value
 
 
@@ -25,6 +30,49 @@ def plan():
 def manifests(operation="google-sheets.list-worksheets"):
     return {"google-sheets": {"capabilities": [{"name": operation, "permission_scope": "read",
                                                "requires_approval": False}]}}
+
+
+def dashboard_plan():
+    candidate = plan()
+    candidate.steps.insert(1, PlanStep(key="report", agent="AURA", tool_slug="aura", operation="report.compose",
+        arguments={"title": "KPI", "instructions": "Research", "sources": [{"id": "source", "title": "Source", "content": "Public evidence"}],
+                   "dashboard": {"business_name": "Example", "reporting_period": "September 2026",
+                                 "companies": ["Example"], "workbook_metadata": {"locale": "en_US"}}},
+        reason="Build cells", expected_output="Compiled rows"))
+    candidate.steps[-1].operation = "google-sheets.update-multiple-rows"
+    candidate.steps[-1].arguments.update(rows="{{steps.report.rows_json}}", range="A1")
+    candidate.steps[-1].depends_on = ["report"]
+    return candidate
+
+
+def test_compiled_dashboard_gets_the_real_destination_locale_before_review():
+    candidate = dashboard_plan()
+    manifest = manifests("google-sheets.get-spreadsheet-by-id")
+    original_write = deepcopy(candidate.steps[-1].arguments)
+    bind_dashboard_metadata(candidate, manifest)
+    create, metadata, report, writer = candidate.steps
+    assert metadata.operation == "google-sheets.get-spreadsheet-by-id"
+    assert metadata.arguments == {"sheetId": "{{steps.create.ret.spreadsheetId}}"}
+    assert metadata.depends_on == [create.key] and not metadata.consequential
+    assert report.arguments["dashboard"]["workbook_metadata"] == "{{steps.create_dashboard_metadata}}"
+    assert report.depends_on == [metadata.key]
+    assert writer.arguments == original_write
+    bind_created_worksheets(candidate, manifest)
+    assert writer.arguments["worksheetId"] == "{{steps.create_dashboard_metadata.worksheetId}}"
+    once = candidate.model_dump()
+    bind_dashboard_metadata(candidate, manifest)
+    bind_created_worksheets(candidate, manifest)
+    assert candidate.model_dump() == once
+
+
+def test_dashboard_metadata_does_not_expand_accounts_or_touch_existing_workbooks():
+    candidate = dashboard_plan()
+    with pytest.raises(ValueError, match="full Google Sheets metadata read"):
+        bind_dashboard_metadata(candidate, manifests())
+    candidate.steps[-1].arguments["sheetId"] = "existing_book"
+    before = candidate.model_dump()
+    bind_dashboard_metadata(candidate, manifests("google-sheets.get-spreadsheet-by-id"))
+    assert candidate.model_dump() == before
 
 
 @pytest.mark.parametrize("tab_id", [0, 1386900864])
