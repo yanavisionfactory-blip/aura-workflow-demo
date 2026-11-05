@@ -1,5 +1,6 @@
 // Display saved receipts only. This module never dispatches a provider action.
 import { operationProviderName } from "./providerDisplay.mjs";
+import { editableResultText } from "./toolOutputEditing.mjs";
 const secretKey = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|password|client[_-]?secret|credential|cookie|private[_-]?key)/i;
 
 export function redactEvidence(value, depth = 0) {
@@ -56,6 +57,7 @@ export function toolEvidence(activity = []) {
       operation: output.operation || step.operation || "",
       status: providerError ? "provider_error" : step.status || "pending",
       hasResponse,
+      userEdited: typeof output.user_revision?.text === "string" && editableResultText(step) !== null,
       response: hasResponse ? redactEvidence(response) : null,
       inputs: redactEvidence(output.resolved_arguments ?? step.arguments ?? null),
       error: redactEvidence(step.error || output.error || ""),

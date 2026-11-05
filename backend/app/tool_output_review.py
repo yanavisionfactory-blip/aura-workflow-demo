@@ -25,6 +25,9 @@ def plan_authorizes_action(run, snapshot, step) -> bool:
 
 def editable_text_output(step) -> bool:
     result = (step.output or {}).get("provider_result", {})
+    if (step.status == StepStatus.completed and step.operation == "report.compose"
+            and isinstance(result, dict) and isinstance(result.get("body"), str)):
+        return True
     return bool(
         step.status == StepStatus.completed
         and step.operation in {"anthropic.chat", "intelligence.claude_backup"}
@@ -41,7 +44,10 @@ def reviewed_step_result(step):
     revision = (step.output or {}).get("user_revision", {})
     if editable_text_output(step) and isinstance(revision.get("text"), str):
         result = deepcopy(result)
-        result["ret"]["content"] = [{"type": "text", "text": revision["text"]}]
+        if step.operation == "report.compose":
+            result["body"] = revision["text"]
+        else:
+            result["ret"]["content"] = [{"type": "text", "text": revision["text"]}]
     return result
 
 

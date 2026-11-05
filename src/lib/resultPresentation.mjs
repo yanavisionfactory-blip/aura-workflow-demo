@@ -562,9 +562,10 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
     && output.provider_result?.status === "draft"
     && typeof output.provider_result?.body === "string" && output.provider_result.body.trim());
   if (report && (!explicitPrimary || explicitPrimary === report)) {
-    const saved = report.provider_result;
+    const userEdited = typeof report.user_revision?.text === "string";
+    const saved = userEdited ? { ...report.provider_result, body: report.user_revision.text } : report.provider_result;
     const audit = !saved.synthetic && seoAuditManifest(saved.sources || []);
-    if (audit) return {
+    if (audit && !userEdited) return {
       title: "SEO audit", kind: "seo_audit", provider: "AURA", providerVerb: "Review in",
       completionTitle: "SEO audit result",
       completionSummary: "Inspect the findings, implementation backlog and actual outcomes from each tool.",
@@ -578,6 +579,7 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
         : saved.summary,
       detail: saved.summary,
       preview: { title: saved.title, body: saved.body, sources: saved.sources || [] },
+      userEdited,
       link: null, downloadUrl: null,
     };
   }

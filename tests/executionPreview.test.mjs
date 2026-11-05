@@ -17,12 +17,14 @@ before(async () => {
     configFile: path.join(repo, "vite.config.js"), logLevel: "silent",
     define: { "import.meta.env.VITE_AURA_API_URL": JSON.stringify("https://api.example.invalid") },
     resolve: { alias: [
+      { find: "@/api/auraClient", replacement: "\0preview-model" },
       { find: "@/api/base44Client", replacement: "\0no-live-planner" },
       { find: "framer-motion", replacement: "\0instant-motion" },
       { find: "@", replacement: path.join(repo, "src") },
     ] },
     plugins: [{ name: "execution-preview-test", enforce: "pre",
       load(id) {
+        if (id === "\0preview-model") return "export const aura = { integrations: { Core: { InvokeLLM: (...args) => globalThis.__resultEditorModel(...args) } } };";
         if (id === "\0no-live-planner") return "export const base44 = {};";
         if (id === "\0instant-motion") return `import React from "react";
           export const AnimatePresence = ({children}) => children;
@@ -51,7 +53,7 @@ after(async () => {
   await new Promise((resolve) => setTimeout(resolve, 30));
   globalThis.fetch = originalFetch;
   dom?.window.close();
-  for (const key of ["window", "document", "localStorage", "Element", "HTMLElement", "SVGElement", "requestAnimationFrame", "cancelAnimationFrame", "IS_REACT_ACT_ENVIRONMENT", "Node", "NodeFilter", "HTMLInputElement", "CustomEvent", "MutationObserver", "getComputedStyle"]) delete globalThis[key];
+  for (const key of ["window", "document", "localStorage", "Element", "HTMLElement", "SVGElement", "requestAnimationFrame", "cancelAnimationFrame", "IS_REACT_ACT_ENVIRONMENT", "Node", "NodeFilter", "HTMLInputElement", "CustomEvent", "MutationObserver", "getComputedStyle", "__resultEditorModel"]) delete globalThis[key];
   if (navigatorDescriptor) Object.defineProperty(globalThis, "navigator", navigatorDescriptor);
   else delete globalThis.navigator;
   if (temporary) fs.rmSync(temporary, { recursive: true, force: true });
@@ -63,6 +65,96 @@ const draft = { id: "draft", key: "draft", tool: "anthropic", status: "completed
       ret: { content: [{ type: "text", text: "Original dashboard" }] },
     } } };
 const review = { step_id: "draft", step_ids: ["draft"], tool_slug: "anthropic", next_tool_slug: "google-sheets" };
+
+test("AI edits the current manual draft, returns to preview, supports undo, and waits for approval", async () => {
+  const calls = [], approvals = [];
+  let resolve;
+  globalThis.__resultEditorModel = (request) => {
+    calls.push(request); return new Promise((done) => { resolve = done; });
+  };
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  const button = (label) => [...container.querySelectorAll("button")].find((item) => item.textContent === label);
+  try {
+    await act(async () => root.render(React.createElement(ToolOutputReview, {
+      steps: [draft], review, onApprove: (edits) => approvals.push(edits),
+    })));
+    assert.ok(button("Edit manually")); assert.ok(button("Edit with AI"));
+    await act(async () => Simulate.click(button("Edit manually")));
+    await act(async () => Simulate.change(container.querySelector("textarea"), { target: { value: "Manually revised dashboard" } }));
+    await act(async () => Simulate.click(button("Done editing")));
+    assert.match(container.textContent, /Manually revised dashboard/);
+    await act(async () => Simulate.click(button("Edit with AI")));
+    assert.equal(button("Apply AI edit").disabled, true);
+    await act(async () => Simulate.change(container.querySelector("textarea"), { target: { value: "Add a conversions section" } }));
+    await act(async () => { Simulate.submit(container.querySelector("form")); Simulate.submit(container.querySelector("form")); });
+    assert.equal(calls.length, 1);
+    assert.match(calls[0].prompt, /Manually revised dashboard/);
+    assert.match(calls[0].prompt, /Add a conversions section/);
+    assert.equal(button("Approve result").disabled, true, "approval waits for the AI response");
+    assert.equal(button("Edit manually").disabled, true);
+    await act(async () => resolve({ text: "AI revised dashboard with conversions", summary: "Added conversions." }));
+    assert.equal(container.querySelector("form"), null);
+    assert.equal(container.querySelector("textarea"), null);
+    assert.match(container.textContent, /AI revised dashboard with conversions/);
+    assert.match(container.textContent, /Unsaved changes/);
+    assert.doesNotMatch(container.textContent, /Original dashboard|Manually revised dashboard/);
+    assert.deepEqual(approvals, [], "AI suggestions never approve or resume execution");
+    await act(async () => Simulate.click(button("Undo AI edit")));
+    assert.match(container.textContent, /Manually revised dashboard/);
+    await act(async () => Simulate.click(button("Approve result")));
+    assert.deepEqual(approvals, [{ draft: "Manually revised dashboard" }]);
+  } finally {
+    await act(async () => root.unmount()); container.remove();
+  }
+});
+
+test("AI failure preserves the draft and cancelled or stale responses cannot overwrite a newer edit", async () => {
+  const requests = [];
+  globalThis.__resultEditorModel = () => new Promise((resolve, reject) => requests.push({ resolve, reject }));
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  const button = (label) => [...container.querySelectorAll("button")].find((item) => item.textContent === label);
+  const start = async () => {
+    await act(async () => Simulate.click(button("Edit with AI")));
+    await act(async () => Simulate.change(container.querySelector("textarea"), { target: { value: "Make this shorter" } }));
+    await act(async () => Simulate.submit(container.querySelector("form")));
+  };
+  try {
+    await act(async () => root.render(React.createElement(ToolOutputReview, { steps: [draft], review, onApprove: () => {} })));
+    await start();
+    await act(async () => requests[0].reject(new Error("AI is temporarily unavailable")));
+    assert.match(container.querySelector('[role="alert"]').textContent, /temporarily unavailable/);
+    assert.match(container.textContent, /Original dashboard/);
+    assert.equal(container.querySelector("textarea").value, "Make this shorter");
+    assert.equal(button("Approve result").disabled, false);
+    await act(async () => Simulate.submit(container.querySelector("form")));
+    await act(async () => requests[1].resolve({ text: null, summary: "Invalid" }));
+    assert.match(container.querySelector('[role="alert"]').textContent, /incomplete edit/);
+    assert.match(container.textContent, /Original dashboard/);
+    await act(async () => Simulate.submit(container.querySelector("form")));
+    await act(async () => Simulate.click(button("Cancel AI edit")));
+    assert.equal(button("Approve result").disabled, false);
+    await start();
+    await act(async () => requests[2].resolve({ text: "Stale result", summary: "Old request" }));
+    assert.doesNotMatch(container.textContent, /Stale result/);
+    assert.equal(button("Approve result").disabled, true);
+    await act(async () => requests[3].resolve({ text: "Current result", summary: "Shortened" }));
+    assert.match(container.textContent, /Current result/);
+    assert.equal(button("Approve result").disabled, false);
+    await act(async () => Simulate.click(button("Discard edits")));
+    assert.match(container.textContent, /Original dashboard/);
+    assert.doesNotMatch(container.textContent, /Current result|Unsaved changes/);
+    await start();
+    await act(async () => root.render(React.createElement(ToolOutputReview, { steps: [{ ...draft, id: "next" }],
+      review: { ...review, step_id: "next", step_ids: ["next"] }, onApprove: () => {} })));
+    await act(async () => requests[4].resolve({ text: "Previous checkpoint result", summary: "Late" }));
+    assert.doesNotMatch(container.textContent, /Previous checkpoint result/);
+    assert.match(container.textContent, /Original dashboard/);
+  } finally {
+    await act(async () => root.unmount()); container.remove();
+  }
+});
 
 test("result preview is a separate page; edits persist on failure and approval is the only handoff", async () => {
   const calls = [];
@@ -90,7 +182,7 @@ test("result preview is a separate page; edits persist on failure and approval i
     assert.equal(container.querySelector("textarea"), null);
     assert.deepEqual(calls, [], "opening the result does not approve anything");
 
-    await act(async () => Simulate.click(button("Edit Claude result")));
+    await act(async () => Simulate.click(button("Edit manually")));
     const editor = container.querySelector("textarea");
     assert.equal(editor.value, "Original dashboard");
     await act(async () => Simulate.change(editor, { target: { value: "" } }));
@@ -128,7 +220,7 @@ test("review cannot approve missing output; a new checkpoint starts with its own
     assert.equal(button("Approve result").disabled, true);
     assert.doesNotMatch(container.textContent, /Original dashboard/);
     await act(async () => root.render(render([draft])));
-    await act(async () => Simulate.click(button("Edit Claude result")));
+    await act(async () => Simulate.click(button("Edit manually")));
     await act(async () => Simulate.change(container.querySelector("textarea"), { target: { value: "Unsaved first result" } }));
     const final = { ...draft, id: "last", key: "last" };
     await act(async () => root.render(render([final], { ...review, step_id: "last", step_ids: ["last"], is_final: true })));

@@ -5,7 +5,7 @@ import { mainToolEntry, toolOutputResult, toolResultGroups, toolResultName, tool
 import ResultPreview from "./ResultPreview";
 import ToolEvidence, { EvidenceValue } from "./ToolEvidence";
 
-export function ToolResultFrame({ tool, title, synthetic = false, onExpand, children, expanded = false, appScreen = false, backupNotice }) {
+export function ToolResultFrame({ tool, title, synthetic = false, onExpand, children, expanded = false, appScreen = false, backupNotice, userEdited = false }) {
   return <section aria-label={`${toolResultName(tool)} output preview`} className="overflow-hidden rounded-xl border border-white/15 bg-[#0b1320]">
     <header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-white/[0.03] px-4 py-3">
       <div className="flex min-w-0 items-center gap-3">
@@ -14,6 +14,7 @@ export function ToolResultFrame({ tool, title, synthetic = false, onExpand, chil
       </div>
       <div className="flex items-center gap-3">
         {synthetic && <span className="rounded-full border border-violet-400/25 px-2 py-1 text-[10px] text-violet-200">Synthetic data</span>}
+        {userEdited && <span className="text-[11px] text-primary">Edited result</span>}
         {backupNotice && <span className="text-[11px] text-amber-200">Backup used</span>}
         {onExpand && <button type="button" onClick={onExpand} className="inline-flex items-center gap-1.5 text-xs font-medium text-primary"><Maximize2 className="h-3.5 w-3.5" />Open tool view</button>}
       </div>
@@ -65,7 +66,7 @@ export function ToolOutputCards({ entries, activity, backendRunId, onOpen = unde
     const entry = mainToolEntry(items, combined || {}) || [...items].reverse().find((item) => item.preview) || items.at(-1);
     const result = combined || entry.preview || { kind: "result", title: entry.action, provider: tool };
     return <div key={tool} className="space-y-2">
-      <ToolResultFrame tool={tool} title={result.title || entry.action} synthetic={entry.synthetic} backupNotice={entry.backupNotice}
+      <ToolResultFrame tool={tool} title={result.title || entry.action} synthetic={entry.synthetic} backupNotice={entry.backupNotice} userEdited={items.some((item) => item.userEdited)}
         appScreen={["spreadsheet", "ai_response"].includes(result.kind)} onExpand={onOpen ? () => onOpen(entry.id) : undefined}>
         <MainToolOutput entry={entry} result={result} activity={activity} backendRunId={backendRunId} />
       </ToolResultFrame>
@@ -100,7 +101,7 @@ export default function ToolResultDialog({ request, onClose, entries, primary, m
               {entry && <span className="flex items-center gap-1.5 text-xs text-muted-foreground">{entry.status === "completed" ? <CheckCircle2 className="h-4 w-4 text-emerald-400" /> : <AlertTriangle className="h-4 w-4 text-amber-300" />}{toolResultStatus(entry)}</span>}
               {link && <a href={link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-primary">Open in {tool}<ArrowUpRight className="h-3.5 w-3.5" /></a>}
             </div>
-            {isMain ? <ToolResultFrame tool={tool} title={title} synthetic={mainEntry?.synthetic} backupNotice={mainEntry?.backupNotice} expanded><MainToolOutput entry={mainEntry} result={primary} results={results} activity={activity} backendRunId={backendRunId} /></ToolResultFrame> : entry ? <>
+            {isMain ? <ToolResultFrame tool={tool} title={title} synthetic={mainEntry?.synthetic} backupNotice={mainEntry?.backupNotice} userEdited={mainEntry?.userEdited || primary.userEdited} expanded><MainToolOutput entry={mainEntry} result={primary} results={results} activity={activity} backendRunId={backendRunId} /></ToolResultFrame> : entry ? <>
               {entry.backupNotice && <p className="mb-3 text-xs text-amber-200">Backup used · details below</p>}
               {entry.synthetic && <p className="mb-4 rounded-lg border border-violet-400/25 p-3 text-xs text-violet-100">Synthetic data · saved AURA result</p>}
               {entry.error && <p role="status" className="mb-4 whitespace-pre-wrap rounded-lg bg-amber-400/10 p-3 text-sm text-amber-200">{typeof entry.error === "string" ? entry.error : JSON.stringify(entry.error)}</p>}
