@@ -718,29 +718,45 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
                 await session.commit()
                 return "handoff"
             return "not_applicable"
-        selected, source, reason = await supervise_recovery(
-            {
-                "status": run.status.value,
-                "completed_steps": sum(step.status == StepStatus.completed for step in steps),
-                "failed_step_ids": [step.id for step in steps if step.status == StepStatus.failed],
-                "recovery_round": recovery_counter(state.get("rounds")) + 1,
-                "failed_step": (
-                    {
-                        "id": failed_step.id,
-                        "key": failed_step.step_key,
-                        "tool_slug": failed_step.tool_slug,
-                        "operation": failed_step.operation,
-                        "consequential": failed_step.consequential,
-                    }
-                    if failed_step
-                    else None
-                ),
-                "failure": failure,
-                "recovery_history": state["failure_history"][-8:],
-            },
-            options,
-        )
+        # A known rate limit needs no model diagnosis. It can only retry the
+        # already authorized read and must preserve the provider's deadline.
+        rate_limited_read = bool(failure and failure.get("category") == "rate_limited"
+                                 and len(options) == 1 and options[0].action == "retry_step"
+                                 and failed_step and not failed_step.consequential
+                                 and operation_scope(failed_step.operation) == "read")
+        if rate_limited_read:
+            selected, source, reason = options[0], "provider_rate_limit", "Wait for provider quota"
+        else:
+            selected, source, reason = await supervise_recovery(
+                {
+                    "status": run.status.value,
+                    "completed_steps": sum(step.status == StepStatus.completed for step in steps),
+                    "failed_step_ids": [step.id for step in steps if step.status == StepStatus.failed],
+                    "recovery_round": recovery_counter(state.get("rounds")) + 1,
+                    "failed_step": (
+                        {
+                            "id": failed_step.id,
+                            "key": failed_step.step_key,
+                            "tool_slug": failed_step.tool_slug,
+                            "operation": failed_step.operation,
+                            "consequential": failed_step.consequential,
+                        }
+                        if failed_step
+                        else None
+                    ),
+                    "failure": failure,
+                    "recovery_history": state["failure_history"][-8:],
+                },
+                options,
+            )
         step = next((item for item in steps if item.id == selected.step_id), None)
+        available_at = datetime.now(UTC) + timedelta(seconds=selected.delay_seconds)
+        if rate_limited_read and step:
+            from .provider_rate_limits import retry_deadline
+
+            provider_deadline = retry_deadline((step.output or {}).get("provider_retry_at"))
+            if provider_deadline:
+                available_at = max(available_at, provider_deadline)
         if selected.action == "revalidate_connection":
             if not step:
                 return "not_applicable"
@@ -811,9 +827,7 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
                 "round": state["rounds"],
             },
         ]
-        state["next_attempt_at"] = (
-            datetime.now(UTC) + timedelta(seconds=selected.delay_seconds)
-        ).isoformat()
+        state["next_attempt_at"] = available_at.isoformat()
         if selected.action == "retry_final_review":
             state["review_recoveries"] = recovery_counter(state.get("review_recoveries")) + 1
         elif step:
@@ -872,7 +886,6 @@ async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
                 entry.status = "resolved"
                 entry.resolved_at = datetime.now(UTC)
         await session.flush()
-        available_at = datetime.now(UTC) + timedelta(seconds=selected.delay_seconds)
         intents = (
             await session.scalars(
                 select(DispatchIntent).where(

@@ -57,12 +57,14 @@ def test_expired_authorization_does_not_penalize_provider_trust():
     assert _failure_impacts_trust(error) is False
 
 
-def test_rate_limits_and_timeouts_are_provider_availability_signals():
+def test_quota_wait_does_not_penalize_trust_but_timeouts_do():
     request = httpx.Request("GET", "https://api.example.com/items")
     response = httpx.Response(429, request=request)
     rate_limit = httpx.HTTPStatusError("429 Too Many Requests", request=request, response=response)
 
-    assert _failure_impacts_trust(rate_limit) is True
+    # A provider-enforced wait is not an outage. Lowering trust here could
+    # prevent the scheduled read from resuming when quota becomes available.
+    assert _failure_impacts_trust(rate_limit) is False
     assert _failure_impacts_trust(httpx.TimeoutException("timed out")) is True
 
 
