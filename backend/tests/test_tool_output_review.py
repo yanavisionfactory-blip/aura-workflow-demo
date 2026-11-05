@@ -11,6 +11,33 @@ from app.schemas import CriticDecision, ToolOutputReviewDecision
 from app.tool_output_review import REVIEW_KEY, pending_output_review
 
 
+async def test_generated_report_edits_are_saved_for_downstream_steps_without_changing_receipts(runtime, monkeypatch):
+    from app.tool_output_review import editable_text_output, reviewed_step_result
+
+    dispatch = AsyncMock()
+    monkeypatch.setattr(main, "dispatch_pending", dispatch)
+    receipt = {"body": "Original report", "sources": [{"id": "source"}], "title": "KPI report"}
+    async with runtime() as session:
+        run = await session.get(WorkflowRun, "run")
+        run.execution_context = {REVIEW_KEY: {"enabled": True,
+            "pending": {"step_id": "step", "step_ids": ["step"]}}}
+        transition_run(run, RunStatus.awaiting_approval, reason="test_review", dispatch=None)
+        step = await session.get(RunStep, "step")
+        step.operation, step.status = "report.compose", StepStatus.completed
+        step.output = {"provider_result": receipt}
+        await session.commit()
+        decision = ToolOutputReviewDecision(step_id="step", edited_outputs={"step": "Reviewed report"})
+        await main.review_tool_output("run", decision, main.TenantContext("w", "alice", "owner"), session)
+        assert step.output["provider_result"] == receipt
+        assert step.output["user_revision"]["edited_by"] == "alice"
+        assert reviewed_step_result(step) == {**receipt, "body": "Reviewed report"}
+        assert (await main.review_tool_output("run", decision, main.TenantContext("w", "alice", "owner"), session))["already_reviewed"]
+        step.operation = "docs.get"
+        assert not editable_text_output(step)
+        assert reviewed_step_result(step) == receipt
+    dispatch.assert_awaited_once()
+
+
 def grouped_run():
     steps = [SimpleNamespace(
         id=str(i), step_key=str(i), position=i, tool_slug=slug, operation=operation,

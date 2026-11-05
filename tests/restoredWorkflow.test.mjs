@@ -36,7 +36,7 @@ before(async () => {
           `export const ${name} = (...args) => globalThis.__savedRunHarness.api(${JSON.stringify(name)}, args);`).join("\n");
         if (id === "\0saved-run-history") return `export const aura = { entities: {
           WorkflowRun: { filter: async () => [{id: "history", workflow_id: "workflow"}] }
-        } };`;
+        }, integrations: { Core: { InvokeLLM: (...args) => globalThis.__savedRunHarness.model(...args) } } };`;
         if (id === "\0no-live-planner") return "export const base44 = {};";
         if (id === "\0no-connections") return "export const connectTool = () => { throw new Error('Unexpected connection'); };";
         if (id === "\0instant-motion") return `import React from "react";
@@ -134,7 +134,8 @@ for (const entry of ["refresh", "history"]) test(`${entry} resumes the saved 0/3
     assert.match(container.textContent, /Review Claude result/);
     assert.match(container.textContent, /Completed KPI layout/);
     assert.equal(container.querySelector('[aria-label="Execution steps"]'), null);
-    assert.match(container.textContent, /Edit Claude result/);
+    assert.match(container.textContent, /Edit manually/);
+    assert.match(container.textContent, /Edit with AI/);
     assert.doesNotMatch(container.textContent, /Preview Claude|Continue to|Open action preview|Execution paused for approval/);
     assert.equal(calls.filter((call) => call.name === "resumePythonReviewedPlan").length, 1);
     assert.equal(calls.some((call) => ["approvePythonPlan", "decidePythonApproval", "reviewPythonToolOutput"].includes(call.name)), false);
@@ -197,7 +198,7 @@ test("each tool opens its result automatically; one approval resumes execution a
     assert.equal(approvals().length, 0);
     assert.doesNotMatch(container.textContent, /Preview Claude|Continue to|Open action preview/);
 
-    await act(async () => Simulate.click(button("Edit Claude result")));
+    await act(async () => Simulate.click(button("Edit manually")));
     await act(async () => Simulate.change(container.querySelector("textarea"), { target: { value: "Reviewed KPI layout" } }));
     await act(async () => { Simulate.click(button("Approve result")); Simulate.click(button("Approve result")); });
     assert.equal(approvals().length, 1, "double clicks cannot approve twice");
@@ -207,9 +208,19 @@ test("each tool opens its result automatically; one approval resumes execution a
     assert.equal(container.querySelector("textarea").value, "Reviewed KPI layout");
     assert.equal(container.querySelector('[aria-label="Execution steps"]'), null);
 
+    globalThis.__savedRunHarness.model = async (request) => {
+      assert.match(request.prompt, /Reviewed KPI layout/);
+      assert.match(request.prompt, /Include conversions/);
+      return { text: "AI-reviewed KPI layout", summary: "Included conversions." };
+    };
+    await act(async () => Simulate.click(button("Edit with AI")));
+    await act(async () => Simulate.change(container.querySelector("form textarea"), { target: { value: "Include conversions" } }));
+    await act(async () => Simulate.submit(container.querySelector("form")));
+    assert.match(container.textContent, /AI-reviewed KPI layout/);
+    assert.equal(approvals().length, 1, "AI editing must not approve or resume a run");
     await act(async () => Simulate.click(button("Approve result")));
     assert.deepEqual(approvals().map((call) => call.args), [
-      ["saved", "draft", { draft: "Reviewed KPI layout" }], ["saved", "draft", { draft: "Reviewed KPI layout" }],
+      ["saved", "draft", { draft: "Reviewed KPI layout" }], ["saved", "draft", { draft: "AI-reviewed KPI layout" }],
     ]);
     run = { ...run, status: "running", tool_output_review: null,
       steps: [run.steps[0], { ...steps[1], status: "running" }] };
