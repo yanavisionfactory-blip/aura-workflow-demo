@@ -27,7 +27,7 @@ before(async () => {
     plugins: [{ name: "restored-workflow-test", enforce: "pre",
       resolveId(id, importer) {
         if (importer?.endsWith("/src/pages/Demo.jsx") && id.includes("/components/aura/")
-            && !/\/(ExecutionView|ToolOutputReview)(\.jsx)?$/.test(id)) {
+            && !/\/(ExecutionView|ToolOutputReview|EditRunReviewModal)(\.jsx)?$/.test(id)) {
           return `\0shell:${path.basename(id).replace(/\.jsx$/, "")}`;
         }
       },
@@ -46,8 +46,15 @@ before(async () => {
         if (id === "\0shell:WorkspaceShell") return `import React from "react";
           export default ({children}) => React.createElement("div", null, children);`;
         if (id === "\0shell:HistoryPanel") return `import React from "react";
-          export default ({open, onOpenRun}) => open && React.createElement("button", {
-            onClick: () => onOpenRun("saved") }, "Open saved workflow");`;
+          export default ({open, onOpenRun, onEditRun}) => open && React.createElement("div", null,
+            React.createElement("button", { onClick: () => onOpenRun("saved") }, "Open saved workflow"),
+            React.createElement("button", { onClick: () => onEditRun(globalThis.__savedRunHarness.workflow, "writes") }, "Edit and run again"));`;
+        if (id === "\0shell:PlanView") return `import React from "react";
+          export default ({plan, onApprove, approveLabel, onRetryPlan, busy}) => React.createElement("section", null,
+            React.createElement("p", null, plan.error || plan.compileError || plan.interpretation),
+            React.createElement("button", { disabled: busy || plan.provisional,
+              onClick: () => onApprove(plan.steps, plan.workflowName) }, approveLabel),
+            plan.compileState === "blocked" && React.createElement("button", {onClick: onRetryPlan}, "Retry planning"));`;
         if (id === "\0shell:ResultsView") return `import React from "react";
           export default ({results}) => React.createElement("section", { "aria-label": "Finished workflow" }, results.title);`;
         if (id.startsWith("\0shell:")) return "export default () => null;";
@@ -84,6 +91,73 @@ const waitUntil = async (predicate) => {
   assert.ok(predicate(), "workflow did not reach the expected visible state");
 };
 
+for (const failFirst of [false, true]) test(`history edit compiles a fresh durable run before approval${failFirst ? " after a failed planning attempt" : ""}`, async () => {
+  const calls = [];
+  const prompt = "Create a Plantea KPI dashboard template for September 2026 in Google Sheets, compared to dermalogica.com and bskincaretx.com. Leave unknown actuals blank.";
+  const step = { key: "sheet", tool_slug: "google-sheets", operation: "sheets.append", consequential: true,
+    arguments: { spreadsheet_id: "existing", range: "Dashboard!A1", values: [["Metric", "Target", "Actual"]] },
+    reason: "Write the dashboard", expected_output: "Saved dashboard" };
+  const workflow = { id: "workflow", name: "Plantea dashboard", prompt,
+    interpretation: "Create a dashboard", steps: [{ tool: "Google Sheets", action: "Old display step" }] };
+  let finishPlanning, creations = 0;
+  let run = { id: "new-durable-run", status: "awaiting_approval", plan_approved: false,
+    prompt, plan: { name: workflow.name, interpretation: prompt, steps: [step] }, steps: [] };
+  globalThis.__savedRunHarness = { workflow, api(name, args) {
+    calls.push({ name, args });
+    if (["rememberedActivePythonRun", "rememberActivePythonRun", "forgetActivePythonRun"].includes(name)) return null;
+    if (name === "createPythonRun") {
+      creations++;
+      if (failFirst && creations === 1) return Promise.reject(Object.assign(new Error("Planning unavailable"), { status: 422 }));
+      return new Promise((resolve) => { finishPlanning = () => resolve({ id: run.id }); });
+    }
+    if (name === "getPythonRun") return Promise.resolve(structuredClone(run));
+    if (name === "approvePythonPlan") {
+      assert.equal(args[0], "new-durable-run");
+      run = { ...run, plan_approved: true, status: "running", steps: [{ ...step, id: "sheet", position: 0, status: "running" }] };
+      return Promise.resolve({ id: run.id, status: "running" });
+    }
+    throw new Error(`Unexpected API call: ${name}`);
+  } };
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  const button = (label) => [...container.querySelectorAll("button")].find((item) => item.textContent === label);
+  try {
+    await act(async () => root.render(React.createElement(MemoryRouter, {
+      initialEntries: [{ pathname: "/", state: { openHistory: true } }],
+      future: { v7_startTransition: true, v7_relativeSplatPath: true },
+    }, React.createElement(Demo))));
+    await act(async () => Simulate.click(button("Edit and run again")));
+    if (failFirst) {
+      await waitUntil(() => button("Retry planning"));
+      assert.match(container.textContent, /Planning unavailable/);
+      assert.equal(button("Review changes").disabled, true);
+      assert.equal(button("Run with changes"), undefined);
+      await act(async () => Simulate.click(button("Retry planning")));
+    }
+    await waitUntil(() => finishPlanning);
+    assert.equal(button("Review changes").disabled, true);
+    assert.equal(button("Run with changes"), undefined);
+    assert.equal(calls.some((call) => call.name === "approvePythonPlan"), false);
+    const creation = calls.filter((call) => call.name === "createPythonRun").at(-1);
+    assert.equal(creation.args[0], prompt, "the short interpretation must not discard company, month or competitors");
+    assert.equal(creation.args[3].saved_workflow_id, workflow.id);
+    await act(async () => finishPlanning());
+    await waitUntil(() => !button("Review changes").disabled);
+    await act(async () => Simulate.click(button("Review changes")));
+    assert.ok(button("Run with changes"));
+    assert.equal(calls.some((call) => call.name === "approvePythonPlan"), false);
+    await act(async () => Simulate.click(button("Run with changes")));
+    await waitUntil(() => container.textContent.includes("Running your workflow"));
+    assert.equal(creations, failFirst ? 2 : 1, "confirmation approves the reviewed run without replanning");
+    assert.deepEqual(calls.filter((call) => call.name === "approvePythonPlan").map((call) => call.args), [
+      ["new-durable-run", null, false, { reviewToolOutputs: true, executeReviewedPlan: true }],
+    ]);
+    assert.doesNotMatch(container.textContent, /not attached to a durable/);
+  } finally {
+    await act(async () => root.unmount()); container.remove();
+  }
+});
+
 for (const entry of ["refresh", "history"]) test(`${entry} resumes the saved 0/3 run and first offers review after tool completion`, async () => {
   const calls = [];
   const steps = [
@@ -117,7 +191,8 @@ for (const entry of ["refresh", "history"]) test(`${entry} resumes the saved 0/3
     }, React.createElement(Demo))));
     if (entry === "history") await act(async () => Simulate.click([...container.querySelectorAll("button")]
       .find((button) => button.textContent === "Open saved workflow")));
-    await waitUntil(() => calls.some((call) => call.name === "resumePythonReviewedPlan"));
+    await waitUntil(() => calls.some((call) => call.name === "resumePythonReviewedPlan")
+      && container.textContent.includes("Running your workflow"));
     assert.match(container.textContent, /Running your workflow/);
     assert.match(container.textContent, /0\/3/);
     assert.doesNotMatch(container.textContent, /Open action preview|Execution paused for approval|Edit .* result/);

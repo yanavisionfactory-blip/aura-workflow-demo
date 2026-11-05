@@ -1687,6 +1687,7 @@ async def critique_step(step: dict, provider_result: object) -> CriticDecision:
 async def verify_outcome(prompt: str, plan: dict, artifacts: list[dict],
                          final_deliverable: dict | None = None,
                          prepared_evidence: object | None = None) -> OutcomeVerification:
+    from .dashboard_quality import dashboard_requirements
     from .request_contracts import missing_requested_operations
 
     evidence_ids = {str(item.get("step_id", "")) for item in artifacts}
@@ -1713,6 +1714,7 @@ async def verify_outcome(prompt: str, plan: dict, artifacts: list[dict],
             )
         return OutcomeVerification(status="unverified", reasons=["Pilot provider read-back is incomplete"])
     payload = {"original_request": prompt, "temporal_context": planning_temporal_context(), "approved_plan": plan,
+               "spreadsheet_quality_requirements": dashboard_requirements(prompt),
                "accepted_artifacts": artifacts if prepared_evidence is None else prepared_evidence,
                "accepted_evidence_index": [{"step_id": item["step_id"], "operation": item.get("operation"),
                    "provider_check": item.get("outcome_check", {}).get("status", "unsupported")} for item in artifacts]}
@@ -1896,6 +1898,7 @@ async def materialize_action_arguments(
     operation = str(step.get("operation", ""))
     from .approval_readiness import unfinished_action_content
     from .composed_content import preserve_action_targets, validate_composed_content
+    from .dashboard_quality import dashboard_requirements, validate_dashboard_values
 
     planned_arguments = step.get("arguments") or {}
     sheet_targets = {}
@@ -1930,6 +1933,7 @@ async def materialize_action_arguments(
                                  if key in referenced_variables}
     payload = {
         "original_request": prompt,
+        "spreadsheet_quality_requirements": dashboard_requirements(prompt),
         "action_step": step,
         "required_argument_contract": (
             capability.get("input_schema", {}) if capability else {}
@@ -1980,6 +1984,7 @@ async def materialize_action_arguments(
             if unfinished_action_content(operation, resolved):
                 raise ValueError("The action must contain finished content, not a placeholder")
             validate_composed_content(step, resolved)
+            validate_dashboard_values(prompt, operation, resolved)
             return resolved
         except Exception as exc:
             last_error = exc
