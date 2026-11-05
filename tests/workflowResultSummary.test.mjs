@@ -49,6 +49,23 @@ test("non-Sheets results keep their own presentation", () => {
   assert.equal(sheetWorkflowSummary([compose], { kind: "document" }), null);
 });
 
+test("broker receipts supply honest row totals and the exact final workbook link", () => {
+  const receipt = { ...write, operation: "google-sheets.update-multiple-rows",
+    response: { os: [], ret: { spreadsheetId: "pilot", updatedRange: "Dashboard!A1:G37", updatedRows: 37 } } };
+  const result = { ...primary, verified: false, readBack: true, link: "https://docs.google.com/spreadsheets/d/pilot/edit#gid=173" };
+  const summary = sheetWorkflowSummary([compose, receipt], result);
+  assert.deepEqual(summary.metrics, [{ value: 1, label: "report prepared" }, { value: 37, label: "rows saved" }]);
+  assert.equal(summary.actions.at(-1).link, result.link);
+  assert.equal(summary.actions.at(-1).detail, "Dashboard · Saved cells read back");
+  assert.match(summary.summary, /AURA prepared the report/);
+  assert.doesNotMatch(summary.summary, /verified/);
+  for (const error of [{ error: "Failed" }, { success: false }]) {
+    for (const response of [{ ...receipt.response, ...error }, { ret: { ...receipt.response.ret, ...error } }]) {
+      assert.deepEqual(sheetWorkflowSummary([{ ...receipt, response }], result).metrics, []);
+    }
+  }
+});
+
 test("web research excludes failed reads, repeated pages and later tracking-table checks", () => {
   const page = { id: "web", operation: "web.page.read", status: "completed", hasResponse: true,
     response: { url: "https://example.com/", text: "Retrieved page" } };

@@ -2,14 +2,15 @@ const WRITES = new Set(["sheets.append", "sheets.kpi.create", "sheets.campaign_r
 const READS = new Set(["sheets.read", "sheets.workbook.get", "sheets.campaign_report.get"]);
 const validId = (id) => typeof id === "string" && /^[A-Za-z0-9_-]+$/.test(id);
 const brokerOperation = (operation = "") => operation.startsWith("google-sheets.");
-const isWrite = (operation = "") => WRITES.has(operation)
+export const isSheetsWrite = (operation = "") => WRITES.has(operation)
   || /^google-sheets\.(?:new|create|add|append|update|format|clear)-/.test(operation);
-const isRead = (operation = "") => READS.has(operation)
+export const isSheetsRead = (operation = "") => READS.has(operation)
   || /^google-sheets\.(?:get|list|read|find|search)-/.test(operation);
-const resultOf = (output) => {
+export const sheetReceipt = (output) => {
   const receipt = output?.provider_result || {};
   return receipt.ret && typeof receipt.ret === "object" && !Array.isArray(receipt.ret) ? receipt.ret : receipt;
 };
+const isWrite = isSheetsWrite, isRead = isSheetsRead, resultOf = sheetReceipt;
 const failed = (output) => [output?.provider_result, resultOf(output)]
   .some((receipt) => receipt?.error || receipt?.isError || receipt?.is_error || receipt?.success === false);
 const writtenRange = (output) => resultOf(output).updates?.updatedRange || resultOf(output).updatedRange;
@@ -56,7 +57,21 @@ export function sheetAppLinks(id, range, gid) {
   return { link: link.toString(), embedUrl: embed.toString() };
 }
 
-function grids(receipt) {
+function grids(receipt, output) {
+  // The broker's read-rows action returns evaluated cell arrays in ret.rows,
+  // without an A1 range. Use only that read's resolved destination, never a
+  // report's proposed rows or a write's requested values.
+  if (output?.operation === "google-sheets.read-rows") {
+    const args = output.resolved_arguments || {};
+    const origin = sheetRange(args.range);
+    const name = origin?.tab || args.sheetName;
+    if (args.hasHeaders !== false || !origin || !name
+        || (origin.tab && args.sheetName && origin.tab !== args.sheetName)
+        || !Array.isArray(receipt.rows) || !receipt.rows.every((row) => Array.isArray(row)
+          && row.every((cell) => cell === null || ["string", "number", "boolean"].includes(typeof cell)))) return [];
+    const range = `'${String(name).replaceAll("'", "''")}'!${args.range.split("!").at(-1)}`;
+    return [{ range, values: receipt.rows }];
+  }
   if (Array.isArray(receipt.values) && sheetRange(receipt.range)) {
     return [{ range: receipt.range, values: receipt.majorDimension === "COLUMNS"
       ? Array.from({ length: Math.max(0, ...receipt.values.map((column) => column.length)) }, (_, row) => receipt.values.map((column) => column[row] ?? ""))
@@ -71,6 +86,22 @@ function grids(receipt) {
   }).filter(Boolean));
 }
 
+function matchesRange(grid, target, allowPartial = false) {
+  const source = sheetRange(grid.range), destination = sheetRange(target);
+  if (!source || !destination || source.tab !== destination.tab) return false;
+  const end = (range, origin, values = []) => {
+    const last = range.split("!").at(-1).split(":")[1];
+    return last ? sheetRange(last) : { row: origin.row + Math.max(1, values.length) - 1,
+      column: origin.column + Math.max(1, ...values.map((row) => row.length)) - 1 };
+  };
+  const lastSource = end(grid.range, source, grid.values), lastTarget = end(target, destination);
+  if (!lastSource || !lastTarget) return false;
+  if (allowPartial) return source.row <= lastTarget.row && source.column <= lastTarget.column
+    && lastSource.row >= destination.row && lastSource.column >= destination.column;
+  return source.row <= destination.row && source.column <= destination.column
+    && lastSource.row >= lastTarget.row && lastSource.column >= lastTarget.column;
+}
+
 export function googleSheetsResult(outputs, context = {}, explicitPrimary = null) {
   const sheets = outputs.filter((output) => (isWrite(output.operation) || isRead(output.operation))
     && !failed(output) && spreadsheetId(output)
@@ -83,11 +114,12 @@ export function googleSheetsResult(outputs, context = {}, explicitPrimary = null
   const id = spreadsheetId(write || explicitPrimary || matching.at(-1));
   const targetRange = writtenRange(write);
   const read = [...matching].reverse().find((output) => isRead(output.operation)
-    && spreadsheetId(output) === id && (!targetRange || resultOf(output).range === targetRange));
+    && spreadsheetId(output) === id && (!write || matching.indexOf(output) > matching.indexOf(write))
+    && (!targetRange || grids(resultOf(output), output).some((grid) => matchesRange(grid, targetRange, true))));
   const checked = write?.outcome_check?.status === "verified";
   // Display actual provider reads, never the requested write values as proof.
   const receipt = read ? resultOf(read) : checked ? resultOf({ provider_result: write.outcome_check.observed }) : {};
-  const ranges = grids(receipt);
+  const ranges = grids(receipt, read);
   const range = targetRange || ranges[0]?.range || resultOf(explicitPrimary).range || "";
   const origin = sheetRange(range);
   const headerRead = matching.find((output) => {
@@ -105,6 +137,7 @@ export function googleSheetsResult(outputs, context = {}, explicitPrimary = null
   return { kind: "spreadsheet", provider: "Google Sheets", providerVerb: write ? checked ? "Saved and verified in" : "Saved in" : "Read from",
     title: resultOf(named).properties?.title || resultOf(named).title || origin?.tab || context.title || "Google Sheets result",
     sourceStepKey: source?.step_key, sourceStepId: source?.step_id, sourceOperation: source?.operation,
-    spreadsheetId: id, range, ranges, headers, sheetId: gid, verified: Boolean(checked),
+    spreadsheetId: id, range, ranges, headers, sheetId: gid, verified: Boolean(checked), readBack: Boolean(read && ranges.length),
+    partialReadBack: Boolean(read && targetRange && !ranges.some((grid) => matchesRange(grid, targetRange))),
     ...sheetAppLinks(id, range, gid), linkLabel: "Open in Google Sheets", downloadUrl: null };
 }

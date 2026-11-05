@@ -132,8 +132,8 @@ test("backup results disclose the actual generator and preserve its saved respon
     },
   }] });
   for (const expected of ["Claude response", "Backup used", "insufficient credits", "September 2026", "What happened", "Results by tool"]) assert.ok(html.includes(expected), expected);
-  assert.ok(html.indexOf("Main workflow result") < html.indexOf("What happened"));
-  assert.match(html, /<section aria-label="Main workflow result"/);
+  assert.ok(html.indexOf("What happened") < html.indexOf("Main workflow result"));
+  assert.match(html, /<details aria-label="Main workflow result"/);
   assert.doesNotMatch(html, /Generated with Claude|AURA Intelligence output preview/);
   assert.match(html, /<details[^>]*><summary[^>]*>Execution details · backup used/);
 });
@@ -222,13 +222,13 @@ const run = { id: "saved-run", status: "completed", plan: { name: "Roofing campa
   } },
 };
 
-test("the expanded tool result precedes supporting activity", () => {
+test("summary actions and tools precede the expandable actual result", () => {
   const html = render(run);
   const main = html.indexOf('aria-label="Main workflow result"');
   const actions = html.indexOf('aria-label="Supporting workflow actions"');
   const tools = html.indexOf('aria-label="Results by tool"');
-  assert.ok(main > 0 && main < tools && tools < actions);
-  assert.match(html, /<section aria-label="Main workflow result"/);
+  assert.ok(actions > 0 && actions < tools && tools < main);
+  assert.match(html, /<details aria-label="Main workflow result"/);
   const content = html.slice(main, html.indexOf("What would you like to do next?"));
   for (const text of ["Sourced campaign brief", "Get a Free Estimate", "Final review remains pending."]) assert.ok(content.includes(text));
   assert.match(content, /href="https:\/\/example.com\/roofing"/);
@@ -270,7 +270,7 @@ test("an unavailable main output does not create an empty tool preview", () => {
   assert.match(html, /View Google Ads results/);
 });
 
-test("the visible Results section leads with final Sheets cells, exact link and ChatGPT attribution", () => {
+test("the expandable Results section contains final Sheets cells, exact link and ChatGPT attribution", () => {
   const sheetSteps = [
     { id: "source", key: "source", tool_slug: "google", status: "completed", output: { operation: "sheets.read", resolved_arguments: { spreadsheet_id: "workbook" }, provider_result: { range: "'Source'!A1:B2", values: [["Earlier source"]] } } },
     { id: "compose", key: "compose", tool_slug: "aura", status: "completed", output: { operation: "report.compose", provider_result: { body: "Generated report" } } },
@@ -287,7 +287,7 @@ test("the visible Results section leads with final Sheets cells, exact link and 
   assert.match(html, /source tab read in Google Sheets/);
   assert.match(html, /report prepared with ChatGPT/);
   assert.match(html, /rows saved to Google Sheets/);
-  assert.match(html, /<section aria-label="Main workflow result"/);
+  assert.match(html, /<details aria-label="Main workflow result"/);
   assert.ok(html.indexOf('aria-label="Results by tool"') < html.indexOf('aria-label="Google Sheets result screen"'));
   assert.match(html, /aria-label="View ChatGPT results"/);
   assert.doesNotMatch(html, /AURA Intelligence|Earlier source|majorDimension|~12 min|time saved|Campaign report sent/);
@@ -413,4 +413,37 @@ test("broker saved-cell readback renders a spreadsheet grid without depending on
   assert.match(html, /Revenue/);
   assert.match(html, /Open in Google Sheets/);
   assert.doesNotMatch(html, /<iframe/);
+});
+
+test("an incomplete broker workflow summarizes completed work and previews the exact evaluated sheet readback", () => {
+  const steps = [
+    { id: "web", key: "web", tool_slug: "web", status: "completed", output: { operation: "web.page.read", provider_result: { url: "https://example.com/", text: "Retrieved source" } } },
+    { id: "report", key: "report", tool_slug: "aura", status: "completed", output: { operation: "report.compose", provider_result: { body: "Intermediate planning report" } } },
+    { id: "save", key: "save", tool_slug: "google-sheets", operation: "google-sheets.update-multiple-rows", status: "completed",
+      output: { resolved_arguments: { sheetId: "final-workbook", worksheetId: 173, rows: '[["Unsaved proposal"]]' },
+        provider_result: { os: [], ret: { spreadsheetId: "final-workbook", updatedRange: "Dashboard!A1:G37", updatedRows: 37 } } } },
+    { id: "verify", key: "verify", tool_slug: "google-sheets", operation: "google-sheets.read-rows", status: "completed",
+      output: { resolved_arguments: { spreadsheetId: "final-workbook", sheetName: "Dashboard", range: "A1:F200", hasHeaders: false },
+        provider_result: { os: [], ret: { rows: [["Plantéa", "September 2026"], ["Revenue", "", "Not publicly reported", "Awaiting input"]], rowCount: 2 } } } },
+  ];
+  const html = render({ id: "broker-saved-run", status: "waiting_for_action", plan: { name: "KPI dashboard" }, steps, result: {} });
+  assert.match(html, /Report saved to Google Sheets — review needed/);
+  assert.match(html, /Final review needs attention/);
+  assert.match(html, /AURA has not verified the full requested outcome/);
+  assert.match(html, />37<\/p>/);
+  assert.match(html, /web page read/);
+  assert.match(html, /Tools used/);
+  assert.match(html, /<details aria-label="Main workflow result" class="group mb-6">/);
+  assert.ok(html.indexOf("What happened") < html.indexOf("Tools used"));
+  assert.ok(html.indexOf("Tools used") < html.indexOf('aria-label="Main workflow result"'));
+  assert.match(html, /Saved Google Sheets cells/);
+  assert.match(html, /Cell A1/);
+  assert.match(html, /Partial saved preview:/);
+  assert.match(html, /Dashboard&#x27;!A1:F200/);
+  assert.match(html, /Not publicly reported/);
+  assert.match(html, /Awaiting input/);
+  assert.match(html, /https:\/\/docs.google.com\/spreadsheets\/d\/final-workbook\/edit#gid=173&amp;range=A1%3AG37/);
+  assert.doesNotMatch(html, /<iframe|Unsaved proposal|Empty list returned|Workflow complete<\/|Schedule<\/button>/);
+  assert.ok(html.indexOf("Saved Google Sheets cells") < html.indexOf("Research and preparation"));
+  assert.ok(html.indexOf("Research and preparation") < html.indexOf("Intermediate planning report"));
 });

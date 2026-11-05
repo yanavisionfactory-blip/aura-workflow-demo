@@ -96,6 +96,48 @@ const brokerWrite = (operation = "google-sheets.add-multiple-rows") => ({
   exports: { $summary: "Successfully updated 8 row(s) in the spreadsheet." } },
 });
 
+const brokerRead = () => ({ step_key: "verify", operation: "google-sheets.read-rows",
+  resolved_arguments: { spreadsheetId: "broker-workbook", sheetName: "Dashboard", range: "A1:G8", hasHeaders: false },
+  provider_result: { os: [], ret: { rows: [["Revenue", "", "Not publicly reported", "Awaiting input"], ["Actual zero", 0, false, null]], rowCount: 2 } },
+});
+
+test("broker read-rows displays evaluated cells from the same written workbook and preserves unknowns and true zeros", () => {
+  const outputs = [brokerWrite(), brokerRead()];
+  const before = structuredClone(outputs);
+  const result = googleSheetsResult(outputs);
+  assert.equal(result.sourceStepKey, "verify");
+  assert.equal(result.readBack, true);
+  assert.equal(result.partialReadBack, false);
+  assert.equal(result.verified, false);
+  assert.equal(result.spreadsheetId, "broker-workbook");
+  assert.equal(result.sheetId, 173);
+  assert.deepEqual(result.ranges, [{ range: "'Dashboard'!A1:G8", values: outputs[1].provider_result.ret.rows }]);
+  assert.doesNotMatch(JSON.stringify(result), /Requested cells are not readback/);
+  assert.deepEqual(outputs, before);
+});
+
+test("broker readback rejects stale, other-workbook, other-tab, unrelated-range and header-object responses", () => {
+  assert.deepEqual(googleSheetsResult([brokerRead(), brokerWrite()]).ranges, []);
+  for (const args of [{ spreadsheetId: "other-workbook" }, { sheetName: "Other" }, { range: "H1:J8" },
+    { range: "A9:G20" }, { range: "Other!A1:G8" }, { hasHeaders: true }, { hasHeaders: undefined }]) {
+    const read = brokerRead();
+    read.resolved_arguments = { ...read.resolved_arguments, ...args };
+    assert.deepEqual(googleSheetsResult([brokerWrite(), read]).ranges, [], JSON.stringify(args));
+  }
+  const read = brokerRead();
+  read.provider_result.ret.rows = [{ Metric: "Revenue", Actual: 0 }];
+  assert.deepEqual(googleSheetsResult([brokerWrite(), read]).ranges, []);
+});
+
+test("a larger readback range and quoted tab names retain their actual coordinates", () => {
+  const write = brokerWrite(), read = brokerRead();
+  write.provider_result.ret.updatedRange = "'Brand''s Dashboard'!A2:G8";
+  read.resolved_arguments = { ...read.resolved_arguments, sheetName: "Brand's Dashboard", range: "A1:G20" };
+  const result = googleSheetsResult([write, read]);
+  assert.equal(result.ranges[0].range, "'Brand''s Dashboard'!A1:G20");
+  assert.equal(result.range, "'Brand''s Dashboard'!A2:G8");
+});
+
 test("broker write receipts open the actual Google Sheets screen and saved worksheet", () => {
   for (const operation of ["google-sheets.add-multiple-rows", "google-sheets.update-row", "google-sheets.update-multiple-rows"]) {
     const output = brokerWrite(operation);
@@ -154,4 +196,16 @@ test("broker workbook creations keep their provider title and never invent cell 
   assert.equal(result.title, "September KPI dashboard");
   assert.equal(result.spreadsheetId, "new-workbook");
   assert.deepEqual(result.ranges, []);
+});
+
+
+test("a partial read of the written range remains visible without claiming a complete preview", () => {
+  const read = brokerRead();
+  read.resolved_arguments.range = "A1:F200";
+  const result = googleSheetsResult([brokerWrite(), read]);
+  assert.equal(result.readBack, true);
+  assert.equal(result.partialReadBack, true);
+  assert.equal(result.range, "Dashboard!A1:G8");
+  assert.equal(result.ranges[0].range, "'Dashboard'!A1:F200");
+  assert.deepEqual(result.ranges[0].values, read.provider_result.ret.rows);
 });

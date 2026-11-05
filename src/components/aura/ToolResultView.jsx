@@ -24,16 +24,16 @@ export function ToolResultFrame({ tool, title, synthetic = false, onExpand, chil
   </section>;
 }
 
-export function ResultsByTool({ entries, onOpen, selectedTool }) {
+export function ResultsByTool({ entries, onOpen, selectedTool, compact = false }) {
   if (!entries.length) return null;
   const attention = entries.filter((entry) => ["failed", "blocked", "provider_error"].includes(entry.status)).length;
   return <section aria-label="Results by tool" className="mb-6 rounded-xl border border-white/10 bg-[#0c121e]/65 p-4">
     <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-      <h3 className="flex items-center gap-2 text-sm font-semibold"><Wrench className="h-4 w-4 text-muted-foreground" />Results by tool</h3>
+      <h3 className="flex items-center gap-2 text-sm font-semibold"><Wrench className="h-4 w-4 text-muted-foreground" />{compact ? "Tools used" : "Results by tool"}</h3>
       <button type="button" onClick={() => onOpen("activity")} className="inline-flex items-center gap-1 rounded-full border border-violet-400/20 px-2.5 py-1 text-[11px] text-violet-400"><Activity className="h-3 w-3" />View activity</button>
     </div>
     <div className="flex flex-wrap gap-2">{toolResultGroups(entries).sort((a, b) => Number(b.tool === selectedTool) - Number(a.tool === selectedTool)).map(({ tool, entries: items }) =>
-      <button type="button" key={tool} aria-label={`View ${tool} results`} aria-pressed={selectedTool ? selectedTool === tool : undefined} onClick={() => onOpen(([...items].reverse().find((item) => item.preview) || items[0]).id)} className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-xs font-medium hover:border-violet-400/40 ${selectedTool === tool ? "border-violet-400/50 bg-violet-400/15 text-violet-100" : "border-white/10 bg-white/[0.02]"}`}>
+      <button type="button" key={tool} aria-label={`View ${tool} results`} aria-pressed={selectedTool ? selectedTool === tool : undefined} onClick={() => onOpen(compact && selectedTool === tool ? "main" : ([...items].reverse().find((item) => item.preview) || items[0]).id)} className={`inline-flex items-center gap-2 rounded-xl border ${compact ? "px-2.5 py-1.5" : "px-4 py-2.5"} text-xs font-medium hover:border-violet-400/40 ${selectedTool === tool && !compact ? "border-violet-400/50 bg-violet-400/15 text-violet-100" : "border-white/10 bg-white/[0.02]"}`}>
         {items.some((entry) => ["failed", "blocked", "provider_error"].includes(entry.status)) ? <AlertTriangle className="h-3 w-3 text-amber-400" /> : items.every((entry) => entry.status === "completed") ? <Check className="h-3 w-3 text-emerald-400" /> : <Clock className="h-3 w-3 text-muted-foreground" />}<span>{tool}</span>
       </button>)}
     </div>
