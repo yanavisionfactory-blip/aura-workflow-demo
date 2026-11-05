@@ -40,6 +40,11 @@ from .db import SessionLocal, engine, set_tenant_context
 from .execution_lock import execution_lock
 from .google_ads_accounts import apply_account_defaults, selected_account
 from .managed_connectors import managed_connection_reference, managed_connector_client
+from .meta_planning_connection import (
+    connection_provider,
+    meta_contract_ready,
+    restore_meta_contract,
+)
 from .models import (
     Approval,
     ApprovalSnapshot,
@@ -1558,6 +1563,21 @@ async def connection_requirement_inventory(
         _connection_family(item) for item in combined if _connection_family(item)
     }
 
+    # Managed MCP setup routes are available before tools/list can be verified.
+    # They belong in the connection catalog, never the executable operation list.
+    from .mcp_oauth import managed_mcp_catalog
+
+    requested_text = " ".join([prompt, *map(str, requested_tool_names)]).casefold()
+    for item in managed_mcp_catalog(hubspot_enabled=get_settings().hubspot_connection_mode == "mcp"):
+        family = _connection_family(item)
+        if family not in known_families and any(
+            re.search(rf"(?<!\w){re.escape(alias.casefold())}(?!\w)", requested_text)
+            for alias in item.get("aliases", []) if alias
+        ):
+            combined.append({**_catalog_entry_inventory(item, connected_families),
+                             "provider_hint": item["provider"]})
+            known_families.add(family)
+
     snapshots = list((await session.scalars(select(ManagedConnectorCatalog))).all())
     for snapshot in snapshots:
         for item in snapshot.providers or []:
@@ -1767,7 +1787,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             await session.scalars(
                 select(CapabilityManifest).where(
                     CapabilityManifest.tool_id.in_([tool.id for tool in tools]),
-                    CapabilityManifest.status == "verified",
+                    CapabilityManifest.workspace_id == run.workspace_id,
                 )
             )
         ).all()
@@ -1787,21 +1807,30 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             # Browser discovery may call a remote service. Refresh only an app
             # named in this request; other verified contracts remain available
             # from the saved manifest without delaying the first model response.
-            names = (tool.slug, tool.display_name)
+            provider = connection_provider(tool)
+            names = (tool.slug, tool.display_name, provider, provider.replace("-", " "))
             if any(name and (
                 name.casefold() in selected_names
                 or (len(name) > 2 and re.search(
                     rf"(?<!\w){re.escape(name.casefold())}(?!\w)", request_text,
                 ))
             ) for name in names):
-                await refresh_browser_connection_contract(tool, manifests_by_tool.get(tool.id))
+                manifest = await restore_meta_contract(session, tool, manifests_by_tool.get(tool.id))
+                if manifest is not None:
+                    manifests_by_tool[tool.id] = manifest
+                if manifest is not None and manifest.status == "verified":
+                    await refresh_browser_connection_contract(tool, manifest)
+        manifests_by_tool = {
+            tool.id: manifest for tool in tools
+            if (manifest := manifests_by_tool.get(tool.id)) is not None
+            if manifest.status == "verified" and (manifest.verification or {}).get("ok") is not False
+            and (connection_provider(tool) != "meta-ads" or meta_contract_ready(tool, manifest))
+        }
         connected_inventory = [
             {
                 "slug": tool.slug,
                 "name": tool.display_name,
-                "canonical_provider": (tool.config or {}).get("canonical_provider")
-                or (tool.config or {}).get("vendor_app")
-                or tool.slug,
+                "canonical_provider": connection_provider(tool),
                 "kind": tool.kind.value,
                 "allowed_operations": tool.allowed_operations,
                 "granted_operations": list(tool.allowed_operations or []),
@@ -1840,10 +1869,9 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
         manifests_by_slug = dict(dynamic_manifests)
         manifests_by_slug.update(broker_manifests)
         manifests_by_slug.update({
-            tool.slug: manifest.manifest
+            tool.slug: manifests_by_tool[tool.id].manifest
             for tool in tools
-            for manifest in manifests
-            if manifest.tool_id == tool.id
+            if tool.id in manifests_by_tool
         })
         from .connection_families import capability_family
 
@@ -2165,7 +2193,8 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             # unrelated Google accounts need consent. Only a compiled plan's
             # actual grant checks may ask for access after an explicit choice.
             missing = ([] if failure_category == "operator_quota" or (run.inputs or {}).get("connection_routes") else
-                       explicit_disconnected_capabilities(run.prompt, requirement_inventory))
+                       explicit_disconnected_capabilities(
+                           run.prompt + "\n" + "\n".join(requested_tools), requirement_inventory))
             missing = [item for item in missing if capability_family(item) not in excluded_families]
             if missing:
                 for capability in missing:
@@ -2174,7 +2203,9 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                             workspace_id=workspace_id,
                             run_id=run.id,
                             capability=capability,
-                            provider_hint=capability,
+                            provider_hint=next((item.get("provider_hint") or capability
+                                                for item in requirement_inventory
+                                                if _connection_family(item) == capability), capability),
                             reason=f"Connect {capability} so AURA can finish the saved plan",
                             required_permissions=next(
                                 (

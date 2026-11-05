@@ -151,7 +151,10 @@ export async function hydrateConnections({ force = false } = {}) {
 
     const tools = await listPythonTools();
     const health = await Promise.all(tools.map(async (tool) => {
-      if (!tool.enabled || (tool.kind !== "oauth" && !["wordpress_plugin", "shopify_client_credentials"].includes(tool.connection_backend))) return { tool, connected: Boolean(tool.enabled) };
+      if (!tool.enabled) return { tool, connected: false };
+      if (tool.kind !== "oauth" && !["wordpress_plugin", "shopify_client_credentials"].includes(tool.connection_backend)) {
+        return { tool, connected: isVerifiedConnection(tool) };
+      }
       try {
         const result = await testPythonConnection(tool.id);
         return { tool, connected: isVerifiedConnection(result) };
