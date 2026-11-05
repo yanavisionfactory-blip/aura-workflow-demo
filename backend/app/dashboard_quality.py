@@ -36,7 +36,12 @@ GUIDANCE = (
     "A FORMULA-only read cannot establish that calculations work; include a dependent "
     "FORMATTED_VALUE or UNFORMATTED_VALUE read and repair any returned cell errors. "
     "For google-sheets.read-rows, use hasHeaders=false to preserve every cell: a dashboard "
-    "title row is not a table header, and object mapping can silently discard other columns."
+    "title row is not a table header, and object mapping can silently discard other columns. "
+    "For bounded update-multiple-rows ranges, provide exactly the declared number of row arrays; "
+    "each array must fit the declared columns. A four-row range with two row arrays writes only "
+    "the first two rows, not two nonadjacent destinations. Use separate exact-range write steps "
+    "for nonadjacent edits; do not invent blank padding that would erase intervening cells. "
+    "format-cells accepts one range per call; use separate calls for nonadjacent ranges."
 )
 
 
@@ -110,9 +115,59 @@ def _supplied_numbers(prompt):
                 or re.search(r"\b(?:use|read|import|calculate)\b[^.!?\n]{0,100}\b(?:attached|uploaded|supplied|provided|actual)\s+data\b", text, re.IGNORECASE))
 
 
+def _validate_bounded_range(operation, arguments):
+    """Reject incomplete rectangles before a partial provider write can occur.
+
+    This is validation, never padding or range rewriting: null/omitted cells
+    can intentionally preserve existing values, and blanks can erase them.
+    Start-cell anchors and upstream references keep their existing semantics.
+    """
+    if operation not in {"google-sheets.update-multiple-rows", "google-sheets.format-cells"}:
+        return
+    target = arguments.get("range")
+    if not isinstance(target, str) or referenced_paths(target):
+        return
+    cells = target.rsplit("!", 1)[-1].strip()
+    if "," in cells or ";" in cells:
+        raise ValueError("KPI sheet range: use one contiguous range per action; split nonadjacent edits or formatting into separate exact-range steps.")
+    if operation == "google-sheets.format-cells":
+        return
+    match = re.fullmatch(r"\$?([A-Za-z]+)\$?([1-9][0-9]*):\$?([A-Za-z]+)\$?([1-9][0-9]*)", cells)
+    if not match:
+        return  # A1 start-cell anchors, open ranges and provider-specific notation.
+    rows = arguments.get("rows")
+    if referenced_paths(rows):
+        return  # Rechecked once the content has been materialized.
+    if isinstance(rows, str):
+        try:
+            rows = json.loads(rows)
+        except (ValueError, RecursionError):
+            return  # The connector's JSON/schema validator owns malformed input.
+    if not isinstance(rows, list) or not all(isinstance(row, list) for row in rows):
+        return
+
+    def column_index(name):
+        index = 0
+        for letter in name.upper():
+            index = index * 26 + ord(letter) - ord("A") + 1
+        return index
+
+    first_col, first_row, last_col, last_row = match.groups()
+    height = int(last_row) - int(first_row) + 1
+    width = column_index(last_col) - column_index(first_col) + 1
+    if height <= 0 or width <= 0 or len(rows) != height or any(len(row) > width for row in rows):
+        raise ValueError(
+            f"KPI sheet range: {target} declares {height} rows and {width} columns, "
+            f"but rows contains {len(rows)} row arrays with maximum width {max(map(len, rows), default=0)}. "
+            "Use matching exact-range writes; split nonadjacent edits into separate steps. "
+            "Do not invent blank padding or overwrite intervening cells."
+        )
+
+
 def validate_dashboard_values(prompt, operation, arguments):
     if not dashboard_template_requested(prompt) or not operation.startswith(("sheets.", "google-sheets.")):
         return
+    _validate_bounded_range(operation, arguments)
     rows = sheet_rows(arguments)
     if not _supplied_numbers(prompt):
         for row in rows:
