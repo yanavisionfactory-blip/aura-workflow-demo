@@ -74,15 +74,21 @@ _CALENDAR_EVENT_TARGET = re.compile(
 
 def user_request_text(prompt: str) -> str:
     """Ignore serialized previous plans when deciding what the user authorized."""
-    original, marker, revision = prompt.partition(_REVIEW_MARKER)
-    if not marker:
+    parts = prompt.split(_REVIEW_MARKER)
+    if len(parts) == 1:
         return prompt
-    instruction = revision.split("\nCurrent reviewed steps (", 1)[0]
-    if instruction.lstrip().startswith("AURA backend authorization rejected the previous plan."):
-        # Recovery diagnostics quote rejected operations verbatim. They are
-        # internal repair hints, not a new user authorization to send.
-        return original
-    return original + "\n" + instruction
+    instructions = [parts[0]]
+    for revision in parts[1:]:
+        instruction = revision.split("\nCurrent reviewed steps (", 1)[0]
+        if instruction.lstrip().startswith("AURA backend authorization rejected the previous plan."):
+            # Recovery diagnostics quote rejected operations verbatim. They are
+            # internal repair hints, not a new user authorization to send.
+            continue
+        instructions.append(instruction)
+    # Saved result edits can wrap a previously revised prompt. Keep every real
+    # user edit, while excluding each serialized plan and any repair diagnostics.
+    # JSON-encoded plan text escapes newlines, so it cannot add a review marker.
+    return "\n".join(instructions)
 
 
 def _existing_sheets_recovery(prompt: str) -> bool:
@@ -342,7 +348,7 @@ def validate_revision_write_scope(
     if _REVIEW_MARKER not in prompt:
         return
     marker = "\nCurrent reviewed steps (preserve unchanged steps and dependencies): "
-    _, found, serialized = prompt.partition(marker)
+    _, found, serialized = prompt.rpartition(marker)
     if not found:
         return
     try:
