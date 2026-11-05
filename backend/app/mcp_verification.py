@@ -108,4 +108,3 @@ async def verify_managed_mcp(credentials: dict, provider: str, *, discover, exec
         if auth_failure:
             raise auth_failure from exc
         raise ConnectorError("The MCP service could not be verified; existing access was kept") from exc
-
