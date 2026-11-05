@@ -83,9 +83,7 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
       const latest = await getPythonRun(run.backend_run_id);
       const projected = backendRunHistoryProjection(latest).run;
       const blocked = result.preflight_blocker;
-      const pendingReview = latest.status === "awaiting_approval" && latest.steps?.some((step) =>
-        step.approval_status === "pending" && step.approval_preview?.status === "ready"
-      );
+      const pendingReview = latest.plan_approved && latest.status === "awaiting_approval";
       setReviewReady(Boolean(pendingReview));
       // The public run view can say "recovering" while its durable status is
       // waiting_for_action. Use the scoped dispatch response to identify a pause.
@@ -104,7 +102,9 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
       }
       setRepairReady(blocked?.action === "wait_for_connector_repair" && result.preflight_status === "blocked");
       setCheckResult(pendingReview
-        ? "The next action is ready for your review. Open its prepared content to continue this saved run."
+        ? latest.tool_output_review?.step_id
+          ? "A tool has finished. Open this saved workflow to review its result and continue."
+          : "Continue this saved workflow from the plan you already started."
         : blocked && result.preflight_status === "blocked"
         ? blocked.action === "wait_for_connector_repair"
           ? `Paused before step 1: ${blocked.tool_slug || "the selected app"} needs connector repair.`
@@ -152,7 +152,7 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
       await onOpenRun?.(run.backend_run_id);
     } catch (error) {
       setReviewReady(false);
-      setCheckResult(error.message || "Could not open the pending review.");
+      setCheckResult(error.message || "Could not continue this saved workflow.");
     }
   };
 
@@ -362,7 +362,7 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
             {reviewReady && (
               <Button size="sm" variant="outline" className="w-full border-amber-400/25 text-amber-200"
                 onClick={openPendingReview} disabled={checkBusy}>
-                Review pending action
+                Open saved workflow
               </Button>
             )}
             {run.status === "running" && (

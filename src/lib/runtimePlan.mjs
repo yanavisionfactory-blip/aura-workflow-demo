@@ -1,5 +1,3 @@
-import { pendingTextPreparation } from "./textPreparation.mjs";
-
 export function hasDurablePlan(runId, backendPlan) {
   return Boolean(runId && backendPlan?.steps?.length);
 }
@@ -55,7 +53,7 @@ export function restorablePlanningRun(run = {}) {
     || (run.connection_requirements || []).some((item) => item.status !== "satisfied");
 }
 
-export function savedRunResumeView(run = {}, { openPreview = false } = {}) {
+export function savedRunResumeView(run = {}) {
   if (!run?.id) return null;
   if (!run.plan_approved) {
     if (restorablePlanningRun(run)) return "plan";
@@ -68,10 +66,6 @@ export function savedRunResumeView(run = {}, { openPreview = false } = {}) {
   if (run.status === "awaiting_approval" && run.tool_output_review?.step_id) return "execution";
   if (run.automation_state?.status === "blocked"
       || ["waiting_for_action", "blocked", "failed"].includes(run.status)) return "recovery";
-  if (pendingTextPreparation(run)) return "execution";
-  if (openPreview && run.status === "awaiting_approval" && run.steps?.some((step) =>
-    step.approval_status === "pending" && step.approval_preview?.status === "ready"
-  )) return "preview";
   if (["queued", "running", "recovering", "awaiting_approval", "completed"].includes(run.status)) return "execution";
   return null;
 }

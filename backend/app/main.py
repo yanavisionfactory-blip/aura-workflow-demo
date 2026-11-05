@@ -6579,6 +6579,91 @@ async def review_run_readiness(
     return await check_run_readiness(session, run, WorkflowPlan.model_validate(plan_data))
 
 
+@app.post("/v1/runs/{run_id}/resume-reviewed-plan")
+async def resume_reviewed_plan(
+    run_id: str,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    """Continue a previously started interactive run using its original plan decision.
+
+    Older clients saved per-action input gates. Upgrade that execution mode, not
+    the approved plan, action arguments, receipts, or output-review checkpoint.
+    The worker still validates each concrete action against current permissions.
+    """
+    from .tool_output_review import REVIEW_KEY, pause_for_output_review
+
+    run = await session.scalar(select(WorkflowRun).where(
+        WorkflowRun.id == run_id, WorkflowRun.workspace_id == context.workspace_id,
+    ).with_for_update())
+    if not run:
+        raise HTTPException(404, "Run not found")
+    if run.cancellation_requested or run.status == RunStatus.cancelled:
+        raise HTTPException(409, "This workflow has been cancelled")
+    if not run.plan_approved or (run.execution_context or {}).get("execution_mode") == "unattended":
+        raise HTTPException(409, "Only an already started interactive plan can continue here")
+    version = await session.scalar(select(PlanVersion).where(
+        PlanVersion.run_id == run.id, PlanVersion.workspace_id == context.workspace_id,
+        PlanVersion.status == "approved",
+    ).order_by(PlanVersion.version.desc()).limit(1))
+    snapshot = await session.scalar(select(ApprovalSnapshot).where(
+        ApprovalSnapshot.run_id == run.id, ApprovalSnapshot.workspace_id == context.workspace_id,
+    ).order_by(ApprovalSnapshot.approved_at.desc()).limit(1))
+    plan_hash = canonical_plan_hash(run.plan)
+    if (not version or not snapshot or snapshot.plan_version_id != version.id
+            or version.plan_hash != plan_hash or snapshot.plan_hash != plan_hash
+            or canonical_plan_hash(version.plan) != plan_hash):
+        raise HTTPException(409, "The saved plan changed and needs to be reviewed again")
+    state = dict((run.execution_context or {}).get(REVIEW_KEY, {}))
+    if state.get("enabled") and state.get("execute_reviewed_plan"):
+        if state.get("approved_plan_hash") != plan_hash:
+            raise HTTPException(409, "The saved execution decision does not match this plan")
+        # Another tab or a retried request already upgraded this run. Never
+        # redispatch it or acknowledge a pending result on the caller's behalf.
+        return {"id": run.id, "status": run.status.value, "already_resumed": True}
+    blocker = (run.execution_context or {}).get("__aura_blocker__") or {}
+    if (run.status != RunStatus.awaiting_approval
+            or blocker.get("code") not in {
+                None, "external_submission_approval_required", "tool_output_review_required",
+            }):
+        raise HTTPException(409, "This workflow is not waiting at a saved action or result review")
+    steps = (await session.scalars(select(RunStep).where(
+        RunStep.run_id == run.id,
+    ).order_by(RunStep.position))).all()
+    if not steps or len(steps) != len((run.plan or {}).get("steps", [])):
+        raise HTTPException(409, "The saved steps no longer match the reviewed plan")
+    remaining = [step for step in steps if step.status not in {StepStatus.completed, StepStatus.skipped}]
+    attempted = await session.scalar(select(StepAttempt.id).where(
+        StepAttempt.run_id == run.id, StepAttempt.step_id.in_([step.id for step in remaining]),
+        StepAttempt.provider_dispatched.is_(True),
+    ).limit(1))
+    if attempted or any(
+        step.status not in {StepStatus.pending, StepStatus.awaiting_approval}
+        or "provider_result" in (step.output or {}) for step in remaining
+    ):
+        raise HTTPException(409, "A pending action needs reconciliation before this workflow can continue")
+    if any(step.operation not in snapshot.permission_snapshot.get(step.tool_slug, []) for step in remaining):
+        raise HTTPException(409, "A pending action is outside the original plan permissions")
+    state.update(version=1, enabled=True, execute_reviewed_plan=True, approved_plan_hash=plan_hash)
+    run.execution_context = {**(run.execution_context or {}), REVIEW_KEY: state}
+    session.add(AuditEvent(
+        workspace_id=context.workspace_id, run_id=run.id, actor=context.subject,
+        event_type="run.reviewed_plan_execution_resumed",
+        payload={"plan_version_id": version.id, "plan_hash": plan_hash},
+    ))
+    # Older runs may already have a completed tool result, with or without a
+    # durable checkpoint. Preserve it before releasing the next action.
+    if await pause_for_output_review(session, run, steps):
+        return {"id": run.id, "status": run.status.value}
+    transition_run(
+        run, RunStatus.running, reason="reviewed_plan_execution_resumed", actor=context.subject,
+        phase="execution", supervisor_status="active", error=None, blocker=None,
+    )
+    await session.commit()
+    await dispatch_pending(context.workspace_id, run_id=run.id)
+    return {"id": run.id, "status": run.status.value}
+
+
 @app.post("/v1/runs/{run_id}/review-tool-output")
 async def review_tool_output(
     run_id: str,

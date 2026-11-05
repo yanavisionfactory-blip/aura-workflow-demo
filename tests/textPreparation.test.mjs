@@ -24,7 +24,7 @@ test("tool names and planner classifications never authorize external writes", (
   const value = run();
   delete value.steps[0].preparation_only;
   assert.equal(pendingTextPreparation(value), null);
-  assert.equal(savedRunResumeView(value, { openPreview: true }), "preview");
+  assert.equal(savedRunResumeView(value, { openPreview: true }), "execution");
   value.steps.unshift({ ...value.steps[0], id: "sheet", operation: "sheets.append" });
   value.steps[1].preparation_only = true;
   assert.equal(pendingTextPreparation(value), null);

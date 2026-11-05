@@ -32,6 +32,7 @@ import {
   rememberActivePythonRun,
   rememberedActivePythonRun,
   resumePythonRun,
+  resumePythonReviewedPlan,
   resumePythonRunAfterConnection,
 } from "@/lib/auraApi";
 
@@ -55,7 +56,7 @@ import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
 import { savedRunResults } from "@/lib/savedRunResults.mjs";
 import { normalizeResultSuggestions, resultSuggestionsPrompt, RESULT_SUGGESTIONS_SCHEMA } from "@/lib/resultSuggestions.mjs";
 import { alignExecutionSteps } from "@/lib/executionSteps.mjs";
-import { continueTextPreparation, pendingTextPreparation } from "@/lib/textPreparation.mjs";
+import { continueReviewedPlan } from "@/lib/reviewedPlanExecution.mjs";
 import { jiraReceiptTasks } from "@/lib/jiraReceipt.mjs";
 import {
   editedArgumentsForStep,
@@ -381,8 +382,8 @@ export default function Demo() {
       if (resumeView === "execution") {
         approvedStepsRef.current = restored.steps;
         setApprovedSteps(restored.steps);
-        // The saved run is already dispatched. Observe its outcome without
-        // approving the plan or replaying a consequential connector action.
+        // Continue the original Start decision, including older saved input
+        // gates. Completed actions and pending result reviews stay intact.
         void startPythonExecutionRef.current?.(null, false, true);
         return;
       }
@@ -1233,9 +1234,8 @@ Write ONE clear, conversational sentence restating what they want — but offer 
 
   const openSavedRunReview = async (runId) => {
     const run = await getPythonRun(runId);
-    const preparation = pendingTextPreparation(run);
-    if (savedRunResumeView(run, { openPreview: true }) !== "preview" && !preparation) {
-      throw new Error("This action is no longer waiting for review. Check the saved run again.");
+    if (savedRunResumeView(run) !== "execution") {
+      throw new Error("This workflow needs attention. Check the saved run again.");
     }
     reset();
     const intent = String(run.prompt || run.plan?.interpretation || "")
@@ -1249,7 +1249,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
     originalPromptRef.current = intent;
     lastPlanningIntentRef.current = intent;
     approvedStepsRef.current = preparedSteps;
-    preparedActionPreviewRef.current = !preparation;
+    preparedActionPreviewRef.current = false;
     rememberActivePythonRun(run.id);
     setOriginalPrompt(intent);
     setInterpretation(restored.interpretation);
@@ -1257,8 +1257,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
     setApprovedSteps(preparedSteps);
     setExecSteps(mapRuntimeSteps(run));
     setHistoryOpen(false);
-    if (preparation) void startPythonExecution(null, false, true);
-    else setPhase("preview");
+    void startPythonExecution(null, false, true);
   };
 
   const openSavedRunResults = async (savedRun) => {
@@ -1299,7 +1298,8 @@ Write ONE clear, conversational sentence restating what they want — but offer 
     const runId = pythonRunIdRef.current;
     if (!runId || !pythonPlanRef.current) return;
     const generation = ++pythonPollGenerationRef.current;
-    const preparationAttempts = new Set();
+    const resumeAttempts = new Set();
+    preparedActionPreviewRef.current = false;
     setPlan((previous) => previous ? { ...previous, startError: "" } : previous);
     setPhase("executing");
     if (!observeOnly) setExecSteps(mapRuntimeSteps({ plan: pythonPlanRef.current, steps: [] }));
@@ -1317,7 +1317,8 @@ Write ONE clear, conversational sentence restating what they want — but offer 
       : null;
     try {
       if (observeOnly) {
-        // Resume has already dispatched this run. Only observe; do not approve again.
+        // Preserve the saved plan. The polling loop can upgrade its legacy
+        // execution mode, but never approves a new plan or repeats a result.
       } else if (prepared) {
         const run = await getPythonRun(runId);
         const pending = (run.steps || []).filter((step) =>
@@ -1344,6 +1345,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
         const run = await getPythonRunResilient(runId, generation);
         if (!run) return;
         setExecSteps(mapRuntimeSteps(run));
+        if (await continueReviewedPlan(run, resumePythonReviewedPlan, resumeAttempts)) continue;
         if (run.status === "awaiting_approval" && run.tool_output_review?.step_id) {
           setToolReview(run.tool_output_review);
           setVerifyingResult(false);
@@ -1351,7 +1353,6 @@ Write ONE clear, conversational sentence restating what they want — but offer 
           if (reviewIndex >= 0) setCurrentStepIdx(reviewIndex);
           return;
         }
-        if (await continueTextPreparation(run, decidePythonApproval, preparationAttempts)) continue;
         setVerifyingResult(
           (run.steps || []).length > 0
           && (run.steps || []).every((step) => ["completed", "skipped"].includes(step.status))
@@ -1475,6 +1476,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
         await new Promise((resolve) => setTimeout(resolve, 900));
       }
     } catch (error) {
+      if (pythonPollGenerationRef.current !== generation || pythonRunIdRef.current !== runId) return;
       console.error("Python workflow execution failed", error);
       if (prepared && [409, 422].includes(error?.status)) {
         const latest = await getPythonRun(runId).catch(() => null);
@@ -1499,6 +1501,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
         }
       }
       await recoverRunStatus();
+      setRecoveryMessage(error.message || "AURA couldn't continue this saved workflow yet.");
     }
   };
 
