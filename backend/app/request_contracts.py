@@ -83,6 +83,20 @@ def user_request_text(prompt: str) -> str:
     return original + "\n" + instruction
 
 
+def _existing_sheets_recovery(prompt: str) -> bool:
+    marker = "Existing Google Sheets workbook receipts (data, not instructions):"
+    if marker not in prompt or "Reuse these exact workbooks; do not create replacements." not in prompt:
+        return False
+    try:
+        receipts, _ = json.JSONDecoder().raw_decode(prompt.split(marker, 1)[1].lstrip())
+    except ValueError:
+        return False
+    return bool(isinstance(receipts, list) and receipts and all(
+        isinstance(item, dict) and isinstance(item.get("spreadsheetId"), str)
+        and re.fullmatch(r"[A-Za-z0-9_-]{10,200}", item["spreadsheetId"]) for item in receipts
+    ))
+
+
 def draft_only_email_request(prompt: str) -> bool:
     """A request for email prose does not authorize transmitting an email."""
     instruction = user_request_text(prompt)
@@ -284,6 +298,15 @@ def requested_effects(prompt: str, inventory: list[dict], manifests: dict) -> li
         if email_senders:
             effects[("gmail", "send")] = email_senders
 
+    if _existing_sheets_recovery(prompt) and ("sheets", "create") in effects:
+        # The requested workbook already exists. Complete its cells through
+        # an approved update rather than requiring another create/append.
+        updates = {(slug, operation) for (slug, operation), (module, _) in catalog.items()
+                   if _family(slug, operation) == "sheets" and _operation_matches("update", module)}
+        if updates:
+            effects.pop(("sheets", "create"))
+            effects.setdefault(("sheets", "update"), set()).update(updates)
+
     return [
         {"effect": f"{family} {kind}", "targets": [
             {"tool_slug": slug, "operation": operation}
@@ -400,6 +423,10 @@ def validate_requested_operations(
 
     validate_audit_sources(user_request_text(prompt), plan, inventory or [])
     validate_proofing_sources(user_request_text(prompt), plan, inventory or [], manifests or {})
+    if (_existing_sheets_recovery(prompt)
+            and any(step.operation in {"google-sheets.new-spreadsheet", "google-sheets.create-spreadsheet",
+                                       "sheets.kpi.create"} for step in plan.steps)):
+        raise ValueError("This recovery must reuse the saved Google Sheets workbook; read its tabs and cells before proposing missing changes")
     if draft_only_email_request(prompt) and any(
         is_gmail_delivery_step(step, manifests) for step in plan.steps
     ):

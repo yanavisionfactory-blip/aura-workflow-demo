@@ -1965,7 +1965,7 @@ Generate a results summary in plain, human-friendly language (not technical).
                     } else startAlternativePlan(recoveryRun);
                   } : undefined}
                   alternativeLabel={activeRecovery?.canRestartReadPlan
-                    ? "Build a complete plan" : "Ask AURA for another solution"}
+                    ? "Build a complete plan" : activeRecovery?.alternativeLabel || "Ask AURA for another solution"}
                   onSuggest={recoveryRun ? (suggestion) => startAlternativePlan(recoveryRun, suggestion) : undefined}
                   onLater={recoveryRun ? () => keepRunForLater(recoveryRun) : undefined}
                   onCancel={recoveryRun ? () => cancelSavedRun(recoveryRun) : undefined}

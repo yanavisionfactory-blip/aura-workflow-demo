@@ -32,6 +32,34 @@ const run = (patch = {}) => ({ id: 'saved-run', status: 'waiting_for_action',
     { id: 'failed', position: 1, status: 'failed', consequential: false }],
   plan: { steps: [{}, {}] }, ...patch });
 
+test('legacy guessed Sheets tab offers inspection and repair using the existing workbook receipt', () => {
+  const saved = { prompt: 'Create the KPI dashboard', blocker: {
+    code: 'no_safe_recovery', action: 'inspect_run', step_id: 'rows', retryable: false,
+  }, steps: [
+    { id: 'book', key: 'create_dashboard', status: 'completed', operation: 'google-sheets.new-spreadsheet',
+      output: { provider_result: { ret: { spreadsheetId: 'real_existing_workbook', worksheetName: 'Dashboard',
+        private_unrelated: 'DO_NOT_COPY' } } } },
+    { id: 'rows', status: 'failed', tool_slug: 'google-sheets', operation: 'google-sheets.add-multiple-rows',
+      arguments: { sheetId: '{{steps.create_dashboard.ret.spreadsheetId}}', worksheetId: 1 } },
+  ] };
+  const recovery = recoveryForRun(saved);
+  assert.match(recovery.what, /unverified worksheet ID/);
+  assert.equal(recovery.canRetry, false);
+  assert.equal(recovery.alternativeLabel, 'Repair remaining Sheets steps');
+  assert.match(recovery.fix, /existing workbook/);
+  const prompt = alternativeRecoveryPrompt(saved);
+  assert.match(prompt, /real_existing_workbook/);
+  assert.match(prompt, /current cells first/);
+  assert.match(prompt, /do not create replacements/);
+  assert.doesNotMatch(prompt, /DO_NOT_COPY/);
+  const failedCreate = structuredClone(saved);
+  failedCreate.steps[0].status = 'failed';
+  assert.doesNotMatch(alternativeRecoveryPrompt(failedCreate), /real_existing_workbook/);
+  const bound = structuredClone(saved);
+  bound.steps[1].arguments.worksheetId = '{{steps.tabs.worksheetId}}';
+  assert.doesNotMatch(recoveryForRun(bound).what, /unverified worksheet ID/);
+});
+
 test('failed preparation can resume only with server proof of an unsubmitted action and pending review', () => {
   const step = { id: 'write', status: 'failed', consequential: true, operation: 'sheets.append',
     approval_status: 'pending', recovery: { phase: 'before_action', can_retry: true } };

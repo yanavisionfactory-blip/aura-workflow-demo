@@ -28,6 +28,11 @@ def preflight_plan(
     establish whether it may run. A missing grant never hides a malformed step.
     """
     fixes = deterministic_plan_fixes(plan, available_inventory, available_input_names)
+    from .sheets_targets import needs_worksheet_binding
+
+    for index, step in enumerate(plan.steps, start=1):
+        if needs_worksheet_binding(step, plan.steps[:index - 1]):
+            fixes.append(f"Step {index} must bind worksheetId to a worksheet metadata read; the create receipt has no tab ID")
     manifests = {
         item["slug"]: current_capability_manifest(
             item["slug"], manifests_by_slug.get(item["slug"])

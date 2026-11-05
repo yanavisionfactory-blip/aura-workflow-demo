@@ -86,3 +86,26 @@ async def test_action_failures_never_escape_as_results(payload):
 ])
 async def test_successful_results_and_logs_are_preserved(payload):
     assert await execute_result(payload) is payload
+
+
+@pytest.mark.parametrize("location", ["message", "response"])
+async def test_google_rejection_preserves_status_without_leaking_payload_or_replaying_write(location):
+    detail = {"error": {"code": 400, "status": "INVALID_ARGUMENT", "message": "Unable to parse range: PRIVATE"}}
+    error = {"message": json.dumps(detail)} if location == "message" else {"response": {"data": detail}}
+    with pytest.raises(PipedreamConnectError) as raised:
+        await execute_result({"os": [{"k": "error", "err": error}]})
+    failure = raised.value
+    assert failure.status_code == 400
+    assert "PRIVATE" not in str(failure)
+    assert "rejected" in str(failure)
+    assert classify_failure(failure, read=True).category == "invalid_request"
+    # An action may contain more than one provider call; an embedded error
+    # alone is not proof that no earlier mutation happened.
+    assert classify_failure(failure, read=False).category == "uncertain_write"
+
+
+async def test_partial_receipt_is_not_proof_of_no_effect_even_with_explicit_rejection():
+    with pytest.raises(PipedreamConnectError) as raised:
+        await execute_result({"ret": {"spreadsheetId": "already_created"},
+                              "error": {"response": {"status": 400}}})
+    assert classify_failure(raised.value, read=False).category == "uncertain_write"
