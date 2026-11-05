@@ -9,6 +9,7 @@ import re
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
+from .google_ads_errors import public_message
 from .models import BrokerCapabilityPack, CapabilityManifest
 from .native_connectors import validate_module_arguments
 from .pipedream_connect import (
@@ -86,7 +87,9 @@ async def _reader(session, tool):
             ), timeout=35)
         except (PipedreamConnectError, TimeoutError) as exc:
             raise AccountDiscoveryError(
-                "Google Ads could not load your accounts. Try again or reconnect with the Google account that has access."
+                public_message(str(exc)) or
+                "Google Ads could not load your accounts. The saved connection is preserved. "
+                "Retry the account lookup or inspect the provider error before reconnecting."
             ) from exc
         rows = result.get("ret") if isinstance(result, dict) else None
         if not isinstance(rows, list):
