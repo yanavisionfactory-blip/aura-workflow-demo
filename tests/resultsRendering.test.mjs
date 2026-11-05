@@ -373,3 +373,44 @@ test("final results show both tool screens, with the Sheet ahead of the Claude s
   assert.doesNotMatch(html, /AURA Intelligence output preview|Generated with Claude/);
   assert.match(html, /<details[^>]*><summary[^>]*>Execution details · backup used/);
 });
+
+
+test("broker Sheets result review shows the workbook screen with technical receipts collapsed", () => {
+  const step = { id: "saved", key: "save", tool: "Google Sheets", tool_slug: "google-sheets",
+    operation: "google-sheets.add-multiple-rows", action: "Draft the content", status: "completed",
+    output: { resolved_arguments: { sheetId: "broker-workbook", worksheetId: 173, rows: '[["Requested only"]]' },
+      provider_result: { os: [], ret: { spreadsheetId: "broker-workbook", updatedRange: "Dashboard!A1:G8",
+        updatedRows: 8, updatedColumns: 7, updatedCells: 56 },
+        exports: { $summary: "Successfully updated 8 row(s) in the spreadsheet." } } } };
+  const html = renderExecution([step], { step_id: step.id, step_ids: [step.id],
+    tool_slug: "google-sheets", operation: step.operation, is_final: true });
+  const visible = html.replace(/<details\b[^>]*>[\s\S]*?<\/details>/g, "");
+  for (const text of ["Review Google Sheets result", "Google Sheets result screen", "Open in Google Sheets",
+    "Google Sheets — final workflow result", "Approve and finish"]) assert.ok(visible.includes(text), text);
+  assert.match(visible, /<iframe[^>]+src="https:\/\/docs.google.com\/spreadsheets\/d\/broker-workbook\/edit\?rm=minimal#gid=173&amp;range=A1%3AG8"/);
+  assert.doesNotMatch(visible, /Empty list returned|spreadsheetId|updatedRange|updatedRows|updatedColumns|updatedCells|>ret<|>os<|Requested only/);
+  assert.match(html, /<details[^>]*><summary[^>]*>Technical details<\/summary>/);
+  assert.doesNotMatch(html, /<details[^>]*\bopen(?:=|>)/);
+  assert.ok(html.indexOf("<iframe") < html.indexOf("Technical details"));
+  assert.doesNotMatch(html, /<button[^>]*disabled[^>]*>[^<]*Approve and finish/);
+
+  const final = render({ id: "broker-run", status: "completed", plan: { name: "KPI dashboard" },
+    steps: [step], result: { result_presentation: { primary_step_key: "save" } } });
+  assert.match(final, /Google Sheets result screen/);
+  assert.match(final, /<iframe[^>]+docs.google.com/);
+  assert.match(final, /Open in Google Sheets/);
+});
+
+test("broker saved-cell readback renders a spreadsheet grid without depending on embedded Google sign-in", () => {
+  const step = { id: "saved", key: "save", tool: "Google Sheets", tool_slug: "google-sheets",
+    operation: "google-sheets.update-row", status: "completed",
+    output: { provider_result: { ret: { spreadsheetId: "broker-workbook", updatedRange: "Dashboard!A1:C2" } },
+      outcome_check: { status: "verified", observed: { ret: { range: "Dashboard!A1:C2",
+        values: [["Metric", "Target", "Actual"], ["Revenue", "", ""]] } } } } };
+  const html = renderExecution([step], { step_id: step.id, step_ids: [step.id],
+    tool_slug: "google-sheets", operation: step.operation, is_final: true });
+  assert.match(html, /Saved Google Sheets cells/);
+  assert.match(html, /Revenue/);
+  assert.match(html, /Open in Google Sheets/);
+  assert.doesNotMatch(html, /<iframe/);
+});

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { columnName, googleSheetsResult, sheetAppLinks, sheetRange, spreadsheetId } from "../src/lib/googleSheetsResult.mjs";
 import { primaryResultFromOutputs } from "../src/lib/resultPresentation.mjs";
-import { mainToolEntry, toolResultEntries } from "../src/lib/toolResultViews.mjs";
+import { mainToolEntry, toolOutputResult, toolResultEntries } from "../src/lib/toolResultViews.mjs";
 import { operationStepTitle } from "../src/lib/planPresentation.mjs";
 import { historyStepsForBackendRun } from "../src/lib/workflowHistory.mjs";
 
@@ -85,4 +85,73 @@ test("ChatGPT labels describe report generation without renaming unrelated AURA 
   const entries = toolResultEntries([{ tool: "AURA Intelligence", operation: "report.compose", status: "completed" },
     { tool: "AURA Intelligence", operation: "weather.forecast", status: "completed" }]);
   assert.deepEqual(entries.map((entry) => entry.tool), ["ChatGPT", "AURA Intelligence"]);
+});
+
+
+const brokerWrite = (operation = "google-sheets.add-multiple-rows") => ({
+  step_key: "save", operation,
+  resolved_arguments: { sheetId: "broker-workbook", worksheetId: 173, rows: '[["Requested cells are not readback"]]' },
+  provider_result: { os: [], ret: { spreadsheetId: "broker-workbook", updatedRange: "Dashboard!A1:G8",
+    updatedRows: 8, updatedColumns: 7, updatedCells: 56 },
+  exports: { $summary: "Successfully updated 8 row(s) in the spreadsheet." } },
+});
+
+test("broker write receipts open the actual Google Sheets screen and saved worksheet", () => {
+  for (const operation of ["google-sheets.add-multiple-rows", "google-sheets.update-row", "google-sheets.update-multiple-rows"]) {
+    const output = brokerWrite(operation);
+    const before = structuredClone(output);
+    const result = primaryResultFromOutputs([output], { title: "Draft the content" });
+    assert.equal(result.kind, "spreadsheet");
+    assert.equal(result.title, "Dashboard");
+    assert.equal(result.range, "Dashboard!A1:G8");
+    assert.equal(result.sourceOperation, operation);
+    assert.equal(result.spreadsheetId, "broker-workbook");
+    const link = new URL(result.link);
+    assert.equal(link.origin, "https://docs.google.com");
+    assert.equal(link.pathname, "/spreadsheets/d/broker-workbook/edit");
+    assert.equal(new URLSearchParams(link.hash.slice(1)).get("gid"), "173");
+    assert.equal(new URLSearchParams(link.hash.slice(1)).get("range"), "A1:G8");
+    assert.equal(new URL(result.embedUrl).searchParams.get("rm"), "minimal");
+    assert.deepEqual(result.ranges, []);
+    assert.equal(result.verified, false);
+    assert.doesNotMatch(JSON.stringify(result), /Requested cells are not readback/);
+    assert.deepEqual(output, before);
+  }
+});
+
+test("checkpoint previews retain the persisted operation when the output envelope omits it", () => {
+  const { operation, ...output } = brokerWrite();
+  const step = { id: "save-step", key: "save", tool: "google-sheets", status: "completed", operation, output };
+  const entries = toolResultEntries([step]);
+  assert.equal(entries[0].preview.kind, "spreadsheet");
+  assert.equal(entries[0].preview.sourceStepId, "save-step");
+  assert.equal(toolOutputResult(entries, [step]).kind, "spreadsheet");
+});
+
+test("broker previews reject failed receipts and never invent a tab or claim requested values were read back", () => {
+  const output = brokerWrite();
+  for (const error of [{ error: "Failed" }, { isError: true }, { is_error: true }, { success: false }]) {
+    assert.equal(googleSheetsResult([{ ...output, provider_result: { ...output.provider_result, ...error } }]), null);
+    assert.equal(googleSheetsResult([{ ...output, provider_result: { ret: { ...output.provider_result.ret, ...error } } }]), null);
+  }
+  for (const id of ["../bad", "javascript:alert(1)", "bad?token=secret"]) {
+    assert.equal(googleSheetsResult([{ ...output, provider_result: { ret: { spreadsheetId: id } } }]), null);
+  }
+  for (const worksheetId of [undefined, -1, true, "not-a-tab"]) {
+    const result = googleSheetsResult([{ ...output, resolved_arguments: { ...output.resolved_arguments, worksheetId } }]);
+    assert.equal(new URLSearchParams(new URL(result.link).hash.slice(1)).has("gid"), false);
+    assert.deepEqual(result.ranges, []);
+  }
+  const observed = { ret: { range: "Dashboard!A1:G8", values: [["Actual saved value"]] } };
+  assert.deepEqual(googleSheetsResult([{ ...output, outcome_check: { status: "verified", observed } }]).ranges[0].values,
+    [["Actual saved value"]]);
+});
+
+test("broker workbook creations keep their provider title and never invent cell contents", () => {
+  const result = googleSheetsResult([{ step_key: "create", operation: "google-sheets.new-spreadsheet",
+    provider_result: { ret: { spreadsheetId: "new-workbook", title: "September KPI dashboard", worksheetName: "Dashboard" } } }]);
+  assert.equal(result.kind, "spreadsheet");
+  assert.equal(result.title, "September KPI dashboard");
+  assert.equal(result.spreadsheetId, "new-workbook");
+  assert.deepEqual(result.ranges, []);
 });
