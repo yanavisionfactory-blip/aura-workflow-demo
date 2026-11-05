@@ -1687,8 +1687,8 @@ async def critique_step(step: dict, provider_result: object) -> CriticDecision:
 async def verify_outcome(prompt: str, plan: dict, artifacts: list[dict],
                          final_deliverable: dict | None = None,
                          prepared_evidence: object | None = None) -> OutcomeVerification:
-    from .request_contracts import missing_requested_operations
     from .dashboard_quality import dashboard_requirements
+    from .request_contracts import missing_requested_operations
 
     evidence_ids = {str(item.get("step_id", "")) for item in artifacts}
     if not artifacts or "" in evidence_ids or any(

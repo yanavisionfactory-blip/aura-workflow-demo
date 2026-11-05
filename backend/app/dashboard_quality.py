@@ -5,7 +5,6 @@ import re
 
 from .request_contracts import user_request_text
 
-
 GUIDANCE = (
     "For a KPI dashboard template, write a usable spreadsheet, not a description of one. "
     "Include the business name, requested reporting period, explicit Metric / Target / Actual "
@@ -25,8 +24,8 @@ GUIDANCE = (
 
 def dashboard_template_requested(prompt):
     text = user_request_text(prompt)
-    return bool(re.search(r"\btemplate\b", text, re.I)
-                and re.search(r"\b(?:kpis?|dashboard)\b", text, re.I))
+    return bool(re.search(r"\btemplate\b", text, re.IGNORECASE)
+                and re.search(r"\b(?:kpis?|dashboard)\b", text, re.IGNORECASE))
 
 
 def dashboard_requirements(prompt):
@@ -75,9 +74,9 @@ def _supplied_numbers(prompt):
     # Explicit examples or supplied business data can contain genuine zeros.
     # A year or reporting month alone is not evidence of business performance.
     text = user_request_text(prompt)
-    return bool(re.search(r"\b(?:sample|fictional|synthetic|illustrative|dummy|example)\s+(?:data|numbers|values)\b", text, re.I)
-                or re.search(r"\b(?:revenue|sales|orders|conversions?|actuals?|targets?)\s*(?:is|are|was|were|of|:|=)?\s*[$€£]?\s*\d", text, re.I)
-                or re.search(r"\b(?:use|read|import|calculate)\b[^.!?\n]{0,100}\b(?:attached|uploaded|supplied|provided|actual)\s+data\b", text, re.I))
+    return bool(re.search(r"\b(?:sample|fictional|synthetic|illustrative|dummy|example)\s+(?:data|numbers|values)\b", text, re.IGNORECASE)
+                or re.search(r"\b(?:revenue|sales|orders|conversions?|actuals?|targets?)\s*(?:is|are|was|were|of|:|=)?\s*[$€£]?\s*\d", text, re.IGNORECASE)
+                or re.search(r"\b(?:use|read|import|calculate)\b[^.!?\n]{0,100}\b(?:attached|uploaded|supplied|provided|actual)\s+data\b", text, re.IGNORECASE))
 
 
 def validate_dashboard_values(prompt, operation, arguments):
@@ -88,14 +87,14 @@ def validate_dashboard_values(prompt, operation, arguments):
         for row in rows:
             metric = next((str(cell) for cell in row if re.fullmatch(
                 r"(?:net |total |monthly |sales )?revenue|sales(?: orders)?|(?:purchase )?conversions?(?: rate)?|(?:serum )?units sold",
-                str(cell).strip(), re.I)), None)
+                str(cell).strip(), re.IGNORECASE)), None)
             if metric and any(_zero(cell) for cell in row):
                 raise ValueError(f"KPI template quality: {metric} contains an unsupported zero. Leave unknown target/actual cells blank; do not invent performance.")
     for row in rows:
         for cell in row:
             if not isinstance(cell, str) or not cell.startswith("="):
                 continue
-            if re.search(r"IFERROR\s*\(.*[,;]\s*0\s*\)\s*$", cell, re.I) and not re.search(r'COUNT\s*\(|ISNUMBER\s*\(|[=<>]\s*""', cell, re.I):
+            if re.search(r"IFERROR\s*\(.*[,;]\s*0\s*\)\s*$", cell, re.IGNORECASE) and not re.search(r'COUNT\s*\(|ISNUMBER\s*\(|[=<>]\s*""', cell, re.IGNORECASE):
                 raise ValueError("KPI template quality: guard missing inputs before calculating; do not convert missing data or formula errors to zero.")
 
 
@@ -137,8 +136,8 @@ def validate_dashboard_plan(prompt, plan):
         return
     text = " ".join(str(cell) for row in rows for cell in row).casefold()
     failures = []
-    if not any(any(re.search(r"\btarget\b", str(cell), re.I) for cell in row)
-               and any(re.search(r"\bactual\b", str(cell), re.I) for cell in row) for row in rows):
+    if not any(any(re.search(r"\btarget\b", str(cell), re.IGNORECASE) for cell in row)
+               and any(re.search(r"\bactual\b", str(cell), re.IGNORECASE) for cell in row) for row in rows):
         failures.append("include explicit Target and Actual column headers")
     request = user_request_text(prompt).casefold()
     for label, pattern in (("Revenue", r"\brevenue\b"), ("Sales", r"\bsales\b"), ("Conversions", r"\bconversions?\b")):

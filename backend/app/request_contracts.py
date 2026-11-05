@@ -419,8 +419,8 @@ def validate_requested_operations(
     *, connection_routes: dict[str, str] | None = None,
 ) -> list[dict]:
     from .audit_sources import validate_audit_sources
-    from .proofing import validate_proofing_sources
     from .dashboard_quality import validate_dashboard_plan
+    from .proofing import validate_proofing_sources
 
     validate_dashboard_plan(prompt, plan)
     validate_audit_sources(user_request_text(prompt), plan, inventory or [])

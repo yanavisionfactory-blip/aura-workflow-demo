@@ -3,9 +3,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.dashboard_quality import dashboard_requirements, sheet_rows, validate_dashboard_plan, validate_dashboard_values
+from app.dashboard_quality import (
+    dashboard_requirements,
+    sheet_rows,
+    validate_dashboard_plan,
+    validate_dashboard_values,
+)
 from app.schemas import PlanStep, WorkflowPlan
-
 
 PROMPT = ("Create a simple KPI dashboard template including Revenue sales and conversions in Google Sheets "
           "for Plantea in Texas compared to dermalogica.com and bskincaretx.com. "
