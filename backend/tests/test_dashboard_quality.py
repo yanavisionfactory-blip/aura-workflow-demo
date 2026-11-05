@@ -84,6 +84,50 @@ def test_formula_errors_are_not_hidden_as_real_zero_performance():
         validate_dashboard_plan(PROMPT, plan(rows))
 
 
+@pytest.mark.parametrize("rows", [
+    [["replacement"], [None, "", ""]],  # Live failure: wrote D20:F21, not D20:F23.
+    [["value"]] * 5,
+    [["too", "many", "columns", "here"]] * 4,
+])
+@pytest.mark.parametrize("encoded", [False, True])
+def test_bounded_dashboard_writes_cannot_silently_apply_a_partial_rectangle(rows, encoded):
+    arguments = {"range": "Dashboard!D20:F23", "rows": json.dumps(rows) if encoded else rows}
+    original = json.loads(json.dumps(arguments))
+    with pytest.raises(ValueError, match="split nonadjacent edits"):
+        validate_dashboard_values("Repair the KPI workbook", "google-sheets.update-multiple-rows", arguments)
+    assert arguments == original
+
+
+@pytest.mark.parametrize("target,rows", [
+    ("D20:D20", [["replacement"]]),
+    ("E23:F23", [["", ""]]),
+    ("'Dashboard, notes'!$AA$20:$AC$23", [["replacement"], [], [None], [None, "", ""]]),
+    ("A1", [["Title"], ["Metric", "Target", "Actual"]]),
+])
+def test_exact_edits_and_explicit_preserved_cells_are_not_rewritten(target, rows):
+    arguments = {"range": target, "rows": json.dumps(rows)}
+    original = dict(arguments)
+    validate_dashboard_values("Repair the KPI workbook", "google-sheets.update-multiple-rows", arguments)
+    assert arguments == original
+
+
+@pytest.mark.parametrize("operation", ["google-sheets.format-cells", "google-sheets.update-multiple-rows"])
+def test_nonadjacent_ranges_require_separate_actions(operation):
+    with pytest.raises(ValueError, match="one contiguous range"):
+        validate_dashboard_values("Polish the dashboard in Google Sheets", operation,
+                                  {"range": "A11:F11,A25:D25", "rows": [["replacement"]]})
+    validate_dashboard_values("Polish the dashboard in Google Sheets", operation,
+                              {"range": "'Sales, Marketing'!A11:F11", "rows": [["replacement"]]})
+
+
+def test_bounded_range_content_references_are_checked_after_materialization():
+    arguments = {"range": "D20:F23", "rows": "{{steps.content.body}}"}
+    validate_dashboard_values("Repair the KPI workbook", "google-sheets.update-multiple-rows", arguments)
+    with pytest.raises(ValueError, match="declares 4 rows"):
+        validate_dashboard_values("Repair the KPI workbook", "google-sheets.update-multiple-rows",
+                                  {**arguments, "rows": '[["replacement"],[null,"",""]]'})
+
+
 def test_readback_must_follow_the_write_not_precede_it():
     candidate = plan(good_rows())
     candidate.steps[1].depends_on = []
@@ -253,6 +297,52 @@ async def test_compiler_repairs_bad_template_before_review_or_provider_dispatch(
     assert result is good
     assert create.await_count == 2
     assert any("unsupported zero" in requirement for requirement in create.await_args.args[4])
+    assert result.planning_artifacts["compiled_contracts"]
+
+
+@pytest.mark.asyncio
+async def test_compiler_repairs_live_range_mismatch_before_review(monkeypatch):
+    from app import llm_planner, orchestrator
+    from app.config import get_settings
+
+    prompt = "Repair the existing KPI dashboard in Google Sheets: update D20 and clear E23:F23, then read back all cells."
+    write_op = "google-sheets.update-multiple-rows"
+    read_op = "google-sheets.read-rows"
+    bad = WorkflowPlan(name="Repair dashboard", interpretation=prompt, steps=[
+        PlanStep(key="write", agent="Sheets", tool_slug="google-sheets", operation=write_op,
+                 arguments={"sheetId": "workbook", "worksheetId": 7, "range": "D20:F23",
+                            "rows": '[["Replacement"],[null,"",""]]'},
+                 consequential=True, reason="Repair existing cells", expected_output="Updated cells"),
+        PlanStep(key="verify", agent="Sheets", tool_slug="google-sheets", operation=read_op,
+                 arguments={"spreadsheetId": "workbook", "sheetName": "Dashboard", "range": "A1:G30", "hasHeaders": False},
+                 depends_on=["write"], reason="Verify written cells", expected_output="Evaluated cells"),
+    ])
+    corrected = bad.model_copy(deep=True)
+    corrected.steps[0].arguments.update(range="D20:D20", rows='[["Replacement"]]')
+    clear = corrected.steps[0].model_copy(deep=True, update={"key": "clear"})
+    clear.arguments.update(range="E23:F23", rows='[["",""]]')
+    corrected.steps.insert(1, clear)
+    corrected.steps[-1].depends_on = ["write", "clear"]
+    manifest = {"capabilities": [
+        {"name": operation, "permission_scope": scope, "requires_approval": scope == "write",
+         "input_schema": {"type": "object", "properties": properties, "required": list(properties),
+                          "additionalProperties": False}}
+        for operation, scope, properties in [
+            (write_op, "write", {"sheetId": {"type": "string"}, "worksheetId": {"type": "integer"},
+                                 "range": {"type": "string"}, "rows": {"type": "string"}}),
+            (read_op, "read", {"spreadsheetId": {"type": "string"}, "sheetName": {"type": "string"},
+                               "range": {"type": "string"}, "hasHeaders": {"type": "boolean"}}),
+        ]
+    ]}
+    monkeypatch.setattr(get_settings(), "planner_mode", "llm")
+    create = AsyncMock(side_effect=[bad, corrected])
+    monkeypatch.setattr(llm_planner, "create_llm_plan", create)
+    result = await orchestrator._create_compiled_plan(prompt,
+        [{"slug": "google-sheets", "name": "Google Sheets", "connected": True,
+          "allowed_operations": [write_op, read_op]}], set(), {"google-sheets": manifest})
+    assert result is corrected
+    assert create.await_count == 2
+    assert any("declares 4 rows" in requirement for requirement in create.await_args.args[4])
     assert result.planning_artifacts["compiled_contracts"]
 
 
