@@ -2257,6 +2257,8 @@ def _update_trust(
 
 
 def _partial_result(outputs: list[dict], step: RunStep, error: str) -> dict:
+    from .review_failures import saved_review_failure
+
     return {
         "partial": True,
         "accepted_artifacts": outputs,
@@ -2266,6 +2268,7 @@ def _partial_result(outputs: list[dict], step: RunStep, error: str) -> dict:
             "tool_slug": step.tool_slug,
             "operation": step.operation,
             "error": error,
+            "review_failure_code": saved_review_failure(step.output),
         },
         "available_actions": ["retry", "fallback", "skip", "cancel"],
     }
@@ -2282,6 +2285,16 @@ async def review_recorded_result(session, run, step, snapshot, contract, result)
     ) + incomplete_evidence(step.operation, result, contract.get("required_evidence", []))
     if errors:
         return CriticDecision(action="escalate", reasons=errors)
+    from .sheets_outcomes import worksheet_read_errors
+
+    worksheet_errors = worksheet_read_errors(step.operation, contract.get("arguments", {}), result)
+    if worksheet_errors is not None:
+        if worksheet_errors:
+            return CriticDecision(action="escalate", reasons=worksheet_errors)
+        step.output = {**step.output, "outcome_check": {
+            "status": "verified", "mode": "accepted_read_receipt", "operation": step.operation,
+        }}
+        return CriticDecision(action="accept", reasons=["Provider worksheet identities verified"])
     if step.operation == "website.content.prepare":
         from .website_content import validate_recorded_content
 

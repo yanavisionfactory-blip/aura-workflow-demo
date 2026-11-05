@@ -621,13 +621,17 @@ def public_run_projection(run: WorkflowRun, blocker: dict | None) -> dict:
     ):
         # The write receipt is saved, but no retry is queued. Give the user a
         # way to recheck that receipt without submitting the write a second time.
+        from .review_failures import MESSAGES
+
+        message = MESSAGES.get(failed_step.get("review_failure_code"),
+            "The provider action was recorded, but AURA could not verify its result.")
         return {
             "public_status": "blocked",
             "public_error": None,
             "public_blocker": {
                 "kind": "operator_action",
                 "code": "recorded_result_needs_review",
-                "message": "The provider action was recorded, but AURA could not verify its result.",
+                "message": message,
                 "action": "recheck_saved_result",
                 "step_id": failed_step["id"],
                 "retryable": True,

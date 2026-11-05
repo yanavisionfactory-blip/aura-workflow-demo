@@ -51,6 +51,7 @@ def catalog():
         ("new-spreadsheet", "Create a spreadsheet", "write"),
         ("update-cells", "Update cells", "write"),
         ("get-spreadsheet", "Read a spreadsheet", "read"),
+        ("get-spreadsheet-info", "Verify the created workbook and headers", "read"),
         ("delete-spreadsheet", "Delete a spreadsheet", "destructive"),
         ("share-spreadsheet", "Share a spreadsheet", "write"),
     ]]}

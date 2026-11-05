@@ -184,6 +184,7 @@ def test_compiler_and_start_preflight_accept_the_real_broker_schema():
     manifest = {"capabilities": [
         capability("new-spreadsheet", {"title": "string", "sheetName": "string"}, ["title"], "write"),
         capability("list-worksheets", {"sheetId": "string"}, ["sheetId"], "read"),
+        capability("get-spreadsheet-info", {"spreadsheetId": "string"}, ["spreadsheetId"], "read"),
         capability("add-multiple-rows", {"sheetId": "string", "worksheetId": "integer", "rows": "string"},
                    ["sheetId", "worksheetId", "rows"], "write"),
     ]}

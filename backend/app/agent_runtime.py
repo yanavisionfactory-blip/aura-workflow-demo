@@ -1640,6 +1640,9 @@ async def create_plan(
 
 
 async def critique_step(step: dict, provider_result: object) -> CriticDecision:
+    from .review_failures import MESSAGES, review_failure
+
+    failure_code = "unavailable"
     payload = step_review_payload(step, provider_result)
     evidence_key = "provider_result"
     if step.get("operation") != "website.content.prepare":
@@ -1666,8 +1669,9 @@ async def critique_step(step: dict, provider_result: object) -> CriticDecision:
                 decision.action = "escalate"
             return decision
         except Exception as exc:  # noqa: BLE001 - model/transport failures are transient here
-            logger.warning("Output review unavailable operation=%s attempt=%s error_type=%s",
-                           step.get("operation"), attempt + 1, type(exc).__name__)
+            failure_code = review_failure(exc)
+            logger.warning("Output review unavailable operation=%s attempt=%s error_type=%s cause=%s",
+                           step.get("operation"), attempt + 1, type(exc).__name__, failure_code)
 
             if _stop_model_retry(exc):
                 break
@@ -1676,7 +1680,7 @@ async def critique_step(step: dict, provider_result: object) -> CriticDecision:
     # Preserve the provider receipt in the executor; retry review, never the write.
     return CriticDecision(
         action="escalate",
-        reasons=["Output review is unavailable; the recorded provider result needs verification"],
+        reasons=[MESSAGES[failure_code]],
     )
 
 
