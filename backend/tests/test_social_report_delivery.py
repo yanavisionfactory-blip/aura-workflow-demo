@@ -62,19 +62,22 @@ def test_creative_requires_exactly_service_line_and_cta(items):
         validate_module_arguments(native_manifest('canva'), 'canva.presentation.create', presentation(items=items))
 
 
-def test_plan_annotation_normalization_preserves_calculations_other_tabs_and_existing_workbooks():
+@pytest.mark.parametrize('reader_key', ['create_worksheets', 'lookup_actual_tab'])
+def test_plan_annotation_normalization_preserves_calculations_other_tabs_and_existing_workbooks(reader_key):
     create = SimpleNamespace(key='create', operation='google-sheets.new-spreadsheet',
                              arguments={'headers': ['Metric', 'Actual', 'Formula / Source']})
     write = SimpleNamespace(operation='google-sheets.add-multiple-rows', arguments={
         'sheetId': '{{steps.create.ret.spreadsheetId}}',
-        'worksheetId': '{{steps.create_worksheets.worksheetId}}',
+        'worksheetId': '{{steps.' + reader_key + '.worksheetId}}',
         'rows': '[ ["CTR", "=C2/B2", "=clicks/impressions"] ]'})
     other = deepcopy(write)
     other.arguments['worksheetId'] = '{{steps.other.worksheetId}}'
     existing = deepcopy(write)
     existing.arguments['sheetId'] = 'existing-workbook'
     originals = deepcopy([other.arguments, existing.arguments])
-    plan = SimpleNamespace(steps=[create, write, other, existing])
+    reader = SimpleNamespace(key=reader_key, operation='google-sheets.list-worksheets',
+                             arguments={'sheetId': '{{steps.create.ret.spreadsheetId}}'})
+    plan = SimpleNamespace(steps=[create, reader, write, other, existing])
     normalize_report_annotations(plan)
     import json
     assert json.loads(write.arguments['rows']) == [['CTR', '=C2/B2', "'=clicks/impressions"]]

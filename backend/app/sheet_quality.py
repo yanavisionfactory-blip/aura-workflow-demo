@@ -2,6 +2,8 @@
 import json
 import re
 
+from .sheets_targets import DISCOVERY, created_workbook_source
+
 READS = {"sheets.read", "sheets.workbook.get", "google-sheets.get-values-in-range",
          "google-sheets.get-spreadsheet", "google-sheets.read-rows"}
 WRITES = {"sheets.append", "sheets.kpi.create", "sheets.campaign_report.create",
@@ -18,17 +20,17 @@ def normalize_report_annotations(plan) -> None:
     This runs before plan review. Existing workbooks and calculated columns are
     untouched; execution never rewrites the user's approved arguments.
     """
-    creators = {step.key: step for step in plan.steps
-                if step.operation == "google-sheets.new-spreadsheet"}
+    creators = [step for step in plan.steps if step.operation == "google-sheets.new-spreadsheet"]
+    readers = {step.key: step for step in plan.steps if step.operation in DISCOVERY}
     for step in plan.steps:
         if step.operation != "google-sheets.add-multiple-rows":
             continue
-        binding = re.fullmatch(r"\{\{steps\.([\w-]+)\.ret\.spreadsheetId\}\}",
-                               str(step.arguments.get("sheetId", "")))
-        creator = creators.get(binding[1]) if binding else None
-        # Worksheet binding is inserted by the planner before normalization.
-        worksheet = str(step.arguments.get("worksheetId", ""))
-        if not creator or worksheet != "{{steps." + creator.key + "_worksheets.worksheetId}}":
+        creator = created_workbook_source(step.arguments, creators)
+        # Accept both inserted metadata reads and equivalent existing reads.
+        binding = re.fullmatch(r"\{\{\s*steps\.([\w-]+)\.worksheetId\s*\}\}",
+                               str(step.arguments.get("worksheetId", "")))
+        reader = readers.get(binding[1]) if binding else None
+        if not creator or not reader or created_workbook_source(reader.arguments, creators) is not creator:
             continue
         headers = creator.arguments.get("headers")
         if not isinstance(headers, list):
