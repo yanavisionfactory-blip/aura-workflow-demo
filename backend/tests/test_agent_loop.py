@@ -43,12 +43,12 @@ from app.schemas import (
 from app.workflow_memory import select_memory_inputs
 
 
-@pytest.mark.parametrize("scenario", ["credit", "primary_ok", "backup_failed", "backup_repaired", "unapproved"])
+@pytest.mark.parametrize("scenario", ["credit", "primary_ok", "backup_failed", "backup_repaired", "backup_truncated", "unapproved"])
 @pytest.mark.parametrize("review_outputs", [False, True])
 async def test_claude_backup_preserves_plan_and_populates_dependent_write(runtime, monkeypatch, scenario, review_outputs):
     from unittest.mock import AsyncMock
 
-    from app import main
+    from app import intelligence_backup, main
     from app.intelligence_backup import BACKUP_OPERATION, ClaudeTextRequest
     from app.pipedream_connect import PipedreamConnectError
     from app.schemas import ToolOutputReviewDecision
@@ -104,6 +104,17 @@ async def test_claude_backup_preserves_plan_and_populates_dependent_write(runtim
         await session.commit()
 
     calls = []
+    if scenario == "backup_truncated":
+        create = AsyncMock(side_effect=[
+            SimpleNamespace(status="incomplete", output_text="PARTIAL", model="gpt-5.4-mini",
+                            incomplete_details=SimpleNamespace(reason="max_output_tokens")),
+            SimpleNamespace(status="completed", output_text="Revenue\tTarget\tActual", id="complete", model="gpt-5.4-mini"),
+        ])
+        client = AsyncMock()
+        client.__aenter__.return_value = SimpleNamespace(responses=SimpleNamespace(create=create))
+        monkeypatch.setattr(intelligence_backup, "AsyncOpenAI", lambda **kwargs: client)
+        monkeypatch.setattr(intelligence_backup, "get_settings", lambda: SimpleNamespace(
+            openai_api_key="test", openai_model="gpt-5.4-mini", model_call_timeout_seconds=5))
 
     async def execute(executor, operation, args):
         calls.append((operation, args))
@@ -115,6 +126,8 @@ async def test_claude_backup_preserves_plan_and_populates_dependent_write(runtim
             raise ValueError("AURA Intelligence returned incomplete or empty content")
         if operation == "records.create":
             return {"id": "saved-table", "title": args["title"]}
+        if operation == BACKUP_OPERATION and scenario == "backup_truncated":
+            return await intelligence_backup.generate_claude_backup(args)
         return {"ret": {"id": "response", "model": "test-generator",
                         "content": [{"type": "text", "text": "Revenue\tTarget\tActual"}]},
                 "source_provider": "aura", "model_provider": "openai", "external_writes": False}
@@ -129,6 +142,8 @@ async def test_claude_backup_preserves_plan_and_populates_dependent_write(runtim
     monkeypatch.setattr(orchestrator, "critique_step", review)
     monkeypatch.setattr(orchestrator, "check_provider_outcome", outcome)
     await orchestrator._execute_run("run", "w")
+    if scenario == "backup_truncated":
+        assert [call.kwargs["max_output_tokens"] for call in create.call_args_list] == [800, 4096]
     if scenario == "backup_repaired":
         from app.schemas import ResumeDecision
         async with runtime() as session:
@@ -147,7 +162,7 @@ async def test_claude_backup_preserves_plan_and_populates_dependent_write(runtim
             await main.resume_run("run", ResumeDecision(action="retry", step_id="step"),
                                   main.TenantContext("w", "alice", "owner"), session)
         await orchestrator._execute_run("run", "w")
-    if review_outputs and scenario in {"credit", "primary_ok", "backup_repaired"}:
+    if review_outputs and scenario in {"credit", "primary_ok", "backup_repaired", "backup_truncated"}:
         async with runtime() as session:
             run = await session.get(WorkflowRun, "run")
             assert run.status == RunStatus.awaiting_approval
@@ -176,7 +191,7 @@ async def test_claude_backup_preserves_plan_and_populates_dependent_write(runtim
         assert run.status == RunStatus.awaiting_approval, run.error
         approval = await session.get(Approval, saved.approval_id)
         assert approval.preview["arguments"] == {"title": "Revenue\tTarget\tActual"}
-        if scenario in {"credit", "backup_repaired"}:
+        if scenario in {"credit", "backup_repaired", "backup_truncated"}:
             assert source.tool_slug == "aura"
             assert source.output["fallback"]["requested_tool"] == "anthropic"
             assert source.output["fallback"]["status"] == "used"
@@ -197,7 +212,7 @@ async def test_claude_backup_preserves_plan_and_populates_dependent_write(runtim
         await orchestrator._execute_run("run", "w")
     assert [op for op, _ in calls].count("records.create") == 1
     assert [op for op, _ in calls].count("anthropic.chat") == 1
-    assert [op for op, _ in calls].count(BACKUP_OPERATION) == (2 if scenario == "backup_repaired" else 1 if scenario == "credit" else 0)
+    assert [op for op, _ in calls].count(BACKUP_OPERATION) == (2 if scenario == "backup_repaired" else 1 if scenario in {"credit", "backup_truncated"} else 0)
 
 
 def make_step(key, **kwargs):

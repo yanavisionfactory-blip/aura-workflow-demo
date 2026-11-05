@@ -1,28 +1,25 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Search, Plus, FileUp, Loader2, Check, Link2, Paperclip, X, Bot } from "lucide-react";
+import { Search, Plus, Loader2, Check, Link2, Paperclip, X, Bot } from "lucide-react";
 import { CATALOG } from "@/lib/toolCatalog";
 import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
 import { connectTool } from "@/lib/connectService";
-import { aura } from "@/api/auraClient";
+import DocumentUpload from "./DocumentUpload";
 import { listAgentConnections } from "@/lib/auraApi";
 import AgentConnectionForm from "./AgentConnectionForm";
 
 // Normal users only see tools with a backend-owned OAuth route. Custom API,
 // MCP, key, and browser provisioning remains an operator-side concern.
 
-export default function ResourceComposer({ open, onClose, onAddTool, onAddAgent, onAddDocument, pinnedTools = [], pinnedDocs = [] }) {
+export default function ResourceComposer({ open, onClose, onAddTool, onAddAgent, onAddDocument, pinnedTools = [], pinnedDocs = [], onDocumentUploadChange = undefined }) {
   const [tab, setTab] = useState("tools");
   const [query, setQuery] = useState("");
   const [connecting, setConnecting] = useState(null);
-  const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState("");
   const [connections, setConnections] = useState(getAllConnections);
   const [connectionError, setConnectionError] = useState("");
   const [agents, setAgents] = useState([]);
   const [loadingAgents, setLoadingAgents] = useState(false);
   const [showAgentForm, setShowAgentForm] = useState(false);
-  const fileRef = useRef(null);
 
   useEffect(() => subscribeConnections(setConnections), []);
 
@@ -74,31 +71,6 @@ export default function ResourceComposer({ open, onClose, onAddTool, onAddAgent,
       setConnecting(null);
     }
   };
-
-  const handleFile = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (pinnedDocs.length >= 8) {
-      setUploadError("Attach no more than eight documents to one workflow.");
-      return;
-    }
-    if (file.size > 10 * 1024 * 1024) {
-      setUploadError("Choose a file smaller than 10 MB.");
-      if (fileRef.current) fileRef.current.value = "";
-      return;
-    }
-    setUploading(true);
-    setUploadError("");
-    try {
-      const out = await aura.integrations.Core.UploadFile({ file });
-      onAddDocument({ name: file.name, file_url: out.file_url, size: file.size });
-    } catch (cause) {
-      setUploadError(cause.message || "AURA could not attach that file.");
-    }
-    setUploading(false);
-    if (fileRef.current) fileRef.current.value = "";
-  };
-
   return (
     <AnimatePresence>
       {open && (
@@ -202,21 +174,7 @@ export default function ResourceComposer({ open, onClose, onAddTool, onAddAgent,
           )}
           {tab === "docs" && (
             <div className="p-3">
-              <button
-                onClick={() => fileRef.current?.click()}
-                disabled={uploading}
-                className="w-full flex flex-col items-center justify-center gap-2 py-6 rounded-xl border border-dashed border-white/12 hover:border-primary/30 hover:bg-primary/5 transition-all disabled:opacity-50"
-              >
-                {uploading ? (
-                  <Loader2 className="w-5 h-5 animate-spin text-primary" />
-                ) : (
-                  <FileUp className="w-5 h-5 text-primary" />
-                )}
-                <span className="text-[11px] font-medium">{uploading ? "Uploading…" : "Attach a document or file"}</span>
-                <span className="text-[10px] text-muted-foreground/60">PDF, CSV, sheet, doc, image — AURA can read it in the workflow</span>
-              </button>
-              <input ref={fileRef} type="file" className="hidden" onChange={handleFile} />
-              {uploadError && <p className="mt-2 text-[10px] text-red-400">{uploadError}</p>}
+              <DocumentUpload documents={pinnedDocs} onAttach={onAddDocument} onBusyChange={onDocumentUploadChange} compact />
 
               {pinnedDocs.length > 0 && (
                 <div className="mt-2 space-y-0.5">

@@ -124,3 +124,68 @@ async def test_token_exhaustion_is_reported_without_accepting_partial_content(mo
         await backup.generate_claude_backup(ARGS)
     assert "reason=max_output_tokens" in caplog.text
     assert "PRIVATE" not in caplog.text
+    assert [call.kwargs["max_output_tokens"] for call in create.call_args_list] == [800, 4096, 16384]
+
+
+def backup_client(monkeypatch, responses):
+    create = AsyncMock(side_effect=responses)
+    context = AsyncMock()
+    context.__aenter__.return_value = SimpleNamespace(responses=SimpleNamespace(create=create))
+    monkeypatch.setattr(backup, "AsyncOpenAI", lambda **kwargs: context)
+    monkeypatch.setattr(backup, "get_settings", lambda: SimpleNamespace(
+        openai_api_key="test", openai_model="gpt-5.4-mini", model_call_timeout_seconds=5))
+    return create
+
+
+def truncated():
+    return SimpleNamespace(status="incomplete", output_text='PRIVATE {"rows":[', model="gpt-5.4-mini",
+                           incomplete_details=SimpleNamespace(reason="max_output_tokens"))
+
+
+async def test_short_dashboard_limit_is_expanded_without_reusing_partial_output(monkeypatch):
+    text = '{"title":"Plantea September 2026","rows":[["Revenue","Target","Actual"]]}'
+    complete = SimpleNamespace(status="completed", output_text=text, id="complete", model="gpt-5.4-mini")
+    create = backup_client(monkeypatch, [truncated(), complete])
+    args = {**ARGS, "maxTokensToSample": 700}
+    result = await backup.generate_claude_backup(args)
+    assert args["maxTokensToSample"] == 700
+    assert result["ret"]["content"][0]["text"] == text
+    assert result["ret"]["id"] == "complete"
+    assert result["external_writes"] is False
+    assert [call.kwargs["max_output_tokens"] for call in create.call_args_list] == [700, 4096]
+    for call in create.call_args_list:
+        assert call.kwargs["input"] == [{"role": "user", "content": ARGS["userMessage"]}]
+        assert "PRIVATE" not in str(call.kwargs)
+        assert "tools" not in call.kwargs
+
+
+async def test_length_recovery_stops_at_the_ceiling_and_preserves_call_budgets(monkeypatch):
+    from time import monotonic
+
+    from app.reliability import BudgetExceeded, CallBudget, model_budget
+
+    create = backup_client(monkeypatch, [truncated()])
+    with pytest.raises(ValueError, match="response length limit"):
+        await backup.generate_claude_backup({**ARGS, "maxTokensToSample": 64_000})
+    assert create.await_count == 1
+    create = backup_client(monkeypatch, [truncated()])
+    token = model_budget.set(CallBudget(deadline=monotonic() + 5, remaining_calls=1))
+    try:
+        with pytest.raises(BudgetExceeded):
+            await backup.generate_claude_backup(ARGS)
+    finally:
+        model_budget.reset(token)
+    assert create.await_count == 1
+
+
+@pytest.mark.parametrize("response", [
+    SimpleNamespace(status="incomplete", output_text="blocked", model="test",
+                    incomplete_details=SimpleNamespace(reason="content_filter")),
+    SimpleNamespace(status="completed", output_text=" ", model="test"),
+    RuntimeError("Provider unavailable"),
+])
+async def test_only_length_truncation_gets_a_larger_output_budget(monkeypatch, response):
+    create = backup_client(monkeypatch, [response])
+    with pytest.raises((ValueError, RuntimeError)):
+        await backup.generate_claude_backup(ARGS)
+    assert create.await_count == 1

@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowLeft,
   Bot,
   Check,
-  FileUp,
   Link2,
   Loader2,
   Paperclip,
@@ -16,7 +15,7 @@ import {
   X,
 } from "lucide-react";
 
-import { aura } from "@/api/auraClient";
+import DocumentUpload from "./DocumentUpload";
 import AgentConnectionForm from "./AgentConnectionForm";
 import { agentConnectionPreset } from "@/lib/agentConnections.mjs";
 import { connectionScreenPreset } from "@/lib/connectionNavigation.mjs";
@@ -64,11 +63,9 @@ export default function ConnectionsPill() {
   const [searchingCatalog, setSearchingCatalog] = useState(false);
   const [catalogSearchQuery, setCatalogSearchQuery] = useState("");
   const [connectionAction, setConnectionAction] = useState("");
-  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
   const [managedConnection, setManagedConnection] = useState(null);
   const [agentConnections, setAgentConnections] = useState([]);
-  const fileRef = useRef(null);
 
   const refreshConnections = useCallback(async () => {
     const [tools, agents] = await Promise.all([
@@ -236,34 +233,6 @@ export default function ConnectionsPill() {
       setError(cause.message || `Could not ${action} ${name}.`);
     } finally {
       setConnectionAction("");
-    }
-  };
-
-  const handleFiles = async (event) => {
-    const files = [...(event.target.files || [])];
-    if (!files.length) return;
-    if (files.length + documents.length > 8) {
-      setError("Attach no more than eight documents to one workflow.");
-      if (fileRef.current) fileRef.current.value = "";
-      return;
-    }
-    if (files.some((file) => file.size > 10 * 1024 * 1024)) {
-      setError("Each document must be smaller than 10 MB.");
-      if (fileRef.current) fileRef.current.value = "";
-      return;
-    }
-    setUploading(true);
-    setError("");
-    try {
-      for (const file of files) {
-        const result = await aura.integrations.Core.UploadFile({ file });
-        attachDocument({ name: file.name, file_url: result.file_url, size: file.size });
-      }
-    } catch (cause) {
-      setError(cause.message || "AURA could not attach that document.");
-    } finally {
-      setUploading(false);
-      if (fileRef.current) fileRef.current.value = "";
     }
   };
 
@@ -459,12 +428,7 @@ export default function ConnectionsPill() {
                 <div className="flex-1 overflow-y-auto p-5">
                   <h3 className="text-base font-semibold">Attach documents</h3>
                   <p className="mt-1 text-xs text-muted-foreground">Files uploaded here are available to the next workflow without leaving Connect.</p>
-                  <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading} className="mt-4 flex w-full flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-white/12 py-8 transition-all hover:border-primary/30 hover:bg-primary/5 disabled:opacity-50">
-                    {uploading ? <Loader2 className="h-6 w-6 animate-spin text-primary" /> : <FileUp className="h-6 w-6 text-primary" />}
-                    <span className="text-sm font-medium">{uploading ? "Uploading…" : "Choose documents"}</span>
-                    <span className="text-[11px] text-muted-foreground">PDF, DOC, sheet, CSV, image, or other workflow input</span>
-                  </button>
-                  <input ref={fileRef} type="file" multiple className="hidden" onChange={handleFiles} />
+                  <div className="mt-4"><DocumentUpload documents={documents} onAttach={attachDocument} /></div>
                   <div className="mt-4 space-y-1">
                     {documents.map((document) => (
                       <div key={`${document.name}:${document.file_url}`} className="flex items-center gap-3 rounded-xl bg-white/5 p-2.5">

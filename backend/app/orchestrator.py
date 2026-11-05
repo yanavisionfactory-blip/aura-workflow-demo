@@ -4277,10 +4277,15 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             resolved_arguments,
                         )
                     elif intelligence_reason:
+                        backup_detail = (
+                            "its response reached the length limit before finishing"
+                            if "response length limit" in error else None
+                        )
                         step.output = {**step.output, "fallback": {
                             **step.output["fallback"], "status": "failed",
                             "message": intelligence_reason + " AURA Intelligence backup also "
-                                       "failed; this step has not produced usable content.",
+                                       "failed" + (f": {backup_detail}" if backup_detail else "")
+                                       + "; this step has not produced usable content.",
                         }}
                         error = (error + " [aura_intelligence_backup_failed] "
                                  + intelligence_reason)
