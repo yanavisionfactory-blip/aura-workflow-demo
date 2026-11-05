@@ -310,6 +310,10 @@ def _provider_rejection_detail(exc: Exception) -> str | None:
 
 def _friendly_execution_error(error: str | None) -> str:
     detail = (error or "").lower()
+    if "public web search returned no usable sources" in detail:
+        return "AURA's web search found no usable sources. Simplify the search or use the supplied website URLs. Missing research is not zero performance."
+    if "public web search did not complete" in detail:
+        return "AURA's web search did not complete. No researched figures have been verified yet."
     if "google sheets did not return one matching worksheet" in detail:
         return "Google Sheets returned no unambiguous matching tab. Choose the exact worksheet before writing."
     if "the connected app rejected this action's inputs" in detail:

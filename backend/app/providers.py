@@ -1440,10 +1440,9 @@ class ProviderExecutor:
         )
 
     async def _web_search(self, a: dict) -> dict:
-        return await self._browser_worker_request(
-            "/v1/search",
-            {"query": a["query"], "limit": min(int(a.get("limit", 10)), 20)},
-        )
+        from .web_research import search_public_web
+
+        return await search_public_web(a)
 
     async def _web_page_read(self, a: dict) -> dict:
         return await self._browser_worker_request("/v1/read", {"url": a["url"]})

@@ -456,21 +456,22 @@ def test_google_identity_reads_current_connected_account(monkeypatch):
     )
 
 
-def test_public_web_operations_delegate_to_the_isolated_worker(monkeypatch):
+def test_public_web_search_uses_retrieval_api_and_page_reads_stay_isolated(monkeypatch):
+    from app import web_research
+
     executor = ProviderExecutor({})
-    request = AsyncMock(side_effect=[{"results": []}, {"text": "Creator profile"}])
+    search_request = AsyncMock(return_value={"results": [{"url": "https://example.com"}]})
+    monkeypatch.setattr(web_research, "search_public_web", search_request)
+    request = AsyncMock(return_value={"text": "Creator profile"})
     monkeypatch.setattr(executor, "_browser_worker_request", request)
 
     search = asyncio.run(executor._web_search({"query": "TikTok creators", "limit": 50}))
     page = asyncio.run(executor._web_page_read({"url": "https://www.tiktok.com/@creator"}))
 
-    assert search == {"results": []}
+    assert search == {"results": [{"url": "https://example.com"}]}
     assert page == {"text": "Creator profile"}
+    search_request.assert_awaited_once_with({"query": "TikTok creators", "limit": 50})
     assert request.await_args_list[0].args == (
-        "/v1/search",
-        {"query": "TikTok creators", "limit": 20},
-    )
-    assert request.await_args_list[1].args == (
         "/v1/read",
         {"url": "https://www.tiktok.com/@creator"},
     )
