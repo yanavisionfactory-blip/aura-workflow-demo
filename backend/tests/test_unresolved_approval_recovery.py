@@ -11,6 +11,7 @@ from app import dispatch, main
 from app.agent_runtime import materialize_action_arguments
 from app.approval_readiness import unfinished_action_content
 from app.db import Base
+from app.run_supervisor import transition_run
 from app.models import (
     Approval,
     DispatchIntent,
@@ -182,3 +183,59 @@ async def test_unresolved_preview_with_dispatch_evidence_requires_reconciliation
         assert error.value.status_code == 409
         assert run.status == RunStatus.awaiting_approval
         assert approval.status == "pending" and approval.preview["status"] == "ready"
+
+
+async def test_explicit_pending_work_check_recovers_failed_drafting_after_a_fix(database, monkeypatch):
+    async with database() as session:
+        run, read, write, approval = await saved_run(session, "fixed-drafting", "Body will be written from research")
+        transition_run(run, RunStatus.waiting_for_action, reason="fixture_preparation_failed",
+                       actor="fixture", phase="execution", supervisor_status="operator_attention", dispatch=None)
+        write.status = StepStatus.failed
+        write.error = "Source processing limit"
+        approval.preview = {"status": "preparing"}
+        run.execution_context = {**run.execution_context,
+            "__aura_autonomy__": {"handoff_reason_code": "no_safe_recovery"},
+            "__aura_recovery__": {write.id: 4},
+            "__aura_blocker__": {"action": "inspect_run"}}
+        await session.commit()
+        sent = []
+        async def publish(workspace_id, *, run_id):
+            sent.append((workspace_id, run_id))
+            return 1
+        monkeypatch.setattr(dispatch, "dispatch_pending", publish)
+        result = await main.dispatch_due_run(run.id, SimpleNamespace(workspace_id="workspace", subject="owner"), session)
+        assert result["preparation_refreshed"] is True
+        assert sent == [("workspace", run.id)]
+        assert run.status == RunStatus.running
+        assert write.status == StepStatus.awaiting_approval and write.error is None
+        assert approval.status == "pending" and approval.preview == {"status": "preparing"}
+        assert read.status == StepStatus.completed and read.output["provider_result"] == {"searches": 2400}
+        assert write.id not in run.execution_context["__aura_recovery__"]
+        assert "handoff_reason_code" not in run.execution_context["__aura_autonomy__"]
+
+
+@pytest.mark.parametrize("protection", ["dispatched", "provider_receipt", "permission_required", "approved"])
+async def test_failed_preparation_refresh_preserves_dispatch_and_authorization_barriers(database, monkeypatch, protection):
+    async with database() as session:
+        run, _, write, approval = await saved_run(session, "protected", "Body will be written from research",
+                                                 dispatched=protection == "dispatched")
+        transition_run(run, RunStatus.waiting_for_action, reason="fixture_preparation_failed",
+                       actor="fixture", phase="execution", supervisor_status="operator_attention", dispatch=None)
+        write.status = StepStatus.failed
+        approval.preview = {"status": "preparing"}
+        if protection == "provider_receipt": write.output = {"provider_result": {"id": "saved"}}
+        elif protection == "permission_required": run.execution_context = {
+            **run.execution_context, "__aura_blocker__": {"code": "permission_required", "action": "reconnect_account"}}
+        elif protection == "approved": approval.status = "approved"
+        await session.commit()
+        async def publish(*_args, **_kwargs): return 0
+        monkeypatch.setattr(dispatch, "dispatch_pending", publish)
+        if protection in {"dispatched", "provider_receipt"}:
+            with pytest.raises(HTTPException) as error:
+                await main.dispatch_due_run(run.id, SimpleNamespace(workspace_id="workspace", subject="owner"), session)
+            assert error.value.status_code == 409
+        else:
+            result = await main.dispatch_due_run(run.id, SimpleNamespace(workspace_id="workspace", subject="owner"), session)
+            assert result["preparation_refreshed"] is False
+        assert run.status == RunStatus.waiting_for_action and write.status == StepStatus.failed
+        assert approval.preview == {"status": "preparing"}
