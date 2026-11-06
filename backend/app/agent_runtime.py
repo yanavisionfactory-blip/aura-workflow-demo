@@ -790,6 +790,7 @@ def _builder_inventory(inventory: list[dict], selected_slugs: set[str]) -> list[
         "connected",
         "operation_contracts",
         "google_ads_account",
+        "reddit_ads_account",
     )
     return [{key: item.get(key) for key in keys if key in item} for item in source]
 

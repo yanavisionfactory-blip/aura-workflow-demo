@@ -7,6 +7,10 @@ do not perform this extra configuration read.
 
 ## Configuration ownership
 
+**Reddit Ads** uses an AURA-owned developer application and direct Reddit consent.
+Customers never provide developer credentials. See [Reddit Ads sign-in](reddit-ads-sign-in.md)
+for the one-time backend setup, account picker, read-only scope and production checks.
+
 New **Google Ads**, **Google Analytics**, and **Google Sheets** connections
 prefer their signed Pipedream managed OAuth route. The marketplace and broker
 must agree on that route, including when a legacy Nango integration or broad

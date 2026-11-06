@@ -30,6 +30,14 @@ FRAMEIO_FILE = {"type": "object", "required": [
              "properties": {"id": TEXT, "type": {"const": "file"}}},
 }}
 KNOWN = {
+    "reddit-ads.identity.get": ({"type": "object", "required": ["ok", "identity"],
+        "properties": {"ok": {"const": True}, "identity": {"type": "object", "required": ["id"],
+            "properties": {"id": {"type": "string", "minLength": 1}}}}}, ["verified_identity"]),
+    **{operation: ({"type": "object", "required": ["data", "complete"], "properties": {
+        "complete": {"const": True}, "data": {"type": "array", "items": {
+            "type": "object", "required": ["id"], "properties": {"id": {"type": "string", "minLength": 1}}}}}},
+        ["account_metadata" if "campaigns" not in operation else "campaign_metadata"])
+       for operation in ("reddit-ads.businesses.list", "reddit-ads.accounts.list", "reddit-ads.campaigns.list")},
     "intelligence.claude_backup": ({
         "type": "object", "required": ["ret", "source_provider", "model_provider", "external_writes"],
         "properties": {

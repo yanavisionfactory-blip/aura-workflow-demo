@@ -14,6 +14,8 @@ const ICONS = {
   slack: "💬",
   tiktok: "🎵",
   "tiktok-ads-manager": "📣",
+  "reddit-ads": "🟠",
+  "google-ads": "📈",
   x: "𝕏",
   mailchimp: "✉️",
   canva: "🎨",
@@ -24,7 +26,7 @@ const ICONS = {
 const socialAliases = { "tiktok-zernio": "tiktok", "x-zernio": "x", "tiktok-ads": "tiktok-ads-manager", twitter: "x", "twitter-v1": "x", "twitter-v2": "x", "twitter-oauth2": "x", "x-twitter": "x" };
 const socialNames = { "tiktok-ads-manager": "TikTok Ads", x: "X (Twitter)" };
 const socialSearchAliases = { "tiktok-ads-manager": ["TikTok Ads", "TikTok Ads Manager"], x: ["X", "Twitter", "X (Twitter)"] };
-const featuredSocial = ["tiktok", "tiktok-ads-manager", "x"];
+const featuredSocial = ["tiktok", "tiktok-ads-manager", "x", "google-ads", "reddit-ads"];
 
 const providerSlug = (value) => String(value || "")
   .trim()
