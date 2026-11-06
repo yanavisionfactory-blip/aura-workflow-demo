@@ -19,6 +19,7 @@ from .kpi_pilot import KpiFields
 from .policy import operation_scope
 from .presentation_content import PRESENTATION_SCHEMA
 from .proofing import FeedbackImportRequest
+from .reddit_ads import REPORT_BREAKDOWNS, REPORT_FIELDS
 from .reports import ReportRequest
 from .seo_crawl import CrawlReviewRequest
 from .website_content import ContentRequest
@@ -67,6 +68,33 @@ _POSITIVE_INTEGER = {"type": "integer", "minimum": 1}
 
 
 NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
+    "reddit-ads": {
+        "schema_version": "1.1", "catalog_version": 1, "provider_type": "oauth",
+        "name": "Reddit Ads", "description": "Read Reddit Ads businesses, accounts, campaigns and performance. Separate from Reddit posts and communities.",
+        "base_url": "https://ads-api.reddit.com/api/v3", "identity": {"provider": "reddit-ads"},
+        "modules": [
+            _module("reddit-ads.identity.get", "search", "Verify the connected Reddit Ads identity."),
+            _module("reddit-ads.businesses.list", "search", "List the connected user's Reddit Ads businesses, following all pages."),
+            _module("reddit-ads.accounts.list", "search", "List ad accounts owned by an exact business. Shared accounts may be absent; verify a supplied account ID with account.get. Never guess which account represents the client.",
+                    required=("business_id",), properties={"business_id": _TEXT}),
+            _module("reddit-ads.account.get", "search", "Verify an explicit Reddit ad account and read its currency and settings.",
+                    required=("ad_account_id",), properties={"ad_account_id": _TEXT}),
+            *[_module(f"reddit-ads.{resource}.list", "search", f"Read {label} for an explicit verified Reddit ad account. All pages must complete.",
+                      required=("ad_account_id",), properties={"ad_account_id": _TEXT})
+              for resource, label in (("campaigns", "campaigns"), ("ad-groups", "ad groups"), ("ads", "ads"))],
+            _module("reddit-ads.report.get", "search", "Read performance for an explicit Reddit ad account and period. Hourly UTC boundaries are required. Preserve raw units, account currency, time zone and attribution. Reddit purchase credits are not sales orders or company revenue; keep unavailable metrics blank. All report pages must complete.",
+                    required=("ad_account_id", "starts_at", "ends_at"), properties={
+                        "ad_account_id": _TEXT,
+                        "starts_at": {"type": "string", "format": "date-time", "description": "UTC boundary YYYY-MM-DDTHH:00:00Z"},
+                        "ends_at": {"type": "string", "format": "date-time", "description": "UTC boundary YYYY-MM-DDTHH:00:00Z"},
+                        "time_zone_id": {"type": "string", "description": "Reporting IANA time zone; defaults to UTC."},
+                        "fields": {"type": "array", "minItems": 1, "maxItems": len(REPORT_FIELDS), "uniqueItems": True,
+                                   "items": {"type": "string", "enum": list(REPORT_FIELDS)}},
+                        "breakdowns": {"type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": True,
+                                       "items": {"type": "string", "enum": list(REPORT_BREAKDOWNS)}},
+                    }, permission_scope="read", requires_approval=False),
+        ],
+    },
     "frameio": {
         "schema_version": "1.1", "catalog_version": 1, "provider_type": "oauth",
         "name": "Frame.io", "description": "Read exact Frame.io V4 file versions and reviewer comments.",

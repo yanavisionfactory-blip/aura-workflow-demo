@@ -1,11 +1,14 @@
 """Customer-facing social app names; stored account and vendor IDs stay intact."""
 
 _APPS = {
+    "reddit-ads": ("Reddit Ads", ("Reddit Ads", "Reddit Advertising", "Reddit Ads Manager")),
     "tiktok": ("TikTok", ("TikTok",)),
     "tiktok-ads-manager": ("TikTok Ads", ("TikTok Ads", "TikTok Ads Manager")),
     "x": ("X (Twitter)", ("X", "Twitter", "X (Twitter)")),
 }
 _ALIASES = {
+    "reddit-advertising": "reddit-ads",
+    "reddit-ads-manager": "reddit-ads",
     "tiktok-zernio": "tiktok",
     "x-zernio": "x",
     "tiktok-ads": "tiktok-ads-manager",

@@ -11,6 +11,32 @@ import {
   searchMarketplace,
 } from "../src/lib/toolCatalog.js";
 
+test("Reddit Ads stays separate from Reddit and respects backend readiness", () => {
+  replaceToolCatalog({ marketplace: [
+    { provider: "reddit", display_name: "Reddit", connectable: true, connection_backend: "pipedream" },
+    { provider: "reddit-ads", display_name: "Reddit Ads", connectable: false, availability: "coming_soon" },
+  ] });
+  assert.equal(searchMarketplace("Reddit").length, 2);
+  assert.equal(searchMarketplace("Reddit Ads")[0].connectable, false);
+  assert.equal(catalogEntryFor("Reddit Ads"), null);
+  assert.equal(catalogEntryFor("Reddit").provider, "reddit");
+  mergeMarketplaceApps([{ provider: "reddit-ads", display_name: "Reddit Ads", connectable: true,
+    connection_backend: "native", connection_strategy: "oauth", preferred_connection: true }]);
+  assert.equal(catalogEntryFor("Reddit Advertising").provider, "reddit-ads");
+  assert.equal(catalogEntryFor("Reddit Ads Manager").connectionBackend, "native");
+  assert.equal(catalogEntryFor("Reddit Ads").routes.some(route => route.provider === "reddit"), false);
+});
+
+test("Reddit Ads remains visible in a large directory without claiming a connection", () => {
+  replaceToolCatalog({ marketplace: [
+    ...Array.from({ length: 150 }, (_, index) => ({ provider: `app-${index}`, display_name: `App ${index}`, connectable: true })),
+    { provider: "reddit-ads", display_name: "Reddit Ads", connectable: false },
+  ] });
+  assert.equal(searchMarketplace("")[0].name, "Reddit Ads");
+  assert.equal(searchMarketplace("")[0].connectable, false);
+  assert.equal(CATALOG.some(item => item.provider === "reddit-ads"), false);
+});
+
 test("exact Google Sheets identity wins over another connector's search aliases", () => {
   replaceToolCatalog({ marketplace: [
     { provider: "meta-ads-mcp", display_name: "A shared ads connector", connectable: true,

@@ -29,7 +29,40 @@ FRAMEIO_FILE = {"type": "object", "required": [
     "file": {"type": "object", "required": ["id", "type"],
              "properties": {"id": TEXT, "type": {"const": "file"}}},
 }}
+REDDIT_ADS_READ = {"type": "object", "required": [
+    "data", "source_url", "provider", "api_version", "retrieved_at", "result_url",
+], "properties": {
+    "data": {"type": "array", "items": OBJECT}, "source_url": TEXT,
+    "provider": {"const": "Reddit Ads"}, "api_version": {"const": "v3"},
+    "retrieved_at": TEXT, "result_url": TEXT,
+}}
+REDDIT_ADS_COLLECTION = {**REDDIT_ADS_READ,
+    "required": [*REDDIT_ADS_READ["required"], "raw_pages", "page_count", "coverage_complete"],
+    "properties": {**REDDIT_ADS_READ["properties"],
+        "raw_pages": {"type": "array", "minItems": 1, "items": OBJECT},
+        "page_count": {"type": "integer", "minimum": 1}, "coverage_complete": {"const": True},
+    },
+}
 KNOWN = {
+    "reddit-ads.identity.get": ({"type": "object", "required": ["ok", "identity", "read_only"],
+        "properties": {"ok": {"const": True}, "read_only": {"const": True},
+                       "identity": {"type": "object", "required": ["id"], "properties": {"id": TEXT}}}},
+        ["verified_identity"]),
+    "reddit-ads.businesses.list": (REDDIT_ADS_COLLECTION, ["business_metadata"]),
+    "reddit-ads.accounts.list": (REDDIT_ADS_COLLECTION, ["account_metadata"]),
+    "reddit-ads.account.get": ({**REDDIT_ADS_READ, "properties": {**REDDIT_ADS_READ["properties"],
+        "data": {"type": "object", "required": ["id"], "properties": {"id": TEXT}}}}, ["account_metadata"]),
+    **{f"reddit-ads.{resource}.list": ({**REDDIT_ADS_COLLECTION,
+        "required": [*REDDIT_ADS_COLLECTION["required"], "ad_account"],
+        "properties": {**REDDIT_ADS_COLLECTION["properties"], "ad_account": OBJECT}}, ["advertising_entities"])
+       for resource in ("campaigns", "ad-groups", "ads")},
+    "reddit-ads.report.get": ({**REDDIT_ADS_COLLECTION,
+        "required": [*REDDIT_ADS_COLLECTION["required"], "ad_account", "report_request", "metric_units"],
+        "properties": {**REDDIT_ADS_COLLECTION["properties"],
+            "ad_account": {"type": "object", "required": ["id"], "properties": {"id": TEXT}},
+            "report_request": {"type": "object", "required": ["starts_at", "ends_at", "fields", "time_zone_id"],
+                               "properties": {"starts_at": TEXT, "ends_at": TEXT, "fields": {"type": "array", "items": TEXT}, "time_zone_id": TEXT}},
+            "metric_units": OBJECT}}, ["advertising_report", "attribution_evidence"]),
     "intelligence.claude_backup": ({
         "type": "object", "required": ["ret", "source_provider", "model_provider", "external_writes"],
         "properties": {

@@ -44,6 +44,14 @@ class OAuthProvider:
 
 
 PROVIDERS = {
+    "reddit-ads": OAuthProvider(
+        slug="reddit-ads", display_name="Reddit Ads",
+        authorization_url="https://www.reddit.com/api/v1/authorize",
+        token_url="https://www.reddit.com/api/v1/access_token",
+        scopes=("adsread",),
+        client_id_attr="reddit_ads_client_id", client_secret_attr="reddit_ads_client_secret",
+        callback_provider="reddit-ads", native_only=True,
+    ),
     "frameio": OAuthProvider(
         slug="frameio",
         display_name="Frame.io",
@@ -333,6 +341,8 @@ def oauth_authorization_url(settings: Settings, provider: OAuthProvider, state: 
         })
     if provider.slug == "google":
         params.update({"access_type": "offline", "prompt": "consent", "include_granted_scopes": "true"})
+    if provider.slug == "reddit-ads":
+        params.update({"duration": "permanent", "scope": ",".join(provider.scopes)})
     return f"{provider.authorization_url}?{urlencode(params)}"
 
 
@@ -365,10 +375,14 @@ async def exchange_oauth_code(
         headers["Authorization"] = f"Basic {basic}"
         payload.pop("client_secret")
         payload["code_verifier"] = _oauth_code_verifier(settings, state)
-    elif provider.slug in {"airtable", "notion", "frameio"}:
+    elif provider.slug in {"airtable", "notion", "frameio", "reddit-ads"}:
         basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
         headers["Authorization"] = f"Basic {basic}"
         payload.pop("client_secret")
+    if provider.slug == "reddit-ads":
+        from .reddit_ads import USER_AGENT
+        headers["User-Agent"] = USER_AGENT
+        payload.pop("client_id")
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(
             provider.token_url,
@@ -380,6 +394,12 @@ async def exchange_oauth_code(
         data = response.json()
     if provider.slug == "slack" and not data.get("ok", False):
         raise RuntimeError(data.get("error", "Slack OAuth failed"))
+    if provider.slug == "reddit-ads":
+        from . import reddit_ads
+        granted_scopes = set(re.split(r"[\s,]+", str(data.get("scope") or "")))
+        if not data.get("access_token") or not data.get("refresh_token") or "adsread" not in granted_scopes:
+            raise ValueError("Reddit Ads did not grant renewable reporting access.")
+        data["reddit_ads_verification"] = await reddit_ads.verify(data)
     if provider.slug == "x":
         if not data.get("access_token") or not data.get("refresh_token"):
             raise ValueError("X did not grant renewable account access.")
@@ -473,10 +493,14 @@ async def refresh_oauth_credentials(
         "grant_type": "refresh_token",
     }
     headers = {"Accept": "application/json"}
-    if provider.slug in {"airtable", "canva", "notion", "frameio", "x"}:
+    if provider.slug in {"airtable", "canva", "notion", "frameio", "x", "reddit-ads"}:
         basic = base64.b64encode(f"{payload['client_id']}:{payload['client_secret']}".encode()).decode()
         headers["Authorization"] = f"Basic {basic}"
         payload.pop("client_secret")
+    if provider.slug == "reddit-ads":
+        from .reddit_ads import USER_AGENT
+        headers["User-Agent"] = USER_AGENT
+        payload.pop("client_id")
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(
             provider.token_url,
@@ -490,6 +514,14 @@ async def refresh_oauth_credentials(
         raise ValueError("Adobe returned no refreshed access token.")
     if provider.slug == "x" and not refreshed.get("access_token"):
         raise ValueError("X returned no refreshed access token.")
+    if provider.slug == "reddit-ads":
+        if not refreshed.get("access_token") or (
+            "scope" in refreshed and "adsread" not in re.split(r"[\s,]+", str(refreshed["scope"]))
+        ):
+            raise ValueError("Reddit Ads did not renew reporting access.")
+        # Reddit may omit the refresh token instead of rotating it.
+        if not refreshed.get("refresh_token"):
+            refreshed.pop("refresh_token", None)
     merged = {**credentials, **refreshed}
     if refreshed.get("expires_in"):
         merged["expires_at"] = int(time.time()) + int(refreshed["expires_in"])
@@ -497,6 +529,9 @@ async def refresh_oauth_credentials(
 
 
 async def verify_oauth_credentials(provider_slug: str, credentials: dict) -> dict:
+    if provider_slug == "reddit-ads":
+        from . import reddit_ads
+        return await reddit_ads.verify(credentials)
     if provider_slug == "frameio":
         from . import frameio
         return await frameio.verify(credentials)
@@ -592,6 +627,13 @@ class ProviderExecutor:
             arguments = coerce_module_arguments(
                 self.capability_manifest, operation, arguments
             )
+        from . import reddit_ads
+        if operation in reddit_ads.OPERATIONS:
+            capability_for(self.capability_manifest, operation)
+            if (self.capability_manifest.get("identity", {}).get("provider") != "reddit-ads"
+                    or self.capability_manifest.get("provider_type") != "oauth"):
+                raise ValueError("Reddit Ads requires its own verified connection")
+            return await reddit_ads.execute(self.credentials, operation, arguments, self.timeout_seconds)
         from . import zernio_connect
         if operation in zernio_connect.OPERATIONS:
             capability_for(self.capability_manifest, operation)
