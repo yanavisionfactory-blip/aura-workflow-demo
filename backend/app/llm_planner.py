@@ -256,7 +256,7 @@ def _bounded_planning_catalog(payload: dict) -> dict:
 
     catalog = payload["operations"]
     compact = [
-        {key: item[key] for key in ("slug", "name", "connected", "canonical_provider", "google_ads_account")
+        {key: item[key] for key in ("slug", "name", "connected", "canonical_provider", "google_ads_account", "reddit_ads_account")
          if key in item}
         | {"allowed_operations": [], "operation_contracts": []}
         for item in catalog

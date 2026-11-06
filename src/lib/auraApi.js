@@ -581,6 +581,21 @@ export async function disconnectPythonConnection(connectionId) {
   return request(`/v1/connections/${connectionId}`, { method: "DELETE" });
 }
 
+export async function listRedditAdsAccounts(connectionId, businessId = "", search = "") {
+  await ensureWorkspace();
+  const query = new URLSearchParams();
+  if (businessId) query.set("business_id", businessId);
+  if (search) query.set("search", search);
+  return request(`/v1/connections/${encodeURIComponent(connectionId)}/reddit-ads/accounts?${query}`, { timeoutMs: 80000 });
+}
+
+export async function selectRedditAdsAccount(connectionId, selection) {
+  await ensureWorkspace();
+  return request(`/v1/connections/${encodeURIComponent(connectionId)}/reddit-ads/account`, {
+    method: "POST", body: JSON.stringify(selection), timeoutMs: 80000,
+  });
+}
+
 export async function reconnectPythonConnection(connection, timeoutMs = 120000, reservedWindow = null) {
   const popup = authorizationWindow(connection.slug || connection.id, true, reservedWindow);
   let started;

@@ -1,20 +1,22 @@
 // Account names are provider data: always insert them as text, never HTML.
 // OAuth credentials and customer-number text inputs do not belong in this dialog.
-export function googleAdsAccountDialog({ load, save, selected = null }) {
+export function googleAdsAccountDialog({ load, save, selected = null, platform = "Google" }) {
+  // Only fixed product labels enter the static template, never provider data.
+  platform = platform === "Reddit" ? "Reddit" : "Google";
   return new Promise((resolve) => {
     const dialog = document.createElement("dialog");
     dialog.className = "rounded-2xl border border-white/15 bg-[#151421] p-6 text-white shadow-2xl backdrop:bg-black/70 w-[min(92vw,480px)]";
     dialog.setAttribute("aria-labelledby", "aura-ads-title");
     dialog.innerHTML = `
       <form class="space-y-4">
-        <h2 id="aura-ads-title" class="text-lg font-semibold">Choose your Google Ads account</h2>
-        <p class="text-sm text-white/70">Google sign-in is saved. Choose the advertising account AURA should use for new workflows.</p>
+        <h2 id="aura-ads-title" class="text-lg font-semibold">Choose your ${platform} Ads account</h2>
+        <p class="text-sm text-white/70">${platform} sign-in is saved. Choose the advertising account AURA should use for new workflows.</p>
         <label data-access class="text-sm" hidden>Account access<select name="access" class="mt-1 block w-full rounded-lg border border-white/20 bg-[#151421] p-3"></select></label>
         <label class="block text-sm">Find an account by name<input name="search" type="search" autocomplete="off" maxlength="100" placeholder="Search your ad accounts" class="mt-1 block w-full rounded-lg border border-white/20 bg-black/25 p-3"></label>
         <label class="block text-sm">Advertising account<select name="account" required class="mt-1 block w-full rounded-lg border border-white/20 bg-[#151421] p-3"></select></label>
         <p data-status role="status" class="text-sm text-white/70"></p>
         <p role="alert" class="text-sm text-red-300" hidden></p>
-        <p class="text-xs text-white/60">Manager accounts show the advertising accounts they can access. Search by name if your account is not listed. You can change this choice in Manage. Existing reviewed workflows keep their original account.</p>
+        <p class="text-xs text-white/60">${platform === "Reddit" ? "Choose a business to see its owned advertising accounts. Accounts shared into a business are not listed here." : "Manager accounts show the advertising accounts they can access. Search by name if your account is not listed."} You can change this choice in Manage. Existing reviewed workflows keep their original account.</p>
         <div class="flex flex-wrap justify-end gap-3">
           <button data-retry type="button" class="rounded-lg border border-white/20 px-4 py-2">Refresh</button>
           <button data-close type="button" class="rounded-lg border border-white/20 px-4 py-2">Choose later</button>
@@ -58,11 +60,11 @@ export function googleAdsAccountDialog({ load, save, selected = null }) {
       clearAccounts();
       loading = true;
       error.hidden = true;
-      status.textContent = "Loading your Google Ads accounts…";
+      status.textContent = `Loading your ${platform} Ads accounts…`;
       try {
         const result = await load(login, search.value.trim());
         if (closed || id !== requestId) return;
-        access.replaceChildren(option("", "Choose an account or manager"),
+        access.replaceChildren(option("", platform === "Reddit" ? "Choose a business" : "Choose an account or manager"),
           ...result.access_accounts.map((root) => option(root.id, `${root.name} · ${root.id}`)));
         login = result.login_customer_id || "";
         access.value = login;
@@ -76,13 +78,13 @@ export function googleAdsAccountDialog({ load, save, selected = null }) {
         account.disabled = !accounts.length;
         submit.disabled = !account.value;
         status.textContent = !result.access_accounts.length
-          ? "No Google Ads accounts are available to this Google login. Use Manage → Reconnect to sign in with another Google account."
-          : !login ? "Choose the account or manager you use to access Google Ads."
+          ? `No ${platform} Ads accounts are available to this ${platform} login. Use Manage → Reconnect to sign in with another ${platform} account.`
+          : !login ? (platform === "Reddit" ? "Choose your Reddit business." : "Choose the account or manager you use to access Google Ads.")
           : !accounts.length ? "No advertising accounts found. Search by account name or choose another account manager."
           : `${accounts.length} advertising account${accounts.length === 1 ? "" : "s"} available.`;
       } catch (cause) {
         if (closed || id !== requestId) return;
-        status.textContent = "Your Google sign-in is saved.";
+        status.textContent = `Your ${platform} sign-in is saved.`;
         error.textContent = cause.message || "Accounts could not be loaded. Try Refresh.";
         error.hidden = false;
         // A revoked manager selection can be recovered by refreshing roots.

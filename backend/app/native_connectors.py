@@ -67,6 +67,19 @@ _POSITIVE_INTEGER = {"type": "integer", "minimum": 1}
 
 
 NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
+    "reddit-ads": {
+        "schema_version": "1.1", "catalog_version": 1, "provider_type": "oauth",
+        "name": "Reddit Ads", "description": "Connect with Reddit to read advertising accounts and campaigns.",
+        "base_url": "https://ads-api.reddit.com/api/v3", "identity": {"provider": "reddit-ads"},
+        "modules": [
+            _module("reddit-ads.identity.get", "search", "Read the connected Reddit Ads identity.", permission_scope="read"),
+            _module("reddit-ads.businesses.list", "search", "List businesses accessible to the connected advertiser.", permission_scope="read"),
+            _module("reddit-ads.accounts.list", "search", "List ad accounts owned by a discovered business. Shared-in accounts are not included.",
+                    required=("business_id",), properties={"business_id": _TEXT}, permission_scope="read"),
+            _module("reddit-ads.campaigns.list", "search", "Read campaigns from an explicitly selected advertising account.",
+                    required=("ad_account_id",), properties={"ad_account_id": _TEXT}, permission_scope="read"),
+        ],
+    },
     "frameio": {
         "schema_version": "1.1", "catalog_version": 1, "provider_type": "oauth",
         "name": "Frame.io", "description": "Read exact Frame.io V4 file versions and reviewer comments.",

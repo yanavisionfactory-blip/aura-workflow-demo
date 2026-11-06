@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     tiktok_client_secret: str = ""
     x_client_id: str = ""
     x_client_secret: SecretStr = SecretStr("")
+    reddit_ads_client_id: str = ""
+    reddit_ads_client_secret: SecretStr = SecretStr("")
+    reddit_ads_user_agent: str = "web:aura-workflow:v1.0"
     # AURA's server account; customers never sign in to Zernio.
     zernio_api_key: SecretStr = SecretStr("")
     mailchimp_client_id: str = ""

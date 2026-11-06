@@ -9,10 +9,12 @@ import {
   getManagedConnectorStatus,
   listPythonTools,
   listGoogleAdsAccounts,
+  listRedditAdsAccounts,
   pythonRuntimeEnabled,
   reserveAuthorizationWindow,
   searchConnectorBrokerApps,
   selectGoogleAdsAccount,
+  selectRedditAdsAccount,
   testPythonConnection,
 } from "@/lib/auraApi";
 import {
@@ -29,6 +31,23 @@ let hydratedTools = null;
 let hydratedAt = 0;
 
 export async function chooseGoogleAdsAccount(tool, { force = false } = {}) {
+  if (tool?.slug === "reddit-ads" && tool.connection_backend === "native") {
+    if (!force && tool.reddit_ads_account) return tool;
+    const adapt = (row) => row && ({ ...row, login_customer_id: row.business_id, customer_id: row.ad_account_id });
+    const selected = await googleAdsAccountDialog({
+      platform: "Reddit",
+      selected: adapt(tool.reddit_ads_account),
+      load: async (business, search) => {
+        const result = await listRedditAdsAccounts(tool.id, business, search);
+        return { access_accounts: result.businesses, login_customer_id: result.business_id,
+          accounts: result.accounts.map(adapt) };
+      },
+      save: (row) => selectRedditAdsAccount(tool.id, {
+        business_id: row.login_customer_id, ad_account_id: row.customer_id,
+      }),
+    });
+    return selected ? { ...tool, reddit_ads_account: selected } : tool;
+  }
   if (tool?.slug !== "google-ads" || tool.connection_backend !== "pipedream"
     || (!force && tool.google_ads_account)) return tool;
   const selected = await googleAdsAccountDialog({

@@ -10,6 +10,7 @@ import httpx
 from jsonschema import Draft202012Validator
 from sqlalchemy import select
 
+from . import reddit_ads
 from .agent_runtime import (
     ConnectionRequiredError,
     create_plan,
@@ -1190,6 +1191,7 @@ async def _create_compiled_plan(
                     connection_routes=connection_routes,
                 )
             apply_account_defaults(plan, inventory, manifests_by_slug)
+            reddit_ads.apply_account_defaults(plan, inventory, manifests_by_slug)
             _normalize_planned_steps(plan, manifests_by_slug, request_prompt or prompt)
             from .intelligence_backup import add_intelligence_backups
 
@@ -1835,6 +1837,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 "allowed_operations": tool.allowed_operations,
                 "granted_operations": list(tool.allowed_operations or []),
                 "google_ads_account": selected_account(tool),
+                "reddit_ads_account": reddit_ads.selected_account(tool),
                 "connected": True,
             }
             for tool in tools
@@ -1902,7 +1905,8 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 session, run, connected_inventory, manifests_by_slug,
             ))
             if plan is not None and any(
-                item.get("google_ads_account") and any(step.tool_slug == item["slug"] for step in plan.steps)
+                (item.get("google_ads_account") or item.get("reddit_ads_account"))
+                and any(step.tool_slug == item["slug"] for step in plan.steps)
                 for item in connected_inventory
             ):
                 # A cached plan can contain a previous customer's literal IDs.

@@ -20,6 +20,25 @@ const tick = () => new Promise((resolve) => setImmediate(resolve));
 const event = (name) => new window.Event(name, { bubbles: true, cancelable: true });
 const form = () => document.querySelector("form");
 
+test("Reddit uses business and ad-account choices without developer credentials", async () => {
+  setup();
+  const business = "1e200a0b-4e98-32cc-dd47-3006e4c85bb2";
+  const account = { login_customer_id: business, customer_id: "t2_advertiser", name: "Reddit campaign account" };
+  let saved;
+  const result = googleAdsAccountDialog({ platform: "Reddit", load: async () => ({
+    access_accounts: [{ id: business, name: "Customer business" }], login_customer_id: business,
+    accounts: [account],
+  }), save: async (value) => { saved = value; return { selected_account: account }; } });
+  await tick();
+  assert.match(document.querySelector("h2").textContent, /Reddit Ads/);
+  assert.doesNotMatch(document.body.textContent, /Google|client.secret|client.id/i);
+  assert.match(document.body.textContent, /shared into a business/);
+  assert.deepEqual([...document.querySelectorAll("input")].map(input => input.type), ["search"]);
+  form().dispatchEvent(event("submit"));
+  assert.deepEqual(await result, account);
+  assert.equal(saved.customer_id, "t2_advertiser");
+});
+
 test("shows named accounts without credentials or customer-number text fields, and saves the selected provider result", async () => {
   setup();
   let payload;

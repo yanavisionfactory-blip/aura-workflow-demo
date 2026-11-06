@@ -21,7 +21,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
-from . import frameio, google_ads_accounts, wordpress_plugins, zernio_connect
+from . import frameio, google_ads_accounts, reddit_ads, wordpress_plugins, zernio_connect
 from .agent_runtime import is_governed_derivative_step
 from .approval_readiness import unfinished_action_content
 from .approval_review import (
@@ -664,6 +664,7 @@ async def list_tools(
                 "external_account_id": tool.external_account_id,
                 "connection_backend": (tool.config or {}).get("managed_by"),
                 "google_ads_account": google_ads_accounts.selected_account(tool),
+                "reddit_ads_account": reddit_ads.selected_account(tool),
                 "canonical_provider": canonical_provider_slug(connection_provider(tool)),
                 "execution_strategy": (tool.config or {}).get("execution_strategy"),
                 "is_agent": (tool.config or {}).get("managed_by") == "agent_gateway",
@@ -1387,6 +1388,8 @@ def _canonical_marketplace_entries(items: list[dict]) -> list[dict]:
     """Present one app card while retaining every certified execution route."""
     grouped: dict[str, list[dict]] = {}
     for raw in items:
+        if canonical_provider_slug(raw.get("provider")) == "reddit-ads" and raw.get("source") != "native":
+            continue
         raw = social_catalog_entry(raw)
         provider = str(raw.get("provider") or "").strip()
         if not provider:
@@ -1534,6 +1537,9 @@ async def managed_connector_status(
                 "source": "native",
                 "connection_backend": backend,
                 "preferred_connection": definition.native_only and backend == "native",
+                "connection_strategy": "oauth",
+                "setup_hint": ("Sign in with Reddit" if backend else "AURA is preparing Reddit sign-in")
+                    if slug == "reddit-ads" else "Provider consent",
                 "availability": "available" if backend else "coming_soon",
                 "connectable": backend is not None,
             }
@@ -1553,6 +1559,7 @@ async def managed_connector_status(
             "connectable": True,
         }
         for release in dynamic
+        if release.provider_slug != "reddit-ads"
     ]
     long_tail_packs = list(
         (
@@ -1595,7 +1602,7 @@ async def managed_connector_status(
             "connectable": long_tail_ready,
         }
         for pack in long_tail_packs
-        if pipedream_pack_signature_valid(pack)
+        if pipedream_pack_signature_valid(pack) and pack.provider_slug != "reddit-ads"
     ]
     available_by_provider = {
         item["provider"]: item
@@ -1640,6 +1647,7 @@ async def managed_connector_status(
         }
     for item in native_catalog + long_tail_catalog:
         marketplace_by_provider.setdefault(item["provider"], item)
+    marketplace_by_provider["reddit-ads"] = next(item for item in native_catalog if item["provider"] == "reddit-ads")
     native_ready = any(item.get("connectable") for item in native_catalog)
     released_long_tail_count = len(long_tail_catalog)
     catalog = [
@@ -1760,12 +1768,17 @@ async def search_connector_broker_apps(
             "source": "native",
             "connection_backend": native_backend,
             "preferred_connection": definition.native_only and native_backend == "native",
+            "connection_strategy": "oauth",
+            "setup_hint": ("Sign in with Reddit" if native_backend else "AURA is preparing Reddit sign-in")
+                if slug == "reddit-ads" else "Provider consent",
             "capability_count": len(native_operations(slug)),
         }
         if matches(item):
             entries[slug] = item
     if nango.configured:
         for release in await released_connectors(session):
+            if release.provider_slug == "reddit-ads":
+                continue
             item = {
                 **release_descriptor(release),
                 "availability": "available",
@@ -1884,6 +1897,9 @@ async def search_connector_broker_apps(
                 provider_slug = str(
                     app_definition.get("name_slug") or app_definition.get("name") or ""
                 )
+                if canonical_provider_slug(provider_slug) == "reddit-ads":
+                    # Never replace AURA's Ads sign-in with developer-key forms.
+                    continue
                 pack = await released_pipedream_pack(session, provider_slug)
                 item = pipedream_marketplace_entry(
                     app_definition,
@@ -4094,6 +4110,59 @@ async def choose_google_ads_account(
     return {"selected_account": selected}
 
 
+async def _reddit_ads_credentials(connection_id, context, session):
+    tool = await session.get(ToolConnection, connection_id)
+    if not tool or tool.workspace_id != context.workspace_id or tool.slug != "reddit-ads":
+        raise HTTPException(404, "Connection not found")
+    if not tool.enabled or (tool.config or {}).get("managed_by") != "native":
+        raise HTTPException(409, "Reconnect Reddit Ads before choosing an account.")
+    credentials = CredentialVault().decrypt(tool.encrypted_credentials)
+    credentials, changed = await refresh_oauth_credentials(settings, "reddit-ads", credentials)
+    if changed:
+        tool.encrypted_credentials = CredentialVault().encrypt(credentials)
+        await session.commit()
+    return tool, credentials
+
+
+@app.get("/v1/connections/{connection_id}/reddit-ads/accounts")
+async def reddit_ads_account_options(
+    connection_id: str,
+    business_id: str | None = Query(default=None, max_length=36),
+    search: str = Query(default="", max_length=100),
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    try:
+        async with asyncio.timeout(60):
+            _, credentials = await _reddit_ads_credentials(connection_id, context, session)
+            return await reddit_ads.account_options(credentials, business_id, search)
+    except (httpx.HTTPError, ValueError, TimeoutError):
+        raise HTTPException(409, "Reddit Ads could not load your accounts. Try Refresh or reconnect if access was removed.") from None
+
+
+@app.post("/v1/connections/{connection_id}/reddit-ads/account")
+async def choose_reddit_ads_account(
+    connection_id: str,
+    payload: reddit_ads.AccountSelection,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    try:
+        async with asyncio.timeout(60):
+            tool, credentials = await _reddit_ads_credentials(connection_id, context, session)
+            options = await reddit_ads.account_options(credentials, str(payload.business_id))
+            selected = next((row for row in options["accounts"] if row["ad_account_id"] == payload.ad_account_id), None)
+            if not selected:
+                raise ValueError("Advertising account is not accessible")
+    except (httpx.HTTPError, ValueError, TimeoutError):
+        raise HTTPException(409, "That Reddit Ads account could not be verified. Refresh and choose an accessible account.") from None
+    tool.config = {**tool.config, "reddit_ads_account": {**selected, "identity_id": tool.external_account_id}}
+    session.add(AuditEvent(workspace_id=context.workspace_id, actor=context.subject,
+                          event_type="connector.reddit_ads_account_selected", payload={"tool_id": tool.id, **selected}))
+    await session.commit()
+    return {"selected_account": selected}
+
+
 @app.post("/v1/connections/{connection_id}/test")
 async def test_connection(
     connection_id: str,
@@ -4752,6 +4821,8 @@ async def oauth_start(
     try:
         authorization_url = oauth_authorization_url(settings, definition, state)
     except ValueError as exc:
+        if provider == "reddit-ads":
+            raise HTTPException(503, "AURA is preparing Reddit Ads sign-in. Please try again once setup is complete.") from None
         raise HTTPException(503, str(exc)) from exc
     return {"authorization_url": authorization_url}
 
@@ -4825,6 +4896,11 @@ async def oauth_callback(
         )
     )
     allowed = native_operations(provider)
+    if provider == "reddit-ads" and tool and (tool.config or {}).get("managed_by") not in {None, "native"}:
+        return RedirectResponse(f"{frontend_url}?" + urlencode({
+            "oauth_provider": provider, "oauth_status": "error",
+            "oauth_message": "Your existing Reddit Ads connection was kept. Reconnect from Manage to use its saved sign-in method.",
+        }))
     if tool:
         tool.encrypted_credentials = CredentialVault().encrypt(credentials)
         tool.enabled = True
@@ -4840,6 +4916,13 @@ async def oauth_callback(
         )
         session.add(tool)
         await session.flush()
+    if provider == "reddit-ads":
+        identity = credentials["reddit_ads_identity"]
+        config = dict(tool.config or {})
+        if tool.external_account_id != identity:
+            config.pop("reddit_ads_account", None)
+        tool.config = {**config, "managed_by": "native"}
+        tool.external_account_id = identity
     capability_record = await session.scalar(
         select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id)
     )
