@@ -69,6 +69,10 @@ def worksheet_metadata_context(result, operation):
         normalized.setdefault("worksheets", tabs)
         value = {**result, "ret": normalized}
         value.setdefault("worksheets", tabs)
+        # Saved plans also use the native Sheets API collection directly,
+        # without the connector's `ret` envelope. Preserve the provider's
+        # ordered collection so reviewed tab-ID and title references replay.
+        value.setdefault("sheets", rows)
         return value
     if operation != "google-sheets.get-spreadsheet-info":
         return result

@@ -216,6 +216,43 @@ def test_saved_full_metadata_resolves_reviewed_worksheet_collection_paths(tab_id
     assert value["provider_result"] is receipt and receipt == original
 
 
+@pytest.mark.parametrize("tab_id", [0, 1386900864])
+def test_saved_dashboard_write_and_readback_resolve_native_sheets_paths(tab_id):
+    """Replay the failing references using the completed metadata receipt."""
+    receipt = {"ret": {"spreadsheetId": "saved_book", "sheets": [
+        {"properties": {"sheetId": tab_id, "title": "Dashboard"}},
+        {"properties": {"sheetId": 51, "title": "Sources"}},
+    ]}}
+    original = deepcopy(receipt)
+    context = {"steps": {
+        "create_workbook": step_context_value(
+            {"ret": {"spreadsheetId": "saved_book"}}, "google-sheets.new-spreadsheet"),
+        "read_workbook_metadata": step_context_value(
+            receipt, "google-sheets.get-spreadsheet-by-id"),
+        "compose_dashboard": {"rows_json": '[["Revenue","Not publicly reported"]]'},
+    }}
+    write = {
+        "sheetId": "{{steps.create_workbook.spreadsheetId}}",
+        "worksheetId": "{{steps.read_workbook_metadata.sheets[0].properties.sheetId}}",
+        "rows": "{{steps.compose_dashboard.rows_json}}",
+    }
+    readback = {
+        "spreadsheetId": "{{steps.create_workbook.spreadsheetId}}",
+        "sheetName": "{{steps.read_workbook_metadata.sheets[0].properties.title}}",
+    }
+    reviewed_arguments = deepcopy((write, readback))
+    assert resolve_value(write, context) == {
+        "sheetId": "saved_book", "worksheetId": tab_id,
+        "rows": '[["Revenue","Not publicly reported"]]',
+    }
+    assert resolve_value(readback, context) == {"spreadsheetId": "saved_book", "sheetName": "Dashboard"}
+    assert resolve_value("{{steps.read_workbook_metadata.sheets[1].properties.sheetId}}", context) == 51
+    assert (write, readback) == reviewed_arguments
+    assert receipt == original
+    assert context["steps"]["read_workbook_metadata"]["provider_result"] is receipt
+    assert "worksheetId" not in context["steps"]["read_workbook_metadata"]
+
+
 @pytest.mark.parametrize("properties", [None, {}, {"sheetId": True, "title": "Dashboard"},
     {"sheetId": "8", "title": "Dashboard"}, {"sheetId": -1, "title": "Dashboard"},
     {"sheetId": 8, "title": " "}])
@@ -223,6 +260,7 @@ def test_full_metadata_collection_alias_requires_real_provider_tab_identity(prop
     receipt = {"ret": {"sheets": [{"properties": properties}]}}
     value = step_context_value(receipt, "google-sheets.get-spreadsheet-by-id")
     assert "worksheets" not in value and "worksheets" not in value["ret"]
+    assert "sheets" not in value
     assert value["provider_result"] is receipt
 
 
