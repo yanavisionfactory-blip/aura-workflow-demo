@@ -1136,6 +1136,7 @@ async def _create_compiled_plan(
     # passes. Give malformed candidates one bounded correction before review;
     # this does not execute tools, change grants or bypass approval.
     direct_planning = get_settings().planner_mode == "llm"
+    reference_repair = None
     for attempt in range(2):
         if direct_planning:
             from .llm_planner import create_llm_plan
@@ -1143,6 +1144,7 @@ async def _create_compiled_plan(
             plan = await create_llm_plan(
                 prompt, inventory, available_input_names, requested_tool_names,
                 list(repair_requirements), required_effects,
+                **({"reference_repair": reference_repair} if reference_repair else {}),
             )
         else:
             plan = await create_plan(
@@ -1218,6 +1220,10 @@ async def _create_compiled_plan(
         except (NativeConnectorError, ValueError) as exc:
             if attempt == 1:
                 raise
+            if direct_planning:
+                from .llm_planner import reference_repair_context
+
+                reference_repair = reference_repair_context(plan, available_input_names)
             repair_requirements.append(str(exc))
             reason = str(exc)
             failure_category = (
