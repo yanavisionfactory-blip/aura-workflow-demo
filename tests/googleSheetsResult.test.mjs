@@ -209,3 +209,34 @@ test("a partial read of the written range remains visible without claiming a com
   assert.equal(result.ranges[0].range, "'Dashboard'!A1:F200");
   assert.deepEqual(result.ranges[0].values, read.provider_result.ret.rows);
 });
+
+test("all saved destination tables survive later writes to other tabs and metadata reads", () => {
+  const save = (tab) => ({ ...write, step_key: tab, provider_result: { spreadsheetId: "workbook", updates: { updatedRange: `${tab}!A1:B2` } },
+    outcome_check: { status: "verified", observed: { range: `${tab}!A1:B2`, values: [["Metric", "Value"], [tab, 0]] } } });
+  const result = googleSheetsResult([save("Dashboard"), save("Competitors"), save("Feedback"),
+    { operation: "google-sheets.get-spreadsheet-info", provider_result: { ret: { spreadsheetId: "workbook", title: "Saved dashboard" } } }]);
+  assert.deepEqual(result.ranges.map((grid) => sheetRange(grid.range).tab), ["Dashboard", "Competitors", "Feedback"]);
+  assert.equal(result.ranges[0].values[1][1], 0);
+});
+
+test("an empty later read cannot erase a verified table; subsequent cell writes invalidate stale tables", () => {
+  const saved = { ...write, outcome_check: { status: "verified", observed: { range: "'Pilot Record'!A49:B52", values: [["Retained actual cells"]] } } };
+  const metadata = read("metadata", "'Pilot Record'!A49:B52", undefined);
+  assert.equal(googleSheetsResult([saved, metadata]).ranges[0].values[0][0], "Retained actual cells");
+  assert.deepEqual(googleSheetsResult([saved, { ...write, outcome_check: undefined }]).ranges, []);
+  assert.deepEqual(googleSheetsResult([{ ...saved, outcome_check: { status: "verified", observed: { spreadsheetId: "other", range: "'Pilot Record'!A49:B52", values: [["Wrong workbook"]] } } }]).ranges, []);
+});
+
+test("batch read tables stay separate and a newer identical range replaces its old snapshot", () => {
+  const output = { operation: "sheets.read", resolved_arguments: { spreadsheet_id: "workbook" }, provider_result: {
+    valueRanges: [{ range: "Dashboard!A1:B2", values: [["Old value"]] }, { range: "Feedback!A1:B2", values: [["Feedback table"]] }] } };
+  const result = googleSheetsResult([output, read("latest", "Dashboard!A1:B2", [["Latest value"]])]);
+  assert.deepEqual(result.ranges.map((grid) => grid.values[0][0]), ["Feedback table", "Latest value"]);
+});
+
+test("workbook creation verification alone does not claim saved cells were verified", () => {
+  const result = googleSheetsResult([{ operation: "google-sheets.new-spreadsheet", provider_result: { ret: { spreadsheetId: "workbook", title: "Dashboard" } },
+    outcome_check: { status: "verified", observed: { ret: { spreadsheetId: "workbook", worksheets: [{ sheetId: 0, sheetName: "Dashboard", headers: [] }] } } } }]);
+  assert.equal(result.verified, false);
+  assert.deepEqual(result.ranges, []);
+});

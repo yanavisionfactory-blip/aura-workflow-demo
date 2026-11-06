@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mainToolEntry, supportingToolOutputs, toolResultEntries, toolResultGroups } from "../src/lib/toolResultViews.mjs";
+import { preferredToolOutcome, mainToolEntry, supportingToolOutputs, toolResultEntries, toolResultGroups } from "../src/lib/toolResultViews.mjs";
 import { primaryResultFromOutputs, supportingReceipts } from "../src/lib/resultPresentation.mjs";
 import { toolEvidence } from "../src/lib/toolEvidence.mjs";
 
@@ -127,4 +127,18 @@ test("source links come only from completed web reads and generated reports do n
     assert.equal(entry("web.page.read", url).link, null);
   assert.equal(entry("web.page.read", "https://example.com/", "failed").link, null);
   assert.equal(entry("report.compose", "https://chatgpt.com/").link, null);
+});
+
+test("saved activity restores empty cached Sheet results without switching workbooks", () => {
+  const primary = { kind: "spreadsheet", spreadsheetId: "target", title: "Saved dashboard", ranges: [], verified: true };
+  const activity = [{ id: "save", status: "completed", operation: "sheets.append", output: {
+    operation: "sheets.append", provider_result: { spreadsheetId: "target", updatedRange: "Dashboard!A1:B2" },
+    outcome_check: { status: "verified", observed: { range: "Dashboard!A1:B2", values: [["Actual saved table", 0]] } },
+  } }, { id: "other", status: "completed", operation: "sheets.read", output: {
+    operation: "sheets.read", provider_result: { spreadsheetId: "other", range: "Dashboard!A1:B2", values: [["Unrelated workbook"]] },
+  } }];
+  const result = preferredToolOutcome(primary, activity);
+  assert.equal(result.spreadsheetId, "target");
+  assert.deepEqual(result.ranges[0].values, [["Actual saved table", 0]]);
+  assert.doesNotMatch(JSON.stringify(result), /Unrelated/);
 });

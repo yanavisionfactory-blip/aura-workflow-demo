@@ -9,6 +9,7 @@ import { frameioOutputs } from "./fixtures/frameioReview.mjs";
 import { resolvedApprovalStep } from "../src/lib/approvalReview.mjs";
 import { JSDOM } from "jsdom";
 import React, { act } from "react";
+import { rows as planteaRows } from "../public/showcase/mason-green/data.mjs";
 
 const repo = fileURLToPath(new URL("../", import.meta.url));
 let temporary;
@@ -53,18 +54,19 @@ before(async () => {
 });
 after(() => { if (temporary) fs.rmSync(temporary, { recursive: true, force: true }); });
 
-test("Frame.io review opens the file workspace with an editable brief and contextual prompt", () => {
+test("Frame.io review keeps its editable brief without the removed change composer", () => {
   const steps = frameioOutputs().map((output) => ({ id: output.step_id || output.step_key, key: output.step_key,
     tool_slug: output.operation.startsWith("frameio") ? "frameio" : "aura", operation: output.operation,
     status: "completed", reason: output.operation, output }));
   const html = render({ id: "frameio-review", status: "completed", plan: { name: "Review campaign" }, steps,
     result: { result_presentation: { primary_step_key: "brief" } } });
   for (const text of ["Frame.io review workspace", "Campaign cut.mp4", "Revision brief", "Edit brief", "Comments (0)",
-    "Human review pending", "View Frame.io results", "View ChatGPT results", "Change result with a prompt", "Prepare requested changes"]) assert.ok(html.includes(text), text);
+    "Human review pending", "View Frame.io results", "View ChatGPT results"]) assert.ok(html.includes(text), text);
   assert.ok(html.indexOf("Frame.io review workspace") < html.indexOf("Supporting workflow actions"));
   assert.doesNotMatch(html, /Google Docs|Google Sheets|<iframe|Approved content/);
   assert.match(html, /<details[^>]*><summary[^>]*>File details/);
   assert.match(html, /Open in Frame.io/);
+  assert.doesNotMatch(html, /What would you like to change|Change result with a prompt/);
 });
 
 test("result review shows completed output on its own page without previews for pending steps", () => {
@@ -135,8 +137,8 @@ test("backup results disclose the actual generator and preserve its saved respon
     },
   }] });
   for (const expected of ["Claude response", "Backup used", "insufficient credits", "September 2026", "What happened", "Results by tool"]) assert.ok(html.includes(expected), expected);
-  assert.ok(html.indexOf("Main workflow result") < html.indexOf("What happened"));
-  assert.match(html, /<details aria-label="Main workflow result"/);
+  assert.ok(html.indexOf("What happened") < html.indexOf("Claude response"));
+  assert.match(html, /<details[^>]*aria-label="Claude result dropdown"/);
   assert.doesNotMatch(html, /Generated with Claude|AURA Intelligence output preview/);
   assert.match(html, /<details[^>]*><summary[^>]*>Execution details · backup used/);
 });
@@ -225,30 +227,23 @@ const run = { id: "saved-run", status: "completed", plan: { name: "Roofing campa
   } },
 };
 
-test("the main result comes first, followed by collapsed tool outputs and the workflow summary", () => {
+test("the summary leads and every tool result is a dropdown inside What happened", () => {
   const html = render(run);
-  const main = html.indexOf('aria-label="Main workflow result"');
-  const actions = html.indexOf('aria-label="Supporting workflow actions"');
-  const tools = html.indexOf('aria-label="Results by tool"');
-  const supporting = html.indexOf('aria-label="Supporting tool outputs"');
-  const summary = html.indexOf('aria-label="Workflow summary"');
-  assert.ok(main > 0 && main < supporting && supporting < summary && summary < actions && actions < tools);
-  assert.match(html, /<details aria-label="Main workflow result"/);
-  const content = html.slice(main, html.indexOf("What would you like to do next?"));
-  for (const text of ["Sourced campaign brief", "Get a Free Estimate", "Final review remains pending."]) assert.ok(content.includes(text));
-  assert.match(content, /href="https:\/\/example.com\/roofing"/);
-  assert.doesNotMatch(content, /Fictional demonstration/);
-  assert.match(html, /What happened/);
-  assert.match(html, /View action/);
-  assert.match(html, /Results by tool/);
+  const doc = new JSDOM(html).window.document;
+  const summary = doc.querySelector('[aria-label="Workflow summary"]');
+  const outcomes = summary.querySelector('[aria-label="Supporting workflow actions"]');
+  const tools = summary.querySelector('[aria-label="Results by tool"]');
+  assert.equal(summary.parentElement.firstElementChild, summary);
+  assert.equal(outcomes.nextElementSibling, tools);
+  for (const name of ["Google Docs", "Google Ads"]) assert.ok(outcomes.querySelector(`details[aria-label="${name} result dropdown"]`));
+  for (const text of ["Sourced campaign brief", "Get a Free Estimate", "Final review remains pending.", "roof repair"]) assert.ok(outcomes.textContent.includes(text));
+  assert.match(html, /href="https:\/\/example.com\/roofing"/);
+  assert.doesNotMatch(html, /Main workflow result|Other tool outputs|What would you like to change|Change result with a prompt|Fictional demonstration/);
   assert.match(html, /View activity/);
-  assert.match(content, /Google Docs output preview/);
-  assert.match(content, /Open tool view/);
-  assert.match(content, /max-h-\[30rem\]/);
   assert.match(html, /aria-label="View Google Ads results"/);
-  const openDetails = [...html.matchAll(/<details[^>]*\bopen(?:=|[ >])[^>]*>/g)];
+  const openDetails = [...doc.querySelectorAll("details[open]")];
   assert.equal(openDetails.length, 1);
-  assert.match(openDetails[0][0], /aria-label="Main workflow result"/);
+  assert.equal(openDetails[0].getAttribute("aria-label"), "Google Docs result dropdown");
 });
 
 test("a blocked run retains actual saved content and failed action evidence without a completion claim", () => {
@@ -267,7 +262,7 @@ test("a primary provider read shows its returned rows in the tool screen rather 
   const html = render({ ...run, steps: [keywords], result: { result_presentation: { primary_step_key: "keywords" } } });
   assert.match(html, /Google Ads output preview/);
   assert.match(html, /roof repair/);
-  assert.match(html, /<details aria-label="Main workflow result"/);
+  assert.match(html, /<details[^>]*aria-label="[^"]+ result dropdown"/);
   assert.doesNotMatch(html, /Google Docs output preview/);
 });
 
@@ -294,10 +289,12 @@ test("the expandable Results section contains final Sheets cells, exact link and
   assert.match(html, /source tab read in Google Sheets/);
   assert.match(html, /report prepared with ChatGPT/);
   assert.match(html, /rows saved to Google Sheets/);
-  assert.match(html, /<details aria-label="Main workflow result"/);
+  assert.match(html, /<details[^>]*aria-label="[^"]+ result dropdown"/);
   assert.ok(html.indexOf('aria-label="Google Sheets result screen"') < html.indexOf('aria-label="Results by tool"'));
   assert.match(html, /aria-label="View ChatGPT results"/);
-  assert.doesNotMatch(html, /AURA Intelligence|Earlier source|majorDimension|~12 min|time saved|Campaign report sent/);
+  const cells = new JSDOM(html).window.document.querySelector('[aria-label="Saved Google Sheets cells"]');
+  assert.doesNotMatch(cells.textContent, /Earlier source/);
+  assert.doesNotMatch(html, /AURA Intelligence|~12 min|time saved|Campaign report sent/);
 });
 
 test("a supplied-evidence report renders its complete body without implying provider execution", () => {
@@ -322,12 +319,13 @@ test("a completed campaign stays native in AURA with channel views and actual pe
       provider_result: { status: "draft", title: "Unpublished campaign package", body: campaignBody,
         summary: "Campaign prepared inside AURA.", synthetic: false, sources: [] },
     } }], result: { result_presentation: { primary_step_key: "compose", metrics: [] } } });
-  const main = html.slice(html.indexOf('aria-label="Main workflow result"'), html.indexOf("What would you like to do next?"));
+  const main = html.slice(html.indexOf('aria-label="Supporting workflow actions"'), html.indexOf("What would you like to do next?"));
   assert.match(main, /aria-label="Campaign launch package"/);
   for (const label of ["Google Ads", "Social ads", "Business Profile", "Indoor screens", "Assets", "Approvals and handoff", "Tool outputs"]) assert.ok(main.includes(label));
   assert.match(main, /Saved draft copy with pending client approvals/);
-  assert.doesNotMatch(main.slice(0, main.indexOf("Other tool outputs")), /Open in Google Docs|Checked in Google Docs/);
-  assert.match(main, /<details aria-label="Google Docs result dropdown"/);
+  const campaign = new JSDOM(html).window.document.querySelector('[aria-label="Campaign launch package"]');
+  assert.doesNotMatch(campaign.textContent, /Open in Google Docs|Checked in Google Docs/);
+  assert.match(main, /<details[^>]*aria-label="Google Docs result dropdown"/);
   assert.match(html, /Read keyword ideas/);
   assert.match(html, /aria-label="View Google Ads results"/);
 });
@@ -341,7 +339,7 @@ test("a scoped booking campaign shows saved GBP, Meta and Reel views without exc
     provider_result: { status: "draft", title: "Local booking campaign", body: campaignBody,
       summary: "Unpublished review package.", synthetic: false, sources: [] },
   } }], result: { result_presentation: { primary_step_key: "compose", metrics: [] } } });
-  const main = html.slice(html.indexOf('aria-label="Main workflow result"'), html.indexOf("What would you like to do next?"));
+  const main = html.slice(html.indexOf('aria-label="Supporting workflow actions"'), html.indexOf("What would you like to do next?"));
   for (const label of ["Social ads", "Business Profile", "Reel", "Booking and source checks", "Assets", "Approvals and handoff", "Tool outputs"]) assert.ok(main.includes(label));
   assert.doesNotMatch(main, /Google Ads|Indoor screens|Open in Google Docs/);
   assert.match(main, /Complete saved report and source evidence/);
@@ -394,18 +392,20 @@ test("broker Sheets result review shows the workbook screen with technical recei
     tool_slug: "google-sheets", operation: step.operation, is_final: true });
   const visible = html.replace(/<details\b[^>]*>[\s\S]*?<\/details>/g, "");
   for (const text of ["Review Google Sheets result", "Google Sheets result screen", "Open in Google Sheets",
-    "Google Sheets — final workflow result", "Approve and finish"]) assert.ok(visible.includes(text), text);
-  assert.match(visible, /<iframe[^>]+src="https:\/\/docs.google.com\/spreadsheets\/d\/broker-workbook\/edit\?rm=minimal#gid=173&amp;range=A1%3AG8"/);
+    "No saved cell data is available", "Approve and finish"]) assert.ok(visible.includes(text), text);
+  assert.match(visible, /href="https:\/\/docs.google.com\/spreadsheets\/d\/broker-workbook\/edit#gid=173&amp;range=A1%3AG8"/);
+  assert.doesNotMatch(visible, /<iframe/);
   assert.doesNotMatch(visible, /Empty list returned|spreadsheetId|updatedRange|updatedRows|updatedColumns|updatedCells|>ret<|>os<|Requested only/);
   assert.match(html, /<details[^>]*><summary[^>]*>Technical details<\/summary>/);
   assert.doesNotMatch(html, /<details[^>]*\bopen(?:=|>)/);
-  assert.ok(html.indexOf("<iframe") < html.indexOf("Technical details"));
+  assert.ok(html.indexOf("No saved cell data is available") < html.indexOf("Technical details"));
   assert.doesNotMatch(html, /<button[^>]*disabled[^>]*>[^<]*Approve and finish/);
 
   const final = render({ id: "broker-run", status: "completed", plan: { name: "KPI dashboard" },
     steps: [step], result: { result_presentation: { primary_step_key: "save" } } });
   assert.match(final, /Google Sheets result screen/);
-  assert.match(final, /<iframe[^>]+docs.google.com/);
+  assert.doesNotMatch(final, /<iframe/);
+  assert.match(final, /No saved cell data is available/);
   assert.match(final, /Open in Google Sheets/);
 });
 
@@ -441,9 +441,9 @@ test("an incomplete broker workflow summarizes completed work and previews the e
   assert.match(html, />37<\/p>/);
   assert.match(html, /web page read/);
   assert.match(html, /Tools used/);
-  assert.match(html, /<details aria-label="Main workflow result" open="" class="group mb-6">/);
+  assert.match(html, /<details[^>]*open=""[^>]*aria-label="Google Sheets result dropdown"/);
   assert.ok(html.indexOf("What happened") < html.indexOf("Tools used"));
-  assert.ok(html.indexOf('aria-label="Main workflow result"') < html.indexOf("Tools used"));
+  assert.ok(html.indexOf("What happened") < html.indexOf('aria-label="Google Sheets result screen"'));
   assert.match(html, /Saved Google Sheets cells/);
   assert.match(html, /Cell A1/);
   assert.match(html, /Partial saved preview:/);
@@ -451,13 +451,32 @@ test("an incomplete broker workflow summarizes completed work and previews the e
   assert.match(html, /Not publicly reported/);
   assert.match(html, /Awaiting input/);
   assert.match(html, /https:\/\/docs.google.com\/spreadsheets\/d\/final-workbook\/edit#gid=173&amp;range=A1%3AG37/);
-  assert.doesNotMatch(html, /<iframe|Unsaved proposal|Empty list returned|Workflow complete<\/|Schedule<\/button>/);
-  assert.ok(html.indexOf("Saved Google Sheets cells") < html.indexOf("Other tool outputs"));
-  assert.ok(html.indexOf("Other tool outputs") < html.indexOf("Intermediate planning report"));
-  assert.ok(html.indexOf("Intermediate planning report") < html.indexOf('aria-label="Workflow summary"'));
+  assert.doesNotMatch(html, /<iframe|Unsaved proposal|Workflow complete<\/|Schedule<\/button>/);
+  assert.ok(html.indexOf('aria-label="Workflow summary"') < html.indexOf("What happened"));
+  assert.ok(html.indexOf("What happened") < html.indexOf("Intermediate planning report"));
+  assert.doesNotMatch(html, /Other tool outputs|What would you like to change/);
 });
 
-test("the sheet is visible on load while supporting reports and activity open inline dropdowns", async () => {
+test("the existing 37-row Plantea snapshot restores the actual tables from activity when the cached result is empty", () => {
+  const create = { step_key: "create", operation: "google-sheets.new-spreadsheet", provider_result: { ret: { spreadsheetId: "plantea-workbook", title: "Plantéa Skin KPI Dashboard" } }, outcome_check: { status: "verified" } };
+  const steps = [
+    { id: "create", key: "create", tool_slug: "google-sheets", status: "completed", output: create },
+    { id: "save", key: "save", tool_slug: "google-sheets", operation: "google-sheets.update-multiple-rows", status: "completed", output: { resolved_arguments: { worksheetId: 173 }, provider_result: { ret: { spreadsheetId: "plantea-workbook", updatedRange: "Dashboard!A1:G37", updatedRows: 37 } } } },
+    { id: "read", key: "read", tool_slug: "google-sheets", operation: "google-sheets.read-rows", status: "completed", output: { resolved_arguments: { spreadsheetId: "plantea-workbook", sheetName: "Dashboard", range: "A1:F200", hasHeaders: false }, provider_result: { ret: { rows: planteaRows } } } },
+  ];
+  const html = render({ id: "restored-plantea", status: "waiting_for_action", plan: { name: "Plantéa dashboard" }, steps, result: { outputs: [create] } });
+  const doc = new JSDOM(html).window.document;
+  const dropdown = doc.querySelector('[aria-label="Google Sheets result dropdown"]');
+  const cells = dropdown.querySelector('[aria-label="Saved Google Sheets cells"]');
+  assert.equal(cells.querySelectorAll("tbody tr").length, 37);
+  const visibleCells = [...cells.querySelectorAll("tbody td button")].map((cell) => cell.textContent.replaceAll("\u00a0", ""));
+  assert.deepEqual(visibleCells, planteaRows.flat());
+  assert.ok(doc.querySelector('[aria-label="Supporting workflow actions"]').contains(dropdown));
+  assert.match(dropdown.textContent, /Partial saved preview/);
+  assert.doesNotMatch(html, /<iframe|What would you like to change/);
+});
+
+test("What happened owns each tool dropdown and Tools used opens those same results", async () => {
   const dom = new JSDOM("<!doctype html><body><div id='app'></div></body>", { pretendToBeVisual: true, url: "https://aura.example.invalid" });
   const globals = { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
     Element: dom.window.Element, SVGElement: dom.window.SVGElement, navigator: dom.window.navigator,
@@ -474,59 +493,65 @@ test("the sheet is visible on load while supporting reports and activity open in
   const saved = { ...run, id: "dropdown-run", steps: [
     { id: "web", key: "web", tool_slug: "web", status: "completed", output: { operation: "web.page.read", provider_result: { url: "https://example.com/serum", text: "Retrieved source" } } },
     { id: "report", key: "report", tool_slug: "aura", status: "completed", output: { operation: "report.compose", provider_result: { body: "Saved research report" } } },
+    { id: "feedback", key: "feedback", tool_slug: "google-sheets", operation: "google-sheets.update-multiple-rows", status: "completed", output: {
+      provider_result: { ret: { spreadsheetId: "exact-workbook", updatedRange: "Feedback!A1:B2" } },
+      outcome_check: { status: "verified", observed: { range: "Feedback!A1:B2", values: [["Saved feedback table", "Review pricing"]] } },
+    } },
     { id: "save", key: "save", tool_slug: "google-sheets", operation: "google-sheets.update-multiple-rows", status: "completed",
       output: { resolved_arguments: { worksheetId: 173 }, provider_result: { ret: { spreadsheetId: "exact-workbook", updatedRange: "Dashboard!A1:C2", updatedRows: 2 } },
         outcome_check: { status: "verified", observed: { range: "Dashboard!A1:C2", values: [["Company", "September 2026"], ["Revenue", "", "Not publicly reported"]] } } } },
   ], result: {} };
   try {
     await act(async () => root.render(React.createElement(ResultsTestView, { run: saved })));
-    const overview = byLabel("Supporting workflow actions"), main = byLabel("Main workflow result");
-    assert.equal(main.parentElement.firstElementChild, main, "the main output must be the first screen");
-    assert.equal(main.nextElementSibling, byLabel("Supporting tool outputs"));
-    assert.equal(byLabel("Supporting tool outputs").nextElementSibling, byLabel("Workflow summary"));
+    const overview = byLabel("Supporting workflow actions"), main = byLabel("Google Sheets result dropdown");
+    const summary = byLabel("Workflow summary");
+    assert.equal(summary.parentElement.firstElementChild, summary, "the workflow summary must be first");
+    assert.ok(overview.contains(main));
+    assert.equal(overview.nextElementSibling, byLabel("Results by tool"));
     const toolLink = main.querySelector("summary > a");
-    assert.equal(main.open, true, "the primary output must be visible without a click");
+    assert.equal(main.open, true, "the saved table is visible within What happened");
     assert.match(byLabel("Saved Google Sheets cells").textContent, /Not publicly reported/);
-    assert.ok([...app.querySelectorAll("details")].filter((details) => details !== main).every((details) => !details.open), "supporting details start collapsed");
-    assert.equal(byLabel("Inline tool result"), null);
+    assert.equal(byLabel("Change result with a prompt"), null);
+    const rangeTabs = byLabel("Saved sheet ranges");
+    assert.equal(rangeTabs.querySelectorAll('[role="tab"]').length, 2);
+    await click([...rangeTabs.querySelectorAll("button")].find((tab) => tab.textContent === "Feedback"));
+    assert.match(byLabel("Saved Google Sheets cells").textContent, /Saved feedback table/);
+    await click([...rangeTabs.querySelectorAll("button")].find((tab) => tab.textContent === "Dashboard"));
+    assert.match(byLabel("Saved Google Sheets cells").textContent, /Not publicly reported/);
     assert.equal(toolLink.href, "https://docs.google.com/spreadsheets/d/exact-workbook/edit#gid=173&range=A1%3AC2");
     assert.equal(toolLink.target, "_blank");
-    assert.equal(app.querySelector('[role="dialog"]'), null);
     await click(main.querySelector("summary"));
     assert.equal(main.open, false);
-    await click(byLabel("View result: rows saved to Google Sheets"));
+    await click(byLabel("View Google Sheets results"));
     assert.equal(main.open, true);
     assert.match(byLabel("Saved Google Sheets cells").textContent, /Not publicly reported/);
     await click(main.querySelector("summary"));
-    assert.equal(main.open, false);
     await click(toolLink);
     assert.equal(main.open, false, "native-tool link must not toggle its dropdown");
-    await click(byLabel("View report: report prepared with ChatGPT"));
-    let panel = byLabel("Inline tool result");
-    assert.equal(panel.open, true);
-    assert.match(panel.textContent, /Saved research report/);
-    assert.equal(byLabel("Supporting workflow actions"), overview);
+    const report = byLabel("ChatGPT result dropdown");
+    assert.equal(report.open, false);
+    await click(byLabel("View ChatGPT results"));
+    assert.equal(report.open, true);
+    assert.match(report.textContent, /Saved research report/);
+    assert.ok(overview.contains(report));
     assert.equal(main.open, false);
     assert.equal(app.querySelector('[role="dialog"]'), null);
-    await click(panel.querySelector("summary"));
-    assert.equal(panel.open, false);
-    await click(byLabel("View report: report prepared with ChatGPT"));
-    assert.equal(panel.open, true, "a closed result must reopen from its overview control");
-    await click(byLabel("View sources: public web page researched"));
-    panel = byLabel("Inline tool result");
-    assert.equal(panel.querySelector("summary > a").href, "https://example.com/serum");
-    assert.match(panel.querySelector("summary").textContent, /Open source/);
-    await click(panel.querySelector("summary"));
-    assert.equal(panel.open, false);
-    assert.ok(panel.querySelector("summary > a"), "the source link remains on the collapsed header");
+    await click(report.querySelector("summary"));
+    await click(byLabel("View ChatGPT results"));
+    assert.equal(report.open, true, "Tools used reopens a collapsed result");
+    await click(byLabel("View Web research results"));
+    const sources = byLabel("Web research result dropdown");
+    assert.equal(sources.open, true);
+    assert.equal(sources.querySelector("summary > a").href, "https://example.com/serum");
+    assert.ok(overview.contains(sources));
     await click(byText("View activity"));
-    assert.equal(byLabel("Inline tool result").open, true);
     assert.match(byLabel("Inline tool result").querySelector("summary").textContent, /Workflow activity/);
     assert.equal(byLabel("Supporting workflow actions"), overview);
     assert.equal(app.querySelector('[role="dialog"]'), null);
     await click(byLabel("View Google Sheets results"));
     assert.equal(main.open, true);
-    assert.equal(toolLink.href, "https://docs.google.com/spreadsheets/d/exact-workbook/edit#gid=173&range=A1%3AC2");
+    assert.equal(app.querySelectorAll('[aria-label="Google Sheets result screen"]').length, 1);
+
   } finally {
     await act(async () => root.unmount());
     dom.window.close();
