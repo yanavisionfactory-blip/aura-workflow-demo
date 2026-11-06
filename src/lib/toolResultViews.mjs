@@ -1,7 +1,7 @@
 import { primaryResultFromOutputs } from "./resultPresentation.mjs";
 import { toolEvidence } from "./toolEvidence.mjs";
 import { intelligenceBackupNotice, operationProviderName } from "./providerDisplay.mjs";
-import { googleSheetsResult } from "./googleSheetsResult.mjs";
+import { googleSheetsResult, spreadsheetId } from "./googleSheetsResult.mjs";
 
 const names = {
   anthropic: "Claude", claude: "Claude",
@@ -75,11 +75,15 @@ export function supportingToolOutputs(entries, primary = {}, presentation = {}) 
 }
 
 export function preferredToolOutcome(primary, activity = []) {
-  if (!["ai_response", "report", "result"].includes(primary.kind)) return primary;
+  if (!["spreadsheet", "ai_response", "report", "result"].includes(primary.kind)) return primary;
   const outputs = activity.filter((step) => step.status === "completed").map((step) => ({
     ...step.output, step_id: step.id, step_key: step.stepKey || step.key,
     operation: step.output?.operation || step.operation,
   }));
+  if (primary.kind === "spreadsheet") {
+    const saved = googleSheetsResult(outputs.filter((output) => spreadsheetId(output) === primary.spreadsheetId), { title: primary.title });
+    return saved && (saved.ranges.length || !primary.ranges?.length) ? { ...primary, ...saved } : primary;
+  }
   // A saved spreadsheet is the deliverable; a source-only read stays secondary.
   const sheet = googleSheetsResult(outputs, { title: primary.title });
   if (sheet) return sheet;

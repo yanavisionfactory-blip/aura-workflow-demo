@@ -7,11 +7,11 @@ import { auraRequest } from "@/lib/auraApi";
 import { sheetComparisonMarkdown } from "@/lib/sheetReviewEdit.mjs";
 import { downloadTextFile } from "@/lib/auraDownload";
 
-function SavedCells({ ranges = [] }) {
-  const [tab, setTab] = useState(0);
+function SavedCells({ ranges = [], initialRange }) {
+  const [tab, setTab] = useState(() => Math.max(0, ranges.findIndex((grid) => sheetRange(grid.range)?.tab === sheetRange(initialRange)?.tab)));
   const grid = ranges[tab];
   const [selected, setSelected] = useState(null);
-  if (!grid) return <p className="p-6 text-sm text-slate-600">The preview is unavailable here. Open the workbook in Google Sheets to view its cells.</p>;
+  if (!grid) return <p className="p-6 text-sm text-slate-600">No saved cell data is available for this workbook. Open Google Sheets to inspect the actual result.</p>;
   const origin = sheetRange(grid.range);
   const columns = Math.max(1, ...grid.values.map((row) => row.length));
   const longCells = grid.values.flatMap((row, r) => row.map((value, c) => ({ r, c, value })))
@@ -20,7 +20,7 @@ function SavedCells({ ranges = [] }) {
   const address = (r, c) => `${columnName(origin.column + c)}${origin.row + r}`;
   return <div className="bg-white text-slate-800">
     <div className="flex flex-wrap gap-1 border-b border-slate-200 bg-[#f8fafd] px-3 pt-2" role="tablist" aria-label="Saved sheet ranges">
-      {ranges.map((item, index) => <button type="button" role="tab" aria-selected={index === tab} key={`${item.range}-${index}`} onClick={() => { setTab(index); setSelected(null); }} className={`rounded-t-lg px-4 py-2.5 text-xs font-medium ${index === tab ? "border-b-2 border-emerald-700 bg-emerald-50 text-emerald-800" : "text-slate-600"}`}>{sheetRange(item.range)?.tab || item.range}</button>)}
+      {ranges.map((item, index) => <button type="button" role="tab" aria-selected={index === tab} key={`${item.range}-${index}`} onClick={() => { setTab(index); setSelected(null); }} className={`rounded-t-lg px-4 py-2.5 text-xs font-medium ${index === tab ? "border-b-2 border-emerald-700 bg-emerald-50 text-emerald-800" : "text-slate-600"}`}>{sheetRange(item.range)?.tab || item.range}{ranges.filter((grid) => sheetRange(grid.range)?.tab === sheetRange(item.range)?.tab).length > 1 ? ` · ${item.range.split("!").at(-1)}` : ""}</button>)}
     </div>
     <div className="max-h-80 overflow-auto" aria-label="Saved Google Sheets cells">
       <table className="w-full border-collapse text-left text-xs"><thead className="sticky top-0 z-10 bg-[#f1f3f4] text-slate-600"><tr><th className="w-12 border border-slate-200" />{Array.from({ length: columns }, (_, c) => <th key={c} className="border border-slate-200 px-3 py-2 text-center font-normal">{columnName(origin.column + c)}</th>)}</tr></thead>
@@ -42,7 +42,8 @@ export default function GoogleSheetsResult({ result, backendRunId }) {
   // Saved results must remain visible even when Google's embedded session
   // requires a separate sign-in or third-party-cookie decision.
   const hasSavedCells = Boolean(result.ranges?.some((grid) => grid.values?.length));
-  const [view, setView] = useState(hasSavedCells ? "saved" : "app");
+  const [view, setView] = useState("saved");
+  useEffect(() => { setView("saved"); }, [result.spreadsheetId, hasSavedCells]);
   const resolveTab = Boolean(backendRunId && result.sourceStepKey && !Number.isInteger(result.sheetId)
     && !result.sourceOperation?.startsWith("google-sheets."));
   const [screen, setScreen] = useState(null);
@@ -65,13 +66,13 @@ export default function GoogleSheetsResult({ result, backendRunId }) {
     ? sheetComparisonMarkdown(result.headers, result.ranges[0].values) : "";
   return <section aria-label="Google Sheets result screen" className="overflow-hidden rounded-xl border border-slate-200 bg-white">
     <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-[#f8fafd] px-4 py-3 text-slate-700">
-      <div className="flex items-center gap-2 text-sm"><Table2 className="h-5 w-5 text-emerald-700" /><span className="font-medium">{sheetRange(result.range)?.tab || "Google Sheets"}</span>{result.verified && <span className="flex items-center gap-1 text-xs text-emerald-700"><CheckCircle2 className="h-3.5 w-3.5" />Verified</span>}</div>
+      <div className="flex items-center gap-2 text-sm"><Table2 className="h-5 w-5 text-emerald-700" /><span className="font-medium">{sheetRange(result.range)?.tab || "Google Sheets"}</span>{result.verified && hasSavedCells && <span className="flex items-center gap-1 text-xs text-emerald-700"><CheckCircle2 className="h-3.5 w-3.5" />Verified</span>}</div>
       <div className="flex flex-wrap items-center gap-3"><div className="flex rounded-lg border border-slate-200 bg-white p-1" role="tablist" aria-label="Spreadsheet view">
-        {[['app', 'Google Sheets'], ...(hasSavedCells ? [['saved', 'Saved cells']] : []), ...(comparison ? [['markdown', 'Markdown comparison']] : [])].map(([id, label]) => <button type="button" role="tab" aria-selected={view === id} key={id} onClick={() => setView(id)} className={`rounded-md px-3 py-1.5 text-xs font-medium ${view === id ? "bg-emerald-50 text-emerald-800" : "text-slate-600 hover:bg-slate-50"}`}>{label}</button>)}
+        {[['saved', 'Saved cells'], ['app', 'Google Sheets'], ...(comparison ? [['markdown', 'Markdown comparison']] : [])].map(([id, label]) => <button type="button" role="tab" aria-selected={view === id} key={id} onClick={() => setView(id)} className={`rounded-md px-3 py-1.5 text-xs font-medium ${view === id ? "bg-emerald-50 text-emerald-800" : "text-slate-600 hover:bg-slate-50"}`}>{label}</button>)}
       </div><a href={app.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 rounded-lg bg-emerald-700 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-800">Open in Google Sheets<ArrowUpRight className="h-3.5 w-3.5" /></a></div>
     </div>
     {view !== "app" && result.partialReadBack && <p role="note" className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs leading-5 text-amber-900">Partial saved preview: {result.ranges.map((grid) => grid.range).join(", ")}. Open Google Sheets for the complete workbook.</p>}
-    {view === "app" ? loading ? <div className="flex min-h-80 items-center justify-center text-sm text-slate-600" role="status">Opening the saved Google Sheets tab…</div> : <iframe title="Google Sheets — final workflow result" src={app.embedUrl} className="block h-[min(70vh,760px)] min-h-[480px] w-full border-0 bg-white" referrerPolicy="no-referrer" onError={() => setView("saved")} /> : view === "markdown" ? <div className="max-h-[36rem] overflow-auto p-5 text-sm leading-6 text-slate-800 [&_th]:min-w-40 [&_th]:border [&_th]:bg-slate-50 [&_th]:p-3 [&_td]:min-w-48 [&_td]:border [&_td]:p-3 [&_td]:align-top"><ReactMarkdown {...documentMarkdownOptions}>{comparison}</ReactMarkdown></div> : <SavedCells ranges={result.ranges} />}
+    {view === "app" ? loading ? <div className="flex min-h-80 items-center justify-center text-sm text-slate-600" role="status">Opening the saved Google Sheets tab…</div> : <iframe title="Google Sheets — final workflow result" src={app.embedUrl} className="block h-[min(70vh,760px)] min-h-[480px] w-full border-0 bg-white" referrerPolicy="no-referrer" onError={() => setView("saved")} /> : view === "markdown" ? <div className="max-h-[36rem] overflow-auto p-5 text-sm leading-6 text-slate-800 [&_th]:min-w-40 [&_th]:border [&_th]:bg-slate-50 [&_th]:p-3 [&_td]:min-w-48 [&_td]:border [&_td]:p-3 [&_td]:align-top"><ReactMarkdown {...documentMarkdownOptions}>{comparison}</ReactMarkdown></div> : <SavedCells key={`${result.spreadsheetId}:${result.range}`} ranges={result.ranges} initialRange={result.range} />}
     <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 px-4 py-2 text-xs text-slate-600">{hasSavedCells ? <button type="button" className="underline underline-offset-2" onClick={() => setView(view === "app" ? "saved" : "app")}>{view === "app" ? "Sheet not loading? View saved cells" : "View the Google Sheets app"}</button> : <span>Open in Google Sheets if the preview needs sign-in.</span>}<a href={app.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-emerald-700">Open Google Sheets<ArrowUpRight className="h-3.5 w-3.5" /></a></div>
     <div className="flex flex-wrap justify-between gap-2 border-t border-slate-200 bg-[#f8fafd] px-4 py-2 text-xs text-slate-600"><span>{result.range || "Workbook"}</span>{comparison && <button type="button" onClick={() => downloadTextFile("aura-verified-comparison.md", comparison)} className="font-medium text-emerald-700 underline">Download Markdown</button>}<span>{view === "app" ? "Google Sheets app" : hasSavedCells ? "Saved from the workflow’s Google Sheets read-back" : "Google Sheets workbook"}</span></div>
   </section>;

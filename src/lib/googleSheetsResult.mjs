@@ -58,6 +58,7 @@ export function sheetAppLinks(id, range, gid) {
 }
 
 function grids(receipt, output) {
+  if (Array.isArray(receipt.valueRanges)) return receipt.valueRanges.flatMap((item) => grids(item, output));
   // The broker's read-rows action returns evaluated cell arrays in ret.rows,
   // without an A1 range. Use only that read's resolved destination, never a
   // report's proposed rows or a write's requested values.
@@ -113,13 +114,27 @@ export function googleSheetsResult(outputs, context = {}, explicitPrimary = null
   if (!explicitPrimary && !write && outputs.some((output) => !sheets.includes(output))) return null;
   const id = spreadsheetId(write || explicitPrimary || matching.at(-1));
   const targetRange = writtenRange(write);
-  const read = [...matching].reverse().find((output) => isRead(output.operation)
-    && spreadsheetId(output) === id && (!write || matching.indexOf(output) > matching.indexOf(write))
-    && (!targetRange || grids(resultOf(output), output).some((grid) => matchesRange(grid, targetRange, true))));
+  const workbook = matching.filter((output) => spreadsheetId(output) === id);
+  const writes = workbook.filter((output) => isWrite(output.operation));
+  // Retain every destination's actual read-back, including earlier verified
+  // tabs. A later metadata-only read must not erase populated cell tables.
+  const snapshots = workbook.flatMap((output, index) => {
+    const observed = isWrite(output.operation) && output.outcome_check?.status === "verified";
+    if (!isRead(output.operation) && !observed) return [];
+    const receipt = observed ? resultOf({ provider_result: output.outcome_check.observed }) : resultOf(output);
+    if (receipt.spreadsheetId && receipt.spreadsheetId !== id) return [];
+    return grids(receipt, observed ? undefined : output).filter((grid) => {
+      const relevant = writes.filter((item) => !writtenRange(item) || matchesRange(grid, writtenRange(item), true));
+      if (writes.length && !relevant.length) return false;
+      // A read preceding a later write is stale, even for the same workbook.
+      return !relevant.some((item) => workbook.indexOf(item) > index);
+    }).map((grid) => ({ grid, output, observed }));
+  });
+  const retained = snapshots.filter(({ grid }, index) => !snapshots.slice(index + 1)
+    .some((later) => matchesRange(later.grid, grid.range)));
+  const ranges = retained.map(({ grid }) => grid);
+  const read = [...retained].reverse().find((snapshot) => !snapshot.observed)?.output;
   const checked = write?.outcome_check?.status === "verified";
-  // Display actual provider reads, never the requested write values as proof.
-  const receipt = read ? resultOf(read) : checked ? resultOf({ provider_result: write.outcome_check.observed }) : {};
-  const ranges = grids(receipt, read);
   const range = targetRange || ranges[0]?.range || resultOf(explicitPrimary).range || "";
   const origin = sheetRange(range);
   const headerRead = matching.find((output) => {
@@ -130,14 +145,16 @@ export function googleSheetsResult(outputs, context = {}, explicitPrimary = null
   });
   const headers = headerRead ? resultOf(headerRead).values[0] : [];
   const source = read || write || explicitPrimary || matching.at(-1);
-  const gid = tabId(ranges[0]?.gid) ?? (brokerOperation(write?.operation)
+  const selectedGrid = ranges.find((grid) => sheetRange(grid.range)?.tab === origin?.tab) || ranges[0];
+  const gid = tabId(selectedGrid?.gid) ?? (brokerOperation(write?.operation)
     ? tabId(write?.resolved_arguments?.worksheetId) : undefined);
   const named = matching.find((output) => spreadsheetId(output) === id
     && (resultOf(output).properties?.title || resultOf(output).title));
-  return { kind: "spreadsheet", provider: "Google Sheets", providerVerb: write ? checked ? "Saved and verified in" : "Saved in" : "Read from",
+  const verified = Boolean(checked && ranges.length);
+  return { kind: "spreadsheet", provider: "Google Sheets", providerVerb: write ? verified ? "Saved and verified in" : "Saved in" : "Read from",
     title: resultOf(named).properties?.title || resultOf(named).title || origin?.tab || context.title || "Google Sheets result",
     sourceStepKey: source?.step_key, sourceStepId: source?.step_id, sourceOperation: source?.operation,
-    spreadsheetId: id, range, ranges, headers, sheetId: gid, verified: Boolean(checked), readBack: Boolean(read && ranges.length),
+    spreadsheetId: id, range, ranges, headers, sheetId: gid, verified, readBack: Boolean(read && ranges.length),
     partialReadBack: Boolean(read && targetRange && !ranges.some((grid) => matchesRange(grid, targetRange))),
     ...sheetAppLinks(id, range, gid), linkLabel: "Open in Google Sheets", downloadUrl: null };
 }
