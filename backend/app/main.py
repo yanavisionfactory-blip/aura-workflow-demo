@@ -1528,6 +1528,8 @@ async def managed_connector_status(
                 "provider": slug,
                 "display_name": definition.display_name,
                 "auth_mode": "OAUTH2",
+                **({"categories": ["Advertising", "Reporting"], "setup_hint": "Read-only advertising reports"}
+                   if slug == "reddit-ads" else {}),
                 "capability_count": len(native_operations(slug)),
                 "capabilities": native_operations(slug),
                 "managed": True,
@@ -1754,6 +1756,8 @@ async def search_connector_broker_apps(
             "display_name": definition.display_name,
             "categories": [],
             "auth_mode": "OAUTH2",
+            **({"categories": ["Advertising", "Reporting"], "setup_hint": "Read-only advertising reports"}
+               if slug == "reddit-ads" else {}),
             "eligible_for_one_click": native_backend is not None,
             "availability": "available" if native_backend else "coming_soon",
             "connectable": native_backend is not None,

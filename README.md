@@ -46,6 +46,9 @@ the frontend is switched to the new API.
 
 ## Frontend
 
+For the read-only Reddit Ads connector, operator OAuth setup and report semantics,
+see [Reddit Ads reporting](docs/reddit-ads.md).
+
 ```bash
 npm install
 cp .env.example .env.local

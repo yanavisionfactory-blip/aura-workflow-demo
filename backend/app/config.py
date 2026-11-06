@@ -87,6 +87,8 @@ class Settings(BaseSettings):
     notion_client_secret: str = ""
     tiktok_client_id: str = ""
     tiktok_client_secret: str = ""
+    reddit_ads_client_id: str = ""
+    reddit_ads_client_secret: SecretStr = SecretStr("")
     x_client_id: str = ""
     x_client_secret: SecretStr = SecretStr("")
     # AURA's server account; customers never sign in to Zernio.

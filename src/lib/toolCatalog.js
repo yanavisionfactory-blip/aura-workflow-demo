@@ -14,6 +14,7 @@ const ICONS = {
   slack: "💬",
   tiktok: "🎵",
   "tiktok-ads-manager": "📣",
+  "reddit-ads": "🟠",
   x: "𝕏",
   mailchimp: "✉️",
   canva: "🎨",
@@ -21,10 +22,17 @@ const ICONS = {
   jira: "✅",
 };
 
-const socialAliases = { "tiktok-zernio": "tiktok", "x-zernio": "x", "tiktok-ads": "tiktok-ads-manager", twitter: "x", "twitter-v1": "x", "twitter-v2": "x", "twitter-oauth2": "x", "x-twitter": "x" };
-const socialNames = { "tiktok-ads-manager": "TikTok Ads", x: "X (Twitter)" };
-const socialSearchAliases = { "tiktok-ads-manager": ["TikTok Ads", "TikTok Ads Manager"], x: ["X", "Twitter", "X (Twitter)"] };
-const featuredSocial = ["tiktok", "tiktok-ads-manager", "x"];
+const socialAliases = {
+  "tiktok-zernio": "tiktok", "x-zernio": "x", "tiktok-ads": "tiktok-ads-manager",
+  twitter: "x", "twitter-v1": "x", "twitter-v2": "x", "twitter-oauth2": "x", "x-twitter": "x",
+  "reddit-advertising": "reddit-ads", "reddit-ads-manager": "reddit-ads",
+};
+const socialNames = { "tiktok-ads-manager": "TikTok Ads", x: "X (Twitter)", "reddit-ads": "Reddit Ads" };
+const socialSearchAliases = {
+  "tiktok-ads-manager": ["TikTok Ads", "TikTok Ads Manager"], x: ["X", "Twitter", "X (Twitter)"],
+  "reddit-ads": ["Reddit Ads", "Reddit Advertising", "Reddit Ads Manager"],
+};
+const featuredSocial = ["tiktok", "tiktok-ads-manager", "x", "reddit-ads"];
 
 const providerSlug = (value) => String(value || "")
   .trim()
