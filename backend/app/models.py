@@ -131,6 +131,18 @@ class ToolConnection(Base):
     )
 
 
+class NativeOAuthAuthorization(Base):
+    __tablename__ = "native_oauth_authorizations"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    subject: Mapped[str] = mapped_column(String(240))
+    provider: Mapped[str] = mapped_column(String(120))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    consumed: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 class ZernioProfile(Base):
     __tablename__ = "zernio_profiles"
     workspace_id: Mapped[str] = mapped_column(

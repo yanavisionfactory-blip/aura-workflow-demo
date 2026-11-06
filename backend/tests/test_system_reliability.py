@@ -117,6 +117,10 @@ def _valid_schema_value(schema, root=None):
         return "a" * 64
     if schema.get("pattern") == "^[0-9]+$":
         return "123"
+    if schema.get("pattern") == "^(act_)?[0-9]{1,40}$":
+        return "act_123"
+    if schema.get("pattern") == "^[0-9]{4}-[0-9]{2}-[0-9]{2}$":
+        return "2026-09-18"
     if schema.get("pattern") == "^SIMULATED_":
         return "SIMULATED_source.csv"
     return "value"

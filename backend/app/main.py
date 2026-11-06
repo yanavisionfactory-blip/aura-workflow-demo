@@ -21,7 +21,15 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
-from . import frameio, google_ads_accounts, reddit_ads, wordpress_plugins, zernio_connect
+from . import (
+    frameio,
+    google_ads_accounts,
+    meta_ads,
+    meta_ads_oauth,
+    reddit_ads,
+    wordpress_plugins,
+    zernio_connect,
+)
 from .agent_runtime import is_governed_derivative_step
 from .approval_readiness import unfinished_action_content
 from .approval_review import (
@@ -1528,6 +1536,9 @@ async def managed_connector_status(
         backend = _builtin_connection_backend(definition, nango_configured=client.configured)
         native_catalog.append(
             {
+                **({"canonical_provider": "meta-ads", "aliases": ["Meta Ads", "Facebook Ads", "Direct Meta"],
+                    "setup_hint": "Connect directly with Meta · Read-only reporting"}
+                   if slug == meta_ads.SLUG else {}),
                 "provider": slug,
                 "display_name": definition.display_name,
                 "auth_mode": "OAUTH2",
@@ -1758,6 +1769,9 @@ async def search_connector_broker_apps(
     for slug, definition in PROVIDERS.items():
         native_backend = _builtin_connection_backend(definition, nango_configured=nango.configured)
         item = {
+            **({"canonical_provider": "meta-ads", "aliases": ["Meta Ads", "Facebook Ads", "Direct Meta"],
+                "setup_hint": "Connect directly with Meta · Read-only reporting"}
+               if slug == meta_ads.SLUG else {}),
             "provider": slug,
             "display_name": definition.display_name,
             "categories": [],
@@ -2751,7 +2765,7 @@ async def create_connector_broker_session(
     if not selected_tool and provider in PROVIDERS and PROVIDERS[provider].native_only:
         # Apps registered for AURA must use the exact AURA callback,
         # never a Nango session or an MCP broker's client registration.
-        result = await oauth_start(provider=provider, context=context)
+        result = await oauth_start(provider=provider, context=context, session=session)
         return {**result, "backend": "native", "provider": provider}
     # Mailchimp and HubSpot require an exact registered redirect URI. Apps
     # registered for AURA return to AURA's provider callback, whereas a
@@ -2764,7 +2778,7 @@ async def create_connector_broker_session(
             getattr(settings, definition.client_id_attr)
             and getattr(settings, definition.client_secret_attr)
         ):
-            result = await oauth_start(provider=provider, context=context)
+            result = await oauth_start(provider=provider, context=context, session=session)
             return {**result, "backend": "native", "provider": provider}
     if (
         nango.configured
@@ -2783,7 +2797,7 @@ async def create_connector_broker_session(
         return {**result, "backend": "nango", "provider": provider}
     if not selected_tool and provider in PROVIDERS and not pipedream_only:
         try:
-            result = await oauth_start(provider=provider, context=context)
+            result = await oauth_start(provider=provider, context=context, session=session)
         except HTTPException as exc:
             if exc.status_code != 503:
                 raise
@@ -4341,6 +4355,10 @@ async def test_connection(
             if changed:
                 tool.encrypted_credentials = CredentialVault().encrypt(credentials)
             result = await verify_oauth_credentials(tool.slug, credentials)
+        except meta_ads.MetaAdsError as exc:
+            result = {"ok": False, "reason": exc.reason, "retryable": exc.retryable, "message": str(exc)}
+        except TimeoutError:
+            result = {"ok": False, "reason": "provider_unavailable", "retryable": True}
         except (httpx.HTTPError, ValueError):
             result = {"ok": False, "reason": "authorization_required"}
     elif (tool.config or {}).get("managed_by") == "agent_gateway":
@@ -4621,6 +4639,9 @@ async def reconnect_connection(
             "previous_updated_at": previous_updated_at,
             "managed": True,
         }
+    if tool.slug == meta_ads.SLUG and tool.config.get("managed_by") == "meta_direct":
+        result = await oauth_start(provider=meta_ads.SLUG, context=context, session=session)
+        return {**result, "connection_id": tool.id, "previous_updated_at": previous_updated_at}
     if tool.config.get("oauth_custom"):
         credentials = CredentialVault().decrypt(tool.encrypted_credentials)
         client_id = credentials.get("client_id")
@@ -4817,6 +4838,11 @@ async def oauth_start(
     definition = PROVIDERS.get(provider)
     if not definition:
         raise HTTPException(404, "Unknown OAuth provider")
+    if provider == meta_ads.SLUG:
+        try:
+            return await meta_ads_oauth.start(session, context, settings)
+        except ValueError as exc:
+            raise HTTPException(503, str(exc)) from None
     state = create_oauth_state(context.workspace_id, provider)
     try:
         authorization_url = oauth_authorization_url(settings, definition, state)
@@ -4851,6 +4877,28 @@ async def oauth_callback(
         )
     state_provider = claims.get("provider", "")
     callback_route_provider = provider
+    if state_provider == meta_ads.SLUG or provider == meta_ads.SLUG:
+        if state_provider != meta_ads.SLUG or not oauth_callback_matches(settings, state_provider, provider):
+            raise HTTPException(400, "OAuth state/provider mismatch")
+        try:
+            tool, subject = await meta_ads_oauth.complete(
+                session, settings, claims, state, code,
+                oauth_exchange_callback_url(settings, PROVIDERS[meta_ads.SLUG], provider), error,
+            )
+        except (ValueError, TimeoutError) as exc:
+            message = str(exc) if isinstance(exc, meta_ads.MetaAdsError) else "Meta verification could not finish. Start Connect again."
+            logger.warning("meta_direct_connection_failed reason=%s", getattr(exc, "reason", "verification_failed"))
+            return RedirectResponse(f"{frontend_url}?{urlencode({
+                'oauth_provider': meta_ads.SLUG, 'oauth_status': 'error', 'oauth_message': message,
+            })}")
+        context = TenantContext(workspace_id=claims["workspace_id"], subject=subject, role="member")
+        resumed = await _satisfy_matching_connection_requirements(session, context, tool)
+        await session.commit()
+        if resumed:
+            await dispatch_pending(context.workspace_id)
+        return RedirectResponse(f"{frontend_url}?{urlencode({
+            'oauth_provider': meta_ads.SLUG, 'oauth_status': 'success', 'tool_connected': meta_ads.SLUG,
+        })}")
     if error or not code:
         safe_provider = state_provider if state_provider in PROVIDERS else provider
         message = (

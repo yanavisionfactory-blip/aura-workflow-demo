@@ -122,3 +122,16 @@ test("expired and future Meta markers cannot claim an unrelated agent return", (
     assert.equal(connectionScreenPreset("?oauth_provider=mcp-agent&oauth_status=error", browser), null);
   }
 });
+
+test("direct Meta consent returns to its own route without a Pipeboard login", () => {
+  const browser = browserStub();
+  const direct = { backend: "native", provider: "meta-ads-direct",
+    authorization_url: "https://www.facebook.com/v26.0/dialog/oauth?state=server-only-state" };
+  assert.equal(usesSameTabAuthorization(direct.provider), true);
+  assert.equal(redirectConnectorAuthorization(direct, browser).connected, false);
+  const query = "?oauth_provider=meta-ads-direct&oauth_status=success&tool_connected=meta-ads-direct";
+  assert.equal(isSameTabAuthorizationReturn(query, browser), true);
+  assert.equal(shouldNotifyAuthorizationOpener(query, browser), false);
+  assert.equal(connectionScreenPreset(query, browser).query, "Meta Ads");
+  assert.doesNotMatch(connectionScreenPreset("?connect=meta-ads", browser).message, /Pipeboard/);
+});

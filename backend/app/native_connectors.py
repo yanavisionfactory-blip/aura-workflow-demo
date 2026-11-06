@@ -80,6 +80,25 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                     required=("ad_account_id",), properties={"ad_account_id": _TEXT}, permission_scope="read"),
         ],
     },
+    "meta-ads-direct": {
+        "schema_version": "1.1", "catalog_version": 1, "provider_type": "oauth",
+        "name": "Meta Ads", "description": "Read Meta advertising accounts and performance directly through Meta.",
+        "base_url": "https://graph.facebook.com", "identity": {"provider": "meta-ads-direct"},
+        "modules": [
+            _module("meta-ads.identity.get", "search", "Verify Meta user, ads_read consent and accessible ad accounts.", permission_scope="read"),
+            _module("meta-ads.accounts.list", "search", "List all accessible Meta ad accounts with currency and timezone. Ask the user to choose the intended account; never assume the first account.", permission_scope="read"),
+            *[_module(f"meta-ads.{edge}.list", "search", f"Read all {edge} in an explicitly selected Meta ad account. Returns complete rows or fails on pagination limits.",
+                      required=("account_id",), properties={"account_id": {"type": "string", "pattern": r"^(act_)?[0-9]{1,40}$"}}, permission_scope="read")
+              for edge in ("campaigns", "adsets", "ads")],
+            _module("meta-ads.insights.get", "search", "Read complete performance rows for one explicitly selected account and inclusive YYYY-MM-DD dates, including year. Run once per comparison period. Currency/timezone are the account's; action attribution uses ad-set settings. No totals are invented, reach is not additive, action types remain separate. Save and read back source rows before using the campaign report tool.",
+                    required=("account_id", "since", "until"), permission_scope="read", properties={
+                        "account_id": {"type": "string", "pattern": r"^(act_)?[0-9]{1,40}$"},
+                        "since": {"type": "string", "pattern": r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+                        "until": {"type": "string", "pattern": r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+                        "level": {"type": "string", "enum": ["account", "campaign", "adset", "ad"]},
+                    }),
+        ],
+    },
     "frameio": {
         "schema_version": "1.1", "catalog_version": 1, "provider_type": "oauth",
         "name": "Frame.io", "description": "Read exact Frame.io V4 file versions and reviewer comments.",
@@ -708,6 +727,12 @@ def native_operations(slug: str) -> list[str]:
     return [item["name"] for item in native_manifest(slug)["capabilities"]]
 
 
+def _direct_meta_configured() -> bool:
+    from .config import get_settings
+    settings = get_settings()
+    return bool(settings.meta_client_id and settings.meta_client_secret.get_secret_value())
+
+
 def planning_catalog(connected_slugs: set[str] | None = None) -> list[dict[str, Any]]:
     """Expose catalog capabilities for proposals without granting execution access."""
     connected = connected_slugs or set()
@@ -715,11 +740,13 @@ def planning_catalog(connected_slugs: set[str] | None = None) -> list[dict[str, 
         {
             "slug": slug,
             "name": definition["name"],
+            **({"canonical_provider": "meta-ads"} if slug == "meta-ads-direct" else {}),
             "kind": definition["provider_type"],
             "allowed_operations": native_operations(slug),
             "connected": slug in connected,
         }
         for slug, definition in NATIVE_CONNECTORS.items()
+        if slug != "meta-ads-direct" or slug in connected or _direct_meta_configured()
     ]
     universal = [
         {

@@ -23,7 +23,7 @@ function hasSameOriginOpener(browser) {
 }
 
 export function usesSameTabAuthorization(provider, connection = null) {
-  return provider === "meta-ads-mcp" || provider === "meta-ads"
+  return provider === "meta-ads-mcp" || provider === "meta-ads" || provider === "meta-ads-direct"
     || /^agent-meta-ads-[a-f0-9]{10}$/.test(provider || "")
     || connection?.canonical_provider === "meta-ads";
 }
@@ -76,7 +76,7 @@ export function connectionScreenPreset(search, browser = window) {
       ? params.get("oauth_status") === "error"
         ? "Meta Ads authorization did not finish. Tap Connect to try again."
         : "Meta Ads authorization returned. Check your verified connection status below."
-      : "Connect Meta Ads via Pipeboard. Sign-in opens in this tab and returns to AURA.",
+      : "Choose a Meta Ads connection. Sign-in opens in this tab and returns to AURA.",
   };
 }
 

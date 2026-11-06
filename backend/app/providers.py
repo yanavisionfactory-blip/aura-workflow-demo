@@ -53,6 +53,13 @@ PROVIDERS = {
         client_secret_attr="reddit_ads_client_secret",
         callback_provider="reddit-ads", native_only=True,
     ),
+    "meta-ads-direct": OAuthProvider(
+        slug="meta-ads-direct", display_name="Meta Ads",
+        authorization_url="https://www.facebook.com/v26.0/dialog/oauth",
+        token_url="https://graph.facebook.com/v26.0/oauth/access_token",
+        scopes=("ads_read",), client_id_attr="meta_client_id", client_secret_attr="meta_client_secret",
+        callback_provider="meta-ads-direct", native_only=True,
+    ),
     "frameio": OAuthProvider(
         slug="frameio",
         display_name="Frame.io",
@@ -344,6 +351,12 @@ def oauth_authorization_url(settings: Settings, provider: OAuthProvider, state: 
         params.update({"access_type": "offline", "prompt": "consent", "include_granted_scopes": "true"})
     if provider.slug == "reddit-ads":
         params["duration"] = "permanent"
+    if provider.slug == "meta-ads-direct":
+        from .meta_ads import api_version
+        params["auth_type"] = "rerequest"
+        if settings.meta_login_config_id:
+            params["config_id"] = settings.meta_login_config_id
+        return f"https://www.facebook.com/{api_version(settings)}/dialog/oauth?{urlencode(params)}"
     return f"{provider.authorization_url}?{urlencode(params)}"
 
 
@@ -359,6 +372,9 @@ async def exchange_oauth_code(
     state: str | None = None,
     callback_url: str | None = None,
 ) -> dict:
+    if provider.slug == "meta-ads-direct":
+        from .meta_ads import exchange
+        return await exchange(settings, code, callback_url or oauth_callback_url(settings, provider))
     client_id = getattr(settings, provider.client_id_attr)
     client_secret = _oauth_client_secret(settings, provider)
     payload = {
@@ -453,6 +469,9 @@ async def refresh_oauth_credentials(
     force: bool = False,
 ) -> tuple[dict, bool]:
     """Refresh shortly before expiry; returns credentials and whether they changed."""
+    if provider_slug == "meta-ads-direct":
+        # Meta's long-lived user tokens have no refresh-token grant.
+        return credentials, False
     if not credentials.get("refresh_token") or (
         not force and int(credentials.get("expires_at", 0)) > int(time.time()) + 90
     ):
@@ -529,6 +548,9 @@ async def verify_oauth_credentials(provider_slug: str, credentials: dict) -> dic
     if provider_slug == "reddit-ads":
         from . import reddit_ads
         return await reddit_ads.verify(credentials)
+    if provider_slug == "meta-ads-direct":
+        from .meta_ads import verify
+        return await verify(credentials)
     if provider_slug == "frameio":
         from . import frameio
         return await frameio.verify(credentials)
@@ -637,6 +659,13 @@ class ProviderExecutor:
                     or (self.credentials.get("zernio") or {}).get("platform") != zernio_connect.PROVIDERS[slug][0]):
                 raise ValueError("This operation requires its own verified social connection")
             return await zernio_connect.execute(self.credentials, operation, arguments, self.timeout_seconds)
+        from . import meta_ads
+        if operation in meta_ads.OPERATIONS:
+            capability_for(self.capability_manifest, operation)
+            if (self.capability_manifest.get("identity", {}).get("provider") != meta_ads.SLUG
+                    or self.capability_manifest.get("provider_type") != "oauth"):
+                raise ValueError("Meta reporting requires its own verified direct connection")
+            return await meta_ads.execute(self.credentials, operation, arguments, self.timeout_seconds)
         from . import frameio
         if operation in frameio.OPERATIONS:
             capability_for(self.capability_manifest, operation)
