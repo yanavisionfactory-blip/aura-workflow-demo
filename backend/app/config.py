@@ -103,6 +103,10 @@ class Settings(BaseSettings):
     hubspot_client_secret: str = ""
     atlassian_client_id: str = ""
     atlassian_client_secret: str = ""
+    meta_client_id: str = ""
+    meta_client_secret: SecretStr = SecretStr("")
+    meta_graph_api_version: str = "v26.0"
+    meta_login_config_id: str = ""
     frameio_client_id: str = ""
     frameio_client_secret: SecretStr = SecretStr("")
     oauth_callback_overrides: str = ""

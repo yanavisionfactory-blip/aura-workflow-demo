@@ -13,6 +13,7 @@ GOOGLE_APP_FAMILIES = {
 # Nango versions the Slack OAuth adapter, not the customer account. Keep the
 # execution route intact while asking for only one Slack authorization.
 PROVIDER_FAMILIES = {
+    "meta-ads-direct": "meta-ads",
     "slack-v2": "slack", "rank-math": "rankmath", "rank-math-seo": "rankmath",
     "google-business-profile": "google-my-business",
     # The catalog uses `frame`; the native Adobe adapter uses `frameio`.
@@ -53,7 +54,7 @@ def synthetic_source_families(prompt: str) -> set[str]:
 def is_synthetic_source(item: dict, families: set[str]) -> bool:
     candidates = {str(item.get(key) or "").casefold() for key in ("slug", "canonical_provider", "provider")}
     aliases = {"x": {"x", "twitter"}, "tiktok": {"tiktok", "tiktok-ads", "tiktok-business"},
-               "meta-ads": {"meta", "meta-ads", "facebook-ads", "facebook-marketing"}}
+               "meta-ads": {"meta", "meta-ads", "meta-ads-direct", "facebook-ads", "facebook-marketing"}}
     return any(candidates.intersection(aliases[family]) for family in families)
 
 

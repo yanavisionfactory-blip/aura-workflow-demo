@@ -29,6 +29,10 @@ FRAMEIO_FILE = {"type": "object", "required": [
     "file": {"type": "object", "required": ["id", "type"],
              "properties": {"id": TEXT, "type": {"const": "file"}}},
 }}
+META_COLLECTION = {"type": "object", "required": ["data", "complete", "source_provider", "vendor_api_called", "connection_route", "retrieved_at"],
+    "properties": {"data": {"type": "array", "items": OBJECT}, "complete": {"const": True},
+                   "source_provider": {"const": "meta-ads"}, "vendor_api_called": {"const": True},
+                   "connection_route": {"const": "direct"}, "retrieved_at": TEXT}}
 KNOWN = {
     "reddit-ads.identity.get": ({"type": "object", "required": ["ok", "identity"],
         "properties": {"ok": {"const": True}, "identity": {"type": "object", "required": ["id"],
@@ -38,6 +42,21 @@ KNOWN = {
             "type": "object", "required": ["id"], "properties": {"id": {"type": "string", "minLength": 1}}}}}},
         ["account_metadata" if "campaigns" not in operation else "campaign_metadata"])
        for operation in ("reddit-ads.businesses.list", "reddit-ads.accounts.list", "reddit-ads.campaigns.list")},
+    "meta-ads.identity.get": ({"type": "object", "required": ["ok", "identity", "account_ids", "accounts_verified", "expires_at"],
+        "properties": {"ok": {"const": True}, "identity": OBJECT,
+                       "account_ids": {"type": "array", "minItems": 1, "items": TEXT},
+                       "accounts_verified": {"type": "integer", "minimum": 1}, "expires_at": {"type": "integer"}}}, ["verified_identity"]),
+    "meta-ads.accounts.list": (META_COLLECTION, ["account_metadata"]),
+    **{f"meta-ads.{edge}.list": ({**META_COLLECTION,
+        "required": [*META_COLLECTION["required"], "account_id", "account", "row_count"],
+        "properties": {**META_COLLECTION["properties"], "account_id": TEXT, "account": OBJECT,
+                       "row_count": {"type": "integer", "minimum": 0}}}, ["advertising_metadata"])
+       for edge in ("campaigns", "adsets", "ads")},
+    "meta-ads.insights.get": ({**META_COLLECTION,
+        "required": [*META_COLLECTION["required"], "account_id", "account", "date_range", "attribution", "level", "row_count"],
+        "properties": {**META_COLLECTION["properties"], "account_id": TEXT, "account": OBJECT,
+                       "date_range": OBJECT, "attribution": OBJECT, "level": TEXT,
+                       "row_count": {"type": "integer", "minimum": 0}}}, ["campaign_performance_rows"]),
     "intelligence.claude_backup": ({
         "type": "object", "required": ["ret", "source_provider", "model_provider", "external_writes"],
         "properties": {

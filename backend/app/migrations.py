@@ -3,6 +3,7 @@ from sqlalchemy import text
 from .db import Base, engine
 
 DIRECT_TENANT_TABLES = (
+    "native_oauth_authorizations",
     "zernio_profiles",
     "zernio_authorizations",
     "run_support_grants",

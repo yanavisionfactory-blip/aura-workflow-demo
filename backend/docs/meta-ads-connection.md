@@ -1,7 +1,12 @@
 # Meta Ads authorization and reporting
 
-AURA's **Meta Ads** marketplace entry opens Pipeboard's hosted OAuth flow. The
-card explicitly identifies Pipeboard. Facebook Pages remains a separate
+AURA supports an operator-owned [direct Meta connection](meta-direct-setup.md)
+and the existing Pipeboard route. Direct Meta becomes the preferred new connection
+only after its server-side app credentials are configured. Existing Pipeboard
+accounts keep their own credentials and executable contracts.
+
+The **Pipeboard** route opens Pipeboard's hosted OAuth flow. Its card explicitly
+identifies Pipeboard. Facebook Pages remains a separate
 connection and never satisfies Meta Ads reporting requirements.
 
 The route uses the provider's published protected-resource and authorization

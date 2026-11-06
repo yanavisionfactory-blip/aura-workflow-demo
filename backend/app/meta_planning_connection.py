@@ -40,6 +40,9 @@ async def restore_meta_contract(session, tool, manifest):
     probe used at consent must succeed before this record enters planning.
     """
     config = tool.config or {}
+    if (tool.enabled and tool.slug == "meta-ads-direct" and tool.kind == ToolKind.oauth
+            and config.get("managed_by") == "meta_direct"):
+        return await _restore_direct(session, tool, manifest)
     if (not tool.enabled or tool.kind != ToolKind.mcp
             or config.get("managed_by") != "agent_gateway"
             or managed_mcp_provider(tool.base_url or "") != "meta-ads"
@@ -98,4 +101,33 @@ async def restore_meta_contract(session, tool, manifest):
     manifest.verified_at = datetime.now(UTC)
     tool.allowed_operations = discovered_operations(refreshed)
     tool.config = {**config, "canonical_provider": "meta-ads"}
+    return manifest
+
+
+async def _restore_direct(session, tool, manifest):
+    from . import meta_ads
+    from .native_connectors import native_manifest, native_operations
+
+    if manifest and manifest.status not in {"verified", "degraded", "discovered"}:
+        return manifest
+    try:
+        credentials = CredentialVault().decrypt(tool.encrypted_credentials)
+        meta_ads._token(credentials)  # Local expiry/app binding check, never a refresh grant.
+        if meta_contract_ready(tool, manifest):
+            return manifest
+        verification = await meta_ads.verify(credentials)
+    except (meta_ads.MetaAdsError, RuntimeError, TimeoutError) as exc:
+        if manifest:
+            manifest.status = "degraded"
+            manifest.verification = {"ok": False, "reason": getattr(exc, "reason", "provider_unavailable"),
+                                     "retryable": getattr(exc, "retryable", True)}
+        return manifest
+    if manifest is None:
+        manifest = CapabilityManifest(workspace_id=tool.workspace_id, tool_id=tool.id, provider_type="oauth")
+        session.add(manifest)
+    manifest.manifest = native_manifest(meta_ads.SLUG)
+    manifest.status = "verified"
+    manifest.verification = verification
+    manifest.verified_at = datetime.now(UTC)
+    tool.allowed_operations = native_operations(meta_ads.SLUG)
     return manifest
