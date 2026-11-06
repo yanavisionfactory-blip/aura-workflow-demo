@@ -22,6 +22,51 @@ from .config import get_settings
 from .model_inputs import ModelInputTooLarge, bounded_input
 from .reliability import bounded_model_call
 from .schemas import MAX_WORKFLOW_STEPS, WorkflowPlan
+from .workflow_context import referenced_paths
+
+
+def reference_repair_context(plan: WorkflowPlan, available_input_names: set[str]) -> dict | None:
+    """Explain unresolved bindings without guessing a resource or selecting a list item.
+
+    The direct planner cannot declare output variables. Give its existing bounded
+    retry the rejected graph and the actual input names, rather than just an error
+    mentioning a placeholder that it may reproduce in a different namespace.
+    """
+    prior_keys: set[str] = set()
+    unresolved = []
+    for step in plan.steps:
+        invalid = []
+        for path in sorted(referenced_paths(step.arguments)):
+            parts = path.split(".")
+            if (len(parts) > 1 and parts[0] == "inputs"
+                    and parts[1] in available_input_names):
+                continue
+            if len(parts) > 1 and parts[0] == "steps" and parts[1] in prior_keys:
+                continue
+            invalid.append(path)
+        if invalid:
+            unresolved.append({"step_key": step.key, "references": invalid})
+        prior_keys.add(step.key)
+    if not unresolved:
+        return None
+    return {
+        "unresolved_references": unresolved,
+        "available_input_references": ["{{inputs." + name + "}}"
+                                       for name in sorted(available_input_names)],
+        "rejected_steps": [step.model_dump(include={
+            "key", "tool_slug", "operation", "arguments", "depends_on", "consequential",
+        }) for step in plan.steps],
+        "required_behavior": (
+            "Replace each unresolved binding using a real listed input or a prior step's "
+            "documented output_schema. Renaming a placeholder to inputs.* or vars.* does not "
+            "make it available. Add permitted discovery reads when necessary; never invent "
+            "IDs, output fields or a selection step that is not an actual operation. "
+            "Preserve the requested scope: do not select the first campaign to satisfy an "
+            "all-campaign report. Prefer a listed account-level reporting operation when "
+            "it covers the request. Omit optional campaign filters when no campaign was "
+            "selected. Keep the requested date coverage and downstream report delivery."
+        ),
+    }
 
 
 def _catalog_plan_format(inventory: list[dict]) -> type[CompactWorkflowPlan]:
@@ -197,9 +242,16 @@ def _sensitivity_tags(prompt: str, operations: list[str]) -> list[str]:
 
 def _compact_operation(module: dict) -> dict:
     """Keep the argument contract; execution checks use the original manifest."""
-    return {key: module[key] for key in (
-        "name", "description", "input_schema", "permission_scope", "reliability",
+    compact = {key: module[key] for key in (
+        "name", "description", "input_schema", "output_schema", "permission_scope", "reliability",
     ) if key in module}
+    if "output_schema" in compact:
+        output = _compact_schema(compact["output_schema"])
+        if output:
+            compact["output_schema"] = output
+        else:
+            compact.pop("output_schema")
+    return compact
 
 
 def _compact_schema(schema):
@@ -348,6 +400,8 @@ def _bounded_planning_catalog(payload: dict) -> dict:
             bounded_input(reduced)
         except ModelInputTooLarge:
             contract["input_schema"] = _compact_schema(contract.get("input_schema"))
+            if "output_schema" in contract:
+                contract["output_schema"] = _compact_schema(contract["output_schema"])
             contract.pop("reliability", None)
             try:
                 bounded_input(reduced)
@@ -373,6 +427,7 @@ async def create_llm_plan(
     requested_tool_names: list[str] | tuple[str, ...] | set[str] = (),
     requirements: list[str] | None = None,
     required_effects: list[dict] | None = None,
+    reference_repair: dict | None = None,
 ) -> WorkflowPlan:
     """Translate intent into a candidate plan, without an agent execution loop.
 
@@ -393,6 +448,7 @@ async def create_llm_plan(
         "requirements": requirements or [],
         "required_actions": effects,
         "operations": relevant,
+        **({"reference_repair": reference_repair} if reference_repair else {}),
     })
     payload = bounded_input(planning_data)
     instructions = (
@@ -418,6 +474,15 @@ async def create_llm_plan(
         "(login_customer_id) and customerClientId (customer_id). Do not ask users to type "
         "customer numbers; use the account picker or supported discovery reads. "
         "Use search/list reads and reference their output using {{steps.key.field}}. "
+        "Workflow references must start with inputs. or steps.; inputs names must be in "
+        "available_input_names and steps keys must name earlier steps. This compact plan "
+        "cannot declare vars or local variables: never emit {{selected_campaign_id}} or "
+        "{{vars.selected_campaign_id}}. A name in reason or expected_output does not create "
+        "a variable. Use the source operation's output_schema for real returned field paths. "
+        "For all-campaign reports, use a supported account-level report or complete campaign "
+        "discovery; do not invent a selected campaign or silently use only the first result. "
+        "If reference_repair is present, correct its rejected bindings and preserve the "
+        "original requested scope, date coverage and required actions. "
         "Reference only prior steps and listed input names. Declare dependencies and exact "
         "required_evidence tags only when present in the selected operation's reliability "
         "provides list. Mark writes consequential. Use the trusted temporal_context for "
