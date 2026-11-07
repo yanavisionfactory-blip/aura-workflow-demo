@@ -143,6 +143,35 @@ def test_typed_references_defer_until_resolved_but_never_reach_the_broker():
         normalize_report_arguments(OPERATION, args)
 
 
+@pytest.mark.parametrize("prefix", ["", "campaign."])
+def test_removed_campaign_date_fields_use_v23_replacements(prefix):
+    operation = "google-ads.create-campaign-report"
+    args = {"fields": ["campaign.id", f"{prefix}start_date", f"{prefix}end_date"],
+            "metrics": ["metrics.clicks"], "segments": [], "orderBy": "campaign.start_date"}
+    original = deepcopy(args)
+    result = normalize_report_arguments(operation, args)
+    assert args == original
+    assert result == {"fields": ["campaign.id", "campaign.start_date_time", "campaign.end_date_time"],
+                      "metrics": ["metrics.clicks"], "segments": [], "orderBy": "campaign.start_date_time"}
+    assert normalize_report_arguments(operation, result) == result
+
+
+async def test_broker_repairs_removed_campaign_dates_in_saved_plans():
+    client = PipedreamClient(Settings(pipedream_project_id="project"))
+    client._request = AsyncMock(return_value={"results": []})
+    cap = {"name": "google-ads.create-campaign-report",
+           "metadata": {"connector_broker": {"provider": "google-ads"}},
+           "transport": {"type": "pipedream_action", "action_id": "google_ads-create-campaign-report", "auth_prop": "google_ads"}}
+    await client.run_action("owner", "grant", cap, {
+        "accountId": "manager", "customerClientId": "client",
+        "fields": ["campaign.start_date", "campaign.end_date"], "segments": [],
+    })
+    props = client._request.call_args.kwargs["json"]["configured_props"]
+    assert props["fields"] == ["campaign.start_date_time", "campaign.end_date_time"]
+    assert props["accountId"] == "manager" and props["customerClientId"] == "client"
+    assert "dateRange" not in props
+
+
 def test_old_and_new_manifest_inputs_receive_checks_before_schema_validation():
     for enums in (False, True):
         properties = {"dateRange": {"type": "string"}, "metrics": {"type": "array", "items": {"type": "string"}}}
