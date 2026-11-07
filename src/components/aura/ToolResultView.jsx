@@ -4,6 +4,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { mainToolEntry, toolOutputResult, toolResultGroups, toolResultName, toolResultStatus } from "@/lib/toolResultViews.mjs";
 import ResultPreview from "./ResultPreview";
 import ToolEvidence, { EvidenceValue } from "./ToolEvidence";
+import SavedToolResponse from "./SavedToolResponse";
 
 export function ToolResultFrame({ tool, title, synthetic = false, onExpand, link, children, expanded = false, appScreen = false, backupNotice, userEdited = false }) {
   return <section aria-label={`${toolResultName(tool)} output preview`} className="overflow-hidden rounded-xl border border-white/15 bg-[#0b1320]">
@@ -57,8 +58,8 @@ function SourceOutput({ entry }) {
 
 export function MainToolOutput({ entry, result, results = {}, activity, backendRunId }) {
   if (entry?.source) return <SourceOutput entry={entry} />;
-  if ((!result.kind || result.kind === "result") && !results.breakdown && !result.items?.length && entry?.hasResponse) return <EvidenceValue value={entry.response} />;
-  return <ResultPreview result={{ ...result, displayProvider: entry?.tool || result.displayProvider }} results={results} activity={activity} backendRunId={backendRunId} />;
+  if ((!result.kind || result.kind === "result") && !results.breakdown && !result.items?.length && entry?.hasResponse) return <SavedToolResponse entry={entry} />;
+  return <ResultPreview result={{ ...result, sourceStepKey: entry?.originalStepKey || result.sourceStepKey, displayProvider: entry?.tool || result.displayProvider }} results={results} activity={activity} backendRunId={entry?.runId || backendRunId} />;
 }
 
 export function ToolOutputCards({ entries, activity, backendRunId, onOpen = undefined, collapsible = false }) {
@@ -125,7 +126,7 @@ export default function ToolResultDialog({ request, onClose, entries, primary, m
               {entry.backupNotice && <p className="mb-3 text-xs text-amber-200">Backup used · details below</p>}
               {entry.synthetic && <p className="mb-4 rounded-lg border border-violet-400/25 p-3 text-xs text-violet-100">Synthetic data · saved AURA result</p>}
               {entry.error && <p role="status" className="mb-4 whitespace-pre-wrap rounded-lg bg-amber-400/10 p-3 text-sm text-amber-200">{typeof entry.error === "string" ? entry.error : JSON.stringify(entry.error)}</p>}
-              {entry.source ? <SourceOutput entry={entry} /> : entry.preview ? <ResultPreview result={entry.tool === "Frame.io" && primary.kind === "frameio_review" ? primary : entry.preview} results={{ summary: entry.action }} backendRunId={backendRunId} /> : entry.hasResponse ? <EvidenceValue value={entry.response} /> : <p className="text-sm text-muted-foreground">No provider response is saved for this action. This does not mean the tool returned zero results.</p>}
+              {entry.source ? <SourceOutput entry={entry} /> : entry.preview ? <ResultPreview result={entry.tool === "Frame.io" && primary.kind === "frameio_review" ? primary : entry.preview} results={{ summary: entry.action }} backendRunId={backendRunId} /> : entry.hasResponse ? <SavedToolResponse entry={entry} /> : <p className="text-sm text-muted-foreground">No provider response is saved for this action. This does not mean the tool returned zero results.</p>}
               <details className="mt-5 rounded-lg border border-white/10 p-3"><summary className="cursor-pointer text-xs font-semibold">{entry.backupNotice ? "Execution details · backup used" : "Action details"}</summary>{entry.backupNotice && <p className="my-3 text-xs leading-6 text-muted-foreground">{entry.backupNotice}</p>}<p className="my-3 break-all text-xs text-muted-foreground">{entry.operation}{entry.completedAt && ` · ${entry.completedAt}`}</p><h4 className="mb-3 text-xs font-semibold">Inputs used</h4><EvidenceValue value={entry.inputs} />{(entry.preview || entry.source) && <><h4 className="my-3 text-xs font-semibold">Saved response</h4><EvidenceValue value={entry.response} /></>}</details>
             </> : <p className="text-sm text-muted-foreground">This action is not available in the saved workflow.</p>}
           </>}

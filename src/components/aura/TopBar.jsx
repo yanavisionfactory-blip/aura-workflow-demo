@@ -29,7 +29,7 @@ export default function TopBar({ onHistoryOpen, onBack, backLabel = "Back" }) {
           Pro
         </span>
       </div>
-      <div className="flex items-center gap-4">
+      <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:gap-4">
         <WorkspaceIdentity />
         <ConnectionsPill />
         <button

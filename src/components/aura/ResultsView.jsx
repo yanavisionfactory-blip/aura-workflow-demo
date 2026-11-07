@@ -46,6 +46,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
     const tool = id === "main" ? mainEntry?.tool || toolResultName(primaryResult.provider) : toolEntries.find((entry) => entry.id === id)?.tool;
     const dropdown = summaryFirst && dropdowns.current.get(tool);
     if (dropdown) {
+      if (id === "main" || tool === (mainEntry?.tool || toolResultName(primaryResult.provider))) { dropdown.closest("article")?.scrollIntoView({ block: "start" }); return; }
       dropdown.open = true;
       dropdown.querySelector("summary")?.focus({ preventScroll: true });
       dropdown.scrollIntoView({ block: "nearest" });
@@ -102,12 +103,12 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
   if (primaryResult.kind === "marketing_tools") return <div className="mx-auto w-full max-w-3xl pb-8"><ResultPreview result={primaryResult} results={results} activity={activity} backendRunId={backendRunId} /></div>;
 
   const resultSummary = <>
-    <ResultsHeading centered={summaryFirst} title={sheetSummary?.title ? `${sheetSummary.title}${isFailure ? " — review needed" : ""}` : primaryResult.completionTitle || results.title || "Workflow complete"} summary={sheetSummary?.summary || primaryResult.completionSummary || results.summary} isFailure={isFailure} />
+    <ResultsHeading centered={false} title={sheetSummary?.title ? `${sheetSummary.title}${isFailure ? " — review needed" : ""}` : primaryResult.completionTitle || results.title || "Workflow complete"} summary={sheetSummary?.summary || primaryResult.completionSummary || results.summary} isFailure={isFailure} />
     <ResultsMetrics metrics={metrics} compact />
   </>;
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`mx-auto w-full pb-8 ${summaryFirst ? "max-w-3xl" : ["website_content", "spreadsheet", "frameio_review"].includes(primaryResult.kind) ? "max-w-6xl" : "max-w-5xl"}`}>
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`mx-auto w-full pb-8 ${summaryFirst ? "max-w-5xl" : ["website_content", "spreadsheet", "frameio_review"].includes(primaryResult.kind) ? "max-w-6xl" : "max-w-5xl"}`}>
       {!nativeResult && !summaryFirst && resultSummary}
       {nativeResult && <ResultPreview result={primaryResult} results={results} activity={activity} backendRunId={backendRunId} />}
       {nativeResult && !nativeAudit && primaryResult.kind !== "website_content" && <ResultsByTool entries={toolEntries} onOpen={openTool} />}
@@ -144,6 +145,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
 
       {summaryFirst && <section aria-label="Workflow summary" className="mt-7">
         {resultSummary}
+        {visualChoices.length > 1 && <label className="mb-5 block text-xs text-muted-foreground">Main output<select value={visualChoices.find((choice) => choice.result.designId === primaryResult.designId)?.key || ""} onChange={(event) => { const next = new URLSearchParams(searchParams); next.set("main", event.target.value); setSearchParams(next); }} className="mt-2 block w-full rounded-xl border border-white/10 bg-card p-3 text-sm text-foreground">{visualChoices.map((choice) => <option key={choice.key} value={choice.key}>{choice.label}</option>)}</select></label>}
         <WorkflowToolResults entries={toolEntries} primary={primaryResult} mainEntry={mainEntry} hasMainOutput={hasMainOutput} results={results} activity={activity || []} backendRunId={backendRunId} actions={actions} dropdowns={dropdowns} onOpenRun={onOpenRun} onOpen={openTool} />
         <ResultsByTool entries={toolEntries} selectedTool={outputEntry?.tool || displayedResult.provider} onOpen={openTool} compact />
       </section>}
@@ -164,7 +166,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
           ? <div className="flex flex-wrap gap-2">{nextSteps.map((step, index) => <button key={index} type="button" onClick={() => onStartWorkflow(primaryResult.kind === "frameio_review" ? resultRevisionPrompt({ instruction: step, result: primaryResult }) : step)} className="rounded-full border border-violet-400/20 px-3 py-1.5 text-xs text-violet-400 hover:bg-violet-400/10">{step}</button>)}</div>
           : <p className="text-sm text-muted-foreground">{results.suggestionsLoading ? "Finding useful follow-ups…" : "No follow-up suggestions are available for this result."}</p>}
       </section>}
-      <section className="rounded-2xl border border-violet-400/15 bg-violet-400/[0.035] p-4">
+      {!results.collection && <section className="rounded-2xl border border-violet-400/15 bg-violet-400/[0.035] p-4">
         <h3 className="text-sm font-semibold">What would you like to do next?</h3>
         <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{approvedWeekly ? "This review uses fixed reporting dates and individually labelled source inputs. Start a new review with fresh inputs for the next week." : isFailure ? "Your completed work is saved. Try again or start a new workflow." : "Run it again, automate it for later, or start something new."}</p>
         <div className={`mt-3 grid gap-2 ${!isFailure && !approvedWeekly && backendRunId ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
@@ -172,14 +174,15 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
           {!isFailure && !approvedWeekly && backendRunId && <button type="button" onClick={() => setShowSchedule(true)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-violet-500 to-sky-400 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_5px_20px_rgba(139,92,246,0.15)]"><CalendarClock className="h-4 w-4" />Schedule</button>}
           <button type="button" onClick={onNewWorkflow} className={outlineButton}><Plus className="h-4 w-4" />New workflow</button>
         </div>
-      </section>
+      </section>}
 
       <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-white/10 pt-4 text-xs">
+        <a href="#/results/collect" className={footerButton}>Collect saved results</a>
         {activity?.length > 0 && <button type="button" onClick={() => openTool("activity")} className={footerButton}><Activity className="h-3.5 w-3.5" />Activity</button>}
-        <button type="button" onClick={handleShare} className={footerButton}>{copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Share2 className="h-3.5 w-3.5" />}{copied ? "Copied" : "Share"}</button>
+        <button type="button" onClick={handleShare} className={footerButton}>{copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Share2 className="h-3.5 w-3.5" />}{copied ? "Copied" : "Copy summary"}</button>
         {primaryResult.downloadUrl
           ? <a href={primaryResult.downloadUrl} target="_blank" rel="noopener noreferrer" className={footerButton}><FileDown className="h-3.5 w-3.5" />Download</a>
-          : <button type="button" onClick={handleDownload} className={footerButton}><FileDown className="h-3.5 w-3.5" />{primaryResult.kind === "frameio_review" ? "Download original brief" : "Download"}</button>}
+          : <button type="button" onClick={handleDownload} className={footerButton}><FileDown className="h-3.5 w-3.5" />{primaryResult.kind === "frameio_review" ? "Download original brief" : "Download summary"}</button>}
         {!isFailure && !backendRunId && <button type="button" onClick={() => setShowModal(true)} className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 font-semibold text-white"><Zap className="h-4 w-4" />Connect & run for real</button>}
       </div>
       {!backendRunId && <AccessRequestModal open={showModal} onClose={() => setShowModal(false)} workflowPrompt={workflowPrompt} />}

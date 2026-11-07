@@ -54,7 +54,7 @@ export function toolResultEntries(activity = []) {
     const actualTool = toolResultName(entry.tool, entry.operation);
     const tool = backupNotice && fallback?.status === "used" && fallback.requested_tool && fallback.requested_operation
       ? toolResultName(fallback.requested_tool, fallback.requested_operation) : actualTool;
-    return { ...entry, tool, actualTool, backupNotice,
+    return { ...entry, tool, actualTool, backupNotice, runId: step.runId, originalStepKey: step.originalStepKey,
       stepKey: step.stepKey || step.key || output.step_key,
       preview: candidate?.kind && candidate.kind !== "result" ? { ...candidate, displayProvider: tool } : null,
       link: candidate?.link || savedSourceLink(entry),
@@ -80,6 +80,8 @@ export function preferredToolOutcome(primary, activity = []) {
     ...step.output, step_id: step.id, step_key: step.stepKey || step.key,
     operation: step.output?.operation || step.operation,
   }));
+  const canva = primaryResultFromOutputs(outputs.filter((output) => output.operation?.startsWith("canva.") && output.critic?.action === "accept" && output.outcome_check?.status === "verified"), { title: primary.title });
+  if (canva?.kind === "presentation" && canva.designId) return canva;
   if (primary.kind === "spreadsheet") {
     const saved = googleSheetsResult(outputs.filter((output) => spreadsheetId(output) === primary.spreadsheetId), { title: primary.title });
     return saved && (saved.ranges.length || !primary.ranges?.length) ? { ...primary, ...saved } : primary;
@@ -87,10 +89,7 @@ export function preferredToolOutcome(primary, activity = []) {
   // A saved spreadsheet is the deliverable; a source-only read stays secondary.
   const sheet = googleSheetsResult(outputs, { title: primary.title });
   if (sheet) return sheet;
-  const canva = primaryResultFromOutputs(outputs.filter((output) =>
-    output.operation === "canva.presentation.create" && output.critic?.action === "accept"
-    && output.outcome_check?.status === "verified"), { title: primary.title });
-  return canva?.kind === "presentation" && canva.designId ? canva : primary;
+  return primary;
 }
 
 export function toolOutputResult(entries, activity = []) {

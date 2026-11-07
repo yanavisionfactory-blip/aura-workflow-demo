@@ -1,54 +1,53 @@
-import { AlertTriangle, ChevronDown, ExternalLink, FileText } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, ExternalLink, FileText, Presentation, Table2 } from "lucide-react";
 import { mainToolEntry, toolOutputResult, toolResultGroups, toolResultName, toolResultStatus } from "@/lib/toolResultViews.mjs";
-import { MainToolOutput, ToolResultFrame } from "./ToolResultView";
-import { EvidenceValue } from "./ToolEvidence";
+import { MainToolOutput } from "./ToolResultView";
+import SavedToolResponse from "./SavedToolResponse";
+import { savedToolResponse } from "@/lib/savedToolResponse.mjs";
 
-// One result location per tool. The Tools used controls open these same rows.
+function SourceResults({ items }) {
+  const summaries = items.map(savedToolResponse);
+  const metaEmpty = items.length > 1 && items.every((item) => item.tool === "Meta Ads") && summaries.every((item) => item.empty);
+  if (!metaEmpty) return <div className="space-y-5">{items.map((entry) => <section key={entry.id}><h4 className="mb-3 text-sm font-medium">{entry.action}</h4><SavedToolResponse entry={entry} /></section>)}</div>;
+  const withAccount = items.find((entry) => savedToolResponse(entry).facts.some((fact) => fact.label === "Account")) || items[0];
+  const periods = [...new Set(summaries.flatMap((item) => item.facts.filter((fact) => fact.label === "Reporting dates").map((fact) => fact.value)))];
+  return <div className="space-y-4"><SavedToolResponse entry={withAccount} />{periods.length > 0 && <div><h4 className="mb-2 text-xs font-medium text-muted-foreground">Reporting periods checked</h4><ul className="space-y-1 text-sm text-slate-200">{periods.map((period) => <li key={period}>{period}</li>)}</ul></div>}</div>;
+}
+
 export default function WorkflowToolResults({ entries, primary, mainEntry, hasMainOutput, results, activity, backendRunId, actions, dropdowns, onOpenRun, onOpen }) {
   const primaryTool = mainEntry?.tool || toolResultName(primary.provider);
   const groups = toolResultGroups(entries);
   if (hasMainOutput && !groups.some((group) => group.tool === primaryTool)) groups.push({ tool: primaryTool, entries: [] });
-  // Put the deliverable first inside What happened, below the outcome summary.
   groups.sort((a, b) => Number(b.tool === primaryTool) - Number(a.tool === primaryTool));
-  return <section aria-label="Supporting workflow actions" className="mb-6">
-    <h3 className="mb-3 text-sm font-semibold">What happened</h3>
-    <div className="space-y-2">{groups.map(({ tool, entries: items }) => {
+  return <section aria-label="Supporting workflow actions" className="mb-7 space-y-5">
+    <h2 className="text-sm font-semibold">Results from every tool</h2>
+    {groups.map(({ tool, entries: items }) => {
       const isPrimary = tool === primaryTool && hasMainOutput;
       const completed = items.filter((entry) => entry.status === "completed" && entry.hasResponse);
       const combined = isPrimary ? primary : toolOutputResult(completed, activity);
       const combinedEntry = isPrimary ? mainEntry : mainToolEntry(completed, combined || {}) || completed.at(-1);
-      const showCombined = isPrimary || combined?.kind === "spreadsheet";
-      const action = actions.find((item) => isPrimary ? item.actionId === "main" : items.some((entry) => entry.id === item.actionId));
+      const visual = combined && !["result"].includes(combined.kind);
       const issues = items.filter((entry) => ["failed", "blocked", "provider_error"].includes(entry.status));
-      const link = (showCombined && combined?.link) || action?.link || completed.at(-1)?.link;
-      const linkLabel = (showCombined && combined?.linkLabel) || action?.linkLabel || completed.at(-1)?.linkLabel;
-      return <details key={tool} ref={(node) => { if (node) dropdowns.current.set(tool, node); else dropdowns.current.delete(tool); }}
-        open={isPrimary || undefined} aria-label={`${tool} result dropdown`} className={`group/tool overflow-hidden rounded-xl border bg-[#0c121e]/65 ${issues.length ? "border-amber-400/30" : "border-white/10"}`}>
-        <summary className="flex cursor-pointer list-none flex-wrap items-center gap-3 p-3 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300 [&::-webkit-details-marker]:hidden">
-          <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-xl ${issues.length ? "bg-amber-400/10 text-amber-400" : "bg-violet-400/10 text-violet-400"}`}>{issues.length ? <AlertTriangle className="h-4 w-4" /> : <FileText className="h-4 w-4" />}</span>
-          <span className="min-w-0 flex-1"><span className="block text-sm font-semibold">{tool}</span><span className="mt-0.5 block text-[11px] leading-4 text-muted-foreground">{action ? `${action.count !== undefined ? `${action.count} ` : ""}${action.title}` : completed.length ? `${completed.length} saved ${completed.length === 1 ? "action" : "actions"}` : items.map(toolResultStatus).join(" · ")}{issues.length ? " · Needs attention" : ""}</span></span>
-          {link && <a href={link} target="_blank" rel="noopener noreferrer" onClick={(event) => event.stopPropagation()} className="inline-flex items-center gap-1.5 rounded-full border border-cyan-400/25 px-3 py-1.5 text-[11px] font-medium text-cyan-300 hover:bg-cyan-400/10"><ExternalLink className="h-3 w-3" />{linkLabel || `Open in ${tool}`}</a>}
-          <ChevronDown aria-hidden="true" className="h-4 w-4 shrink-0 text-violet-400 group-open/tool:rotate-180" />
-        </summary>
-        <div className="space-y-4 border-t border-white/10 p-3 sm:p-4">
-          {action?.detail && <p className="text-xs text-muted-foreground">{action.detail}</p>}
-          {actions.filter((item) => item !== action && !item.issue && items.some((entry) => entry.id === item.actionId)).map((item) => <p key={item.key} className="text-xs text-muted-foreground">{item.count !== undefined ? `${item.count} ` : ""}{item.title}{item.detail ? ` · ${item.detail}` : ""}</p>)}
-          {showCombined ? <ToolResultFrame tool={tool} title={combined?.title || results.title} backupNotice={combinedEntry?.backupNotice} userEdited={combinedEntry?.userEdited} synthetic={combinedEntry?.synthetic} appScreen={["spreadsheet", "ai_response"].includes(combined?.kind)}>
-            <MainToolOutput entry={combinedEntry} result={combined} results={results} activity={activity} backendRunId={backendRunId} />
-          </ToolResultFrame> : completed.map((entry) => <ToolResultFrame key={entry.id} tool={tool} title={entry.preview?.title || entry.action} backupNotice={entry.backupNotice} userEdited={entry.userEdited} synthetic={entry.synthetic} appScreen={entry.preview?.kind === "ai_response"} link={entry.link}>
-            <MainToolOutput entry={entry} result={entry.preview || { kind: "result" }} activity={activity} backendRunId={backendRunId} />
-          </ToolResultFrame>)}
-          {items.filter((entry) => entry.status !== "completed").map((entry) => <section key={entry.id} aria-label={`${tool} action status`} className="rounded-lg border border-white/10 p-3 text-sm">
-            <p className="font-medium">{entry.action} · {toolResultStatus(entry)}</p>
-            {entry.error ? <p className="mt-2 whitespace-pre-wrap text-amber-200">{typeof entry.error === "string" ? entry.error : JSON.stringify(entry.error)}</p> : !entry.hasResponse && <p className="mt-2 text-muted-foreground">No saved response is available for this action.</p>}
-            {entry.hasResponse && <EvidenceValue value={entry.response} />}
-          </section>)}
-          {items.length > 0 && <details className="rounded-lg border border-white/10 p-3"><summary className="cursor-pointer text-xs font-medium text-muted-foreground">Action details</summary><div className="mt-3 space-y-4">{items.map((entry) => <section key={entry.id}><p className="mb-2 text-xs font-medium">{entry.action} · {toolResultStatus(entry)}</p><EvidenceValue value={entry.response} /></section>)}</div></details>}
-        </div>
-      </details>;
-    })}</div>
-    {actions.filter((action) => action.key === "final-review").map((action) => <div key={action.key} className="mt-2 rounded-xl border border-amber-400/30 bg-amber-400/[0.04] p-3 text-sm">
-      <p className="font-medium text-amber-200">{action.title}</p><p className="mt-1 text-xs text-muted-foreground">{action.detail}</p><button type="button" onClick={() => action.resume && onOpenRun ? onOpenRun() : onOpen("activity")} className="mt-2 text-xs text-cyan-300">{action.actionLabel}</button>
-    </div>)}
+      const link = combined?.link || completed.findLast((entry) => entry.link)?.link;
+      const Icon = tool === "Canva" ? Presentation : tool === "Google Sheets" ? Table2 : FileText;
+      const count = combined?.kind === "spreadsheet" ? `${combined.ranges?.length || 0} saved ranges` : combined?.pageCount ? `${combined.pageCount} ${combined.pageCount === 1 ? "slide" : "slides"}` : `${completed.length} saved ${completed.length === 1 ? "action" : "actions"}`;
+      return <article key={tool} className={`min-w-0 overflow-hidden rounded-2xl border ${isPrimary ? "border-violet-400/30 bg-gradient-to-br from-violet-400/[0.08] to-[#0c1420]" : "border-white/10 bg-[#0d1522]"}`}>
+        <header className="flex flex-wrap items-center justify-between gap-4 p-4 sm:p-6">
+          <div className="flex min-w-0 items-center gap-3"><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-400/10 text-violet-300"><Icon className="h-5 w-5" /></span><div className="min-w-0"><p className="text-xs font-medium text-violet-300">{isPrimary ? "Main output" : "Tool result"}</p><h3 className="mt-1 text-base font-semibold">{tool}</h3><p className="mt-1 text-xs text-muted-foreground">{count}{issues.length ? " · Needs attention" : ""}</p></div></div>
+          {link && <a href={link} target="_blank" rel="noopener noreferrer" className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold ${isPrimary ? "bg-violet-500 text-white hover:bg-violet-400" : "border border-white/15 text-cyan-200 hover:bg-white/5"}`}>Open in {tool}<ExternalLink className="h-4 w-4" /></a>}
+        </header>
+        {combinedEntry?.backupNotice && <p className="mx-4 mb-4 rounded-xl border border-amber-400/20 bg-amber-400/5 p-3 text-xs leading-5 text-amber-100 sm:mx-6">Backup used · {combinedEntry.backupNotice}</p>}
+        {isPrimary && visual && <div className="px-4 pb-4 sm:px-6 sm:pb-6"><h4 className="mb-4 break-words text-lg font-medium sm:text-xl">{combined.title}</h4><MainToolOutput entry={combinedEntry} result={combined} results={results} activity={activity} backendRunId={backendRunId} /></div>}
+        <details ref={(node) => { if (node) dropdowns.current.set(tool, node); else dropdowns.current.delete(tool); }} aria-label={`${tool} result dropdown`} open={!isPrimary && !visual || undefined} className="group/tool border-t border-white/10">
+          <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300 sm:px-6 [&::-webkit-details-marker]:hidden"><span>{isPrimary ? "Saved actions" : visual ? `View ${tool === "Google Sheets" ? "saved report" : "result"} in AURA` : "Results and reporting coverage"}</span><ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground group-open/tool:rotate-180" /></summary>
+          <div className="space-y-4 px-4 pb-5 sm:px-6">
+            {(!isPrimary || !visual) && (visual ? <MainToolOutput entry={combinedEntry} result={combined} results={results} activity={activity} backendRunId={backendRunId} /> : <SourceResults items={completed} />)}
+            {items.filter((entry) => entry.status !== "completed").map((entry) => <p key={entry.id} className="flex items-start gap-2 text-sm text-amber-200"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{entry.action} · {toolResultStatus(entry)}</p>)}
+            {(isPrimary || visual) && <ul className="space-y-3">{items.map((entry) => <li key={entry.id} className="flex items-start gap-2 text-xs leading-5 text-muted-foreground">{entry.status === "completed" ? <Check className="mt-1 h-3 w-3 shrink-0 text-emerald-400" /> : <AlertTriangle className="mt-1 h-3 w-3 shrink-0 text-amber-300" />}<span>{entry.action}<span className="block text-[11px]">{toolResultStatus(entry)}{entry.completedAt ? ` · ${new Date(entry.completedAt).toLocaleString()}` : ""}</span></span></li>)}</ul>}
+            <button type="button" onClick={() => onOpen("activity")} className="text-xs text-muted-foreground underline underline-offset-4">View workflow activity</button>
+          </div>
+        </details>
+      </article>;
+    })}
+    {actions.filter((action) => action.key === "final-review").map((action) => <div key={action.key} className="rounded-xl border border-amber-400/30 bg-amber-400/[0.04] p-4 text-sm"><p className="font-medium text-amber-200">{action.title}</p><p className="mt-1 text-xs text-muted-foreground">{action.detail}</p><button type="button" onClick={() => action.resume && onOpenRun ? onOpenRun() : onOpen("activity")} className="mt-2 text-xs text-cyan-300">{action.actionLabel}</button></div>)}
   </section>;
 }
