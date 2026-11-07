@@ -20,6 +20,7 @@ import { detectNewConsequential } from "@/lib/editRunDetect";
 import { requestNotifyPermission, notifyWorkflowComplete, notifyWorkflowError } from "@/lib/auraNotify";
 import { connectTool } from "@/lib/connectService";
 import { catalogEntryFor } from "@/lib/toolCatalog";
+import { reconcileToolOmissions } from "@/lib/toolOmissions.mjs";
 import { announceWorkflowHistoryChanged } from "@/lib/workflowHistory.mjs";
 import {
   approvePythonPlan,
@@ -704,9 +705,12 @@ Write ONE clear, conversational sentence restating what they want — but offer 
       pendingPlanRevisionRef.current = revisionInstruction
         ? { instruction: revisionInstruction, reviewedSteps, connectionRoutes } : null;
       const confirmedIntent = editedInterpretation.trim() || originalPromptRef.current;
-      const selectedTools = userSelectedToolsRef.current.filter(
-        (tool) => !omittedToolsRef.current.includes(tool)
+      const planningPrompt = planningRequestPrompt(confirmedIntent, revisionInstruction, reviewedSteps);
+      const { selectedTools, excludedFamilies } = reconcileToolOmissions(
+        planningPrompt, userSelectedToolsRef.current, omittedToolsRef.current,
       );
+      userSelectedToolsRef.current = selectedTools;
+      omittedToolsRef.current = excludedFamilies;
       planningInFlightRef.current = true;
       setPlanLoading(true);
       setPhase("plan");
@@ -735,14 +739,13 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             pythonPlanRef.current = null;
           }
           lastPlanningIntentRef.current = confirmedIntent;
-          const planningPrompt = planningRequestPrompt(confirmedIntent, revisionInstruction, reviewedSteps);
           runRequestKeyRef.current ||= globalThis.crypto?.randomUUID?.()
             || `aura-${Date.now()}-${Math.random().toString(36).slice(2)}`;
           const requestKey = runRequestKeyRef.current;
           const resources = attachedResourcesRef.current || {};
           const created = await createPythonRunResilient(planningPrompt, null, requestKey, {
             requested_tools: selectedTools,
-            excluded_tool_families: [...omittedToolsRef.current],
+            excluded_tool_families: excludedFamilies,
             connection_routes: connectionRoutes,
             saved_workflow_id: currentWorkflowIdRef.current,
             attached_documents: (resources.documents || []).map(({ name, file_url, size }) => ({

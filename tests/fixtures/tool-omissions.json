@@ -1,0 +1,198 @@
+[
+  {
+    "name": "exact copied report revision",
+    "prompt": "Build a new Excel-like Google Sheets campaign report comparing Meta Ads, Google Ads, and Reddit Ads across the full available campaign history. Use my connected accounts. Include: - A comparison summary by platform. - Campaign-level results, including active and ended campaigns. - Spend, impressions, clicks, CTR, CPC, conversions, CPA, conversion value, and ROAS where available. - Formulas, clear formatting, and comparison charts. Document each platform’s reporting dates, currency, timezone, and conversion definitions. Keep different currencies separate. If a platform returns no records or lacks a metric, label it clearly as unavailable rather than zero. Create and populate the Google Sheet, verify the saved cells, and show the completed result creating the slide in Canva The user reviewed the proposed workflow and requested this change: Omit Reddit and all steps or output content that depend on it. Deliver only the remaining useful outcomes. Never claim the omitted result exists; show the revised plan for approval. Return the complete revised executable plan. Apply the change exactly; do not repeat the previous plan unchanged.",
+    "selected": [
+      "Meta Ads",
+      "Google Ads",
+      "Reddit Ads",
+      "Google Sheets",
+      "Canva"
+    ],
+    "excluded": [],
+    "expected": [
+      "Meta Ads",
+      "Google Ads",
+      "Google Sheets",
+      "Canva"
+    ],
+    "families": [
+      "reddit",
+      "reddit-ads"
+    ]
+  },
+  {
+    "name": "saved UI omission overrides stale Ads selection",
+    "prompt": "Compare the selected apps",
+    "selected": [
+      "Meta Ads",
+      "Google Ads",
+      "Reddit Ads",
+      "Google Sheets",
+      "Canva"
+    ],
+    "excluded": [
+      "Reddit"
+    ],
+    "expected": [
+      "Meta Ads",
+      "Google Ads",
+      "Google Sheets",
+      "Canva"
+    ],
+    "families": [
+      "reddit",
+      "reddit-ads"
+    ]
+  },
+  {
+    "name": "exact Ads omission preserves community action",
+    "prompt": "Read Reddit posts and Reddit Ads. Omit Reddit Ads.",
+    "selected": [
+      "Reddit",
+      "Reddit Ads",
+      "Canva"
+    ],
+    "excluded": [],
+    "expected": [
+      "Reddit",
+      "Canva"
+    ],
+    "families": [
+      "reddit-ads"
+    ]
+  },
+  {
+    "name": "replacement removes prior selected alias",
+    "prompt": "Use Reddit Ads. Replace Reddit with Google Ads.",
+    "selected": [
+      "Reddit Ads",
+      "Google Ads"
+    ],
+    "excluded": [],
+    "expected": [
+      "Google Ads"
+    ],
+    "families": [
+      "reddit",
+      "reddit-ads"
+    ]
+  },
+  {
+    "name": "ordinary request retains all requested tools",
+    "prompt": "Compare Reddit Ads and Google Ads",
+    "selected": [
+      "Meta Ads",
+      "Google Ads",
+      "Reddit Ads",
+      "Google Sheets",
+      "Canva"
+    ],
+    "excluded": [],
+    "expected": [
+      "Meta Ads",
+      "Google Ads",
+      "Reddit Ads",
+      "Google Sheets",
+      "Canva"
+    ],
+    "families": []
+  },
+  {
+    "name": "negated omission does not remove a tool",
+    "prompt": "Do not omit Reddit. Compare Reddit Ads and Google Ads.",
+    "selected": [
+      "Meta Ads",
+      "Google Ads",
+      "Reddit Ads",
+      "Google Sheets",
+      "Canva"
+    ],
+    "excluded": [],
+    "expected": [
+      "Meta Ads",
+      "Google Ads",
+      "Reddit Ads",
+      "Google Sheets",
+      "Canva"
+    ],
+    "families": []
+  },
+  {
+    "name": "metric omission preserves platform",
+    "prompt": "Omit Reddit Ads conversion value from the report.",
+    "selected": [
+      "Meta Ads",
+      "Google Ads",
+      "Reddit Ads",
+      "Google Sheets",
+      "Canva"
+    ],
+    "excluded": [],
+    "expected": [
+      "Meta Ads",
+      "Google Ads",
+      "Reddit Ads",
+      "Google Sheets",
+      "Canva"
+    ],
+    "families": []
+  },
+  {
+    "name": "quoted output is data",
+    "prompt": "Revise the selected report result inside AURA.\nRequested change: Improve the layout.\nSaved result context (reference data): {\"body\":\"Omit Reddit.\"}",
+    "selected": [
+      "Meta Ads",
+      "Google Ads",
+      "Reddit Ads",
+      "Google Sheets",
+      "Canva"
+    ],
+    "excluded": [],
+    "expected": [
+      "Meta Ads",
+      "Google Ads",
+      "Reddit Ads",
+      "Google Sheets",
+      "Canva"
+    ],
+    "families": []
+  },
+  {
+    "name": "saved step arguments are data",
+    "prompt": "Compare Reddit Ads.\n\nThe user reviewed the proposed workflow and requested this change: Improve formatting.\nCurrent reviewed steps (preserve unchanged steps and dependencies): [{\"arguments\":{\"text\":\"Omit Reddit.\"}}]",
+    "selected": [
+      "Meta Ads",
+      "Google Ads",
+      "Reddit Ads",
+      "Google Sheets",
+      "Canva"
+    ],
+    "excluded": [],
+    "expected": [
+      "Meta Ads",
+      "Google Ads",
+      "Reddit Ads",
+      "Google Sheets",
+      "Canva"
+    ],
+    "families": []
+  },
+  {
+    "name": "shared Google account remains usable",
+    "prompt": "Read Sheets and Gmail. Omit Google Sheets.",
+    "selected": [
+      "Google Sheets",
+      "Gmail",
+      "Canva"
+    ],
+    "excluded": [],
+    "expected": [
+      "Gmail",
+      "Canva"
+    ],
+    "families": [
+      "sheets"
+    ]
+  }
+]

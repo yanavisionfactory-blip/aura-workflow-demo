@@ -1,3 +1,5 @@
+import { reconcileToolOmissions } from "./toolOmissions.mjs";
+
 const normalize = (value) => String(value || "")
   .toLowerCase()
   .replace(/[^a-z0-9]+/g, " ")
@@ -95,7 +97,8 @@ export function promptToolHints(value = "", catalog = [], limit = 6) {
     add(hint.label, Math.min(...positions), 1);
   });
 
-  return candidates
+  const allowed = new Set(reconcileToolOmissions(value, candidates.map((item) => item.label)).selectedTools);
+  return candidates.filter((item) => allowed.has(item.label))
     .sort((left, right) => left.position - right.position || left.priority - right.priority)
     .slice(0, limit)
     .map((item) => item.label);

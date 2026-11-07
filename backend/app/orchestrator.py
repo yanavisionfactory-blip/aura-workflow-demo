@@ -835,6 +835,11 @@ async def _create_compiled_plan(
     connection_routes: dict[str, str] | None = None,
 ):
     """Build a schema-valid plan, repairing internal connector mismatches silently."""
+    from .tool_omissions import omission_bounded_inventory, reconcile_tool_omissions
+
+    requested_tool_names, excluded_tool_families = reconcile_tool_omissions(
+        request_prompt or prompt, requested_tool_names, excluded_tool_families, inventory,
+    )
     manifests_by_slug = {
         item["slug"]: _current_capability_manifest(
             item["slug"], manifests_by_slug.get(item["slug"])
@@ -848,6 +853,11 @@ async def _create_compiled_plan(
         validate_plan_connection_routes,
     )
 
+    if isinstance(connection_routes, dict) and excluded_tool_families:
+        from .connection_families import capability_family
+
+        connection_routes = {app: route for app, route in connection_routes.items()
+                             if capability_family(app) not in excluded_tool_families}
     connection_routes = selected_connection_routes(connection_routes, inventory)
     inventory = route_bounded_inventory(inventory, connection_routes)
     inventory = prefer_connected_app_routes(
@@ -859,11 +869,7 @@ async def _create_compiled_plan(
         def allowed(operation: str) -> bool:
             return capability_family(operation.split(".", 1)[0]) not in excluded_tool_families
 
-        inventory = [
-            {**item, "allowed_operations": [op for op in item.get("allowed_operations", []) if allowed(op)]}
-            for item in inventory
-            if capability_family(item.get("slug")) not in excluded_tool_families
-        ]
+        inventory = omission_bounded_inventory(inventory, excluded_tool_families)
         included_slugs = {item["slug"] for item in inventory}
         manifests_by_slug = {
             slug: {**manifest, "capabilities": [
@@ -1110,6 +1116,14 @@ async def _create_compiled_plan(
     from .dashboard_quality import dashboard_requirements
 
     repair_requirements.extend(dashboard_requirements(objective))
+    if excluded_tool_families:
+        repair_requirements.append(
+            "The user's omission overrides earlier app selections and mentions: "
+            + ", ".join(sorted(excluded_tool_families))
+            + ". Exclude their actions, fallbacks and dependent output content. "
+            "Preserve all other requested outcomes and show the revised plan for approval. "
+            "Never claim the omitted results exist."
+        )
     repair_requirements.extend(
         "The user explicitly selected " + name
         + ". Include a relevant required primary step for this app using its catalog operations on: "
@@ -1889,16 +1903,23 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             if tool.id in manifests_by_tool
         })
         from .connection_families import capability_family
+        from .tool_omissions import omission_bounded_inventory, reconcile_tool_omissions
 
-        excluded_families = {
-            capability_family(value)
-            for value in (run.inputs or {}).get("excluded_tool_families", [])
-            if isinstance(value, str)
-        }
+        requested_tools, excluded_families = reconcile_tool_omissions(
+            run.prompt, requested_tools,
+            (run.inputs or {}).get("excluded_tool_families", []), inventory,
+        )
+        if excluded_families:
+            # Persist the effective scope so retries/restored drafts cannot
+            # resurrect a composer choice the user explicitly removed.
+            run.inputs = {**(run.inputs or {}), "requested_tools": requested_tools,
+                          "excluded_tool_families": sorted(excluded_families)}
+        inventory = omission_bounded_inventory(inventory, excluded_families)
         requirement_inventory = (
             inventory if run.prompt.startswith(PILOT_PREFIX)
             else await connection_requirement_inventory(session, run.prompt, inventory, requested_tools)
         )
+        requirement_inventory = omission_bounded_inventory(requirement_inventory, excluded_families)
         await session.commit()
 
         try:
@@ -1908,12 +1929,16 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 validate_plan_connection_routes,
             )
 
-            connection_routes = selected_connection_routes((run.inputs or {}).get("connection_routes"), inventory)
+            route_choices = (run.inputs or {}).get("connection_routes")
+            if isinstance(route_choices, dict) and excluded_families:
+                route_choices = {app: route for app, route in route_choices.items()
+                                 if capability_family(app) not in excluded_families}
+            connection_routes = selected_connection_routes(route_choices, inventory)
             requirement_inventory = route_bounded_inventory(requirement_inventory, connection_routes)
             from .plan_reuse import reuse_saved_plan
             from .request_contracts import validate_requested_operations
 
-            plan = (None if connection_routes or get_settings().planner_mode == "llm" else await reuse_saved_plan(
+            plan = (None if connection_routes or excluded_families or get_settings().planner_mode == "llm" else await reuse_saved_plan(
                 session, run, connected_inventory, manifests_by_slug,
             ))
             if plan is not None and any(
