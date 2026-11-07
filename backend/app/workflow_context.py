@@ -487,6 +487,22 @@ def canonical_action_arguments(operation: str, arguments: dict, context: dict) -
     A job ID and the resource it created are distinct identities. Repair only
     an exact receipt match from this run; never substitute an unrelated design.
     """
+    if operation.startswith("google-sheets."):
+        # Replay saved plans which bound a whole creation receipt as an ID.
+        # Only the exact confirmed creation result from this run qualifies.
+        for key in ("sheetId", "spreadsheetId"):
+            target = arguments.get(key)
+            if not isinstance(target, dict):
+                continue
+            for output in context.get("steps", {}).values():
+                created = output.get("new-spreadsheet") if isinstance(output, dict) else None
+                receipt = created.get("ret") if isinstance(created, dict) else None
+                identifier = receipt.get("spreadsheetId") if isinstance(receipt, dict) else None
+                if (isinstance(identifier, str) and re.fullmatch(r"[A-Za-z0-9_-]{10,200}", identifier)
+                        and target in (receipt, created, output)):
+                    arguments = {**arguments, key: identifier}
+                    break
+        return arguments
     if operation == "jira.issue.update" and isinstance(arguments.get("fields"), dict):
         from .jira_content import jira_description
         fields = dict(arguments["fields"])

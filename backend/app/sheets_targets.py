@@ -117,6 +117,24 @@ def needs_worksheet_binding(step, steps):
 
 def bind_created_worksheets(plan, manifests):
     """Compile the metadata read into the plan before review/approval hashing."""
+    for index, step in enumerate(plan.steps):
+        if not step.operation.startswith("google-sheets."):
+            continue
+        for key in ("sheetId", "spreadsheetId"):
+            target = step.arguments.get(key)
+            paths = referenced_paths(target)
+            if not isinstance(target, str) or not REFERENCE.fullmatch(target) or len(paths) != 1:
+                continue
+            path = next(iter(paths))
+            source = next((prior for prior in plan.steps[:index]
+                           if prior.operation == "google-sheets.new-spreadsheet"
+                           and prior.tool_slug == step.tool_slug
+                           and path in {f"steps.{prior.key}", f"steps.{prior.key}.ret",
+                                        f"steps.{prior.key}.output", f"steps.{prior.key}.result"}), None)
+            if source:
+                step.arguments = {**step.arguments, key: f"{{{{steps.{source.key}.ret.spreadsheetId}}}}"}
+                if source.key not in step.depends_on:
+                    step.depends_on.append(source.key)
     for step in tuple(plan.steps):
         source = needs_worksheet_binding(step, plan.steps[:plan.steps.index(step)])
         if not source:

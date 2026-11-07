@@ -12,7 +12,39 @@ from app.sheets_targets import (
     bind_dashboard_metadata,
     needs_worksheet_binding,
 )
-from app.workflow_context import WorksheetIdentityError, resolve_value, step_context_value
+from app.workflow_context import (
+    WorksheetIdentityError,
+    canonical_action_arguments,
+    resolve_value,
+    step_context_value,
+)
+
+
+@pytest.mark.parametrize("suffix", ["", ".ret", ".output", ".result"])
+def test_whole_creation_result_is_bound_to_workbook_id_before_review(suffix):
+    candidate = plan()
+    candidate.steps[-1].arguments["sheetId"] = "{{steps.create" + suffix + "}}"
+    bind_created_worksheets(candidate, manifests())
+    writer = candidate.steps[-1]
+    assert writer.arguments["sheetId"] == "{{steps.create.ret.spreadsheetId}}"
+    assert writer.arguments["worksheetId"] == "{{steps.create_worksheets.worksheetId}}"
+    assert set(writer.depends_on) == {"create", "create_worksheets"}
+    once = candidate.model_dump()
+    bind_created_worksheets(candidate, manifests())
+    assert candidate.model_dump() == once
+
+
+def test_saved_whole_workbook_receipt_requires_exact_creation_evidence():
+    receipt = {"ret": {"spreadsheetId": "verified-workbook-123", "worksheetName": "Sheet1"}}
+    context = {"steps": {"create": step_context_value(receipt, "google-sheets.new-spreadsheet")}}
+    args = {"spreadsheetId": receipt["ret"]}
+    assert canonical_action_arguments("google-sheets.get-spreadsheet-info", args, context) == {
+        "spreadsheetId": "verified-workbook-123"}
+    assert args["spreadsheetId"] == receipt["ret"]
+    unknown = {"spreadsheetId": {"spreadsheetId": "another-workbook-456"}}
+    assert canonical_action_arguments("google-sheets.get-spreadsheet-info", unknown, context) == unknown
+    assert canonical_action_arguments("other.read", args, context) == args
+    assert canonical_action_arguments("google-sheets.get-spreadsheet-info", args, {}) == args
 
 
 def plan():
