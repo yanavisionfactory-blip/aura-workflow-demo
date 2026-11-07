@@ -339,7 +339,9 @@ def intent_bounded_tool_inventory(
     # a more detailed schema. Preserve unique operations and explicit routes.
     explicit_direct_meta = bool(re.search(
         r"\b(?:direct meta|meta ads direct|native meta|meta directly)\b", text,
-    )) or any("meta ads direct" in value for value in requested)
+    )) or bool(re.search(r"\bmeta-ads\.[a-z]+\.[a-z]+\b", original)) or any(
+        "meta ads direct" in value for value in requested
+    )
     meta_reads = {
         str(operation).removeprefix("mcp_meta_ads_")
         for item in bounded if item.get("connected")

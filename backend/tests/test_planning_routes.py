@@ -131,7 +131,7 @@ def test_connected_meta_reporting_does_not_add_duplicate_direct_consent(prefix):
     assert direct["allowed_operations"] == ["meta-ads.campaigns.list", "meta-ads.identity.get"]
     assert [item["name"] for item in direct["operation_contracts"]] == direct["allowed_operations"]
     assert tools == before
-    for case in ("both_connected", "not_granted", "explicit_direct", "selected_direct"):
+    for case in ("both_connected", "not_granted", "explicit_direct", "selected_direct", "exact_operation"):
         variant = deepcopy(tools)
         prompt = "Read Meta Ads accounts"
         selected = []
@@ -141,6 +141,8 @@ def test_connected_meta_reporting_does_not_add_duplicate_direct_consent(prefix):
             variant[0]["granted_operations"] = []
         elif case == "explicit_direct":
             prompt = "Read accounts through Direct Meta"
+        elif case == "exact_operation":
+            prompt = "Read Meta Ads accounts with meta-ads.accounts.list"
         else:
             selected = ["meta-ads-direct"]
         result = intent_bounded_tool_inventory(prompt, variant, selected)
