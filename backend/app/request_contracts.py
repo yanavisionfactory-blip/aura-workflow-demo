@@ -9,13 +9,13 @@ from .connection_families import capability_family
 
 _ACTION = re.compile(
     r"\b(send|email|deliver|forward|post|publish|create|make|schedule|add|"
-    r"upload|append|update|edit|modify|format|style|delete|remove|archive|cancel|share)\b",
+    r"upload|append|update|edit|modify|write|populate|fill|format|style|delete|remove|archive|cancel|share)\b",
     re.IGNORECASE,
 )
 _VERBS = {
     "send": {"send", "email", "deliver", "forward", "post", "publish"},
     "create": {"create", "make", "schedule", "add", "upload", "append"},
-    "update": {"update", "edit", "modify"},
+    "update": {"update", "edit", "modify", "write", "populate", "fill"},
     "format": {"format", "style"},
     "delete": {"delete", "remove", "archive", "cancel"},
     "share": {"share"},
@@ -246,6 +246,24 @@ def requested_effects(prompt: str, inventory: list[dict], manifests: dict) -> li
                 catalog[slug, name] = (module, item)
 
     effects: dict[tuple[str, str], set[tuple[str, str]]] = {}
+    # Parse explicit calls before sentence splitting: a catalog operation's
+    # dot is not punctuation. Mentions, saved plan text and negated calls do
+    # not authorize writes. An exact call authorizes only that operation.
+    for (slug, operation), (module, _) in catalog.items():
+        call = re.compile(
+            r"\b(?:use|run|execute|call|insert|add)\s+"
+            r"(?:(?:a|an|the|actual|real|supported|bounded)\s+){0,4}"
+            + re.escape(operation) + r"(?![\w-]|\.[\w-])", re.IGNORECASE,
+        )
+        for match in call.finditer(prompt):
+            lead = prompt[max(0, match.start() - 50):match.start()]
+            if re.search(r"\b(?:do not|don't|never|without|no)(?:\s+\w+){0,3}\s+$",
+                         lead, re.IGNORECASE):
+                continue
+            kind = next((kind for kind in _OPERATION_VERBS
+                         if _operation_matches(kind, module)), None)
+            if kind:
+                effects.setdefault((_family(slug, operation), kind), set()).add((slug, operation))
     for clause in re.split(r"[.!?;\n]+", prompt.casefold()):
         actions = list(_ACTION.finditer(clause))
         if (re.search(r"\b(?:draft|compose|write|prepare)\b.{0,120}\b(?:emails?|e-mails?)\b", clause)
