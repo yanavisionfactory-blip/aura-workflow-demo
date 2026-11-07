@@ -967,6 +967,13 @@ class PipedreamClient:
         if not action_id or not auth_prop:
             raise PipedreamConnectError("The released action is incomplete", retryable=False)
         configured = dict(arguments)
+        if provider == "google-ads":
+            from .google_ads_reporting import normalize_report_arguments
+
+            try:
+                configured = normalize_report_arguments(str(capability.get("name") or ""), configured)
+            except ValueError as exc:
+                raise PipedreamConnectError(str(exc), retryable=False) from exc
         configured[auth_prop] = {"authProvisionId": account_id}
         payload: dict[str, Any] = {
             "id": action_id,
@@ -1013,8 +1020,13 @@ def _prop_schema(prop: dict[str, Any]) -> dict[str, Any]:
     if description:
         schema["description"] = description[:2000]
     options = prop.get("options")
-    if isinstance(options, list) and options and all(not isinstance(item, dict) for item in options):
-        schema["enum"] = options[:500]
+    if isinstance(options, list) and options:
+        values = [item.get("value") if isinstance(item, dict) else item for item in options]
+        if all(isinstance(value, (str, int, float, bool)) for value in values):
+            # Labels are display text. The action accepts values, and array
+            # choices constrain each item rather than the array as a whole.
+            target = schema["items"] if array else schema
+            target["enum"] = list(dict.fromkeys(values))
     return schema
 
 

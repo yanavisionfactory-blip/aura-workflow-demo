@@ -1100,6 +1100,12 @@ def _normalize_module_arguments(
                 properties.get(target, {}), value, f"{operation}.{target}"
             )
         normalized[target] = value
+    from .google_ads_reporting import normalize_report_arguments
+
+    try:
+        normalized = normalize_report_arguments(operation, normalized, allow_references=True)
+    except ValueError as exc:
+        raise NativeConnectorError(str(exc)) from exc
     validate_module_arguments(manifest, operation, normalized)
     return normalized
 

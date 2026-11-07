@@ -25,11 +25,20 @@ ACCOUNT_CODES = {
 QUERY_CODES = {
     "UNRECOGNIZED_FIELD", "PROHIBITED_RESOURCE_TYPE_IN_SELECT_CLAUSE",
     "PROHIBITED_FIELD_COMBINATION_IN_SELECT_CLAUSE", "INVALID_DATE_FORMAT",
-    "INVALID_DATE_RANGE", "REQUESTED_METRICS_FOR_MANAGER", "INVALID_ARGUMENT",
+    "INVALID_DATE_RANGE", "REQUESTED_METRICS_FOR_MANAGER",
+    "INVALID_VALUE_WITH_DURING_OPERATOR", "INVALID_VALUE_WITH_BETWEEN_OPERATOR",
+    "EXPECTED_AND", "EXPECTED_FILTERS_ON_DATE_RANGE", "UNEXPECTED_INPUT",
+    "BAD_FIELD_NAME", "BAD_ENUM_CONSTANT", "BAD_RESOURCE_TYPE_IN_FROM_CLAUSE",
+    "PROHIBITED_FIELD_IN_SELECT_CLAUSE", "PROHIBITED_FIELD_OR_SEGMENT_WITH_METRIC",
+    "PROHIBITED_METRIC_IN_SELECT_OR_WHERE_CLAUSE",
+    "PROHIBITED_SEGMENT_IN_SELECT_OR_WHERE_CLAUSE",
+    "PROHIBITED_SEGMENT_WITH_METRIC_IN_SELECT_OR_WHERE_CLAUSE",
+    "DATE_RANGE_TOO_NARROW", "DATE_RANGE_TOO_WIDE", "MISALIGNED_DATE_FOR_FILTER",
+    "INVALID_DATE", "START_DATE_AFTER_END_DATE", "REQUESTED_DATE_GRANULARITY_NOT_SUPPORTED",
 }
 CANONICAL_CODES = {
     "PERMISSION_DENIED", "UNAUTHENTICATED", "NOT_FOUND", "RESOURCE_EXHAUSTED",
-    "FAILED_PRECONDITION", "INTERNAL", "UNAVAILABLE", "DEADLINE_EXCEEDED",
+    "FAILED_PRECONDITION", "INTERNAL", "UNAVAILABLE", "DEADLINE_EXCEEDED", "INVALID_ARGUMENT",
 }
 RUNTIME_CODES = {"TYPEERROR", "REFERENCEERROR", "SYNTAXERROR", "AXIOSERROR"}
 CODES = AUTH_CODES | CONFIG_CODES | ACCOUNT_CODES | QUERY_CODES | CANONICAL_CODES | RUNTIME_CODES
@@ -37,7 +46,8 @@ _CODE = re.compile(r"(?<![A-Z0-9_])(" + "|".join(sorted(CODES)) + r")(?![A-Z0-9_
 _HTTP = re.compile(r"(?:status code|HTTP(?:/\d(?:\.\d)?)?)\s*[:=]?\s*([45]\d\d)\b", re.IGNORECASE)
 _KEYS = {"error", "errors", "errorCode", "error_code", "details", "response", "data",
          "message", "name", "type", "code", "status", "cause", "authenticationError",
-         "authorizationError", "queryError", "requestError", "headerError"}
+         "authorizationError", "queryError", "requestError", "headerError",
+         "dateRangeError", "dateError", "fieldError"}
 
 
 def diagnose(errors):
@@ -91,7 +101,13 @@ def message(code):
         detail = "The Google Ads API configuration needs repair by the connector operator; signing in again will not fix this error."
     elif code in ACCOUNT_CODES:
         detail = "Google rejected access to the selected advertising account. Check its enabled status, user access and manager-account selection."
-    elif code in QUERY_CODES:
+    elif code == "REQUESTED_METRICS_FOR_MANAGER":
+        detail = "Performance metrics cannot be read for a manager account. Select the advertising client account in the Google Ads account picker."
+    elif code in {"INVALID_VALUE_WITH_DURING_OPERATOR", "EXPECTED_FILTERS_ON_DATE_RANGE"}:
+        detail = "The report's date range is invalid or missing. Use a supported date range or explicit start and end dates; full-period totals must omit the date range and date segments."
+    elif code in {"INVALID_DATE", "INVALID_DATE_FORMAT", "START_DATE_AFTER_END_DATE"}:
+        detail = "The report dates are invalid. Use YYYY-MM-DD dates with the start on or before the end."
+    elif code in QUERY_CODES or code == "INVALID_ARGUMENT":
         detail = "Google rejected the reporting query. Correct its fields, dates or account type before retrying."
     elif code in RUNTIME_CODES:
         detail = "The Google Ads connector action failed. Its implementation or upstream response needs investigation; authorization expiry is not established."
