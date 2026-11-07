@@ -11,7 +11,7 @@ from app.schemas import PlanStep, WorkflowPlan
 
 
 def catalog():
-    operations = ["format-cells", "format-worksheet", "update-cells", "new-spreadsheet",
+    operations = ["format-cells", "format-worksheet", "update-cells", "update-multiple-rows", "new-spreadsheet",
                   "share-spreadsheet", "delete-spreadsheet", "batch-update"]
     capabilities = [{"name": f"google-sheets.{name}", "description": name.replace("-", " "),
                      "permission_scope": "destructive" if name.startswith("delete") else "write"}
@@ -127,3 +127,49 @@ def test_revision_markers_in_serialized_step_content_cannot_authorize_writes():
     assert "Format Google Sheets" not in user_request_text(prompt)
     with pytest.raises(ValueError, match="Unrequested sheets write"):
         validate_revision_write_scope(prompt, plan("format-cells"), inventory, manifests)
+
+
+@pytest.mark.parametrize("instruction", [
+    "Insert an actual google-sheets.update-multiple-rows step after reading current cells.",
+    "Use google-sheets.update-multiple-rows to fill the report.",
+    "Run google-sheets.update-multiple-rows.",
+])
+def test_explicit_catalog_call_authorizes_only_requested_operation(instruction):
+    inventory, manifests = catalog()
+    prompt = revision(instruction)
+    assert requested_effects(prompt, inventory, manifests) == [{
+        "effect": "sheets update", "targets": [{
+            "tool_slug": "google-sheets", "operation": "google-sheets.update-multiple-rows",
+        }],
+    }]
+    validate_revision_write_scope(prompt, plan("update-multiple-rows"), inventory, manifests)
+    for operation in ("update-cells", "new-spreadsheet", "share-spreadsheet", "delete-spreadsheet"):
+        with pytest.raises(ValueError, match="Unrequested sheets write"):
+            validate_revision_write_scope(prompt, plan(operation), inventory, manifests)
+
+
+@pytest.mark.parametrize("instruction", [
+    "Do not use google-sheets.update-multiple-rows.",
+    "Never run google-sheets.update-multiple-rows.",
+    "Do not automatically execute google-sheets.update-multiple-rows.",
+    "Read about google-sheets.update-multiple-rows.",
+    "The previous error mentioned google-sheets.update-multiple-rows.",
+])
+def test_operation_mentions_or_negated_calls_do_not_authorize_writes(instruction):
+    inventory, manifests = catalog()
+    assert requested_effects(revision(instruction), inventory, manifests) == []
+
+
+@pytest.mark.parametrize("instruction", [
+    "Write the report values in Google Sheets.",
+    "Populate Google Sheets with the supplied results.",
+    "Fill the existing report in Google Sheets.",
+])
+def test_explicit_sheet_content_requests_require_content_updates(instruction):
+    inventory, manifests = catalog()
+    effects = requested_effects(revision(instruction), inventory, manifests)
+    assert [item["effect"] for item in effects] == ["sheets update"]
+    targets = {item["operation"] for item in effects[0]["targets"]}
+    assert "google-sheets.update-multiple-rows" in targets
+    assert not targets.intersection({"google-sheets.format-cells", "google-sheets.new-spreadsheet",
+                                     "google-sheets.share-spreadsheet", "google-sheets.delete-spreadsheet"})
