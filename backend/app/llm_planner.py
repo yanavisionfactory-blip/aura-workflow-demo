@@ -501,6 +501,8 @@ async def create_llm_plan(
         "Google Sheets worksheetId is the actual numeric tab ID, not its position: never guess 0 or 1. "
         "new-spreadsheet returns spreadsheetId and worksheetName, not worksheetId. Use a listed "
         "worksheet metadata read and bind the returned tab ID before writing rows. "
+        "add-worksheet returns the created tab ID in ret.properties.sheetId and its name in "
+        "ret.properties.title; reference that saved creation receipt for subsequent writes. "
         "For add-multiple-rows/update-multiple-rows, provide rows as actual JSON row arrays, "
         "not a JSON-encoded string. The compiler serializes them once for the provider. "
         "A whole upstream content reference is also supported; do not nest it in empty row placeholders. "
