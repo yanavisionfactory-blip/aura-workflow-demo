@@ -176,9 +176,9 @@ export async function hydrateConnections({ force = false } = {}) {
       }
       try {
         const result = await testPythonConnection(tool.id);
-        return { tool, connected: isVerifiedConnection(result) };
+        return { tool: { ...tool, status: result.status, verification: result.verification }, connected: isVerifiedConnection(result) };
       } catch {
-        return { tool, connected: false };
+        return { tool: { ...tool, status: "unverified", verification: { ok: false, reason: "connection_check_unavailable" } }, connected: false };
       }
     }));
 
@@ -190,10 +190,10 @@ export async function hydrateConnections({ force = false } = {}) {
         map[entry.name] = true;
       });
     }
-    replaceConnections(map);
-    hydratedTools = tools;
+    hydratedTools = health.map(({ tool }) => tool);
     hydratedAt = Date.now();
-    return tools;
+    replaceConnections(map);
+    return hydratedTools;
   })().finally(() => {
     hydrationPromise = null;
   });

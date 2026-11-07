@@ -19,6 +19,7 @@ import DocumentUpload from "./DocumentUpload";
 import AgentConnectionForm from "./AgentConnectionForm";
 import { agentConnectionPreset } from "@/lib/agentConnections.mjs";
 import { connectionScreenPreset } from "@/lib/connectionNavigation.mjs";
+import { connectionIsReady, isMetaConnection, metaConnectionRows } from "@/lib/metaConnectionRoutes.mjs";
 import { getAllConnections, subscribeConnections } from "@/lib/connectionsStore";
 import {
   connectTool,
@@ -66,12 +67,18 @@ export default function ConnectionsPill() {
   const [error, setError] = useState("");
   const [managedConnection, setManagedConnection] = useState(null);
   const [agentConnections, setAgentConnections] = useState([]);
+  const [savedTools, setSavedTools] = useState([]);
+  const [connectionsLoaded, setConnectionsLoaded] = useState(false);
 
-  const refreshConnections = useCallback(async () => {
+  const refreshConnections = useCallback(async (options) => {
     const [tools, agents] = await Promise.all([
-      hydrateConnections(),
+      hydrateConnections(options),
       listAgentConnections(),
     ]);
+    setSavedTools(tools);
+    setConnectionsLoaded(true);
+    setManagedConnection((current) => current
+      ? { ...current, ...tools.find((tool) => tool.id === current.id) } : null);
     setAgentConnections(agents);
     setCatalogRevision((value) => value + 1);
     return tools;
@@ -134,21 +141,23 @@ export default function ConnectionsPill() {
   }, [query]);
 
   const connectedTools = useMemo(() => {
-    const catalogConnected = CATALOG.filter((tool) => connected[tool.name] && !isAura(tool.name));
+    const catalogConnected = metaConnectionRows(CATALOG, savedTools, { includeSaved: true })
+      .filter((tool) => (tool.connectionId || (tool.isConnected ?? connected[tool.name])) && !isAura(tool.name));
     const catalogNames = new Set(CATALOG.map((tool) => tool.name.toLowerCase()));
     const agentNames = new Set(agentConnections.map((agent) => agent.name.toLowerCase()));
     const existingConnections = Object.keys(connected)
       .filter((name) => !isAura(name) && !catalogNames.has(name.toLowerCase()) && !catalogEntryFor(name) && !agentNames.has(name.toLowerCase()))
       .map((name) => ({ name, icon: "🔗", desc: "Existing workspace connection" }));
     return [...catalogConnected, ...existingConnections];
-  }, [agentConnections, connected, catalogRevision]);
+  }, [agentConnections, connected, catalogRevision, savedTools]);
 
   const marketplace = useMemo(() => {
-    return searchMarketplace(query);
-  }, [query, catalogRevision]);
+    return metaConnectionRows(searchMarketplace(query), savedTools);
+  }, [query, catalogRevision, savedTools]);
 
   const agentCards = agentConnections
-    .filter((agent) => agent.enabled && agent.status === "verified")
+    .filter((agent) => agent.enabled && agent.status === "verified"
+      && !savedTools.some((tool) => tool.id === agent.id && isMetaConnection(tool)))
     .map((agent) => ({
       ...agent,
       icon: "🤖",
@@ -158,8 +167,8 @@ export default function ConnectionsPill() {
   const stacked = [...connectedTools, ...agentCards].slice(0, 4);
 
   const connect = async (tool) => {
-    if (!tool.connectable || connected[tool.name]) return;
-    setConnecting(tool.name);
+    if ((isMetaConnection(tool) && !connectionsLoaded) || !tool.connectable || tool.connectionId || (tool.isConnected ?? connected[tool.name])) return;
+    setConnecting(tool.rowKey || tool.name);
     setError("");
     try {
       const result = await connectTool(tool.name, { provider: tool.provider });
@@ -167,7 +176,7 @@ export default function ConnectionsPill() {
       if (["google-ads", "reddit-ads"].includes(result.connection?.slug)) {
         setManagedConnection({ ...result.connection, uiName: tool.name });
       }
-      await hydrateConnections();
+      await refreshConnections();
     } catch (cause) {
       setError(cause.message || `Could not connect ${tool.name}.`);
     } finally {
@@ -189,13 +198,14 @@ export default function ConnectionsPill() {
     }
   };
 
-  const openConnectionManager = async (name) => {
+  const openConnectionManager = async (tool) => {
+    const name = typeof tool === "string" ? tool : tool.name;
     setConnectionAction(name);
     setError("");
     try {
-      const connection = await getToolConnection(name);
+      const connection = await getToolConnection(name, tool.connectionId, tool.provider, { exactProvider: Boolean(tool.connectionId) });
       if (!connection) throw new Error(`${name} is not connected.`);
-      setManagedConnection({ ...connection, uiName: name });
+      setManagedConnection({ ...connection, ...(tool.connection || {}), uiName: name, uiLabel: tool.displayName || name });
     } catch (cause) {
       setError(cause.message || `Could not load ${name}.`);
     } finally {
@@ -219,17 +229,25 @@ export default function ConnectionsPill() {
         setManagedConnection({ ...result.tool, uiName: name });
       } else {
         const result = await testToolConnection(name, managedConnection?.id);
+        setManagedConnection((current) => current ? { ...current, status: result.status, verification: result.verification } : null);
+        await refreshConnections({ force: true });
         if (result.status !== "verified" || result.verification?.ok !== true) {
           const reason = result.verification?.reason;
           throw new Error(reason === "google_docs_write_scope_not_configured"
             ? "AURA's Google connection is missing Drive file creation access in its app setup. An administrator must correct it; reconnecting your account will not fix this."
             : reason === "google_docs_write_permission_missing"
             ? "Google Docs cannot create files yet. Reconnect Google and grant Drive file creation access."
-            : `${name} needs a new authorization before AURA can use it.`);
+            : `AURA could not verify ${name}. Check the connection before using it.`);
         }
+        return;
       }
       await refreshConnections();
     } catch (cause) {
+      if (action === "test") {
+        const unverified = (tool) => ({ ...tool, status: "unverified", verification: { ...tool.verification, ok: false } });
+        setManagedConnection((current) => current?.id === managedConnection?.id ? unverified(current) : current);
+        setSavedTools((current) => current.map((tool) => tool.id === managedConnection?.id ? unverified(tool) : tool));
+      }
       setError(cause.message || `Could not ${action} ${name}.`);
     } finally {
       setConnectionAction("");
@@ -257,7 +275,7 @@ export default function ConnectionsPill() {
         <div className="flex items-center">
           {stacked.map((tool, index) => (
             <div
-              key={tool.name}
+              key={tool.rowKey || tool.name}
               style={{ marginLeft: index === 0 ? 0 : -8, zIndex: stacked.length - index }}
               className="flex h-6 w-6 items-center justify-center rounded-full border border-white/10 bg-secondary text-[11px]"
             >
@@ -298,16 +316,16 @@ export default function ConnectionsPill() {
 
               <div className="flex-1 space-y-4 overflow-y-auto px-3 pb-4">
                 <section>
-                  <p className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Connected apps</p>
+                  <p className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Saved app connections</p>
                   {connectedTools.length ? connectedTools.map((tool) => (
-                    <div key={tool.name} className="flex items-center gap-3 rounded-xl p-2.5 transition-colors hover:bg-white/5">
+                    <div key={tool.rowKey || tool.name} className="flex items-center gap-3 rounded-xl p-2.5 transition-colors hover:bg-white/5">
                       <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/8 bg-secondary text-base">{tool.icon}</div>
-                      <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{tool.name}</p><p className="truncate text-xs text-muted-foreground">{tool.desc}</p></div>
-                      <button type="button" onClick={() => openConnectionManager(tool.name)} disabled={connectionAction === tool.name} className="flex items-center gap-1 px-1.5 py-1 text-[10px] text-muted-foreground hover:text-foreground">
+                      <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{tool.displayName || tool.name}</p><p className="truncate text-xs text-muted-foreground">{tool.desc}</p></div>
+                      <button type="button" onClick={() => openConnectionManager(tool)} disabled={connectionAction === tool.name} className="flex items-center gap-1 px-1.5 py-1 text-[10px] text-muted-foreground hover:text-foreground">
                         {connectionAction === tool.name ? <Loader2 className="h-3 w-3 animate-spin" /> : <Settings2 className="h-3 w-3" />}
                         Manage
                       </button>
-                      <Check className="h-3.5 w-3.5 text-emerald-400" />
+                      {(tool.isConnected ?? connected[tool.name]) && <Check className="h-3.5 w-3.5 text-emerald-400" />}
                     </div>
                   )) : <p className="px-2 py-3 text-xs text-muted-foreground">No apps connected yet.</p>}
                 </section>
@@ -387,18 +405,18 @@ export default function ConnectionsPill() {
                   </div>
                   <div className="flex-1 space-y-1 overflow-y-auto px-3 pb-4">
                     {marketplace.map((tool) => {
-                      const isConnected = Boolean(connected[tool.name]);
+                      const isConnected = tool.isConnected ?? Boolean(connected[tool.name]);
                       return (
-                        <div key={`${tool.provider}:${tool.name}`} className="flex items-center gap-3 rounded-xl p-2.5 transition-colors hover:bg-white/5">
+                        <div key={tool.rowKey || `${tool.provider}:${tool.name}`} data-connection-row={tool.rowKey} className="flex items-center gap-3 rounded-xl p-2.5 transition-colors hover:bg-white/5">
                           <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-lg border border-white/8 bg-secondary text-base">
                             {tool.logoUrl ? <img src={tool.logoUrl} alt="" className="h-6 w-6 object-contain" /> : tool.icon}
                           </div>
                           <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-medium">{tool.name}</p>
-                            <p className="truncate text-xs text-muted-foreground">{tool.desc}</p>
+                            <p className="text-sm font-medium">{tool.displayName || tool.name}</p>
+                            <p className="text-xs text-muted-foreground">{tool.desc}</p>
                           </div>
-                          {isConnected ? (
-                            <button type="button" onClick={() => openConnectionManager(tool.name)} className="flex items-center gap-1 text-xs text-emerald-400"><Check className="h-3.5 w-3.5" />Manage</button>
+                          {tool.connectionId || isConnected ? (
+                            <button type="button" onClick={() => openConnectionManager(tool)} className={`flex items-center gap-1 text-xs ${isConnected ? "text-emerald-400" : "text-amber-300"}`}>{isConnected && <Check className="h-3.5 w-3.5" />}Manage</button>
                           ) : tool.requestable && catalogSearchQuery !== query.trim().replace(/\s+/g, " ") ? (
                             searchingCatalog
                               ? <span className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />Searching…</span>
@@ -408,8 +426,8 @@ export default function ConnectionsPill() {
                               {requesting === tool.name ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}{requesting === tool.name ? "Requesting…" : "Request app"}
                             </button>
                           ) : tool.connectable ? (
-                            <button type="button" onClick={() => connect(tool)} disabled={Boolean(connecting)} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-50">
-                              {connecting === tool.name ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}{connecting === tool.name ? "Opening…" : "Connect"}
+                            <button type="button" onClick={() => connect(tool)} disabled={Boolean(connecting) || (isMetaConnection(tool) && !connectionsLoaded)} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-50">
+                              {connecting === (tool.rowKey || tool.name) ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}{connecting === (tool.rowKey || tool.name) ? "Opening…" : "Connect"}
                             </button>
                           ) : (
                             <span className="rounded-full border border-amber-400/20 bg-amber-400/5 px-2 py-1 text-[10px] text-amber-300">{tool.availability === "requested" ? "Requested" : "Coming soon"}</span>
@@ -459,14 +477,15 @@ export default function ConnectionsPill() {
               className="w-full max-w-sm overflow-hidden rounded-2xl border border-white/10 bg-card shadow-2xl"
             >
               <div className="flex items-center justify-between border-b border-white/8 px-5 py-4">
-                <p className="text-sm font-semibold">{managedConnection.uiName || managedConnection.display_name}</p>
+                <p className="text-sm font-semibold">{managedConnection.uiLabel || managedConnection.uiName || managedConnection.display_name}</p>
                 <button type="button" aria-label="Close connection manager" onClick={() => setManagedConnection(null)} className="p-1.5 text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
               </div>
               <div className="px-6 py-6">
-                <div className="flex items-center gap-3 rounded-xl border border-emerald-400/15 bg-emerald-400/5 px-4 py-3">
-                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-400/15"><Check className="h-4 w-4 text-emerald-400" /></div>
-                  <div><p className="text-xs font-medium text-emerald-400">Connected and verified</p><p className="mt-0.5 text-[11px] text-muted-foreground">AURA checks permissions for each plan before Start.</p></div>
+                <div className={`flex items-center gap-3 rounded-xl border px-4 py-3 ${connectionIsReady(managedConnection) ? "border-emerald-400/15 bg-emerald-400/5" : "border-amber-400/20 bg-amber-400/5"}`}>
+                  {connectionIsReady(managedConnection) && <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-400/15"><Check className="h-4 w-4 text-emerald-400" /></div>}
+                  <div><p className={`text-xs font-medium ${connectionIsReady(managedConnection) ? "text-emerald-400" : "text-amber-300"}`}>{connectionIsReady(managedConnection) ? "Connected and verified" : managedConnection.enabled === false ? "Connection disabled" : "Connection needs checking"}</p><p className="mt-0.5 text-[11px] text-muted-foreground">AURA checks permissions for each plan before Start.</p></div>
                 </div>
+                {isMetaConnection(managedConnection) && <p className="mt-3 text-xs text-muted-foreground">This connection has its own authorization. Testing, reconnecting or removing it leaves your other Meta Ads connections unchanged.</p>}
                 {managedConnection.identity?.domain && <p className="mt-2 text-sm">Verified store: <span className="font-medium">{managedConnection.identity.domain}</span></p>}
                 {((managedConnection.slug === "google-ads" && managedConnection.connection_backend === "pipedream") ||
                   (managedConnection.slug === "reddit-ads" && managedConnection.connection_backend === "native")) && (

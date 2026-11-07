@@ -1536,8 +1536,7 @@ async def managed_connector_status(
         backend = _builtin_connection_backend(definition, nango_configured=client.configured)
         native_catalog.append(
             {
-                **({"canonical_provider": "meta-ads", "aliases": ["Meta Ads", "Facebook Ads", "Direct Meta"],
-                    "setup_hint": "Connect directly with Meta · Read-only reporting"}
+                **({"canonical_provider": "meta-ads", "aliases": ["Meta Ads", "Facebook Ads", "Direct Meta"]}
                    if slug == meta_ads.SLUG else {}),
                 "provider": slug,
                 "display_name": definition.display_name,
@@ -1550,7 +1549,8 @@ async def managed_connector_status(
                 "preferred_connection": definition.native_only and backend == "native",
                 "connection_strategy": "oauth",
                 "setup_hint": ("Sign in with Reddit" if backend else "AURA is preparing Reddit sign-in")
-                    if slug == "reddit-ads" else "Provider consent",
+                    if slug == "reddit-ads" else "Connect directly with Meta · Read-only reporting"
+                    if slug == meta_ads.SLUG else "Provider consent",
                 "availability": "available" if backend else "coming_soon",
                 "connectable": backend is not None,
             }
@@ -1769,8 +1769,7 @@ async def search_connector_broker_apps(
     for slug, definition in PROVIDERS.items():
         native_backend = _builtin_connection_backend(definition, nango_configured=nango.configured)
         item = {
-            **({"canonical_provider": "meta-ads", "aliases": ["Meta Ads", "Facebook Ads", "Direct Meta"],
-                "setup_hint": "Connect directly with Meta · Read-only reporting"}
+            **({"canonical_provider": "meta-ads", "aliases": ["Meta Ads", "Facebook Ads", "Direct Meta"]}
                if slug == meta_ads.SLUG else {}),
             "provider": slug,
             "display_name": definition.display_name,
@@ -1784,7 +1783,8 @@ async def search_connector_broker_apps(
             "preferred_connection": definition.native_only and native_backend == "native",
             "connection_strategy": "oauth",
             "setup_hint": ("Sign in with Reddit" if native_backend else "AURA is preparing Reddit sign-in")
-                if slug == "reddit-ads" else "Provider consent",
+                if slug == "reddit-ads" else "Connect directly with Meta · Read-only reporting"
+                if slug == meta_ads.SLUG else "Provider consent",
             "capability_count": len(native_operations(slug)),
         }
         if matches(item):
