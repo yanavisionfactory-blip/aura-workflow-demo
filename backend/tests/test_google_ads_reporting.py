@@ -7,7 +7,7 @@ import pytest
 from app.config import Settings
 from app.google_ads_errors import diagnose, message
 from app.google_ads_reporting import REPORT_RESOURCES, normalize_report_arguments
-from app.native_connectors import NativeConnectorError, normalize_planned_module_arguments
+from app.native_connectors import normalize_planned_module_arguments
 from app.pipedream_connect import PipedreamClient, PipedreamConnectError, _prop_schema
 from app.policy import operation_scope
 from app.schemas import CriticDecision
@@ -180,8 +180,28 @@ def test_old_and_new_manifest_inputs_receive_checks_before_schema_validation():
         manifest = {"capabilities": [{"name": OPERATION, "input_schema": {"type": "object", "properties": properties}}]}
         assert normalize_planned_module_arguments(manifest, OPERATION, {"metrics": ["clicks"]}) == {"metrics": ["metrics.clicks"]}
         assert normalize_planned_module_arguments(manifest, OPERATION, {"metrics": ["conversion_value"]}) == {"metrics": ["metrics.conversions_value"]}
-        with pytest.raises(NativeConnectorError, match="ALL_TIME"):
-            normalize_planned_module_arguments(manifest, OPERATION, {"date_range": "ALL_TIME"})
+        assert normalize_planned_module_arguments(manifest, OPERATION, {"date_range": "ALL_TIME"}) == {"segments": []}
+
+
+@pytest.mark.parametrize("period", ["ALL_TIME", "all_time", "LIFETIME", ""])
+def test_generated_full_history_range_uses_an_unfiltered_provider_query(period):
+    args = {"accountId": "manager", "customerClientId": "client", "dateRange": period,
+            "fields": ["campaign.name"], "metrics": ["clicks"], "segments": []}
+    result = normalize_report_arguments("google-ads.create-campaign-report", args, normalize_full_history=True)
+    assert "dateRange" not in result and result["segments"] == []
+    assert result["accountId"] == "manager" and result["customerClientId"] == "client"
+    assert result["fields"] == ["campaign.name"] and result["metrics"] == ["metrics.clicks"]
+    assert args["dateRange"] == period
+
+
+@pytest.mark.parametrize("extra", [
+    {"segments": ["date"]}, {"orderBy": "segments.date"},
+    {"startDate": "2026-01-01"}, {"segments": "{{steps.fields.segments}}"},
+])
+def test_full_history_normalization_never_erases_requested_dates_or_breakdowns(extra):
+    with pytest.raises(ValueError):
+        normalize_report_arguments(OPERATION, {"dateRange": "ALL_TIME", **extra},
+                                   allow_references=True, normalize_full_history=True)
 
 
 async def test_broker_checks_resolved_arguments_and_preserves_account_binding():

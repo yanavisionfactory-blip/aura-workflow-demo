@@ -1118,7 +1118,8 @@ def _normalize_module_arguments(
     from .google_ads_reporting import normalize_report_arguments
 
     try:
-        normalized = normalize_report_arguments(operation, normalized, allow_references=True)
+        normalized = normalize_report_arguments(operation, normalized, allow_references=True,
+                                                normalize_full_history=normalize_generated_text)
     except ValueError as exc:
         raise NativeConnectorError(str(exc)) from exc
     validate_module_arguments(manifest, operation, normalized)
