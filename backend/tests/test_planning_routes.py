@@ -112,3 +112,36 @@ def test_ads_request_cannot_fall_back_to_regular_reddit_when_ads_route_is_absent
               "allowed_operations": ["reddit.search-posts"]}]
     assert explicit_disconnected_capabilities("Read Reddit Ads results", tools) == []
     assert intent_bounded_tool_inventory("Read Reddit Ads results", tools) == []
+
+
+@pytest.mark.parametrize("prefix", ["", "mcp_meta_ads_"])
+def test_connected_meta_reporting_does_not_add_duplicate_direct_consent(prefix):
+    tools = [
+        {"slug": "agent-meta", "name": "Meta Ads — Pipeboard", "canonical_provider": "meta-ads",
+         "connected": True, "allowed_operations": [prefix + "get_ad_accounts", prefix + "get_insights"]},
+        {"slug": "meta-ads-direct", "name": "Meta Ads", "canonical_provider": "meta-ads",
+         "connected": False, "allowed_operations": ["meta-ads.accounts.list", "meta-ads.insights.get",
+                                                     "meta-ads.campaigns.list", "meta-ads.identity.get"],
+         "operation_contracts": [{"name": name} for name in ["meta-ads.accounts.list", "meta-ads.insights.get",
+                                                             "meta-ads.campaigns.list", "meta-ads.identity.get"]]},
+    ]
+    before = deepcopy(tools)
+    bounded = intent_bounded_tool_inventory("Compare Meta Ads performance using my connected accounts", tools)
+    direct = next(item for item in bounded if item["slug"] == "meta-ads-direct")
+    assert direct["allowed_operations"] == ["meta-ads.campaigns.list", "meta-ads.identity.get"]
+    assert [item["name"] for item in direct["operation_contracts"]] == direct["allowed_operations"]
+    assert tools == before
+    for case in ("both_connected", "not_granted", "explicit_direct", "selected_direct"):
+        variant = deepcopy(tools)
+        prompt = "Read Meta Ads accounts"
+        selected = []
+        if case == "both_connected":
+            variant[1]["connected"] = True
+        elif case == "not_granted":
+            variant[0]["granted_operations"] = []
+        elif case == "explicit_direct":
+            prompt = "Read accounts through Direct Meta"
+        else:
+            selected = ["meta-ads-direct"]
+        result = intent_bounded_tool_inventory(prompt, variant, selected)
+        assert next(item for item in result if item["slug"] == "meta-ads-direct") == variant[1]

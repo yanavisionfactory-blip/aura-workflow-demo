@@ -15,6 +15,18 @@ const catalog = [
   { name: "Google Sheets", provider: "google", canonicalProvider: "google", aliases: ["google", "Google Sheets"] },
 ];
 
+for (const brand of ["Reddit", "LinkedIn", "TikTok"]) {
+  test(`${brand} Ads does not suggest a separate community connection`, () => {
+    const apps = [
+      {name: brand, provider: brand.toLowerCase()},
+      {name: `${brand} Ads`, provider: `${brand.toLowerCase()}-ads`},
+    ];
+    assert.deepEqual(promptToolHints(`Compare ${brand} Ads performance`, apps), [`${brand} Ads`]);
+    assert.deepEqual(promptToolHints(`Compare ${brand} advertising performance`, [apps[0]]), []);
+    assert.deepEqual(promptToolHints(`Read ${brand} Ads and ${brand} posts`, apps), [`${brand} Ads`, brand]);
+  });
+}
+
 test("weather presentation intent immediately suggests Canva and AURA Weather", () => {
   assert.deepEqual(
     promptToolHints("Make a presentation on Canva about the weather in Munich tomorrow", catalog),

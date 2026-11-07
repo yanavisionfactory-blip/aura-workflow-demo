@@ -71,10 +71,14 @@ export function promptToolHints(value = "", catalog = [], limit = 6) {
   };
 
   catalog.forEach((tool) => {
+    const family = normalize(tool?.canonicalProvider || tool?.provider || tool?.name);
+    const toolText = ["reddit", "linkedin", "tiktok"].includes(family)
+      ? text.replace(new RegExp(`\\b${family}\\s+(?:ads?(?:\\s+manager)?|advertising)\\b`, "g"), (match) => " ".repeat(match.length))
+      : text;
     const positions = catalogPhrases(tool, ambiguousProviders)
       .map(normalize)
-      .filter((phrase) => containsPhrase(text, phrase))
-      .map((phrase) => text.indexOf(phrase));
+      .filter((phrase) => containsPhrase(toolText, phrase))
+      .map((phrase) => toolText.indexOf(phrase));
     if (positions.length) add(tool.name, Math.min(...positions), 0);
   });
 
