@@ -475,6 +475,8 @@ async def create_llm_plan(
         "customer numbers; use the account picker or supported discovery reads. "
         "Google Ads create-*-report fields must match the report resource (campaign fields "
         "require create-campaign-report); use metrics.* and segments.* for those arrays. "
+        "Spend is metrics.cost_micros (millionths of the account currency); conversion value "
+        "is metrics.conversions_value (plural), never metrics.conversion_value. "
         "For full-period totals omit dateRange, startDate and endDate and set segments to []; "
         "ALL_TIME is not a GAQL date range. For a time breakdown use verified date bounds "
         "with dateRange CUSTOM, startDate and endDate; never invent a campaign start date. "

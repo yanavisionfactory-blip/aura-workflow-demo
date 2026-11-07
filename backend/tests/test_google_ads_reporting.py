@@ -74,6 +74,16 @@ def test_lifetime_and_custom_ranges_preserve_requested_coverage():
     assert normalize_report_arguments(OPERATION, nondate) == nondate
 
 
+@pytest.mark.parametrize("value", ["conversion_value", "metrics.conversion_value"])
+@pytest.mark.parametrize("operation", REPORT_RESOURCES)
+def test_live_rejected_conversion_value_alias_uses_google_plural_field(value, operation):
+    args = {"metrics": ["clicks", value, "metrics.all_conversions_value"], "segments": []}
+    assert normalize_report_arguments(operation, args) == {
+        "metrics": ["metrics.clicks", "metrics.conversions_value", "metrics.all_conversions_value"],
+        "segments": [],
+    }
+
+
 def test_typed_references_defer_until_resolved_but_never_reach_the_broker():
     args = {"metrics": "{{steps.fields.metrics}}", "dateRange": "{{inputs.period}}"}
     assert normalize_report_arguments(OPERATION, args, allow_references=True) == args
@@ -85,9 +95,10 @@ def test_old_and_new_manifest_inputs_receive_checks_before_schema_validation():
     for enums in (False, True):
         properties = {"dateRange": {"type": "string"}, "metrics": {"type": "array", "items": {"type": "string"}}}
         if enums:
-            properties["metrics"]["items"]["enum"] = ["metrics.clicks"]
+            properties["metrics"]["items"]["enum"] = ["metrics.clicks", "metrics.conversions_value"]
         manifest = {"capabilities": [{"name": OPERATION, "input_schema": {"type": "object", "properties": properties}}]}
         assert normalize_planned_module_arguments(manifest, OPERATION, {"metrics": ["clicks"]}) == {"metrics": ["metrics.clicks"]}
+        assert normalize_planned_module_arguments(manifest, OPERATION, {"metrics": ["conversion_value"]}) == {"metrics": ["metrics.conversions_value"]}
         with pytest.raises(NativeConnectorError, match="ALL_TIME"):
             normalize_planned_module_arguments(manifest, OPERATION, {"date_range": "ALL_TIME"})
 
@@ -98,12 +109,12 @@ async def test_broker_checks_resolved_arguments_and_preserves_account_binding():
     cap = {"name": OPERATION, "metadata": {"connector_broker": {"provider": "google-ads"}},
            "transport": {"type": "pipedream_action", "action_id": "google_ads-create-customer-report", "auth_prop": "google_ads"}}
     args = {"accountId": "manager", "customerClientId": "client", "objectFilter": [],
-            "metrics": ["clicks"], "segments": [], "dateRange": "LAST_7_DAYS"}
+            "metrics": ["clicks", "metrics.conversion_value"], "segments": [], "dateRange": "LAST_7_DAYS"}
     await client.run_action("owner", "grant", cap, args)
     payload = client._request.call_args.kwargs["json"]
     assert payload["external_user_id"] == "owner"
     assert payload["configured_props"] == {"accountId": "manager", "customerClientId": "client",
-        "metrics": ["metrics.clicks"], "segments": [], "dateRange": "LAST_7_DAYS",
+        "metrics": ["metrics.clicks", "metrics.conversions_value"], "segments": [], "dateRange": "LAST_7_DAYS",
         "google_ads": {"authProvisionId": "grant"}}
     client._request.reset_mock()
     with pytest.raises(PipedreamConnectError, match="ALL_TIME") as error:
