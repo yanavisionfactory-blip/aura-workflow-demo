@@ -2,6 +2,7 @@ import hashlib
 import json
 from typing import Any
 
+from .google_ads_reporting import REPORT_RESOURCES
 from .schemas import WorkflowPlan
 
 DEFAULT_POLICY: dict[str, Any] = {
@@ -28,6 +29,10 @@ def canonical_plan_hash(plan: dict) -> str:
 
 def operation_scope(operation: str) -> str:
     normalized = operation.lower()
+    # These released components execute GAQL SELECT queries. Their "create"
+    # name describes the returned report, not a write to the ad account.
+    if normalized in REPORT_RESOURCES:
+        return "read"
     if normalized in {"wordpress-org.search-posts", "wordpress-org.list-media-options", "imagify.media.preview"}:
         return "read"
     if normalized == "imagify.media.optimize":

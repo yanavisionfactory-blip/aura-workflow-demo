@@ -1,4 +1,5 @@
 from copy import deepcopy
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -8,8 +9,59 @@ from app.google_ads_errors import diagnose, message
 from app.google_ads_reporting import REPORT_RESOURCES, normalize_report_arguments
 from app.native_connectors import NativeConnectorError, normalize_planned_module_arguments
 from app.pipedream_connect import PipedreamClient, PipedreamConnectError, _prop_schema
+from app.policy import operation_scope
+from app.schemas import CriticDecision
 
 OPERATION = "google-ads.create-customer-report"
+
+
+@pytest.mark.parametrize("operation", REPORT_RESOURCES)
+async def test_accepted_google_report_is_a_verified_read_receipt(monkeypatch, operation):
+    from app import orchestrator
+
+    monkeypatch.setattr(orchestrator, "check_provider_outcome", AsyncMock(return_value={"status": "unsupported"}))
+    critic = AsyncMock(return_value=CriticDecision(action="accept", reasons=["Report matches the requested scope"]))
+    monkeypatch.setattr(orchestrator, "critique_step", critic)
+    step = SimpleNamespace(operation=operation, output={})
+    receipt = {"ret": [{"campaign": {"id": "1"}, "metrics": {"clicks": "12"}}]}
+    decision = await orchestrator.review_recorded_result(None, None, step, None, {}, receipt)
+
+    assert operation_scope(operation) == "read"
+    assert decision.action == "accept"
+    critic.assert_awaited_once()
+    assert step.output["outcome_check"] == {
+        "status": "verified", "mode": "accepted_read_receipt", "operation": operation,
+    }
+
+
+@pytest.mark.parametrize("case", ["incomplete", "policy"])
+async def test_report_read_classification_does_not_accept_missing_or_unsafe_evidence(monkeypatch, case):
+    from app import orchestrator
+
+    monkeypatch.setattr(orchestrator, "check_provider_outcome", AsyncMock(return_value={"status": "unsupported"}))
+    monkeypatch.setattr(orchestrator, "critique_step", AsyncMock(return_value=CriticDecision(
+        action="escalate", policy_violations=["Response exceeds approved scope"],
+    )))
+    step = SimpleNamespace(operation=OPERATION, output={})
+    receipt = {"ret": []}
+    if case == "incomplete":
+        receipt["nextPageToken"] = "remaining-page"
+    decision = await orchestrator.review_recorded_result(
+        None, None, step, None, {"required_evidence": ["complete_collection"]}, receipt,
+    )
+    assert decision.action == "escalate"
+    assert step.output.get("outcome_check", {}).get("status") != "verified"
+
+
+@pytest.mark.parametrize("operation,scope", [
+    ("google-ads.create-campaign", "write"),
+    ("google-ads.update-campaign", "write"),
+    ("google-ads.delete-campaign", "destructive"),
+    ("google-ads.create-custom-report", "write"),
+    ("other.create-campaign-report", "write"),
+])
+def test_report_read_exceptions_are_exact_and_leave_writes_governed(operation, scope):
+    assert operation_scope(operation) == scope
 
 
 @pytest.mark.parametrize("options", [["clicks", "cost_micros"], [
