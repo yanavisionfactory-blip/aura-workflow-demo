@@ -803,6 +803,16 @@ def _validate_value(schema: dict[str, Any], value: Any, path: str) -> None:
     if _workflow_reference(value):
         return
     schema_type = schema.get("type")
+    if isinstance(schema_type, list):
+        # JSON Schema permits unions such as ["string", "null"]. Check
+        # each branch with the same constraints, including nested fields.
+        for candidate in schema_type:
+            try:
+                _validate_value({**schema, "type": candidate}, value, path)
+                return
+            except NativeConnectorError:
+                continue
+        raise NativeConnectorError(f"{path} does not match any permitted type")
     type_checks = {
         "object": dict,
         "array": list,
@@ -810,9 +820,10 @@ def _validate_value(schema: dict[str, Any], value: Any, path: str) -> None:
         "integer": int,
         "number": (int, float),
         "boolean": bool,
+        "null": type(None),
     }
     expected = type_checks.get(schema_type)
-    if expected and (not isinstance(value, expected) or schema_type == "integer" and isinstance(value, bool)):
+    if expected and (not isinstance(value, expected) or schema_type in {"integer", "number"} and isinstance(value, bool)):
         raise NativeConnectorError(f"{path} must be {schema_type}")
     if schema.get("format") == "date-time" and isinstance(value, str) and "{{" not in value:
         try:
