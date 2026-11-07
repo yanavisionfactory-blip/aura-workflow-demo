@@ -23,7 +23,13 @@ DATE_SEGMENTS = {f"segments.{part}" for part in ("date", "week", "month", "quart
 _ROOTS = set(REPORT_RESOURCES.values()) | {"metrics", "segments", "campaign_budget"}
 # The planner used the natural-language singular in a live campaign report.
 # Google exposes the conversion-value metric under this plural field name.
-_FIELD_ALIASES = {"metrics.conversion_value": "metrics.conversions_value"}
+_FIELD_ALIASES = {
+    "metrics.conversion_value": "metrics.conversions_value",
+    # Google Ads v23 removed these date-only fields. The current campaign
+    # fields preserve the account-local start/end time as well as the date.
+    "campaign.start_date": "campaign.start_date_time",
+    "campaign.end_date": "campaign.end_date_time",
+}
 _FIELD = re.compile(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*")
 _REFERENCE = re.compile(r"\{\{\s*(?:inputs|vars|steps)\.[a-zA-Z0-9_.\-\[\]'\" ]+\s*\}\}")
 
@@ -64,6 +70,9 @@ def normalize_report_arguments(
             field = value if value.startswith(f"{prefix}.") else f"{prefix}.{value}"
             qualified.append(_FIELD_ALIASES.get(field, field))
         result[key] = qualified
+
+    if isinstance(result.get("orderBy"), str):
+        result["orderBy"] = _FIELD_ALIASES.get(result["orderBy"], result["orderBy"])
 
     date_range = result.get("dateRange")
     if reference(date_range):
