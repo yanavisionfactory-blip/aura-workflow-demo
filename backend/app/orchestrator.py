@@ -977,6 +977,8 @@ async def _create_compiled_plan(
                 if (capability_family(slug) in excluded_tool_families
                     or capability_family(str(operation or "").split(".", 1)[0]) in excluded_tool_families):
                     raise NativeConnectorError("The revised plan still uses an omitted app")
+    from .operation_contracts import enrich_operation
+
     inventory = [
         {
             **item,
@@ -995,7 +997,8 @@ async def _create_compiled_plan(
                         "reliability",
                     )
                 }
-                for module in manifests_by_slug[item["slug"]].get("capabilities", [])
+                for raw_module in manifests_by_slug[item["slug"]].get("capabilities", [])
+                for module in [enrich_operation(raw_module)]
                 if module.get("name") in item.get("allowed_operations", [])
             ],
         }
@@ -1069,7 +1072,7 @@ async def _create_compiled_plan(
         from .intelligence_backup import add_intelligence_backups
 
         add_intelligence_backups(audited_plan, catalog_inventory, objective, excluded_tool_families)
-        from .plan_preflight import preflight_plan
+        from .plan_preflight import PlanPreflightError, preflight_plan
         from .request_contracts import validate_requested_operations
 
         validate_requested_operations(
@@ -1081,7 +1084,7 @@ async def _create_compiled_plan(
             audited_plan, catalog_inventory, manifests_by_slug, available_input_names
         )
         if preflight.fixes:
-            raise ValueError("Plan failed preflight: " + "; ".join(preflight.fixes))
+            raise PlanPreflightError("Plan failed preflight: " + "; ".join(preflight.fixes))
         audited_plan.planning_artifacts["compiled_contracts"] = preflight.contracts
         return audited_plan
     inventory = intent_bounded_tool_inventory(prompt, inventory, requested_tool_names)
@@ -1201,7 +1204,7 @@ async def _create_compiled_plan(
             _ensure_document_body_readback(plan, manifests_by_slug)
             _include_requested_story_in_email(plan, prompt)
             _normalize_illustrated_canva_slides(plan, prompt)
-            from .plan_preflight import preflight_plan
+            from .plan_preflight import PlanPreflightError, preflight_plan
             validate_requested_operations(
                 request_prompt or prompt, plan, available_operations,
                 catalog_inventory, manifests_by_slug,
@@ -1211,7 +1214,7 @@ async def _create_compiled_plan(
                 plan, catalog_inventory, manifests_by_slug, available_input_names
             )
             if preflight.fixes:
-                raise ValueError("Plan failed preflight: " + "; ".join(preflight.fixes))
+                raise PlanPreflightError("Plan failed preflight: " + "; ".join(preflight.fixes))
             plan.planning_artifacts["compiled_contracts"] = preflight.contracts
             plan.planning_artifacts["contract_repair_attempts"] = attempt
             if supervisor_strategy in {"repair_plan", "compact_replan"}:
@@ -1246,6 +1249,7 @@ async def _create_compiled_plan(
 def planning_error_message(exc: Exception) -> str:
     """Return a user-facing planning failure without leaking provider payloads."""
     from .audit_sources import AUDIT_SOURCE_MESSAGE, AuditSourceContractError
+    from .plan_preflight import PlanPreflightError
     from .proofing import ProofingSourceError
     from .selected_tools import SelectedToolError
 
@@ -1261,7 +1265,7 @@ def planning_error_message(exc: Exception) -> str:
             return AUDIT_SOURCE_MESSAGE
         if isinstance(current, ProofingSourceError):
             return str(current)
-        if isinstance(current, SelectedToolError):
+        if isinstance(current, (SelectedToolError, PlanPreflightError)):
             return current.public_message
         chain.append(str(current))
         current = current.__cause__ or current.__context__
@@ -2198,6 +2202,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 type(exc).__name__,
             )
             failure_category = planning_failure_category(exc)
+            from .plan_preflight import PlanPreflightError
             from .selected_tools import SelectedToolError
             # A failed model call cannot establish that connecting a catalog
             # app would help. In particular, do not hide exhausted AI credits
@@ -2206,6 +2211,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             # unrelated Google accounts need consent. Only a compiled plan's
             # actual grant checks may ask for access after an explicit choice.
             missing = ([] if failure_category == "operator_quota"
+                       or isinstance(exc, PlanPreflightError)
                        or (isinstance(exc, SelectedToolError) and exc.missing_from_plan)
                        or (run.inputs or {}).get("connection_routes") else
                        explicit_disconnected_capabilities(
@@ -2276,7 +2282,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 scope_error = str(exc) if str(exc).startswith("Unrequested ") else None
                 pause_direct_planning_failure(
                     run, scope_error=scope_error,
-                    public_message=planning_error_message(exc) if isinstance(exc, SelectedToolError) else None,
+                    public_message=planning_error_message(exc) if isinstance(exc, (SelectedToolError, PlanPreflightError)) else None,
                 )
             else:
                 await recover_planning_failure(
