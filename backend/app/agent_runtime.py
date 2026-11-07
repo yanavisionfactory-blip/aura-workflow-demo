@@ -334,6 +334,42 @@ def intent_bounded_tool_inventory(
     bounded = [item for index, item in enumerate(inventory) if index in selected] or [
         item for index, item in enumerate(inventory) if index not in product_mismatches
     ]
+    # A verified Pipeboard grant already provides these Meta reporting reads.
+    # Do not introduce a second OAuth route just because the native catalog has
+    # a more detailed schema. Preserve unique operations and explicit routes.
+    explicit_direct_meta = bool(re.search(
+        r"\b(?:direct meta|meta ads direct|native meta|meta directly)\b", text,
+    )) or bool(re.search(r"\bmeta-ads\.[a-z]+\.[a-z]+\b", original)) or any(
+        "meta ads direct" in value for value in requested
+    )
+    meta_reads = {
+        str(operation).removeprefix("mcp_meta_ads_")
+        for item in bounded if item.get("connected")
+        and capability_family(item.get("canonical_provider") or item.get("slug")) == "meta-ads"
+        and item.get("slug") != "meta-ads-direct"
+        for operation in item.get("granted_operations", item.get("allowed_operations")) or []
+    }
+    redundant_meta = {
+        f"meta-ads.{edge}.{verb}"
+        for edge, verb, equivalent in (
+            ("accounts", "list", "get_ad_accounts"), ("campaigns", "list", "get_campaigns"),
+            ("adsets", "list", "get_adsets"), ("ads", "list", "get_ads"),
+            ("insights", "get", "get_insights"),
+        ) if equivalent in meta_reads
+    }
+    if redundant_meta and not explicit_direct_meta:
+        preferred_meta = []
+        for item in bounded:
+            if item.get("slug") == "meta-ads-direct" and not item.get("connected"):
+                operations = [op for op in item.get("allowed_operations") or [] if op not in redundant_meta]
+                if not operations:
+                    continue
+                item = {**item, "allowed_operations": operations}
+                if "operation_contracts" in item:
+                    item["operation_contracts"] = [contract for contract in item["operation_contracts"]
+                                                   if contract.get("name") in operations]
+            preferred_meta.append(item)
+        bounded = preferred_meta
     # Prefer already granted native reads/appends over a duplicate unconnected
     # broker route. Keep unique broker capabilities and separately connected
     # accounts; this changes planning choices, never permissions or identities.
@@ -408,7 +444,10 @@ def build_agents() -> dict[str, Agent]:
             """Return one PlanningBundle that normalizes the request, selects the smallest sufficient
             toolset from the supplied connector catalog, and builds a finite auditable plan. Preserve
             explicit constraints and state assumptions. A catalog connector with connected=false is
-            valid for plan review. Select only listed operations. Every step needs concrete inputs,
+            valid for plan review. Prefer an already connected and granted operation over a
+            disconnected alternative that serves the same purpose, unless the user chose that
+            specific route. Do not add identity/consent checks for an unconnected route when
+            a verified connected route can read the requested records. Select only listed operations. Every step needs concrete inputs,
             an output contract, a stable lowercase key, and explicit dependencies.
             Use operation_contracts as authoritative input/output and evidence guarantees.
             Declare required_evidence only as exact output guarantee tags in that
@@ -479,7 +518,9 @@ def build_agents() -> dict[str, Agent]:
         "router": _agent(
             "Tool Router Agent",
             """Choose the smallest sufficient toolset from the supplied connector catalog.
-            Never select an absent tool or operation. A catalog tool may be selected when connected
+            Prefer already connected and granted operations for the requested work; do not
+            introduce another authorization when an existing route serves the same purpose.
+            Respect a user's explicit choice of connection. Never select an absent tool or operation. A catalog tool may be selected when connected
             is false: explain its role normally and let the application request connection after the
             user reviews the plan. Report missing_capabilities only when no catalog connector can
             perform the job, never merely because a suitable connector is not connected yet.""",
