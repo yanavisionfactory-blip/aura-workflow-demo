@@ -528,3 +528,28 @@ test("request deadlines include a stalled token lookup and prevent a late networ
     assert.equal(requests, 0);
   } finally { flow.setAuraTokenProvider(async () => "test-user-token"); }
 });
+
+test("temporary probe errors preserve a verified exact account but rejected access clears it", async () => {
+  setup();
+  let failure = 0;
+  globalThis.fetch = async (url) => {
+    const { pathname } = new URL(url);
+    if (pathname === "/v1/managed-connectors/status") return Response.json({});
+    if (pathname === "/v1/tools") return Response.json([{ id: "stable-google", slug: "google", kind: "oauth",
+      enabled: true, display_name: "Google Workspace", allowed_operations: ["sheets.read"] }]);
+    if (pathname === "/v1/connections/stable-google/test") {
+      if (failure) return Response.json({ detail: "Check unavailable" }, { status: failure });
+      return Response.json({ status: "verified", verification: { ok: true } });
+    }
+    throw new Error(`Unexpected request: ${pathname}`);
+  };
+  await flow.hydrateConnections({ force: true });
+  assert.equal(flow.getAllConnections()["Google Sheets"], true);
+  failure = 503;
+  const pending = await flow.hydrateConnections({ force: true });
+  assert.equal(flow.getAllConnections()["Google Sheets"], true);
+  assert.equal(pending[0].connection_check_pending, true);
+  failure = 401;
+  await flow.hydrateConnections({ force: true });
+  assert.equal(flow.getAllConnections()["Google Sheets"], undefined);
+});

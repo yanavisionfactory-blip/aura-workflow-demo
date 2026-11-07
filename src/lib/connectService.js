@@ -177,7 +177,19 @@ export async function hydrateConnections({ force = false } = {}) {
       try {
         const result = await testPythonConnection(tool.id);
         return { tool: { ...tool, status: result.status, verification: result.verification }, connected: isVerifiedConnection(result) };
-      } catch {
+      } catch (error) {
+        // A transport outage is not revoked consent. Preserve only a previously
+        // verified exact account; execution still validates its actual grants.
+        const previous = hydratedTools?.find((item) => item.id === tool.id && item.slug === tool.slug);
+        const transient = !error?.status || error.status >= 500 || error.status === 429;
+        const verified = isVerifiedConnection(tool) ? tool
+          : previous?.connection_check_pending ? previous.last_verified_connection : previous;
+        if (transient && isVerifiedConnection(verified)) {
+          return { tool: { ...tool, status: "unverified",
+            verification: { ok: false, reason: "connection_check_unavailable" },
+            last_verified_connection: { status: "verified", verification: verified.verification },
+            connection_check_pending: true }, connected: true };
+        }
         return { tool: { ...tool, status: "unverified", verification: { ok: false, reason: "connection_check_unavailable" } }, connected: false };
       }
     }));
