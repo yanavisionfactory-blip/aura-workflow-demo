@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { parseRunCollection, collectionActivity } from "../src/lib/savedRunCollection.mjs";
-import { preferredToolOutcome } from "../src/lib/toolResultViews.mjs";
+import { preferredToolOutcome, toolResultName } from "../src/lib/toolResultViews.mjs";
 import { primaryResultFromOutputs } from "../src/lib/resultPresentation.mjs";
 import { savedToolResponse } from "../src/lib/savedToolResponse.mjs";
 const runId = "11111111-1111-4111-8111-111111111111", stepId = "22222222-2222-4222-8222-222222222222";
@@ -40,4 +40,8 @@ test("ad summaries preserve missing metrics, conversions, zeroes and exact accou
   const google = savedToolResponse({ tool: "Google Ads", inputs: { accountId: "customer-test" }, response: { ret: [{ campaign: { name: "Test" }, metrics: { costMicros: "12000000", clicks: "0", impressions: "100", conversions: "0" } }] } });
   const metrics = Object.fromEntries(google.campaigns[0].metrics.map((m) => [m.label, m.value]));
   assert.equal(metrics.Spend, "12"); assert.equal(metrics.Clicks, "0"); assert.equal(metrics.CPC, "Unavailable"); assert.equal(metrics["Conversion value"], "Unavailable");
+});
+
+test("direct Meta connections retain the user-facing provider name", () => {
+  assert.equal(toolResultName("meta-ads-direct", "meta-ads.insights.read"), "Meta Ads");
 });

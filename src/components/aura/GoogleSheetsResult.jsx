@@ -10,7 +10,10 @@ import { downloadTextFile } from "@/lib/auraDownload";
 function MobileReportRows({ grid }) {
   const headers = grid.values[0].map(String);
   const metrics = /^(Spend|Impressions|Clicks|CTR|CPC|Conversions|CPA|Conversion ?Value|ROAS)$/i;
-  return <div className="space-y-4 p-4 sm:hidden" aria-label="Campaign report cards">{grid.values.slice(1).map((row, index) => {
+  const rows = grid.values.slice(1);
+  const isData = (row) => headers.some((label, index) => metrics.test(label) && row[index] !== undefined && row[index] !== "");
+  const notes = rows.filter((row) => !isData(row) && row.some((value) => value !== ""));
+  return <div className="space-y-4 p-4 sm:hidden" aria-label="Campaign report cards">{rows.filter(isData).map((row, index) => {
     const values = headers.map((label, column) => ({ label, value: String(row[column] ?? "") }));
     const measured = values.filter(({ label }) => metrics.test(label));
     const unavailable = measured.length > 0 && measured.every(({ value }) => !value || /^unavailable$/i.test(value));
@@ -19,7 +22,7 @@ function MobileReportRows({ grid }) {
       {unavailable ? <p className="mt-3 text-sm text-slate-600">Metrics unavailable. See the reporting context below.</p> : <dl className="mt-4 grid grid-cols-2 gap-4">{measured.map(({ label, value }) => <div key={label}><dt className="text-xs text-slate-500">{label}</dt><dd className="mt-1 break-words text-sm font-semibold tabular-nums">{value || "Unavailable"}</dd></div>)}</dl>}
       {context.length > 0 && <details className="mt-4 border-t border-slate-200 pt-3"><summary className="cursor-pointer text-xs font-medium text-emerald-800">Reporting context</summary><dl className="mt-3 space-y-3">{context.map(({ label, value }) => <div key={label}><dt className="text-xs text-slate-500">{label}</dt><dd className="mt-1 break-words text-xs leading-5">{value}</dd></div>)}</dl></details>}
     </article>;
-  })}</div>;
+  })}{notes.length > 0 && <details className="rounded-xl border border-slate-200 p-4"><summary className="cursor-pointer text-sm font-medium text-emerald-800">Reporting notes</summary><dl className="mt-3 space-y-4">{notes.map((row, index) => <div key={index}><dt className="text-xs font-medium">{row[0]}</dt><dd className="mt-1 text-xs leading-5 text-slate-600">{row.slice(1).filter(Boolean).join(" · ")}</dd></div>)}</dl></details>}</div>;
 }
 
 function SavedCells({ ranges = [], initialRange }) {

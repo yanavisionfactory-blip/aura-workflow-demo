@@ -557,3 +557,17 @@ test("Results from every tool owns each tool dropdown and Tools used opens those
     }
   }
 });
+
+
+test("campaign mobile cards keep reporting notes out of platform metrics", () => {
+  const step = { id: "read", key: "read", tool_slug: "google-sheets", operation: "google-sheets.read-rows", status: "completed", output: {
+    operation: "google-sheets.read-rows", resolved_arguments: { spreadsheetId: "test-sheet", sheetName: "Summary", range: "A1:D4", hasHeaders: false },
+    provider_result: { ret: { rows: [["Platform", "Currency", "Spend", "Clicks"], ["Google Ads", "EUR", "12.00", "10"], ["Meta Ads", "EUR", "Unavailable", "Unavailable"], ["Reporting scope", "Earlier history is unverified", "", ""]] } },
+  } };
+  const doc = new JSDOM(render({ ...run, steps: [step], result: {} })).window.document;
+  const cards = doc.querySelector('[aria-label="Campaign report cards"]');
+  assert.equal(cards.querySelectorAll("article").length, 2);
+  assert.match(cards.textContent, /Metrics unavailable/);
+  assert.match(cards.querySelector(":scope > details").textContent, /Earlier history is unverified/);
+  assert.match(doc.querySelector('a[href="/results/collect"]').textContent, /Collect saved results/);
+});
