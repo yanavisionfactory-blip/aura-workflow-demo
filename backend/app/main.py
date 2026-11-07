@@ -1654,7 +1654,7 @@ async def managed_connector_status(
             **item,
             "availability": "available",
             "connectable": True,
-            "eligible_for_one_click": True,
+            "eligible_for_one_click": item.get("connection_strategy") == "oauth",
         }
     for item in native_catalog + long_tail_catalog:
         marketplace_by_provider.setdefault(item["provider"], item)

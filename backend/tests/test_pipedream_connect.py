@@ -1,3 +1,4 @@
+import json
 import os
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -308,6 +309,17 @@ def test_marketplace_exposes_every_secure_executable_connection_strategy():
         {**app_definition(), "img_src": "https://tracking.example/linear.png"},
         connectable=True,
     )
+
+
+@pytest.mark.parametrize("as_json", [False, True])
+def test_oauth_with_developer_credentials_is_not_one_click_consent(as_json):
+    fields = [{"name": "client_id"}, {"name": "client_secret"}]
+    app = {**app_definition(), "custom_fields_json": json.dumps(fields) if as_json else fields}
+    entry = marketplace_entry(app, connectable=True)
+    assert app_uses_managed_oauth(app) is False
+    assert entry["eligible_for_one_click"] is False
+    assert entry["connection_strategy"] == "service_account"
+    assert entry["setup_hint"] == "Administrator setup required"
 
 
 def test_external_user_reference_is_stable_opaque_and_tenant_scoped():
