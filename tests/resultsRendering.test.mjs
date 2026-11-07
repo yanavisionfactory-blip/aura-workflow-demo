@@ -484,7 +484,8 @@ test("Results from every tool owns each tool dropdown and Tools used opens those
     IS_REACT_ACT_ENVIRONMENT: true };
   const descriptors = Object.fromEntries(Object.keys(globals).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
-  dom.window.HTMLElement.prototype.scrollIntoView = () => {};
+  let scrolled;
+  dom.window.HTMLElement.prototype.scrollIntoView = function () { scrolled = this; };
   const { createRoot } = await import("react-dom/client");
   const app = document.getElementById("app"), root = createRoot(app);
   const click = async (element) => { assert.ok(element); await act(async () => element.click()); };
@@ -554,6 +555,8 @@ test("Results from every tool owns each tool dropdown and Tools used opens those
     assert.equal(app.querySelectorAll('[aria-label="Google Sheets result screen"]').length, 1);
     await click(byLabel("View Google Ads results"));
     const ads = byLabel("Google Ads result screen");
+    assert.equal(scrolled, ads.closest("article"));
+    assert.equal(byLabel("Google Ads result dropdown").open, false, "tool navigation opens the data screen, not action history");
     assert.match(ads.textContent, /earlier campaign/);
     assert.doesNotMatch(ads.textContent, /later campaign/);
     const select = ads.querySelector("select");
