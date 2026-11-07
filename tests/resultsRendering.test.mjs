@@ -242,8 +242,8 @@ test("the summary leads and every tool result is a dropdown inside Results from 
   assert.match(html, /View activity/);
   assert.match(html, /aria-label="View Google Ads results"/);
   const openDetails = [...doc.querySelectorAll("details[open]")];
-  assert.equal(openDetails.length, 1);
-  assert.equal(openDetails[0].getAttribute("aria-label"), "Google Ads result dropdown");
+  assert.equal(openDetails.length, 0, "saved data screens are visible above collapsed action history");
+  assert.match(outcomes.querySelector('[aria-label="Google Ads result screen"]').textContent, /roof repair/);
 });
 
 test("a blocked run retains actual saved content and failed action evidence without a completion claim", () => {
@@ -484,7 +484,8 @@ test("Results from every tool owns each tool dropdown and Tools used opens those
     IS_REACT_ACT_ENVIRONMENT: true };
   const descriptors = Object.fromEntries(Object.keys(globals).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
-  dom.window.HTMLElement.prototype.scrollIntoView = () => {};
+  let scrolled;
+  dom.window.HTMLElement.prototype.scrollIntoView = function () { scrolled = this; };
   const { createRoot } = await import("react-dom/client");
   const app = document.getElementById("app"), root = createRoot(app);
   const click = async (element) => { assert.ok(element); await act(async () => element.click()); };
@@ -500,6 +501,10 @@ test("Results from every tool owns each tool dropdown and Tools used opens those
     { id: "save", key: "save", tool_slug: "google-sheets", operation: "google-sheets.update-multiple-rows", status: "completed",
       output: { resolved_arguments: { worksheetId: 173 }, provider_result: { ret: { spreadsheetId: "exact-workbook", updatedRange: "Dashboard!A1:C2", updatedRows: 2 } },
         outcome_check: { status: "verified", observed: { range: "Dashboard!A1:C2", values: [["Company", "September 2026"], ["Revenue", "", "Not publicly reported"]] } } } },
+    ...["earlier", "later"].map((period, index) => ({ id: period, key: period, tool_slug: "google-ads", operation: "google-ads.create-campaign-report", status: "completed", reason: `Read ${period} period`, output: {
+      resolved_arguments: { accountId: "manager", customerClientId: "client", dateRange: "CUSTOM", startDate: `2026-0${index + 1}-01`, endDate: `2026-0${index + 1}-28` },
+      provider_result: { ret: [{ campaign: { name: `${period} campaign` }, customer: { id: "client", currencyCode: "EUR", timeZone: "Europe/Berlin" }, metrics: { costMicros: String((index + 1) * 1000000) } }] },
+    } })),
   ], result: {} };
   try {
     await act(async () => root.render(React.createElement(ResultsTestView, { run: saved })));
@@ -548,6 +553,22 @@ test("Results from every tool owns each tool dropdown and Tools used opens those
     await click(byLabel("View Google Sheets results"));
     assert.equal(main.open, false);
     assert.equal(app.querySelectorAll('[aria-label="Google Sheets result screen"]').length, 1);
+    await click(byLabel("View Google Ads results"));
+    const ads = byLabel("Google Ads result screen");
+    assert.equal(scrolled, ads.closest("article"));
+    assert.equal(byLabel("Google Ads result dropdown").open, false, "tool navigation opens the data screen, not action history");
+    assert.match(ads.textContent, /earlier campaign/);
+    assert.doesNotMatch(ads.textContent, /later campaign/);
+    const select = ads.querySelector("select");
+    await act(async () => { select.value = "later"; select.dispatchEvent(new dom.window.Event("change", { bubbles: true })); });
+    assert.match(ads.textContent, /later campaign/);
+    assert.doesNotMatch(ads.textContent, /earlier campaign/);
+    await click([...ads.querySelectorAll('[role="tab"]')].find((button) => button.textContent === "Accounts & coverage"));
+    assert.match(ads.textContent, /Europe\/Berlin/);
+    assert.match(ads.textContent, /2026-01-01 – 2026-01-28/);
+    assert.match(ads.textContent, /2026-02-01 – 2026-02-28/);
+    await click([...ads.querySelectorAll('[role="tab"]')].find((button) => button.textContent === "Campaign data"));
+    assert.match(ads.textContent, /later campaign/, "switching tabs preserves the selected saved report");
 
   } finally {
     await act(async () => root.unmount());
@@ -570,4 +591,30 @@ test("campaign mobile cards keep reporting notes out of platform metrics", () =>
   assert.match(cards.textContent, /Metrics unavailable/);
   assert.match(cards.querySelector(":scope > details").textContent, /Earlier history is unverified/);
   assert.match(doc.querySelector('a[href="/results/collect"]').textContent, /Collect saved results/);
+});
+
+test("advertising inputs have their own visible app screens without inventing deliverables", () => {
+  const receipt = (key, tool, operation, provider_result, resolved_arguments = {}) => ({ id: key, key, tool_slug: tool, operation, status: "completed",
+    output: { operation, provider_result, resolved_arguments, critic: { action: "accept" }, outcome_check: { status: "verified" } } });
+  const steps = [
+    receipt("ads", "google-ads", "google-ads.create-campaign-report", { ret: { results: [{ campaign: { name: "Search campaign" }, metrics: { costMicros: "12000000", impressions: "100", clicks: "0" } }] } }, { accountId: "manager", customerClientId: "client" }),
+    receipt("meta", "meta-ads-direct", "meta-ads.insights.read", { account_id: "act-test", data: [], date_range: { since: "2026-01-01", until: "2026-06-30" } }),
+  ];
+  const doc = new JSDOM(render({ ...run, steps, result: {} })).window.document;
+  for (const tool of ["Google Ads", "Meta Ads"]) {
+    const screen = doc.querySelector(`[aria-label="${tool} result screen"]`);
+    assert.ok(screen, tool);
+    assert.equal(screen.closest("details"), null, "source preview is visible without opening action history");
+    assert.match(screen.textContent, /Used as input/);
+    assert.match(screen.textContent, /Saved source data in AURA/);
+    assert.equal(screen.querySelectorAll('[role="tab"]').length, 2);
+    assert.doesNotMatch(screen.textContent, /\bret\b|spreadsheetId|Empty list returned/);
+  }
+  const google = doc.querySelector('[aria-label="Google Ads result screen"]');
+  assert.match(google.textContent, /Search campaign/);
+  assert.match(google.textContent, /Account: client/);
+  assert.doesNotMatch(google.textContent, /Account: manager/);
+  const meta = doc.querySelector('[aria-label="Meta Ads result screen"]');
+  assert.match(meta.textContent, /Metrics are unavailable, not zero/);
+  assert.match(meta.textContent, /2026-01-01 – 2026-06-30/);
 });
