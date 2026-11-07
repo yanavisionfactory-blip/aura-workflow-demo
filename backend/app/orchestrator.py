@@ -1333,6 +1333,7 @@ def explicit_disconnected_capabilities(prompt: str, inventory: list[dict]) -> li
     """Find every explicitly named, disconnected provider account family."""
     from .connection_families import (
         is_synthetic_source,
+        provider_intent_text,
         synthetic_source_families,
         uses_builtin_openai,
     )
@@ -1385,10 +1386,11 @@ def explicit_disconnected_capabilities(prompt: str, inventory: list[dict]) -> li
             r"do not (?:use|connect|include)|don t (?:use|connect|include)|instead of) "
             r"(?:(?:any|new|additional|the|a|an|shared) )*$"
         )
+        provider_text = provider_intent_text(text, family)
         if any(
             alias and any(
-                not negative_prefix.search(text[:match.start()].rstrip() + " ")
-                for match in re.finditer(rf"(?<!\w){re.escape(alias)}(?!\w)", text)
+                not negative_prefix.search(provider_text[:match.start()].rstrip() + " ")
+                for match in re.finditer(rf"(?<!\w){re.escape(alias)}(?!\w)", provider_text)
             )
             for alias in aliases
         ):

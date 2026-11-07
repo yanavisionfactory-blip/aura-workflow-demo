@@ -28,6 +28,19 @@ def capability_family(value: object) -> str:
     return GOOGLE_APP_FAMILIES.get(normalized, PROVIDER_FAMILIES.get(normalized, normalized))
 
 
+def provider_intent_text(text: str, family: str) -> str:
+    """An Ads product mention does not request its separate community account.
+
+    Text is normalized to words by callers. Keep independent mentions (for
+    example, "Reddit Ads and Reddit posts") and exact operation authorization.
+    Apply this even when the Ads connector is absent from the catalog: its
+    absence cannot make the community connector a valid substitute.
+    """
+    if family not in {"reddit", "linkedin", "tiktok"}:
+        return text
+    return re.sub(rf"\b{family}\s+(?:ads?(?:\s+manager)?|advertising)\b", " ", text)
+
+
 def synthetic_source_families(prompt: str) -> set[str]:
     """Recognize explicit synthetic social inputs without suppressing live actions.
 

@@ -179,6 +179,7 @@ def intent_bounded_tool_inventory(
     from .connection_families import (
         capability_family,
         is_synthetic_source,
+        provider_intent_text,
         synthetic_source_families,
         uses_builtin_openai,
     )
@@ -195,6 +196,7 @@ def intent_bounded_tool_inventory(
     wants_public_weather = requests_public_weather(prompt)
     requested = {_intent_words(str(value)) for value in requested_tool_names if value}
     external_matches: set[int] = set()
+    product_mismatches: set[int] = set()
     for index, item in enumerate(inventory):
         if builtin_openai and capability_family(item.get("canonical_provider") or item.get("slug")) == "openai":
             continue
@@ -205,8 +207,14 @@ def intent_bounded_tool_inventory(
         # identity/Gmail connector. Do not let the generic `google` alias in
         # google.identity.get introduce an unrelated Workspace consent gate.
         # Other explicit Workspace apps (Gmail, Docs, Drive...) still match.
-        item_text = text
-        item_requested = requested
+        family = capability_family(item.get("canonical_provider") or item.get("slug"))
+        item_text = provider_intent_text(text, family)
+        item_requested = {provider_intent_text(value, family) for value in requested}
+        if (item_text != text or item_requested != requested) and not any(
+            f" {alias} " in value for alias in aliases if alias
+            for value in [item_text, *item_requested]
+        ):
+            product_mismatches.add(index)
         if str(item.get("slug") or "").casefold() == "google":
             # The brand alone is not an app requirement. After a customer
             # selects dedicated Sheets, remaining Workspace Gmail/identity
@@ -323,7 +331,9 @@ def intent_bounded_tool_inventory(
             if inventory[index].get("slug") != "google-docs"
         }
 
-    bounded = [item for index, item in enumerate(inventory) if index in selected] or inventory
+    bounded = [item for index, item in enumerate(inventory) if index in selected] or [
+        item for index, item in enumerate(inventory) if index not in product_mismatches
+    ]
     # Prefer already granted native reads/appends over a duplicate unconnected
     # broker route. Keep unique broker capabilities and separately connected
     # accounts; this changes planning choices, never permissions or identities.

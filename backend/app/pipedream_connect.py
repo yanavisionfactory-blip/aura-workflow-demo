@@ -220,7 +220,13 @@ def _trusted_logo(url: Any) -> str | None:
 
 
 def app_uses_managed_oauth(app: dict[str, Any]) -> bool:
-    return str(app.get("auth_type") or "").strip().casefold() in _OAUTH_AUTH_TYPES
+    # OAuth describes the protocol, not who owns the developer registration.
+    # Some apps (including community Reddit) require the customer to supply
+    # both client credentials before consent and are not one-click sign-in.
+    fields = {str(item.get("name") or "").strip().casefold()
+              for item in _custom_fields(app) if item.get("optional") is not True}
+    return (str(app.get("auth_type") or "").strip().casefold() in _OAUTH_AUTH_TYPES
+            and not {"client_id", "client_secret"} <= fields)
 
 
 def _custom_fields(app: dict[str, Any]) -> list[dict[str, Any]]:
