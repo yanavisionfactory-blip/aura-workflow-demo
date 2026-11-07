@@ -2,6 +2,7 @@ import { AlertTriangle, Check, ChevronDown, ExternalLink, FileText, Presentation
 import { mainToolEntry, toolOutputResult, toolResultGroups, toolResultName, toolResultStatus } from "@/lib/toolResultViews.mjs";
 import { MainToolOutput } from "./ToolResultView";
 import SavedToolResponse from "./SavedToolResponse";
+import AdsInputResult from "./AdsInputResult";
 import { savedToolResponse } from "@/lib/savedToolResponse.mjs";
 
 function SourceResults({ items }) {
@@ -26,23 +27,25 @@ export default function WorkflowToolResults({ entries, primary, mainEntry, hasMa
       const combined = isPrimary ? primary : toolOutputResult(completed, activity);
       const combinedEntry = isPrimary ? mainEntry : mainToolEntry(completed, combined || {}) || completed.at(-1);
       const visual = combined && !["result"].includes(combined.kind);
+      const adsInput = ["Google Ads", "Meta Ads"].includes(tool) && completed.length > 0 && !visual;
       const issues = items.filter((entry) => ["failed", "blocked", "provider_error"].includes(entry.status));
       const link = combined?.link || completed.findLast((entry) => entry.link)?.link;
       const Icon = tool === "Canva" ? Presentation : tool === "Google Sheets" ? Table2 : FileText;
       const count = combined?.kind === "spreadsheet" ? `${combined.ranges?.length || 0} saved ranges` : combined?.pageCount ? `${combined.pageCount} ${combined.pageCount === 1 ? "slide" : "slides"}` : `${completed.length} saved ${completed.length === 1 ? "action" : "actions"}`;
       return <article key={tool} className={`min-w-0 overflow-hidden rounded-2xl border ${isPrimary ? "border-violet-400/30 bg-gradient-to-br from-violet-400/[0.08] to-[#0c1420]" : "border-white/10 bg-[#0d1522]"}`}>
         <header className="flex flex-wrap items-center justify-between gap-4 p-4 sm:p-6">
-          <div className="flex min-w-0 items-center gap-3"><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-400/10 text-violet-300"><Icon className="h-5 w-5" /></span><div className="min-w-0"><p className="text-xs font-medium text-violet-300">{isPrimary ? "Main output" : "Tool result"}</p><h3 className="mt-1 text-base font-semibold">{tool}</h3><p className="mt-1 text-xs text-muted-foreground">{count}{issues.length ? " · Needs attention" : ""}</p></div></div>
+          <div className="flex min-w-0 items-center gap-3"><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-400/10 text-violet-300"><Icon className="h-5 w-5" /></span><div className="min-w-0"><p className="text-xs font-medium text-violet-300">{isPrimary ? "Main output" : adsInput ? "Source data · Used as input" : "Tool result"}</p><h3 className="mt-1 text-base font-semibold">{tool}</h3><p className="mt-1 text-xs text-muted-foreground">{count}{issues.length ? " · Needs attention" : ""}</p></div></div>
           {link && <a href={link} target="_blank" rel="noopener noreferrer" className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold ${isPrimary ? "bg-violet-500 text-white hover:bg-violet-400" : "border border-white/15 text-cyan-200 hover:bg-white/5"}`}>Open in {tool}<ExternalLink className="h-4 w-4" /></a>}
         </header>
         {combinedEntry?.backupNotice && <p className="mx-4 mb-4 rounded-xl border border-amber-400/20 bg-amber-400/5 p-3 text-xs leading-5 text-amber-100 sm:mx-6">Backup used · {combinedEntry.backupNotice}</p>}
         {isPrimary && visual && <div className="px-4 pb-4 sm:px-6 sm:pb-6"><h4 className="mb-4 break-words text-lg font-medium sm:text-xl">{combined.title}</h4><MainToolOutput entry={combinedEntry} result={combined} results={results} activity={activity} backendRunId={backendRunId} /></div>}
-        <details ref={(node) => { if (node) dropdowns.current.set(tool, node); else dropdowns.current.delete(tool); }} aria-label={`${tool} result dropdown`} open={!isPrimary && !visual || undefined} className="group/tool border-t border-white/10">
-          <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300 sm:px-6 [&::-webkit-details-marker]:hidden"><span>{isPrimary ? "Saved actions" : visual ? `View ${tool === "Google Sheets" ? "saved report" : "result"} in AURA` : "Results and reporting coverage"}</span><ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground group-open/tool:rotate-180" /></summary>
+        {adsInput && <div className="px-4 pb-5 sm:px-6"><AdsInputResult tool={tool} entries={completed} isPrimary={isPrimary} /></div>}
+        <details ref={(node) => { if (node) dropdowns.current.set(tool, node); else dropdowns.current.delete(tool); }} aria-label={`${tool} result dropdown`} open={!isPrimary && !visual && !adsInput || undefined} className="group/tool border-t border-white/10">
+          <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300 sm:px-6 [&::-webkit-details-marker]:hidden"><span>{isPrimary || adsInput ? "Saved actions" : visual ? `View ${tool === "Google Sheets" ? "saved report" : "result"} in AURA` : "Results and reporting coverage"}</span><ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground group-open/tool:rotate-180" /></summary>
           <div className="space-y-4 px-4 pb-5 sm:px-6">
-            {(!isPrimary || !visual) && (visual ? <MainToolOutput entry={combinedEntry} result={combined} results={results} activity={activity} backendRunId={backendRunId} /> : <SourceResults items={completed} />)}
+            {!adsInput && (!isPrimary || !visual) && (visual ? <MainToolOutput entry={combinedEntry} result={combined} results={results} activity={activity} backendRunId={backendRunId} /> : <SourceResults items={completed} />)}
             {items.filter((entry) => entry.status !== "completed").map((entry) => <p key={entry.id} className="flex items-start gap-2 text-sm text-amber-200"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{entry.action} · {toolResultStatus(entry)}</p>)}
-            {(isPrimary || visual) && <ul className="space-y-3">{items.map((entry) => <li key={entry.id} className="flex items-start gap-2 text-xs leading-5 text-muted-foreground">{entry.status === "completed" ? <Check className="mt-1 h-3 w-3 shrink-0 text-emerald-400" /> : <AlertTriangle className="mt-1 h-3 w-3 shrink-0 text-amber-300" />}<span>{entry.action}<span className="block text-[11px]">{toolResultStatus(entry)}{entry.completedAt ? ` · ${new Date(entry.completedAt).toLocaleString()}` : ""}</span></span></li>)}</ul>}
+            {(isPrimary || visual || adsInput) && <ul className="space-y-3">{items.map((entry) => <li key={entry.id} className="flex items-start gap-2 text-xs leading-5 text-muted-foreground">{entry.status === "completed" ? <Check className="mt-1 h-3 w-3 shrink-0 text-emerald-400" /> : <AlertTriangle className="mt-1 h-3 w-3 shrink-0 text-amber-300" />}<span>{entry.action}<span className="block text-[11px]">{toolResultStatus(entry)}{entry.completedAt ? ` · ${new Date(entry.completedAt).toLocaleString()}` : ""}</span></span></li>)}</ul>}
             <button type="button" onClick={() => onOpen("activity")} className="text-xs text-muted-foreground underline underline-offset-4">View workflow activity</button>
           </div>
         </details>
