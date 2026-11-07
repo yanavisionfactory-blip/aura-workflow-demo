@@ -51,7 +51,8 @@ def update_check(arguments, receipt):
     title, saved_range = updated.rsplit("!", 1)
     if title.startswith("'") and title.endswith("'"):
         title = title[1:-1].replace("''", "'")
-    if not title or saved_range != cell_range or result.get("updatedCells") != len(rows)*len(rows[0]):
+    if (not title or saved_range != cell_range or type(result.get("updatedCells")) is not int
+            or result["updatedCells"] != len(rows)*len(rows[0])):
         raise ValueError("Google's write receipt does not cover the approved range")
     read_args = {"spreadsheetId": book, "sheetName": title, "range": cell_range, "hasHeaders": False}
     checks = (OutcomeCheck(INFO, {"spreadsheetId": book}, book, {}),
@@ -94,10 +95,25 @@ def evaluate_update(check, observed):
     if not isinstance(observed, dict) or observed.get("spreadsheetId") != check.resource_id:
         return failure
     sheets = observed.get("sheets")
-    if not isinstance(sheets, list) or len(sheets) != 1 or not isinstance(sheets[0], dict):
+    if not isinstance(sheets, list) or not sheets:
         return failure
-    sheet = sheets[0]
-    props = sheet.get("properties", {})
+    # Google may return metadata for unrequested tabs too. Identify the target
+    # by its numeric ID, not by array position, and reject ambiguous metadata.
+    seen_ids, seen_titles, matches = set(), set(), []
+    for item in sheets:
+        props = item.get("properties") if isinstance(item, dict) else None
+        if (not isinstance(props, dict) or type(props.get("sheetId")) is not int
+                or not isinstance(props.get("title"), str)
+                or props["sheetId"] in seen_ids or props["title"] in seen_titles):
+            return failure
+        seen_ids.add(props["sheetId"])
+        seen_titles.add(props["title"])
+        if props["sheetId"] == check.expected["worksheetId"]:
+            matches.append(item)
+    if len(matches) != 1:
+        return failure
+    sheet = matches[0]
+    props = sheet["properties"]
     if (props.get("title") != check.expected["title"] or type(props.get("sheetId")) is not int
             or props["sheetId"] != check.expected["worksheetId"]):
         return failure

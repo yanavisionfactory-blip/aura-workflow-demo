@@ -26,6 +26,9 @@ def test_google_receipt_uses_live_numeric_tab_mapping_and_all_cells():
     check = build_outcome_check(sw.WRITE, ARGS, RECEIPT)
     assert required_reads(sw.WRITE, ARGS) == {sw.READ, sw.INFO}
     assert evaluate_outcome_check(check, OBSERVED)["status"] == "verified"
+    with_other_tabs = deepcopy(OBSERVED)
+    with_other_tabs["sheets"].insert(0, {"properties": {"sheetId": 0, "title": "Campaigns"}})
+    assert evaluate_outcome_check(check, with_other_tabs)["status"] == "verified"
 
 
 @pytest.mark.parametrize("change", ["book", "tab", "title", "offset", "value", "formula", "formula_error", "missing_cell", "extra_sheet", "error"])
