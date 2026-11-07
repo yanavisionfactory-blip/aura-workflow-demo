@@ -25,7 +25,7 @@ before(async () => {
     plugins: [{ name: "document-upload-test", enforce: "pre", load(id) {
       if (id === "\0upload-history") return "export const base44 = {entities:{WorkflowRun:{list:async()=>[]}}};";
       if (id === "\0upload-api") return exportsOf("auraApi").map((name) => `export const ${name} = async () => [];`).join("\n");
-      if (id === "\0upload-connections") return exportsOf("connectService").map((name) => `export const ${name} = async () => ({});`).join("\n");
+      if (id === "\0upload-connections") return exportsOf("connectService").map((name) => `export const ${name} = async () => (${name === "hydrateConnections" ? "[]" : "{}"});`).join("\n");
       if (id === "\0upload-motion") return `import React from "react";
         export const AnimatePresence = ({children}) => children;
         const plain = (tag) => ({initial, animate, exit, transition, whileHover, whileTap, ...props}) => React.createElement(tag, props);

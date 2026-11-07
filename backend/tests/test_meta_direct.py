@@ -306,6 +306,7 @@ async def test_catalog_prefers_direct_only_when_configured_and_keeps_pipeboard(s
         entries = result.get("apps", result.get("providers", []))
         entry = next(e for e in entries if e["canonical_provider"] == "meta-ads")
         assert entry["provider"] == SLUG and entry["preferred_connection"]
+        assert entry["setup_hint"] == "Connect directly with Meta · Read-only reporting"
         assert {r["provider"] for r in entry["routes"]} >= {SLUG, "meta-ads-mcp"}
         monkeypatch.setattr(settings, "meta_client_id", "")
         result = await main.search_connector_broker_apps("Meta Ads", 30, context, session)
