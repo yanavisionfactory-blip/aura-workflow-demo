@@ -2210,9 +2210,10 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             # A failed connector switch is a failed draft, not evidence that
             # unrelated Google accounts need consent. Only a compiled plan's
             # actual grant checks may ask for access after an explicit choice.
+            # Only an unavailable selected app can justify this fallback.
+            # Model, schema and compiler failures do not establish missing access.
             missing = ([] if failure_category == "operator_quota"
-                       or isinstance(exc, PlanPreflightError)
-                       or (isinstance(exc, SelectedToolError) and exc.missing_from_plan)
+                       or not isinstance(exc, SelectedToolError) or exc.missing_from_plan
                        or (run.inputs or {}).get("connection_routes") else
                        explicit_disconnected_capabilities(
                            run.prompt + "\n" + "\n".join(requested_tools), requirement_inventory))

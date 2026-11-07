@@ -17,6 +17,40 @@ from app.native_connectors import (
 from app.orchestrator import refresh_native_connection_contract
 
 
+@pytest.mark.parametrize("value", ["EUR", None, 42, 4.2])
+def test_connector_union_fields_accept_only_valid_values_without_crashing(value):
+    schema = {"type": ["string", "number", "null"], "minLength": 3}
+    manifest = {"capabilities": [{"name": "account.get", "input_schema": {
+        "type": "object", "properties": {"field": schema}, "additionalProperties": False,
+    }}]}
+    arguments = {"field": value}
+    assert normalize_planned_module_arguments(manifest, "account.get", arguments) == arguments
+    assert coerce_module_arguments(manifest, "account.get", arguments) == arguments
+
+
+@pytest.mark.parametrize("value", [True, False, "EU", [], {}])
+def test_connector_union_fields_reject_invalid_values_and_keep_constraints(value):
+    manifest = {"capabilities": [{"name": "account.get", "input_schema": {
+        "type": "object", "properties": {"field": {"type": ["string", "number", "null"], "minLength": 3}},
+    }}]}
+    with pytest.raises(NativeConnectorError, match="permitted type"):
+        normalize_planned_module_arguments(manifest, "account.get", {"field": value})
+
+
+def test_nullable_nested_connector_objects_keep_validation_and_workflow_references():
+    manifest = {"capabilities": [{"name": "account.get", "input_schema": {
+        "type": "object", "properties": {"options": {
+            "type": ["object", "null"], "required": ["account_id"], "additionalProperties": False,
+            "properties": {"account_id": {"type": "string", "pattern": "^act_[0-9]+$"}},
+        }},
+    }}]}
+    for options in [None, {"account_id": "act_123"}, {"account_id": "{{steps.accounts.id}}"}]:
+        validate_module_arguments(manifest, "account.get", {"options": options})
+    for options in [{}, {"account_id": "wrong"}, {"account_id": "act_123", "extra": True}]:
+        with pytest.raises(NativeConnectorError):
+            validate_module_arguments(manifest, "account.get", {"options": options})
+
+
 def test_resolved_structured_result_is_coerced_to_connector_text() -> None:
     result = coerce_module_arguments(
         native_manifest("google"),
