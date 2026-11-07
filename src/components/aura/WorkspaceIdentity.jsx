@@ -12,7 +12,7 @@ export default function WorkspaceIdentity() {
       onClick={() => setOpen(!open)} className="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground">
       Account
     </button>
-    {open && <section aria-label="Account and workspace details" className="absolute right-0 top-10 z-50 w-72 rounded-xl border border-white/10 bg-[#111827] p-4 text-sm shadow-xl">
+    {open && <section aria-label="Account and workspace details" className="absolute left-0 top-10 z-50 w-[min(18rem,calc(100vw-2rem))] sm:left-auto sm:right-0 rounded-xl border border-white/10 bg-[#111827] p-4 text-sm shadow-xl">
       <p className="text-xs text-muted-foreground">Signed in as</p>
       <p className="mt-1 break-all">{email || user?.fullName || "Current AURA account"}</p>
       <p className="mt-3 text-xs text-muted-foreground">Workspace</p>
