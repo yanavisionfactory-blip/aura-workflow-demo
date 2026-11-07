@@ -322,6 +322,19 @@ def step_context_value(
         value.setdefault("output", result)
         value.setdefault("result", result)
         value.setdefault("provider_result", evidence)
+        if operation in {"get_ad_accounts", "mcp_meta_ads_get_ad_accounts"} and result.get("is_error") is False:
+            # Pipeboard returns the account collection as JSON inside its MCP
+            # structured result. Expose the full collection, without selecting
+            # an account or altering the saved provider receipt.
+            structured = result.get("structured_content")
+            payload = structured.get("result") if isinstance(structured, dict) else None
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except ValueError:
+                    payload = None
+            if isinstance(payload, dict) and isinstance(payload.get("data"), list):
+                value.setdefault("data", payload["data"])
         if "ret" in result or "exports" in result:
             if operation == "google-sheets.new-spreadsheet":
                 workbook = result.get("ret")

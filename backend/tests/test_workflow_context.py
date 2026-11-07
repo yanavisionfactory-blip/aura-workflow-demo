@@ -1,3 +1,6 @@
+import json
+from copy import deepcopy
+
 import pytest
 from pydantic import ValidationError
 
@@ -12,6 +15,31 @@ from app.workflow_context import (
     resolve_value,
     step_context_value,
 )
+
+
+@pytest.mark.parametrize("operation", ["get_ad_accounts", "mcp_meta_ads_get_ad_accounts"])
+def test_meta_account_discovery_exposes_complete_wrapped_collection(operation):
+    accounts = [{"id": "act_a", "currency": "EUR"}, {"id": "act_b", "currency": "USD"}]
+    receipt = {"is_error": False, "structured_content": {"result": json.dumps({"data": accounts})},
+               "content": [{"type": "text", "text": "original provider evidence"}]}
+    original = deepcopy(receipt)
+    value = step_context_value(receipt, operation)
+    assert receipt == original
+    assert value["provider_result"] == original
+    assert value["data"] == accounts
+    assert "id" not in value and "account_id" not in value
+    assert resolve_value("{{steps.discovery.data[1].id}}", {"steps": {"discovery": value}}) == "act_b"
+
+
+@pytest.mark.parametrize("error,payload,operation", [
+    (True, '{"data":[{"id":"act_a"}]}', "get_ad_accounts"),
+    (False, "not JSON", "get_ad_accounts"),
+    (False, '{"data":{"id":"act_a"}}', "get_ad_accounts"),
+    (False, '{"data":[{"id":"act_a"}]}', "other.get_ad_accounts"),
+])
+def test_meta_account_alias_rejects_failed_malformed_or_unrelated_receipts(error, payload, operation):
+    receipt = {"is_error": error, "structured_content": {"result": payload}}
+    assert "data" not in step_context_value(receipt, operation)
 
 
 def test_referenced_paths_includes_all_template_roots() -> None:
