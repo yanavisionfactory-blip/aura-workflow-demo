@@ -9,10 +9,11 @@ export default function ExecutionView({ steps, currentStepIndex, isReal, verifyi
   const completedCount = steps.filter((s) => s.status === "completed").length;
   const failed = steps.some((s) => s.status === "failed");
   const recovering = steps.some((s) => s.status === "recovering");
+  const providerWait = steps.find((s) => s.status === "waiting_for_provider");
   const progress = stepCount ? (completedCount / stepCount) * 100 : 0;
   const remaining = Math.max(0, stepCount - completedCount);
   const etaSecs = remaining > 0 && !failed ? remaining * STEP_DURATION : 0;
-  const eta = failed
+  const eta = failed || providerWait
     ? null
     : isReal
     ? remaining > 0
@@ -34,11 +35,11 @@ export default function ExecutionView({ steps, currentStepIndex, isReal, verifyi
         <div className="flex items-center gap-3">
           <div className="relative p-2 rounded-xl bg-accent/10 border border-accent/20">
             <Activity className="w-5 h-5 text-accent" />
-            {failed ? null : <div className="absolute inset-0 rounded-xl bg-accent/20 animate-pulse" />}
+            {failed || providerWait ? null : <div className="absolute inset-0 rounded-xl bg-accent/20 animate-pulse" />}
           </div>
           <div>
             <h2 className="text-lg font-semibold">
-              {failed ? "Workflow paused" : verifying ? "Checking the final result" : recovering
+              {failed ? "Workflow paused" : providerWait ? `Waiting for ${providerWait.tool || "the provider"}` : verifying ? "Checking the final result" : recovering
                 ? steps.some((step) => step.jiraTasks?.length) ? "Checking your Jira tasks" : "Checking your results"
                 : demo ? "Playing the prepared workflow" : "Running your workflow"}
             </h2>
@@ -46,7 +47,7 @@ export default function ExecutionView({ steps, currentStepIndex, isReal, verifyi
               {stepCount
                 ? `Step ${Math.min(currentStepIndex + 1, stepCount)} of ${stepCount}`
                 : "Restoring the saved run"}
-              {eta ? ` · ${eta}` : verifying ? " · Completed steps are saved" : ""}
+              {eta ? ` · ${eta}` : providerWait ? " · Automatic retry scheduled · Completed work is saved" : verifying ? " · Completed steps are saved" : ""}
             </p>
           </div>
         </div>
@@ -82,7 +83,7 @@ export default function ExecutionView({ steps, currentStepIndex, isReal, verifyi
       {!failed && (
         <div className="flex items-center justify-center gap-1.5 mt-4 text-[11px] text-muted-foreground/50">
           <Clock className="w-3 h-3" />
-          {demo ? "Local demo playback · no provider calls or external changes" : "Your result opens automatically when this tool finishes."}
+          {demo ? "Local demo playback · no provider calls or external changes" : providerWait ? "You can leave this page. The saved workflow resumes automatically when the scheduled retry is due." : "Your result opens automatically when this tool finishes."}
         </div>
       )}
       {isReal && onCancel && (
