@@ -8,6 +8,13 @@ from .native_connectors import current_capability_manifest, normalize_module_arg
 from .operation_contracts import compile_contracts
 
 
+class PlanPreflightError(ValueError):
+    public_message = (
+        "AURA couldn't match the planned actions to the tools' supported capabilities. "
+        "Retry planning. Your existing connections are unchanged."
+    )
+
+
 @dataclass
 class PlanPreflight:
     fixes: list[str]

@@ -199,9 +199,14 @@ async def test_model_quota_failure_precedes_inferred_app_connection(
 
 
 @pytest.mark.asyncio
-async def test_selected_app_planning_failure_is_not_masked_by_another_connection_gate(database, monkeypatch):
+@pytest.mark.parametrize("failure_kind", ["selected_app", "preflight"])
+async def test_plan_validation_failure_is_not_masked_by_another_connection_gate(database, monkeypatch, failure_kind):
+    from app.plan_preflight import PlanPreflightError
     from app.selected_tools import SelectedToolError
 
+    failure = (SelectedToolError("internal repair instruction", public_message="AURA couldn't include Reddit Ads in this plan.",
+                                 missing_from_plan=True) if failure_kind == "selected_app"
+               else PlanPreflightError("internal repair instruction: get_account_info cannot supply verified_identity"))
     monkeypatch.setattr(orchestrator, "SessionLocal", database)
     monkeypatch.setattr(get_settings(), "planner_mode", "llm")
     async def empty_catalog(*_args):
@@ -209,8 +214,7 @@ async def test_selected_app_planning_failure_is_not_masked_by_another_connection
     async def disconnected_catalog(_session, _prompt, inventory, *_args):
         return inventory + [{"slug": "reddit-ads", "name": "Reddit Ads", "connected": False}]
     async def omitted_app(*_args, **_kwargs):
-        raise SelectedToolError("internal repair instruction", public_message="AURA couldn't include Reddit Ads in this plan.",
-                                missing_from_plan=True)
+        raise failure
     monkeypatch.setattr("app.connector_engineer.dynamic_planning_catalog", empty_catalog)
     monkeypatch.setattr("app.pipedream_connect.planning_catalog", empty_catalog)
     monkeypatch.setattr(orchestrator, "connection_requirement_inventory", disconnected_catalog)
@@ -225,7 +229,7 @@ async def test_selected_app_planning_failure_is_not_masked_by_another_connection
         run = await session.get(WorkflowRun, "selected-failure")
         assert run.status == RunStatus.waiting_for_action
         assert run.execution_context["__aura_blocker__"]["code"] == "planning_retry_required"
-        assert "couldn't include Reddit Ads" in run.error
+        assert run.error == failure.public_message
         assert "internal repair" not in str(run.execution_context)
         assert await session.scalar(select(ConnectionRequirement)) is None
         assert await session.scalar(select(DispatchIntent)) is None
@@ -827,3 +831,38 @@ def test_planner_inventory_preserves_operation_semantics(monkeypatch) -> None:
     assert captured["contract"]["description"] == "Read the current rendered page."
     assert captured["contract"]["requires_approval"] is False
     assert captured["contract"]["capability_tags"] == ["public_page_content"]
+
+
+@pytest.mark.parametrize("invent_identity", [False, True])
+def test_mcp_planner_sees_compiler_evidence_contract_and_cannot_invent_identity(monkeypatch, invent_identity):
+    from app.plan_preflight import PlanPreflightError
+
+    calls = []
+    module = {"name": "get_account_info", "description": "Read advertising account metadata",
+              "permission_scope": "read", "input_schema": {"type": "object"},
+              "output_schema": {"type": "object"},
+              "reliability": {"provides": ["verified_identity"]}}
+    async def fake_create_plan(_prompt, inventory, *_args, **_kwargs):
+        calls.append(inventory[0]["operation_contracts"][0])
+        assert calls[-1]["reliability"]["provides"] == []
+        assert calls[-1]["reliability"]["output_validation"] == "provisional"
+        return WorkflowPlan(name="Read account", interpretation="Read advertising account metadata", steps=[
+            PlanStep(key="account", agent="reader", tool_slug="pipeboard", operation="get_account_info",
+                     reason="Read account", expected_output="Advertising account metadata",
+                     required_evidence=["verified_identity"] if invent_identity else []),
+        ])
+    monkeypatch.setattr(orchestrator, "create_plan", fake_create_plan)
+    async def compile_plan():
+        return await orchestrator._create_compiled_plan(
+            "Read advertising account metadata",
+            [{"slug": "pipeboard", "name": "Pipeboard", "allowed_operations": ["get_account_info"]}],
+            set(), {"pipeboard": {"capabilities": [module]}},
+        )
+    if invent_identity:
+        with pytest.raises(PlanPreflightError, match="cannot supply"):
+            asyncio.run(compile_plan())
+        assert len(calls) == 2
+    else:
+        plan = asyncio.run(compile_plan())
+        assert plan.planning_artifacts["compiled_contracts"]["account"]["provides"] == []
+        assert len(calls) == 1
