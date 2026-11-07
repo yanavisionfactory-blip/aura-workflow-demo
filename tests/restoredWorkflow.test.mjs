@@ -46,8 +46,9 @@ before(async () => {
         if (id === "\0shell:WorkspaceShell") return `import React from "react";
           export default ({children}) => React.createElement("div", null, children);`;
         if (id === "\0shell:HistoryPanel") return `import React from "react";
-          export default ({open, onOpenRun, onEditRun}) => open && React.createElement("div", null,
+          export default ({open, onOpenRun, onEditRun, onViewResults}) => open && React.createElement("div", null,
             React.createElement("button", { onClick: () => onOpenRun("saved") }, "Open saved workflow"),
+            React.createElement("button", { onClick: () => onViewResults({backend_run_id: "saved"}) }, "View saved results"),
             React.createElement("button", { onClick: () => onEditRun(globalThis.__savedRunHarness.workflow, "writes") }, "Edit and run again"));`;
         if (id === "\0shell:PlanView") return `import React from "react";
           export default ({plan, onApprove, approveLabel, onRetryPlan, busy}) => React.createElement("section", null,
@@ -90,6 +91,44 @@ const waitUntil = async (predicate) => {
   }
   assert.ok(predicate(), "workflow did not reach the expected visible state");
 };
+
+test('opening saved results during a provider cooldown restores live progress without replay', async () => {
+  const calls = [];
+  const retryAt = new Date(Date.now() + 3_600_000).toISOString();
+  const steps = [
+    { key: 'sheet', tool_slug: 'google-sheets', operation: 'sheets.create', consequential: true, status: 'completed' },
+    { key: 'ads', tool_slug: 'google-ads', operation: 'google-ads.create-campaign-report', consequential: false,
+      status: 'pending', error: null, output: { provider_retry_at: retryAt } },
+  ].map((step, position) => ({ ...step, id: step.key, position, arguments: {} }));
+  const run = { id: 'saved', plan_approved: true, status: 'recovering', public_status: 'recovering',
+    prompt: 'Compare campaign history', plan: { name: 'Campaign report', steps }, steps,
+    autonomy_state: { last_step_id: 'ads', next_attempt_at: retryAt },
+    execution_context: { __aura_tool_output_review__: { enabled: true, execute_reviewed_plan: true } } };
+  globalThis.__savedRunHarness = { api(name, args) {
+    calls.push({ name, args });
+    if (['rememberedActivePythonRun', 'rememberActivePythonRun', 'forgetActivePythonRun'].includes(name)) return null;
+    if (name === 'getPythonRun') return Promise.resolve(structuredClone(run));
+    throw new Error(`Unexpected API call: ${name}`);
+  } };
+  const container = document.createElement('div'); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(React.createElement(MemoryRouter, {
+      initialEntries: [{ pathname: '/', state: { openHistory: true } }],
+      future: { v7_startTransition: true, v7_relativeSplatPath: true },
+    }, React.createElement(Demo))));
+    const button = [...container.querySelectorAll('button')].find((item) => item.textContent === 'View saved results');
+    await act(async () => Simulate.click(button));
+    await waitUntil(() => container.textContent.includes('Automatic retry:'));
+    assert.match(container.textContent, /Waiting for google-ads/);
+    assert.match(container.textContent, /Step 2 of 2/);
+    assert.match(container.textContent, /Completed work is saved/);
+    assert.equal(container.querySelector('[aria-label="Finished workflow"]'), null);
+    assert.equal(calls.some(({name}) => /approve|createPythonRun|resumePythonRun|dispatchDue/.test(name)), false);
+  } finally {
+    await act(async () => root.unmount()); container.remove();
+  }
+});
 
 for (const failFirst of [false, true]) test(`history edit compiles a fresh durable run before approval${failFirst ? " after a failed planning attempt" : ""}`, async () => {
   const calls = [];

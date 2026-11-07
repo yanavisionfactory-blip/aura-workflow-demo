@@ -2,6 +2,12 @@ import { motion } from "framer-motion";
 import { Check, Loader2, Clock, AlertTriangle, ArrowRight, ExternalLink } from "lucide-react";
 
 const statusConfig = {
+  waiting_for_provider: {
+    icon: Clock,
+    color: "text-amber-400",
+    bg: "bg-amber-400/10 border-amber-400/20",
+    label: "Waiting for API limit",
+  },
   pending: {
     icon: Clock,
     color: "text-muted-foreground/40",

@@ -1271,6 +1271,10 @@ Write ONE clear, conversational sentence restating what they want — but offer 
 
   const openSavedRunResults = async (savedRun) => {
     const run = await getPythonRun(savedRun.backend_run_id);
+    if (run.plan_approved && ["queued", "running", "recovering"].includes(run.public_status || run.status)) {
+      await openSavedRunReview(run.id);
+      return;
+    }
     const result = savedRunResults(run);
     reset();
     pythonRunIdRef.current = run.id;
@@ -1368,7 +1372,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
           && (run.steps || []).every((step) => ["completed", "skipped"].includes(step.status))
           && run.status !== "completed"
         );
-        const active = (run.steps || []).findIndex((step) => step.status === "running");
+        const active = (run.steps || []).findIndex((step) => ["running", "pending", "failed"].includes(step.status));
         if (active >= 0) setCurrentStepIdx(active);
         else if ((run.steps || []).length && (run.steps || []).every((step) => ["completed", "skipped"].includes(step.status))) {
           setCurrentStepIdx(Math.max(0, approvedStepsRef.current.length - 1));

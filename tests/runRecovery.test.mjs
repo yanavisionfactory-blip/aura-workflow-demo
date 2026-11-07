@@ -6,8 +6,35 @@ import {
   needsRecovery,
   recoveryProgressMessage,
   recoveryForRun,
+  providerCooldown,
   visibleRecoveryStepStatus,
 } from '../src/lib/runRecovery.mjs';
+
+test('a queued Google Ads quota retry shows its deadline after the server clears the step error', () => {
+  const retryAt = new Date(Date.now() + 3_600_000).toISOString();
+  const value = { public_status: 'recovering', autonomy_state: {
+    last_step_id: 'ads-read', next_attempt_at: retryAt, last_decision_source: 'provider_rate_limit',
+  } };
+  const step = { id: 'ads-read', status: 'pending', error: null, output: { provider_retry_at: retryAt } };
+  assert.deepEqual(providerCooldown(value, step), { retryAt, waiting: true });
+  assert.equal(visibleRecoveryStepStatus(value, step), 'waiting_for_provider');
+  assert.match(recoveryProgressMessage(value, step), /provider limited API requests.*Automatic retry:/);
+  assert.match(recoveryProgressMessage(value, step), /completed work is saved/);
+  assert.equal(providerCooldown(value, { ...step, id: 'later-read' }), null);
+  assert.equal(visibleRecoveryStepStatus(value, { id: 'later-read', status: 'pending' }), 'pending');
+  for (const status of ['completed', 'running', 'skipped']) {
+    assert.equal(providerCooldown(value, { ...step, status }), null);
+  }
+  assert.equal(providerCooldown({ ...value, public_status: 'blocked' }, step), null);
+  assert.equal(providerCooldown({ ...value, autonomy_state: {} }, step), null);
+  assert.equal(providerCooldown(value, { ...step, output: { provider_retry_at: 'invalid' } }), null);
+  const expired = new Date(Date.now() - 60_000).toISOString();
+  const due = { ...value, autonomy_state: { last_step_id: step.id, next_attempt_at: expired } };
+  const dueStep = { ...step, output: { provider_retry_at: expired } };
+  assert.equal(visibleRecoveryStepStatus(due, dueStep), 'recovering');
+  assert.match(recoveryProgressMessage(due, dueStep), /resuming the saved read/);
+  assert.equal(providerCooldown(value, dueStep).retryAt, retryAt);
+});
 
 test('a failed Claude backup explains the cause and offers only the bounded content retry', () => {
   const value = { status: 'waiting_for_action',

@@ -8,6 +8,7 @@ import { conjugateAction } from "@/lib/auraVerbs";
 import { announceWorkflowHistoryChanged, backendRunHistoryProjection } from "@/lib/workflowHistory.mjs";
 import { cancelPythonRun, dispatchDuePythonRun, getPythonRun, resumePythonRun } from "@/lib/auraApi";
 import RunAgainModal from "./RunAgainModal";
+import { providerCooldown, recoveryProgressMessage } from "@/lib/runRecovery.mjs";
 
 const outcomeIcons = {
   message: MessageSquare,
@@ -82,6 +83,7 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
       const result = await dispatchDuePythonRun(run.backend_run_id);
       const latest = await getPythonRun(run.backend_run_id);
       const projected = backendRunHistoryProjection(latest).run;
+      const waitingStep = latest.steps?.find((step) => providerCooldown(latest, step));
       const blocked = result.preflight_blocker;
       const pendingReview = latest.plan_approved && latest.status === "awaiting_approval";
       setReviewReady(Boolean(pendingReview));
@@ -111,6 +113,8 @@ export default function HistoryRunDetail({ run, workflow, runCount = 1, onBack, 
           : `Paused before step 1: ${blocked.tool_slug || "the selected app"} needs ${blocked.action === "reconnect_account" ? "reconnection" : "attention"}.`
         : paused
           ? `Saved run paused: ${latest.error || recordedReceipt?.error || "This step needs attention."}${recordedReceipt ? " Its provider response is saved; a recheck will not repeat the action." : ""}`
+        : waitingStep
+        ? recoveryProgressMessage(latest, waitingStep)
         : result.published
         ? "Due work dispatched for this run."
         : result.next_attempt_at

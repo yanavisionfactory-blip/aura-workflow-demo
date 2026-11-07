@@ -1,13 +1,37 @@
 // Presentation only. The resume endpoint remains the authority for recovery.
 export const needsRecovery = (status) => ["waiting_for_action", "blocked", "failed"].includes(status);
 
+export function providerCooldown(run = {}, step = {}, now = Date.now()) {
+  if ((run.public_status || run.status) !== "recovering"
+      || !["pending", "failed"].includes(step.status)) return null;
+  const state = run.autonomy_state || {};
+  if (state.last_step_id && state.last_step_id !== step.id) return null;
+  const providerDeadline = Date.parse(step.output?.provider_retry_at || "");
+  if (!Number.isFinite(providerDeadline)) return null;
+  const scheduled = Date.parse(state.next_attempt_at || "");
+  if (!Number.isFinite(scheduled)) return null;
+  const deadline = Math.max(providerDeadline, scheduled);
+  return { retryAt: new Date(deadline).toISOString(), waiting: deadline > now };
+}
+
 export function visibleRecoveryStepStatus(run = {}, step = {}) {
+  const cooldown = providerCooldown(run, step);
+  if (cooldown) return cooldown.waiting ? "waiting_for_provider" : "recovering";
   return run.public_status === "recovering" && step.status === "failed"
     ? "recovering"
     : step.status;
 }
 
 export function recoveryProgressMessage(run = {}, step = {}) {
+  const cooldown = providerCooldown(run, step);
+  if (cooldown) {
+    const when = new Intl.DateTimeFormat(undefined, {
+      month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", timeZoneName: "short",
+    }).format(new Date(cooldown.retryAt));
+    return cooldown.waiting
+      ? `The provider limited API requests. Automatic retry: ${when}. Your completed work is saved; this step will continue without starting a new workflow.`
+      : "The provider's waiting period has ended. AURA is resuming the saved read; completed steps will not repeat.";
+  }
   return run.public_status === "recovering" && step.status === "failed"
     ? "AURA is resolving this safely. Completed work is preserved."
     : "";
