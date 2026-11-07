@@ -6,7 +6,10 @@ from .connection_families import capability_family
 
 
 class SelectedToolError(ValueError):
-    pass
+    def __init__(self, message, *, public_message=None, missing_from_plan=False):
+        super().__init__(message)
+        self.public_message = public_message or message
+        self.missing_from_plan = missing_from_plan
 
 
 def _name(value: str) -> str:
@@ -55,5 +58,8 @@ def validate_selected_tools(plan, targets: dict[str, set[tuple[str, str]]]) -> N
     if missing:
         raise SelectedToolError(
             "The plan must use these explicitly selected tools: " + ", ".join(missing)
-            + ". Include a relevant required action for each; a mention or backup does not count."
+            + ". Include a relevant required action for each; a mention or backup does not count.",
+            public_message="AURA couldn't include the selected app(s) in this plan: " + ", ".join(missing)
+            + ". Revise or retry the plan. Your existing connections are unchanged.",
+            missing_from_plan=True,
         )

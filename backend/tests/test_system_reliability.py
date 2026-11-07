@@ -119,6 +119,8 @@ def _valid_schema_value(schema, root=None):
         return "123"
     if schema.get("pattern") == "^(act_)?[0-9]{1,40}$":
         return "act_123"
+    if schema.get("pattern") == "^(?:t2|a2)_[A-Za-z0-9]+$":
+        return "a2_example"
     if schema.get("pattern") == "^[0-9]{4}-[0-9]{2}-[0-9]{2}$":
         return "2026-09-18"
     if schema.get("pattern") == "^SIMULATED_":

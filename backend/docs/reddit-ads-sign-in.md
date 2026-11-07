@@ -6,8 +6,8 @@ the developer registration. Customers never create an app or enter a client ID,
 client secret, access token, or refresh token.
 
 This connection is separate from Reddit posts/comments. It requests only
-`adsread`, with `duration=permanent`. Its initial operations read the authenticated
-advertiser, businesses, owned advertising accounts and campaigns. It does not
+`adsread`, with `duration=permanent`. Its operations read the authenticated
+advertiser, businesses, owned advertising accounts, campaigns and performance reports. It does not
 create or change ads, budgets, conversions or audiences.
 
 ## One-time operator setup
@@ -27,6 +27,25 @@ create or change ads, budgets, conversions or audiences.
 5. Test with a real advertiser: consent, authenticated `/me`, business and account
    lookup, account selection, campaign read, token refresh and disconnect/reconnect.
    Automated tests mock Reddit and do not establish production access.
+
+## Performance reporting
+
+`reddit-ads.report.get` reads account metadata, campaign metadata and every page of
+the v3 reporting endpoint. Supply a selected `ad_account_id`; optional `since` and
+`until` are inclusive UTC dates. Omit them for the available 24-month delivery
+window through the latest completed hour. Older requested dates are clipped with
+an explicit retention disclosure, never described as full lifetime history.
+
+The response retains raw provider metrics and returns normalized spend, impressions,
+clicks, CTR, CPC and purchase conversions/value/CPA/ROAS. Purchase click and view
+counts remain separately available; other conversion events are not included.
+Account attribution settings, currency and account timezone accompany the UTC
+reporting window. Spend uses microcurrency / 1,000,000 and purchase value uses cents
+/ 100. Missing metrics remain null. Campaigns without delivery rows are listed
+separately and must not be reported as zero. Incomplete pagination fails the read.
+Existing native `adsread` grants use the deployed read contract without another login.
+
+Reporting contract: [Get a Report](https://ads-api.reddit.com/docs/v3/api/get-a-report).
 
 Use Reddit's [application setup guide](https://ads-api.reddit.com/docs/v3/guides/quick-start/create-dev-app)
 and [authentication guide](https://ads-api.reddit.com/docs/v3/authenticate-your-developer-application).
