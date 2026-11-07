@@ -368,7 +368,7 @@ export function visualResultChoices(activity = [], context = {}) {
   const choices = [];
   for (const step of activity.filter((item) => item.status === "completed")) {
     const output = step.output || {};
-    if (!["canva.presentation.create", "canva.design.get"].includes(output.operation)) continue;
+    if (!CANVA_RESULT_OPERATIONS.includes(output.operation)) continue;
     const key = step.stepKey || step.key || output.step_key;
     if (!key) continue;
     const result = primaryResultFromOutputs([{ ...output, step_key: key }], context,
@@ -448,14 +448,30 @@ const canvaDownloadUrl = (outputs = []) => {
   return null;
 };
 
+const CANVA_RESULT_OPERATIONS = ["canva.presentation.create", "canva.design.get", "canva.get-design", "canva.list-designs", "canva.create-design-import-job", "canva.get-design-import-job"];
+
+// Search results are not deliverables by position. Require one exact title or
+// design ID match; a pending import alone never proves a saved design exists.
+function savedCanvaDesign(output) {
+  const result = output.provider_result?.ret ?? output.provider_result ?? {};
+  if (output.operation === "canva.list-designs") {
+    const query = output.resolved_arguments?.query;
+    if (typeof query !== "string" || !query.trim()) return null;
+    const matching = (result.items || []).filter((item) => item?.id && (item.title === query.trim() || item.id === query.trim()));
+    return matching.length === 1 ? matching[0] : null;
+  }
+  if (output.operation.includes("import-job") && (result.job || result).status !== "success") return null;
+  return canvaDesign(result);
+}
+
 const canvaArtifactFromOutputs = (outputs = [], context = {}, stepKey = null) => {
-  const canva = outputs.find((output) => ["canva.presentation.create", "canva.design.get"].includes(output.operation)
-    && (!stepKey || output.step_key === stepKey));
+  const canva = [...outputs].reverse().find((output) => CANVA_RESULT_OPERATIONS.includes(output.operation)
+    && (!stepKey || output.step_key === stepKey) && savedCanvaDesign(output));
   if (!canva) return null;
-  const result = canva.provider_result || {};
-  const design = canvaDesign(result);
+  const result = canva.provider_result?.ret ?? canva.provider_result ?? {};
+  const design = savedCanvaDesign(canva);
   const designId = design?.id;
-  const reused = canva.operation === "canva.design.get";
+  const reused = ["canva.design.get", "canva.get-design", "canva.list-designs"].includes(canva.operation);
   const link = safeHttpsUrl(result.result_url)
     || safeHttpsUrl(design?.urls?.edit_url)
     || (designId ? `https://www.canva.com/design/${encodeURIComponent(designId)}/edit` : null);
@@ -466,6 +482,9 @@ const canvaArtifactFromOutputs = (outputs = [], context = {}, stepKey = null) =>
     ...(reused ? { completionTitle: context.title || "Existing campaign creative verified",
       completionSummary: context.summary || "Existing Canva creative checked. Saved content reused." } : {}),
     designId,
+    pageCount: design?.page_count ?? null,
+    sourceStepKey: canva.step_key,
+    sourceStepId: canva.step_id,
     kind: "presentation",
     preview: designId ? slideContent(canva.resolved_arguments) : null,
     thumbnailUrl: designId ? canvaThumbnailUrl(design?.thumbnail?.url) : null,
@@ -671,7 +690,7 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
       linkLabel: "Open in Jira",
     };
   }
-  if (artifact && (!explicitPrimary || ["canva.presentation.create", "canva.design.get"].includes(explicitPrimary.operation))) {
+  if (artifact && (!explicitPrimary || CANVA_RESULT_OPERATIONS.includes(explicitPrimary.operation))) {
     return {
       ...artifact,
       detail: context.deliverable || context.summary || "Your presentation is ready.",

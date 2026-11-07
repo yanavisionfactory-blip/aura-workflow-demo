@@ -7,12 +7,28 @@ import { auraRequest } from "@/lib/auraApi";
 import { sheetComparisonMarkdown } from "@/lib/sheetReviewEdit.mjs";
 import { downloadTextFile } from "@/lib/auraDownload";
 
+function MobileReportRows({ grid }) {
+  const headers = grid.values[0].map(String);
+  const metrics = /^(Spend|Impressions|Clicks|CTR|CPC|Conversions|CPA|Conversion ?Value|ROAS)$/i;
+  return <div className="space-y-4 p-4 sm:hidden" aria-label="Campaign report cards">{grid.values.slice(1).map((row, index) => {
+    const values = headers.map((label, column) => ({ label, value: String(row[column] ?? "") }));
+    const measured = values.filter(({ label }) => metrics.test(label));
+    const unavailable = measured.length > 0 && measured.every(({ value }) => !value || /^unavailable$/i.test(value));
+    const context = values.filter(({ label, value }, i) => i > 0 && !metrics.test(label) && value && !/chart$/i.test(label));
+    return <article key={index} className="rounded-xl border border-slate-200 p-4"><h4 className="font-semibold">{row[0]}</h4>
+      {unavailable ? <p className="mt-3 text-sm text-slate-600">Metrics unavailable. See the reporting context below.</p> : <dl className="mt-4 grid grid-cols-2 gap-4">{measured.map(({ label, value }) => <div key={label}><dt className="text-xs text-slate-500">{label}</dt><dd className="mt-1 break-words text-sm font-semibold tabular-nums">{value || "Unavailable"}</dd></div>)}</dl>}
+      {context.length > 0 && <details className="mt-4 border-t border-slate-200 pt-3"><summary className="cursor-pointer text-xs font-medium text-emerald-800">Reporting context</summary><dl className="mt-3 space-y-3">{context.map(({ label, value }) => <div key={label}><dt className="text-xs text-slate-500">{label}</dt><dd className="mt-1 break-words text-xs leading-5">{value}</dd></div>)}</dl></details>}
+    </article>;
+  })}</div>;
+}
+
 function SavedCells({ ranges = [], initialRange }) {
   const [tab, setTab] = useState(() => Math.max(0, ranges.findIndex((grid) => sheetRange(grid.range)?.tab === sheetRange(initialRange)?.tab)));
   const grid = ranges[tab];
   const [selected, setSelected] = useState(null);
   if (!grid) return <p className="p-6 text-sm text-slate-600">No saved cell data is available for this workbook. Open Google Sheets to inspect the actual result.</p>;
   const origin = sheetRange(grid.range);
+  const reportCards = origin?.row === 1 && /^platform$/i.test(String(grid.values[0]?.[0]));
   const columns = Math.max(1, ...grid.values.map((row) => row.length));
   const longCells = grid.values.flatMap((row, r) => row.map((value, c) => ({ r, c, value })))
     .filter((cell) => typeof cell.value === "string" && cell.value.length > 200).sort((a, b) => b.value.length - a.value.length);
@@ -22,14 +38,15 @@ function SavedCells({ ranges = [], initialRange }) {
     <div className="flex flex-wrap gap-1 border-b border-slate-200 bg-[#f8fafd] px-3 pt-2" role="tablist" aria-label="Saved sheet ranges">
       {ranges.map((item, index) => <button type="button" role="tab" aria-selected={index === tab} key={`${item.range}-${index}`} onClick={() => { setTab(index); setSelected(null); }} className={`rounded-t-lg px-4 py-2.5 text-xs font-medium ${index === tab ? "border-b-2 border-emerald-700 bg-emerald-50 text-emerald-800" : "text-slate-600"}`}>{sheetRange(item.range)?.tab || item.range}{ranges.filter((grid) => sheetRange(grid.range)?.tab === sheetRange(item.range)?.tab).length > 1 ? ` · ${item.range.split("!").at(-1)}` : ""}</button>)}
     </div>
-    <div className="max-h-80 overflow-auto" aria-label="Saved Google Sheets cells">
+    {reportCards && <MobileReportRows grid={grid} />}
+    <div className={`max-h-80 overflow-auto ${reportCards ? "hidden sm:block" : ""}`} aria-label="Saved Google Sheets cells">
       <table className="w-full border-collapse text-left text-xs"><thead className="sticky top-0 z-10 bg-[#f1f3f4] text-slate-600"><tr><th className="w-12 border border-slate-200" />{Array.from({ length: columns }, (_, c) => <th key={c} className="border border-slate-200 px-3 py-2 text-center font-normal">{columnName(origin.column + c)}</th>)}</tr></thead>
         <tbody>{grid.values.map((row, r) => <tr key={r}><th className="w-12 border border-slate-200 bg-[#f1f3f4] px-3 py-2 text-center font-normal text-slate-500">{origin.row + r}</th>{Array.from({ length: columns }, (_, c) => <td key={c} className={`min-w-36 max-w-xl border border-slate-200 align-top ${active?.r === r && active?.c === c ? "bg-blue-50 outline outline-2 -outline-offset-2 outline-blue-500" : ""}`}>
           <button type="button" aria-label={`Cell ${address(r, c)}`} onClick={() => setSelected({ r, c, value: row[c] ?? "" })} className="block w-full px-3 py-2 text-left"><span className="line-clamp-3 whitespace-pre-wrap break-words">{String(row[c] ?? "") || "\u00a0"}</span></button>
         </td>)}</tr>)}</tbody>
       </table>
     </div>
-    {active && <section aria-label="Selected cell contents" className="border-t border-slate-200">
+    {active && <section aria-label="Selected cell contents" className={`border-t border-slate-200 ${reportCards ? "hidden sm:block" : ""}`}>
       <div className="flex items-center gap-3 bg-[#f8fafd] px-4 py-2 text-xs"><span className="rounded border border-slate-200 bg-white px-2 py-1 font-medium">{address(active.r, active.c)}</span><span className="text-slate-600">Complete saved cell</span></div>
       <div className="max-h-[32rem] overflow-auto p-5 text-sm leading-7 [text-wrap:pretty] [&_h1]:mb-4 [&_h1]:text-xl [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:mt-6 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:mt-4 [&_h3]:font-semibold [&_p]:mb-3 [&_table]:block [&_table]:overflow-auto [&_th]:border [&_th]:border-slate-200 [&_th]:bg-slate-50 [&_th]:p-2 [&_td]:min-w-40 [&_td]:border [&_td]:border-slate-200 [&_td]:p-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_a]:text-blue-700 [&_a]:underline">
         <ReactMarkdown {...documentMarkdownOptions}>{String(active.value ?? "")}</ReactMarkdown>
