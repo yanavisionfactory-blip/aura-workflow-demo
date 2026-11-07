@@ -924,6 +924,13 @@ class PipedreamClient:
         from .analytics_discovery import execute as execute_analytics_discovery
         from .analytics_discovery import handles as handles_analytics_discovery
 
+        if (transport_type in {"pipedream_action", "pipedream_mcp"}
+                and provider == "google-sheets"
+                and capability.get("name") == "google-sheets.get-spreadsheet-info"):
+            from .sheets_metadata import execute as read_sheets_metadata
+
+            return await read_sheets_metadata(self, external_user_id, account_id, arguments)
+
         if transport_type in {"pipedream_action", "pipedream_mcp"} and handles_analytics_discovery(
             provider, str(capability.get("name") or "")
         ):
