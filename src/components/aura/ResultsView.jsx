@@ -183,9 +183,9 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
         {primaryResult.downloadUrl
           ? <a href={primaryResult.downloadUrl} target="_blank" rel="noopener noreferrer" className={footerButton}><FileDown className="h-3.5 w-3.5" />Download</a>
           : <button type="button" onClick={handleDownload} className={footerButton}><FileDown className="h-3.5 w-3.5" />{primaryResult.kind === "frameio_review" ? "Download original brief" : "Download summary"}</button>}
-        {!isFailure && !backendRunId && <button type="button" onClick={() => setShowModal(true)} className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 font-semibold text-white"><Zap className="h-4 w-4" />Connect & run for real</button>}
+        {!isFailure && !backendRunId && !results.collection && <button type="button" onClick={() => setShowModal(true)} className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 font-semibold text-white"><Zap className="h-4 w-4" />Connect & run for real</button>}
       </div>
-      {!backendRunId && <AccessRequestModal open={showModal} onClose={() => setShowModal(false)} workflowPrompt={workflowPrompt} />}
+      {!backendRunId && !results.collection && <AccessRequestModal open={showModal} onClose={() => setShowModal(false)} workflowPrompt={workflowPrompt} />}
       <RunSupportAccess runId={backendRunId} compact />
       <ScheduleModal open={showSchedule} onClose={() => setShowSchedule(false)} title={scheduleTitle || results.title} backendRunId={backendRunId} historyWorkflowId={historyWorkflowId} />
       {!summaryFirst && <ToolResultDialog request={toolView} onClose={() => setToolView(null)} entries={toolEntries} primary={primaryResult} mainEntry={mainEntry} hasMainOutput={hasMainOutput} results={results} activity={activity || []} backendRunId={backendRunId} />}

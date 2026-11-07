@@ -19,6 +19,7 @@ const names = {
 export function toolResultName(name = "AURA", operation = "") {
   operation ||= "";
   if (operation.startsWith("frameio.")) return "Frame.io";
+  if (operation.startsWith("meta-ads.")) return "Meta Ads";
   if (["report.compose", "web.page.read", "web.search", "intelligence.claude_backup"].includes(operation)) return operationProviderName(name, operation);
   for (const [prefix, label] of [["docs.", "Google Docs"], ["sheets.", "Google Sheets"],
     ["drive.", "Google Drive"], ["gmail.", "Gmail"]]) {

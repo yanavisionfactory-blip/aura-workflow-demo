@@ -6,8 +6,8 @@ import { savedToolResponse } from "@/lib/savedToolResponse.mjs";
 
 function SourceResults({ items }) {
   const summaries = items.map(savedToolResponse);
-  const metaEmpty = items.length > 1 && items.every((item) => item.tool === "Meta Ads") && summaries.every((item) => item.empty);
-  if (!metaEmpty) return <div className="space-y-5">{items.map((entry) => <section key={entry.id}><h4 className="mb-3 text-sm font-medium">{entry.action}</h4><SavedToolResponse entry={entry} /></section>)}</div>;
+  const metaEmpty = items.length > 1 && items.every((item) => item.tool === "Meta Ads") && summaries.some((item) => item.empty) && summaries.every((item, index) => item.empty || ["meta-ads.accounts.list", "meta-ads.identity.get"].includes(items[index].operation));
+  if (!metaEmpty) return <div className="space-y-5">{items.map((entry) => <section key={entry.id}><h4 className="mb-3 text-sm font-medium">{entry.tool === "Google Ads" ? savedToolResponse(entry).campaigns.length ? "Campaign performance" : "Account and reporting settings" : entry.action}</h4><SavedToolResponse entry={entry} /></section>)}</div>;
   const withAccount = items.find((entry) => savedToolResponse(entry).facts.some((fact) => fact.label === "Account")) || items[0];
   const periods = [...new Set(summaries.flatMap((item) => item.facts.filter((fact) => fact.label === "Reporting dates").map((fact) => fact.value)))];
   return <div className="space-y-4"><SavedToolResponse entry={withAccount} />{periods.length > 0 && <div><h4 className="mb-2 text-xs font-medium text-muted-foreground">Reporting periods checked</h4><ul className="space-y-1 text-sm text-slate-200">{periods.map((period) => <li key={period}>{period}</li>)}</ul></div>}</div>;
