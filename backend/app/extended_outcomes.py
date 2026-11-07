@@ -4,6 +4,7 @@ import hashlib
 from dataclasses import replace
 
 EXTRA_READBACK = {
+    "google-sheets.update-multiple-rows": "google-sheets.read-rows",
     "google-sheets.new-spreadsheet": "google-sheets.get-spreadsheet-info",
     "x.posts.create": "x.posts.get",
     "sheets.campaign_report.create": "sheets.campaign_report.get",
@@ -23,6 +24,9 @@ EXTRA_READBACK = {
 
 def build_extended(operation, a, receipt):
     from .outcome_checks import OutcomeCheck
+    if operation == "google-sheets.update-multiple-rows":
+        from .sheets_write_outcomes import update_check
+        return update_check(a, receipt)
     if operation == "google-sheets.new-spreadsheet":
         from .sheets_outcomes import creation_check
         return creation_check(a, receipt)
@@ -133,10 +137,13 @@ def build_extended(operation, a, receipt):
 
 
 def leaves(check):
-    return [leaf for child in check.checks for leaf in leaves(child)] if check.kind == "compound" else [check]
+    return [leaf for child in check.checks for leaf in leaves(child)] if check.kind in {"compound", "broker_sheets_update"} else [check]
 
 
 def evaluate_extended(check, observed):
+    if check.kind == "broker_sheets_update":
+        from .sheets_write_outcomes import evaluate_update
+        return evaluate_update(check, observed)
     if check.kind == "broker_sheets_create":
         from .sheets_outcomes import evaluate_creation
         return evaluate_creation(check, observed)
@@ -243,6 +250,8 @@ def evaluate_extended(check, observed):
 
 async def observe_check(executor, check):
     """All calls here are read operations. Caller supplies shared time/request budgets."""
+    if check.kind == "broker_sheets_update":
+        return await executor.read_sheet_cells(check.arguments)
     if check.kind == "compound":
         if check.checks and all(child.operation == "jira.issue.get" for child in check.checks):
             # Bound fan-out while preserving the receipt order for exact comparisons.
@@ -261,6 +270,8 @@ def required_reads(operation, arguments):
     from .outcome_checks import READBACK_OPERATIONS
     read = READBACK_OPERATIONS.get(operation)
     required = {read} if read else set()
+    if operation == "google-sheets.update-multiple-rows":
+        required.add("google-sheets.get-spreadsheet-info")
     if operation == "notion.page.create" and arguments.get("children"):
         required.add("notion.blocks.children.list")
     return required

@@ -28,6 +28,16 @@ async def readback_executor(session, tool, required):
         raise ValueError("Managed account reference is missing")
 
     class ReadbackExecutor:
+        async def read_sheet_cells(self, arguments):
+            from .sheets_write_outcomes import INFO, READ, read_cells
+            # Both approved signed reads are required: cell contents and numeric
+            # worksheet identity. The proxy combines them in one bounded GET.
+            for operation, args in ((READ, arguments), (INFO, {"spreadsheetId": arguments["spreadsheetId"]})):
+                capability = capabilities[operation]
+                prepared = coerce_module_arguments(pack.definition, operation, args)
+                Draft202012Validator(capability.get("input_schema") or {}).validate(prepared)
+            return await read_cells(pipedream_client_for_tool(tool), external_user_id, account_id, arguments)
+
         async def execute(self, operation, arguments):
             capability = capabilities[operation]
             prepared = coerce_module_arguments(pack.definition, operation, arguments)
