@@ -1,6 +1,6 @@
 import RunSupportAccess from "./RunSupportAccess";
 import { useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { Activity, ArrowRight, BarChart3, CalendarClock, Check, ChevronDown, ExternalLink, FileDown, Plus, RefreshCw, Share2, Zap } from "lucide-react";
 import AccessRequestModal from "./AccessRequestModal";
@@ -177,7 +177,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
       </section>}
 
       <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-white/10 pt-4 text-xs">
-        <a href="#/results/collect" className={footerButton}>Collect saved results</a>
+        <Link to="/results/collect" className={footerButton}>Collect saved results</Link>
         {activity?.length > 0 && <button type="button" onClick={() => openTool("activity")} className={footerButton}><Activity className="h-3.5 w-3.5" />Activity</button>}
         <button type="button" onClick={handleShare} className={footerButton}>{copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Share2 className="h-3.5 w-3.5" />}{copied ? "Copied" : "Copy summary"}</button>
         {primaryResult.downloadUrl
