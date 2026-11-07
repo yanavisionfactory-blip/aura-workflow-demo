@@ -82,3 +82,21 @@ def test_saved_sheet_recheck_does_not_guess_results_or_override_access(change):
     assert not blocker or blocker["action"] != "recheck_saved_result"
     if change == "authorization_required":
         assert blocker == run.execution_context["__aura_blocker__"]
+
+
+@pytest.mark.parametrize("status", [StepStatus.failed, StepStatus.running])
+def test_saved_cell_update_exposes_read_only_recovery_after_handoff(status):
+    run = paused_run({"code": "no_safe_recovery", "action": "inspect_run", "retryable": False})
+    step = SimpleNamespace(id="saved-update", status=status, tool_slug="google-sheets",
+        operation="google-sheets.update-multiple-rows",
+        arguments={"sheetId": "saved_workbook_12345", "worksheetId": 0, "range": "A4:B4", "rows": [["Source", "Google Ads"]]},
+        output={"provider_result": {"ret": {"spreadsheetId": "saved_workbook_12345", "updatedRange": "Summary!A4:B4", "updatedCells": 2}}})
+    before = deepcopy(step.output)
+    blocker = main._run_blocker(run, [step], {}, [], {step.id})
+    assert blocker["action"] == "recheck_saved_result" and blocker["retryable"] is True
+    assert step.output == before
+    step.output["provider_result"]["ret"]["updatedCells"] = 1
+    assert main._run_blocker(run, [step], {}, [], {step.id})["action"] == "inspect_run"
+    step.output = before
+    run.execution_context["__aura_blocker__"] = {"action": "reconnect_account"}
+    assert main._run_blocker(run, [step], {}, [], {step.id})["action"] == "reconnect_account"
