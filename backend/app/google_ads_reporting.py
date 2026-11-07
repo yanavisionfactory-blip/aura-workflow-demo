@@ -21,6 +21,9 @@ DATE_RANGES = {
 }
 DATE_SEGMENTS = {f"segments.{part}" for part in ("date", "week", "month", "quarter", "year")}
 _ROOTS = set(REPORT_RESOURCES.values()) | {"metrics", "segments", "campaign_budget"}
+# The planner used the natural-language singular in a live campaign report.
+# Google exposes the conversion-value metric under this plural field name.
+_FIELD_ALIASES = {"metrics.conversion_value": "metrics.conversions_value"}
 _FIELD = re.compile(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*")
 _REFERENCE = re.compile(r"\{\{\s*(?:inputs|vars|steps)\.[a-zA-Z0-9_.\-\[\]'\" ]+\s*\}\}")
 
@@ -58,7 +61,8 @@ def normalize_report_arguments(
             root = value.split(".", 1)[0]
             if "." in value and root in _ROOTS and root != prefix:
                 raise ValueError(f"Google Ads {key} must use the {prefix} namespace for this report; choose the matching report resource.")
-            qualified.append(value if value.startswith(f"{prefix}.") else f"{prefix}.{value}")
+            field = value if value.startswith(f"{prefix}.") else f"{prefix}.{value}"
+            qualified.append(_FIELD_ALIASES.get(field, field))
         result[key] = qualified
 
     date_range = result.get("dateRange")
