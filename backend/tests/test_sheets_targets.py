@@ -20,6 +20,41 @@ from app.workflow_context import (
 )
 
 
+@pytest.mark.parametrize("tab_id", [0, 1386900864])
+def test_saved_add_worksheet_receipt_resolves_reviewed_writer_without_recreation(tab_id):
+    receipt = {"ret": {"properties": {"sheetId": tab_id, "title": "Campaigns", "index": 1}},
+               "exports": {"$summary": 'Created worksheet "Campaigns"'}}
+    original = deepcopy(receipt)
+    value = step_context_value(receipt, "google-sheets.add-worksheet")
+    context = {"steps": {"populate_summary_and_campaigns": value}}
+    for prefix in ("", "ret.", "output.", "result."):
+        assert resolve_value("{{steps.populate_summary_and_campaigns." + prefix + "worksheetId}}", context) == tab_id
+        assert resolve_value("{{steps.populate_summary_and_campaigns." + prefix + "sheetName}}", context) == "Campaigns"
+    assert resolve_value("{{steps.populate_summary_and_campaigns.ret.properties.sheetId}}", context) == tab_id
+    assert value["provider_result"] is receipt and receipt == original
+    assert "worksheetId" not in receipt["ret"]
+
+
+@pytest.mark.parametrize("properties", [None, [], {}, {"sheetId": True, "title": "Campaigns"},
+    {"sheetId": "1", "title": "Campaigns"}, {"sheetId": -1, "title": "Campaigns"},
+    {"sheetId": 2147483648, "title": "Campaigns"}, {"sheetId": 1, "title": " "}])
+def test_created_worksheet_alias_never_guesses_missing_or_invalid_identity(properties):
+    receipt = {"ret": {"properties": properties}}
+    value = step_context_value(receipt, "google-sheets.add-worksheet")
+    assert "worksheetId" not in value and "worksheetId" not in value["ret"]
+    with pytest.raises(ValueError, match="unavailable"):
+        resolve_value("{{steps.created.ret.worksheetId}}", {"steps": {"created": value}})
+
+
+def test_created_worksheet_alias_is_operation_scoped_and_rejects_conflicting_ids():
+    receipt = {"ret": {"properties": {"sheetId": 8, "title": "Campaigns"}}}
+    assert "worksheetId" not in step_context_value(receipt, "other.create")["ret"]
+    with pytest.raises(WorksheetIdentityError, match="conflicting"):
+        step_context_value({**receipt, "worksheetId": 9}, "google-sheets.add-worksheet")
+    with pytest.raises(WorksheetIdentityError, match="conflicting"):
+        step_context_value({"ret": {**receipt["ret"], "sheetName": "Another tab"}}, "google-sheets.add-worksheet")
+
+
 @pytest.mark.parametrize("suffix", ["", ".ret", ".output", ".result"])
 def test_whole_creation_result_is_bound_to_workbook_id_before_review(suffix):
     candidate = plan()

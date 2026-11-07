@@ -42,6 +42,27 @@ def worksheet_metadata_context(result, operation):
     """
     if not isinstance(result, dict):
         return result
+    if operation == "google-sheets.add-worksheet":
+        returned = result.get("ret")
+        properties = returned.get("properties") if isinstance(returned, dict) else None
+        if not isinstance(properties, dict):
+            return result
+        tab_id, title = properties.get("sheetId"), properties.get("title")
+        if (type(tab_id) is not int or not 0 <= tab_id <= 2147483647
+                or not isinstance(title, str) or not title.strip()):
+            return result
+        # Add-worksheet returns one created tab, not a collection to choose
+        # from. Saved plans use worksheetId while the receipt puts that exact
+        # identity in ret.properties.sheetId. Derive aliases on a copy so
+        # restore/retry can reuse the receipt without repeating creation.
+        aliases = {"worksheetId": tab_id, "sheetName": title}
+        if any(key in envelope and envelope[key] != value
+               for envelope in (result, returned)
+               for key, value in aliases.items()):
+            from .workflow_context import WorksheetIdentityError
+
+            raise WorksheetIdentityError("Created worksheet receipt contains conflicting tab identities")
+        return {**result, **aliases, "ret": {**returned, **aliases}}
     if operation == "google-sheets.get-spreadsheet-by-id":
         returned = result.get("ret")
         rows = returned.get("sheets") if isinstance(returned, dict) else None
