@@ -439,6 +439,7 @@ class PipedreamClient:
         path: str,
         *,
         authenticated: bool = True,
+        retry_safe: bool | None = None,
         **kwargs: Any,
     ) -> dict[str, Any] | list[Any]:
         parsed = urlsplit(self.base_url)
@@ -447,6 +448,9 @@ class PipedreamClient:
         headers = {**self._environment_headers(), **(kwargs.pop("headers", {}) or {})}
         if authenticated:
             headers["Authorization"] = f"Bearer {await self._oauth_token()}"
+        # An action POST may have completed even if its response was lost.
+        # Only verified read contracts may opt a POST into transport retries.
+        retry_safe = method.upper() in {"GET", "HEAD", "OPTIONS"} if retry_safe is None else retry_safe
         last_status = 0
         for attempt in range(3):
             try:
@@ -458,14 +462,15 @@ class PipedreamClient:
                         **kwargs,
                     )
             except httpx.HTTPError as exc:
-                if attempt < 2:
+                if retry_safe and attempt < 2:
                     await asyncio.sleep(0.15 * (2**attempt))
                     continue
-                raise PipedreamConnectError("The connector network is temporarily unavailable") from exc
+                raise PipedreamConnectError("The connector network is temporarily unavailable",
+                    retryable=retry_safe, effect_uncertain=not retry_safe) from exc
             last_status = response.status_code
             # The durable run scheduler owns rate-limit retries. Never spend
             # three requests inside this adapter before it sees Retry-After.
-            if response.status_code in _RETRYABLE_STATUS - {429} and attempt < 2:
+            if retry_safe and response.status_code in _RETRYABLE_STATUS - {429} and attempt < 2:
                 await asyncio.sleep(0.15 * (2**attempt))
                 continue
             if not response.is_success:
@@ -485,6 +490,7 @@ class PipedreamClient:
                     "The connector network rejected this request",
                     retryable=response.status_code in _RETRYABLE_STATUS,
                     status_code=response.status_code,
+                    effect_uncertain=not retry_safe and response.status_code in {408, 500, 502, 503, 504},
                     upstream_code=upstream_code,
                     retry_after=max(retry_seconds(response.headers.get("retry-after")),
                                     error_retry_seconds(error_payload)),
@@ -998,6 +1004,7 @@ class PipedreamClient:
         result = await self._request(
             "POST",
             f"/v1/connect/{quote(self.settings.pipedream_project_id, safe='')}/actions/run",
+            retry_safe=capability.get("permission_scope") == "read" and not capability.get("requires_approval"),
             json=payload,
         )
         if not isinstance(result, dict):

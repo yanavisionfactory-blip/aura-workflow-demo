@@ -1063,6 +1063,12 @@ def _schema_argument_target(key: str, properties: dict[str, Any], operation: str
         if len(candidates) == 1:
             return candidates[0]
 
+    if (operation in {"google-sheets.add-multiple-rows", "google-sheets.update-multiple-rows"}
+            and compact_key in {"rows", "values"} and "rows" in properties):
+        # Both names describe the same complete cell matrix. Never map record
+        # objects, single-row actions or arbitrary provider inputs this way.
+        return "rows"
+
     for aliases in _SCHEMA_ALIAS_GROUPS:
         if key not in aliases:
             continue
@@ -1092,6 +1098,10 @@ def _normalize_module_arguments(
     for key, value in arguments.items():
         snake_key = re.sub(r"(?<!^)(?=[A-Z])", "_", key).lower()
         target = _schema_argument_target(snake_key, properties, operation)
+        if (normalize_generated_text and target == "rows"
+                and operation in {"google-sheets.add-multiple-rows", "google-sheets.update-multiple-rows"}
+                and properties.get(target, {}).get("type") == "string" and isinstance(value, list)):
+            value = json.dumps(value, ensure_ascii=False, allow_nan=False)
         property_schema = properties.get(target, {})
         if (normalize_generated_text and value is None and target not in required
                 and _non_nullable_schema(property_schema)):
@@ -1099,7 +1109,7 @@ def _normalize_module_arguments(
             # Preserve required values and nullable fields, but do not block a
             # plan because an optional opaque ID such as folderId is absent.
             continue
-        if target in normalized and target != key:
+        if target in normalized:
             raise NativeConnectorError(f"Duplicate values supplied for {target!r}")
         if properties.get(target, {}).get("format") == "date-time" and isinstance(value, str) and "{{" not in value:
             try:
@@ -1142,13 +1152,6 @@ def normalize_planned_module_arguments(
     manifest: dict[str, Any], operation: str, arguments: dict[str, Any]
 ) -> dict[str, Any]:
     """Fit safe generated prose to connector limits before review and approval."""
-    if operation in {"google-sheets.add-multiple-rows", "google-sheets.update-multiple-rows"}:
-        module = next((item for item in manifest.get("capabilities", [])
-                       if item.get("name") == operation), {})
-        schema = module.get("input_schema", {}).get("properties", {}).get("rows", {})
-        if schema.get("type") == "string" and isinstance(arguments.get("rows"), list):
-            # Encode structured model output once, before the reviewed plan is hashed.
-            arguments = {**arguments, "rows": json.dumps(arguments["rows"], ensure_ascii=False)}
     if operation == "gmail.list":
         # Models sometimes attach Gmail GET response selectors to the list
         # request. List returns message IDs; it cannot accept these selectors.

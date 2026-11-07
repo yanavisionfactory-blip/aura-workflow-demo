@@ -91,7 +91,7 @@ def _lookup(context: dict[str, Any], path: str) -> Any:
     value: Any = context
     for part in normalized_path.split("."):
         if (isinstance(value, dict) and value.get("__aura_worksheet_metadata__") is True
-                and part == "worksheetId" and part not in value):
+                and part in {"worksheetId", "worksheetName"} and part not in value):
             raise WorksheetIdentityError("Google Sheets did not return one matching worksheet; choose the exact tab before writing")
         if isinstance(value, dict) and part in value:
             value = value[part]
