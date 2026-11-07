@@ -572,11 +572,13 @@ def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict], request_p
         bind_created_worksheets,
         bind_dashboard_metadata,
         bind_requested_sheet_reads,
+        bind_required_worksheet_names,
     )
 
     bind_requested_sheet_reads(plan, request_prompt)
     bind_dashboard_metadata(plan, manifests_by_slug)
     bind_created_worksheets(plan, manifests_by_slug)
+    bind_required_worksheet_names(plan, manifests_by_slug)
     for planned_step in plan.steps:
         manifest = _current_capability_manifest(
             planned_step.tool_slug,

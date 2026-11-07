@@ -94,6 +94,12 @@ def worksheet_metadata_context(result, operation):
         # without the connector's `ret` envelope. Preserve the provider's
         # ordered collection so reviewed tab-ID and title references replay.
         value.setdefault("sheets", rows)
+        exports = result.get("exports")
+        if exports is None or isinstance(exports, dict):
+            exports = dict(exports or {})
+            exports.setdefault("sheets", rows)
+            exports.setdefault("worksheets", tabs)
+            value["exports"] = exports
         return value
     if operation != "google-sheets.get-spreadsheet-info":
         return result
@@ -278,3 +284,61 @@ def worksheet_identity(result, operation, planned_steps=None, step_key=None):
     if isinstance(name, str) and name and "{{" not in name:
         tabs = [tab for tab in tabs if tab[1] == name]
     return {"worksheetId": tabs[0][0], "worksheetName": tabs[0][1]} if len(tabs) == 1 else None
+
+
+def bind_required_worksheet_names(plan, manifests):
+    """Bind omitted tab names to an earlier read of the same workbook.
+
+    Names and numeric tab IDs are distinct. Reuse observed metadata instead of
+    asking the model to invent Sheet1, and leave ambiguous selections blocked.
+    """
+    def workbook(arguments):
+        targets = [value for key, value in arguments.items()
+                   if re.sub(r"[^a-z]", "", key.lower()) in {"sheetid", "spreadsheetid"}]
+        return targets[0] if len(targets) == 1 else None
+
+    for step in tuple(plan.steps):
+        if not step.operation.startswith("google-sheets."):
+            continue
+        capability = next((item for item in manifests.get(step.tool_slug, {}).get("capabilities", [])
+                           if item.get("name") == step.operation), {})
+        schema = capability.get("input_schema", {})
+        if "sheetName" not in schema.get("required", []):
+            continue
+        names = [value for key, value in step.arguments.items()
+                 if re.sub(r"[^a-z]", "", key.lower()) == "sheetname"]
+        if any(value not in (None, "") for value in names):
+            continue
+        target = workbook(step.arguments)
+        if target is None:
+            continue
+        prior = plan.steps[:plan.steps.index(step)]
+        readers = [item for item in prior if item.tool_slug == step.tool_slug
+                   and item.operation in DISCOVERY and workbook(item.arguments) == target]
+        source = created_workbook_source(step.arguments, prior)
+        if not readers and source and source.tool_slug == step.tool_slug:
+            capabilities = manifests.get(step.tool_slug, {}).get("capabilities", [])
+            operation = next((name for name in DISCOVERY if any(
+                item.get("name") == name and item.get("permission_scope") == "read"
+                and not item.get("requires_approval") for item in capabilities)), None)
+            if not operation:
+                continue  # Normal validation requests the missing metadata contract.
+            if len(plan.steps) >= MAX_WORKFLOW_STEPS:
+                raise ValueError("Worksheet metadata read exceeds the workflow step limit")
+            key = f"{source.key[:100]}_worksheets"
+            if any(item.key == key for item in plan.steps):
+                raise ValueError("Worksheet metadata step key is already in use")
+            reader = PlanStep(key=key, agent="Google Sheets", tool_slug=step.tool_slug,
+                operation=operation, arguments={DISCOVERY[operation]: target}, depends_on=[source.key],
+                reason="Read the actual worksheet name before accessing its cells",
+                expected_output="Verified worksheet identity from Google Sheets")
+            plan.steps.insert(plan.steps.index(source) + 1, reader)
+            readers = [reader]
+        if not readers:
+            continue
+        reader = readers[-1]
+        step.arguments = {**{key: value for key, value in step.arguments.items()
+                            if re.sub(r"[^a-z]", "", key.lower()) != "sheetname"},
+                          "sheetName": f"{{{{steps.{reader.key}.worksheetName}}}}"}
+        if reader.key not in step.depends_on:
+            step.depends_on.append(reader.key)
