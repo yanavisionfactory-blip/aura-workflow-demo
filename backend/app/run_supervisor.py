@@ -564,9 +564,11 @@ def is_unavoidable_human_blocker(blocker: dict | None) -> bool:
     )
 
 
-def pause_direct_planning_failure(run: WorkflowRun, scope_error: str | None = None) -> None:
+def pause_direct_planning_failure(
+    run: WorkflowRun, scope_error: str | None = None, *, public_message: str | None = None,
+) -> None:
     """End a failed direct LLM attempt without an agent repair loop."""
-    message = (f"AURA's orchestrator blocked this plan: {scope_error} No action started."
+    message = public_message or (f"AURA's orchestrator blocked this plan: {scope_error} No action started."
                if scope_error else
         "AURA couldn't prepare the actions for this plan. "
         "Nothing has started. Please try again."

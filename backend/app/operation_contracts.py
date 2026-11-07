@@ -34,6 +34,17 @@ META_COLLECTION = {"type": "object", "required": ["data", "complete", "source_pr
                    "source_provider": {"const": "meta-ads"}, "vendor_api_called": {"const": True},
                    "connection_route": {"const": "direct"}, "retrieved_at": TEXT}}
 KNOWN = {
+    "reddit-ads.report.get": ({"type": "object", "required": [
+        "source_provider", "vendor_api_called", "complete", "account_id", "account", "data",
+        "raw_data", "campaigns", "date_range", "conversion_definition", "row_count", "notes", "retrieved_at",
+    ], "properties": {
+        "source_provider": {"const": "reddit-ads"}, "vendor_api_called": {"const": True},
+        "complete": {"const": True}, "account_id": TEXT, "account": OBJECT,
+        "data": {"type": "array", "items": OBJECT}, "raw_data": {"type": "array", "items": OBJECT},
+        "campaigns": {"type": "array", "items": OBJECT}, "date_range": OBJECT,
+        "conversion_definition": TEXT, "row_count": {"type": "integer", "minimum": 0},
+        "notes": {"type": "array", "items": TEXT}, "retrieved_at": TEXT,
+    }}, ["campaign_performance_rows"]),
     "reddit-ads.identity.get": ({"type": "object", "required": ["ok", "identity"],
         "properties": {"ok": {"const": True}, "identity": {"type": "object", "required": ["id"],
             "properties": {"id": {"type": "string", "minLength": 1}}}}}, ["verified_identity"]),

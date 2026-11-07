@@ -198,6 +198,39 @@ async def test_model_quota_failure_precedes_inferred_app_connection(
         assert await session.scalar(select(DispatchIntent)) is None
 
 
+@pytest.mark.asyncio
+async def test_selected_app_planning_failure_is_not_masked_by_another_connection_gate(database, monkeypatch):
+    from app.selected_tools import SelectedToolError
+
+    monkeypatch.setattr(orchestrator, "SessionLocal", database)
+    monkeypatch.setattr(get_settings(), "planner_mode", "llm")
+    async def empty_catalog(*_args):
+        return [], {}
+    async def disconnected_catalog(_session, _prompt, inventory, *_args):
+        return inventory + [{"slug": "reddit-ads", "name": "Reddit Ads", "connected": False}]
+    async def omitted_app(*_args, **_kwargs):
+        raise SelectedToolError("internal repair instruction", public_message="AURA couldn't include Reddit Ads in this plan.",
+                                missing_from_plan=True)
+    monkeypatch.setattr("app.connector_engineer.dynamic_planning_catalog", empty_catalog)
+    monkeypatch.setattr("app.pipedream_connect.planning_catalog", empty_catalog)
+    monkeypatch.setattr(orchestrator, "connection_requirement_inventory", disconnected_catalog)
+    monkeypatch.setattr(orchestrator, "_create_compiled_plan", omitted_app)
+    async with database() as session:
+        session.add(Workspace(id="selected-workspace", name="Selected app regression"))
+        session.add(WorkflowRun(id="selected-failure", workspace_id="selected-workspace",
+            prompt="Compare Reddit Ads performance", inputs={"requested_tools": ["Reddit Ads"]}, status=RunStatus.planning))
+        await session.commit()
+    await orchestrator._plan_run("selected-failure", "selected-workspace")
+    async with database() as session:
+        run = await session.get(WorkflowRun, "selected-failure")
+        assert run.status == RunStatus.waiting_for_action
+        assert run.execution_context["__aura_blocker__"]["code"] == "planning_retry_required"
+        assert "couldn't include Reddit Ads" in run.error
+        assert "internal repair" not in str(run.execution_context)
+        assert await session.scalar(select(ConnectionRequirement)) is None
+        assert await session.scalar(select(DispatchIntent)) is None
+
+
 def test_only_exact_backend_catalog_provider_becomes_user_connection_action() -> None:
     inventory = [
         {"slug": "hubspot", "name": "HubSpot", "connected": False},

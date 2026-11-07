@@ -1262,7 +1262,7 @@ def planning_error_message(exc: Exception) -> str:
         if isinstance(current, ProofingSourceError):
             return str(current)
         if isinstance(current, SelectedToolError):
-            return str(current)
+            return current.public_message
         chain.append(str(current))
         current = current.__cause__ or current.__context__
     lowered = " ".join(chain).lower()
@@ -2198,13 +2198,16 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 type(exc).__name__,
             )
             failure_category = planning_failure_category(exc)
+            from .selected_tools import SelectedToolError
             # A failed model call cannot establish that connecting a catalog
             # app would help. In particular, do not hide exhausted AI credits
             # behind an unrelated account-authorization prompt.
             # A failed connector switch is a failed draft, not evidence that
             # unrelated Google accounts need consent. Only a compiled plan's
             # actual grant checks may ask for access after an explicit choice.
-            missing = ([] if failure_category == "operator_quota" or (run.inputs or {}).get("connection_routes") else
+            missing = ([] if failure_category == "operator_quota"
+                       or (isinstance(exc, SelectedToolError) and exc.missing_from_plan)
+                       or (run.inputs or {}).get("connection_routes") else
                        explicit_disconnected_capabilities(
                            run.prompt + "\n" + "\n".join(requested_tools), requirement_inventory))
             missing = [item for item in missing if capability_family(item) not in excluded_families]
@@ -2271,7 +2274,10 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 # must not enter the agent-style supervisor retry loop. Leave
                 # the visible proposal intact and offer an explicit retry.
                 scope_error = str(exc) if str(exc).startswith("Unrequested ") else None
-                pause_direct_planning_failure(run, scope_error=scope_error)
+                pause_direct_planning_failure(
+                    run, scope_error=scope_error,
+                    public_message=planning_error_message(exc) if isinstance(exc, SelectedToolError) else None,
+                )
             else:
                 await recover_planning_failure(
                     session,

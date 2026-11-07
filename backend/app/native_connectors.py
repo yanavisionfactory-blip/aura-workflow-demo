@@ -19,6 +19,7 @@ from .kpi_pilot import KpiFields
 from .policy import operation_scope
 from .presentation_content import PRESENTATION_SCHEMA
 from .proofing import FeedbackImportRequest
+from .reddit_ads import ReportRequest as RedditReportRequest
 from .reports import ReportRequest
 from .seo_crawl import CrawlReviewRequest
 from .website_content import ContentRequest
@@ -68,8 +69,8 @@ _POSITIVE_INTEGER = {"type": "integer", "minimum": 1}
 
 NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
     "reddit-ads": {
-        "schema_version": "1.1", "catalog_version": 1, "provider_type": "oauth",
-        "name": "Reddit Ads", "description": "Connect with Reddit to read advertising accounts and campaigns.",
+        "schema_version": "1.1", "catalog_version": 2, "provider_type": "oauth",
+        "name": "Reddit Ads", "description": "Read advertising accounts, campaigns and campaign performance reports.",
         "base_url": "https://ads-api.reddit.com/api/v3", "identity": {"provider": "reddit-ads"},
         "modules": [
             _module("reddit-ads.identity.get", "search", "Read the connected Reddit Ads identity.", permission_scope="read"),
@@ -78,6 +79,9 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                     required=("business_id",), properties={"business_id": _TEXT}, permission_scope="read"),
             _module("reddit-ads.campaigns.list", "search", "Read campaigns from an explicitly selected advertising account.",
                     required=("ad_account_id",), properties={"ad_account_id": _TEXT}, permission_scope="read"),
+            {**_module("reddit-ads.report.get", "search",
+                "Read complete campaign performance for one explicitly selected Reddit Ads account: spend, impressions, clicks, CTR, CPC and purchase conversions/value/CPA/ROAS. Includes account identity, currency, timezone, attribution settings and active/ended campaign metadata. Omit since/until for the full available 24-month history, or use inclusive YYYY-MM-DD dates. Reports use UTC and completed hours. Never describe retained history as full lifetime. Missing metrics remain null; campaigns without report rows are unavailable, not zero. Use this operation for performance comparisons, not campaigns.list alone.",
+                permission_scope="read"), "input_schema": RedditReportRequest.model_json_schema()},
         ],
     },
     "meta-ads-direct": {
