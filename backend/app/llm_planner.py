@@ -386,6 +386,32 @@ def _bounded_planning_catalog(payload: dict) -> dict:
                      if (catalog[candidate[1]]["slug"], candidate[2]) in choices), None)
         if best:
             reserved.add((catalog[best[1]]["slug"], best[2]))
+    # A provider explicitly named in prose needs representation too. Without
+    # this reservation, a large Sheets/Ads catalog can consume the entire
+    # budget and make a connected Meta account appear to have no operations.
+    # Keep actual route identities and grants; never infer consent from a name.
+    from .connection_families import capability_family
+
+    named_families = set()
+    for item in catalog:
+        aliases = [str(item.get(key) or "") for key in ("slug", "name", "canonical_provider")]
+        if any(alias and alias.casefold() not in {"google"} and re.search(
+            r"(?<![\w.:-])" + r"[\s_-]+".join(re.escape(part) for part in
+                re.findall(r"[a-z0-9]+", alias.casefold())) + r"(?![\w.:-])", request,
+        ) for alias in aliases):
+            named_families.add(capability_family(item.get("canonical_provider") or item["slug"]))
+    for family in named_families:
+        choices = [candidate for candidate in candidates
+                   if capability_family(catalog[candidate[1]].get("canonical_provider")
+                                        or catalog[candidate[1]]["slug"]) == family]
+        if not choices:
+            continue
+        def granted(candidate):
+            item = catalog[candidate[1]]
+            return item.get("connected") and candidate[2] in item.get(
+                "granted_operations", item.get("allowed_operations", []))
+        best = min(choices, key=lambda candidate: (not granted(candidate), candidate))
+        reserved.add((catalog[best[1]]["slug"], best[2]))
     required.update(reserved)
     candidates.sort(key=lambda candidate: (
         (catalog[candidate[1]]["slug"], candidate[2]) not in reserved, candidate,
@@ -456,7 +482,12 @@ async def create_llm_plan(
         "The operations list is the complete authority: use only its exact tool slugs and "
         "operation names. Each step is one actual provider call. Reasoning, summaries and "
         "drafting between calls do not need placeholder steps. An unconnected catalog tool "
-        "may be planned; connection checks happen later. Choose the smallest set of real "
+        "may be planned; connection checks happen later. Prefer already granted connected "
+        "operations over equivalent disconnected routes unless the user chose a specific route. "
+        "Never use an operation from one provider as a placeholder for connecting or reading "
+        "another provider. Preserve every requested source platform; if a needed reporting "
+        "capability is absent, disclose that limitation rather than silently omitting its results. "
+        "Choose the smallest set of real "
         "operations that completes every requested outcome; do not invent extra sends, "
         "writes, recipients, IDs, permissions or provider results. Use the supplied input "
         "schema for arguments_json, a JSON-encoded object. Resolve named resources with "

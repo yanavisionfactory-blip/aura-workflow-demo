@@ -408,6 +408,29 @@ def test_many_large_operations_keep_required_action_and_valid_catalog():
     assert set(offered) == set(item["allowed_operations"])
 
 
+def test_named_report_platforms_survive_catalog_packing_without_manual_selection():
+    google = [{"name": f"google-ads.campaign-report-performance-{i}",
+               "description": str(i) + "G" * 4000, "permission_scope": "read",
+               "input_schema": {"type": "object", "properties": {}}} for i in range(50)]
+    others = [{"slug": slug, "name": label, "canonical_provider": provider, "connected": connected,
+               "allowed_operations": [operation], "operation_contracts": [{
+                   "name": operation, "description": label + "M" * 30000,
+                   "permission_scope": "read", "input_schema": {"type": "object", "properties": {}}}]}
+              for slug, label, provider, connected, operation in [
+                  ("agent-meta", "Meta Ads — Pipeboard", "meta-ads", True, "get_insights"),
+                  ("reddit-ads", "Reddit Ads", "reddit-ads", False, "reddit-ads.campaigns.list"),
+              ]]
+    packed = llm_planner._bounded_planning_catalog({
+        "request": "Compare Google Ads, Meta Ads, and Reddit Ads campaign performance in a report",
+        "selected_tools": [], "required_actions": [],
+        "operations": [{"slug": "google-ads", "name": "Google Ads", "connected": True,
+                        "allowed_operations": [m["name"] for m in google], "operation_contracts": google}, *others],
+    })
+    assert all(item["allowed_operations"] for item in packed["operations"])
+    assert next(item for item in packed["operations"] if item["slug"] == "agent-meta")["connected"] is True
+    assert next(item for item in packed["operations"] if item["slug"] == "reddit-ads")["connected"] is False
+
+
 def test_large_selected_catalog_retains_exact_requested_generation_and_reads():
     distractors = [{
         "name": f"connector.report.read.compose-{index}",
