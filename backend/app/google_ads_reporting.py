@@ -36,6 +36,7 @@ _REFERENCE = re.compile(r"\{\{\s*(?:inputs|vars|steps)\.[a-zA-Z0-9_.\-\[\]'\" ]+
 
 def normalize_report_arguments(
     operation: str, arguments: dict[str, Any], *, allow_references: bool = False,
+    normalize_full_history: bool = False,
 ) -> dict[str, Any]:
     resource = REPORT_RESOURCES.get(operation)
     if not resource:
@@ -77,6 +78,19 @@ def normalize_report_arguments(
     date_range = result.get("dateRange")
     if reference(date_range):
         return result  # Check again after typed references are resolved.
+    if (normalize_full_history and isinstance(date_range, str)
+            and date_range.strip().upper() in {"", "ALL_TIME", "LIFETIME"}
+            and result.get("startDate") is None and result.get("endDate") is None
+            and (result.get("segments") is None or isinstance(result.get("segments"), list))):
+        # These model spellings mean an unfiltered history query. Serialize
+        # that intent using the provider's actual contract, before approval.
+        # Preserve explicit time breakdowns: the check below still rejects
+        # those without dates instead of silently dropping requested detail.
+        result.pop("dateRange")
+        result.setdefault("segments", [])
+        if result["segments"] is None:
+            result["segments"] = []
+        date_range = None
     if date_range is not None and (not isinstance(date_range, str) or date_range not in DATE_RANGES):
         raise ValueError("Google Ads dateRange must be a supported GAQL date range or CUSTOM. For full-period totals, omit dateRange and use segments: []; ALL_TIME is not supported.")
     dates = [result.get(key) for key in ("startDate", "endDate")]
