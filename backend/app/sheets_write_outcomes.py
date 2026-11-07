@@ -10,6 +10,20 @@ READ = "google-sheets.read-rows"
 INFO = "google-sheets.get-spreadsheet-info"
 
 
+def has_saved_update(arguments, output):
+    """Recognize a receipt eligible for read-only recovery, not a verified result."""
+    if not isinstance(output, dict):
+        return False
+    resolved, receipt = output.get("resolved_arguments", arguments), output.get("provider_result")
+    if not isinstance(resolved, dict) or not isinstance(receipt, dict):
+        return False
+    try:
+        update_check(resolved, receipt)
+    except (TypeError, ValueError, KeyError):
+        return False
+    return True
+
+
 def bounds(value):
     match = re.fullmatch(r"([A-Z]{1,3})([1-9][0-9]*):([A-Z]{1,3})([1-9][0-9]*)", value or "")
     if not match:
