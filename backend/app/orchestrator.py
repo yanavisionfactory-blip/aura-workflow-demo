@@ -1212,7 +1212,9 @@ async def _create_compiled_plan(
                     connection_routes=connection_routes,
                 )
             apply_account_defaults(plan, inventory, manifests_by_slug)
-            reddit_ads.apply_account_defaults(plan, inventory, manifests_by_slug)
+            reddit_ads.apply_account_defaults(
+                plan, inventory, manifests_by_slug, prompt=request_prompt or prompt,
+            )
             _normalize_planned_steps(plan, manifests_by_slug, request_prompt or prompt)
             from .intelligence_backup import add_intelligence_backups
 
@@ -1242,7 +1244,9 @@ async def _create_compiled_plan(
             if direct_planning:
                 from .llm_planner import reference_repair_context
 
-                reference_repair = reference_repair_context(plan, available_input_names)
+                reference_repair = reference_repair_context(
+                    plan, available_input_names, validation_error=str(exc),
+                )
             repair_requirements.append(str(exc))
             reason = str(exc)
             failure_category = (

@@ -256,7 +256,12 @@ def selected_account(tool):
         return None
 
 
-def apply_account_defaults(plan, inventory, manifests):
+def apply_account_defaults(plan, inventory, manifests, *, prompt=""):
+    """Bind missing/model-malformed account IDs to the verified saved choice.
+
+    This runs before plan approval, never during dispatch. Explicit user targets
+    and workflow references must still be validated instead of being redirected.
+    """
     selected = next((item.get("reddit_ads_account") for item in inventory if item["slug"] == "reddit-ads"), None)
     if not selected:
         return
@@ -266,5 +271,18 @@ def apply_account_defaults(plan, inventory, manifests):
         fields = {"reddit-ads.accounts.list": "business_id", "reddit-ads.campaigns.list": "ad_account_id",
                   "reddit-ads.report.get": "ad_account_id"}
         field = fields.get(step.operation)
-        if field and not step.arguments.get(field):
+        if not field or field not in selected:
+            continue
+        value = step.arguments.get(field)
+        saved = selected[field]
+        if field == "ad_account_id" and (
+            not isinstance(saved, str) or len(saved) > 120 or not re.fullmatch(ACCOUNT_ID, saved)
+        ):
+            continue
+        malformed_generated_id = (
+            field == "ad_account_id" and isinstance(value, str) and value
+            and "{{" not in value and not re.fullmatch(ACCOUNT_ID, value)
+            and value.casefold() not in prompt.casefold()
+        )
+        if not value or malformed_generated_id:
             step.arguments = {**step.arguments, field: selected[field]}
