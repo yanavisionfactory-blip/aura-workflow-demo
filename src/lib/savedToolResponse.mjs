@@ -41,6 +41,8 @@ export function savedToolResponse(entry) {
     fact("Retrieved", body.retrieved_at);
     if (body.inventory_scope?.date_filter === "none") fact("Reporting scope", "Campaign inventory · no date filter");
     fact("Status coverage", body.inventory_scope?.effective_status?.join(", "));
+    fact("Unavailable statuses", body.inventory_scope?.unavailable_effective_status?.join(", "));
+    fact("Inventory limitation", body.inventory_scope?.limitation);
     if (meta && args.time_range === "maximum") fact("Reporting scope", "Maximum history returned by the connected provider");
     if (discovery) {
       fact("Account discovery", discovery.coverage?.status === "complete" ? "Completed for authorized accounts" : "Incomplete · some account access could not be checked");

@@ -85,13 +85,13 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         ],
     },
     "meta-ads-direct": {
-        "schema_version": "1.1", "catalog_version": 2, "provider_type": "oauth",
+        "schema_version": "1.1", "catalog_version": 3, "provider_type": "oauth",
         "name": "Meta Ads", "description": "Read Meta advertising accounts and performance directly through Meta.",
         "base_url": "https://graph.facebook.com", "identity": {"provider": "meta-ads-direct"},
         "modules": [
             _module("meta-ads.identity.get", "search", "Verify Meta user, ads_read consent and accessible ad accounts.", permission_scope="read"),
             _module("meta-ads.accounts.list", "search", "Automatically discover user-assigned accounts and business-owned/client accounts allowed by existing grants, with names, currency, timezone and coverage warnings. Use discovered IDs for reporting. Ask a named-choice question only when the intended account is ambiguous; all-account reports cover all returned accounts separately.", permission_scope="read"),
-            *[_module(f"meta-ads.{edge}.list", "search", f"Read {edge} in an explicitly selected Meta ad account across all supported effective statuses, explicitly including paused, archived and deleted objects. No date filter is applied. Returns the requested status coverage and complete available rows or fails on pagination limits; provider retention still applies.",
+            *[_module(f"meta-ads.{edge}.list", "search", f"Read {edge} in an explicitly selected Meta ad account across all supported effective statuses, explicitly including paused, archived and deleted objects. No date filter is applied. Returns actual status coverage and complete available rows or fails on pagination limits; provider retention still applies. If Meta explicitly rejects deleted inventory, the read continues for the other statuses and records DELETED as unavailable, never zero.",
                       required=("account_id",), properties={"account_id": {"type": "string", "pattern": r"^(act_)?[0-9]{1,40}$"}}, permission_scope="read")
               for edge in ("campaigns", "adsets", "ads")],
             _module("meta-ads.insights.get", "search", "Read complete performance rows for one explicitly selected account and inclusive YYYY-MM-DD dates, including year. Run once per comparison period. Currency/timezone are the account's; action attribution uses ad-set settings. No totals are invented, reach is not additive, action types remain separate. Save and read back source rows before using the campaign report tool.",

@@ -67,7 +67,11 @@ user-selected fields, batches or credential overrides.
 
 Inventory reads explicitly request every supported effective status, including
 paused, archived and deleted objects, without a date filter. Saved receipts retain
-that status coverage; provider retention still applies. Campaign inventory is
+that status coverage; provider retention still applies. If Graph rejects deleted
+inventory with code 100/subcode 1815001, retry once without DELETED, retain all
+other statuses, and explicitly record deleted inventory as unavailable. This
+does not certify deleted history as empty. Other errors still fail the read.
+Campaign inventory is
 distinct from a dated performance report. Discovery records the actual
 `ads_read` and `business_management` grant status. Missing business discovery
 permission does not imply that campaign reporting on a listed account failed,
