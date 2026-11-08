@@ -8,7 +8,14 @@ from sqlalchemy import select
 
 from .broker_readback import readback_executor
 from .execution_preflight import _connection_credentials
-from .models import BrokerCapabilityPack, CapabilityManifest, RunStep, StepStatus, ToolConnection, WorkflowRun
+from .models import (
+    BrokerCapabilityPack,
+    CapabilityManifest,
+    RunStep,
+    StepStatus,
+    ToolConnection,
+    WorkflowRun,
+)
 from .providers import ProviderExecutor
 from .run_readiness import account_fingerprint
 

@@ -6,7 +6,16 @@ import pytest
 from fastapi import HTTPException
 
 from app import broker_readback, canva_screen
-from app.models import BrokerCapabilityPack, CapabilityManifest, RunStep, StepStatus, ToolConnection, ToolKind, WorkflowRun, Workspace
+from app.models import (
+    BrokerCapabilityPack,
+    CapabilityManifest,
+    RunStep,
+    StepStatus,
+    ToolConnection,
+    ToolKind,
+    WorkflowRun,
+    Workspace,
+)
 
 READ = "canva.list-designs"
 DESIGN = {"id": "saved-design", "title": "Campaign comparison", "thumbnail": {"url": "https://media.canva.com/fresh.jpg"},
