@@ -210,7 +210,7 @@ const audiencePreview = (result = {}) => {
 };
 
 const slideContent = (arguments_ = {}) => {
-  if (!Array.isArray(arguments_.phases) || !arguments_.phases.length || !arguments_.title) return null;
+  if (!Array.isArray(arguments_?.phases) || !arguments_.phases.length || !arguments_.title) return null;
   const isRealText = (value) => typeof value === "string" && value.trim() && !/\{\{[^}]+\}\}/.test(value);
   if (!isRealText(arguments_.title) || (arguments_.subtitle && !isRealText(arguments_.subtitle))) return null;
   const slides = arguments_.phases.map((phase) => ({
@@ -488,6 +488,8 @@ const canvaArtifactFromOutputs = (outputs = [], context = {}, stepKey = null) =>
     kind: "presentation",
     preview: designId ? slideContent(canva.resolved_arguments) : null,
     thumbnailUrl: designId ? canvaThumbnailUrl(design?.thumbnail?.url) : null,
+    viewLink: safeHttpsUrl(design?.urls?.view_url),
+    embedUrl: safeHttpsUrl(design?.urls?.embed_url),
     link,
     linkLabel: "View presentation",
     downloadUrl: canvaDownloadUrl(outputs),

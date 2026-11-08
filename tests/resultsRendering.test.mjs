@@ -556,7 +556,11 @@ test("Results from every tool owns each tool dropdown and Tools used opens those
     await click(byLabel("View Google Ads results"));
     const ads = byLabel("Google Ads result screen");
     assert.equal(scrolled, ads.closest("article"));
-    assert.equal(byLabel("Google Ads result dropdown").open, false, "tool navigation opens the data screen, not action history");
+    assert.ok(byLabel("Google Ads native view"));
+    assert.equal(byLabel("Google Ads result dropdown").open, false, "tool navigation focuses the native view, not action history");
+    assert.equal(byLabel("Google Ads saved snapshot").open, false);
+    await click(byLabel("Google Ads saved snapshot").querySelector("summary"));
+    assert.equal(byLabel("Google Ads saved snapshot").open, true);
     assert.match(ads.textContent, /earlier campaign/);
     assert.doesNotMatch(ads.textContent, /later campaign/);
     const select = ads.querySelector("select");
@@ -593,7 +597,7 @@ test("campaign mobile cards keep reporting notes out of platform metrics", () =>
   assert.match(doc.querySelector('a[href="/results/collect"]').textContent, /Collect saved results/);
 });
 
-test("advertising inputs have their own visible app screens without inventing deliverables", () => {
+test("advertising inputs prioritize native tools and keep AURA snapshots secondary", () => {
   const receipt = (key, tool, operation, provider_result, resolved_arguments = {}) => ({ id: key, key, tool_slug: tool, operation, status: "completed",
     output: { operation, provider_result, resolved_arguments, critic: { action: "accept" }, outcome_check: { status: "verified" } } });
   const steps = [
@@ -604,7 +608,13 @@ test("advertising inputs have their own visible app screens without inventing de
   for (const tool of ["Google Ads", "Meta Ads"]) {
     const screen = doc.querySelector(`[aria-label="${tool} result screen"]`);
     assert.ok(screen, tool);
-    assert.equal(screen.closest("details"), null, "source preview is visible without opening action history");
+    assert.equal(screen.closest("details").getAttribute("aria-label"), `${tool} saved snapshot`);
+    assert.equal(screen.closest("details").open, false, "AURA reconstruction is not the default tool view");
+    const native = doc.querySelector(`[aria-label="${tool} native view"]`);
+    assert.equal(native.closest("details"), null);
+    assert.equal(native.querySelector("a").target, "_blank");
+    assert.match(native.textContent, /new tab/);
+    assert.equal(native.querySelector("iframe"), null, "private ads managers are not forced into blocked iframes");
     assert.match(screen.textContent, /Used as input/);
     assert.match(screen.textContent, /Saved source data in AURA/);
     assert.equal(screen.querySelectorAll('[role="tab"]').length, 2);
@@ -617,4 +627,23 @@ test("advertising inputs have their own visible app screens without inventing de
   const meta = doc.querySelector('[aria-label="Meta Ads result screen"]');
   assert.match(meta.textContent, /Metrics are unavailable, not zero/);
   assert.match(meta.textContent, /2026-01-01 – 2026-06-30/);
+});
+
+test("Canva stays the main output with a native design link and a collapsed snapshot", () => {
+  const link = "https://www.canva.com/api/design/test-signed-token/edit";
+  const step = { id: "design", key: "design", tool_slug: "canva", status: "completed", output: {
+    operation: "canva.design.get", provider_result: { design: { id: "DA-TEST", title: "Campaign review", page_count: 1,
+      urls: { edit_url: link }, thumbnail: { url: "https://media.canva.com/test-thumbnail" } } },
+    critic: { action: "accept" }, outcome_check: { status: "verified" },
+  } };
+  const doc = new JSDOM(render({ ...run, steps: [step], result: {} })).window.document;
+  const native = doc.querySelector('[aria-label="Canva native view"]');
+  assert.ok(native);
+  assert.equal(native.querySelector("a").href, link);
+  assert.equal(native.querySelector("a").target, "_blank");
+  assert.equal(native.querySelector("iframe"), null, "private editor links are not converted to public embeds");
+  assert.match(native.closest("article").querySelector("header").textContent, /Main output/);
+  const snapshot = doc.querySelector('[aria-label="Canva saved snapshot"]');
+  assert.equal(snapshot.open, false);
+  assert.ok(snapshot.querySelector("img"), "saved thumbnail remains reachable as a snapshot");
 });
