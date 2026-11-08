@@ -29,6 +29,8 @@ def mock_http(monkeypatch, report_handler, account_id=ACCOUNT):
     calls = []
     def handler(request):
         calls.append(request)
+        if request.url.path == "/api/v3/me/businesses":
+            return httpx.Response(200, json={"data": [], "pagination": {}})
         if request.url.path == PATH:
             return httpx.Response(200, json={"data": {"id": account_id, "name": "Advertiser",
                 "currency": "EUR", "time_zone_id": "Europe/Berlin", "click_attribution_window": "7_DAY"}})
@@ -120,6 +122,8 @@ async def test_empty_report_remains_empty_and_discloses_retention(monkeypatch):
     assert result["date_range"]["starts_at"] == "2024-11-07T00:00:00Z"
     assert result["date_range"]["ends_at"] == "2026-11-01T00:00:00Z"
     assert len(result["campaigns_without_report_rows"]) == 3
+    assert result["account_discovery"]["accounts"] == []
+    assert result["account_discovery"]["coverage"]["status"] == "complete"
 
 
 @pytest.mark.parametrize("args", [

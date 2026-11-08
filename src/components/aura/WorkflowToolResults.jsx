@@ -31,7 +31,7 @@ export default function WorkflowToolResults({ entries, primary, mainEntry, hasMa
       const combined = isPrimary ? primary : toolOutputResult(completed, activity);
       const combinedEntry = isPrimary ? mainEntry : mainToolEntry(completed, combined || {}) || completed.at(-1);
       const visual = combined && !["result"].includes(combined.kind);
-      const adsInput = ["Google Ads", "Meta Ads"].includes(tool) && completed.length > 0 && !visual;
+      const adsInput = ["Google Ads", "Meta Ads", "Reddit Ads"].includes(tool) && completed.length > 0 && !visual;
       const issues = items.filter((entry) => ["failed", "blocked", "provider_error"].includes(entry.status));
       const link = combined?.link || completed.findLast((entry) => entry.link)?.link;
       const previewKey = `${combinedEntry?.runId || backendRunId}:${combinedEntry?.originalStepKey || combined?.sourceStepKey}:${combined?.designId}`;

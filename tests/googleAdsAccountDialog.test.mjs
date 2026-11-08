@@ -146,3 +146,23 @@ test("a failed save keeps the picker open without claiming a changed account", a
   document.querySelector("[data-close]").click();
   await result;
 });
+
+test("Reddit refresh scans all businesses despite a saved default and shows partial coverage", async () => {
+  setup();
+  const calls = [];
+  const result = googleAdsAccountDialog({ platform: "Reddit", selected: chosen, load: async (login) => {
+    calls.push(login);
+    return { access_accounts: [{ id: root, name: "Old" }, { id: customer, name: "New" }], login_customer_id: null,
+      accounts: [chosen, { ...chosen, customer_id: "a2_new", name: "New advertiser" }],
+      coverage: { status: "partial", warnings: ["Shared-account discovery is unavailable for Old."] } };
+  }, save: async () => assert.fail("must not save automatically") });
+  await tick();
+  assert.deepEqual(calls, [""]);
+  assert.match(form().elements.access.textContent, /All accessible businesses/);
+  assert.match(form().elements.account.textContent, /New advertiser/);
+  assert.equal(document.querySelector("[data-coverage]").hidden, false);
+  assert.match(document.querySelector("[data-coverage]").textContent, /Shared-account discovery/);
+  assert.match(document.querySelector('[role="status"]').textContent, /2 advertising accounts/);
+  document.querySelector("[data-close]").click();
+  await result;
+});

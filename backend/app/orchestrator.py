@@ -1927,6 +1927,15 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             run.inputs = {**(run.inputs or {}), "requested_tools": requested_tools,
                           "excluded_tool_families": sorted(excluded_families)}
         inventory = omission_bounded_inventory(inventory, excluded_families)
+        from .ad_account_discovery import refresh_planning_accounts
+
+        await refresh_planning_accounts(inventory, tools, run.prompt, requested_tools)
+        discovered = {item["slug"]: item for item in inventory if item.get("ad_account_discovery")}
+        for item in connected_inventory:
+            if item["slug"] in discovered:
+                current = discovered[item["slug"]]
+                item["ad_account_discovery"] = current["ad_account_discovery"]
+                item["reddit_ads_account"] = current.get("reddit_ads_account")
         requirement_inventory = (
             inventory if run.prompt.startswith(PILOT_PREFIX)
             else await connection_requirement_inventory(session, run.prompt, inventory, requested_tools)
@@ -1954,7 +1963,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 session, run, connected_inventory, manifests_by_slug,
             ))
             if plan is not None and any(
-                (item.get("google_ads_account") or item.get("reddit_ads_account"))
+                (item.get("google_ads_account") or item.get("reddit_ads_account") or item.get("ad_account_discovery"))
                 and any(step.tool_slug == item["slug"] for step in plan.steps)
                 for item in connected_inventory
             ):

@@ -5,8 +5,12 @@ export function adsInputResult(entries) {
   const summaries = entries.filter((entry) => entry.status === "completed" && entry.hasResponse)
     .map((entry) => ({ entry, ...savedToolResponse(entry) }));
   const fact = (item, label) => item.facts.find((value) => value.label === label)?.value;
+  const discovery = summaries.map((item) => item.discovery).filter(Boolean)
+    .sort((a, b) => String(a.retrieved_at || "").localeCompare(String(b.retrieved_at || ""))).at(-1);
   return {
-    datasets: summaries.filter((item) => item.campaigns.length || item.records.length || item.body || item.empty).map((item) => {
+    discovery,
+    datasets: summaries.filter((item) => !/\.(?:accounts|businesses)\.list$|\.identity\.get$|get_ad_accounts$/.test(item.entry.operation || ""))
+      .filter((item) => item.campaigns.length || item.records.length || item.body || item.empty).map((item) => {
       const account = fact(item, "Account");
       const matching = account ? summaries.filter((other) => fact(other, "Account") === account) : [];
       const facts = [...item.facts];

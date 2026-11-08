@@ -61,13 +61,24 @@ vault. Refresh preserves the original refresh token if Reddit does not rotate it
 The browser receives only the authorization URL and sanitized account data.
 Existing broker-backed Reddit Ads accounts retain their recorded reconnect route.
 
-The account picker retrieves `/me/businesses`, then
-`/businesses/{business_id}/ad_accounts`, following validated same-resource
-pagination. It rechecks membership in that returned list when saving a selection.
-Accounts shared into a business are not returned by this Reddit endpoint; this
-limitation is shown in the picker. No arbitrary account ID text input is offered.
-Account choices fill missing targets on new plans; explicit targets and reviewed
-plans are preserved. Signing in as a different advertiser clears the old choice.
+The account picker and new-workflow planning retrieve `/me/businesses`, then scan
+every accessible business using both `/businesses/{business_id}/ad_accounts` and
+the read-only `POST /businesses/{business_id}/ad_accounts/query` with `data: {}`.
+Both follow validated same-resource pagination. Query results can contain accounts
+owned by another business; retain the discovered access business and deduplicate
+by ad-account ID. A denied/unavailable query is labelled partial coverage, never
+silently treated as no shared accounts. Other discovery failures remain failures.
+The query contract is in the same v3 OpenAPI specification and requires `adsread`;
+no additional authorization scope is requested.
+
+The picker opens on all businesses even with a saved selection. Saving rechecks
+membership in the returned directory. New workflow plans receive fresh names and
+IDs automatically. A sole discovered account can be used as a planning default;
+multiple-account reports retain separate accounts and currencies. A saved default
+never narrows an account-list read. Empty campaign/report responses refresh account
+coverage for the result screen. Explicit report targets and reviewed plans are
+preserved; no campaign or permission changes are made by discovery. Signing in as
+a different advertiser clears the old choice.
 
 Google Ads already uses the existing production Pipedream sign-in and named
 account picker. That flow is retained. Regular Reddit community access is a

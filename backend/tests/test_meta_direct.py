@@ -356,6 +356,9 @@ async def test_full_planning_uses_direct_connection_without_reconnect(settings, 
         assert (SLUG, "meta-ads.insights.get") in selected_tool_targets(["Meta Ads"], inventory)["Meta Ads"]
         assert manifests[SLUG]["identity"]["provider"] == SLUG
         assert any(item["slug"] == SLUG and item["connected"] for item in kwargs["connected_inventory"])
+        discovered = next(item for item in inventory if item["slug"] == SLUG)["ad_account_discovery"]
+        assert discovered["accounts"] == [ACCOUNT]
+        assert discovered["coverage"]["status"] == "partial"  # ads_read does not prove portfolio coverage
         captured.append(True)
         return WorkflowPlan(name="Meta comparison sources", interpretation="Read two explicit periods", steps=[
             PlanStep(key=key, tool_slug=SLUG, operation="meta-ads.insights.get", agent="Meta Ads",
@@ -386,7 +389,7 @@ async def test_full_planning_uses_direct_connection_without_reconnect(settings, 
         assert all(step["tool_slug"] == SLUG for step in run.plan["steps"])
         assert await session.scalar(select(ConnectionRequirement)) is None
         assert not run.plan_approved
-    assert len(requests) == (0 if status == "verified" else 3)
+    assert len(requests) == (2 if status == "verified" else 5)
 
 
 async def test_failed_stale_check_stays_degraded_without_exchanging_or_reconnecting(settings, monkeypatch, database):
