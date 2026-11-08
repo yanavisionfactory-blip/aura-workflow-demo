@@ -47,7 +47,7 @@ export default function ResultsView({ results, onNewWorkflow, onStartWorkflow, w
     const dropdown = summaryFirst && dropdowns.current.get(tool);
     if (dropdown) {
       const card = dropdown.closest("article");
-      if (id === "main" || tool === (mainEntry?.tool || toolResultName(primaryResult.provider)) || card?.hasAttribute("data-source-preview")) { card?.scrollIntoView({ block: "start" }); return; }
+      if (id === "main" || tool === (mainEntry?.tool || toolResultName(primaryResult.provider)) || card?.hasAttribute("data-source-preview") || card?.hasAttribute("data-native-view")) { card?.scrollIntoView({ block: "start" }); return; }
       dropdown.open = true;
       dropdown.querySelector("summary")?.focus({ preventScroll: true });
       dropdown.scrollIntoView({ block: "nearest" });
