@@ -120,3 +120,15 @@ test("malformed or error-marked Pipeboard envelopes never invent empty reporting
     { is_error: false, structured_content: { result: 'not-json' } },
   ]) assert.equal(savedToolResponse({ tool: "Meta Ads", operation: "get_insights", response }).empty, false);
 });
+
+test("empty inventory exposes unsupported deleted coverage without claiming it was checked", () => {
+  const result = adsInputResult([{ id: "limited-inventory", tool: "Meta Ads", status: "completed", hasResponse: true,
+    operation: "meta-ads.campaigns.list", response: { data: [], inventory_scope: {
+      date_filter: "none", effective_status: ["ACTIVE", "PAUSED", "ARCHIVED"], coverage: "partial",
+      unavailable_effective_status: ["DELETED"], limitation: "Deleted inventory is unavailable from this endpoint.",
+    } } }]);
+  assert.equal(result.datasets[0].empty, true);
+  assert.doesNotMatch(fact(result.datasets[0], "Status coverage"), /DELETED/);
+  assert.equal(fact(result.datasets[0], "Unavailable statuses"), "DELETED");
+  assert.match(fact(result.datasets[0], "Inventory limitation"), /unavailable/);
+});

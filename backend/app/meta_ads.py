@@ -121,7 +121,13 @@ async def _request(client, method, path, *, settings=None, credentials=None, dat
         if response.status_code >= 500 or (isinstance(error, dict) and error.get("is_transient")):
             raise MetaAdsError("Meta reporting is temporarily unavailable. Retry shortly.",
                                reason="provider_unavailable", status_code=503, retryable=True)
-        raise MetaAdsError("Meta rejected this request. Check the app configuration and selected reporting inputs.",
+        if code == 100 and error.get("error_subcode") == 1815001:
+            raise MetaAdsError("Meta does not support listing deleted objects through this account endpoint.",
+                               reason="deleted_inventory_unsupported")
+        codes = [str(value) for value in (code, error.get("error_subcode") if isinstance(error, dict) else None)
+                 if isinstance(value, int) and not isinstance(value, bool)]
+        detail = f" (Meta code {'/'.join(codes)})" if codes else ""
+        raise MetaAdsError(f"Meta rejected this request{detail}. Check the app configuration and selected reporting inputs.",
                            reason="request_rejected")
     if not isinstance(payload, dict):
         raise MetaAdsError("Meta returned an invalid response.")
@@ -314,7 +320,22 @@ async def execute(credentials, operation, arguments, timeout=45):
             fields = FIELDS[edge]
             params = {"fields": ",".join(fields), "effective_status": json.dumps(EFFECTIVE_STATUSES[edge])}
             evidence["inventory_scope"] = {"date_filter": "none", "effective_status": list(EFFECTIVE_STATUSES[edge])}
-        rows = await _collection(client, f"{selected}/{edge}", credentials, params)
+        try:
+            rows = await _collection(client, f"{selected}/{edge}", credentials, params)
+        except MetaAdsError as exc:
+            # Graph can reject DELETED on account connection edges even though
+            # the SDK exposes it as an enum. Only that precise provider error
+            # permits a narrower read; never mask auth, access or other errors.
+            if edge == "insights" or exc.reason != "deleted_inventory_unsupported":
+                raise
+            statuses = [status for status in EFFECTIVE_STATUSES[edge] if status != "DELETED"]
+            params["effective_status"] = json.dumps(statuses)
+            rows = await _collection(client, f"{selected}/{edge}", credentials, params)
+            evidence["inventory_scope"].update(effective_status=statuses,
+                unavailable_effective_status=["DELETED"], coverage="partial",
+                limitation="Meta does not support listing deleted objects through this account endpoint. "
+                           "Deleted inventory is unavailable; the other listed statuses were checked. "
+                           "An empty result does not establish that deleted campaigns had no activity.")
         seen = set()
         for row in rows:
             if account_id(row.get("account_id")) != selected:

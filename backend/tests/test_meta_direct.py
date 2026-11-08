@@ -134,6 +134,45 @@ async def test_inventory_includes_archived_and_deleted_rows_across_pages(setting
     assert result["inventory_scope"]["date_filter"] == "none" and result["complete"]
 
 
+@pytest.mark.parametrize("edge", ["campaigns", "adsets", "ads"])
+async def test_deleted_inventory_rejection_preserves_other_statuses_and_partial_coverage(settings, monkeypatch, edge):
+    status_reads = []
+
+    def handler(request):
+        if not request.url.path.endswith("/" + edge):
+            return auth_response(request)
+        statuses = json.loads(request.url.params["effective_status"])
+        status_reads.append(statuses)
+        if "DELETED" in statuses:
+            return httpx.Response(400, json={"error": {"code": 100, "error_subcode": 1815001,
+                "message": "private provider response"}})
+        assert set(statuses) == set(meta_ads.EFFECTIVE_STATUSES[edge]) - {"DELETED"}
+        second = request.url.params.get("after") == "second"
+        return httpx.Response(200, json={"data": [{"id": "22" if second else "11",
+            "account_id": "123", "name": "Retained campaign", "effective_status": "PAUSED" if second else "ARCHIVED"}],
+            **({} if second else {"paging": {"next": "ignored", "cursors": {"after": "second"}}})})
+
+    boundary(monkeypatch, handler)
+    result = await meta_ads.execute(credentials(), f"meta-ads.{edge}.list", {"account_id": "act_123"})
+    assert len(status_reads) == 3 and result["row_count"] == 2 and result["complete"]
+    scope = result["inventory_scope"]
+    assert scope["coverage"] == "partial" and scope["unavailable_effective_status"] == ["DELETED"]
+    assert "ARCHIVED" in scope["effective_status"] and "DELETED" not in scope["effective_status"]
+    assert "does not establish" in scope["limitation"] and "private" not in json.dumps(result)
+    assert not output_errors(f"meta-ads.{edge}.list", result)
+
+
+@pytest.mark.parametrize("error", [{"code": 100, "error_subcode": 999}, {"code": 10}, {"code": 190}])
+async def test_inventory_does_not_fallback_for_other_provider_errors(settings, monkeypatch, error):
+    def handler(request):
+        return httpx.Response(400, json={"error": error}) if request.url.path.endswith("/campaigns") else auth_response(request)
+
+    requests = boundary(monkeypatch, handler)
+    with pytest.raises(meta_ads.MetaAdsError):
+        await meta_ads.execute(credentials(), "meta-ads.campaigns.list", {"account_id": "act_123"})
+    assert sum(request.url.path.endswith("/campaigns") for request in requests) == 1
+
+
 async def test_discovery_records_actual_grants_without_claiming_empty_accounts_are_denied(settings, monkeypatch):
     boundary(monkeypatch, auth_response)
     result = await meta_ads.execute(credentials(), "meta-ads.accounts.list", {})
