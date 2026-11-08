@@ -28,6 +28,14 @@ FIELDS = {
     "adsets": ("id", "name", "account_id", "campaign_id", "status", "effective_status"),
     "ads": ("id", "name", "account_id", "campaign_id", "adset_id", "status", "effective_status"),
 }
+# Explicit inventory coverage: provider defaults need not include archived or
+# deleted objects. These are the official Marketing API effective-status enums.
+EFFECTIVE_STATUSES = {
+    "campaigns": ("ACTIVE", "PAUSED", "ARCHIVED", "DELETED", "IN_PROCESS", "WITH_ISSUES"),
+    "adsets": ("ACTIVE", "PAUSED", "ARCHIVED", "DELETED", "CAMPAIGN_PAUSED", "IN_PROCESS", "WITH_ISSUES"),
+    "ads": ("ACTIVE", "PAUSED", "ARCHIVED", "DELETED", "ADSET_PAUSED", "CAMPAIGN_PAUSED",
+            "DISAPPROVED", "IN_PROCESS", "PENDING_BILLING_INFO", "PENDING_REVIEW", "PREAPPROVED", "WITH_ISSUES"),
+}
 MAX_PAGES = 50
 MAX_ROWS = 5000
 
@@ -170,9 +178,11 @@ async def discover_accounts(client, credentials, settings=None):
     business_access = any(row.get("permission") == "business_management"
                           and row.get("status") == "granted" for row in permissions)
     if not business_access:
-        warnings.append("The current Meta connection exposes user-assigned ad accounts. "
-                        "Business portfolio discovery is unavailable without existing business access. "
-                        "If an account is missing, review its assignment to the connected Meta user.")
+        warnings.append("Meta has not granted business_management to this connection, so business portfolio "
+                        "discovery is unavailable. This does not block campaign reporting for the accounts "
+                        "listed here. An empty campaign response is not proof of a permission problem. "
+                        "For a missing account, first check its assignment to the connected Meta user; "
+                        "broader portfolio discovery requires separate Meta authorization.")
     else:
         try:
             businesses = await _collection(client, "me/businesses", credentials,
@@ -200,6 +210,9 @@ async def discover_accounts(client, credentials, settings=None):
         except MetaAdsError as exc:
             warnings.append(f"Business portfolio discovery could not be completed ({exc.reason}).")
     return {"accounts": list(accounts.values()), "retrieved_at": datetime.now(UTC).isoformat(),
+            "permissions": {name: next((row.get("status") for row in permissions
+                                         if row.get("permission") == name), "not_granted")
+                            for name in ("ads_read", "business_management")},
             "coverage": {"status": "partial" if warnings else "complete",
                          "scope": "authorized_accounts", "checked": checked, "warnings": warnings}}
 
@@ -299,7 +312,8 @@ async def execute(credentials, operation, arguments, timeout=45):
                                          "Reach is not additive. Action types must not be summed as interchangeable conversions."])
         else:
             fields = FIELDS[edge]
-            params = {"fields": ",".join(fields)}
+            params = {"fields": ",".join(fields), "effective_status": json.dumps(EFFECTIVE_STATUSES[edge])}
+            evidence["inventory_scope"] = {"date_filter": "none", "effective_status": list(EFFECTIVE_STATUSES[edge])}
         rows = await _collection(client, f"{selected}/{edge}", credentials, params)
         seen = set()
         for row in rows:

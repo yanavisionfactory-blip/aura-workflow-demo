@@ -115,6 +115,33 @@ def test_direct_authorization_requests_only_ads_read_and_exact_callback(settings
         providers.oauth_authorization_url(settings, PROVIDERS[SLUG], "state")
 
 
+@pytest.mark.parametrize("edge", ["campaigns", "adsets", "ads"])
+async def test_inventory_includes_archived_and_deleted_rows_across_pages(settings, monkeypatch, edge):
+    def handler(request):
+        if not request.url.path.endswith("/" + edge):
+            return auth_response(request)
+        requested = json.loads(request.url.params.get("effective_status", "[]"))
+        assert {"ACTIVE", "PAUSED", "ARCHIVED", "DELETED"} <= set(requested)
+        assert "time_range" not in request.url.params and "date_preset" not in request.url.params
+        second = request.url.params.get("after") == "next-page"
+        row = {"id": "22" if second else "11", "account_id": "123", "name": "Old campaign",
+               "status": "DELETED" if second else "ARCHIVED", "effective_status": "DELETED" if second else "ARCHIVED"}
+        return httpx.Response(200, json={"data": [row], **({} if second else {
+            "paging": {"next": "ignored", "cursors": {"after": "next-page"}}})})
+    boundary(monkeypatch, handler)
+    result = await meta_ads.execute(credentials(), f"meta-ads.{edge}.list", {"account_id": "act_123"})
+    assert [row["effective_status"] for row in result["data"]] == ["ARCHIVED", "DELETED"]
+    assert result["inventory_scope"]["date_filter"] == "none" and result["complete"]
+
+
+async def test_discovery_records_actual_grants_without_claiming_empty_accounts_are_denied(settings, monkeypatch):
+    boundary(monkeypatch, auth_response)
+    result = await meta_ads.execute(credentials(), "meta-ads.accounts.list", {})
+    discovery = result["account_discovery"]
+    assert discovery["permissions"] == {"ads_read": "granted", "business_management": "not_granted"}
+    assert "does not block campaign reporting" in discovery["coverage"]["warnings"][0]
+
+
 async def test_full_oauth_checks_permission_and_accounts_without_leaking_secrets(settings, monkeypatch, caplog):
     requests = boundary(monkeypatch, auth_response)
     with caplog.at_level(logging.INFO, logger="httpx"):

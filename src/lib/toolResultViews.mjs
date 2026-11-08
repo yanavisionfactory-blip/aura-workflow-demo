@@ -18,6 +18,7 @@ const names = {
 
 export function toolResultName(name = "AURA", operation = "") {
   operation ||= "";
+  if (["meta-ads-direct", "meta-ads-mcp"].includes(name) || /^agent-meta-ads-[a-f0-9]+$/.test(name)) return "Meta Ads";
   if (operation.startsWith("frameio.")) return "Frame.io";
   if (operation.startsWith("meta-ads.")) return "Meta Ads";
   if (["report.compose", "web.page.read", "web.search", "intelligence.claude_backup"].includes(operation)) return operationProviderName(name, operation);
@@ -55,7 +56,10 @@ export function toolResultEntries(activity = []) {
     const actualTool = toolResultName(entry.tool, entry.operation);
     const tool = backupNotice && fallback?.status === "used" && fallback.requested_tool && fallback.requested_operation
       ? toolResultName(fallback.requested_tool, fallback.requested_operation) : actualTool;
-    return { ...entry, tool, actualTool, backupNotice, runId: step.runId, originalStepKey: step.originalStepKey,
+    const metaAction = tool === "Meta Ads" && /agent-meta-ads-[a-f0-9]+/.test(entry.action || "")
+      ? { get_ad_accounts: "Discover Meta ad accounts", get_account_info: "Read Meta account details",
+        get_campaigns: "Read Meta campaigns", get_insights: "Read Meta performance" }[entry.operation] : null;
+    return { ...entry, action: metaAction || entry.action, tool, actualTool, backupNotice, runId: step.runId, originalStepKey: step.originalStepKey,
       stepKey: step.stepKey || step.key || output.step_key,
       preview: candidate?.kind && candidate.kind !== "result" ? { ...candidate, displayProvider: tool } : null,
       link: candidate?.link || savedSourceLink(entry),

@@ -235,6 +235,7 @@ async def execute(credentials, operation, arguments):
             raise ValueError("Choose a valid Reddit advertising account.")
         result = await collection(credentials, f"/ad_accounts/{account}/campaigns")
         result["account_id"] = account
+        result["inventory_scope"] = {"date_filter": "none"}
         if not result["data"]:
             result["account_discovery"] = await refresh_empty_accounts(credentials)
         return result
