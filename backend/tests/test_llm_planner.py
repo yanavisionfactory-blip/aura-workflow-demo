@@ -87,6 +87,83 @@ async def test_malformed_arguments_get_one_scoped_serialization_repair(malformed
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("graph_error", ["missing", "later", "duplicate", "cycle"])
+async def test_compact_graph_failure_uses_compiler_retry_with_rejected_candidate(
+    malformed_plan_client, monkeypatch, graph_error,
+):
+    compact, parse = malformed_plan_client
+    monkeypatch.setattr(get_settings(), "planner_mode", "llm")
+    compact.steps[1].arguments_json = '{"post_id":107,"title":"Demo"}'
+    rejected = compact.model_copy(deep=True)
+    if graph_error == "missing":
+        # The production regression: expansion failed before the compiler
+        # could provide the omitted dependency to its existing retry.
+        rejected.steps[0].key = "meta_campaign_insights"
+        rejected.steps[0].depends_on = ["meta_accounts"]
+    elif graph_error == "later":
+        rejected.steps.reverse()
+    elif graph_error == "duplicate":
+        rejected.steps[1].key = "read"
+    else:
+        rejected.steps[0].depends_on = ["save"]
+    parse.side_effect = [SimpleNamespace(output_parsed=rejected), SimpleNamespace(output_parsed=compact)]
+    manifest = {"capabilities": [{
+        "name": operation, "permission_scope": scope,
+        "input_schema": {"type": "object", "required": ["post_id"],
+                         "properties": {"post_id": {"type": "integer"}, "title": {"type": "string"}}},
+    } for operation, scope in [("post.get", "read"), ("post.update", "write")]]}
+    inventory = [{"slug": "wordpress", "name": "WordPress", "connected": True,
+                  "allowed_operations": ["post.get", "post.update"]}]
+
+    result = await orchestrator._create_compiled_plan(
+        "Review my WordPress draft", inventory, {"draft_id"}, {"wordpress": manifest},
+    )
+
+    assert parse.await_count == 2
+    repair = json.loads(parse.await_args_list[1].kwargs["input"])["reference_repair"]
+    assert repair["validation_error"]
+    assert repair["available_input_references"] == ["{{inputs.draft_id}}"]
+    assert [step["key"] for step in repair["rejected_steps"]] == [step.key for step in rejected.steps]
+    assert repair["rejected_steps"][0]["depends_on"] == rejected.steps[0].depends_on
+    assert repair["rejected_steps"][0]["arguments"] == json.loads(rejected.steps[0].arguments_json)
+    assert result.planning_artifacts["contract_repair_attempts"] == 1
+    assert result.steps[1].depends_on == ["read"]
+    assert result.steps[1].consequential is True
+    assert preflight_plan(result, inventory, {"wordpress": manifest}, {"draft_id"}).fixes == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("second_failure", ["graph", "connector"])
+async def test_compact_graph_repair_is_bounded_and_still_requires_preflight(
+    malformed_plan_client, monkeypatch, second_failure,
+):
+    compact, parse = malformed_plan_client
+    monkeypatch.setattr(get_settings(), "planner_mode", "llm")
+    compact.steps[1].arguments_json = '{"post_id":107,"title":"Demo"}'
+    rejected = compact.model_copy(deep=True)
+    rejected.steps[0].depends_on = ["missing_read"]
+    if second_failure == "connector":
+        compact.steps[1].arguments_json = '{"title":"Missing required target"}'
+    parse.side_effect = [SimpleNamespace(output_parsed=rejected), SimpleNamespace(
+        output_parsed=rejected if second_failure == "graph" else compact,
+    )]
+    manifest = {"capabilities": [{
+        "name": operation, "permission_scope": scope,
+        "input_schema": {"type": "object", "required": ["post_id"],
+                         "properties": {"post_id": {"type": "integer"}, "title": {"type": "string"}}},
+    } for operation, scope in [("post.get", "read"), ("post.update", "write")]]}
+    inventory = [{"slug": "wordpress", "name": "WordPress", "connected": True,
+                  "allowed_operations": ["post.get", "post.update"]}]
+
+    expected = llm_planner.PlanGraphValidationError if second_failure == "graph" else NativeConnectorError
+    with pytest.raises(expected):
+        await orchestrator._create_compiled_plan(
+            "Review my WordPress draft", inventory, set(), {"wordpress": manifest},
+        )
+    assert parse.await_count == 2
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("repairs", [
     [],
     [{"step_key": "other", "arguments": []}],
