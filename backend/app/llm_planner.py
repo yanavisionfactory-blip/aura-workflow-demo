@@ -331,7 +331,7 @@ def _bounded_planning_catalog(payload: dict) -> dict:
 
     catalog = payload["operations"]
     compact = [
-        {key: item[key] for key in ("slug", "name", "connected", "canonical_provider", "google_ads_account", "reddit_ads_account")
+        {key: item[key] for key in ("slug", "name", "connected", "canonical_provider", "google_ads_account", "reddit_ads_account", "ad_account_discovery")
          if key in item}
         | {"allowed_operations": [], "operation_contracts": []}
         for item in catalog
@@ -510,6 +510,13 @@ async def create_llm_plan(
         "Never use an operation from one provider as a placeholder for connecting or reading "
         "another provider. Preserve every requested source platform; if a needed reporting "
         "capability is absent, disclose that limitation rather than silently omitting its results. "
+        "ad_account_discovery contains fresh provider-returned account IDs and names, not metrics. "
+        "Use these discovered accounts automatically; never ask the user to type account IDs. "
+        "For all-account/full-history platform reports, cover every discovered account, keeping currencies separate. "
+        "For a named account, match its name to discovery; ask a named-choice question only if ambiguous. "
+        "A saved Reddit account is a default for single-account requests, not a restriction on all-account discovery. "
+        "If discovery is unavailable, plan the account-list read without guessed IDs; Reddit accounts.list may omit business_id to scan all businesses. "
+        "Report discovery coverage warnings. A connected grant and an empty account do not establish complete account coverage. "
         "For Reddit Ads campaign comparisons, use reddit-ads.report.get with the selected "
         "ad_account_id exactly as saved in reddit_ads_account, including its t2_ or a2_ prefix, "
         "or discover accessible accounts with its listed reads. Never substitute a business UUID, "

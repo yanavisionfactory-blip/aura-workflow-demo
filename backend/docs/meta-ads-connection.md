@@ -5,6 +5,22 @@ and the existing Pipeboard route. Direct Meta becomes the preferred new connecti
 only after its server-side app credentials are configured. Existing Pipeboard
 accounts keep their own credentials and executable contracts.
 
+Direct Meta discovers `/me/adaccounts` again before planning a requested Meta
+workflow. When the existing grant includes `business_management`, it also checks
+`/me/businesses` and each business's `owned_ad_accounts` and `client_ad_accounts`,
+following all cursors and deduplicating by account ID. This change does not request
+that permission or expand an existing grant. With only `ads_read`, user-assigned
+accounts remain usable and portfolio coverage is explicitly labelled incomplete.
+Provider errors in a business directory also remain visible as coverage warnings.
+Account-list `complete` refers to pagination of returned collections; consult
+`account_discovery.coverage` for the scope that was actually checked.
+
+The planner receives fresh account names and IDs so ordinary reports do not need
+manually typed IDs. Empty inventory/Insights responses refresh discovery and show
+the detected accounts and access limitations in AURA. The selected account of an
+already-reviewed operation never changes automatically. Missing campaign metrics
+remain unavailable, and account discovery is not evidence of campaign activity.
+
 The **Pipeboard** route opens Pipeboard's hosted OAuth flow. Its card explicitly
 identifies Pipeboard. Facebook Pages remains a separate
 connection and never satisfies Meta Ads reporting requirements.

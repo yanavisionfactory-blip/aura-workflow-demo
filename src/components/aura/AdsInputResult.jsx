@@ -20,6 +20,12 @@ export default function AdsInputResult({ tool, entries, isPrimary = false }) {
       <div className="flex items-center gap-3"><span className={`flex h-10 w-10 items-center justify-center rounded-xl ${meta ? "bg-blue-100 text-blue-600" : "bg-green-100 text-green-700"}`}><BarChart3 className="h-5 w-5" /></span><div><h4 className="font-semibold">{tool} · {campaigns ? "Campaigns" : "Saved data"}</h4><p className="mt-0.5 text-xs text-slate-500">Saved source data in AURA</p></div></div>
       <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600"><Database className="h-3.5 w-3.5" />{isPrimary ? "Main result" : "Used as input"}</span>
     </header>
+    {model.discovery && <section aria-label="Automatic account discovery" className="space-y-2 border-b border-slate-200 bg-amber-50 px-4 py-4 text-xs leading-5 sm:px-5">
+      <h5 className="font-semibold">{model.discovery.coverage?.status === "complete" ? "Accounts detected automatically" : "Account discovery needs attention"}</h5>
+      <ul>{(model.discovery.accounts || []).map((account) => <li key={account.ad_account_id || account.id}>{account.name || "Advertising account"} · {account.ad_account_id || account.id}{account.currency ? ` · ${account.currency}` : ""}</li>)}</ul>
+      {(model.discovery.coverage?.warnings || []).map((warning, index) => <p key={index}>{warning}</p>)}
+      <p>Account discovery uses the existing connection. Accounts listed here may not all have been included in this saved report. A new workflow checks accounts again automatically.</p>
+    </section>}
     <div className="border-b border-slate-200 px-4 pt-4 sm:px-5">
       <p className="mb-4 text-xs leading-5 text-slate-500">Data retrieved for this workflow. This is a saved AURA view, not the live ads manager.</p>
       <div role="tablist" aria-label={`${tool} saved data views`} className="flex gap-5">

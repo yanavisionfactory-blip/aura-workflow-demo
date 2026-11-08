@@ -48,3 +48,31 @@ test("malformed metric values remain unavailable while real zero remains zero", 
     assert.equal(result.campaigns[0].metrics.find((m) => m.label === "CPC").value, "Unavailable");
   }
 });
+
+test("account discovery does not hide an empty campaign result and exposes access coverage", () => {
+  const discovery = { accounts: [{ id: "act_123", name: "Named account", currency: "EUR" }],
+    coverage: { status: "partial", warnings: ["Business access is unavailable"] } };
+  const common = { tool: "Meta Ads", status: "completed", hasResponse: true };
+  const result = adsInputResult([
+    { ...common, id: "accounts", operation: "meta-ads.accounts.list", response: { data: discovery.accounts, account_discovery: discovery } },
+    { ...common, id: "campaigns", operation: "meta-ads.campaigns.list", response: { data: [], account_id: "act_123" } },
+  ]);
+  assert.equal(result.datasets.length, 1);
+  assert.equal(result.datasets[0].empty, true);
+  assert.deepEqual(result.discovery, discovery);
+  assert.match(fact(result.summaries[0], "Discovered accounts"), /Named account · act_123/);
+  assert.match(fact(result.summaries[0], "Access limitations"), /Business access/);
+});
+
+test("Reddit campaign results retain purchase definitions, reporting dates and missing values", () => {
+  const result = savedToolResponse({ tool: "Reddit Ads", response: { data: [{ campaign_id: "c1", campaign_name: "Ended campaign",
+    spend: 12, impressions: 100, clicks: 4, purchase_conversions: null, purchase_conversion_value: null }],
+    account_id: "a2_123", account: { currency: "EUR", time_zone_id: "Europe/Amsterdam" },
+    date_range: { starts_at: "2024-11-08T00:00:00Z", ends_at: "2026-11-08T10:00:00Z" } } });
+  assert.equal(result.campaigns.length, 1);
+  assert.equal(result.campaigns[0].metrics.find((m) => m.label === "Conversions").value, "Unavailable");
+  assert.equal(result.campaigns[0].metrics.find((m) => m.label === "CPC").value, "3");
+  assert.equal(fact(result, "Timezone"), "Europe/Amsterdam");
+  assert.match(fact(result, "Reporting dates"), /2024-11-08/);
+  assert.match(result.note, /Reddit-attributed purchases/);
+});

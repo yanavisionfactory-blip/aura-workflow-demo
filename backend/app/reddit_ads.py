@@ -1,4 +1,5 @@
 """Reddit Ads read access. App credentials belong to AURA, never its customers."""
+import asyncio
 import re
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -128,7 +129,7 @@ async def performance_report(credentials, arguments):
                      "purchase_conversions": purchases, "purchase_conversion_value": value,
                      "purchase_cpa": spend / purchases if purchases and spend is not None else None,
                      "purchase_roas": value / spend if spend and value is not None else None})
-    return {"source_provider": "reddit-ads", "vendor_api_called": True, "complete": True,
+    result = {"source_provider": "reddit-ads", "vendor_api_called": True, "complete": True,
             "account_id": request.ad_account_id, "account": account, "data": rows, "raw_data": raw_rows,
             "campaigns": campaigns, "campaigns_without_report_rows": sorted(set(metadata) - seen),
             "row_count": len(rows), "date_range": {**{key: body["data"][key] for key in ("starts_at", "ends_at")},
@@ -141,6 +142,9 @@ async def performance_report(credentials, arguments):
                       "Spend is converted from microcurrency and purchase value from cents; CTR is a fraction.",
                       "Recent metrics and historical conversion attribution can change after provider refreshes."],
             "metrics_updated_at": updated, "retrieved_at": now.isoformat()}
+    if not rows:
+        result["account_discovery"] = await refresh_empty_accounts(credentials)
+    return result
 
 
 class AccountSelection(BaseModel):
@@ -177,7 +181,7 @@ async def verify(credentials):
             "identity": {key: actor[key] for key in ("id", "type", "reddit_username") if key in actor}}
 
 
-async def collection(credentials, path):
+async def collection(credentials, path, *, query=False):
     """Follow only same-origin, same-resource pages; never return a partial list."""
     url, rows, visited = BASE + path, [], set()
     async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
@@ -188,7 +192,14 @@ async def collection(credentials, path):
                     or url in visited or len(visited) >= 25):
                 raise ValueError("Reddit Ads account list could not be completed. Try again.")
             visited.add(url)
-            payload = await _get(client, url, credentials)
+            if query:
+                response = await client.post(url, headers=headers(credentials), json={"data": {}})
+                response.raise_for_status()
+                payload = response.json()
+                if not isinstance(payload, dict) or payload.get("error") or payload.get("errors"):
+                    raise ValueError("Reddit Ads returned an invalid account query.")
+            else:
+                payload = await _get(client, url, credentials)
             page = payload.get("data")
             if not isinstance(page, list) or any(
                 not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"] for row in page
@@ -214,32 +225,76 @@ async def execute(credentials, operation, arguments):
     if operation == "reddit-ads.businesses.list":
         return await collection(credentials, "/me/businesses")
     if operation == "reddit-ads.accounts.list":
-        business = str(UUID(str(arguments.get("business_id", ""))))
-        return await collection(credentials, f"/businesses/{business}/ad_accounts")
+        options = await account_options(credentials, arguments.get("business_id"))
+        return {"data": [{**row, "id": row["ad_account_id"]} for row in options["accounts"]],
+                "complete": True, "account_discovery": options,
+                "source_provider": "reddit-ads", "vendor_api_called": True}
     if operation == "reddit-ads.campaigns.list":
         account = str(arguments.get("ad_account_id", ""))
         if not re.fullmatch(ACCOUNT_ID, account):
             raise ValueError("Choose a valid Reddit advertising account.")
-        return await collection(credentials, f"/ad_accounts/{account}/campaigns")
+        result = await collection(credentials, f"/ad_accounts/{account}/campaigns")
+        result["account_id"] = account
+        if not result["data"]:
+            result["account_discovery"] = await refresh_empty_accounts(credentials)
+        return result
     raise ValueError("Unsupported Reddit Ads operation")
 
 
 async def account_options(credentials, business_id=None, search=""):
     businesses = (await collection(credentials, "/me/businesses"))["data"]
     roots = [{"id": str(UUID(row["id"])), "name": str(row.get("name") or row["id"])[:200]} for row in businesses]
-    business_id = business_id or (roots[0]["id"] if len(roots) == 1 else None)
+    business_id = str(UUID(business_id)) if business_id else None
     if business_id and business_id not in {row["id"] for row in roots}:
         raise ValueError("That Reddit business is no longer accessible. Refresh the account list.")
-    accounts = []
-    if business_id:
-        result = await collection(credentials, f"/businesses/{business_id}/ad_accounts")
-        for row in result["data"]:
-            if not re.fullmatch(ACCOUNT_ID, str(row["id"])) or row.get("business_id") != business_id:
+    accounts, seen, warnings, checked = [], set(), [], []
+    # Discover every accessible business by default, including when a previous
+    # choice exists. business_id is an explicit narrowing filter, not a default.
+    for root in roots:
+        access_business = root["id"]
+        if business_id and access_business != business_id:
+            continue
+        path = f"/businesses/{access_business}/ad_accounts"
+        owned = (await collection(credentials, path))["data"]
+        checked.append(access_business)
+        for row in owned:
+            if row.get("business_id") != access_business:
                 raise ValueError("Reddit Ads returned an unexpected advertising account.")
+        try:
+            # Business Manager query can return partner-accessible assets. Do
+            # not discard an account because its owning business is different.
+            queried = (await collection(credentials, path + "/query", query=True))["data"]
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in {403, 404}:
+                raise
+            queried = []
+            warnings.append(f"Shared-account discovery is unavailable for {root['name']}. "
+                            "Only its owned accounts were checked; review Reddit business access.")
+        for row in owned + queried:
+            if not re.fullmatch(ACCOUNT_ID, str(row["id"])):
+                raise ValueError("Reddit Ads returned an invalid advertising account.")
+            # Deduplicate the same account reached through several businesses.
+            if row["id"] in seen:
+                continue
+            seen.add(row["id"])
             name = str(row.get("name") or row["id"])[:200]
-            if search.casefold() in name.casefold():
-                accounts.append({"business_id": business_id, "ad_account_id": row["id"], "name": name})
-    return {"businesses": roots, "business_id": business_id, "accounts": accounts}
+            if search.casefold() in name.casefold() or search.casefold() in row["id"].casefold():
+                accounts.append({"business_id": access_business, "ad_account_id": row["id"],
+                                 "name": name, **{key: row[key] for key in
+                                    ("currency", "time_zone_id") if key in row}})
+    return {"businesses": roots, "business_id": business_id, "accounts": accounts,
+            "coverage": {"status": "partial" if warnings else "complete",
+                         "scope": "authorized_businesses", "business_ids": checked,
+                         "warnings": warnings}, "retrieved_at": datetime.now(UTC).isoformat()}
+
+
+async def refresh_empty_accounts(credentials):
+    try:
+        async with asyncio.timeout(15):
+            return await account_options(credentials)
+    except (httpx.HTTPError, ValueError, TimeoutError):
+        return {"accounts": [], "coverage": {"status": "unavailable", "warnings": [
+            "Account discovery could not be refreshed. Retry discovery in a new workflow."]}}
 
 
 def selected_account(tool):
@@ -268,7 +323,7 @@ def apply_account_defaults(plan, inventory, manifests, *, prompt=""):
     for step in plan.steps:
         if step.tool_slug != "reddit-ads":
             continue
-        fields = {"reddit-ads.accounts.list": "business_id", "reddit-ads.campaigns.list": "ad_account_id",
+        fields = {"reddit-ads.campaigns.list": "ad_account_id",
                   "reddit-ads.report.get": "ad_account_id"}
         field = fields.get(step.operation)
         if not field or field not in selected:

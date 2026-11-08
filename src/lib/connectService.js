@@ -32,7 +32,6 @@ let hydratedAt = 0;
 
 export async function chooseGoogleAdsAccount(tool, { force = false } = {}) {
   if (tool?.slug === "reddit-ads" && tool.connection_backend === "native") {
-    if (!force && tool.reddit_ads_account) return tool;
     const adapt = (row) => row && ({ ...row, login_customer_id: row.business_id, customer_id: row.ad_account_id });
     const selected = await googleAdsAccountDialog({
       platform: "Reddit",
@@ -40,7 +39,7 @@ export async function chooseGoogleAdsAccount(tool, { force = false } = {}) {
       load: async (business, search) => {
         const result = await listRedditAdsAccounts(tool.id, business, search);
         return { access_accounts: result.businesses, login_customer_id: result.business_id,
-          accounts: result.accounts.map(adapt) };
+          accounts: result.accounts.map(adapt), coverage: result.coverage };
       },
       save: (row) => selectRedditAdsAccount(tool.id, {
         business_id: row.login_customer_id, ad_account_id: row.customer_id,

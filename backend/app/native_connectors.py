@@ -69,14 +69,14 @@ _POSITIVE_INTEGER = {"type": "integer", "minimum": 1}
 
 NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
     "reddit-ads": {
-        "schema_version": "1.1", "catalog_version": 2, "provider_type": "oauth",
+        "schema_version": "1.1", "catalog_version": 3, "provider_type": "oauth",
         "name": "Reddit Ads", "description": "Read advertising accounts, campaigns and campaign performance reports.",
         "base_url": "https://ads-api.reddit.com/api/v3", "identity": {"provider": "reddit-ads"},
         "modules": [
             _module("reddit-ads.identity.get", "search", "Read the connected Reddit Ads identity.", permission_scope="read"),
             _module("reddit-ads.businesses.list", "search", "List businesses accessible to the connected advertiser.", permission_scope="read"),
-            _module("reddit-ads.accounts.list", "search", "List ad accounts owned by a discovered business. Shared-in accounts are not included.",
-                    required=("business_id",), properties={"business_id": _TEXT}, permission_scope="read"),
+            _module("reddit-ads.accounts.list", "search", "Automatically discover accounts across every accessible business using owned and business-query directories. Omit business_id for all businesses; pass it only to explicitly narrow scope. Returns account names, IDs and coverage warnings. Never request a manually typed ID before discovery.",
+                    properties={"business_id": _TEXT}, permission_scope="read"),
             _module("reddit-ads.campaigns.list", "search", "Read campaigns from an explicitly selected advertising account.",
                     required=("ad_account_id",), properties={"ad_account_id": _TEXT}, permission_scope="read"),
             {**_module("reddit-ads.report.get", "search",
@@ -90,7 +90,7 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         "base_url": "https://graph.facebook.com", "identity": {"provider": "meta-ads-direct"},
         "modules": [
             _module("meta-ads.identity.get", "search", "Verify Meta user, ads_read consent and accessible ad accounts.", permission_scope="read"),
-            _module("meta-ads.accounts.list", "search", "List all accessible Meta ad accounts with currency and timezone. Ask the user to choose the intended account; never assume the first account.", permission_scope="read"),
+            _module("meta-ads.accounts.list", "search", "Automatically discover user-assigned accounts and business-owned/client accounts allowed by existing grants, with names, currency, timezone and coverage warnings. Use discovered IDs for reporting. Ask a named-choice question only when the intended account is ambiguous; all-account reports cover all returned accounts separately.", permission_scope="read"),
             *[_module(f"meta-ads.{edge}.list", "search", f"Read all {edge} in an explicitly selected Meta ad account. Returns complete rows or fails on pagination limits.",
                       required=("account_id",), properties={"account_id": {"type": "string", "pattern": r"^(act_)?[0-9]{1,40}$"}}, permission_scope="read")
               for edge in ("campaigns", "adsets", "ads")],

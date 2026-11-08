@@ -16,7 +16,8 @@ export function googleAdsAccountDialog({ load, save, selected = null, platform =
         <label class="block text-sm">Advertising account<select name="account" required class="mt-1 block w-full rounded-lg border border-white/20 bg-[#151421] p-3"></select></label>
         <p data-status role="status" class="text-sm text-white/70"></p>
         <p role="alert" class="text-sm text-red-300" hidden></p>
-        <p class="text-xs text-white/60">${platform === "Reddit" ? "Choose a business to see its owned advertising accounts. Accounts shared into a business are not listed here." : "Manager accounts show the advertising accounts they can access. Search by name if your account is not listed."} You can change this choice in Manage. Existing reviewed workflows keep their original account.</p>
+        <p data-coverage class="text-xs text-amber-200" hidden></p>
+        <p class="text-xs text-white/60">${platform === "Reddit" ? "AURA checks every accessible business, including the business directory for accounts shared into a business. Missing access is shown separately." : "Manager accounts show the advertising accounts they can access. Search by name if your account is not listed."} You can change this choice in Manage. Existing reviewed workflows keep their original account.</p>
         <div class="flex flex-wrap justify-end gap-3">
           <button data-retry type="button" class="rounded-lg border border-white/20 px-4 py-2">Refresh</button>
           <button data-close type="button" class="rounded-lg border border-white/20 px-4 py-2">Choose later</button>
@@ -33,7 +34,8 @@ export function googleAdsAccountDialog({ load, save, selected = null, platform =
     const submit = dialog.querySelector('[type="submit"]');
     const closeButton = dialog.querySelector("[data-close]");
     const retry = dialog.querySelector("[data-retry]");
-    let login = selected?.login_customer_id || "";
+    const coverage = dialog.querySelector("[data-coverage]");
+    let login = platform === "Reddit" ? "" : selected?.login_customer_id || "";
     let accounts = [], requestId = 0, timer, closed = false, saving = false, loading = true;
     const option = (value, label) => {
       const element = document.createElement("option");
@@ -60,16 +62,20 @@ export function googleAdsAccountDialog({ load, save, selected = null, platform =
       clearAccounts();
       loading = true;
       error.hidden = true;
+      coverage.hidden = true;
       status.textContent = `Loading your ${platform} Ads accounts…`;
       try {
         const result = await load(login, search.value.trim());
         if (closed || id !== requestId) return;
-        access.replaceChildren(option("", platform === "Reddit" ? "Choose a business" : "Choose an account or manager"),
+        access.replaceChildren(option("", platform === "Reddit" ? "All accessible businesses" : "Choose an account or manager"),
           ...result.access_accounts.map((root) => option(root.id, `${root.name} · ${root.id}`)));
         login = result.login_customer_id || "";
         access.value = login;
         accessLabel.hidden = result.access_accounts.length <= 1;
         accounts = result.accounts;
+        const warnings = result.coverage?.warnings || [];
+        coverage.textContent = warnings.join(" ");
+        coverage.hidden = warnings.length === 0;
         account.replaceChildren(option("", "Choose an account"),
           ...accounts.map((row) => option(row.customer_id, `${row.name} · ${row.customer_id}`)));
         // A single option is still confirmed by the customer with Use this account.
@@ -79,7 +85,7 @@ export function googleAdsAccountDialog({ load, save, selected = null, platform =
         submit.disabled = !account.value;
         status.textContent = !result.access_accounts.length
           ? `No ${platform} Ads accounts are available to this ${platform} login. Use Manage → Reconnect to sign in with another ${platform} account.`
-          : !login ? (platform === "Reddit" ? "Choose your Reddit business." : "Choose the account or manager you use to access Google Ads.")
+          : !login && platform !== "Reddit" ? "Choose the account or manager you use to access Google Ads."
           : !accounts.length ? "No advertising accounts found. Search by account name or choose another account manager."
           : `${accounts.length} advertising account${accounts.length === 1 ? "" : "s"} available.`;
       } catch (cause) {

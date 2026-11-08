@@ -162,6 +162,48 @@ async def _accounts(client, credentials, settings=None):
     return [_project(row, ACCOUNT_FIELDS) for row in rows]
 
 
+async def discover_accounts(client, credentials, settings=None):
+    """Fresh user + business account discovery using existing grants only."""
+    accounts = {row["id"]: row for row in await _accounts(client, credentials, settings)}
+    checked, warnings = ["me/adaccounts"], []
+    permissions = await _collection(client, "me/permissions", credentials, settings=settings)
+    business_access = any(row.get("permission") == "business_management"
+                          and row.get("status") == "granted" for row in permissions)
+    if not business_access:
+        warnings.append("The current Meta connection exposes user-assigned ad accounts. "
+                        "Business portfolio discovery is unavailable without existing business access. "
+                        "If an account is missing, review its assignment to the connected Meta user.")
+    else:
+        try:
+            businesses = await _collection(client, "me/businesses", credentials,
+                                           {"fields": "id,name"}, settings)
+            if len(businesses) > 50:
+                raise MetaAdsError("Too many business portfolios to verify in one discovery.")
+            checked.append("me/businesses")
+            for business in businesses:
+                identifier = business.get("id")
+                if not isinstance(identifier, str) or not re.fullmatch(r"[0-9]{1,40}", identifier):
+                    raise MetaAdsError("Meta returned an invalid business identifier.")
+                for edge in ("owned_ad_accounts", "client_ad_accounts"):
+                    path = f"{identifier}/{edge}"
+                    try:
+                        rows = await _collection(client, path, credentials,
+                                                 {"fields": ",".join(ACCOUNT_FIELDS)}, settings)
+                        for row in rows:
+                            key = account_id(row.get("id"))
+                            if key != account_id(row.get("account_id")):
+                                raise MetaAdsError("Meta returned an inconsistent ad-account list.")
+                        accounts.update({row["id"]: _project(row, ACCOUNT_FIELDS) for row in rows})
+                        checked.append(path)
+                    except MetaAdsError as exc:
+                        warnings.append(f"Business {identifier} {edge} discovery could not be completed ({exc.reason}).")
+        except MetaAdsError as exc:
+            warnings.append(f"Business portfolio discovery could not be completed ({exc.reason}).")
+    return {"accounts": list(accounts.values()), "retrieved_at": datetime.now(UTC).isoformat(),
+            "coverage": {"status": "partial" if warnings else "complete",
+                         "scope": "authorized_accounts", "checked": checked, "warnings": warnings}}
+
+
 async def verify(credentials, settings=None):
     async with asyncio.timeout(30), httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
         identity = await _request(client, "GET", "me", credentials=credentials,
@@ -214,7 +256,9 @@ async def execute(credentials, operation, arguments, timeout=45):
                 "api_version": api_version(), "retrieved_at": datetime.now(UTC).isoformat()}
     async with asyncio.timeout(timeout), httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
         if operation == "meta-ads.accounts.list":
-            return {**evidence, "data": await _accounts(client, credentials), "complete": True}
+            discovery = await discover_accounts(client, credentials)
+            return {**evidence, "data": discovery["accounts"], "complete": True,
+                    "account_discovery": discovery}
         selected = account_id(arguments.get("account_id"))
         # Verify the exact selected account on every read; never pick the first.
         account = await _request(client, "GET", selected, credentials=credentials,
@@ -276,5 +320,15 @@ async def execute(credentials, operation, arguments, timeout=45):
             if not isinstance(identifier, str) or not re.fullmatch(r"[0-9]{1,40}", identifier) or key in seen:
                 raise MetaAdsError("Meta returned missing or duplicate row identifiers. Repeat the read.")
             seen.add(key)
+        if not rows:
+            # Keep the reviewed target unchanged. Show fresh alternatives and
+            # coverage rather than interpreting an empty account as no activity.
+            try:
+                async with asyncio.timeout(15):
+                    evidence["account_discovery"] = await discover_accounts(client, credentials)
+            except (MetaAdsError, httpx.HTTPError, TimeoutError):
+                evidence["account_discovery"] = {"accounts": [], "coverage": {
+                    "status": "unavailable", "warnings": [
+                        "Account discovery could not be refreshed. Retry discovery in a new workflow."]}}
         return {**evidence, "data": [_project(row, fields) for row in rows],
                 "row_count": len(rows), "complete": True}
