@@ -148,7 +148,11 @@ def test_existing_native_grant_gains_reporting_without_changing_account_or_crede
     assert steps[1].arguments["ad_account_id"] == "t2_explicit"
 
 
-async def test_selected_reddit_report_compiles_with_existing_account_choice(monkeypatch):
+@pytest.mark.parametrize("arguments", [
+    {}, {"ad_account_id": "selected_reddit_ad_account_id"},
+    {"ad_account_id": "1234567890"}, {"ad_account_id": "Advertiser"},
+])
+async def test_selected_reddit_report_compiles_with_existing_account_choice(monkeypatch, arguments):
     from app import llm_planner, orchestrator
     from app.config import get_settings
     from app.schemas import PlanStep, WorkflowPlan
@@ -160,7 +164,7 @@ async def test_selected_reddit_report_compiles_with_existing_account_choice(monk
         "reddit_ads_account": {"ad_account_id": ACCOUNT, "name": "Advertiser"}}]
     candidate = WorkflowPlan(name="Read Reddit performance", interpretation="Read available campaign performance",
         steps=[PlanStep(key="reddit_report", tool_slug="reddit-ads", operation="reddit-ads.report.get",
-            agent="Reddit Ads", reason="Read campaign performance", expected_output="Campaign metrics", arguments={})])
+            agent="Reddit Ads", reason="Read campaign performance", expected_output="Campaign metrics", arguments=arguments)])
     generate = AsyncMock(return_value=candidate)
     monkeypatch.setattr(llm_planner, "create_llm_plan", generate)
     compiled = await orchestrator._create_compiled_plan("Read Reddit Ads campaign performance", inventory, set(),
@@ -168,3 +172,77 @@ async def test_selected_reddit_report_compiles_with_existing_account_choice(monk
     assert compiled.steps[0].arguments["ad_account_id"] == ACCOUNT
     assert generate.await_count == 1
     assert not compiled.steps[0].consequential
+
+
+@pytest.mark.parametrize("account", ["t2_explicit", "a2_explicit", "{{steps.accounts.data[0].id}}",
+                                     "{{inputs.account_id}}", "{{selected_account}}"])
+def test_account_repair_preserves_valid_ids_and_workflow_references(account):
+    step = SimpleNamespace(tool_slug="reddit-ads", operation="reddit-ads.report.get",
+                           arguments={"ad_account_id": account})
+    reddit_ads.apply_account_defaults(SimpleNamespace(steps=[step]), [
+        {"slug": "reddit-ads", "reddit_ads_account": {"ad_account_id": ACCOUNT}}], {})
+    assert step.arguments["ad_account_id"] == account
+
+
+@pytest.mark.parametrize("selected", [None, {}, {"ad_account_id": "invalid"}])
+def test_account_repair_never_invents_a_selection(selected):
+    step = SimpleNamespace(tool_slug="reddit-ads", operation="reddit-ads.report.get",
+                           arguments={"ad_account_id": "selected_account"})
+    reddit_ads.apply_account_defaults(SimpleNamespace(steps=[step]), [
+        {"slug": "reddit-ads", "reddit_ads_account": selected}], {})
+    assert step.arguments["ad_account_id"] == "selected_account"
+
+
+def test_account_repair_does_not_redirect_an_explicit_user_target():
+    step = SimpleNamespace(tool_slug="reddit-ads", operation="reddit-ads.report.get",
+                           arguments={"ad_account_id": "1234567890"})
+    reddit_ads.apply_account_defaults(SimpleNamespace(steps=[step]), [
+        {"slug": "reddit-ads", "reddit_ads_account": {"ad_account_id": ACCOUNT}}], {},
+        prompt="Read Reddit Ads account 1234567890")
+    assert step.arguments["ad_account_id"] == "1234567890"
+
+
+@pytest.mark.parametrize("repeat_invalid", [False, True])
+async def test_malformed_id_retry_receives_rejected_step_and_real_inputs(monkeypatch, repeat_invalid):
+    from app import llm_planner, orchestrator
+    from app.config import get_settings
+    from app.native_connectors import NativeConnectorError
+    from app.schemas import PlanStep, WorkflowPlan
+
+    monkeypatch.setattr(get_settings(), "planner_mode", "llm")
+    manifest = native_manifest("reddit-ads")
+    inventory = [{"slug": "reddit-ads", "name": "Reddit Ads", "connected": True,
+        "allowed_operations": [cap["name"] for cap in manifest["capabilities"]]}]
+    candidate = WorkflowPlan(name="Reddit campaign report", interpretation="All available campaigns",
+        steps=[PlanStep(key="reddit_report", tool_slug="reddit-ads", operation="reddit-ads.report.get",
+            agent="Reddit Ads", reason="Read full available history", expected_output="Campaign metrics",
+            arguments={"ad_account_id": "selected_account"})])
+
+    async def generate(*args, **kwargs):
+        repair = kwargs.get("reference_repair")
+        if repair is None:
+            return candidate.model_copy(deep=True)
+        assert repair["validation_error"] == "reddit-ads.report.get.ad_account_id has an invalid format"
+        assert repair["unresolved_references"] == []
+        assert repair["rejected_steps"][0]["arguments"] == {"ad_account_id": "selected_account"}
+        assert repair["available_input_references"] == ["{{inputs.reddit_account_id}}"]
+        repaired = candidate.model_copy(deep=True)
+        if not repeat_invalid:
+            repaired.steps[0].arguments["ad_account_id"] = "{{inputs.reddit_account_id}}"
+        return repaired
+
+    model = AsyncMock(side_effect=generate)
+    monkeypatch.setattr(llm_planner, "create_llm_plan", model)
+    dispatch = AsyncMock(side_effect=AssertionError("Compilation must not execute providers"))
+    monkeypatch.setattr(ProviderExecutor, "execute", dispatch)
+    if repeat_invalid:
+        with pytest.raises(NativeConnectorError, match="ad_account_id has an invalid format"):
+            await orchestrator._create_compiled_plan("Read all Reddit Ads campaign history", inventory,
+                {"reddit_account_id"}, {"reddit-ads": manifest})
+    else:
+        result = await orchestrator._create_compiled_plan("Read all Reddit Ads campaign history", inventory,
+            {"reddit_account_id"}, {"reddit-ads": manifest})
+        assert result.steps[0].arguments == {"ad_account_id": "{{inputs.reddit_account_id}}"}
+        assert result.planning_artifacts["contract_repair_attempts"] == 1
+    assert model.await_count == 2
+    dispatch.assert_not_awaited()

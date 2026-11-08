@@ -25,7 +25,9 @@ from .schemas import MAX_WORKFLOW_STEPS, WorkflowPlan
 from .workflow_context import referenced_paths
 
 
-def reference_repair_context(plan: WorkflowPlan, available_input_names: set[str]) -> dict | None:
+def reference_repair_context(
+    plan: WorkflowPlan, available_input_names: set[str], *, validation_error: str | None = None,
+) -> dict | None:
     """Explain unresolved bindings without guessing a resource or selecting a list item.
 
     The direct planner cannot declare output variables. Give its existing bounded
@@ -47,9 +49,10 @@ def reference_repair_context(plan: WorkflowPlan, available_input_names: set[str]
         if invalid:
             unresolved.append({"step_key": step.key, "references": invalid})
         prior_keys.add(step.key)
-    if not unresolved:
+    if not unresolved and not validation_error:
         return None
     return {
+        **({"validation_error": validation_error} if validation_error else {}),
         "unresolved_references": unresolved,
         "available_input_references": ["{{inputs." + name + "}}"
                                        for name in sorted(available_input_names)],
@@ -61,6 +64,10 @@ def reference_repair_context(plan: WorkflowPlan, available_input_names: set[str]
             "documented output_schema. Renaming a placeholder to inputs.* or vars.* does not "
             "make it available. Add permitted discovery reads when necessary; never invent "
             "IDs, output fields or a selection step that is not an actual operation. "
+            "Correct validation_error using the rejected steps and the listed input schemas. "
+            "For a malformed account ID, use the verified account selection in the catalog "
+            "or a real input/discovery reference; never guess an ID or redirect an explicit "
+            "user target to another account. "
             "Preserve the requested scope: do not select the first campaign to satisfy an "
             "all-campaign report. Prefer a listed account-level reporting operation when "
             "it covers the request. Omit optional campaign filters when no campaign was "
@@ -488,7 +495,9 @@ async def create_llm_plan(
         "another provider. Preserve every requested source platform; if a needed reporting "
         "capability is absent, disclose that limitation rather than silently omitting its results. "
         "For Reddit Ads campaign comparisons, use reddit-ads.report.get with the selected "
-        "ad_account_id or discover accessible accounts with its listed reads. Omit report dates "
+        "ad_account_id exactly as saved in reddit_ads_account, including its t2_ or a2_ prefix, "
+        "or discover accessible accounts with its listed reads. Never substitute a business UUID, "
+        "account name or placeholder for an advertising account ID. Omit report dates "
         "for full available history and disclose the returned retention window. It returns "
         "normalized spend and purchase metrics; keep its currency, UTC coverage and purchase "
         "conversion definition visible. Campaign listings alone are not performance reports. "
