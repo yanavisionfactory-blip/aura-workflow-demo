@@ -37,7 +37,9 @@ jobs:
           ref: main
           fetch-depth: 0
       - name: Preserve the reviewed release runner before selecting source
-        run: cp scripts/deploy_backend_release.py "$RUNNER_TEMP/aura-deploy-backend-release.py"
+        run: |
+          cp scripts/deploy_backend_release.py "$RUNNER_TEMP/aura-deploy-backend-release.py"
+          cp scripts/install_railway_cli.sh "$RUNNER_TEMP/aura-install-railway-cli.sh"
       - name: Require a tested main-branch release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -60,23 +62,10 @@ jobs:
         run: |
           test -n "$RAILWAY_TOKEN" || { echo 'The existing recovery-production RAILWAY_TOKEN secret is not configured.'; exit 1; }
       - name: Install pinned Railway CLI
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
-        run: |
-          set -euo pipefail
-          cli_dir="$RUNNER_TEMP/aura-railway-cli"
-          mkdir -p "$cli_dir"
-          archive="$cli_dir/railway.tar.gz"
-          # The npm installer has no retries and its release-download URL can time out.
-          # Use the same official 5.23.3 Linux asset through the GitHub release API.
-          curl --fail --location --retry 3 --retry-all-errors --connect-timeout 15 --max-time 60 \
-            --header 'Accept: application/octet-stream' \
-            'https://api.github.com/repos/railwayapp/cli/releases/assets/462501869' \
-            --output "$archive"
-          echo "79622bd63fdae79709bba016b892ae61f89c5645fa47e65d2e4f60c21d7e0949  $archive" | sha256sum --check --strict
-          tar --extract --gzip --file "$archive" --directory "$cli_dir" railway
-          chmod 755 "$cli_dir/railway"
-          "$cli_dir/railway" --version
-          echo "$cli_dir" >> "$GITHUB_PATH"
+        run: bash "$RUNNER_TEMP/aura-install-railway-cli.sh"
       - name: Deploy canary, worker and API and require exact release readiness
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}

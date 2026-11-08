@@ -1,0 +1,25 @@
+name: Verify release installer
+on:
+  pull_request:
+    paths:
+      - scripts/install_railway_cli.sh
+      - .github/workflows/backend-release.yml
+      - .github/workflows/release-cli.yml
+  push:
+    branches: [main]
+    paths:
+      - scripts/install_railway_cli.sh
+      - .github/workflows/backend-release.yml
+      - .github/workflows/release-cli.yml
+permissions:
+  contents: read
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v5
+      - name: Download, verify and run the pinned release CLI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/install_railway_cli.sh
