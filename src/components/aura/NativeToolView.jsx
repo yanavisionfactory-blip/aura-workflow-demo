@@ -11,7 +11,7 @@ export default function NativeToolView({ tool, model }) {
       {model.accounts?.length > 0 && <div><p className="mb-2 text-xs text-slate-400">{tool === "Google Ads" ? "Customer account used" : "Ad account used"}</p><div className="flex flex-wrap gap-2">{model.accounts.map((id) => <span key={id} className="rounded-lg bg-white/5 px-3 py-2 text-sm font-medium tabular-nums text-slate-100">{tool === "Google Ads" ? id.replace(/^(\d{3})(\d{3})(\d{4})$/, "$1-$2-$3") : id}</span>)}</div></div>}
       <p className="max-w-2xl text-sm leading-6 text-slate-400">{model.note}</p>
       <div className="flex flex-wrap gap-3">{model.targets.map((target) => <a key={target.link} href={target.link} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-violet-500 px-5 py-3 text-sm font-semibold text-white hover:bg-violet-400 sm:w-auto">{target.label}<ArrowUpRight className="h-4 w-4" /></a>)}</div>
-      {!embedded && <p className="max-w-2xl text-xs leading-5 text-slate-500">{model.help}</p>}
+      {!embedded && <p className="max-w-2xl text-xs leading-5 text-slate-400">{model.help} These links use your browser’s sign-in, which may differ from your AURA connection.</p>}
     </div>
   </section>;
 }
