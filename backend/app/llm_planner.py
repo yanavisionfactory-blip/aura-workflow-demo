@@ -25,8 +25,17 @@ from .schemas import MAX_WORKFLOW_STEPS, WorkflowPlan
 from .workflow_context import referenced_paths
 
 
+class PlanGraphValidationError(ValueError):
+    """Keep a rejected compact graph available to the compiler's bounded retry."""
+
+    def __init__(self, candidate: CompactWorkflowPlan, error: ValueError):
+        self.candidate = candidate
+        super().__init__(str(error))
+
+
 def reference_repair_context(
-    plan: WorkflowPlan, available_input_names: set[str], *, validation_error: str | None = None,
+    plan: WorkflowPlan | CompactWorkflowPlan, available_input_names: set[str], *,
+    validation_error: str | None = None,
 ) -> dict | None:
     """Explain unresolved bindings without guessing a resource or selecting a list item.
 
@@ -36,9 +45,15 @@ def reference_repair_context(
     """
     prior_keys: set[str] = set()
     unresolved = []
+    rejected_steps = []
     for step in plan.steps:
+        arguments = (json.loads(step.arguments_json)
+                     if isinstance(plan, CompactWorkflowPlan) else step.arguments)
+        rejected_steps.append({**step.model_dump(include={
+            "key", "tool_slug", "operation", "depends_on", "consequential",
+        }), "arguments": arguments})
         invalid = []
-        for path in sorted(referenced_paths(step.arguments)):
+        for path in sorted(referenced_paths(arguments)):
             parts = path.split(".")
             if (len(parts) > 1 and parts[0] == "inputs"
                     and parts[1] in available_input_names):
@@ -56,15 +71,16 @@ def reference_repair_context(
         "unresolved_references": unresolved,
         "available_input_references": ["{{inputs." + name + "}}"
                                        for name in sorted(available_input_names)],
-        "rejected_steps": [step.model_dump(include={
-            "key", "tool_slug", "operation", "arguments", "depends_on", "consequential",
-        }) for step in plan.steps],
+        "rejected_steps": rejected_steps,
         "required_behavior": (
             "Replace each unresolved binding using a real listed input or a prior step's "
             "documented output_schema. Renaming a placeholder to inputs.* or vars.* does not "
             "make it available. Add permitted discovery reads when necessary; never invent "
             "IDs, output fields or a selection step that is not an actual operation. "
             "Correct validation_error using the rejected steps and the listed input schemas. "
+            "Every dependency must name an actual earlier step with a unique key. Add the "
+            "missing permitted supporting reads or order the existing steps correctly; do "
+            "not remove necessary reads or invent their results to pass graph validation. "
             "For a malformed account ID, use the verified account selection in the catalog "
             "or a real input/discovery reference; never guess an ID or redirect an explicit "
             "user target to another account. "
@@ -647,7 +663,13 @@ async def create_llm_plan(
         compact, repaired_keys, repair_ms = await _repair_argument_json(
             client, response.output_parsed, relevant, settings,
         )
-    plan = normalize_plan_graph(_expand_compact_plan(compact))
+    try:
+        plan = normalize_plan_graph(_expand_compact_plan(compact))
+    except ValueError as exc:
+        # Expansion validates the graph before a WorkflowPlan exists. Preserve
+        # that candidate for the same compiler retry used by contract failures;
+        # never construct or return an unvalidated executable plan.
+        raise PlanGraphValidationError(compact, exc) from exc
     operations = [step.operation.lower() for step in plan.steps]
     plan.planning_artifacts.update({
         "planner_recovery_mode": "direct_llm",
