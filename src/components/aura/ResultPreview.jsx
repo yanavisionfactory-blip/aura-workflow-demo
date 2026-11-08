@@ -18,6 +18,7 @@ import { MarketingToolOutput } from "./MarketingToolResults";
 import MarketingResultsSummary from "./MarketingResultsSummary";
 import GoogleSheetsResult from "./GoogleSheetsResult";
 import FrameioReviewResult from "./FrameioReviewResult";
+import CanvaResult from "./CanvaResult";
 
 const readableDetail = (value = "") => readableResultText(value)
   .split(/\n/)
@@ -25,7 +26,7 @@ const readableDetail = (value = "") => readableResultText(value)
   .filter((line) => line && !/(?:https?:\/\/|\b(?:design id|edit url|view url|file id)\s*:|\{\{[^}]+\}\})/i.test(line))
   .join("\n");
 
-function PresentationPreview({ presentation, thumbnailUrl }) {
+function PresentationPreview({ presentation, thumbnailUrl, onImageError }) {
   const [slideIndex, setSlideIndex] = useState(0);
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
   const slides = presentation.slides;
@@ -37,7 +38,7 @@ function PresentationPreview({ presentation, thumbnailUrl }) {
         <span className="flex items-center gap-2"><Presentation className="h-4 w-4 text-[#64dbc4]" /> {thumbnailUrl && !thumbnailFailed && slideIndex === 0 ? "Canva design" : "Created slide content"}</span>
         <span>{timeline ? "Overview" : `${slideIndex + 1} of ${slides.length}`}</span>
       </div>
-      {thumbnailUrl && !thumbnailFailed && slideIndex === 0 && <img src={thumbnailUrl} alt={`Finished Canva slide: ${presentation.title}`} onError={() => setThumbnailFailed(true)} className="block aspect-video w-full bg-[#101c2c] object-contain" />}
+      {thumbnailUrl && !thumbnailFailed && slideIndex === 0 && <img src={thumbnailUrl} alt={`Finished Canva slide: ${presentation.title}`} onError={() => { setThumbnailFailed(true); onImageError?.(); }} className="block aspect-video w-full bg-[#101c2c] object-contain" />}
       {(!thumbnailUrl || thumbnailFailed || slideIndex !== 0) && <div className="relative flex aspect-video min-h-[230px] flex-col justify-center overflow-hidden bg-[#101c2c] px-[7%] py-[5%] text-white sm:min-h-[350px]">
         {timeline ? (
           <>
@@ -82,14 +83,7 @@ function PresentationPreview({ presentation, thumbnailUrl }) {
   );
 }
 
-function ThumbnailOnly({ result }) {
-  const [failed, setFailed] = useState(false);
-  return !failed
-    ? <img src={result.thumbnailUrl} onError={() => setFailed(true)} alt={`Finished Canva design: ${result.title}`} className="block w-full rounded-2xl border border-white/10 bg-[#101c2c] object-contain" />
-    : <div className="flex min-h-44 items-center justify-center rounded-2xl border border-white/10 bg-[#101c2c] px-6 text-center text-sm text-[#b7c7d9]">Your presentation is ready. Open it in Canva to see the finished design.</div>;
-}
-
-export default function ResultPreview({ result, results, activity = [], backendRunId }) {
+export default function ResultPreview({ result, results, activity = [], backendRunId, onCanvaScreen }) {
   if (result.kind === "frameio_review") return <FrameioReviewResult result={result} backendRunId={backendRunId} />;
   if (result.kind === "spreadsheet") return <GoogleSheetsResult result={result} backendRunId={backendRunId} />;
   if (result.kind === "marketing_tools") return <MarketingResultsSummary packet={result.packet} activity={activity} />;
@@ -112,11 +106,9 @@ export default function ResultPreview({ result, results, activity = [], backendR
     </div>)}</div>
   </div>;
   if (result.kind === "presentation") {
-    return result.preview
-      ? <PresentationPreview presentation={result.preview} thumbnailUrl={result.thumbnailUrl} />
-      : result.thumbnailUrl
-        ? <ThumbnailOnly result={result} />
-        : <div className="flex min-h-44 items-center justify-center rounded-2xl border border-white/10 bg-[#101c2c] px-6 text-center text-sm text-[#b7c7d9]">Your presentation is ready. Open it in Canva to see the finished design.</div>;
+    return <CanvaResult key={`${backendRunId}:${result.sourceStepKey}:${result.designId}`} result={result} backendRunId={backendRunId} onCanvaScreen={onCanvaScreen}>
+      {result.preview ? (thumbnailUrl, onImageError) => <PresentationPreview key={thumbnailUrl} presentation={result.preview} thumbnailUrl={thumbnailUrl} onImageError={onImageError} /> : null}
+    </CanvaResult>;
   }
   if (result.kind === "email") {
     return (
