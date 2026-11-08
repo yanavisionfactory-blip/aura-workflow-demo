@@ -85,7 +85,7 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         ],
     },
     "meta-ads-direct": {
-        "schema_version": "1.1", "catalog_version": 3, "provider_type": "oauth",
+        "schema_version": "1.1", "catalog_version": 4, "provider_type": "oauth",
         "name": "Meta Ads", "description": "Read Meta advertising accounts and performance directly through Meta.",
         "base_url": "https://graph.facebook.com", "identity": {"provider": "meta-ads-direct"},
         "modules": [
@@ -99,7 +99,8 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                         "account_id": {"type": "string", "pattern": r"^(act_)?[0-9]{1,40}$"},
                         "since": {"type": "string", "pattern": r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
                         "until": {"type": "string", "pattern": r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
-                        "level": {"type": "string", "enum": ["account", "campaign", "adset", "ad"]},
+                        "level": {"type": "string", "enum": ["account", "campaign", "adset", "ad"],
+                                  "x-preserve-on-recovery": True},
                     }),
         ],
     },
