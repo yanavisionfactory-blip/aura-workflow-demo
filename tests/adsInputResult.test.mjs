@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { adsInputResult } from "../src/lib/adsInputResult.mjs";
 import { savedToolResponse } from "../src/lib/savedToolResponse.mjs";
+import { toolResultEntries } from "../src/lib/toolResultViews.mjs";
 
 const report = (id, client = "client-1", cost = "12000000") => ({
   id, tool: "Google Ads", action: "Read campaigns", operation: "google-ads.create-campaign-report",
@@ -75,4 +76,47 @@ test("Reddit campaign results retain purchase definitions, reporting dates and m
   assert.equal(fact(result, "Timezone"), "Europe/Amsterdam");
   assert.match(fact(result, "Reporting dates"), /2024-11-08/);
   assert.match(result.note, /Reddit-attributed purchases/);
+});
+
+test("Pipeboard receipts render under Meta Ads and retain archived campaigns without invented metrics", () => {
+  const entries = toolResultEntries([{ id: "pipeboard-campaigns", tool: "agent-meta-ads-dda02350f7", status: "completed",
+    operation: "get_campaigns", output: { operation: "get_campaigns", resolved_arguments: { account_id: "act_123" },
+      provider_result: { is_error: false, structured_content: { result: JSON.stringify({ data: [
+        { id: "1", account_id: "123", name: "Archived campaign", status: "ARCHIVED" },
+      ] }) } } } }]);
+  assert.equal(entries[0].tool, "Meta Ads");
+  const result = adsInputResult(entries);
+  assert.equal(result.datasets[0].campaigns[0].title, "Archived campaign");
+  assert.equal(result.datasets[0].campaigns[0].status, "ARCHIVED");
+  assert.ok(result.datasets[0].campaigns[0].metrics.every((metric) => metric.value === "Unavailable"));
+});
+
+test("Pipeboard metadata enriches empty insights without being mistaken for campaign data", () => {
+  const common = { tool: "Meta Ads", status: "completed", hasResponse: true };
+  const receipt = (value) => ({ is_error: false, structured_content: { result: JSON.stringify(value) } });
+  const result = adsInputResult([
+    { ...common, id: "info", operation: "get_account_info", response: receipt({ id: "act_123", account_id: "123", name: "Verified account", currency: "EUR" }) },
+    { ...common, id: "insights", operation: "get_insights", inputs: { object_id: "act_123", time_range: "maximum" }, response: receipt({ data: [] }) },
+  ]);
+  assert.equal(result.datasets.length, 1);
+  assert.equal(result.datasets[0].empty, true);
+  assert.equal(fact(result.datasets[0], "Currency"), "EUR");
+  assert.match(fact(result.datasets[0], "Reporting scope"), /Maximum history/);
+});
+
+test("inventory scope, statuses and permission gaps remain explicit", () => {
+  const result = savedToolResponse({ tool: "Meta Ads", operation: "meta-ads.campaigns.list", response: {
+    data: [], inventory_scope: { date_filter: "none", effective_status: ["ACTIVE", "ARCHIVED", "DELETED"] },
+    account_discovery: { accounts: [], permissions: { ads_read: "granted", business_management: "not_granted" }, coverage: { status: "partial" } },
+  } });
+  assert.match(fact(result, "Reporting scope"), /no date filter/);
+  assert.match(fact(result, "Status coverage"), /ARCHIVED, DELETED/);
+  assert.equal(fact(result, "Business discovery permission"), "not_granted");
+});
+
+test("malformed or error-marked Pipeboard envelopes never invent empty reporting results", () => {
+  for (const response of [
+    { is_error: true, structured_content: { result: '{"data":[]}' } },
+    { is_error: false, structured_content: { result: 'not-json' } },
+  ]) assert.equal(savedToolResponse({ tool: "Meta Ads", operation: "get_insights", response }).empty, false);
 });

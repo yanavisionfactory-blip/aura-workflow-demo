@@ -65,6 +65,16 @@ The read-only operations are `meta-ads.identity.get`, `meta-ads.accounts.list`,
 `meta-ads.insights.get`. There are no campaign writes, arbitrary Graph endpoints,
 user-selected fields, batches or credential overrides.
 
+Inventory reads explicitly request every supported effective status, including
+paused, archived and deleted objects, without a date filter. Saved receipts retain
+that status coverage; provider retention still applies. Campaign inventory is
+distinct from a dated performance report. Discovery records the actual
+`ads_read` and `business_management` grant status. Missing business discovery
+permission does not imply that campaign reporting on a listed account failed,
+and an empty result does not prove a permissions problem. Ordinary reconnect
+continues to request only `ads_read`; broader business access requires separate
+authorization, never a silent scope expansion.
+
 The user must explicitly select an account from the account list. Every account
 read verifies that exact numeric account ID. Insights require full ISO dates
 including year, return one all-days result for the inclusive period, and accept

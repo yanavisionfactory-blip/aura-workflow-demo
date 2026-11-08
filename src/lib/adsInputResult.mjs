@@ -9,7 +9,7 @@ export function adsInputResult(entries) {
     .sort((a, b) => String(a.retrieved_at || "").localeCompare(String(b.retrieved_at || ""))).at(-1);
   return {
     discovery,
-    datasets: summaries.filter((item) => !/\.(?:accounts|businesses)\.list$|\.identity\.get$|get_ad_accounts$/.test(item.entry.operation || ""))
+    datasets: summaries.filter((item) => !/\.(?:accounts|businesses)\.list$|\.identity\.get$|get_ad_accounts$|^get_account_info$/.test(item.entry.operation || ""))
       .filter((item) => item.campaigns.length || item.records.length || item.body || item.empty).map((item) => {
       const account = fact(item, "Account");
       const matching = account ? summaries.filter((other) => fact(other, "Account") === account) : [];
