@@ -56,10 +56,10 @@ function SourceOutput({ entry }) {
   </div>;
 }
 
-export function MainToolOutput({ entry, result, results = {}, activity, backendRunId }) {
+export function MainToolOutput({ entry, result, results = {}, activity, backendRunId, onCanvaScreen }) {
   if (entry?.source) return <SourceOutput entry={entry} />;
   if ((!result.kind || result.kind === "result") && !results.breakdown && !result.items?.length && entry?.hasResponse) return <SavedToolResponse entry={entry} />;
-  return <ResultPreview result={{ ...result, sourceStepKey: entry?.originalStepKey || result.sourceStepKey, displayProvider: entry?.tool || result.displayProvider }} results={results} activity={activity} backendRunId={entry?.runId || backendRunId} />;
+  return <ResultPreview result={{ ...result, sourceStepKey: entry?.originalStepKey || result.sourceStepKey, displayProvider: entry?.tool || result.displayProvider }} results={results} activity={activity} backendRunId={entry?.runId || backendRunId} onCanvaScreen={onCanvaScreen} />;
 }
 
 export function ToolOutputCards({ entries, activity, backendRunId, onOpen = undefined, collapsible = false }) {

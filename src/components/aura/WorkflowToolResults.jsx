@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { AlertTriangle, Check, ChevronDown, ExternalLink, FileText, Presentation, Table2 } from "lucide-react";
 import { mainToolEntry, toolOutputResult, toolResultGroups, toolResultName, toolResultStatus } from "@/lib/toolResultViews.mjs";
 import { MainToolOutput } from "./ToolResultView";
@@ -17,6 +18,7 @@ function SourceResults({ items }) {
 }
 
 export default function WorkflowToolResults({ entries, primary, mainEntry, hasMainOutput, results, activity, backendRunId, actions, dropdowns, onOpenRun, onOpen }) {
+  const [canvaScreens, setCanvaScreens] = useState({});
   const primaryTool = mainEntry?.tool || toolResultName(primary.provider);
   const groups = toolResultGroups(entries);
   if (hasMainOutput && !groups.some((group) => group.tool === primaryTool)) groups.push({ tool: primaryTool, entries: [] });
@@ -32,7 +34,8 @@ export default function WorkflowToolResults({ entries, primary, mainEntry, hasMa
       const adsInput = ["Google Ads", "Meta Ads"].includes(tool) && completed.length > 0 && !visual;
       const issues = items.filter((entry) => ["failed", "blocked", "provider_error"].includes(entry.status));
       const link = combined?.link || completed.findLast((entry) => entry.link)?.link;
-      const native = nativeToolView(tool, completed, combined || {});
+      const previewKey = `${combinedEntry?.runId || backendRunId}:${combinedEntry?.originalStepKey || combined?.sourceStepKey}:${combined?.designId}`;
+      const native = nativeToolView(tool, completed, { ...combined, ...canvaScreens[previewKey] });
       const Icon = tool === "Canva" ? Presentation : tool === "Google Sheets" ? Table2 : FileText;
       const count = combined?.kind === "spreadsheet" ? `${combined.ranges?.length || 0} saved ranges` : combined?.pageCount ? `${combined.pageCount} ${combined.pageCount === 1 ? "slide" : "slides"}` : `${completed.length} saved ${completed.length === 1 ? "action" : "actions"}`;
       return <article key={tool} data-result-preview={visual || adsInput || undefined} className={`min-w-0 overflow-hidden rounded-2xl border ${isPrimary ? "border-violet-400/30 bg-gradient-to-br from-violet-400/[0.08] to-[#0c1420]" : "border-white/10 bg-[#0d1522]"}`}>
@@ -42,7 +45,7 @@ export default function WorkflowToolResults({ entries, primary, mainEntry, hasMa
           {native && <NativeToolView tool={tool} model={native} isPrimary={isPrimary} />}
         </header>
         {combinedEntry?.backupNotice && <p className="mx-4 mb-4 rounded-xl border border-amber-400/20 bg-amber-400/5 p-3 text-xs leading-5 text-amber-100 sm:mx-6">Backup used · {combinedEntry.backupNotice}</p>}
-        {visual && <div className="px-4 pb-4 sm:px-6 sm:pb-6"><h4 className="mb-4 break-words text-lg font-medium sm:text-xl">{combined.title}</h4><MainToolOutput entry={combinedEntry} result={combined} results={results} activity={activity} backendRunId={backendRunId} /></div>}
+        {visual && <div className="px-4 pb-4 sm:px-6 sm:pb-6"><h4 className="mb-4 break-words text-lg font-medium sm:text-xl">{combined.title}</h4><MainToolOutput entry={combinedEntry} result={combined} results={results} activity={activity} backendRunId={backendRunId} onCanvaScreen={(screen) => setCanvaScreens((current) => ({ ...current, [previewKey]: screen }))} /></div>}
         {adsInput && <div className="px-4 pb-5 sm:px-6"><AdsInputResult tool={tool} entries={completed} isPrimary={isPrimary} /></div>}
         <details ref={(node) => { if (node) dropdowns.current.set(tool, node); else dropdowns.current.delete(tool); }} aria-label={`${tool} result dropdown`} open={!isPrimary && !visual && !adsInput || undefined} className="group/tool border-t border-white/10">
           <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300 sm:px-6 [&::-webkit-details-marker]:hidden"><span>{isPrimary || adsInput || visual ? "Saved actions" : "Results and reporting coverage"}</span><ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground group-open/tool:rotate-180" /></summary>
