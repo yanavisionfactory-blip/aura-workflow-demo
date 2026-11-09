@@ -527,7 +527,8 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         onReplaceTool={onReplaceTool}
         onSwitchConnection={handleSwitchConnection}
         replacements={CATALOG.filter((entry) => connections[entry.name]).map((entry) => entry.name)}
-        connectionEnabled={connectionsCanOpen && !checkingConnections}
+        revisionEnabled={!busy && connectionsCanOpen}
+        connectionEnabled={!busy && connectionsCanOpen && !checkingConnections}
       />
 
       {backstageOnly.length > 0 && (

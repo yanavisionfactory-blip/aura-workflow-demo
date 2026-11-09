@@ -53,9 +53,25 @@ export default function PlanConnectionAlert({
   replacements = [],
   userSelectedTools = [],
   connectionEnabled = true,
+  revisionEnabled = connectionEnabled,
 }) {
   const [replacing, setReplacing] = useState("");
   const [replacement, setReplacement] = useState("");
+  const [revisionTool, setRevisionTool] = useState("");
+  const [revisionError, setRevisionError] = useState("");
+  const revise = async (callback, ...args) => {
+    if (revisionTool) return;
+    setRevisionTool(args[0]);
+    setRevisionError("");
+    try {
+      const result = await callback(...args);
+      if (result?.ok === false) throw new Error(result.error || "AURA couldn't update this plan. Try again.");
+    } catch (error) {
+      setRevisionError(error?.message || "AURA couldn't update this plan. Try again.");
+    } finally {
+      setRevisionTool("");
+    }
+  };
   // Only surface connect prompts for tools AURA chose on its own (the user did
   // not pin them in the command input) and that aren't connected. Tools the
   // user explicitly selected are their responsibility — they connect those in
@@ -130,6 +146,8 @@ export default function PlanConnectionAlert({
         </div>}
       </div>
 
+      {revisionTool && <p role="status" className="px-4 py-2 text-xs">Updating your plan…</p>}
+      {revisionError && <p role="alert" className="px-4 py-2 text-xs text-red-300">{revisionError}</p>}
       <div className="divide-y divide-white/5">
         {checklist.map((t) => {
           const Icon = iconFor(t.name);
@@ -165,19 +183,19 @@ export default function PlanConnectionAlert({
                     </button>
                   </div>
                 )}
-                {!connected && connectionEnabled && (
+                {!connected && (
                   <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <button type="button" onClick={() => onRecheck?.(t.key)} disabled={isConnecting}
+                    <button type="button" onClick={() => onRecheck?.(t.key)} disabled={isConnecting || !connectionEnabled}
                       className="rounded-md border border-white/15 px-2.5 py-1 text-[11px] text-foreground hover:bg-white/5 disabled:opacity-50">
                       I've connected it — check again
                     </button>
-                    {onSkipTool && <button type="button" onClick={() => onSkipTool(t.name)} disabled={isConnecting}
+                    {onSkipTool && <button type="button" onClick={() => revise(onSkipTool, t.name)} disabled={isConnecting || !revisionEnabled || Boolean(revisionTool)}
                       className="rounded-md border border-white/15 px-2.5 py-1 text-[11px] text-foreground hover:bg-white/5 disabled:opacity-50">
                       Run without {t.name}
                     </button>}
                     {onReplaceTool && replacements.length > 0 && <button type="button"
                       onClick={() => { setReplacing(replacing === t.name ? "" : t.name); setReplacement(""); }}
-                      disabled={isConnecting} className="rounded-md border border-white/15 px-2.5 py-1 text-[11px] text-foreground hover:bg-white/5 disabled:opacity-50">
+                      disabled={isConnecting || !revisionEnabled || Boolean(revisionTool)} className="rounded-md border border-white/15 px-2.5 py-1 text-[11px] text-foreground hover:bg-white/5 disabled:opacity-50">
                       Replace tool
                     </button>}
                     {replacing === t.name && <div className="flex items-center gap-2 w-full">
@@ -189,7 +207,7 @@ export default function PlanConnectionAlert({
                           <option key={name} value={name}>{name}</option>
                         ))}
                       </select>
-                      <button type="button" disabled={!replacement} onClick={() => onReplaceTool(t.name, replacement)}
+                      <button type="button" disabled={!replacement || !revisionEnabled || Boolean(revisionTool)} onClick={() => revise(onReplaceTool, t.name, replacement)}
                         className="rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground disabled:opacity-50">
                         Revise plan
                       </button>

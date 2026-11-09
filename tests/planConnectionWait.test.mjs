@@ -315,3 +315,42 @@ test("a restored blocked plan discovers its dedicated Sheets route and recompile
     container.remove();
   }
 });
+
+test("Run without remains actionable during background checks and reports revision failure", async () => {
+  let checks = 0, finishProbe;
+  globalThis.fetch = async (url) => {
+    const { pathname } = new URL(url);
+    if (pathname === "/v1/managed-connectors/status") return Response.json({ marketplace: [
+      { display_name: "Google Sheets", provider: "google-sheets", connection_backend: "pipedream", connectable: true },
+    ] });
+    if (pathname === "/v1/tools") return Response.json([{ id: "skip-sheets", slug: "google-sheets",
+      display_name: "Google Sheets", kind: "oauth", enabled: true, allowed_operations: [] }]);
+    if (pathname === "/v1/connections/skip-sheets/test") {
+      if (++checks > 1) return new Promise((resolve) => { finishProbe = resolve; });
+      return Response.json({ status: "verified", verification: { ok: true } });
+    }
+    throw new Error(`Unexpected request: ${pathname}`);
+  };
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  let attempts = 0;
+  try {
+    await act(async () => root.render(React.createElement(PlanView, {
+      plan: { steps: [], compileState: "waiting_for_connection", connectionRequirements: ["google-sheets"],
+        connectionChecklist: [{ provider_hint: "google-sheets", status: "pending", required_permissions: ["sheets.read"] }] },
+      onSkipTool: async () => { attempts++; return { ok: false, error: "Planner unavailable. Try again." }; },
+    })));
+    const skip = [...container.querySelectorAll("button")].find((item) => item.textContent.includes("Run without Google Sheets"));
+    assert.ok(finishProbe, "background connection probe is still pending");
+    assert.equal(skip.disabled, false);
+    await act(async () => Simulate.click(skip));
+    assert.equal(attempts, 1);
+    assert.match(container.querySelector('[role="alert"]').textContent, /Planner unavailable/);
+    assert.equal(skip.disabled, false, "failed revision can be retried");
+    await act(async () => finishProbe(Response.json({ status: "unverified", verification: { ok: false } })));
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
