@@ -166,28 +166,3 @@ test("a response for the previous run cannot unlock a new run", async () => {
   await resolve(1, report({ passed: false }));
   assert.equal(button("Start").disabled, true);
 });
-
-test("Meta review distinguishes the sign-in identity from the exact reporting ad account", async () => {
-  await render();
-  await resolve(0, report({ checks: [
-    { status: "passed", message: "Sign-in verified", connected_account: "999", account_label: "Meta login" },
-    { type: "ad_account", status: "passed", message: "Compare this account with Ads Manager",
-      connected_account: "Client account · act_123", account_label: "Reporting ad account", currency: "EUR",
-      timezone: "Europe/Berlin", reporting_dates: "2026-10-01 – 2026-10-31", reporting_level: "account" },
-  ] }));
-  assert.match(container.textContent, /Meta login: 999/);
-  assert.match(container.textContent, /Reporting ad account: Client account · act_123/);
-  assert.match(container.textContent, /EUR · Europe\/Berlin/);
-  assert.match(container.textContent, /2026-10-01 – 2026-10-31 · Level: account/);
-  assert.equal(button("Start").disabled, false);
-});
-
-test("a missing Meta ad account blocks Start and shows the available choice", async () => {
-  await render();
-  await resolve(0, report({ passed: false, checks: [{ type: "ad_account", status: "blocked",
-    message: "Ad account not found", connected_account: "act_123", account_label: "Reporting ad account",
-    available_accounts: [{ id: "act_456", name: "Available client" }] }] }));
-  assert.equal(button("Start").disabled, true);
-  assert.match(container.textContent, /Available accounts: Available client · act_456/);
-});
-

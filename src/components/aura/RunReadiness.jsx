@@ -29,13 +29,8 @@ export default function RunReadiness({ runId, plan, backendPlan, steps, onReady 
     <p className="mt-1 text-xs text-muted-foreground">AURA checks this plan’s required access before Start and again before execution. New destinations are verified after creation.</p>
     {busy && <p className="mt-2">Checking the selected accounts…</p>}
     {error && <p role="alert" className="mt-2 text-amber-300">{error}</p>}
-    <ul className="mt-2 space-y-2">{report?.checks?.map((check, i) => <li key={i}>{check.status === "passed" ? "✓ " : "! "}{check.message}{check.connected_account && <span className="block text-xs text-muted-foreground">{check.account_label || "Account"}: {check.connected_account}</span>}{check.type === "ad_account" && <>
-      {(check.currency || check.timezone) && <span className="block text-xs text-muted-foreground">{[check.currency, check.timezone].filter(Boolean).join(" · ")}</span>}
-      {check.reporting_dates && <span className="block text-xs text-muted-foreground">Reporting dates: {check.reporting_dates} · Level: {check.reporting_level}</span>}
-      {check.status !== "passed" && check.available_accounts?.length > 0 && <span className="block text-xs text-muted-foreground">Available accounts: {check.available_accounts.map((account) => `${account.name} · ${account.id}`).join("; ")}</span>}
-    </>}</li>)}</ul>
+    <ul className="mt-2 space-y-2">{report?.checks?.map((check, i) => <li key={i}>{check.status === "passed" ? "✓ " : "! "}{check.message}{check.connected_account && <span className="block text-xs text-muted-foreground">Account: {check.connected_account}</span>}</li>)}</ul>
     {report && <p className="mt-2 text-xs text-muted-foreground">Last checked {new Date(report.checked_at).toLocaleTimeString()}. Start checks access again before running anything.</p>}
     <button type="button" disabled={busy} className="mt-3 underline disabled:opacity-50" onClick={() => setRevision((v) => v + 1)}>Check again</button>
   </section>;
 }
-

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { BarChart3, CheckCircle2, Database, SearchX } from "lucide-react";
-import { adsInputResult, metaEmptyResultHelp } from "@/lib/adsInputResult.mjs";
+import { adsInputResult } from "@/lib/adsInputResult.mjs";
 
 const columns = ["Spend", "Impressions", "Clicks", "CTR", "CPC", "Conversions", "CPA", "Conversion value", "ROAS"];
 const fact = (item, label) => item?.facts.find((value) => value.label === label)?.value;
@@ -14,7 +14,6 @@ export default function AdsInputResult({ tool, entries, isPrimary = false }) {
   const records = dataset?.campaigns || [];
   const currency = fact(dataset, "Currency");
   const meta = tool === "Meta Ads";
-  const recovery = metaEmptyResultHelp(dataset);
   const campaigns = records.length > 0 || entries.some((entry) => /campaign|insights/.test(entry.operation));
   const checkedCoverage = [...new Set(model.datasets.map((item) => fact(item, "Reporting dates") || fact(item, "Reporting scope")).filter(Boolean))];
   const inventoryLimitations = [...new Set(model.datasets.map((item) => fact(item, "Inventory limitation")).filter(Boolean))];
@@ -36,7 +35,7 @@ export default function AdsInputResult({ tool, entries, isPrimary = false }) {
       </div>
     </div>
     {tab === "campaigns" ? <div className="space-y-5 p-4 sm:p-5">
-      {model.datasets.length > 1 && <label className="block text-xs font-medium text-slate-500">Saved report<select aria-label={`${tool} saved report`} value={dataset.entry.id} onChange={(event) => setSelected(event.target.value)} className="mt-2 w-full rounded-lg border border-slate-300 bg-white p-2.5 text-sm text-slate-800">{model.datasets.map((item) => <option key={item.entry.id} value={item.entry.id}>{item.label}</option>)}</select></label>}
+      {model.datasets.length > 1 && !allEmpty && <label className="block text-xs font-medium text-slate-500">Saved report<select aria-label={`${tool} saved report`} value={dataset.entry.id} onChange={(event) => setSelected(event.target.value)} className="mt-2 w-full rounded-lg border border-slate-300 bg-white p-2.5 text-sm text-slate-800">{model.datasets.map((item) => <option key={item.entry.id} value={item.entry.id}>{item.label}</option>)}</select></label>}
       <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-slate-500"><span>Account: <strong className="font-medium text-slate-700">{allEmpty && model.accounts.length > 1 ? `${model.accounts.length} accounts · see coverage` : fact(dataset, "Account") || "Unavailable"}</strong></span>{currency && !(allEmpty && model.accounts.length > 1) && <span>Currency: <strong className="font-medium text-slate-700">{currency}</strong></span>}{!allEmpty && <span>{fact(dataset, "Reporting dates") || fact(dataset, "Reporting scope")}</span>}</div>
       {fact(dataset, "Status coverage") && <p className="text-xs leading-5 text-slate-500">Statuses checked: {fact(dataset, "Status coverage")}</p>}
       {dataset?.records.length || dataset?.body ? <div className="space-y-4"><h5 className="font-semibold">{dataset.entry.action}</h5>{dataset.body && <p className="whitespace-pre-wrap break-words text-sm leading-6">{dataset.body}</p>}<ul className="divide-y divide-slate-200">{dataset.records.map((record, index) => <li key={index} className="py-3 text-sm"><p className="font-medium">{record.title}</p>{record.description && <p className="mt-1 text-slate-500">{record.description}</p>}</li>)}</ul></div> : records.length > 0 ? <>
@@ -47,16 +46,7 @@ export default function AdsInputResult({ tool, entries, isPrimary = false }) {
       </> : <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-5 py-8 text-center"><SearchX className="mx-auto mb-3 h-8 w-8 text-slate-400" /><h5 className="font-semibold">{allEmpty ? "No campaign records returned" : "No campaign metrics in this saved response"}</h5><p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">{allEmpty ? "Metrics are unavailable, not zero. The connected account and saved query coverage are shown here." : "Account discovery or another source action completed. See accounts and coverage for the saved details."}</p></div>}
       {allEmpty && <div><h5 className="mb-2 text-xs font-semibold text-slate-600">Reporting coverage</h5><ul className="flex flex-wrap gap-2">{checkedCoverage.map((coverage) => <li key={coverage} className="rounded-md bg-slate-100 px-2.5 py-1.5 text-xs text-slate-600">{coverage}</li>)}</ul>{!checkedCoverage.length && <p className="text-xs text-slate-500">No reporting-date scope was recorded in this saved response.</p>}<p className="mt-3 text-xs leading-5 text-slate-500">No returned records does not establish that earlier history or other accounts have no activity.</p></div>}
       {inventoryLimitations.map((limitation) => <p key={limitation} className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-900">{limitation}</p>)}
-      {recovery && <section aria-label="Find missing Meta campaign data" className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm leading-6 text-slate-700">
-        <h5 className="font-semibold text-slate-900">Find the missing campaign data</h5>
-        <p className="mt-2">Checked ad account: <strong>{[recovery.accountName, recovery.account].filter(Boolean).join(" · ") || "Not recorded"}</strong></p>
-        {recovery.dates && <p>Checked period: {recovery.dates}</p>}
-        {recovery.level && <p>Reporting level: {recovery.level}</p>}
-        <ol className="mt-3 list-decimal space-y-2 pl-5">{recovery.steps.map((step) => <li key={step}>{step}</li>)}</ol>
-        {recovery.adsManagerUrl && <a href={recovery.adsManagerUrl} target="_blank" rel="noopener noreferrer" className="mt-4 inline-flex min-h-11 items-center rounded-lg bg-blue-700 px-4 py-2 font-medium text-white">Compare this account in Ads Manager</a>}
-      </section>}
       {dataset?.note && !allEmpty && <p className="text-xs leading-5 text-slate-500">{dataset.note}</p>}
     </div> : <div className="divide-y divide-slate-200 px-4 sm:px-5">{model.summaries.map((item) => <section key={item.entry.id} className="py-4"><h5 className="text-sm font-semibold">{item.entry.action}</h5><p className="mt-1 text-xs text-slate-500">{item.summary}</p><dl className="mt-3 grid gap-3 text-xs sm:grid-cols-2">{item.facts.map(({label,value}) => <div key={label}><dt className="text-slate-500">{label}</dt><dd className="mt-1 break-words font-medium">{value}</dd></div>)}</dl></section>)}</div>}
   </section>;
 }
-
