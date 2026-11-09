@@ -495,3 +495,25 @@ async def test_insights_reject_duplicate_and_out_of_period_rows(settings, monkey
     boundary(monkeypatch, handler)
     with pytest.raises(meta_ads.MetaAdsError):
         await meta_ads.execute(credentials(), "meta-ads.insights.get", ARGS)
+
+
+@pytest.mark.parametrize("level", ["account", "campaign", "adset", "ad"])
+async def test_empty_insights_preserve_requested_level_during_recovery(settings, monkeypatch, level):
+    from app.orchestrator import _required_read_arguments
+
+    arguments = {**ARGS, "level": level}
+    manifest = native_manifest(SLUG)
+    # Empty Insights must not trigger a "broader" retry that changes aggregation.
+    assert _required_read_arguments(manifest, "meta-ads.insights.get", arguments) is None
+
+    def handler(request):
+        if not request.url.path.endswith("/insights"):
+            return auth_response(request)
+        assert request.url.params["level"] == level
+        return httpx.Response(200, json={"data": []})
+
+    requests = boundary(monkeypatch, handler)
+    result = await ProviderExecutor(credentials(), capability_manifest=manifest).execute(
+        "meta-ads.insights.get", arguments)
+    assert result["level"] == level and result["data"] == [] and result["row_count"] == 0
+    assert len([request for request in requests if request.url.path.endswith("/insights")]) == 1
