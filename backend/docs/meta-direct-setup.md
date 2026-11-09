@@ -102,33 +102,6 @@ apply; this connector never manufactures an approved export or bypasses them.
 
 ## Verification before enabling a customer
 
-The browser-agent approval block for `work.meta.com` is not part of AURA's
-Facebook OAuth flow and must not be presented as a customer connection error.
-Customers authorize AURA in their own browser. AURA never asks them to share
-Meta credentials with support or sign in to the operator's Meta workspace.
-
-Before Start, direct Meta reporting plans now verify the exact literal ad
-account against fresh discovery, show its name/ID, currency, timezone, dates
-and reporting level separately from the Meta login, and block undiscovered
-targets without substituting the first account. Account IDs produced by earlier
-discovery steps are explicitly deferred and verified on the eventual native
-read. Empty reads preserve the chosen reporting level during recovery.
-The saved result provides account/date reconciliation instructions and an
-account-specific Ads Manager link; empty data remains unavailable, not zero.
-
-Release acceptance must include a real customer who is not an AURA Meta app
-administrator, developer or tester. Record separately: app live status and
-permission approval for customer reporting; the customer's own OAuth consent;
-the exact ad account and known-active date range; agreement with Ads Manager;
-and isolation from a second AURA workspace. A successful operator connection
-or mocked test does not satisfy this external-customer check. Do not describe
-customer availability as verified until these live checks have succeeded.
-
-If Meta rejects a customer's consent because the app is unavailable or not
-approved, the AURA operator must correct the Meta app setup. Do not tell the
-customer to repeatedly reconnect or grant unrelated permissions. Missing
-`business_management` alone is not evidence that reporting is blocked.
-
 Automated tests exercise authorization, state replay/expiry/tenant membership,
 permission failures, encrypted persistence, fixed-host requests, pagination,
 expiry, provider failures, catalog preference and the full planning path.
@@ -150,4 +123,3 @@ his AURA workspace.
 - https://developers.facebook.com/docs/marketing-api/insights/
 - https://github.com/meta/facebook-python-business-sdk/blob/main/facebook_business/adobjects/adaccount.py
 - https://github.com/meta/facebook-python-business-sdk/blob/main/facebook_business/session.py
-

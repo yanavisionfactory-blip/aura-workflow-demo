@@ -35,7 +35,6 @@ export function savedToolResponse(entry) {
     fact("Account name", account.name || account.descriptiveName || account.descriptive_name);
     fact("Currency", account.currency || account.currencyCode || account.currency_code);
     fact("Timezone", account.timezone_name || account.timeZone || account.time_zone || account.time_zone_id);
-    if (meta) fact("Reporting level", body.level || args.level);
     const date = body.date_range;
     fact("Reporting dates", date?.since && date?.until ? `${date.since} – ${date.until}` : date?.starts_at && date?.ends_at ? `${date.starts_at} – ${date.ends_at}` : args.startDate && args.endDate ? `${args.startDate} – ${args.endDate}` : undefined);
     if (google && !args.query && !body.query && /create-.*-report$/.test(entry.operation || "")) fact("Reporting scope", args.dateRange || "Full available history · no date filter");
@@ -83,4 +82,3 @@ export function savedToolResponse(entry) {
       : meta && empty ? "This applies to the requested account and dates. It does not establish that earlier history or other accounts have no activity." : null,
   };
 }
-

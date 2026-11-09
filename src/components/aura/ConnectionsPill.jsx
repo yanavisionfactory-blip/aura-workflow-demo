@@ -485,7 +485,7 @@ export default function ConnectionsPill() {
                   {connectionIsReady(managedConnection) && <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-400/15"><Check className="h-4 w-4 text-emerald-400" /></div>}
                   <div><p className={`text-xs font-medium ${connectionIsReady(managedConnection) ? "text-emerald-400" : "text-amber-300"}`}>{connectionIsReady(managedConnection) ? "Connected and verified" : managedConnection.enabled === false ? "Connection disabled" : "Connection needs checking"}</p><p className="mt-0.5 text-[11px] text-muted-foreground">AURA checks permissions for each plan before Start.</p></div>
                 </div>
-                {isMetaConnection(managedConnection) && <div className="mt-3 space-y-2 text-xs text-muted-foreground"><p>This connection has its own authorization. Testing, reconnecting or removing it leaves your other Meta Ads connections unchanged.</p><p>Connected means AURA can sign in and check the granted access. Before starting a report, compare its ad account ID with the account containing your campaigns in Ads Manager. A Meta login or business portfolio is a different account type.</p><p>If your ad account is missing, check that the Facebook login you use has access to it before reconnecting. A successful connection alone does not confirm campaign results.</p></div>}
+                {isMetaConnection(managedConnection) && <p className="mt-3 text-xs text-muted-foreground">This connection has its own authorization. Testing, reconnecting or removing it leaves your other Meta Ads connections unchanged.</p>}
                 {managedConnection.identity?.domain && <p className="mt-2 text-sm">Verified store: <span className="font-medium">{managedConnection.identity.domain}</span></p>}
                 {((managedConnection.slug === "google-ads" && managedConnection.connection_backend === "pipedream") ||
                   (managedConnection.slug === "reddit-ads" && managedConnection.connection_backend === "native")) && (
@@ -521,4 +521,3 @@ export default function ConnectionsPill() {
     </>
   );
 }
-

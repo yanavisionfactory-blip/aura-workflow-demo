@@ -20,86 +20,6 @@ from app.run_readiness import check_run_readiness
 from app.schemas import PlanApproval, PlanStep, WorkflowPlan
 
 
-async def seed_meta(database, account_id="act_123"):
-    plan = WorkflowPlan(name="Meta account report", interpretation="Read the selected advertiser", steps=[PlanStep(
-        key="read", agent="Meta Ads", tool_slug="meta-ads-direct", operation="meta-ads.insights.get",
-        arguments={"account_id": account_id, "since": "2026-10-01", "until": "2026-10-31", "level": "account"},
-        reason="Read selected account", expected_output="Available account totals")])
-    async with database() as session:
-        for wid in ("a", "b"):
-            session.add(Workspace(id=wid, name=wid))
-            session.add(ToolConnection(id=f"meta-{wid}", workspace_id=wid, slug="meta-ads-direct",
-                display_name="Meta Ads", kind=ToolKind.oauth, config={"managed_by": "meta_direct"},
-                base_url="https://graph.facebook.com", allowed_operations=native_operations("meta-ads-direct")))
-            session.add(CapabilityManifest(workspace_id=wid, tool_id=f"meta-{wid}", provider_type="oauth",
-                status="verified", manifest=native_manifest("meta-ads-direct")))
-        session.add(WorkflowRun(id="meta-run", workspace_id="a", prompt="Read Meta account totals",
-            plan=plan.model_dump(mode="json"), status=RunStatus.awaiting_approval))
-        await session.commit()
-    return plan
-
-
-@pytest.mark.parametrize("scenario", ["selected", "missing", "unavailable", "malformed", "dynamic", "invalid"])
-async def test_meta_prestart_checks_ad_account_separately_from_login(database, monkeypatch, scenario):
-    account_id = "{{steps.accounts.data.0.id}}" if scenario == "dynamic" else "not-an-account" if scenario == "invalid" else "act_123"
-    plan = await seed_meta(database, account_id)
-    seen = []
-    async def credentials(session, tool, manifest):
-        seen.append(tool.id)
-        return {"access_token": "SECRET"}, {"identity": {"id": "999"}}, None
-    monkeypatch.setattr(run_readiness, "_connection_credentials", credentials)
-    accounts = [{"id": "act_456", "name": "Other advertiser", "currency": "USD"}]
-    if scenario == "selected":
-        accounts.append({"id": "act_123", "name": "Chosen advertiser", "currency": "EUR", "timezone_name": "Europe/Berlin"})
-    if scenario == "malformed":
-        accounts = [None]
-    execute = AsyncMock(return_value={"account_discovery": {"accounts": accounts}})
-    if scenario == "unavailable":
-        execute.side_effect = TimeoutError("SECRET upstream content")
-    monkeypatch.setattr(run_readiness.ProviderExecutor, "execute", execute)
-    async with database() as session:
-        run = await session.get(WorkflowRun, "meta-run")
-        result = await check_run_readiness(session, run, plan)
-        assert seen == ["meta-a"] and "SECRET" not in str(result)
-        assert result["checks"][0]["account_label"] == "Meta login"
-        target = next(check for check in result["checks"] if check.get("type") == "ad_account")
-        assert result["passed"] is (scenario in {"selected", "dynamic"})
-        if scenario == "selected":
-            assert target["connected_account"] == "Chosen advertiser · act_123"
-            assert target["reporting_dates"] == "2026-10-01 – 2026-10-31"
-            assert target["reporting_level"] == "account"
-            assert target["currency"] == "EUR" and target["timezone"] == "Europe/Berlin"
-        elif scenario == "missing":
-            assert target["code"] == "ad_account_not_discovered"
-            assert target["available_accounts"] == [{"id": "act_456", "name": "Other advertiser"}]
-            assert plan.steps[0].arguments["account_id"] == "act_123"  # Never substitute the first account.
-        elif scenario in {"unavailable", "malformed"}:
-            assert target["code"] == "ad_account_check_unavailable"
-        elif scenario == "dynamic":
-            assert target["code"] == "ad_account_deferred"
-            assert "connected_account" not in target
-        else:
-            assert target["code"] == "invalid_ad_account"
-        if scenario in {"dynamic", "invalid"}:
-            execute.assert_not_awaited()
-        else:
-            execute.assert_awaited_once_with("meta-ads.accounts.list", {})
-
-
-async def test_meta_prestart_discovers_once_for_two_comparison_periods(database, monkeypatch):
-    plan = await seed_meta(database)
-    plan.steps.append(plan.steps[0].model_copy(update={"key": "compare", "arguments": {
-        **plan.steps[0].arguments, "since": "2026-09-01", "until": "2026-09-30"}}))
-    monkeypatch.setattr(run_readiness, "_connection_credentials", AsyncMock(return_value=({}, {"identity": {"id": "999"}}, None)))
-    execute = AsyncMock(return_value={"account_discovery": {"accounts": [{"id": "act_123", "name": "Chosen advertiser"}]}})
-    monkeypatch.setattr(run_readiness.ProviderExecutor, "execute", execute)
-    async with database() as session:
-        result = await check_run_readiness(session, await session.get(WorkflowRun, "meta-run"), plan)
-        assert result["passed"]
-        assert len([check for check in result["checks"] if check.get("type") == "ad_account"]) == 2
-        execute.assert_awaited_once_with("meta-ads.accounts.list", {})
-
-
 async def seed(database):
     plan = WorkflowPlan(name="Read sheet", interpretation="Read the approved target", steps=[PlanStep(
         key="read", agent="Google", tool_slug="google", operation="sheets.read", arguments={"spreadsheet_id": "approved-sheet", "range": "A1:B5"},
@@ -262,4 +182,3 @@ def test_environment_change_preserves_existing_connection(monkeypatch):
     assert pipedream_connect.pipedream_client_for_tool(old).settings.pipedream_environment == "production"
     assert kpi_scope_missing({"sheets.kpi.create"}, {"scope": "https://www.googleapis.com/auth/spreadsheets.readonly"})
     assert not kpi_scope_missing({"sheets.kpi.create"}, {"scope": "https://www.googleapis.com/auth/spreadsheets"})
-

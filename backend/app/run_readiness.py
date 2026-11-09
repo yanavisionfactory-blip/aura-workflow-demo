@@ -5,7 +5,6 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
-from . import meta_ads
 from .config import get_settings
 from .execution_preflight import _account_label, _connection_credentials
 from .extended_outcomes import required_reads
@@ -30,8 +29,6 @@ async def check_run_readiness(session, run, plan):
     for step in plan.steps:
         for slug, op in [(step.tool_slug, step.operation), *([(step.fallback_tool_slug, step.fallback_operation)] if step.fallback_tool_slug and step.fallback_operation else [])]:
             required.setdefault(slug, set()).update({op, *required_reads(op, step.arguments)})
-        if step.tool_slug == meta_ads.SLUG and step.arguments.get("account_id") is not None:
-            required[step.tool_slug].add("meta-ads.accounts.list")
     tools = (await session.scalars(select(ToolConnection).where(
         ToolConnection.workspace_id == run.workspace_id, ToolConnection.slug.in_(required),
     ))).all()
@@ -75,9 +72,6 @@ async def check_run_readiness(session, run, plan):
         bindings[slug] = {"connection_id": tool.id, "account_fingerprint": account_fingerprint(tool, verification)}
         row.update(status="passed", connected_account=_account_label(verification),
                    message=f"{tool.display_name}: account and required capabilities verified.")
-        if slug == meta_ads.SLUG:
-            row.update(account_label="Meta login", message="Meta sign-in and reporting permissions verified. The reporting ad account is checked separately below.")
-    checks.extend(await _meta_account_checks(plan.steps, credentials, by_slug, manifests))
     # Check exact, existing targets. Destinations produced by earlier steps are
     # verified by their creation receipt before a dependent step may use them.
     for step in plan.steps:
@@ -116,56 +110,3 @@ async def check_run_readiness(session, run, plan):
                            event_type="run.review_readiness_checked", payload={"passed": report["passed"], "check_count": len(checks)}))
     await session.commit()
     return {key: value for key, value in report.items() if key != "bindings"}
-
-
-async def _meta_account_checks(steps, credentials, tools, manifests):
-    """Show the actual report target; a verified Meta login is not an ad account."""
-    checks, discovery, discovery_error = [], None, False
-    for step in steps:
-        if step.tool_slug != meta_ads.SLUG or step.tool_slug not in credentials:
-            continue
-        args = step.arguments or {}
-        if "account_id" not in args:
-            continue
-        row = {"type": "ad_account", "tool_slug": step.tool_slug, "operation": step.operation,
-               "account_label": "Reporting ad account", "status": "blocked"}
-        checks.append(row)
-        if "{{" in str(args["account_id"]):
-            row.update(status="passed", code="ad_account_deferred",
-                       message="The ad account will come from an earlier discovery step. AURA verifies that exact account before reading its metrics.")
-            continue
-        try:
-            selected = meta_ads.account_id(args["account_id"])
-        except meta_ads.MetaAdsError:
-            row.update(code="invalid_ad_account", message="Choose an ad account returned by Meta account discovery. A Meta login or business portfolio ID is not an ad account.")
-            continue
-        row["account_id"] = selected
-        if discovery is None and not discovery_error:
-            try:
-                tool = tools[step.tool_slug]
-                result = await ProviderExecutor(credentials[step.tool_slug], tool.base_url,
-                    capability_manifest=manifests[step.tool_slug], timeout_seconds=15).execute("meta-ads.accounts.list", {})
-                discovery = result["account_discovery"]
-                if (not isinstance(discovery.get("accounts"), list)
-                        or any(not isinstance(item, dict) or not item.get("id") for item in discovery["accounts"])):
-                    raise ValueError("invalid_account_discovery")
-            except Exception:  # noqa: BLE001 — remote content must not enter browser diagnostics
-                discovery_error = True
-        if discovery_error:
-            row.update(code="ad_account_check_unavailable", message="Meta ad-account discovery could not complete. Check again; this does not mean the account has no campaigns.")
-            continue
-        account = next((item for item in discovery["accounts"] if item.get("id") == selected), None)
-        row["available_accounts"] = [{"id": item["id"], "name": item.get("name", "Advertising account")}
-                                     for item in discovery["accounts"] if isinstance(item, dict) and item.get("id")]
-        if account is None:
-            row.update(code="ad_account_not_discovered", connected_account=selected,
-                       message="This reporting ad account was not found through this Meta connection. Change the plan to an available account, or check that the Facebook login has access to the intended ad account before reconnecting.")
-            continue
-        row.update(status="passed", connected_account=f"{account.get('name') or 'Advertising account'} · {selected}",
-                   currency=account.get("currency"), timezone=account.get("timezone_name"),
-                   message="Compare this ad account with the account selected in Ads Manager before starting. Verified access does not guarantee campaign data for the requested dates.")
-        if step.operation == "meta-ads.insights.get":
-            row.update(reporting_dates=f"{args.get('since', '')} – {args.get('until', '')}",
-                       reporting_level=args.get("level", "campaign"))
-    return checks
-
