@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { adsInputResult } from "../src/lib/adsInputResult.mjs";
+import { adsInputResult, metaEmptyResultHelp } from "../src/lib/adsInputResult.mjs";
 import { savedToolResponse } from "../src/lib/savedToolResponse.mjs";
 import { toolResultEntries } from "../src/lib/toolResultViews.mjs";
 
@@ -14,6 +14,29 @@ const report = (id, client = "client-1", cost = "12000000") => ({
 const metadata = (id, currency) => ({ id: `metadata-${id}-${currency}`, tool: "Google Ads", status: "completed", hasResponse: true,
   response: { ret: [{ customer: { id, currencyCode: currency, timeZone: "Europe/Berlin" } }] } });
 const fact = (item, label) => item.facts.find((f) => f.label === label)?.value;
+
+test("empty Meta recovery points to the checked account and dates without claiming a permission cause", () => {
+  const entry = { id: "empty-meta", tool: "Meta Ads", status: "completed", hasResponse: true,
+    operation: "meta-ads.insights.get", response: { data: [], account: { id: "act_123", name: "Client account" },
+      date_range: { since: "2026-10-01", until: "2026-10-31" }, level: "account" } };
+  const dataset = adsInputResult([entry]).datasets[0];
+  const help = metaEmptyResultHelp(dataset);
+  assert.equal(help.adsManagerUrl, "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=123");
+  assert.equal(help.accountName, "Client account");
+  assert.equal(help.dates, "2026-10-01 – 2026-10-31");
+  assert.equal(help.level, "account");
+  assert.match(help.steps.join(" "), /If the account differs/);
+  assert.doesNotMatch(help.steps.join(" "), /business_management|grant more permissions|zero performance/);
+  assert.equal(metaEmptyResultHelp({ ...dataset, empty: false }), null);
+  assert.equal(metaEmptyResultHelp(adsInputResult([report("google")]).datasets[0]), null);
+});
+
+test("recovery never constructs an Ads Manager link from unvalidated IDs", () => {
+  for (const account of ["123&token=secret", "javascript:alert(1)", "portfolio-name", undefined]) {
+    const dataset = { entry: { tool: "Meta Ads" }, empty: true, facts: [{ label: "Account", value: account }] };
+    assert.equal(metaEmptyResultHelp(dataset).adsManagerUrl, null);
+  }
+});
 
 test("input screens show the reporting client, not the login manager, and match its metadata", () => {
   const result = adsInputResult([report("read"), metadata("manager", "USD"), metadata("client-1", "EUR")]);
@@ -132,3 +155,4 @@ test("empty inventory exposes unsupported deleted coverage without claiming it w
   assert.equal(fact(result.datasets[0], "Unavailable statuses"), "DELETED");
   assert.match(fact(result.datasets[0], "Inventory limitation"), /unavailable/);
 });
+
