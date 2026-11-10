@@ -98,7 +98,7 @@ def _family(value: object) -> str:
 
 def requested_proofing_sources(prompt: str) -> set[str]:
     # Reports with supplied packets are already explicitly export processing.
-    if prompt.startswith(("AURA_REPORT_V1\n", "AURA_WEEKLY_REVIEW_V1\n", "AURA_EXECUTIVE_REVIEW_V1\n")):
+    if prompt.startswith(("AURA_REPORT_V1\n", "AURA_CONTENT_REVIEW_V1\n", "AURA_WEEKLY_REVIEW_V1\n", "AURA_EXECUTIVE_REVIEW_V1\n")):
         return set()
     if not re.search(r"\b(?:approvals?|feedback|revision|proofing|briefs?)\b", prompt, re.IGNORECASE):
         return set()

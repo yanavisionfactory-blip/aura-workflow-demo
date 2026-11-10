@@ -35,6 +35,12 @@ def preflight_plan(
     establish whether it may run. A missing grant never hides a malformed step.
     """
     fixes = deterministic_plan_fixes(plan, available_inventory, available_input_names)
+    from .content_review import validate_content_review_plan
+
+    try:
+        validate_content_review_plan(plan)
+    except (ValueError, AttributeError, KeyError) as exc:
+        fixes.append(str(exc))
     from .sheets_targets import needs_worksheet_binding
 
     for index, step in enumerate(plan.steps, start=1):

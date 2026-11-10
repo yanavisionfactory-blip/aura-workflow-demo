@@ -1,12 +1,20 @@
 """AURA-native reports from supplied evidence, with no external app writes."""
 
 import json
+import re
 from datetime import UTC, datetime
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .config import get_settings
+from .content_quality import (
+    ContentQualityError,
+    EmailQualityContract,
+    check_email_quality,
+    contains_source_url,
+    quality_instructions,
+)
 from .dashboard_builder import DashboardContext
 from .model_inputs import bounded_input, canonical_execution_evidence
 from .reliability import bounded_model_call
@@ -61,6 +69,17 @@ class ReportSource(BaseModel):
             return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
         return value
 
+    @field_validator("content")
+    @classmethod
+    def reject_source_pointer_prose(cls, value):
+        if re.fullmatch(
+            r"\s*(?:use|refer to|see)\s+(?:the\s+)?(?:actual\s+)?(?:completed\s+)?"
+            r"(?:output|result)(?:\s+from|\s+of)?\s+(?:action|step)\s*[\w-]+"
+            r"(?:\s+as\s+(?:an?\s+)?(?:evidence\s+)?source)?[.\s]*", value, re.IGNORECASE,
+        ):
+            raise ValueError("Source content is an instruction, not evidence. Bind the actual step output.")
+        return value
+
 
 class ReportRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -69,11 +88,21 @@ class ReportRequest(BaseModel):
     sources: list[ReportSource] = Field(min_length=1, max_length=20)
     synthetic: bool = False
     dashboard: DashboardContext | None = None
+    email_quality: EmailQualityContract | None = None
 
     @model_validator(mode="after")
     def distinct_sources(self):
         if len({source.id for source in self.sources}) != len(self.sources):
             raise ValueError("Report source IDs must be distinct")
+        if self.email_quality:
+            if self.dashboard:
+                raise ValueError("Email quality checks cannot be combined with a dashboard")
+            ids = {source.id for source in self.sources}
+            if not set(self.email_quality.comment_ids).issubset(ids):
+                raise ValueError("Every reviewer comment must have its original source text attached")
+            if any(not any(contains_source_url(source.content, url) for source in self.sources)
+                   for url in self.email_quality.source_urls):
+                raise ValueError("Required source links must be bound to supplied evidence")
         return self
 
 
@@ -83,7 +112,7 @@ class ReportDraft(BaseModel):
     body: str = Field(min_length=100)
 
 
-async def compose_report(arguments: dict) -> dict:
+async def compose_report(arguments: dict, *, _quality_attempt: int = 0) -> dict:
     request = ReportRequest.model_validate(arguments)
     settings = get_settings()
     if not settings.openai_api_key:
@@ -121,7 +150,7 @@ async def compose_report(arguments: dict) -> dict:
                     "as fictional demo data. Never claim synthetic tools or metrics were "
                     "confirmed through live provider connections. Return the entire report, "
                     "not a promise, excerpt or execution receipt."
-                ),
+                ) + ("\n" + quality_instructions(request.email_quality) if request.email_quality else ""),
                 input=payload,
                 text_format=ReportDraft,
                 reasoning={"effort": "low"},
@@ -133,13 +162,29 @@ async def compose_report(arguments: dict) -> dict:
         raise ValueError("AURA did not return a complete report")
     draft = ReportDraft.model_validate(response.output_parsed)
     label = "FICTIONAL CLIENT — SYNTHETIC DEMO DATA" if request.synthetic else "DRAFT FOR REVIEW"
-    return {
+    body = f"**{label}**\n\n{draft.body}"
+    quality = None
+    if request.email_quality:
+        try:
+            quality = check_email_quality(body, request.email_quality,
+                                          sources={source.id: source.content for source in request.sources})
+        except ContentQualityError as exc:
+            if _quality_attempt >= 1:
+                raise
+            repaired = {**arguments, "instructions": request.instructions +
+                        "\nThe previous draft failed computed checks. Return the complete corrected "
+                        "email and resolution table. Fix these errors: " + str(exc)}
+            return await compose_report(repaired, _quality_attempt=_quality_attempt + 1)
+    result = {
         "title": request.title, "summary": draft.summary,
-        "body": f"**{label}**\n\n{draft.body}", "status": "draft",
+        "body": body, "status": "draft",
         "synthetic": request.synthetic,
         "sources": [source.model_dump() for source in request.sources],
         "generated_at": datetime.now(UTC).isoformat(),
     }
+    if quality:
+        result["quality_check"] = quality
+    return result
 
 
 def report_workflow_recipe(prompt: str, inventory: list[dict]) -> WorkflowPlan | None:

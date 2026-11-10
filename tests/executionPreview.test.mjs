@@ -66,6 +66,37 @@ const draft = { id: "draft", key: "draft", tool: "anthropic", status: "completed
     } } };
 const review = { step_id: "draft", step_ids: ["draft"], tool_slug: "anthropic", next_tool_slug: "google-sheets" };
 
+test("content signoff is explicit and unsaved edits do not inherit computed checks or approval", async () => {
+  const quality = { status: "passed", body_words: 71, comment_ids: ["C01"], content_sha256: "saved-version" };
+  const source = { ...draft, tool: "aura", operation: "report.compose", output: { ...draft.output,
+    operation: "report.compose", provider_result: { title: "Email", status: "draft", body: "Reviewed email",
+      sources: [], quality_check: quality }, content_signoff: { decision: "approved", approver_subject: "alice",
+      approved_at: "2026-11-10T10:00:00Z", sha256: "saved-version" } } };
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  const approvals = [];
+  const button = (label) => [...container.querySelectorAll("button")].find((item) => item.textContent === label);
+  try {
+    await act(async () => root.render(React.createElement(ToolOutputReview, {
+      steps: [source], review: { ...review, tool_slug: "aura", review_kind: "content_signoff", is_final: true },
+      onApprove: (edits) => approvals.push(edits),
+    })));
+    assert.ok(button("Approve this content version"));
+    assert.match(container.textContent, /designated supervisor/);
+    assert.match(container.textContent, /71 body words/);
+    assert.match(container.textContent, /Approval recorded for this exact version by alice/);
+    await act(async () => Simulate.click(button("Edit manually")));
+    await act(async () => Simulate.change(container.querySelector("textarea"), { target: { value: "A new unsaved version" } }));
+    await act(async () => Simulate.click(button("Done editing")));
+    assert.match(container.textContent, /A new unsaved version/);
+    assert.doesNotMatch(container.textContent, /Computed checks passed|Approval recorded for this exact version/);
+    await act(async () => Simulate.click(button("Approve this content version")));
+    assert.deepEqual(approvals, [{ draft: "A new unsaved version" }]);
+  } finally {
+    await act(async () => root.unmount()); container.remove();
+  }
+});
+
 test("AI edits the current manual draft, returns to preview, supports undo, and waits for approval", async () => {
   const calls = [], approvals = [];
   let resolve;

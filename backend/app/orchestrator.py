@@ -1040,13 +1040,16 @@ async def _create_compiled_plan(
     reviewed_revision = "The user reviewed the proposed workflow and requested this change:" in prompt
     from .agency_workflow import agency_workflow_recipe
     from .campaign_workflow import campaign_workflow_recipe
+    from .content_review import content_review_recipe
     from .executive_review import workflow_recipe as executive_workflow_recipe
     from .reports import report_workflow_recipe
     from .seo_crawl import crawl_review_recipe
     from .website_content import website_workflow_recipe
     from .weekly_review import weekly_workflow_recipe
 
-    audited_plan = report_workflow_recipe(prompt, inventory)
+    audited_plan = content_review_recipe(prompt, inventory)
+    if audited_plan is None:
+        audited_plan = report_workflow_recipe(prompt, inventory)
     if audited_plan is None:
         audited_plan = campaign_workflow_recipe(prompt, inventory)
     if audited_plan is None:
@@ -4881,7 +4884,12 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 "final_review_evidence": evidence_cache,
             }
             await session.commit()
-            synthesis = await synthesize_result(run.prompt, outputs, prepared_evidence)
+            if (run.plan.get("planning_artifacts") or {}).get("planner_recovery_mode") == "content_review_v1":
+                from .content_review import content_review_deliverable
+
+                synthesis = content_review_deliverable(run.plan, outputs)
+            else:
+                synthesis = await synthesize_result(run.prompt, outputs, prepared_evidence)
             if not synthesis.validation_passed:
                 verification = OutcomeVerification(
                     status="unverified",
