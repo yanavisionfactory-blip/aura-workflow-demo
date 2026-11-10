@@ -78,6 +78,9 @@ export const CATALOG = [...NATIVE_FALLBACK];
 export const MARKETPLACE = [...NATIVE_FALLBACK];
 
 function description(item) {
+  if (canonicalProvider(item.provider) === "openai") {
+    return "Connect with an OpenAI API key. ChatGPT sign-in and conversation history are not connected.";
+  }
   const categories = Array.isArray(item.categories) ? item.categories.filter(Boolean) : [];
   const setupHint = String(item.setup_hint || item.setupHint || "").trim();
   if (item.connectable && setupHint && item.capability_count) {
@@ -102,7 +105,7 @@ function normalize(item) {
       connectable: item.connectable ?? item.availability === "available",
     }];
   return {
-    name: socialNames[canonical] || canonicalName(item.display_name || provider),
+    name: canonical === "openai" ? "OpenAI API" : socialNames[canonical] || canonicalName(item.display_name || provider),
     provider,
     canonicalProvider: canonical,
     aliases: [...new Set([
@@ -110,6 +113,7 @@ function normalize(item) {
       canonical,
       String(item.display_name || "").trim(),
       ...(socialSearchAliases[canonical] || []),
+      ...(canonical === "openai" ? ["OpenAI", "OpenAI API", "ChatGPT", "OpenAI (ChatGPT)"] : []),
       ...(Array.isArray(item.aliases) ? item.aliases.map(String) : []),
     ].filter(Boolean))],
     routes: rawRoutes.map((route) => ({
@@ -310,3 +314,4 @@ export async function ensurePlanConnectionRoute(toolName, provider, discover) {
   entry = catalogEntryFor(toolName);
   return entry;
 }
+

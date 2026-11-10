@@ -11,8 +11,8 @@ do not perform this extra configuration read.
 Customers never provide developer credentials. See [Reddit Ads sign-in](reddit-ads-sign-in.md)
 for the one-time backend setup, account picker, read-only scope and production checks.
 
-New **Google Ads**, **Google Analytics**, and **Google Sheets** connections
-prefer their signed Pipedream managed OAuth route. The marketplace and broker
+New **Gmail**, **Google Drive**, **Google Docs**, **Google Ads**, **Google Analytics**,
+and **Google Sheets** connections prefer their signed Pipedream managed OAuth route. The marketplace and broker
 must agree on that route, including when a legacy Nango integration or broad
 Google Workspace app also exists. Google Sheets must not select broad
 Gmail/Drive/Calendar consent simply because the legacy card was expanded first.
@@ -249,3 +249,40 @@ advertised by these routes. Existing native routes retain their capabilities.
 References: https://docs.zernio.com/multi-tenant,
 https://docs.zernio.com/guides/connecting-accounts,
 https://github.com/zernio-dev/zernio-dotnet/blob/main/docs/ConnectApi.md.
+
+
+## External-user venue-proposal workflow
+
+Use the authenticated AURA workflow application, not the marketing site's local
+demo. For a new customer, connect Gmail, Google Drive and Google Docs separately
+through their signed managed routes. Each customer authorizes their own provider
+account. A broad Google Workspace account remains usable through its stored
+route; new connections must not silently migrate or reuse an existing grant.
+A managed route is offered only after its capability pack has passed validation
+and signature checks.
+
+The OpenAI card is labelled **OpenAI API** and requires an API key through the
+existing secure embedded connection form. It does not sign into ChatGPT or import
+ChatGPT conversation history. AURA's built-in model is a separate capability.
+Never request provider credentials through chat, workflow inputs or email.
+
+Before declaring this workflow ready for an external pilot:
+
+1. Use a fresh customer workspace and complete Gmail, Drive and Docs consent.
+   Record the account identity and successful connection Test result for each.
+2. Read an approved sample brief from that customer's Drive and Docs.
+3. With explicit customer approval, save a sample proposal to their chosen
+   destination and verify it by reading the saved file.
+4. Prepare an email for human review. Send only after approval of the exact
+   recipient and content, then verify the provider's saved message identifier.
+5. Repeat the connection checks from a second customer workspace and verify that
+   neither workspace can list or use the other's accounts. Exercise reconnect
+   and disconnect without changing unrelated grants.
+
+Automated route, signature, environment and workspace-isolation tests are
+necessary but do not prove Google consent, external-account eligibility,
+token refresh or a complete live workflow. Reaching a provider sign-in screen
+is not a completed connection.
+
+Provider reference: https://pipedream.com/apps/gmail/integrations/google-drive.
+

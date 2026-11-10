@@ -1382,7 +1382,7 @@ def _marketplace_route(item: dict) -> dict:
 
 
 PUBLIC_GOOGLE_CONNECTORS = frozenset({
-    "google-ads", "google-analytics", "google-docs", "google-sheets",
+    "gmail", "google-drive", "google-ads", "google-analytics", "google-docs", "google-sheets",
 })
 
 
@@ -8359,3 +8359,4 @@ install_assurance_routes(app, tenant_context, tenant_session)
 
 # Dependency injection keeps scoped support access independent of user sessions.
 app.include_router(support_router(tenant_context, tenant_session))
+

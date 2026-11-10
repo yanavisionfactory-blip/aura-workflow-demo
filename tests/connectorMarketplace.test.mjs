@@ -11,6 +11,59 @@ import {
   searchMarketplace,
 } from "../src/lib/toolCatalog.js";
 
+for (const [provider, name] of [["gmail", "Gmail"], ["google-drive", "Google Drive"]]) {
+  test(`${name} prefers certified public consent while keeping the existing Google route`, () => {
+    for (const reverse of [false, true]) {
+      const marketplace = [
+        { provider: "google", display_name: "Google Workspace", connectable: true,
+          connection_backend: "nango", connection_strategy: "oauth", source: "native" },
+        { provider, display_name: name, connectable: true, preferred_connection: true,
+          connection_backend: "pipedream", connection_strategy: "oauth" },
+      ];
+      replaceToolCatalog({ marketplace: reverse ? marketplace.reverse() : marketplace });
+      const entry = catalogEntryFor(name);
+      assert.equal(entry.provider, provider);
+      assert.equal(entry.connectionBackend, "pipedream");
+      assert.equal(entry.preferredConnection, true);
+      assert.equal(searchMarketplace(name).filter(item => item.name === name).length, 1);
+      assert.equal(entry.routes.find(route => route.provider === "google").connectionBackend, "nango");
+    }
+  });
+
+  test(`${name} does not treat an uncertified public route as an authorized connection`, async () => {
+    replaceToolCatalog({ marketplace: [
+      { provider: "google", display_name: "Google Workspace", connectable: true,
+        connection_backend: "nango", connection_strategy: "oauth", source: "native" },
+    ] });
+    const entry = await ensurePlanConnectionRoute(name, provider, async () => ({ apps: [
+      { provider, display_name: name, connectable: false, preferred_connection: true,
+        availability: "verifying", connection_backend: "pipedream", connection_strategy: "oauth" },
+    ] }));
+    assert.equal(entry.provider, "google");
+    assert.equal(entry.routes.find(route => route.provider === provider).connectable, false);
+  });
+}
+
+test("OpenAI connection explains API access and preserves ChatGPT search aliases", () => {
+  replaceToolCatalog({ marketplace: [
+    { provider: "openai", display_name: "OpenAI (ChatGPT)", connectable: true,
+      connection_backend: "pipedream", connection_strategy: "secure_credentials",
+      setup_hint: "Secure credentials required", capability_count: 46 },
+  ] });
+  for (const query of ["OpenAI", "OpenAI API", "ChatGPT", "OpenAI (ChatGPT)"]) {
+    const entry = catalogEntryFor(query);
+    assert.equal(entry.provider, "openai");
+    assert.equal(entry.name, "OpenAI API");
+    assert.equal(entry.connectionStrategy, "secure_credentials");
+    assert.match(entry.desc, /API key/);
+    assert.match(entry.desc, /conversation history are not connected/);
+    assert.equal(searchMarketplace(query)[0].provider, "openai");
+  }
+  mergeMarketplaceApps([{ provider: "openai", display_name: "OpenAI (ChatGPT)",
+    connectable: true, connection_backend: "pipedream", connection_strategy: "secure_credentials" }]);
+  assert.equal(searchMarketplace("OpenAI").length, 1);
+});
+
 test("exact Google Sheets identity wins over another connector's search aliases", () => {
   replaceToolCatalog({ marketplace: [
     { provider: "meta-ads-mcp", display_name: "A shared ads connector", connectable: true,
@@ -275,3 +328,4 @@ test("new Docs customers get managed consent while existing Workspace routes rem
     assert.equal(catalogEntryFor("Google Calendar").provider, "google");
   }
 });
+
