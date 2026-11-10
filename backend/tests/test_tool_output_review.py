@@ -30,7 +30,8 @@ async def test_generated_report_edits_are_saved_for_downstream_steps_without_cha
         await main.review_tool_output("run", decision, main.TenantContext("w", "alice", "owner"), session)
         assert step.output["provider_result"] == receipt
         assert step.output["user_revision"]["edited_by"] == "alice"
-        assert reviewed_step_result(step) == {**receipt, "body": "Reviewed report"}
+        assert reviewed_step_result(step) == {**receipt, "body": "Reviewed report",
+            "summary": "Reviewed text saved in AURA; see the current report."}
         assert (await main.review_tool_output("run", decision, main.TenantContext("w", "alice", "owner"), session))["already_reviewed"]
         step.operation = "docs.get"
         assert not editable_text_output(step)

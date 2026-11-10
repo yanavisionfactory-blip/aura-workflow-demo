@@ -42,18 +42,17 @@ def reviewed_step_result(step):
     """Use the user's saved text downstream while preserving the provider receipt."""
     result = (step.output or {}).get("provider_result", step.output)
     revision = (step.output or {}).get("user_revision", {})
-    if editable_text_output(step) and isinstance(revision.get("text"), str):
-        result = deepcopy(result)
-        if step.operation == "report.compose":
-            result["body"] = revision["text"]
-        else:
-            result["ret"]["content"] = [{"type": "text", "text": revision["text"]}]
+    if editable_text_output(step):
+        from .reviewed_text import reviewed_text_result
+
+        result = reviewed_text_result(step.operation, result, revision) or result
     return result
 
 
 def output_review_enabled(run: WorkflowRun) -> bool:
     context = run.execution_context or {}
-    return bool(
+    return bool(any(step.get("review_checkpoint", "none") != "none"
+                    for step in (run.plan or {}).get("steps", []))) or bool(
         context.get(REVIEW_KEY, {}).get("enabled")
         and context.get("execution_mode") != "unattended"
     )
@@ -71,7 +70,9 @@ def requested_tool(run, step):
     family = operation.split(".", 1)[0]
     key = family if family in {"sheets", "docs", "drive", "gmail", "calendar"} else slug
     if operation == "report.compose":
-        key = "report.compose"
+        # Each generated draft is a review stage, even when consecutive drafts
+        # use the same model. Otherwise revision and handoff run before review.
+        key = "report.compose:" + step.step_key
     elif operation in {"web.search", "web.page.read"}:
         key = "web"
     return key, slug, operation
@@ -85,6 +86,26 @@ def pending_output_review(run, steps):
     if state.get("pending"):
         return state["pending"]
     reviewed = set(state.get("reviewed_step_ids", []))
+    planned = {step.get("key"): step for step in (run.plan or {}).get("steps", [])}
+    ordered = sorted(steps, key=lambda item: item.position)
+    # Explicit stage gates cannot be disabled by final-review or unattended mode.
+    for index, step in enumerate(ordered):
+        gate = planned.get(step.step_key, {})
+        if gate.get("review_checkpoint", "none") == "none" or step.id in reviewed:
+            continue
+        if step.status != StepStatus.completed or "provider_result" not in (step.output or {}):
+            break
+        following = ordered[index + 1] if index + 1 < len(ordered) else None
+        return {
+            "step_id": step.id, "step_ids": [step.id], "tool_slug": step.tool_slug,
+            "operation": step.operation, "is_final": following is None,
+            "next_tool_slug": following.tool_slug if following else None,
+            "next_operation": following.operation if following else None,
+            "review_kind": gate["review_checkpoint"], "reviewer_subject": gate.get("reviewer_subject"),
+        }
+    # Required gates do not opt the rest of the run into optional output review.
+    if not state.get("enabled") or (run.execution_context or {}).get("execution_mode") == "unattended":
+        return None
     if state.get("review_between_tools", True) is False:
         ordered = sorted(steps, key=lambda item: item.position)
         if not ordered or any(step.status not in {StepStatus.completed, StepStatus.skipped} for step in ordered):

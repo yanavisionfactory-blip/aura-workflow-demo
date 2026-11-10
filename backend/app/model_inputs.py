@@ -269,11 +269,14 @@ def canonical_review_artifacts(artifacts):
     its read-back check remain unchanged; only the model's review input is
     projected so eight source documents fit without dropping source text.
     """
+    from .reviewed_text import reviewed_artifact
+
     projected = []
     for artifact in artifacts:
         if not isinstance(artifact, dict):
             projected.append(artifact)
             continue
+        artifact = reviewed_artifact(artifact)
         if artifact.get("operation") == "report.compose":
             artifact = {**artifact, **{
                 key: _report_source_evidence(artifact[key])

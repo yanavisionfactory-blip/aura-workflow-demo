@@ -27,6 +27,8 @@ class Failure:
 
 
 def classify_failure(exc: Exception, *, read: bool) -> Failure:
+    from .review_failures import review_failure
+
     response = getattr(exc, "response", None)
     status = getattr(exc, "status_code", None) or getattr(response, "status_code", None)
     code = getattr(exc, "upstream_code", "") or ""
@@ -39,7 +41,7 @@ def classify_failure(exc: Exception, *, read: bool) -> Failure:
             return Failure("connector_configuration", False)
         if code.removeprefix("google_ads:") in AUTH_CODES:
             return Failure("authorization_required", False)
-    if getattr(exc, "upstream_code", None) == "credit_balance_exhausted":
+    if getattr(exc, "upstream_code", None) == "credit_balance_exhausted" or review_failure(exc) == "quota":
         return Failure("budget_exhausted", False)
     if status in (401, 403):
         return Failure("authorization_required", False)

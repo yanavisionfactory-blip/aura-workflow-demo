@@ -8,12 +8,18 @@ LinkedIn posts, and Google content. The interview names Frame.io and PageProof
 but does not assign either product to a particular stage or require both for
 every asset. Confirm that mapping for the selected test item.
 
-AURA currently supports a bounded part of this process: preparing a revision
+AURA's provider-connected workflow supports a bounded part of this process: preparing a revision
 brief from Frame.io comments and an attached PageProof comments export. It
 retains source and version identifiers and waits for both inputs before
 drafting the brief. The editor makes the changes, and the supervisor makes the
 review and approval decisions. AURA does not edit the audiovisual asset or
 provide final sign-off.
+
+The separate [supplied-email review template](content-review-reliability.md) now
+supports four saved text stages, mandatory checkpoints, computed quality checks,
+and an authenticated supervisor's approval of the exact local handoff version.
+This local approval does not approve an asset in Frame.io or PageProof. It does
+not extend the provider workflow to audiovisual editing or publishing.
 
 ## Six-stage sandbox run
 
@@ -35,8 +41,8 @@ or send invitations as a side effect of setup.
 
 AURA plans are forward-only dependency graphs. Run the automated feedback phase
 once per review round, with human checkpoints between runs. Do not model a
-human revision loop as invented provider calls or claim a persistent supervisor
-approval gate has been implemented. The current native Frame.io connection has
+human revision loop as invented provider calls or claim that a local text
+approval also approves the provider asset. The current native Frame.io connection has
 read operations only; provider uploads and final approvals remain human actions.
 
 The first-run [prompt template](pilots/content-approval/first-review-prompt.txt)

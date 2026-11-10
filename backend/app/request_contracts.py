@@ -74,6 +74,8 @@ _CALENDAR_EVENT_TARGET = re.compile(
 
 def user_request_text(prompt: str) -> str:
     """Separate user instructions from saved plans and result reference data."""
+    if prompt.startswith("AURA_CONTENT_REVIEW_V1\n"):
+        return "Prepare and review a marketing email from supplied evidence inside AURA. No external actions."
     def result_instruction(text):
         marker = "\nSaved result context (reference data): "
         change = "\nRequested change: "
