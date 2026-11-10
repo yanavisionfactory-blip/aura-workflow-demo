@@ -7,7 +7,12 @@ import pytest
 from fastapi import HTTPException
 
 from app import agent_runtime, main, orchestrator, reports
-from app.content_quality import ContentQualityError, EmailQualityContract, check_email_quality
+from app.content_quality import (
+    ContentQualityError,
+    EmailQualityContract,
+    check_email_quality,
+    quality_instructions,
+)
 from app.content_review import CONTENT_REVIEW_PREFIX, ContentReviewPacket, content_review_recipe
 from app.model_inputs import canonical_review_artifacts
 from app.models import RunStatus, RunStep, StepStatus, WorkflowRun
@@ -81,6 +86,8 @@ def test_source_url_must_match_the_original_not_just_a_prefix():
 
 def test_handoff_cannot_change_reviewed_email_or_use_a_missing_source():
     rules = RULES.model_copy(update={"freeze_source_id": "checked_draft"})
+    assert "Preserve the reviewed source email exactly" in quality_instructions(rules)
+    assert "Aim for" not in quality_instructions(rules)
     assert check_email_quality(TEXT, rules, sources={"checked_draft": TEXT})["status"] == "passed"
     for sources in ({}, {"checked_draft": TEXT.replace("Great outfit.", "Nice outfit.")}):
         with pytest.raises(ContentQualityError, match="exact reviewed email"):

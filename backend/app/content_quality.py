@@ -108,12 +108,17 @@ def check_email_quality(text: str, contract: EmailQualityContract | dict, *, sou
 
 
 def quality_instructions(contract: EmailQualityContract) -> str:
+    length_guidance = (
+        "Preserve the reviewed source email exactly; do not rewrite it to target a different length. "
+        if contract.freeze_source_id else
+        f"Aim for {(contract.min_body_words + contract.max_body_words) // 2} body words, "
+        "away from the length boundaries. Count only the words between Body: and CTA:. "
+    )
     return (
         "Return a complete email using exactly these labels, each once on its own line: "
         "Subject:, Preheader:, Body:, CTA:. Put only customer-facing copy between Body: and CTA:. "
         f"The body must be {contract.min_body_words}–{contract.max_body_words} whitespace-separated words. "
-        f"Aim for {(contract.min_body_words + contract.max_body_words) // 2} body words, "
-        "away from the length boundaries. Count only the words between Body: and CTA:. "
+        + length_guidance +
         f"CTA must be exactly {contract.cta!r}. Keep all evidence citations outside the email. "
         "After the email, include a GFM resolution table with one row per supplied comment: "
         "| ID | addressed, rejected, or needs_decision | concrete reason |. "
