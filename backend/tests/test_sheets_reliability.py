@@ -185,3 +185,54 @@ def test_saved_export_metadata_paths_reuse_actual_tabs_for_following_writes():
     assert "worksheetId" not in context["steps"]["metadata"]
     assert context["steps"]["metadata"]["provider_result"] is receipt
     assert receipt == original
+
+
+
+async def test_native_raw_export_preserves_literal_and_numeric_cells_through_readback(monkeypatch):
+    from app.native_connectors import native_manifest
+    from app.outcome_checks import build_outcome_check, evaluate_outcome_check
+
+    values = [["120000000000000001", "2026-10-01", "=1+1", 123.45, 42, 0, False]]
+    arguments = {"spreadsheet_id": "customer-book", "range": "'Meta Ads'!A1:G1",
+                 "value_input_option": "RAW", "values": values}
+    receipt = {"spreadsheetId": "customer-book", "updates": {"updatedRange": "'Meta Ads'!A1:G1"}}
+    observed = {"range": "'Meta Ads'!A1:G1", "values": values}
+    executor = ProviderExecutor({"access_token": "customer-token"}, capability_manifest=native_manifest("google"))
+    request = AsyncMock(side_effect=[receipt, observed])
+    monkeypatch.setattr(executor, "_request", request)
+    result = await executor.execute("sheets.append", arguments)
+    check = build_outcome_check("sheets.append", arguments, result)
+    saved = await executor.execute(check.operation, check.arguments)
+    assert request.await_args_list[0].kwargs["params"]["valueInputOption"] == "RAW"
+    assert request.await_args_list[0].kwargs["json"]["values"] == values
+    assert request.await_args_list[1].kwargs["params"] == {"valueRenderOption": "UNFORMATTED_VALUE"}
+    assert evaluate_outcome_check(check, saved)["status"] == "verified"
+    changed = deepcopy(saved)
+    changed["values"][0][0] = "120000000000000000"
+    assert evaluate_outcome_check(check, changed)["status"] == "failed"
+
+
+async def test_native_existing_formula_write_keeps_user_entered_default(monkeypatch):
+    from app.outcome_checks import build_outcome_check
+
+    executor = ProviderExecutor({"access_token": "customer-token"})
+    receipt = {"spreadsheetId": "book", "updates": {"updatedRange": "Sheet1!A1"}}
+    request = AsyncMock(return_value=receipt)
+    monkeypatch.setattr(executor, "_request", request)
+    arguments = {"spreadsheet_id": "book", "values": [["=SUM(B1:B2)"]]}
+    await executor.execute("sheets.append", arguments)
+    assert request.await_args.kwargs["params"]["valueInputOption"] == "USER_ENTERED"
+    assert "value_render_option" not in build_outcome_check("sheets.append", arguments, receipt).arguments
+
+
+@pytest.mark.parametrize("operation,arguments", [
+    ("sheets.append", {"spreadsheet_id": "book", "values": [[1]], "value_input_option": "INVALID"}),
+    ("sheets.read", {"spreadsheet_id": "book", "value_render_option": "INVALID"}),
+])
+async def test_native_invalid_cell_modes_never_dispatch(monkeypatch, operation, arguments):
+    executor = ProviderExecutor({"access_token": "customer-token"})
+    request = AsyncMock()
+    monkeypatch.setattr(executor, "_request", request)
+    with pytest.raises(ValueError):
+        await executor.execute(operation, arguments)
+    request.assert_not_awaited()

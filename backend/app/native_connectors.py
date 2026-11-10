@@ -311,7 +311,7 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
     },
     "google": {
         "schema_version": "1.1",
-        "catalog_version": 1,
+        "catalog_version": 2,
         "provider_type": "oauth",
         "name": "Google Workspace",
         "description": "Composable Gmail, Docs, Calendar, Drive, and Sheets modules.",
@@ -384,16 +384,18 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
             _module("sheets.campaign_report.get", "search", "Read all five campaign-report worksheets including saved inputs, formulas and calculated results.", required=("spreadsheet_id",), properties={"spreadsheet_id": _TEXT}),
             _module("sheets.workbook.get", "search", "Read the KPI Dashboard, Feedback and Product brief grids, including stored formulas and computed values, for verification.", required=("spreadsheet_id",), properties={"spreadsheet_id": _TEXT}),
             _module("sheets.read", "search", "Read a spreadsheet range.", required=("spreadsheet_id",), properties={
-                "spreadsheet_id": _TEXT, "range": _TEXT
+                "spreadsheet_id": _TEXT, "range": _TEXT,
+                "value_render_option": {"type": "string", "enum": ["FORMATTED_VALUE", "UNFORMATTED_VALUE", "FORMULA"], "x-preserve-on-recovery": True},
             }),
             _module(
                 "sheets.append",
                 "action",
-                "Append approved rows to a spreadsheet.",
+                "Append approved rows to a spreadsheet. For literal source exports (including advertising metrics), use value_input_option=RAW to preserve IDs, dates and formula-like names as supplied; JSON numbers remain numeric. Use USER_ENTERED only when intentional formulas or Sheets parsing are required. Read-back verifies the saved rows.",
                 required=("spreadsheet_id", "values"),
                 properties={
                     "spreadsheet_id": _TEXT,
                     "range": _TEXT,
+                    "value_input_option": {"type": "string", "enum": ["RAW", "USER_ENTERED"], "x-preserve-on-recovery": True},
                     "values": {
                         "type": "array",
                         "minItems": 1,
