@@ -12,10 +12,9 @@ box. Supply `title`, `asset_id`, `version_id`, `source_url`, the complete `draft
 `brief`, exact `cta`, and `comments` containing `id`, `text`, and `version_id`.
 Each comment must belong to the selected version. Optional `min_body_words`
 and `max_body_words` default to 60 and 100; `forbidden_terms` defaults to empty.
-Use `mode: "simulation"` for rehearsal. For a real local approval use
-`mode: "live"` and `supervisor_subject`, the designated reviewer's authenticated
-AURA subject, not their display name. The reviewer must already have access to
-the same AURA workspace.
+Use `mode: "simulation"` for rehearsal and `mode: "live"` for an actual supplied
+draft. Both modes use the existing output-review controls and workspace access
+rules. No named supervisor or special content-approval record is required.
 
 The planner builds four fixed stages without a planning-model call:
 
@@ -24,18 +23,16 @@ The planner builds four fixed stages without a planning-model call:
 | Intake | Original draft, source/version binding, comments and revision brief | Operator reviews the brief |
 | Revision | Complete email plus one decision per comment | Operator can edit the actual saved text |
 | Checked draft | Corrected complete email and comment decisions | Operator reviews or edits the final copy |
-| Handoff | Exact checked email, source and handoff notes | Operator review in simulation; designated authenticated supervisor in live mode |
+| Handoff | Exact checked email, source and handoff notes | Ordinary output review |
 
 All four checkpoints are mandatory, including when optional tool reviews are
 disabled. An edit updates the text consumed by downstream steps and final
 verification; the original model receipt remains saved. Final assembly copies
-the saved handoff verbatim. It cannot silently rewrite the approved email.
+the saved handoff verbatim. It cannot silently rewrite the reviewed email.
 
-The supervisor's live-mode decision records actor, timestamp and SHA-256 of
-the exact handoff. A different identity, stale text, or missing approval blocks
-completion. Plan execution approval and AI QA are separate from content
-approval. A later revision needs a new review round; approval never carries
-to a new run or version. To revise customer-facing copy, edit the checked-draft
+Content approval remains a separate human decision in the team's own process.
+The output-review button continues the workflow; it does not certify supervisor
+approval or authorize publishing. To revise customer-facing copy, edit the checked-draft
 checkpoint before proceeding to handoff. A handoff edit that changes that copy
 is rejected; start another round if it needs to change after that checkpoint.
 
@@ -49,7 +46,7 @@ and the current final version. One model repair is allowed for a malformed
 generated email; a second failure stops the stage.
 
 The computed result is displayed with its word and comment counts. Unsaved
-edits do not inherit a previous version's check or approval badge. These checks
+edits do not inherit a previous version's computed checks. These checks
 do not prove factual accuracy, brand fit, persuasiveness or that a comment was
 handled well. The reviewer must judge those. Rejected comment decisions need
 a reason and deserve particular attention.
@@ -66,8 +63,9 @@ responses mocked at the boundary, both unchanged and with a saved revision. It
 opens fresh database sessions and redelivers worker jobs at every checkpoint,
 then repeats review clicks. Each stage executes once; final copy matches the
 current reviewed version. Tests also reject missing/wrong-version inputs,
-weakened gates, fabricated source handoffs, failed word counts, stale approvals,
-wrong supervisors, and exhausted-credit retry loops.
+weakened checkpoints, fabricated source handoffs, failed word counts, duplicate
+review decisions and exhausted-credit retry loops. Live-mode tests verify that
+the existing workspace review flow completes without a designated supervisor.
 
 The existing runtime suites cover tenant isolation, permission and approval
 revocation, provider timeouts, retry budgets, durable outbox dispatch and

@@ -12,7 +12,6 @@ function CheckpointReview({ steps, review, busy = false, error = "", onApprove, 
   useEffect(() => { heading.current?.focus(); }, []);
   const entries = toolResultEntries(steps).filter((entry) => review.step_ids?.includes(entry.id));
   const tool = toolResultName(review.tool_slug, review.operation);
-  const contentSignoff = review.review_kind === "content_signoff";
   const ready = review.step_ids?.length > 0 && entries.length === review.step_ids.length
     && entries.every((entry) => entry.status === "completed" && entry.hasResponse);
   const hasEdits = Object.keys(edits).length > 0;
@@ -34,10 +33,8 @@ function CheckpointReview({ steps, review, busy = false, error = "", onApprove, 
     <header className="flex items-start gap-3">
       <div className="rounded-xl border border-primary/20 bg-primary/10 p-3"><Eye className="h-5 w-5 text-primary" /></div>
       <div>
-        <h2 ref={heading} tabIndex={-1} className="text-xl font-semibold outline-none">{contentSignoff ? "Approve this content version" : `Review ${tool} result`}</h2>
-        <p className="mt-2 text-sm text-muted-foreground">{contentSignoff
-          ? "The designated supervisor must approve this exact saved version. Your identity and decision are recorded. This does not publish or send the content."
-          : review.is_final
+        <h2 ref={heading} tabIndex={-1} className="text-xl font-semibold outline-none">Review {tool} result</h2>
+        <p className="mt-2 text-sm text-muted-foreground">{review.is_final
           ? "The final tool has finished. Review the result, make any edits, then approve to finish."
           : "This tool has finished. Review the result, make any edits, then approve. Execution resumes automatically."}</p>
       </div>
@@ -67,7 +64,7 @@ function CheckpointReview({ steps, review, busy = false, error = "", onApprove, 
       <button type="button" disabled={locked || !ready || invalidEdit || !onApprove}
         onClick={() => onApprove(hasEdits ? edits : null)}
         className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white hover:bg-primary/90 disabled:opacity-50">
-        <Check className="h-4 w-4" />{busy ? "Approving…" : contentSignoff ? "Approve this content version" : review.is_final ? "Approve and finish" : "Approve result"}
+        <Check className="h-4 w-4" />{busy ? "Approving…" : review.is_final ? "Approve and finish" : "Approve result"}
       </button>
     </footer>
   </section>;

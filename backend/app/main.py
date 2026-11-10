@@ -6787,8 +6787,6 @@ async def review_tool_output(
             or run.status != RunStatus.awaiting_approval
             or pending.get("step_id") != payload.step_id):
         raise HTTPException(409, "This tool output is not waiting for review")
-    if pending.get("reviewer_subject") and pending["reviewer_subject"] != context.subject:
-        raise HTTPException(403, "Only the designated reviewer can approve this content version")
     steps = (await session.scalars(select(RunStep).where(
         RunStep.run_id == run.id, RunStep.id.in_(pending.get("step_ids", [])),
     ))).all()
@@ -6812,9 +6810,6 @@ async def review_tool_output(
     for step in steps:
         result = reviewed_step_result(step)
         candidate = edits.get(step.id, result.get("body") if isinstance(result, dict) else None)
-        if pending.get("review_kind") == "content_signoff" and (
-                not pending.get("reviewer_subject") or not isinstance(candidate, str) or not candidate.strip()):
-            raise HTTPException(422, "Content sign-off requires a designated reviewer and complete saved text")
         contract = (step.output.get("resolved_arguments") or step.arguments or {}).get("email_quality")
         if step.operation == "report.compose" and contract:
             from .content_quality import ContentQualityError, check_email_quality
@@ -6839,18 +6834,6 @@ async def review_tool_output(
             workspace_id=context.workspace_id, run_id=run.id, actor=context.subject,
             event_type="step.output_edited", payload={"step_id": step_id},
         ))
-    if pending.get("review_kind") == "content_signoff":
-        from .reviewed_text import text_digest
-        for step in steps:
-            result = reviewed_step_result(step)
-            text = result.get("body") if isinstance(result, dict) else None
-            decision = {"decision": "approved", "approver_subject": context.subject,
-                        "approved_at": datetime.now(UTC).isoformat(), "sha256": text_digest(text),
-                        "scope": "Exact local text version only; no publication authorized"}
-            step.output = {**step.output, "content_signoff": decision}
-            session.add(AuditEvent(workspace_id=context.workspace_id, run_id=run.id,
-                actor=context.subject, event_type="step.content_approved",
-                payload={"step_id": step.id, **decision}))
     state.update(pending=None, reviewed_step_ids=list(dict.fromkeys(
         [*reviewed, *pending["step_ids"]]
     )))

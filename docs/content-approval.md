@@ -16,9 +16,10 @@ review and approval decisions. AURA does not edit the audiovisual asset or
 provide final sign-off.
 
 The separate [supplied-email review template](content-review-reliability.md) now
-supports four saved text stages, mandatory checkpoints, computed quality checks,
-and an authenticated supervisor's approval of the exact local handoff version.
-This local approval does not approve an asset in Frame.io or PageProof. It does
+supports four saved text stages, ordinary output-review checkpoints and computed
+quality checks. Content approval remains a separate human decision; AURA does
+not impose a designated-supervisor gate. Reviewing local output does not approve
+an asset in Frame.io or PageProof. The template does
 not extend the provider workflow to audiovisual editing or publishing.
 
 ## Six-stage sandbox run
