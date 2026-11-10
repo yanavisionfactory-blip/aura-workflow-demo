@@ -45,8 +45,8 @@ unresolved decisions and configured prohibited terms. It rechecks saved edits
 and the current final version. One model repair is allowed for a malformed
 generated email; a second failure stops the stage.
 
-The computed result is displayed with its word and comment counts. Unsaved
-edits do not inherit a previous version's computed checks. These checks
+The backend stores the computed result with its word and comment counts and
+rechecks saved edits against the current text. These checks
 do not prove factual accuracy, brand fit, persuasiveness or that a comment was
 handled well. The reviewer must judge those. Rejected comment decisions need
 a reason and deserve particular attention.
