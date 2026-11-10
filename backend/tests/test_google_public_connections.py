@@ -13,6 +13,8 @@ from app.pipedream_connect import PipedreamClient, certify_app
 
 
 @pytest.fixture(params=[
+    ("gmail", "Gmail"),
+    ("google_drive", "Google Drive"),
     ("google_ads", "Google Ads"),
     ("google_analytics", "Google Analytics"),
     ("google_sheets", "Google Sheets"),
@@ -143,3 +145,4 @@ async def test_existing_google_accounts_keep_backend_and_environment(
         managed.assert_awaited_once()
     else:
         reconnect.assert_awaited_once()
+
