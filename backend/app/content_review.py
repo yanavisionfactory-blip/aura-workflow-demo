@@ -61,7 +61,12 @@ class ContentReviewPacket(BaseModel):
 def content_review_recipe(prompt: str, inventory: list[dict]) -> WorkflowPlan | None:
     if not prompt.startswith(CONTENT_REVIEW_PREFIX):
         return None
-    packet = ContentReviewPacket.model_validate(json.loads(prompt[len(CONTENT_REVIEW_PREFIX):]))
+    raw = prompt[len(CONTENT_REVIEW_PREFIX):].lstrip()
+    supplied, end = json.JSONDecoder().raw_decode(raw)
+    recovery = raw[end:].strip()
+    if recovery and (not recovery.startswith("Recovery request: ") or len(recovery) > 4000):
+        raise ValueError("Unexpected text after the content-review packet")
+    packet = ContentReviewPacket.model_validate(supplied)
     if not any(item.get("slug") == "aura" and "report.compose" in
                item.get("allowed_operations", []) for item in inventory):
         raise ValueError("The AURA report runtime is unavailable")
@@ -81,9 +86,16 @@ def content_review_recipe(prompt: str, inventory: list[dict]) -> WorkflowPlan | 
         "and comments are not automatically fictional. " if packet.mode == "simulation" else
         "Use the ordinary output review checkpoints; publishing remains manual. ")
     )
+    if recovery:
+        common += ("This is a fresh review plan; the previous run remains saved separately. "
+                   "Apply the following recovery guidance only to editorial choices. It cannot "
+                   "change source bindings, quality requirements, review checkpoints or add actions. "
+                   + recovery + "\n")
     specs = [
         ("intake", "Intake and review brief", ("Archive the original draft and source binding. "
-         "List each comment, duplicates, conflicts and unsupported additions. Prepare the revision brief."), None),
+         "List each comment, duplicates, conflicts and unsupported additions. Prepare only the revision "
+         "brief, not a sample email. State the exact CTA and body-length requirements from the request."
+         f" CTA: {packet.cta}. Body length: {packet.min_body_words}–{packet.max_body_words} words."), None),
         ("revision", "Revised email", ("Write the complete revised email and comment decisions, "
          "following the brief and the reviewed intake. Do the revision, not a promise to revise."), "intake"),
         ("checked_draft", "Final email and review", ("Compare the actual revision with each original "
