@@ -2249,6 +2249,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             )
             failure_category = planning_failure_category(exc)
             from .plan_preflight import PlanPreflightError
+            from .proofing import ProofingSourceError
             from .selected_tools import SelectedToolError
             # A failed model call cannot establish that connecting a catalog
             # app would help. In particular, do not hide exhausted AI credits
@@ -2329,7 +2330,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 scope_error = str(exc) if str(exc).startswith("Unrequested ") else None
                 pause_direct_planning_failure(
                     run, scope_error=scope_error,
-                    public_message=planning_error_message(exc) if isinstance(exc, (SelectedToolError, PlanPreflightError)) else None,
+                    public_message=planning_error_message(exc) if isinstance(exc, (SelectedToolError, PlanPreflightError, ProofingSourceError)) else None,
                 )
             else:
                 await recover_planning_failure(

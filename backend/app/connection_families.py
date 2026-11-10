@@ -28,6 +28,29 @@ def capability_family(value: object) -> str:
     return GOOGLE_APP_FAMILIES.get(normalized, PROVIDER_FAMILIES.get(normalized, normalized))
 
 
+def proofing_intent_text(text: str) -> str:
+    """Remove only explicitly excluded proofing names, including coordinated lists.
+
+    Keep independent positive mentions: supplied comments do not waive a later
+    request to read current feedback or verify approval with the source service.
+    Accept raw and word-normalized text so routing and validation agree.
+    """
+    provider = r"(?:frame[.\s-]?io|page\s?proof)"
+    providers = provider + r"(?:\s*(?:,\s*(?:and\s+|or\s+)?|\s+(?:and|or|nor)\s+)" + provider + r")*"
+    excluded = (
+        r"\b(?:no|without|exclude|excluding|omit|skip|instead of|"
+        r"do not (?:use|connect|include)|don['’]t (?:use|connect|include)|"
+        r"don t (?:use|connect|include)|no need to (?:use|connect))\s+"
+        r"(?:the\s+)?" + providers + r"\b"
+    )
+    text = re.sub(excluded, " ", text, flags=re.IGNORECASE)
+    return re.sub(
+        r"\b" + providers + r"\s+(?:(?:accounts?|connections?|connectors?)\s+)?"
+        r"(?:is|are)\s+not\s+(?:needed|required)\b",
+        " ", text, flags=re.IGNORECASE,
+    )
+
+
 def provider_intent_text(text: str, family: str) -> str:
     """An Ads product mention does not request its separate community account.
 
@@ -36,6 +59,17 @@ def provider_intent_text(text: str, family: str) -> str:
     Apply this even when the Ads connector is absent from the catalog: its
     absence cannot make the community connector a valid substitute.
     """
+    if family in {"frameio", "pageproof"}:
+        return proofing_intent_text(text)
+    if family == "segment":
+        # A time segment or audience segment in supplied content is not the
+        # analytics product. Preserve explicit account/API references and any
+        # separate product mention or composer selection.
+        return re.sub(
+            r"\b(?:this|that|each|every|video|audio|music|opening|closing|customer|audience)\s+segment\b"
+            r"(?!\s+(?:account|app|workspace|connector|api|source|destination|event|data)s?\b)",
+            " ", text, flags=re.IGNORECASE,
+        )
     if family not in {"reddit", "linkedin", "tiktok"}:
         return text
     return re.sub(rf"\b{family}\s+(?:ads?(?:\s+manager)?|advertising)\b", " ", text)

@@ -274,7 +274,7 @@ def intent_bounded_tool_inventory(
         )
 
     if builtin_openai or "report.compose" in original or re.search(
-        r"\b(?:report|review|analysis|comparison|research|summary|draft|result)\b"
+        r"\b(?:report|review|analysis|comparison|research|summary|draft|result|brief)\b"
         r".{0,100}\b(?:in|inside|within) aura\b", original,
     ):
         selected.update(index for index, item in enumerate(inventory)

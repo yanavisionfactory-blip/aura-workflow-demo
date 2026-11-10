@@ -86,6 +86,19 @@ def test_unavailable_builtin_report_does_not_hide_external_provider():
     assert "openai" in explicit_disconnected_capabilities(prompt, tools)
 
 
+@pytest.mark.parametrize("prompt, selected", [
+    ("Read Segment data and prepare a brief in AURA", []),
+    ("Use this Segment account for the report", []),
+    ("Read segment.page events", []),
+    ("Review the supplied data", ["Segment"]),
+    ("Lower music in this segment. Also read Segment events.", []),
+])
+def test_actual_segment_requests_remain_available(prompt, selected):
+    tools = [inventory()[0], {"slug": "segment", "name": "Segment", "connected": False,
+                             "allowed_operations": ["segment.page"]}]
+    assert "segment" in {item["slug"] for item in intent_bounded_tool_inventory(prompt, tools, selected)}
+
+
 @pytest.mark.parametrize("brand", ["Reddit", "LinkedIn", "TikTok"])
 @pytest.mark.parametrize("ads_connected", [False, True])
 def test_ads_request_does_not_require_the_community_account(brand, ads_connected):

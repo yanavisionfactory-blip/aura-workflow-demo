@@ -199,15 +199,17 @@ async def test_model_quota_failure_precedes_inferred_app_connection(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure_kind", ["selected_app", "preflight", "schema_crash", "model_failure"])
+@pytest.mark.parametrize("failure_kind", ["selected_app", "preflight", "proofing", "schema_crash", "model_failure"])
 async def test_plan_validation_failure_is_not_masked_by_another_connection_gate(database, monkeypatch, failure_kind):
     from app.plan_preflight import PlanPreflightError
+    from app.proofing import ProofingSourceError
     from app.selected_tools import SelectedToolError
 
     failure = {
         "selected_app": SelectedToolError("internal repair instruction",
             public_message="AURA couldn't include Reddit Ads in this plan.", missing_from_plan=True),
         "preflight": PlanPreflightError("internal repair instruction: get_account_info cannot supply verified_identity"),
+        "proofing": ProofingSourceError("Reviewer feedback is missing for PageProof. Attach its comments print sheet."),
         "schema_crash": TypeError("internal repair instruction: unhashable type list"),
         "model_failure": RuntimeError("internal repair instruction: provider unavailable"),
     }[failure_kind]
@@ -233,8 +235,10 @@ async def test_plan_validation_failure_is_not_masked_by_another_connection_gate(
         run = await session.get(WorkflowRun, "selected-failure")
         assert run.status == RunStatus.waiting_for_action
         assert run.execution_context["__aura_blocker__"]["code"] == "planning_retry_required"
-        assert run.error == getattr(failure, "public_message",
-            "AURA couldn't prepare the actions for this plan. Nothing has started. Please try again.")
+        expected_message = (str(failure) if isinstance(failure, ProofingSourceError)
+                            else getattr(failure, "public_message",
+                                "AURA couldn't prepare the actions for this plan. Nothing has started. Please try again."))
+        assert run.error == expected_message
         assert "internal repair" not in str(run.execution_context)
         assert await session.scalar(select(ConnectionRequirement)) is None
         assert await session.scalar(select(DispatchIntent)) is None
