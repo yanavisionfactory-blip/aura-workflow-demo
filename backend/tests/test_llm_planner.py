@@ -1,6 +1,7 @@
 """Direct planning repairs serialization once and never bypasses preflight."""
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -13,6 +14,42 @@ from app.native_connectors import NativeConnectorError, native_manifest
 from app.plan_preflight import preflight_plan
 from app.request_contracts import requested_effects
 from app.schemas import PlanStep, WorkflowPlan
+
+
+@pytest.mark.asyncio
+async def test_supplied_content_review_compiles_with_only_aura(malformed_plan_client, monkeypatch):
+    from app.native_connectors import planning_catalog
+
+    _, parse = malformed_plan_client
+    monkeypatch.setattr(get_settings(), "planner_mode", "llm")
+    prompt = (Path(__file__).parent / "fixtures/content_review_comments.txt").read_text()
+    tools = planning_catalog({"aura"}) + [{
+        "slug": "segment", "name": "Segment", "connected": False,
+        "allowed_operations": ["segment.page"],
+    }]
+    arguments = {
+        "title": "Northstar Learn v03 revision brief", "instructions": prompt,
+        "sources": [{"id": "comments", "title": "Supplied fictional review comments", "content": prompt}],
+        "synthetic": True,
+    }
+    compact = CompactWorkflowPlan.model_validate({
+        "name": "Content revision brief", "interpretation": "Review supplied comments inside AURA",
+        "steps": [{"key": "brief", "agent": "reviewer", "tool_slug": "aura",
+                   "operation": "report.compose", "arguments_json": json.dumps(arguments),
+                   "reason": "Prepare the requested brief from supplied evidence",
+                   "expected_output": "Revision brief with unresolved decisions preserved",
+                   "consequential": False, "depends_on": [], "required_evidence": []}],
+    })
+    parse.return_value = SimpleNamespace(output_parsed=compact)
+    result = await orchestrator._create_compiled_plan(prompt, tools, set(), {})
+
+    assert parse.await_count == 1
+    payload = json.loads(parse.await_args.kwargs["input"])
+    assert {item["slug"] for item in payload["operations"]} == {"aura"}
+    assert [(step.tool_slug, step.operation) for step in result.steps] == [("aura", "report.compose")]
+    assert result.steps[0].arguments == arguments
+    assert result.planning_artifacts["contract_repair_attempts"] == 0
+    assert orchestrator.complete_connection_requirements(prompt, [], tools, compiled_plan=result) == []
 
 
 def json_entries(value):

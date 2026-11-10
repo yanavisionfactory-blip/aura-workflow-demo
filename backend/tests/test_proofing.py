@@ -192,3 +192,44 @@ def test_intent_keeps_aura_importer_and_respects_an_explicit_omission():
     assert requested_proofing_sources("Prepare a Frame.io approval brief without PageProof") == {"frameio"}
     assert requested_proofing_sources("Compare Frame.io and PageProof pricing") == set()
     assert "aura" in {item["slug"] for item in intent_bounded_tool_inventory(PROMPT, INVENTORY)}
+
+
+@pytest.mark.parametrize("constraint", [
+    "No Frame.io or PageProof connection is needed.",
+    "Do not use Frame.io or PageProof.",
+    "Without Frame.io and PageProof connections.",
+    "Frame.io and PageProof connections are not needed.",
+    "No need to connect Frame.io or PageProof.",
+])
+def test_supplied_feedback_does_not_require_excluded_proofing_sources(constraint):
+    prompt = "Prepare a revision brief in AURA using only the supplied comments. " + constraint
+    assert requested_proofing_sources(prompt) == set()
+    validate_proofing_sources(prompt, plan(brief()), INVENTORY, {})
+    assert [item["slug"] for item in intent_bounded_tool_inventory(prompt, INVENTORY)] == ["aura"]
+
+
+def test_later_live_source_request_is_not_hidden_by_an_earlier_exclusion():
+    prompt = ("Prepare a revision brief. No Frame.io or PageProof connection is needed. "
+              "Actually, read Frame.io comments for the current asset version.")
+    assert requested_proofing_sources(prompt) == {"frameio"}
+    with pytest.raises(ProofingSourceError, match="missing for Frame.io"):
+        validate_proofing_sources(prompt, plan(brief()), INVENTORY, {})
+
+
+def test_pasted_review_comments_use_internal_composition_not_segment_analytics():
+    from app.orchestrator import explicit_disconnected_capabilities
+
+    prompt = (
+        "TEST: Prepare a content revision brief from synthetic review comments. "
+        "Use only the supplied content. Return the completed brief in AURA. "
+        "No Frame.io or PageProof connection is needed: these are manually supplied comments.\n"
+        "Asset: Northstar Learn, v03.\n"
+        "C07 | 00:30–00:42 | Lower the music under the voiceover in this segment.\n"
+        "C08 | 00:55 | The current logo is missing. List it as unresolved."
+    )
+    tools = [{**item, "connected": item["slug"] == "aura"} for item in INVENTORY]
+    tools += [{"slug": "segment", "name": "Segment", "connected": False,
+                         "allowed_operations": ["segment.page"]}]
+    assert [item["slug"] for item in intent_bounded_tool_inventory(prompt, tools)] == ["aura"]
+    assert explicit_disconnected_capabilities(prompt, tools) == []
+    validate_proofing_sources(prompt, plan(brief()), tools, {})

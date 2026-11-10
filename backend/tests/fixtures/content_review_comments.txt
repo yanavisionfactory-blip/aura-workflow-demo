@@ -1,0 +1,27 @@
+TEST: Prepare a content revision brief from the synthetic review comments below. This is fictional practice data for a content-approval workflow, not a live client job.
+
+Use only the supplied content. Return the completed brief in AURA; do not fetch other assets, contact reviewers, publish content, modify any production asset, or mark anything approved. No Frame.io or PageProof connection is needed: these are manually supplied comments.
+
+Asset: Northstar Learn — onboarding explainer
+File: northstar_onboarding_v03.mp4
+Asset ID: NS-ONB-001
+Version under review: v03
+Duration: 01:00
+Current review status: Changes requested. Final approval pending.
+No video, brand kit, or logo file is attached; you are preparing editing instructions from the comments, not verifying the video itself.
+
+RAW REVIEW COMMENTS
+C01 | v03 | 00:03 | Maya, Marketing: The title says 'Welcome to Northstar Lean'. Correct 'Lean' to 'Learn'.
+C02 | v03 | 00:12–00:15 | Leo, Product: Captions say 'Create you're account'. Change this to 'Create your account'.
+C03 | v03 | 00:21–00:25 | Sam, Design: The subtitles cover the Continue button. Move them above the button during this shot.
+C04 | v03 | 00:29 | Leo, Product: Remove the on-screen claim 'Set up in 2 minutes'. Replace it with 'Set up in a few steps'; we haven't validated the timing claim.
+C05 | v03 | 00:54–01:00 | Maya, Marketing: Change the end-card CTA from 'Learn more' to 'Get started'.
+C06 | v03 | 00:54–01:00 | Leo, Product: Please use 'Book a demo' as the end-card CTA instead of 'Learn more'. This should go to sales. No decision has been agreed with Marketing yet.
+C07 | v03 | 00:30–00:42 | Sam, Design: The background music makes the voiceover hard to hear here. Lower the music under the voiceover in this segment.
+C08 | v03 | 00:55 | Nina, Brand: Replace the end-card logo with our current approved logo. I haven't attached it; please ask me for the correct file before replacing it.
+C09 | v03 | 00:12–00:15 | Maya, Marketing: Agree with Leo: 'you're' should be 'your' in the captions. Same issue as C02.
+C10 | v03 | 00:44 | Nina, Brand: This animation looks great. Keep it as is.
+C11 | v02 | 00:00–00:08 | Sam, Design: Cut the intro by 3 seconds. ARCHIVED NOTE: This was for v02, was already addressed in v03, and must not be applied again.
+C12 | v03 | General | Sam, Design: Design approval is conditional on fixing the subtitle overlap in C03. Product and Brand have not signed off. This is not final approval.
+
+Produce a concise revision brief with: asset/version and review status; actionable edits with exact timecodes and source comment IDs; duplicates consolidated; conflicts and missing inputs listed as unresolved questions; a separate record of comments that require no edit or are out of scope. Do not silently choose a CTA or invent the missing logo, owners, deadlines, or approval. Keep the human review/acceptance step explicit.

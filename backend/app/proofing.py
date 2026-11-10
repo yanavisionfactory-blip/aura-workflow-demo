@@ -13,6 +13,8 @@ from urllib.parse import unquote_to_bytes
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .connection_families import proofing_intent_text
+
 MAX_EXPORT_BYTES = 8_000_000
 MAX_EXPORT_CHARS = 100_000
 PROOFING_ENDPOINTS = {
@@ -100,6 +102,7 @@ def requested_proofing_sources(prompt: str) -> set[str]:
         return set()
     if not re.search(r"\b(?:approvals?|feedback|revision|proofing|briefs?)\b", prompt, re.IGNORECASE):
         return set()
+    prompt = proofing_intent_text(prompt)
     sources = set()
     for source, pattern in (("frameio", r"frame[.\s-]?io"), ("pageproof", r"page\s?proof")):
         for match in re.finditer(pattern, prompt, re.IGNORECASE):
