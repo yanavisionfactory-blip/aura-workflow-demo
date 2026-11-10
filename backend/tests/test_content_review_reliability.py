@@ -147,6 +147,30 @@ async def test_template_compiles_without_spending_planning_credits(monkeypatch):
     planner.assert_not_awaited()
 
 
+async def test_recovery_suffix_compiles_without_changing_sources_or_controls():
+    original = plan_for()
+    recovered = await orchestrator._create_compiled_plan(
+        CONTENT_REVIEW_PREFIX + json.dumps(PACKET) +
+        "\n\nRecovery request: Use this approach from the user: aim for 80 body words.",
+        INVENTORY, set(), {"aura": native_manifest("aura")})
+    for key, value in original.planning_artifacts.items():
+        assert recovered.planning_artifacts[key] == value
+    for before, after in zip(original.steps, recovered.steps):
+        assert after.arguments["sources"] == before.arguments["sources"]
+        assert after.arguments.get("email_quality") == before.arguments.get("email_quality")
+        assert after.review_checkpoint == "output"
+        assert after.depends_on == before.depends_on
+        assert "aim for 80 body words" in after.arguments["instructions"]
+        assert "fresh review plan" in after.arguments["instructions"]
+    assert recovered.result_contract.primary_step_key == "handoff"
+
+
+@pytest.mark.parametrize("suffix", ["\nextra text", "\n{}", "\nRecovery request: " + "x" * 4000])
+def test_template_rejects_unrecognized_or_oversized_trailing_input(suffix):
+    with pytest.raises(ValueError, match="Unexpected text"):
+        content_review_recipe(CONTENT_REVIEW_PREFIX + json.dumps(PACKET) + suffix, INVENTORY)
+
+
 @pytest.mark.parametrize("repair_succeeds", [True, False])
 async def test_generation_repairs_quality_once_and_never_returns_a_false_pass(monkeypatch, repair_succeeds):
     invalid = TEXT.replace(BODY, "Far too short.")
@@ -170,6 +194,13 @@ async def test_generation_repairs_quality_once_and_never_returns_a_false_pass(mo
             await reports.compose_report(arguments)
     assert parse.await_count == 2
     assert "has 3 words" in parse.await_args.kwargs["input"]
+    retry_input = json.loads(parse.await_args.kwargs["input"])
+    assert retry_input["repair_context"]["failed_draft"].endswith(invalid)
+    assert retry_input["repair_context"]["validation_errors"] == "Email body has 3 words; requires 60–100"
+    assert "Aim for 80 body words" in parse.await_args.kwargs["instructions"]
+    assert parse.await_args.kwargs["reasoning"] == {"effort": "medium"}
+    assert "repair_context" not in json.loads(parse.await_args_list[0].kwargs["input"])
+    assert "Far too short." not in json.dumps(arguments)
 
 
 async def test_live_final_verification_requires_no_supervisor_decision(monkeypatch):
