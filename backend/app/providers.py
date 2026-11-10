@@ -1722,7 +1722,12 @@ class ProviderExecutor:
     async def _sheets_read(self, a: dict) -> dict:
         sid, cell_range = a.get("spreadsheet_id"), a.get("range", "A1:Z100")
         if not sid: raise ValueError("sheets.read requires spreadsheet_id")
-        return await self._request("GET", f"https://sheets.googleapis.com/v4/spreadsheets/{quote(str(sid), safe='')}/values/{quote(str(cell_range), safe='')}")
+        options = {}
+        if "value_render_option" in a:
+            if a["value_render_option"] not in {"FORMATTED_VALUE", "UNFORMATTED_VALUE", "FORMULA"}:
+                raise ValueError("Invalid Sheets value render option")
+            options["params"] = {"valueRenderOption": a["value_render_option"]}
+        return await self._request("GET", f"https://sheets.googleapis.com/v4/spreadsheets/{quote(str(sid), safe='')}/values/{quote(str(cell_range), safe='')}", **options)
 
     async def _sheets_kpi_create(self, a: dict) -> dict:
         from .kpi_pilot import workbook_payload
@@ -1761,7 +1766,10 @@ class ProviderExecutor:
     async def _sheets_append(self, a: dict) -> dict:
         sid, cell_range, values = a.get("spreadsheet_id"), a.get("range", "Sheet1!A1"), a.get("values")
         if not sid or not values: raise ValueError("sheets.append requires spreadsheet_id and approved values")
-        return await self._request("POST", f"https://sheets.googleapis.com/v4/spreadsheets/{quote(str(sid), safe='')}/values/{quote(str(cell_range), safe='')}:append", params={"valueInputOption": "USER_ENTERED", "insertDataOption": "INSERT_ROWS"}, json={"values": values})
+        value_input_option = a.get("value_input_option", "USER_ENTERED")
+        if value_input_option not in {"RAW", "USER_ENTERED"}:
+            raise ValueError("Invalid Sheets value input option")
+        return await self._request("POST", f"https://sheets.googleapis.com/v4/spreadsheets/{quote(str(sid), safe='')}/values/{quote(str(cell_range), safe='')}:append", params={"valueInputOption": value_input_option, "insertDataOption": "INSERT_ROWS"}, json={"values": values})
 
     async def _airtable_list(self, a: dict) -> dict:
         if not a.get("base_id") or not a.get("table_id"): raise ValueError("airtable.list requires base_id and table_id")

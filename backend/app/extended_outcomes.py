@@ -56,7 +56,11 @@ def build_extended(operation, a, receipt):
         rid = receipt.get("spreadsheetId", "")
         if rid != a["spreadsheet_id"]:
             raise ValueError("Spreadsheet receipt changed account resource")
-        return OutcomeCheck(read, {"spreadsheet_id": rid, "range": receipt["updates"]["updatedRange"]}, rid,
+        read_arguments = {"spreadsheet_id": rid, "range": receipt["updates"]["updatedRange"]}
+        if a.get("value_input_option") == "RAW":
+            # Compare underlying typed cells, not locale/currency formatting.
+            read_arguments["value_render_option"] = "UNFORMATTED_VALUE"
+        return OutcomeCheck(read, read_arguments, rid,
             {"values": a["values"], "range": receipt["updates"]["updatedRange"]}, "sheets")
     if operation == "notion.blocks.children.append":
         ids = [item["id"] for item in receipt.get("results", [])]

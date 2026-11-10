@@ -50,8 +50,8 @@ PERIOD = {"since": "2026-10-01", "until": "2026-10-31"}
 ROWS = [
     {
         "account_id": "987654321",
-        "campaign_id": "120000000000001",
-        "campaign_name": "Prospecting",
+        "campaign_id": "120000000000000001",
+        "campaign_name": "=1+1",
         "date_start": "2026-10-01",
         "date_stop": "2026-10-31",
         "spend": "123.45",
@@ -62,7 +62,7 @@ ROWS = [
     },
     {
         "account_id": "987654321",
-        "campaign_id": "120000000000002",
+        "campaign_id": "120000000000000002",
         "campaign_name": "Retargeting",
         "date_start": "2026-10-01",
         "date_stop": "2026-10-31",
@@ -73,7 +73,7 @@ ROWS = [
         "frequency": "1.5",
     },
 ]
-FIELDS = ["campaign_name", "date_start", "date_stop", "spend", "impressions", "clicks"]
+FIELDS = ["campaign_id", "campaign_name", "date_start", "date_stop", "spend", "impressions", "clicks"]
 EXPECTED = [[r[k] for k in FIELDS] + ["EUR"] for r in ROWS]
 
 
@@ -100,7 +100,8 @@ async def seed_external_run(runtime, settings):
                     "depends_on": ["meta"],
                     "arguments": {
                         "spreadsheet_id": BOOK,
-                        "range": "'Meta Ads'!A2:G3",
+                        "range": "'Meta Ads'!A2:H3",
+                        "value_input_option": "RAW",
                         "values": [
                             ["{{steps.meta.data[" + str(i) + "]." + k + "}}" for k in FIELDS]
                             + ["{{steps.meta.account.currency}}"]
@@ -286,25 +287,32 @@ async def test_external_meta_to_sheets_delivery_and_failure_boundaries(
                 return httpx.Response(
                     403, json={"error": {"code": 403, "message": "Access denied"}}
                 )
+            # USER_ENTERED interprets formula-like names and date strings.
+            # RAW retains API source strings; this models documented Sheets semantics.
+            if request.url.params.get("valueInputOption") == "USER_ENTERED":
+                values = [list(row) for row in values]
+                values[0][1] = "2"
+                values[0][2] = "10/1/2026"
             written.extend(values)
             return httpx.Response(
                 200,
                 json={
                     "spreadsheetId": BOOK,
                     "updates": {
-                        "updatedRange": "'Meta Ads'!A2:G3",
+                        "updatedRange": "'Meta Ads'!A2:H3",
                         "updatedRows": 2,
-                        "updatedColumns": 7,
-                        "updatedCells": 14,
+                        "updatedColumns": 8,
+                        "updatedCells": 16,
                     },
                 },
             )
-        assert request.method == "GET" and path.endswith("'Meta Ads'!A2:G3")
+        assert request.method == "GET" and path.endswith("'Meta Ads'!A2:H3")
+        assert request.url.params["valueRenderOption"] == "UNFORMATTED_VALUE"
         saved = [list(row) for row in written]
         if scenario == "wrong_saved_cells":
-            saved[0][3] = "0"
+            saved[0][4] = "0"
         return httpx.Response(
-            200, json={"range": "'Meta Ads'!A2:G3", "majorDimension": "ROWS", "values": saved}
+            200, json={"range": "'Meta Ads'!A2:H3", "majorDimension": "ROWS", "values": saved}
         )
 
     original = httpx.AsyncClient
