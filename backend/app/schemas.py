@@ -459,13 +459,10 @@ class PlanStep(BaseModel):
     condition: StepCondition | None = None
     output_variables: dict[str, Any] = Field(default_factory=dict)
     required_evidence: list[str] = Field(default_factory=list, max_length=10)
-    review_checkpoint: Literal["none", "output", "content_signoff"] = "none"
-    reviewer_subject: str | None = Field(default=None, min_length=1, max_length=240)
+    review_checkpoint: Literal["none", "output"] = "none"
 
     @model_validator(mode="after")
-    def validate_content_signoff(self):
-        if self.review_checkpoint == "content_signoff" and not self.reviewer_subject:
-            raise ValueError("Content sign-off requires a designated authenticated reviewer")
+    def validate_review_checkpoint(self):
         if self.review_checkpoint != "none" and (self.optional or self.condition):
             raise ValueError("A mandatory review checkpoint cannot be conditional or optional")
         return self

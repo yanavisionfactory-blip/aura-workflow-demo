@@ -130,7 +130,6 @@ export default function ResultPreview({ result, results, activity = [], backendR
       {result.preview.qualityCheck?.status === "passed" && <aside aria-label="Computed content checks" className="mb-6 rounded-lg border border-slate-200 bg-white p-4 text-xs leading-6">
         <p className="font-semibold">Computed checks passed · {result.preview.qualityCheck.body_words} body words · {result.preview.qualityCheck.comment_ids.length} comments covered</p>
         <p>Format, length, source links and comment coverage checked. Accuracy and editorial judgment still require review.</p>
-        {result.preview.contentSignoff && <p className="mt-2">Approval recorded for this exact version by {result.preview.contentSignoff.approver_subject} · {result.preview.contentSignoff.approved_at}. Publishing remains manual.</p>}
       </aside>}
       <div className="aura-article-preview text-sm leading-7"><ReactMarkdown {...documentMarkdownOptions}>{result.preview.body}</ReactMarkdown></div>
       {result.kind === "report" && result.preview.sources?.length > 0 && <details className="mt-6 border-t border-slate-200 pt-4">

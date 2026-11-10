@@ -1770,9 +1770,9 @@ async def verify_outcome(prompt: str, plan: dict, artifacts: list[dict],
     from .dashboard_quality import dashboard_requirements
     from .request_contracts import missing_requested_operations
 
-    signoff_errors = content_review_errors(plan, artifacts)
-    if signoff_errors:
-        return OutcomeVerification(status="unverified", reasons=signoff_errors)
+    content_errors = content_review_errors(plan, artifacts)
+    if content_errors:
+        return OutcomeVerification(status="unverified", reasons=content_errors)
 
     evidence_ids = {str(item.get("step_id", "")) for item in artifacts}
     if not artifacts or "" in evidence_ids or any(

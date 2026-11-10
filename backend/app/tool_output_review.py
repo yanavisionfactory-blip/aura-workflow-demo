@@ -101,7 +101,7 @@ def pending_output_review(run, steps):
             "operation": step.operation, "is_final": following is None,
             "next_tool_slug": following.tool_slug if following else None,
             "next_operation": following.operation if following else None,
-            "review_kind": gate["review_checkpoint"], "reviewer_subject": gate.get("reviewer_subject"),
+            "review_kind": gate["review_checkpoint"],
         }
     # Required gates do not opt the rest of the run into optional output review.
     if not state.get("enabled") or (run.execution_context or {}).get("execution_mode") == "unattended":

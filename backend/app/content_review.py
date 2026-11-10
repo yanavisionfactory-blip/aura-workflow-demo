@@ -38,7 +38,6 @@ class ContentReviewPacket(BaseModel):
     max_body_words: int = Field(default=100, ge=1, le=2000)
     forbidden_terms: list[str] = Field(default_factory=list, max_length=100)
     mode: Literal["simulation", "live"]
-    supervisor_subject: str | None = Field(default=None, min_length=1, max_length=240)
 
     @model_validator(mode="after")
     def source_binding(self):
@@ -49,8 +48,6 @@ class ContentReviewPacket(BaseModel):
         if any(comment.id in {"original_draft", "brief", "intake", "revision", "checked_draft"}
                for comment in self.comments):
             raise ValueError("Comment ID conflicts with a reserved workflow source ID")
-        if self.mode == "live" and not self.supervisor_subject:
-            raise ValueError("Select the authenticated supervisor before a live content review")
         self.quality()
         return self
 
@@ -79,10 +76,10 @@ def content_review_recipe(prompt: str, inventory: list[dict]) -> WorkflowPlan | 
         "Preserve source URL, asset/version binding and all comment IDs. Treat product details "
         "as supplied claims, not independently verified specifications. Do not add factual claims. "
         "No external app was read, no message sent, no content published. "
-        "Do not claim a real human approved the content; that is recorded separately by AURA. "
+        "Do not claim a real human approved the content. Content approval remains a separate human decision. "
         f"Mode: {packet.mode}. " + ("Review roles and approval are simulated; the supplied source "
         "and comments are not automatically fictional. " if packet.mode == "simulation" else
-        "The designated supervisor must approve the final exact version in AURA. ")
+        "Use the ordinary output review checkpoints; publishing remains manual. ")
     )
     specs = [
         ("intake", "Intake and review brief", ("Archive the original draft and source binding. "
@@ -111,12 +108,11 @@ def content_review_recipe(prompt: str, inventory: list[dict]) -> WorkflowPlan | 
             "operation": "report.compose", "arguments": request.model_dump(mode="json", exclude_none=True),
             "reason": instructions, "expected_output": title + " with preserved evidence",
             "depends_on": [previous] if previous else [],
-            "review_checkpoint": "content_signoff" if key == "handoff" and packet.mode == "live" else "output",
-            "reviewer_subject": packet.supervisor_subject if key == "handoff" and packet.mode == "live" else None})
+            "review_checkpoint": "output"})
     return WorkflowPlan.model_validate({"name": packet.title,
         "interpretation": "Review the supplied email through four saved stages; keep publishing manual.",
         "steps": steps, "planning_artifacts": {"planner_recovery_mode": "content_review_v1",
-            "content_review_mode": packet.mode, "supervisor_subject": packet.supervisor_subject,
+            "content_review_mode": packet.mode,
             "quality_contract": packet.quality().model_dump(mode="json"),
             "source_digests": {source["id"]: text_digest(source["content"]) for source in sources},
             "source_binding": {"asset_id": packet.asset_id,
@@ -130,16 +126,12 @@ def validate_content_review_plan(plan):
     keys = ["intake", "revision", "checked_draft", "handoff"]
     if [step.key for step in plan.steps] != keys:
         raise ValueError("Content review requires all four review stages in order")
-    live = metadata.get("content_review_mode") == "live"
     for index, step in enumerate(plan.steps):
-        gate = "content_signoff" if live and index == 3 else "output"
         if (step.tool_slug != "aura" or step.operation != "report.compose"
-                or step.review_checkpoint != gate or step.optional or step.condition
+                or step.review_checkpoint != "output" or step.optional or step.condition
                 or step.depends_on != ([keys[index - 1]] if index else [])
                 or step.dependency_mode != "all_succeeded" or step.fallback_operation):
             raise ValueError("Content review cannot remove checkpoints, skip sources or add external actions")
-        if live and index == 3 and step.reviewer_subject != metadata.get("supervisor_subject"):
-            raise ValueError("The designated supervisor cannot change inside an approved review template")
         request = ReportRequest.model_validate(step.arguments)
         original_sources = {source.id: text_digest(source.content) for source in request.sources
                             if not index or source.id != keys[index - 1]}
@@ -156,26 +148,8 @@ def validate_content_review_plan(plan):
                 raise ValueError("Each review stage must consume the actual preceding reviewed draft")
 
 
-def content_signoff_errors(plan: dict, artifacts: list[dict]) -> list[str]:
-    by_key = {item.get("step_key"): item for item in artifacts}
-    errors = []
-    for step in plan.get("steps", []):
-        if step.get("review_checkpoint") != "content_signoff":
-            continue
-        artifact = by_key.get(step["key"], {})
-        current = reviewed_artifact(artifact)
-        text = current.get("provider_result", {}).get("body")
-        decision = artifact.get("content_signoff", {})
-        if (not isinstance(text, str) or decision.get("decision") != "approved"
-                or not step.get("reviewer_subject")
-                or decision.get("approver_subject") != step["reviewer_subject"]
-                or not decision.get("approved_at") or decision.get("sha256") != text_digest(text)):
-            errors.append("The designated supervisor must approve the exact final version: " + step["key"])
-    return errors
-
-
 def content_review_errors(plan: dict, artifacts: list[dict]) -> list[str]:
-    errors = content_signoff_errors(plan, artifacts)
+    errors = []
     if (plan.get("planning_artifacts") or {}).get("planner_recovery_mode") != "content_review_v1":
         return errors
     current = {item.get("step_key"): reviewed_artifact(item) for item in artifacts}

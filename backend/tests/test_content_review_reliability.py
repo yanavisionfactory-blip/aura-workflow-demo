@@ -106,23 +106,24 @@ def test_template_has_real_bindings_checkpoints_and_no_external_writes():
     {"comments": []}, {"draft": ""}, {"source_url": "not a link"},
     {"draft": " " * 30}, {"brief": " " * 30}, {"asset_id": " "},
     {"comments": [{"id": "C01", "text": "Wrong version", "version_id": "v2"}]},
-    {"comments": PACKET["comments"] * 2}, {"mode": "live"},
+    {"comments": PACKET["comments"] * 2},
 ])
-def test_template_rejects_missing_mismatched_or_unapproved_inputs(change):
+def test_template_rejects_missing_or_mismatched_inputs(change):
     with pytest.raises(ValueError):
         ContentReviewPacket.model_validate({**PACKET, **change})
 
 
-def test_live_template_requires_named_signoff_and_never_synthetic_approval():
-    plan = plan_for(mode="live", supervisor_subject="supervisor-1")
-    assert plan.steps[-1].review_checkpoint == "content_signoff"
-    assert plan.steps[-1].reviewer_subject == "supervisor-1"
+def test_live_template_uses_ordinary_review_without_a_designated_supervisor():
+    plan = plan_for(mode="live")
+    assert all(step.review_checkpoint == "output" for step in plan.steps)
+    assert all("reviewer_subject" not in step.model_dump() for step in plan.steps)
+    assert "supervisor_subject" not in plan.planning_artifacts
     assert all(not step.arguments["synthetic"] for step in plan.steps)
 
 
-@pytest.mark.parametrize("change", ["checkpoint", "quality", "source", "binding", "stage", "supervisor"])
+@pytest.mark.parametrize("change", ["checkpoint", "quality", "source", "binding", "stage"])
 def test_edited_template_cannot_weaken_review_controls(change):
-    plan = plan_for(mode="live", supervisor_subject="alice")
+    plan = plan_for(mode="live")
     if change == "checkpoint":
         plan.steps[1].review_checkpoint = "none"
     elif change == "quality":
@@ -133,8 +134,6 @@ def test_edited_template_cannot_weaken_review_controls(change):
         plan.steps[0].arguments["sources"][0]["content"] = "A different original draft"
     elif change == "stage":
         plan.steps.pop(0)
-    else:
-        plan.steps[-1].reviewer_subject = "bob"
     assert preflight_plan(plan, INVENTORY, {"aura": native_manifest("aura")}, set()).fixes
 
 
@@ -173,27 +172,23 @@ async def test_generation_repairs_quality_once_and_never_returns_a_false_pass(mo
     assert "has 3 words" in parse.await_args.kwargs["input"]
 
 
-@pytest.mark.parametrize("change", ["missing", "wrong_person", "stale_text"])
-async def test_final_verifier_rejects_invalid_signoff_before_calling_a_model(monkeypatch, change):
-    model = AsyncMock(side_effect=AssertionError("Invalid approval must stop before model review"))
-    monkeypatch.setattr(agent_runtime, "_run", model)
-    plan = plan_for(mode="live", supervisor_subject="alice").model_dump(mode="json")
+async def test_live_final_verification_requires_no_supervisor_decision(monkeypatch):
+    plan = plan_for(mode="live").model_dump(mode="json")
     artifacts = [{"step_id": step["key"], "step_key": step["key"], "operation": "report.compose",
                   "critic": {"action": "accept"}, "provider_result": {"body": TEXT}}
                  for step in plan["steps"]]
-    if change != "missing":
-        artifacts[-1]["content_signoff"] = {"decision": "approved", "approved_at": "now",
-            "approver_subject": "bob" if change == "wrong_person" else "alice",
-            "sha256": text_digest(TEXT if change == "wrong_person" else TEXT + "stale")}
+    model = AsyncMock(return_value={"status": "verified", "evidence_step_ids": [s["key"] for s in plan["steps"]]})
+    monkeypatch.setattr(agent_runtime, "_run", model)
     result = await agent_runtime.verify_outcome("Review", plan, artifacts)
-    assert result.status == "unverified"
-    assert any("supervisor" in reason for reason in result.reasons)
-    model.assert_not_awaited()
+    assert result.status == "verified"
+    model.assert_awaited_once()
 
 
-@pytest.mark.parametrize("revise,interrupt_final", [(False, False), (True, False), (True, True)])
+@pytest.mark.parametrize("mode,revise,interrupt_final", [
+    ("simulation", False, False), ("live", True, False), ("live", True, True),
+])
 async def test_full_durable_review_preserves_edits_and_resumes_without_replaying(
-        runtime, monkeypatch, revise, interrupt_final):
+        runtime, monkeypatch, mode, revise, interrupt_final):
     from app.models import (
         Approval,
         ApprovalSnapshot,
@@ -204,8 +199,9 @@ async def test_full_durable_review_preserves_edits_and_resumes_without_replaying
     from app.policy import canonical_plan_hash
     from app.schemas import CriticDecision
 
+    packet = {**PACKET, "mode": mode}
     plan = await orchestrator._create_compiled_plan(
-        CONTENT_REVIEW_PREFIX + json.dumps(PACKET), INVENTORY, set(), {"aura": native_manifest("aura")})
+        CONTENT_REVIEW_PREFIX + json.dumps(packet), INVENTORY, set(), {"aura": native_manifest("aura")})
     data = plan.model_dump(mode="json")
     digest = canonical_plan_hash(data)
     edited = TEXT.replace("Great outfit.", "Your favourite outfit.")
@@ -247,7 +243,7 @@ async def test_full_durable_review_preserves_edits_and_resumes_without_replaying
         await session.flush()
         run = await session.get(WorkflowRun, "run")
         run.plan = data
-        run.prompt = CONTENT_REVIEW_PREFIX + json.dumps(PACKET)
+        run.prompt = CONTENT_REVIEW_PREFIX + json.dumps(packet)
         run.execution_context = {**run.execution_context, REVIEW_KEY: {"enabled": False}}
         run.execution_context["__aura_preflight__"]["plan_hash"] = digest
         version = await session.get(PlanVersion, "version")
@@ -372,14 +368,14 @@ def test_required_review_stages_cannot_be_skipped(mode):
         run.execution_context[REVIEW_KEY].setdefault("reviewed_step_ids", []).append(step.id)
 
 
-async def test_supervisor_identity_exact_version_and_duplicate_decision(runtime, monkeypatch):
+@pytest.mark.parametrize("actor", ["alice", "bob"])
+async def test_ordinary_review_preserves_quality_checks_and_duplicate_protection(runtime, monkeypatch, actor):
     dispatch = AsyncMock()
     monkeypatch.setattr(main, "dispatch_pending", dispatch)
     async with runtime() as session:
         run = await session.get(WorkflowRun, "run")
         run.execution_context = {REVIEW_KEY: {"enabled": True, "pending": {
-            "step_id": "step", "step_ids": ["step"], "review_kind": "content_signoff",
-            "reviewer_subject": "alice"}}}
+            "step_id": "step", "step_ids": ["step"], "review_kind": "output"}}}
         transition_run(run, RunStatus.awaiting_approval, reason="test", dispatch=None)
         step = await session.get(RunStep, "step")
         step.operation, step.status = "report.compose", StepStatus.completed
@@ -387,23 +383,19 @@ async def test_supervisor_identity_exact_version_and_duplicate_decision(runtime,
         step.output = {"provider_result": {"body": TEXT}}
         await session.commit()
         decision = ToolOutputReviewDecision(step_id="step")
-        with pytest.raises(HTTPException) as denied:
-            await main.review_tool_output("run", decision, main.TenantContext("w", "bob", "owner"), session)
-        assert denied.value.status_code == 403
         with pytest.raises(HTTPException) as invalid:
             await main.review_tool_output("run", ToolOutputReviewDecision(step_id="step",
                 edited_outputs={"step": TEXT.replace(BODY, "Too short.")}),
-                main.TenantContext("w", "alice", "owner"), session)
+                main.TenantContext("w", actor, "owner"), session)
         assert invalid.value.status_code == 422
         assert run.status == RunStatus.awaiting_approval and "content_signoff" not in step.output
-        await main.review_tool_output("run", decision, main.TenantContext("w", "alice", "owner"), session)
-        assert step.output["content_signoff"]["sha256"] == text_digest(TEXT)
-        assert step.output["content_signoff"]["approver_subject"] == "alice"
+        await main.review_tool_output("run", decision, main.TenantContext("w", actor, "owner"), session)
+        assert "content_signoff" not in step.output
         assert (await main.review_tool_output("run", decision,
-            main.TenantContext("w", "alice", "owner"), session))["already_reviewed"]
+            main.TenantContext("w", actor, "owner"), session))["already_reviewed"]
         with pytest.raises(HTTPException) as stale:
             await main.review_tool_output("run", ToolOutputReviewDecision(step_id="step",
-                edited_outputs={"step": "Different version"}), main.TenantContext("w", "alice", "owner"), session)
+                edited_outputs={"step": "Different version"}), main.TenantContext("w", actor, "owner"), session)
         assert stale.value.status_code == 409
     dispatch.assert_awaited_once()
 
