@@ -585,7 +585,6 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
   if (report && (!explicitPrimary || explicitPrimary === report)) {
     const userEdited = typeof report.user_revision?.text === "string";
     const saved = userEdited ? { ...report.provider_result, body: report.user_revision.text } : report.provider_result;
-    const qualityCheck = userEdited ? report.user_revision.quality_check : saved.quality_check;
     const audit = !saved.synthetic && seoAuditManifest(saved.sources || []);
     if (audit && !userEdited) return {
       title: "SEO audit", kind: "seo_audit", provider: "AURA", providerVerb: "Review in",
@@ -600,7 +599,7 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
         ? "Fictional client review saved in AURA. All client data is synthetic."
         : saved.summary,
       detail: saved.summary,
-      preview: { title: saved.title, body: saved.body, sources: saved.sources || [], qualityCheck },
+      preview: { title: saved.title, body: saved.body, sources: saved.sources || [] },
       userEdited,
       link: null, downloadUrl: null,
     };
