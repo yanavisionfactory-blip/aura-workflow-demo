@@ -165,9 +165,9 @@ async def _extract(data: bytes, directory: Path) -> dict:
     last = int(count) - 1 if count.isdigit() else -1
     select = f"isnan(prev_selected_t)+gte(t-prev_selected_t\\,0.5)+gt(scene\\,0.25)+eq(n\\,{last})"
     _, diagnostics = await _command(
-        "ffmpeg", "-nostdin", "-hide_banner", "-threads", "2", *inputs,
+        "ffmpeg", "-nostdin", "-hide_banner", "-threads", "2", "-copyts", "-start_at_zero", *inputs,
         "-map", f"0:{video['index']}", "-an", "-t", str(MAX_DURATION + 1),
-        "-vf", f"setpts=PTS-STARTPTS,select='{select}',scale=960:960:force_original_aspect_ratio=decrease,showinfo",
+        "-vf", f"select='{select}',scale=960:960:force_original_aspect_ratio=decrease,showinfo",
         "-fps_mode", "vfr", "-frames:v", str(MAX_FRAMES + 1), "-q:v", "3",
         str(directory / "frame-%04d.jpg"), timeout=40,
     )
@@ -186,7 +186,7 @@ async def _extract(data: bytes, directory: Path) -> dict:
             length = min(boundary + CHUNK_SECONDS + 1, duration) - start
             wav = directory / f"audio-{start}.wav"
             await _command(
-                "ffmpeg", "-nostdin", "-v", "error", "-threads", "2", *inputs,
+                "ffmpeg", "-nostdin", "-v", "error", "-threads", "2", "-copyts", "-start_at_zero", *inputs,
                 "-map", f"0:{audios[0]['index']}", "-vn", "-af", "aresample=24000:async=1:first_pts=0",
                 "-ss", str(start), "-t", str(length), "-ac", "2", "-c:a", "pcm_s16le", str(wav),
             )

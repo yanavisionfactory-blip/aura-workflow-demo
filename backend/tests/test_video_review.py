@@ -68,6 +68,19 @@ async def test_real_decoder_covers_first_last_frames_and_actual_audio(clip, tmp_
     assert media["audio_streams"] == 1
 
 
+async def test_decoder_preserves_video_offset_relative_to_audio(tmp_path):
+    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+        pytest.skip("FFmpeg runtime required")
+    path = tmp_path / "offset.mp4"
+    await video._command("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+                         "-itsoffset", "1", "-f", "lavfi", "-i", "color=c=red:s=320x240:r=24:d=2",
+                         "-c:v", "libx264", "-fps_mode", "vfr", "-c:a", "aac", str(path))
+    media = await video._extract(path.read_bytes(), tmp_path)
+    assert media["frames"][0][0] == pytest.approx(1.0, abs=0.05)
+    assert media["frames"][-1][0] >= 2.9
+    assert media["audio_chunks"][0][0] == 0
+
+
 async def test_models_receive_images_and_real_audio_not_file_metadata(clip, tmp_path, intelligence, monkeypatch):
     media = await video._extract(clip, tmp_path)
     calls = []
