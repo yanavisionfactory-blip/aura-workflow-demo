@@ -4084,13 +4084,19 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             raise BudgetExceeded("Delivery time budget exhausted")
                         if not manifest_record:
                             raise RuntimeError("Capability provider is not verified")
+                        from .video_review import OPERATIONS as VIDEO_OPERATIONS
+                        step_timeout = (
+                            float(get_settings().video_review_timeout_seconds)
+                            if operation in VIDEO_OPERATIONS
+                            else float(snapshot.policy_snapshot["step_timeout_seconds"])
+                        )
                         execution_timeout = (
                             min(
-                                float(snapshot.policy_snapshot["step_timeout_seconds"]),
+                                step_timeout,
                                 max(0.01, budget.deadline - time.monotonic()),
                             )
                             if budget
-                            else float(snapshot.policy_snapshot["step_timeout_seconds"])
+                            else step_timeout
                         )
                         broker_pack_id = (active_tool.config or {}).get(
                             "capability_pack_id"

@@ -750,6 +750,7 @@ class ProviderExecutor:
             "jira.issue.update": self._jira_issue_update,
             "weather.forecast": self._weather_forecast,
             "report.compose": self._report_compose,
+            "intelligence.video.review": self._video_review,
             "intelligence.claude_backup": self._claude_backup,
             "proofing.feedback.import": self._proofing_feedback_import,
             "website.source.inspect": self._website_source_inspect,
@@ -773,6 +774,10 @@ class ProviderExecutor:
         else:
             result = await handlers[operation](arguments)
         return self._attach_result_url(operation, arguments, result)
+
+    async def _video_review(self, arguments: dict) -> dict:
+        from .video_review import review_upload
+        return await review_upload(arguments)
 
     def _attach_result_url(
         self, operation: str, arguments: dict[str, Any], result: dict

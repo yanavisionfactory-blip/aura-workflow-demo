@@ -34,6 +34,26 @@ META_COLLECTION = {"type": "object", "required": ["data", "complete", "source_pr
                    "source_provider": {"const": "meta-ads"}, "vendor_api_called": {"const": True},
                    "connection_route": {"const": "direct"}, "retrieved_at": TEXT}}
 KNOWN = {
+    **{operation: ({"type": "object", "required": [
+        "title", "summary", "body", "status", "synthetic", "analysis_provider", "media_analyzed",
+        "coverage", "findings", "limitations", "source", "models", "generated_at",
+    ], "properties": {
+        "title": TEXT, "summary": TEXT, "body": {"type": "string", "minLength": 100},
+        "status": {"const": "draft"}, "synthetic": {"const": False},
+        "analysis_provider": {"const": "aura_intelligence"}, "media_analyzed": {"const": True},
+        "coverage": {"type": "object", "required": ["duration_seconds", "frame_count", "frame_timestamps_seconds", "audio_status", "audio_segments"],
+            "properties": {"duration_seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 120},
+                "frame_count": {"type": "integer", "minimum": 1, "maximum": 500},
+                "frame_timestamps_seconds": {"type": "array", "minItems": 1, "items": {"type": "number", "minimum": 0}},
+                "audio_status": {"enum": ["reviewed", "absent"]}, "audio_segments": {"type": "array"}}},
+        "findings": {"type": "array", "items": {"type": "object", "required": ["timestamp_seconds", "end_seconds", "issue", "correction", "evidence"]}},
+        "limitations": {"type": "array", "minItems": 1, "items": TEXT},
+        "source": {"type": "object", "required": ["provider", "sha256", "size_bytes"],
+            "properties": {"provider": {"const": provider}, "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+                "size_bytes": {"type": "integer", "minimum": 1}}},
+        "models": OBJECT, "generated_at": TEXT,
+    }}, ["video_analysis", "timestamped_findings", "media_coverage", "report_body"])
+       for operation, provider in (("intelligence.video.review", "user_upload"), ("frameio.video.review", "frameio"))},
     "reddit-ads.report.get": ({"type": "object", "required": [
         "source_provider", "vendor_api_called", "complete", "account_id", "account", "data",
         "raw_data", "campaigns", "date_range", "conversion_definition", "row_count", "notes", "retrieved_at",
