@@ -5958,6 +5958,24 @@ def _run_blocker(
     stored = (run.execution_context or {}).get("__aura_blocker__") or (run.result or {}).get(
         "blocker"
     )
+    if (run.status in {RunStatus.waiting_for_action, RunStatus.failed}
+            and (not stored or stored.get("action") == "inspect_run")):
+        from .presentation_sources import (
+            source_presentation_blocker,
+            source_presentation_requested,
+            validate_source_presentation_plan,
+        )
+
+        if source_presentation_requested(run.prompt or ""):
+            try:
+                saved_plan = WorkflowPlan.model_validate(run.plan)
+            except ValueError:
+                saved_plan = None
+            if saved_plan:
+                try:
+                    validate_source_presentation_plan(run.prompt, saved_plan)
+                except ValueError as exc:
+                    return source_presentation_blocker(str(exc))
     if (run.status in {RunStatus.waiting_for_action, RunStatus.failed, RunStatus.blocked}
             and (not stored or stored.get("action") == "inspect_run")):
         # Older runs lost folder-reference failures behind a generic

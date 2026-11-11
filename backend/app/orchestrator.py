@@ -1121,6 +1121,9 @@ async def _create_compiled_plan(
     from .dashboard_quality import dashboard_requirements
 
     repair_requirements.extend(dashboard_requirements(objective))
+    from .presentation_sources import source_presentation_requirements
+
+    repair_requirements.extend(source_presentation_requirements(requested_text))
     if excluded_tool_families:
         repair_requirements.append(
             "The user's omission overrides earlier app selections and mentions: "
@@ -2612,7 +2615,9 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                     paused = await session.get(WorkflowRun, run_id)
                     blocker = ((paused.execution_context or {}).get("__aura_blocker__") or {}) if paused else {}
                     if (paused and paused.workspace_id == workspace_id
-                            and blocker.get("code") == "resource_selection_required"):
+                            and blocker.get("code") in {
+                                "resource_selection_required", "source_presentation_plan_required",
+                            }):
                         # The missing source must come from the user. Do not
                         # replace this diagnosis with generic repair exhaustion.
                         break
@@ -2735,6 +2740,26 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
             )
             await session.commit()
             return
+        from .presentation_sources import (
+            source_presentation_blocker,
+            source_presentation_requested,
+            validate_source_presentation_plan,
+        )
+
+        if source_presentation_requested(run.prompt):
+            try:
+                validate_source_presentation_plan(run.prompt, WorkflowPlan.model_validate(run.plan))
+            except ValueError as exc:
+                transition_run(
+                    run, RunStatus.waiting_for_action,
+                    reason="source_presentation_plan_requires_revision",
+                    actor="senior-orchestrator", phase="planning",
+                    supervisor_status="human_action_required",
+                    error=str(exc), blocker=source_presentation_blocker(str(exc)), dispatch=None,
+                )
+                await session.commit()
+                return
+
         from .request_contracts import draft_only_email_request, is_gmail_delivery_step
 
         if draft_only_email_request(run.prompt) and any(
