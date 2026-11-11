@@ -37,11 +37,13 @@ from .approval_review import (
     public_review_preview,
     public_step_arguments,
 )
+from .assurance_api import install_routes as install_assurance_routes
 from .autonomous_delivery import (
     governed_derivative_rejection,
     record_rejected_write_retry,
     reset_read_attempt_cycle,
 )
+from .chatgpt_mcp import install_chatgpt_mcp
 from .config import get_settings
 from .connector_engineer import (
     certify_verified_reads,
@@ -8352,11 +8354,12 @@ async def forget_workflow_memory(
     return {"memory_id": memory.id, "deleted": True}
 
 
-from .assurance_api import install_routes as install_assurance_routes
-
 install_assurance_routes(app, tenant_context, tenant_session)
 
 
 # Dependency injection keeps scoped support access independent of user sessions.
 app.include_router(support_router(tenant_context, tenant_session))
+
+# Keep the root MCP mount after all ordinary API routes.
+install_chatgpt_mcp(app, settings)
 
