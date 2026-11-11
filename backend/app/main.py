@@ -5958,6 +5958,80 @@ def _run_blocker(
     stored = (run.execution_context or {}).get("__aura_blocker__") or (run.result or {}).get(
         "blocker"
     )
+    if (run.status in {RunStatus.waiting_for_action, RunStatus.failed}
+            and (not stored or stored.get("action") == "inspect_run")):
+        from .presentation_sources import (
+            source_presentation_blocker,
+            source_presentation_requested,
+            validate_source_presentation_plan,
+        )
+
+        if source_presentation_requested(run.prompt or ""):
+            try:
+                saved_plan = WorkflowPlan.model_validate(run.plan)
+            except ValueError:
+                saved_plan = None
+            if saved_plan:
+                try:
+                    validate_source_presentation_plan(run.prompt, saved_plan)
+                except ValueError as exc:
+                    return source_presentation_blocker(str(exc))
+    if (run.status in {RunStatus.waiting_for_action, RunStatus.failed, RunStatus.blocked}
+            and (not stored or stored.get("action") == "inspect_run")):
+        # Older runs lost folder-reference failures behind a generic
+        # recovery-exhausted message. Derive recovery from saved read receipts;
+        # this projection never retries providers or changes completed work.
+        from .workflow_context import (
+            DRIVE_FOLDER_ID_PATHS,
+            DriveFolderIdentityError,
+            WorkflowContextError,
+            referenced_paths,
+            referenced_step_keys,
+            resolve_value,
+            step_context_value,
+        )
+
+        folder_sources = {
+            step.step_key: step_context_value(
+                step.output["provider_result"], step.operation,
+                step.output.get("resolved_arguments", step.arguments),
+            )
+            for step in steps
+            if step.status == StepStatus.completed
+            and step.operation == "google-drive.find-folder"
+            and isinstance(step.output, dict)
+            and "provider_result" in step.output
+        }
+        for step in steps:
+            if (not folder_sources or step.status != StepStatus.failed or step.id in attempted_steps
+                    or (step.output or {}).get("provider_result") is not None
+                    or not (referenced_step_keys(step.arguments) & folder_sources.keys())):
+                continue
+            try:
+                resolve_value(step.arguments, {"steps": folder_sources})
+            except DriveFolderIdentityError as exc:
+                return exc.blocker(step.id)
+            except WorkflowContextError:
+                pass
+            else:
+                folder_id_paths = {
+                    f"steps.{key}.{path}" for key in folder_sources
+                    for path in DRIVE_FOLDER_ID_PATHS
+                }
+                if (run.status in {RunStatus.waiting_for_action, RunStatus.failed}
+                        and run.plan_approved and not step.consequential
+                        and step.operation == "google-drive.list-files"
+                        and "Workflow variable" in (step.error or "")
+                        and "unavailable" in (step.error or "")
+                        and referenced_paths(step.arguments) & folder_id_paths):
+                    return {
+                        "code": "recorded_result_needs_review", "kind": "operator_action",
+                        "message": "Google Drive already found the requested folder. "
+                            "Continue from its saved result to read the folder contents; "
+                            "the completed folder search will not repeat.",
+                        "action": "recheck_saved_result", "retryable": True,
+                        "tool_slug": "google-drive", "step_id": step.id,
+                    }
     if (run.status in {RunStatus.waiting_for_action, RunStatus.failed, RunStatus.blocked}
             and (not stored or stored.get("action") == "inspect_run")):
         from .google_ads_errors import public_message

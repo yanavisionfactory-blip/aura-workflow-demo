@@ -59,6 +59,31 @@ const run = (patch = {}) => ({ id: 'saved-run', status: 'waiting_for_action',
     { id: 'failed', position: 1, status: 'failed', consequential: false }],
   plan: { steps: [{}, {}] }, ...patch });
 
+test('an incomplete source presentation offers plan repair instead of repeating the failed read', () => {
+  const value = run({ blocker: { code: 'source_presentation_plan_required', action: 'review_plan',
+    message: 'Read the actual project document contents before creating the presentation.', retryable: false } });
+  const recovery = recoveryForRun(value);
+  assert.equal(recovery.canRetry, false);
+  assert.equal(recovery.canSkip, false);
+  assert.equal(recovery.alternativeLabel, 'Repair presentation plan');
+  assert.match(recovery.why, /actual project document contents/);
+  assert.match(recovery.subtitle, /completed folder search.*preserved/);
+});
+
+test('presentation repair reuses only the unique confirmed folder and omits unrelated receipt fields', () => {
+  const value = run({ prompt: 'Create a presentation from my Drive project folder', steps: [{
+    id: 'folder', status: 'completed', operation: 'google-drive.find-folder',
+    arguments: { nameSearchTerm: 'Music project' }, output: { provider_result: { ret: [{
+      id: 'confirmed_folder', name: 'Music project', private_unrelated: 'DO_NOT_COPY',
+    }] } },
+  }] });
+  assert.match(alternativeRecoveryPrompt(value), /confirmed_folder/);
+  assert.match(alternativeRecoveryPrompt(value), /Read the relevant document contents/);
+  assert.doesNotMatch(alternativeRecoveryPrompt(value), /DO_NOT_COPY/);
+  value.steps[0].output.provider_result.ret.push({ id: 'other_folder', name: 'Music project' });
+  assert.doesNotMatch(alternativeRecoveryPrompt(value), /confirmed_folder|other_folder/);
+});
+
 test('legacy guessed Sheets tab offers inspection and repair using the existing workbook receipt', () => {
   const saved = { prompt: 'Create the KPI dashboard', blocker: {
     code: 'no_safe_recovery', action: 'inspect_run', step_id: 'rows', retryable: false,
