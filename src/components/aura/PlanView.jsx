@@ -14,7 +14,7 @@ import { searchConnectorBrokerApps, testPythonConnection } from "@/lib/auraApi";
 import { isVerifiedConnection } from "@/lib/connectionSelection.mjs";
 import { hasPlanConnectionGrant, planConnectionRequirements, buildPlanConnectionTools, requirementTools } from "@/lib/planConnections.mjs";
 import { planningConnectionsEnabled } from "@/lib/planningFlow.mjs";
-import { removeStepInstruction } from "@/lib/planPresentation.mjs";
+import { planStepGroups, removeStepInstruction } from "@/lib/planPresentation.mjs";
 import { alternativePlanConnection, planConnectionRevision } from "@/lib/planConnectionRoutes.mjs";
 import { CONNECTION_CANCELLED } from "@/lib/connectionAttempt.mjs";
 const PLAN_REVISION_SCHEMA = {
@@ -73,6 +73,9 @@ export default function PlanView({
 }) {
   const [readinessPassed, setReadinessPassed] = useState(false);
   const [steps, setSteps] = useState(plan.steps);
+  const showReadiness = Boolean(backendRunId && !plan.provisional
+    && plan.compileState !== "waiting_for_connection" && !plan.error);
+  const { tasks, preparation } = useMemo(() => planStepGroups(steps, showReadiness), [steps, showReadiness]);
   const [forceEditIndex, setForceEditIndex] = useState(null);
   const [name, setName] = useState(plan.workflowName || "");
   useEffect(() => {
@@ -323,9 +326,12 @@ export default function PlanView({
 
   const onDragEnd = (res) => {
     if (!res.destination || res.source.index === res.destination.index) return;
+    const sourceIndex = tasks[res.source.index]?.index;
+    const destinationIndex = tasks[res.destination.index]?.index;
+    if (sourceIndex === undefined || destinationIndex === undefined) return;
     if (onRevisePlan) {
-      const moved = steps[res.source.index];
-      const destination = steps[res.destination.index];
+      const moved = steps[sourceIndex];
+      const destination = steps[destinationIndex];
       const direction = res.destination.index < res.source.index ? "before" : "after";
       onRevisePlan(
         `Move “${moved?.title || moved?.action || `step ${res.source.index + 1}`}” ${direction} “${destination?.title || destination?.action || `step ${res.destination.index + 1}`}”.`
@@ -334,8 +340,8 @@ export default function PlanView({
     }
     setSteps((prev) => {
       const next = [...prev];
-      const [moved] = next.splice(res.source.index, 1);
-      next.splice(res.destination.index, 0, moved);
+      const [moved] = next.splice(sourceIndex, 1);
+      next.splice(destinationIndex, 0, moved);
       return next;
     });
   };
@@ -570,22 +576,22 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         <Droppable droppableId="plan-steps">
           {(provided) => (
             <div {...provided.droppableProps} ref={provided.innerRef} className="mb-2">
-              {steps.map((step, i) => (
-                <Draggable key={step.key || i} draggableId={`step-${i}`} index={i} isDragDisabled={busy}>
+              {tasks.map(({ step, index: originalIndex }, i) => (
+                <Draggable key={step.key || originalIndex} draggableId={`step-${originalIndex}`} index={i} isDragDisabled={busy}>
                   {(p) => (
                     <PlanStep
                       step={step}
                       index={i}
-                      isLast={i === steps.length - 1}
+                      isLast={i === tasks.length - 1}
                       provided={p}
-                      onChange={(updated) => updateStep(i, updated)}
-                      onDelete={() => deleteStep(i)}
+                      onChange={(updated) => updateStep(originalIndex, updated)}
+                      onDelete={() => deleteStep(originalIndex)}
                       onRequestChange={onRevisePlan
                         ? (instruction) => onRevisePlan(
-                          `For step ${i + 1}${step.key ? ` (${step.key})` : ""}, “${step.title || step.action || "this step"}”: ${instruction}`
+                          `For step ${originalIndex + 1}${step.key ? ` (${step.key})` : ""}, “${step.title || step.action || "this step"}”: ${instruction}`
                         )
                         : undefined}
-                      forceEdit={forceEditIndex === i}
+                      forceEdit={forceEditIndex === originalIndex}
                       onEditConsumed={() => setForceEditIndex(null)}
                     />
                   )}
@@ -685,7 +691,7 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         </AnimatePresence>
       </div>
 
-      {backendRunId && !plan.provisional && plan.compileState !== "waiting_for_connection" && !plan.error && <RunReadiness runId={backendRunId} plan={plan} backendPlan={backendPlan} steps={steps} onReady={setReadinessPassed} />}
+      {showReadiness && <RunReadiness runId={backendRunId} plan={plan} backendPlan={backendPlan} steps={steps} preparationSteps={preparation.map(({ step }) => step)} onReady={setReadinessPassed} />}
       <RunSupportAccess runId={backendRunId} />
       {/* Bottom approval bar */}
       <motion.div

@@ -1,6 +1,49 @@
+const VIDEO_REVIEW_OPERATIONS = new Set(["frameio.video.review", "intelligence.video.review"]);
+
+// One video operation performs all three activities. These are its review
+// phases, not three invented tool calls or extra approval/execution steps.
+export function videoReviewPlanContent(step = {}) {
+  if (!VIDEO_REVIEW_OPERATIONS.has(step.operation)) return null;
+  const source = step.operation === "frameio.video.review" ? "selected Frame.io video version" : "uploaded video";
+  return {
+    title: "Review the video and prepare production feedback",
+    phases: [
+      { title: "Review the video from beginning to end",
+        description: `Examine the ${source}'s visuals and audio across the full timeline, including transitions, graphics, on-screen text, messaging, and sound.` },
+      { title: "Identify issues and recommend corrections",
+        description: "Check for errors, inconsistencies, poor transitions, unclear messaging, incorrect graphics, spelling mistakes, audio problems, and visual distractions. Explain each supported issue and how the production team should fix it, following your review instructions." },
+      { title: "Deliver feedback in chronological order",
+        description: "Return a table with timestamp, issue, supporting observation, and recommended correction. Use verified visual timestamps and clearly label approximate audio timing." },
+    ],
+    timingNote: "Visual review uses sampled frames across the full timeline; brief defects may be missed. Audio timestamps are approximate.",
+  };
+}
+
+// Keep the original objects and indexes: readiness, approval and execution must
+// still receive every operation. Only a read-only video identity prerequisite
+// moves into the existing account-check section; never move a write or a check
+// that is itself the user's standalone task.
+export function planStepGroups(steps = [], separatePreparation = true) {
+  const hasFrameioReview = steps.some((step) => step.operation === "frameio.video.review");
+  const tasks = [], preparation = [];
+  steps.forEach((step, index) => {
+    const background = separatePreparation && hasFrameioReview
+      && step.operation === "frameio.identity.get"
+      && !step.consequential && step.riskLevel !== "modify"
+      && !step.condition && !step.optional;
+    (background ? preparation : tasks).push({ step, index });
+  });
+  return { tasks, preparation };
+}
+
 // Labels follow the actual operation, never incidental words in its reason.
 export function operationStepTitle(step = {}, tool = "the app") {
   const operation = String(step.operation || "");
+  const video = videoReviewPlanContent(step);
+  if (video) return video.title;
+  if (operation === "frameio.identity.get") return "Check the connected Frame.io account";
+  if (operation === "frameio.accounts.list") return "Find the accessible Frame.io accounts";
+  if (operation === "frameio.file.get") return "Read the selected Frame.io video version";
   if (operation === "report.compose") return "Generate report with ChatGPT";
   if (operation === "meta-ads-simulated.review.get") return "Run the Meta Ads simulation";
   if (operation === "klaviyo-simulated.lifecycle.get") return "Run the Klaviyo simulation";
