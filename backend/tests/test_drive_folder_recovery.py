@@ -17,6 +17,7 @@ from app.models import (
     StepAttempt,
     StepStatus,
     WorkflowRun,
+    Workspace,
 )
 from app.policy import canonical_plan_hash
 from app.recovery_engineer import diagnose_run
@@ -102,6 +103,96 @@ def test_missing_folder_diagnosis_does_not_override_other_failures(case):
         failed.arguments = {"folderId": "{{steps.unrelated.id}}"}
     blocker = main._run_blocker(run, [source, failed], {}, [], attempted)
     assert not blocker or blocker["code"] != "resource_selection_required"
+
+
+def test_saved_unique_folder_offers_resume_without_repeating_search():
+    run, source, failed = legacy_run()
+    source.output = {"provider_result": {"ret": [FOLDER]}}
+    before = deepcopy((run.execution_context, source.output, failed.output))
+    blocker = main._run_blocker(run, [source, failed], {}, [], {source.id})
+    assert blocker["action"] == "recheck_saved_result"
+    assert blocker["retryable"] is True
+    assert blocker["step_id"] == failed.id
+    assert "already found" in blocker["message"]
+    assert (run.execution_context, source.output, failed.output) == before
+
+
+@pytest.mark.parametrize("case", [
+    "dispatched", "receipt", "authorization", "unapproved", "blocked",
+    "consequential", "other_failure", "other_reference",
+])
+def test_saved_unique_folder_does_not_offer_unrelated_retry(case):
+    run, source, failed = legacy_run()
+    source.output = {"provider_result": {"ret": [FOLDER]}}
+    attempted = {source.id}
+    if case == "dispatched":
+        attempted.add(failed.id)
+    elif case == "receipt":
+        failed.output = {"provider_result": {"files": []}}
+    elif case == "authorization":
+        run.execution_context = {"__aura_blocker__": {
+            "code": "permission_required", "action": "reconnect_account"}}
+    elif case == "unapproved":
+        run.plan_approved = False
+    elif case == "blocked":
+        run.status = RunStatus.blocked
+    elif case == "consequential":
+        failed.consequential = True
+    elif case == "other_failure":
+        failed.error = "Provider is temporarily unavailable"
+    else:
+        failed.arguments = {"folderId": "{{steps.find_project_folder.name}}"}
+    blocker = main._run_blocker(run, [source, failed], {}, [], attempted)
+    assert not blocker or blocker["action"] != "recheck_saved_result"
+
+
+async def test_saved_folder_read_resume_preserves_search_receipt_and_queues_remaining_step(
+    database, monkeypatch,
+):
+    sent = []
+
+    async def publish(workspace_id):
+        sent.append(workspace_id)
+        return 1
+
+    monkeypatch.setattr(main, "dispatch_pending", publish)
+    async with database() as session:
+        session.add(Workspace(id="w", name="Folder recovery"))
+        run = WorkflowRun(id="saved", workspace_id="w", prompt="Read my project folder",
+            status=RunStatus.waiting_for_action, plan_approved=True,
+            plan={"steps": [{"optional": False}, {"optional": False}]},
+            execution_context={"__aura_recovery__": {"read": 3},
+                "__aura_autonomy__": {"handoff_reason_code": "no_safe_recovery"},
+                "__aura_blocker__": {"code": "no_safe_recovery", "action": "inspect_run"}})
+        source = RunStep(id="source", run_id="saved", position=0,
+            step_key="find_project_folder", agent="Drive", tool_slug="google-drive",
+            operation="google-drive.find-folder", arguments=ARGS,
+            status=StepStatus.completed, consequential=False, idempotency_key="search-once",
+            output={"provider_result": {"ret": [FOLDER]}})
+        failed = RunStep(id="read", run_id="saved", position=1,
+            step_key="inspect_folder_contents", agent="Drive", tool_slug="google-drive",
+            operation="google-drive.list-files", arguments={"folderId": REFERENCE},
+            status=StepStatus.failed, consequential=False, idempotency_key="list-once",
+            depends_on=[source.step_key], error="Workflow variable is unavailable", output={})
+        session.add_all([run, source, failed])
+        await session.commit()
+        blocker = main._run_blocker(run, [source, failed], {}, [], {source.id})
+        result = await main.resume_run(run.id,
+            main.ResumeDecision(action="retry", step_id=blocker["step_id"]),
+            main.TenantContext("w", "owner", "owner"), session)
+        assert result["status"] == "recovering" and result["resumed_from_step"] == "read"
+        assert failed.status == StepStatus.pending
+        assert source.status == StepStatus.completed
+        assert source.output == {"provider_result": {"ret": [FOLDER]}}
+        assert "read" not in run.execution_context["__aura_recovery__"]
+        assert "handoff_reason_code" not in run.execution_context["__aura_autonomy__"]
+        assert await session.scalar(select(StepAttempt.id)) is None
+        intent = await session.scalar(select(DispatchIntent).where(DispatchIntent.run_id == run.id))
+        assert intent.kind == "execute"
+        assert sent == ["w"]
+        assert resolve_value(failed.arguments, {"steps": {source.step_key: step_context_value(
+            source.output["provider_result"], source.operation, source.arguments,
+        )}}) == {"folderId": FOLDER["id"]}
 
 
 @pytest.mark.parametrize("awaiting_approval", [False, True])

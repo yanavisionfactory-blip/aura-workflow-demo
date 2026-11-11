@@ -5960,12 +5960,14 @@ def _run_blocker(
     )
     if (run.status in {RunStatus.waiting_for_action, RunStatus.failed, RunStatus.blocked}
             and (not stored or stored.get("action") == "inspect_run")):
-        # Older runs lost the empty/ambiguous folder diagnosis behind a generic
-        # recovery-exhausted message. Derive it from their saved read receipts;
+        # Older runs lost folder-reference failures behind a generic
+        # recovery-exhausted message. Derive recovery from saved read receipts;
         # this projection never retries providers or changes completed work.
         from .workflow_context import (
+            DRIVE_FOLDER_ID_PATHS,
             DriveFolderIdentityError,
             WorkflowContextError,
+            referenced_paths,
             referenced_step_keys,
             resolve_value,
             step_context_value,
@@ -5993,6 +5995,25 @@ def _run_blocker(
                 return exc.blocker(step.id)
             except WorkflowContextError:
                 pass
+            else:
+                folder_id_paths = {
+                    f"steps.{key}.{path}" for key in folder_sources
+                    for path in DRIVE_FOLDER_ID_PATHS
+                }
+                if (run.status in {RunStatus.waiting_for_action, RunStatus.failed}
+                        and run.plan_approved and not step.consequential
+                        and step.operation == "google-drive.list-files"
+                        and "Workflow variable" in (step.error or "")
+                        and "unavailable" in (step.error or "")
+                        and referenced_paths(step.arguments) & folder_id_paths):
+                    return {
+                        "code": "recorded_result_needs_review", "kind": "operator_action",
+                        "message": "Google Drive already found the requested folder. "
+                            "Continue from its saved result to read the folder contents; "
+                            "the completed folder search will not repeat.",
+                        "action": "recheck_saved_result", "retryable": True,
+                        "tool_slug": "google-drive", "step_id": step.id,
+                    }
     if (run.status in {RunStatus.waiting_for_action, RunStatus.failed, RunStatus.blocked}
             and (not stored or stored.get("action") == "inspect_run")):
         from .google_ads_errors import public_message
