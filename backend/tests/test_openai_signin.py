@@ -250,7 +250,9 @@ async def test_rejects_invalid_signed_identity_claims(flow, changes, missing):
     assert len(token_calls(provider)) == 1
 
 
-@pytest.mark.parametrize("kind", ["wrong_key", "wrong_algorithm", "missing_id_token", "failure"])
+@pytest.mark.parametrize("kind", [
+    "wrong_key", "wrong_algorithm", "missing_id_token", "invalid_shape", "failure",
+])
 async def test_token_exchange_and_signature_fail_closed(flow, kind):
     client, provider = flow
     handle, _, callback = await start(client, provider)
@@ -265,6 +267,8 @@ async def test_token_exchange_and_signature_fail_closed(flow, kind):
         )
     elif kind == "missing_id_token":
         provider.token_payload = {"access_token": "not-an-id-token"}
+    elif kind == "invalid_shape":
+        provider.token_payload = ["not-a-token-response"]
     else:
         provider.token_status = 401
         provider.token_payload = {"error_description": "secret-from-provider"}

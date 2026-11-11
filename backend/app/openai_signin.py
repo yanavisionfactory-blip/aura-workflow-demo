@@ -171,9 +171,9 @@ class OpenAISignInClient:
                 raise ValueError("invalid provider response")
             result = response.json()
             if not isinstance(result, dict):
-                raise ValueError("invalid provider response")
+                raise TypeError("invalid provider response")
             return result
-        except (httpx.HTTPError, ValueError):
+        except (httpx.HTTPError, TypeError, ValueError):
             raise OpenAISignInError("OpenAI sign-in is unavailable. Please start again.") from None
 
     async def discovery(self) -> dict:
@@ -349,7 +349,7 @@ def openai_signin_router(
                 except OpenAISignInError:
                     pass
             handle, location = await client.begin()
-        except Exception:
+        except Exception:  # noqa: BLE001 - clear cookies and hide credentials at the OAuth boundary.
             # Redis/HTTP/adapter exceptions must not leak transaction or token data.
             return clear_transaction(JSONResponse(
                 {"detail": "ChatGPT sign-in is unavailable. Please try again."}, status_code=503,
@@ -373,7 +373,7 @@ def openai_signin_router(
                 {"detail": "ChatGPT sign-in could not be verified. Please start again."},
                 status_code=400,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - includes future account/session adapter failures.
             response = JSONResponse(
                 {"detail": "ChatGPT sign-in is unavailable. Please start again."}, status_code=503,
             )
