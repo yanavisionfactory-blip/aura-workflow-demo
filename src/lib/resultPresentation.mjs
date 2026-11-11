@@ -578,7 +578,7 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
       link: null, downloadUrl: null,
     };
   }
-  const report = [...completed].reverse().find((output) => output.operation === "report.compose"
+  const report = [...completed].reverse().find((output) => ["report.compose", "intelligence.video.review", "frameio.video.review"].includes(output.operation)
     && output.critic?.action === "accept" && output.outcome_check?.status === "verified"
     && output.provider_result?.status === "draft"
     && typeof output.provider_result?.body === "string" && output.provider_result.body.trim());
@@ -593,7 +593,7 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
       audit, link: null, downloadUrl: null,
     };
     return {
-      title: saved.title || context.title, kind: "report", provider: "ChatGPT", providerVerb: "Generated with",
+      title: saved.title || context.title, kind: "report", provider: saved.analysis_provider === "aura_intelligence" ? "AURA Intelligence" : "ChatGPT", providerVerb: "Generated with",
       completionTitle: "Review draft ready",
       completionSummary: saved.synthetic
         ? "Fictional client review saved in AURA. All client data is synthetic."

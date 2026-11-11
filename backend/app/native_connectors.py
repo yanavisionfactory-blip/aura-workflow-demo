@@ -22,6 +22,7 @@ from .proofing import FeedbackImportRequest
 from .reddit_ads import ReportRequest as RedditReportRequest
 from .reports import ReportRequest
 from .seo_crawl import CrawlReviewRequest
+from .video_review import FrameioVideoRequest, VideoReviewRequest
 from .website_content import ContentRequest
 from .website_content import SourceRequest as WebsiteSourceRequest
 from .weekly_review import ReviewRequest, SourceRequest
@@ -105,8 +106,8 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         ],
     },
     "frameio": {
-        "schema_version": "1.1", "catalog_version": 1, "provider_type": "oauth",
-        "name": "Frame.io", "description": "Read exact Frame.io V4 file versions and reviewer comments.",
+        "schema_version": "1.1", "catalog_version": 2, "provider_type": "oauth",
+        "name": "Frame.io", "description": "Read exact Frame.io V4 file versions, reviewer comments and review video with AURA Intelligence.",
         "base_url": "https://api.frame.io", "identity": {"provider": "frameio"},
         "modules": [
             _module("frameio.identity.get", "search", "Verify the Adobe identity and accessible Frame.io V4 accounts."),
@@ -114,19 +115,23 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                     properties={"after": _TEXT, "page_size": {**_POSITIVE_INTEGER, "maximum": 100}}),
             _module("frameio.file.get", "search", "Read the exact selected Frame.io file version. Use its file UUID, not a version stack or a guessed latest version.",
                     required=("account_id", "file_id"), properties={"account_id": _TEXT, "file_id": _TEXT}),
+            {**_module("frameio.video.review", "search", "Download the exact connected Frame.io file rendition and use AURA Intelligence to inspect sampled video frames and actual audio from beginning to end. Returns chronological timestamped production feedback in AURA. Supports MP4/MOV up to 120 seconds / 50 MB. This is AURA analysis, not Frame.io AI Assistant or existing comments. No comments are posted."),
+             "input_schema": FrameioVideoRequest.model_json_schema()},
             _module("frameio.comments.list", "search", "Read all comments and replies for one exact file UUID, verifying the file first. Fails if pagination is incomplete or exceeds 1000 comments. Comment completion never proves asset approval.",
                     required=("account_id", "file_id"), properties={"account_id": _TEXT, "file_id": _TEXT}),
         ],
     },
     "aura": {
         "schema_version": "1.1",
-        "catalog_version": 1,
+        "catalog_version": 2,
         "provider_type": "api_key",
         "name": "AURA Intelligence",
         "description": "Built-in reports from supplied evidence and safe public information.",
         "base_url": "provider-managed",
         "identity": {"provider": "aura"},
         "modules": [
+            {**_module("intelligence.video.review", "search", "Inspect an uploaded MP4/MOV using AURA Intelligence: actual sampled video frames and full audio, with chronological timestamped issues and production corrections. Bind file_url to the attached video input. Supports clips up to 120 seconds / 50 MB. Returns a complete review in AURA; no external writes. For a connected Frame.io asset use frameio.video.review."),
+             "input_schema": VideoReviewRequest.model_json_schema()},
             {
                 **_module(BACKUP_OPERATION, "search", "AURA Intelligence text-only backup for "
                           "a failed anthropic.chat step. Preserve the original request and "

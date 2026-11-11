@@ -10,6 +10,7 @@ API_ORIGIN = "https://api.frame.io"
 OPERATIONS = frozenset({
     "frameio.identity.get", "frameio.accounts.list",
     "frameio.file.get", "frameio.comments.list",
+    "frameio.video.review",
 })
 
 
@@ -191,6 +192,9 @@ async def execute(credentials: dict, operation: str, arguments: dict, timeout: f
         raise FrameioReadError("This Frame.io connector supports reviewed read operations only.")
     if operation == "frameio.identity.get":
         return await verify(credentials)
+    if operation == "frameio.video.review":
+        from .video_review import review_frameio
+        return await review_frameio(credentials, arguments)
     headers = _headers(credentials)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
         if operation == "frameio.accounts.list":

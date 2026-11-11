@@ -30,6 +30,8 @@ class Settings(BaseSettings):
 
     openai_api_key: str = ""
     openai_model: str = "gpt-5.4-mini"
+    video_audio_model: str = "gpt-audio-1.5"
+    video_review_timeout_seconds: int = Field(default=150, ge=30, le=300)
     # One structured model response followed by the existing deterministic
     # contract checks. The former planner remains an explicit rollback route.
     planner_mode: Literal["llm", "agent"] = "llm"
