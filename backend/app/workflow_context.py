@@ -20,6 +20,34 @@ class WorksheetIdentityError(WorkflowContextError):
     """Missing provider identity cannot be repaired by generating an ID."""
 
 
+class DriveFolderIdentityError(WorkflowContextError):
+    """A folder search did not establish the resource needed by the next step."""
+
+    def __init__(self):
+        super().__init__(
+            "Google Drive did not identify one matching project folder. "
+            "Provide the exact Google Drive folder link or ID and confirm that "
+            "the connected Google account can access it, then revise the remaining plan."
+        )
+
+    def blocker(self, step_id: str) -> dict[str, Any]:
+        return {
+            "code": "resource_selection_required", "kind": "human_action",
+            "message": str(self), "action": "choose_resource",
+            "tool_slug": "google-drive", "step_id": step_id, "retryable": False,
+        }
+
+
+# Planners sometimes assume a files envelope around Pipedream's folder result.
+# Resolve these identity paths from the single confirmed match, never by taking
+# the first raw search result. Keep ret/exports/provider_result unchanged.
+DRIVE_FOLDER_ID_PATHS = frozenset({
+    "id", "folderId", "folder_id", "folder.id", "files.0.id", "folders.0.id",
+    "ret.id", "ret.0.id", "ret.folder.id", "ret.files.0.id", "ret.folders.0.id",
+    "ret.data.files.0.id", "exports.folder.id", "exports.files.0.id",
+})
+
+
 def referenced_paths(value: Any) -> set[str]:
     if isinstance(value, dict):
         return set().union(*(referenced_paths(item) for item in value.values()))
@@ -88,6 +116,17 @@ def _lookup(context: dict[str, Any], path: str) -> Any:
     # data lookup only; arbitrary expressions are never evaluated.
     normalized_path = BRACKET_KEY.sub(lambda match: f".{match.group(1)}", path)
     normalized_path = BRACKET_INDEX.sub(lambda match: f".{match.group(1)}", normalized_path)
+    root, _, field = normalized_path.partition(".")
+    step_key, _, suffix = field.partition(".")
+    steps = context.get("steps")
+    step_value = steps.get(step_key) if isinstance(steps, dict) else None
+    if (root == "steps" and suffix in DRIVE_FOLDER_ID_PATHS
+            and isinstance(step_value, dict)
+            and "__aura_drive_folder_identity__" in step_value):
+        identity = step_value["__aura_drive_folder_identity__"]
+        if not isinstance(identity, dict) or not identity.get("id"):
+            raise DriveFolderIdentityError()
+        return identity["id"]
     value: Any = context
     for part in normalized_path.split("."):
         if (isinstance(value, dict) and value.get("__aura_worksheet_metadata__") is True
@@ -391,6 +430,9 @@ def step_context_value(
                 if operation == "google-drive.list-files" else None
             )
             if operation == "google-drive.find-folder":
+                value["__aura_drive_folder_identity__"] = (
+                    {"id": returned["id"]} if returned else {}
+                )
                 logger.info(
                     "drive_folder_receipt_shape ret=%s exports=%s argument_fields=%s confirmed_single=%s",
                     _result_shape(result.get("ret")),

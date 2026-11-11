@@ -2607,6 +2607,15 @@ async def execute_run(run_id: str, workspace_id: str) -> None:
                     return
             for _ in range(3):
                 await _execute_run(run_id, workspace_id)
+                async with SessionLocal() as session:
+                    await set_tenant_context(session, workspace_id)
+                    paused = await session.get(WorkflowRun, run_id)
+                    blocker = ((paused.execution_context or {}).get("__aura_blocker__") or {}) if paused else {}
+                    if (paused and paused.workspace_id == workspace_id
+                            and blocker.get("code") == "resource_selection_required"):
+                        # The missing source must come from the user. Do not
+                        # replace this diagnosis with generic repair exhaustion.
+                        break
                 if await autonomously_recover_run(run_id, workspace_id) in {
                     "scheduled",
                     "handoff",
@@ -3135,7 +3144,23 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     context,
                 )
             except WorkflowContextError as exc:
-                from .workflow_context import WorksheetIdentityError
+                from .workflow_context import DriveFolderIdentityError, WorksheetIdentityError
+
+                if isinstance(exc, DriveFolderIdentityError):
+                    # Missing/ambiguous source identity needs user input, not
+                    # argument generation or repeated provider/code repairs.
+                    step.status = StepStatus.failed
+                    step.error = str(exc)
+                    transition_run(
+                        run, RunStatus.waiting_for_action,
+                        reason="drive_folder_selection_required",
+                        actor="senior-orchestrator", phase="execution",
+                        supervisor_status="human_action_required",
+                        error=step.error, blocker=exc.blocker(step.id), dispatch=None,
+                        metadata={"step_id": step.id},
+                    )
+                    await session.commit()
+                    return
 
                 if step.status == StepStatus.awaiting_approval and not isinstance(exc, WorksheetIdentityError):
                     try:

@@ -5960,6 +5960,41 @@ def _run_blocker(
     )
     if (run.status in {RunStatus.waiting_for_action, RunStatus.failed, RunStatus.blocked}
             and (not stored or stored.get("action") == "inspect_run")):
+        # Older runs lost the empty/ambiguous folder diagnosis behind a generic
+        # recovery-exhausted message. Derive it from their saved read receipts;
+        # this projection never retries providers or changes completed work.
+        from .workflow_context import (
+            DriveFolderIdentityError,
+            WorkflowContextError,
+            referenced_step_keys,
+            resolve_value,
+            step_context_value,
+        )
+
+        folder_sources = {
+            step.step_key: step_context_value(
+                step.output["provider_result"], step.operation,
+                step.output.get("resolved_arguments", step.arguments),
+            )
+            for step in steps
+            if step.status == StepStatus.completed
+            and step.operation == "google-drive.find-folder"
+            and isinstance(step.output, dict)
+            and "provider_result" in step.output
+        }
+        for step in steps:
+            if (not folder_sources or step.status != StepStatus.failed or step.id in attempted_steps
+                    or (step.output or {}).get("provider_result") is not None
+                    or not (referenced_step_keys(step.arguments) & folder_sources.keys())):
+                continue
+            try:
+                resolve_value(step.arguments, {"steps": folder_sources})
+            except DriveFolderIdentityError as exc:
+                return exc.blocker(step.id)
+            except WorkflowContextError:
+                pass
+    if (run.status in {RunStatus.waiting_for_action, RunStatus.failed, RunStatus.blocked}
+            and (not stored or stored.get("action") == "inspect_run")):
         from .google_ads_errors import public_message
 
         ads_failure = next((step for step in steps
