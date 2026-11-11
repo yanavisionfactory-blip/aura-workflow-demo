@@ -181,8 +181,9 @@ async def _extract(data: bytes, directory: Path) -> dict:
     if audios:
         # Preserve source timing, stereo and discontinuities. The model receives
         # real audio, not a transcript used as a proxy for audio quality.
-        for start in range(0, math.ceil(duration), CHUNK_SECONDS):
-            length = min(CHUNK_SECONDS, duration - start)
+        for boundary in range(0, math.ceil(duration), CHUNK_SECONDS):
+            start = max(0, boundary - 1)
+            length = min(boundary + CHUNK_SECONDS + 1, duration) - start
             wav = directory / f"audio-{start}.wav"
             await _command(
                 "ffmpeg", "-nostdin", "-v", "error", "-threads", "2", *inputs,
@@ -239,7 +240,8 @@ async def _analyze(media: dict, instructions: str) -> ReviewDraft:
     )
     async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0) as client:
         async def visual(start):
-            end = min(start + CHUNK_SECONDS, media["duration"])
+            end = min(start + CHUNK_SECONDS + 0.5, media["duration"])
+            start = max(0, start - 0.5)
             frames = [(t, p) for t, p in media["frames"] if start <= t < end]
             if not frames:
                 raise ValueError("A video interval has no visual evidence.")

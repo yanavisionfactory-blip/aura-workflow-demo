@@ -13,8 +13,9 @@ the exact account/file/version identifiers, rendition type, file size and SHA-25
 
 FFmpeg decodes the media locally. Vision receives approximately two frames per
 second plus scene changes and the last frame when declared in the container.
-Actual frame PTS values accompany each image. Audio receives contiguous stereo
-WAV segments covering the first audio stream. The final review combines both
+Actual frame PTS values accompany each image. Audio receives overlapping stereo
+WAV segments covering the first audio stream. Visual and audio intervals overlap
+at boundaries so transitions are not split between isolated calls. The final review combines both
 analyses and states sampling limits. Visual sampling cannot establish every
 single-frame defect or lip sync; audio issue timestamps are approximate and need
 confirmation in an editor. A missing audio track is explicitly reported.
