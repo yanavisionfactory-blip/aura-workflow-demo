@@ -121,6 +121,9 @@ class Settings(BaseSettings):
     clerk_jwks_url: str = ""
     clerk_issuer: str = ""
     clerk_authorized_parties: str = ""
+    # Enable only after configuring Clerk OAuth scopes, resource audience and PKCE.
+    chatgpt_mcp_enabled: bool = False
+    chatgpt_mcp_allowed_client_ids: str = "https://chatgpt.com/oauth/client.json"
     allow_legacy_workspace_tokens: bool = False
     run_rate_limit_per_minute: int = 60
     # Optional managed connector control plane. When configured, AURA delegates
