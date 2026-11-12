@@ -842,9 +842,12 @@ async def _create_compiled_plan(
     input_values: dict | None = None,
 ):
     """Build a schema-valid plan, repairing internal connector mismatches silently."""
+    from .frameio_assistant_contract import require_supported_request
+    from .request_contracts import user_request_text
     from .tool_omissions import omission_bounded_inventory, reconcile_tool_omissions
     from .video_sources import uploaded_video_review_plan, validate_video_source_bindings
 
+    require_supported_request(user_request_text(request_prompt or prompt))
     requested_tool_names, excluded_tool_families = reconcile_tool_omissions(
         request_prompt or prompt, requested_tool_names, excluded_tool_families, inventory,
     )
@@ -4097,7 +4100,6 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             raise RuntimeError("Capability provider is not verified")
                         from .video_review import OPERATIONS as VIDEO_OPERATIONS
                         step_timeout = (
-                            600 if operation == "frameio.assistant.review" else
                             float(get_settings().video_review_timeout_seconds)
                             if operation in VIDEO_OPERATIONS
                             else float(snapshot.policy_snapshot["step_timeout_seconds"])
@@ -4291,9 +4293,6 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                                 timeout_seconds=provider_timeout,
                                 provider_kind=active_tool.kind.value,
                                 capability_manifest=current_manifest,
-                                **({"execution_context": {"workspace_id": workspace_id,
-                                    "tool_id": active_tool.id, "invocation_id": step.id}}
-                                   if operation == "frameio.assistant.review" else {}),
                             )
                             # Connector coercion and schema validation are local
                             # preparation. Complete them before crossing the

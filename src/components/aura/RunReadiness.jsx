@@ -1,4 +1,3 @@
-import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { editedArgumentsForStep } from "@/lib/approvalReview.mjs";
 import { auraRequest } from "@/lib/auraApi";
@@ -30,7 +29,7 @@ export default function RunReadiness({ runId, plan, backendPlan, steps, onReady 
     <p className="mt-1 text-xs text-muted-foreground">AURA checks this plan’s required access before Start and again before execution. New destinations are verified after creation.</p>
     {busy && <p className="mt-2">Checking the selected accounts…</p>}
     {error && <p role="alert" className="mt-2 text-amber-300">{error}</p>}
-    <ul className="mt-2 space-y-2">{report?.checks?.map((check, i) => <li key={i}>{check.status === "passed" ? "✓ " : "! "}{check.message}{check.connect_path?.startsWith("/frameio/assistant?") && <Link className="ml-2 underline" target="_blank" to={check.connect_path}>Connect Frame.io AI Assistant</Link>}{check.connected_account && <span className="block text-xs text-muted-foreground">Account: {check.connected_account}</span>}</li>)}</ul>
+    <ul className="mt-2 space-y-2">{report?.checks?.map((check, i) => <li key={i}>{check.status === "passed" ? "✓ " : "! "}{check.message}{check.connected_account && <span className="block text-xs text-muted-foreground">Account: {check.connected_account}</span>}</li>)}</ul>
     {report && <p className="mt-2 text-xs text-muted-foreground">Last checked {new Date(report.checked_at).toLocaleTimeString()}. Start checks access again before running anything.</p>}
     <button type="button" disabled={busy} className="mt-3 underline disabled:opacity-50" onClick={() => setRevision((v) => v + 1)}>Check again</button>
   </section>;

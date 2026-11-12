@@ -8494,10 +8494,6 @@ async def forget_workflow_memory(
 
 install_assurance_routes(app, tenant_context, tenant_session)
 
-from .frameio_assistant import install_routes as install_frameio_assistant_routes
-
-install_frameio_assistant_routes(app, tenant_context, tenant_session)
-
 
 # Dependency injection keeps scoped support access independent of user sessions.
 app.include_router(support_router(tenant_context, tenant_session))

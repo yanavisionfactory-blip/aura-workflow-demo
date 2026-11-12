@@ -1,13 +1,27 @@
-"""Prevent an explicit native assistant request being silently substituted."""
+"""Keep unsupported native-assistant requests out of executable workflows."""
 import re
+
+from .plan_preflight import PlanPreflightError
+
+OPERATION = "frameio.assistant.review"
+UNAVAILABLE_MESSAGE = (
+    "Frame.io's own AI Assistant is not available through AURA's connected tool. "
+    "The Frame.io connection does not expose that assistant. "
+    "Signing in again will not add this capability."
+)
+
+
+class FrameioAssistantUnavailable(PlanPreflightError):
+    public_message = UNAVAILABLE_MESSAGE
+
+
+def require_supported_request(prompt):
+    explicit = re.search(r"frame[. ]?io(?:['’]s)?\s+(?:(?:own|native|in.product)\s+)?ai\s+assistant|frame[. ]?io.{0,35}(?:own|native)\s+ai", prompt, re.IGNORECASE)
+    if explicit:
+        raise FrameioAssistantUnavailable(UNAVAILABLE_MESSAGE)
 
 
 def validate_native_assistant_plan(prompt, plan):
-    explicit = re.search(r"frame[. ]?io(?:['’]s)?\s+(?:(?:own|native|in.product)\s+)?ai\s+assistant|frame[. ]?io.{0,35}(?:own|native)\s+ai", prompt, re.IGNORECASE)
-    if any(step.operation == "frameio.assistant.review" and step.fallback_operation for step in plan.steps):
-        raise ValueError("Native Frame.io assistant reviews must not fall back to another analysis engine")
-    if not explicit:
-        return
-    operations = {step.operation for step in plan.steps}
-    if "frameio.assistant.review" not in operations or operations & {"frameio.video.review", "intelligence.video.review"}:
-        raise ValueError("The user requested Frame.io's own AI Assistant. Use frameio.assistant.review; do not substitute AURA Intelligence or a composed report.")
+    require_supported_request(prompt)
+    if any(OPERATION in {step.operation, getattr(step, "fallback_operation", None)} for step in plan.steps):
+        raise FrameioAssistantUnavailable(UNAVAILABLE_MESSAGE)

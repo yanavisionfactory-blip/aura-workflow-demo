@@ -1,9 +1,8 @@
 import RunSupport from "@/pages/RunSupport";
-import FrameioAssistantConnect from "@/pages/FrameioAssistantConnect";
 import { useEffect, useState } from "react";
 import { Show, SignIn, SignUp } from "@clerk/react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter as Router, Route, Routes } from "react-router-dom";
+import { BrowserRouter as Router, Navigate, Route, Routes } from "react-router-dom";
 
 import { Toaster } from "@/components/ui/toaster";
 import { AuthProvider, useAuth } from "@/lib/AuthContext";
@@ -94,7 +93,7 @@ function ProductRoutes() {
     <>
       <Routes>
         <Route path="/" element={<Demo />} />
-        <Route path="/frameio/assistant" element={<FrameioAssistantConnect />} />
+        <Route path="/frameio/assistant" element={<Navigate to="/" replace />} />
         <Route path="/results" element={<DeliveryResults />} />
         <Route path="/marketing-tools" element={<MarketingToolsWorkflow />} />
         <Route path="/results/collect" element={<CollectResults />} />
