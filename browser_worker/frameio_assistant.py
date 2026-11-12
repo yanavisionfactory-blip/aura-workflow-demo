@@ -99,15 +99,16 @@ MESSAGES = r"""() => {
 
 def fresh_reply(messages, before, prompt):
     """Only a completed assistant reply following this exact new user message."""
-    submitted = False
+    submitted, candidate = False, None
     for message in messages:
         if message["id"] in before:
             continue
         if message["role"] == "user":
             submitted = message["text"] == prompt
+            candidate = None
         elif submitted and message["role"] == "assistant" and message["complete"]:
-            return message
-    return None
+            candidate = message
+    return candidate
 
 
 def install_routes(app, require_token, public_guard):

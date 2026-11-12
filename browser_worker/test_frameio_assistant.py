@@ -14,6 +14,8 @@ def test_replies_require_exact_new_user_message_and_completed_response():
     user = {"id": "user", "role": "user", "text": "approved prompt"}
     reply = {"id": "reply", "role": "assistant", "complete": True, "text": "new review"}
     assert native.fresh_reply([old, user, reply], {"old"}, "approved prompt") == reply
+    final = {**reply, "id": "final", "text": "final review"}
+    assert native.fresh_reply([old, user, reply, final], {"old"}, "approved prompt") == final
     assert native.fresh_reply([old, reply], {"old"}, "approved prompt") is None
     assert native.fresh_reply([old, user, reply], {"old"}, "different prompt") is None
     assert native.fresh_reply([old, user, {**reply, "complete": False}], {"old"}, "approved prompt") is None
