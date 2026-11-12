@@ -165,6 +165,7 @@ export function recoveryForRun(run = {}) {
       resource_not_found: "AURA could not find the required resource.",
       resource_access_denied: "The connected account cannot access the required resource.",
       external_effect_uncertain: "AURA cannot safely repeat an external action.",
+      video_audio_retry_required: "AURA could not finish the audio analysis.",
       recovery_budget_exhausted: "AURA couldn't complete the remaining step automatically.",
       no_safe_recovery: "AURA couldn't complete the remaining step automatically.",
       claude_backup_failed: "Claude and AURA's backup could not finish the content step.",
@@ -220,7 +221,9 @@ export function recoveryForRun(run = {}) {
       connectedAccount: blocker.connected_account || null,
       what: labels[blocker.code] || "AURA stopped at a required human decision.",
       why: blocker.message || "AURA cannot safely continue this run without this decision.",
-      fix: blocker.code === "claude_backup_failed"
+      fix: blocker.code === "video_audio_retry_required"
+        ? "Retry the saved video review. AURA will analyze the video and audio again using the same approved request."
+        : blocker.code === "claude_backup_failed"
         ? blocker.retryable
           ? "Retry this content step. AURA can use the approved backup if Claude is still unavailable. Later actions keep their existing review requirements."
           : "This content step reached its retry limit. The generation failure needs repair; your plan and completed work are saved."
@@ -240,7 +243,8 @@ export function recoveryForRun(run = {}) {
       canRestartReadPlan: incompleteCustomerRead,
       canRetry: connectionAction || retryAction || savedReadback || finalReviewRetry || contentPreparationRetry || preparationRetry,
       canSkip: false,
-      buttonLabel: blocker.code === "claude_backup_failed" ? "Retry content generation"
+      buttonLabel: blocker.code === "video_audio_retry_required" ? "Retry video review"
+        : blocker.code === "claude_backup_failed" ? "Retry content generation"
         : preparationRetry ? "Retry preparation" : contentPreparationRetry
         ? savedContentResult ? "Recheck saved content" : "Retry content step"
         : savedReadback

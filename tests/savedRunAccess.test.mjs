@@ -116,6 +116,7 @@ test("Run again from a saved result restores its video and only prefills a fresh
     await waitForText(container, /Loaded saved/);
     assert.equal(ui.getAttachedDocuments()[0].name, "unrelated.txt"); // Viewing results is read-only.
     await act(async () => [...container.querySelectorAll("button")].find((b) => b.textContent === "Run again").click());
+    await waitForText(container, /Fresh input/);
     assert.deepEqual(ui.getAttachedDocuments(), [video]);
     assert.deepEqual(destination.state, { newWorkflow: true, workflowPrompt: prompt });
     assert.equal(reads, 1);

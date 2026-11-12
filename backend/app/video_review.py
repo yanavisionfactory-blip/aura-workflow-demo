@@ -10,6 +10,7 @@ import binascii
 import hashlib
 import ipaddress
 import json
+import logging
 import math
 import re
 import shutil
@@ -31,6 +32,51 @@ MAX_BYTES = 50 * 1024 * 1024
 MAX_DURATION = 120
 MAX_FRAMES = 500
 CHUNK_SECONDS = 20
+logger = logging.getLogger(__name__)
+AUDIO_EMPTY_MESSAGE = "AURA returned no audio analysis."
+
+
+def is_empty_audio_error(error: str | None) -> bool:
+    return (error or "").removeprefix("[contract_or_runtime_error] ") == AUDIO_EMPTY_MESSAGE
+
+
+def _audio_analysis_text(response) -> str | None:
+    """Accept complete text or the transcript of the model's spoken analysis."""
+    if not response.choices:
+        return None
+    choice = response.choices[0]
+    message = choice.message
+    finish = getattr(choice, "finish_reason", None)
+    if getattr(message, "refusal", None) or finish == "content_filter":
+        raise ValueError("The audio model declined this analysis.")
+    if finish not in (None, "stop"):
+        raise ValueError("The audio model returned an incomplete analysis.")
+    for text in (message.content, getattr(getattr(message, "audio", None), "transcript", None)):
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+    return None
+
+
+async def _listen(client, messages, model: str) -> str:
+    # Retry an empty successful response once, using the documented audio/text
+    # output shape. Refusals, truncated answers and HTTP errors never reach this
+    # fallback. Every attempt consumes the existing run's call/time budget.
+    for attempt in range(2):
+        output = ({"modalities": ["text"]} if attempt == 0 else
+                  {"modalities": ["text", "audio"], "audio": {"voice": "alloy", "format": "wav"}})
+        response = await bounded_model_call(lambda output=output: client.chat.completions.create(
+            model=model, store=False, messages=messages, max_completion_tokens=6000, **output,
+        ), 65)
+        text = _audio_analysis_text(response)
+        if text:
+            return text
+        # Deliberately exclude response bodies, media, transcripts and credentials.
+        logger.warning("Empty video audio analysis model=%s attempt=%d choices=%d finish=%s",
+                       model, attempt + 1, len(response.choices),
+                       getattr(response.choices[0], "finish_reason", None) if response.choices else None)
+    raise ValueError(AUDIO_EMPTY_MESSAGE)
+
+
 FRAMEIO_UUID_PATTERN = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 FRAMEIO_TARGET_MESSAGE = (
     "Select the exact video version in Frame.io before reviewing it. "
@@ -307,9 +353,8 @@ async def _analyze(media: dict, instructions: str) -> ReviewDraft:
 
         async def audio(start, length, path):
             async with gate:
-                response = await bounded_model_call(lambda: client.chat.completions.create(
-                    model=settings.video_audio_model, modalities=["text"], store=False,
-                    messages=[{"role": "system", "content": common}, {"role": "user", "content": [
+                text = await _listen(client,
+                    [{"role": "system", "content": common}, {"role": "user", "content": [
                         {"type": "text", "text":
                          f"Listen to this entire {length:.3f}-second audio segment. Its video offset is "
                          f"{start} seconds. {instructions} Identify audible glitches, clipping, abrupt "
@@ -319,11 +364,7 @@ async def _analyze(media: dict, instructions: str) -> ReviewDraft:
                          "If no audio defect is audible, say so. Include uncertainty."},
                         {"type": "input_audio", "input_audio": {"format": "wav", "data":
                          base64.b64encode(path.read_bytes()).decode()}},
-                    ]}], max_completion_tokens=3500,
-                ), 65)
-            text = response.choices[0].message.content if response.choices else None
-            if not text or not text.strip():
-                raise ValueError("AURA returned no audio analysis.")
+                    ]}], settings.video_audio_model)
             return {"kind": "audio", "start_seconds": start, "end_seconds": start + length,
                     "local_timing_notes": text}
 
