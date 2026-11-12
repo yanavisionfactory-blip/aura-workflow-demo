@@ -22,6 +22,7 @@ import { connectTool } from "@/lib/connectService";
 import { catalogEntryFor } from "@/lib/toolCatalog";
 import { reconcileToolOmissions } from "@/lib/toolOmissions.mjs";
 import { attachedDocumentsFromRun } from "@/lib/runAttachments.mjs";
+import { replaceAttachedDocuments } from "@/lib/documentStore";
 import { announceWorkflowHistoryChanged } from "@/lib/workflowHistory.mjs";
 import {
   approvePythonPlan,
@@ -1989,7 +1990,13 @@ Generate a results summary in plain, human-friendly language (not technical).
                     : handleRetry}
                   onCheck={recoveryRun && !activeRecovery.canRetry ? () => handleRunRecovery("check") : undefined}
                   onAlternative={recoveryRun ? () => {
-                    if (activeRecovery.canRestartReadPlan) {
+                    if (activeRecovery.needsVideoSource) {
+                      const previousRequest = recoveryRun.prompt;
+                      const documents = attachedDocumentsFromRun(recoveryRun);
+                      reset();
+                      replaceAttachedDocuments(documents);
+                      setInputPrompt(previousRequest);
+                    } else if (activeRecovery.canRestartReadPlan) {
                       const previousRequest = recoveryRun.prompt;
                       reset();
                       window.setTimeout(() => handleSubmit(previousRequest), 0);

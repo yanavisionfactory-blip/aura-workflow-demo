@@ -5,10 +5,12 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import ValidationError
 
-from app import main, run_readiness, video_review
+from app import main, orchestrator, run_readiness, video_review
 from app.models import (
     CapabilityManifest,
     RunStatus,
+    RunStep,
+    StepAttempt,
     StepStatus,
     ToolConnection,
     ToolKind,
@@ -114,3 +116,51 @@ def test_video_diagnosis_preserves_other_protections(case):
     if case == "completed": run.status = RunStatus.completed
     blocker = main._run_blocker(run, [step], {}, [], {step.id})
     assert blocker is None or blocker["code"] != "resource_selection_required"
+
+
+@pytest.mark.parametrize("case", ["legacy", "newer_auth", "newer_timeout", "different_operation",
+                                  "other_workspace", "write", "receipt", "completed"])
+async def test_saved_run_diagnoses_latest_attempt_after_display_error_was_sanitized(database, monkeypatch, case):
+    raw_error = "[invalid_request] Select the exact Frame.io file UUID."
+    display_error = orchestrator._friendly_execution_error(raw_error)
+    assert "Frame.io" not in display_error  # Reproduce the actual persistence path.
+    execute = AsyncMock(side_effect=AssertionError("Reading history must not execute providers"))
+    monkeypatch.setattr(main.ProviderExecutor, "execute", execute)
+    async with database() as session:
+        session.add(Workspace(id="w", name="Video workspace"))
+        session.add(Workspace(id="other", name="Other workspace"))
+        run = WorkflowRun(id="video-run", workspace_id="w", prompt="Review this video with timestamps",
+            plan_approved=True, status=RunStatus.waiting_for_action,
+            inputs={"attached_documents": [{"name": "clip.mp4", "file_url": "data:video/mp4;base64,YWI=", "size": 2}]},
+            execution_context={"__aura_autonomy__": {"handoff_reason_code": "no_safe_recovery"},
+                               "__aura_supervisor__": {"status": "operator_attention", "phase": "execution"}})
+        step = RunStep(id="video-step", run_id=run.id, position=0, step_key="review", agent="Frame.io",
+            tool_slug="frameio", operation="frameio.video.review", arguments={},
+            status=StepStatus.failed, consequential=False, error=display_error, output={},
+            idempotency_key="video-attempt")
+        attempt = StepAttempt(id="old-attempt", workspace_id="w", run_id=run.id, step_id=step.id,
+            attempt_number=1, status="failed", tool_slug="frameio", operation="frameio.video.review",
+            provider_dispatched=True, error=raw_error)
+        session.add_all([run, step, attempt])
+        if case in {"newer_auth", "newer_timeout"}:
+            session.add(StepAttempt(workspace_id="w", run_id=run.id, step_id=step.id, attempt_number=2,
+                status="failed", tool_slug="frameio", operation="frameio.video.review", provider_dispatched=True,
+                error="[authorization_required] PRIVATE_DETAIL" if case == "newer_auth" else "[transient] Provider timed out"))
+        if case == "different_operation": attempt.operation = "frameio.file.get"
+        if case == "other_workspace": attempt.workspace_id = "other"
+        if case == "write": step.consequential = True
+        if case == "receipt": step.output = {"provider_result": {"body": "Saved review"}}
+        if case == "completed": run.status = RunStatus.completed
+        await session.commit()
+        original = deepcopy((run.execution_context, step.output, step.error, step.status, attempt.error))
+        view = await main.get_run(run.id, main.TenantContext("w", "member", "member"), session)
+        assert (view["steps"][0]["recovery"].get("reason_code") == "frameio_target_invalid") is (case == "legacy")
+        assert ((view["blocker"] or {}).get("code") == "resource_selection_required") is (case == "legacy")
+        if case == "legacy":
+            assert view["blocker"]["action"] == "choose_resource"
+            assert not view["blocker"]["retryable"]
+            assert view["inputs"] == run.inputs
+        assert "PRIVATE_DETAIL" not in str(view)
+        assert raw_error not in str(view)
+        assert (run.execution_context, step.output, step.error, step.status, attempt.error) == original
+        execute.assert_not_awaited()

@@ -5950,6 +5950,7 @@ def _run_blocker(
     approvals_by_step,
     requirements,
     attempted_steps: set[str] | frozenset[str] = frozenset(),
+    video_target_failures: set[str] | frozenset[str] = frozenset(),
 ) -> dict | None:
     # Recovery metadata is historical after a terminal transition. It cannot
     # create a new blocker for a verified completion or a cancelled run.
@@ -5963,16 +5964,12 @@ def _run_blocker(
         # Legacy video reads marked dispatch before local UUID validation. That
         # flag is not evidence of a write. Correct only this known local failure;
         # preserve receipts, authorization blockers and all write protections.
-        from .video_review import FRAMEIO_TARGET_MESSAGE
+        from .video_review import FRAMEIO_TARGET_MESSAGE, is_frameio_target_error
         invalid_video = next((step for step in steps
             if step.status == StepStatus.failed and step.tool_slug == "frameio"
             and step.operation == "frameio.video.review" and not step.consequential
             and not (step.output or {}).get("provider_result")
-            and any(message in (step.error or "") for message in (
-                "Select the exact Frame.io file UUID.", "Select the exact Frame.io account UUID.",
-                "frameio.video.review.file_id has an invalid format",
-                "frameio.video.review.account_id has an invalid format",
-            ))), None)
+            and (step.id in video_target_failures or is_frameio_target_error(step.error))), None)
         if invalid_video:
             return {"code": "resource_selection_required", "kind": "human_action",
                     "message": FRAMEIO_TARGET_MESSAGE, "action": "choose_resource",
@@ -6324,6 +6321,28 @@ async def _run_view(session: AsyncSession, run: WorkflowRun) -> dict:
             )
         ).all()
     )
+    # Step.error is deliberately sanitized for display. Diagnose legacy local
+    # validation from the latest durable attempt, exposing only a fixed code.
+    # Older attempts must not hide a newer authorization or provider failure.
+    from .video_review import is_frameio_target_error
+
+    video_target_failures: set[str] = set()
+    failed_video_ids = [step.id for step in steps
+                        if step.status == StepStatus.failed and not step.consequential
+                        and step.tool_slug == "frameio" and step.operation == "frameio.video.review"
+                        and not (step.output or {}).get("provider_result")]
+    if failed_video_ids and run.status in {RunStatus.waiting_for_action, RunStatus.failed, RunStatus.blocked}:
+        video_attempts = (await session.scalars(select(StepAttempt).where(
+            StepAttempt.run_id == run.id, StepAttempt.workspace_id == run.workspace_id,
+            StepAttempt.step_id.in_(failed_video_ids),
+        ).order_by(StepAttempt.attempt_number.desc()))).all()
+        latest_video_attempts = {}
+        for attempt in video_attempts:
+            latest_video_attempts.setdefault(attempt.step_id, attempt)
+        video_target_failures = {step_id for step_id, attempt in latest_video_attempts.items()
+                                 if attempt.status == "failed" and attempt.tool_slug == "frameio"
+                                 and attempt.operation == "frameio.video.review"
+                                 and is_frameio_target_error(attempt.error)}
     # Start authorizes this pinned text-generation request. Its provider response
     # is the useful review, so let interactive clients complete only this input
     # approval and then stop at the existing durable output checkpoint. Never
@@ -6362,7 +6381,7 @@ async def _run_view(session: AsyncSession, run: WorkflowRun) -> dict:
                                 "tool_slug": step.tool_slug, "operation": step.operation,
                             }, preview.get("arguments") or {})):
                         preparation_ids.add(step.id)
-    blocker = _run_blocker(run, steps, approvals_by_step, requirements, attempted_steps)
+    blocker = _run_blocker(run, steps, approvals_by_step, requirements, attempted_steps, video_target_failures)
     from .run_supervisor import public_run_projection
 
     public = public_run_projection(run, blocker)
@@ -6420,7 +6439,8 @@ async def _run_view(session: AsyncSession, run: WorkflowRun) -> dict:
                 "status": s.status.value,
                 "consequential": s.consequential,
                 "preparation_only": s.id in preparation_ids,
-                "recovery": _step_recovery_state(run, s, attempted_steps),
+                "recovery": {**_step_recovery_state(run, s, attempted_steps),
+                             **({"reason_code": "frameio_target_invalid"} if s.id in video_target_failures else {})},
                 "approval_id": s.approval_id,
                 "approval_status": approvals_by_step[s.id].status
                 if s.id in approvals_by_step
