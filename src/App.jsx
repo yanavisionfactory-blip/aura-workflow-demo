@@ -1,4 +1,5 @@
 import RunSupport from "@/pages/RunSupport";
+import FrameioAssistantConnect from "@/pages/FrameioAssistantConnect";
 import { useEffect, useState } from "react";
 import { Show, SignIn, SignUp } from "@clerk/react";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -93,6 +94,7 @@ function ProductRoutes() {
     <>
       <Routes>
         <Route path="/" element={<Demo />} />
+        <Route path="/frameio/assistant" element={<FrameioAssistantConnect />} />
         <Route path="/results" element={<DeliveryResults />} />
         <Route path="/marketing-tools" element={<MarketingToolsWorkflow />} />
         <Route path="/results/collect" element={<CollectResults />} />

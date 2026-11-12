@@ -1,6 +1,10 @@
 // Copy for the existing title/description fields. The video operation performs
 // the complete review; its activities are not extra executable steps.
 export function videoReviewPlanContent(step = {}) {
+  if (step.operation === "frameio.assistant.review") return {
+    title: "Review the video with Frame.io AI Assistant",
+    iWill: "send your review instructions and selected video to Frame.io’s own AI Assistant through AURA, then return its actual response with timestamps and production corrections. Preserve the assistant’s stated audio and coverage limitations. Connect its sign-in session before starting",
+  };
   if (!["frameio.video.review", "intelligence.video.review"].includes(step.operation)) return null;
   const source = step.operation === "frameio.video.review" ? "selected Frame.io video version" : "uploaded video";
   return {

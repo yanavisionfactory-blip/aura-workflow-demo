@@ -34,6 +34,18 @@ META_COLLECTION = {"type": "object", "required": ["data", "complete", "source_pr
                    "source_provider": {"const": "meta-ads"}, "vendor_api_called": {"const": True},
                    "connection_route": {"const": "direct"}, "retrieved_at": TEXT}}
 KNOWN = {
+    "frameio.assistant.review": ({"type": "object", "required": [
+        "body", "title", "summary", "status", "synthetic", "analysis_provider", "execution_mode", "source", "receipt", "limitations"],
+        "properties": {"body": {"type": "string", "minLength": 100}, "title": TEXT, "summary": TEXT,
+            "status": {"const": "draft"}, "synthetic": {"const": False},
+            "analysis_provider": {"const": "frameio_ai_assistant"}, "execution_mode": {"const": "authenticated_browser"},
+            "source": {"type": "object", "required": ["provider", "account_id", "file_id", "url"],
+                "properties": {"provider": {"const": "frameio"}, "account_id": TEXT, "file_id": TEXT, "url": TEXT}},
+            "receipt": {"type": "object", "required": ["invocation_id", "message_id", "request_sha256", "native_video_analysis_completed"],
+                "properties": {"invocation_id": TEXT, "message_id": TEXT,
+                    "request_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+                    "native_video_analysis_completed": {"const": True}}},
+            "limitations": {"type": "array", "minItems": 1, "items": TEXT}}}, ["native_assistant_response", "report_body"]),
     **{operation: ({"type": "object", "required": [
         "title", "summary", "body", "status", "synthetic", "analysis_provider", "media_analyzed",
         "coverage", "findings", "limitations", "source", "models", "generated_at",
@@ -634,7 +646,7 @@ def enrich_operation(module: dict) -> dict:
             "uncertain_write": "reconcile_before_retry"},
         "pagination": "bounded_recursive" if operation == "notion.blocks.children.list" else "provider_cursor" if any(word in operation for word in ("list", "search")) or (value.get("transport") or {}).get("type") == "nango_records" else "not_applicable",
         "reconciliation": "read_known_resource" if operation in {"notion.page.update", "jira.issue.update"} else "receipt_readback_or_pause" if readback_operation else "pause_if_uncertain",
-        "concurrent_read": read and typed,
+        "concurrent_read": read and typed and operation != "frameio.assistant.review",
         "execution_ready": False, "certification": "live_conformance_required"}
     contract["hash"] = hashlib.sha256(json.dumps({"input": value.get("input_schema"),
         "output": schema, "contract": contract}, sort_keys=True).encode()).hexdigest()

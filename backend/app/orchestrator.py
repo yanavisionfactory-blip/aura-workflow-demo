@@ -4097,6 +4097,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             raise RuntimeError("Capability provider is not verified")
                         from .video_review import OPERATIONS as VIDEO_OPERATIONS
                         step_timeout = (
+                            600 if operation == "frameio.assistant.review" else
                             float(get_settings().video_review_timeout_seconds)
                             if operation in VIDEO_OPERATIONS
                             else float(snapshot.policy_snapshot["step_timeout_seconds"])
@@ -4290,6 +4291,9 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                                 timeout_seconds=provider_timeout,
                                 provider_kind=active_tool.kind.value,
                                 capability_manifest=current_manifest,
+                                **({"execution_context": {"workspace_id": workspace_id,
+                                    "tool_id": active_tool.id, "invocation_id": step.id}}
+                                   if operation == "frameio.assistant.review" else {}),
                             )
                             # Connector coercion and schema validation are local
                             # preparation. Complete them before crossing the

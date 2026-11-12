@@ -524,7 +524,7 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
   // A file read prepares video analysis; it must not replace the completed
   // production report with the comments workspace when no primary is selected.
   const videoReview = [...completed].reverse().find((output) =>
-    ["intelligence.video.review", "frameio.video.review"].includes(output.operation)
+    ["intelligence.video.review", "frameio.video.review", "frameio.assistant.review"].includes(output.operation)
     && output.critic?.action === "accept" && output.outcome_check?.status === "verified"
     && output.provider_result?.status === "draft"
     && typeof output.provider_result?.body === "string" && output.provider_result.body.trim());
@@ -585,7 +585,7 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
       link: null, downloadUrl: null,
     };
   }
-  const report = [...completed].reverse().find((output) => ["report.compose", "intelligence.video.review", "frameio.video.review"].includes(output.operation)
+  const report = [...completed].reverse().find((output) => ["report.compose", "intelligence.video.review", "frameio.video.review", "frameio.assistant.review"].includes(output.operation)
     && output.critic?.action === "accept" && output.outcome_check?.status === "verified"
     && output.provider_result?.status === "draft"
     && typeof output.provider_result?.body === "string" && output.provider_result.body.trim());
@@ -601,7 +601,8 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
     };
     return {
       title: saved.title || context.title, kind: "report",
-      provider: saved.analysis_provider === "aura_intelligence"
+      provider: saved.analysis_provider === "frameio_ai_assistant" ? "Frame.io AI Assistant"
+        : saved.analysis_provider === "aura_intelligence"
         ? operationProviderName("AURA Intelligence", report.operation) : "ChatGPT",
       providerVerb: "Generated with",
       completionTitle: "Review draft ready",

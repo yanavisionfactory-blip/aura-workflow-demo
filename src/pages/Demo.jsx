@@ -74,7 +74,7 @@ const PLANNING_POLL_INTERVAL_MS = 400;
 const PLANNING_TRANSIENT_FAILURE_LIMIT = 3;
 
 const planToolName = (step) => {
-  if (step.operation === "frameio.video.review") return operationProviderName(step.tool_slug, step.operation);
+  if (["frameio.video.review", "frameio.assistant.review"].includes(step.operation)) return operationProviderName(step.tool_slug, step.operation);
   if (step.operation === "report.compose") return "ChatGPT";
   if (step.tool_slug === "google") {
     if (step.operation.startsWith("gmail.")) return "Gmail";

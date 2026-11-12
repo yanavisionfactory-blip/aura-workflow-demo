@@ -626,12 +626,14 @@ class ProviderExecutor:
         timeout_seconds: float = 45,
         provider_kind: str | None = None,
         capability_manifest: dict | None = None,
+        execution_context: dict | None = None,
     ):
         self.credentials = credentials
         self.base_url = base_url
         self.timeout_seconds = timeout_seconds
         self.provider_kind = provider_kind
         self.capability_manifest = capability_manifest or {}
+        self.execution_context = execution_context or {}
 
     def _headers(self) -> dict[str, str]:
         token = self.credentials.get("access_token") or self.credentials.get("api_key")
@@ -667,10 +669,13 @@ class ProviderExecutor:
                 raise ValueError("Meta reporting requires its own verified direct connection")
             return await meta_ads.execute(self.credentials, operation, arguments, self.timeout_seconds)
         from . import frameio
-        if operation in frameio.OPERATIONS:
+        if operation in frameio.OPERATIONS or operation == "frameio.assistant.review":
             capability_for(self.capability_manifest, operation)
             if self.capability_manifest.get("identity", {}).get("provider") != "frameio":
                 raise ValueError("Frame.io requires its own verified connection")
+            if operation == "frameio.assistant.review":
+                from .frameio_assistant import execute
+                return await execute(self.credentials, arguments, self.execution_context)
             return await frameio.execute(self.credentials, operation, arguments, self.timeout_seconds)
         from . import shopify_client_credentials as shopify
         if operation in {shopify.IDENTITY_OPERATION, shopify.PAGES_OPERATION}:

@@ -10,6 +10,7 @@ on:
     branches: [main]
     paths:
       - "backend/**"
+      - "browser_worker/**"
       - "scripts/deploy_backend_release.py"
       - "scripts/tests/test_backend_release.py"
       - "integrations/wordpress/**"
@@ -101,3 +102,15 @@ jobs:
         env:
           VITE_AURA_API_URL: https://api.example.invalid
           VITE_CLERK_PUBLISHABLE_KEY: pk_test_ci_placeholder
+
+  browser-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install browser worker test dependencies
+        run: pip install -r browser_worker/requirements.txt pytest pytest-asyncio httpx
+      - name: Verify browser worker isolation and assistant response matching
+        run: python -m pytest browser_worker -q
