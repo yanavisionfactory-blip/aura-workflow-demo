@@ -128,9 +128,12 @@ def validate_video_source_bindings(plan, inputs: dict | None) -> None:
     uploads = [(index, doc) for index, doc in enumerate(documents)
                if isinstance(doc, dict) and video_upload(doc)]
     for step in plan.steps:
+        fallback_operation = getattr(step, "fallback_operation", None)
+        if not {step.operation, fallback_operation} & {"intelligence.video.review", "frameio.video.review"}:
+            continue
         variants = [
             (step.operation, step.arguments),
-            (step.fallback_operation, step.arguments),
+            (fallback_operation, step.arguments),
         ]
         if step.reduced_scope_arguments:
             variants.append((step.operation, step.reduced_scope_arguments))
