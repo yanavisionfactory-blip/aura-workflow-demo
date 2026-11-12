@@ -52,7 +52,7 @@ import {
   unavailablePlanningState,
 } from "@/lib/planningFlow.mjs";
 import { campaignRepeatPrompt, hasDurablePlan, planningRequestPrompt, savedRunResumeView, planningRevisionOutcome, shouldRestoreRememberedRun, workflowInputPrompt } from "@/lib/runtimePlan.mjs";
-import { operationStepTitle, weatherStepTitle } from "@/lib/planPresentation.mjs";
+import { operationStepTitle, videoReviewPlanContent, weatherStepTitle } from "@/lib/planPresentation.mjs";
 import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
 import { savedRunResults } from "@/lib/savedRunResults.mjs";
 import { normalizeResultSuggestions, resultSuggestionsPrompt, RESULT_SUGGESTIONS_SCHEMA } from "@/lib/resultSuggestions.mjs";
@@ -200,7 +200,7 @@ const uiPlanStepFromRun = (step) => {
     arguments: step.arguments || {},
     resolvedArguments: step.arguments || {},
     title: friendlyStepTitle(step),
-    iWill: firstPersonStepCopy(step.reason),
+    iWill: videoReviewPlanContent(step)?.iWill || firstPersonStepCopy(step.reason),
     action: step.operation === "jira.issues.create_from_blocks"
       ? "Create the Jira tasks" : cleanSentence(step.reason),
     detail: JSON.stringify(step.arguments, null, 2),
