@@ -1,6 +1,22 @@
+// Copy for the existing title/description fields. The video operation performs
+// the complete review; its activities are not extra executable steps.
+export function videoReviewPlanContent(step = {}) {
+  if (!["frameio.video.review", "intelligence.video.review"].includes(step.operation)) return null;
+  const source = step.operation === "frameio.video.review" ? "selected Frame.io video version" : "uploaded video";
+  return {
+    title: "Review the video and prepare production feedback",
+    iWill: `review the ${source} across its full timeline using sampled frames and audio, following your instructions. Identify errors, inconsistencies, poor transitions, unclear messaging, incorrect graphics, spelling mistakes, audio problems, and visual distractions. Return feedback in chronological order with timestamps, observed issues, and recommended production fixes. Visual timestamps come from sampled frames; brief defects may be missed and audio times are approximate`,
+  };
+}
+
 // Labels follow the actual operation, never incidental words in its reason.
 export function operationStepTitle(step = {}, tool = "the app") {
   const operation = String(step.operation || "");
+  const video = videoReviewPlanContent(step);
+  if (video) return video.title;
+  if (operation === "frameio.identity.get") return "Check the connected Frame.io account";
+  if (operation === "frameio.accounts.list") return "Find the accessible Frame.io accounts";
+  if (operation === "frameio.file.get") return "Read the selected Frame.io video version";
   if (operation === "report.compose") return "Generate report with ChatGPT";
   if (operation === "meta-ads-simulated.review.get") return "Run the Meta Ads simulation";
   if (operation === "klaviyo-simulated.lifecycle.get") return "Run the Klaviyo simulation";
