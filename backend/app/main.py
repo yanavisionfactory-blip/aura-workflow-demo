@@ -5958,6 +5958,25 @@ def _run_blocker(
     stored = (run.execution_context or {}).get("__aura_blocker__") or (run.result or {}).get(
         "blocker"
     )
+    if (run.status in {RunStatus.waiting_for_action, RunStatus.failed, RunStatus.blocked}
+            and (not stored or stored.get("action") == "inspect_run")):
+        # Legacy video reads marked dispatch before local UUID validation. That
+        # flag is not evidence of a write. Correct only this known local failure;
+        # preserve receipts, authorization blockers and all write protections.
+        from .video_review import FRAMEIO_TARGET_MESSAGE
+        invalid_video = next((step for step in steps
+            if step.status == StepStatus.failed and step.tool_slug == "frameio"
+            and step.operation == "frameio.video.review" and not step.consequential
+            and not (step.output or {}).get("provider_result")
+            and any(message in (step.error or "") for message in (
+                "Select the exact Frame.io file UUID.", "Select the exact Frame.io account UUID.",
+                "frameio.video.review.file_id has an invalid format",
+                "frameio.video.review.account_id has an invalid format",
+            ))), None)
+        if invalid_video:
+            return {"code": "resource_selection_required", "kind": "human_action",
+                    "message": FRAMEIO_TARGET_MESSAGE, "action": "choose_resource",
+                    "retryable": False, "tool_slug": "frameio", "step_id": invalid_video.id}
     if (run.status in {RunStatus.waiting_for_action, RunStatus.failed}
             and (not stored or stored.get("action") == "inspect_run")):
         from .presentation_sources import (

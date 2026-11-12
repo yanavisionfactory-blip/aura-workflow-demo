@@ -29,6 +29,8 @@ async def check_run_readiness(session, run, plan):
     for step in plan.steps:
         for slug, op in [(step.tool_slug, step.operation), *([(step.fallback_tool_slug, step.fallback_operation)] if step.fallback_tool_slug and step.fallback_operation else [])]:
             required.setdefault(slug, set()).update({op, *required_reads(op, step.arguments)})
+            if op == "frameio.video.review":
+                required[slug].add("frameio.file.get")
     tools = (await session.scalars(select(ToolConnection).where(
         ToolConnection.workspace_id == run.workspace_id, ToolConnection.slug.in_(required),
     ))).all()
@@ -79,7 +81,20 @@ async def check_run_readiness(session, run, plan):
             continue
         args = step.arguments or {}
         probe = None
-        if step.operation == "drive.spreadsheet.resolve":
+        if step.operation == "frameio.video.review":
+            from .video_review import FRAMEIO_TARGET_MESSAGE, frameio_review_target
+            try:
+                target = frameio_review_target(args, {
+                    **(run.execution_context or {}), "inputs": run.inputs or {},
+                })
+            except ValueError:
+                checks.append({"type": "source", "tool_slug": step.tool_slug,
+                    "operation": step.operation, "status": "blocked",
+                    "code": "resource_selection_required", "message": FRAMEIO_TARGET_MESSAGE})
+                continue
+            if target is not None:
+                probe = ("frameio.file.get", target)
+        elif step.operation == "drive.spreadsheet.resolve":
             probe = (step.operation, args)
         elif step.operation == "sheets.append":
             probe = ("sheets.read", {"spreadsheet_id": args.get("spreadsheet_id"), "range": args.get("range", "Sheet1!A1")})
@@ -98,7 +113,10 @@ async def check_run_readiness(session, run, plan):
             else:
                 row.update(status="passed", message="The existing destination is accessible.")
         except Exception:  # noqa: BLE001 — sanitize remote failure before returning diagnostics
-            row.update(code="destination_unavailable", message="The selected destination could not be read with this account.")
+            row.update(code="destination_unavailable", message=(
+                "The selected Frame.io video version could not be read with this account. Select an accessible video version."
+                if step.operation == "frameio.video.review" else
+                "The selected destination could not be read with this account."))
     report = {"version": 1, "plan_hash": canonical_plan_hash(plan.model_dump(mode="json")),
               "checked_at": now.isoformat(), "expires_at": (now + timedelta(seconds=max(1, get_settings().connection_probe_ttl_seconds))).isoformat(),
               "passed": bool(checks) and all(row["status"] == "passed" for row in checks),
