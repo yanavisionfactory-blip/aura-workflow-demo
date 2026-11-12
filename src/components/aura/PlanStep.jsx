@@ -2,7 +2,6 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Check, Pencil, X, GripVertical, Shield, Move, Loader2 } from "lucide-react";
 import { base44 } from "@/api/base44Client";
-import { videoReviewPlanContent } from "@/lib/planPresentation.mjs";
 
 const STEP_SCHEMA = {
   type: "object",
@@ -52,8 +51,7 @@ export default function PlanStep({ step, index, isLast, provided, onChange, onDe
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
-  const videoReview = videoReviewPlanContent(step);
-  const title = videoReview?.title || step.title || step.action;
+  const title = step.title || step.action;
   const iWill = step.iWill || (step.action ? step.action[0].toLowerCase() + step.action.slice(1) : "");
   const flow = (step.flow || []).map((f) => ({ ...f, label: normLabel(f.label), value: String(f.value || "").replace(/\bdocument_?id\b/gi, "document reference").replace(/\bURL\b/g, "link").replace(/\breadback\b/gi, "verification") }))
     .filter((field) => step.riskLevel === "modify" || field.label === "Uses");
@@ -145,15 +143,7 @@ Return the REVISED step with all fields updated to reflect the change. Keep the 
             </div>
 
             {/* I'll ... */}
-            {videoReview ? <div className="text-sm text-muted-foreground leading-relaxed mb-3">
-              <ol aria-label="Video review activities" className="space-y-3">
-                {videoReview.phases.map((phase, i) => <li key={phase.title}>
-                  <p className="font-medium text-foreground">{i + 1}. {phase.title}</p>
-                  <p>{phase.description}</p>
-                </li>)}
-              </ol>
-              <p className="mt-3 text-xs">{videoReview.timingNote}</p>
-            </div> : <p className="text-sm text-muted-foreground leading-relaxed mb-3">I'll {iWill}.</p>}
+            <p className="text-sm text-muted-foreground leading-relaxed mb-3">I'll {iWill}.</p>
 
             {/* Flow — Uses (editable) / Creates */}
             {flow.length > 0 && (
