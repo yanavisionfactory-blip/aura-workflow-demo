@@ -53,6 +53,33 @@ test("a legacy local target failure offers the exact saved upload in a new plan"
   assert.equal(JSON.stringify(run), before);
 });
 
+test("saved execution evidence enables upload recovery when the displayed error is generic", () => {
+  const run = failedVideo();
+  run.steps[1].error = "AURA couldn't complete this step safely after automatic recovery. Try again or adjust the workflow.";
+  assert.equal(uploadedVideoRecovery(run), null);
+  run.steps[1].recovery = { phase: "after_dispatch", reason_code: "frameio_target_invalid" };
+  assert.equal(recoveryForRun(run).alternativeLabel, "Review uploaded video");
+  assert.equal(alternativeRecoveryPrompt(run), run.prompt);
+  assert.deepEqual(attachedDocumentsFromRun(run), [video]);
+  run.blocker.action = "reconnect_account";
+  assert.equal(uploadedVideoRecovery(run), null);
+});
+
+test("a diagnosed invalid target without a single upload asks for a source instead of another failed plan", () => {
+  for (const documents of [[], [video, { ...video, name: "other.mp4" }]]) {
+    const run = failedVideo();
+    run.inputs.attached_documents = documents;
+    run.steps[1].error = "The execution error was sanitized.";
+    run.steps[1].recovery = { reason_code: "frameio_target_invalid" };
+    const recovery = recoveryForRun(run);
+    assert.equal(recovery.needsVideoSource, true);
+    assert.equal(recovery.alternativeLabel, "Select video for review");
+    assert.equal(recovery.canRetry, false);
+    assert.equal(recovery.canSkip, false);
+    assert.match(recovery.fix, /original instructions/);
+  }
+});
+
 test("upload recovery never guesses missing sources or replays existing effects", () => {
   const changes = [
     (r) => { r.inputs = {}; },

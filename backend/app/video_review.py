@@ -37,6 +37,17 @@ FRAMEIO_TARGET_MESSAGE = (
     "An uploaded MP4, filename, or share link is not a Frame.io file ID. "
     "The video review has not started; completed steps are preserved."
 )
+FRAMEIO_TARGET_ERRORS = (
+    "Select the exact Frame.io file UUID.", "Select the exact Frame.io account UUID.",
+    "frameio.video.review.file_id has an invalid format",
+    "frameio.video.review.account_id has an invalid format",
+)
+
+
+def is_frameio_target_error(error: str | None) -> bool:
+    return any(message in (error or "") for message in FRAMEIO_TARGET_ERRORS)
+
+
 DEFAULT_INSTRUCTIONS = (
     "Review this video from beginning to end. Identify errors, inconsistencies, poor "
     "transitions, unclear messaging, incorrect graphics, spelling mistakes, audio "

@@ -1,4 +1,4 @@
-import { uploadedVideoRecovery } from "./runAttachments.mjs";
+import { frameioTargetRecovery, uploadedVideoRecovery } from "./runAttachments.mjs";
 
 // Presentation only. The resume endpoint remains the authority for recovery.
 export const needsRecovery = (status) => ["waiting_for_action", "blocked", "failed"].includes(status);
@@ -111,6 +111,15 @@ export function recoveryForRun(run = {}) {
     fix: `Prepare a new review using the saved upload, ${upload.document.name}. Review the new plan before starting.`,
     subtitle: "Your uploaded video and completed account check are saved.",
     alternativeLabel: "Review uploaded video", canRetry: false, canSkip: false,
+  };
+  const videoTarget = frameioTargetRecovery(run);
+  if (videoTarget) return {
+    ...videoTarget, toolSlug: "frameio", blockerCode: blocker?.code, blockerAction: blocker?.action,
+    what: "The saved plan does not identify a usable video source.",
+    why: "The Frame.io target is invalid, and this run has no single saved video upload ready to review.",
+    fix: "Open a new request with the original instructions and select one MP4 or MOV to review. The existing run stays saved.",
+    subtitle: "No video review was completed. The saved account check is preserved.",
+    alternativeLabel: "Select video for review", needsVideoSource: true, canRetry: false, canSkip: false,
   };
   if (blocker) {
     let blockerIndex = steps.findIndex((step) => step.id === blocker.step_id);
