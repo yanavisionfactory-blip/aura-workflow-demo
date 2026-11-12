@@ -92,7 +92,7 @@ test("dropping multiple documents in the prompt keeps the batch visible and subm
     await act(async () => Simulate.dragEnter(target, { dataTransfer: transfer }));
     await act(async () => Simulate.dragOver(target, { dataTransfer: transfer, preventDefault: () => { prevented = true; } }));
     assert.equal(prevented, true); assert.equal(transfer.dropEffect, "copy");
-    assert.match(container.textContent, /Drop documents here/);
+    assert.match(container.textContent, /Drop files here/);
     await drop(container, [file("targets.csv"), file("actuals.csv", "Revenue,150")]);
     assert.equal(button(container, "Create plan").disabled, true);
     await act(async () => Simulate.keyDown(container.querySelector("textarea"), { key: "Enter" }));
@@ -166,5 +166,37 @@ test("concurrent drops cannot duplicate a pending upload and one failed file doe
     assert.deepEqual(attached.map((doc) => doc.name), ["first.csv", "last.csv"]);
     assert.match(container.querySelector('[role="alert"]').textContent, /bad.csv: Read failed/);
     assert.equal(container.querySelector("button").disabled, false);
+  });
+});
+
+
+test("an empty prompt exposes video drop and picker; actual bytes reach plan inputs", async () => {
+  const submissions = [];
+  await mounted(React.createElement(fixture.CommandInput, { examples: [],
+    enableWeeklyReviewSetup: false, onSubmit: (...args) => submissions.push(args) }), async (container) => {
+    assert.match(container.textContent, /Drop video or files here, or browse/);
+    assert.ok(container.querySelector('input[type="file"]'));
+    const video = new dom.window.File([new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112])],
+      "production.mp4", { type: "video/mp4" });
+    await drop(container, [video]);
+    await waitUntil(() => fixture.getAttachedDocuments().length === 1);
+    assert.match(container.textContent, /production.mp4/);
+    await act(async () => Simulate.change(container.querySelector("textarea"), {
+      target: { value: "Review this video with timestamps and corrections" },
+    }));
+    await act(async () => Simulate.click(button(container, "Create plan")));
+    const attached = submissions[0][2].documents[0];
+    assert.equal(attached.name, "production.mp4");
+    assert.equal(attached.size, 8);
+    assert.equal(attached.file_url, "data:video/mp4;base64,AAAAGGZ0eXA=");
+  });
+});
+
+test("a disabled prompt cannot accept files through drop or picker", async () => {
+  await mounted(React.createElement(fixture.CommandInput, { examples: [], disabled: true,
+    enableWeeklyReviewSetup: false, onSubmit() {} }), async (container) => {
+    assert.equal(container.querySelector('input[type="file"]').disabled, true);
+    await drop(container, [file("blocked.csv")]);
+    assert.equal(fixture.getAttachedDocuments().length, 0);
   });
 });

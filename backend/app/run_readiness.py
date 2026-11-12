@@ -77,6 +77,16 @@ async def check_run_readiness(session, run, plan):
     # Check exact, existing targets. Destinations produced by earlier steps are
     # verified by their creation receipt before a dependent step may use them.
     for step in plan.steps:
+        if step.operation == "intelligence.video.review":
+            from .video_sources import UPLOAD_SOURCE_MESSAGE, validate_uploaded_video_arguments
+            try:
+                validate_uploaded_video_arguments(step.arguments or {}, {
+                    **(run.execution_context or {}), "inputs": run.inputs or {},
+                })
+            except ValueError:
+                checks.append({"type": "source", "tool_slug": step.tool_slug,
+                    "operation": step.operation, "status": "blocked",
+                    "code": "resource_selection_required", "message": UPLOAD_SOURCE_MESSAGE})
         if step.tool_slug not in credentials:
             continue
         args = step.arguments or {}

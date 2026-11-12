@@ -129,3 +129,60 @@ async def test_repeated_wrong_source_never_becomes_an_executable_plan(monkeypatc
             {"attached_documents"}, {"frameio": native_manifest("frameio")}, input_values=inputs(),
         )
     assert planner.await_count == 2
+
+
+def upload_plan(arguments=None):
+    return WorkflowPlan(name="Video review", interpretation=PROMPT, steps=[PlanStep(
+        key="review", agent="AURA Intelligence", tool_slug="aura", operation="intelligence.video.review",
+        arguments=arguments if arguments is not None else {
+            "file_url": "{{inputs.attached_documents[1].file_url}}",
+            "filename": "{{inputs.attached_documents[1].name}}", "instructions": PROMPT},
+        reason="Inspect uploaded media", expected_output="Timestamped feedback",
+    )])
+
+
+def test_uploaded_review_accepts_resolved_bracket_references_without_mutating_inputs():
+    plan, values = upload_plan(), inputs()
+    before = deepcopy((plan.model_dump(), values))
+    validate_video_source_bindings(plan, values)
+    assert (plan.model_dump(), values) == before
+
+
+@pytest.mark.parametrize("case", ["missing_inputs", "missing_filename", "wrong_index", "nonvideo", "empty_arguments"])
+def test_uploaded_review_rejects_unavailable_source_before_execution(case):
+    plan, values = upload_plan(), inputs()
+    if case == "missing_inputs": values = {}
+    if case == "missing_filename": plan.steps[0].arguments["filename"] = "{{inputs.attached_documents[1].filename}}"
+    if case == "wrong_index": plan.steps[0].arguments["file_url"] = "{{inputs.attached_documents[9].file_url}}"
+    if case == "nonvideo": plan.steps[0].arguments["file_url"] = "{{inputs.attached_documents[0].file_url}}"
+    if case == "empty_arguments": plan.steps[0].arguments = {}
+    with pytest.raises(ValueError, match="Attach an MP4 or MOV") as error:
+        validate_video_source_bindings(plan, values)
+    assert UPLOAD not in str(error.value)
+
+
+def test_prior_step_media_may_be_deferred_but_missing_upload_name_is_not():
+    plan = upload_plan({"file_url": "{{steps.download.file_url}}", "filename": "clip.mp4"})
+    validate_video_source_bindings(plan, {})
+    plan.steps[0].arguments["filename"] = "{{inputs.missing.name}}"
+    with pytest.raises(ValueError, match="Attach an MP4 or MOV"):
+        validate_video_source_bindings(plan, {})
+
+
+@pytest.mark.asyncio
+async def test_readiness_blocks_saved_plan_with_missing_video_and_never_calls_provider(database, monkeypatch):
+    from app import run_readiness
+    from app.models import WorkflowRun, Workspace
+
+    execute = AsyncMock(side_effect=AssertionError("Readiness must not analyze media"))
+    monkeypatch.setattr(run_readiness.ProviderExecutor, "execute", execute)
+    async with database() as session:
+        session.add(Workspace(id="upload-check", name="Upload check"))
+        run = WorkflowRun(id="missing-upload", workspace_id="upload-check", prompt=PROMPT, inputs={})
+        session.add(run)
+        await session.commit()
+        report = await run_readiness.check_run_readiness(session, run, upload_plan())
+        assert not report["passed"]
+        assert any(row.get("type") == "source" and row.get("code") == "resource_selection_required"
+                   for row in report["checks"])
+        execute.assert_not_awaited()
