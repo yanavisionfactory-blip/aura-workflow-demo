@@ -60,6 +60,34 @@ test("an explicit different deliverable keeps its main result", () => {
   assert.equal(frameioReviewResult([...frameioOutputs(), other], other), null);
 });
 
+test("completed video analysis leads with its report after a Frame.io file read", () => {
+  const source = frameioOutputs()[0];
+  const review = {
+    step_key: "video_review", operation: "frameio.video.review",
+    critic: { action: "accept" }, outcome_check: { status: "verified" },
+    provider_result: { status: "draft", analysis_provider: "aura_intelligence",
+      title: "Video production review", summary: "Timestamped visual and audio review",
+      body: "00:22 — Match the graphic font. Audio reviewed.", media_analyzed: true },
+  };
+  const outputs = [source, review];
+  for (const presentation of [null, { primary_step_key: "video_review" }]) {
+    const result = primaryResultFromOutputs(outputs, {}, presentation);
+    assert.equal(result.kind, "report");
+    assert.equal(result.provider, "Frame.io + AURA Intelligence");
+    assert.equal(result.preview.body, review.provider_result.body);
+  }
+  assert.equal(primaryResultFromOutputs(outputs, {}, { primary_step_key: source.step_key }).kind,
+    "frameio_review");
+  for (const change of [
+    (output) => { output.critic.action = "reject"; },
+    (output) => { output.outcome_check.status = "failed"; },
+    (output) => { output.provider_result.body = ""; },
+  ]) {
+    const invalid = structuredClone(review); change(invalid);
+    assert.equal(primaryResultFromOutputs([source, invalid]).kind, "frameio_review");
+  }
+});
+
 test("follow-up prompts keep exact Frame.io identities and read evidence dependencies", () => {
   const result = frameioReviewResult(frameioOutputs());
   const prompt = resultRevisionPrompt({ result, instruction: "Make the checklist shorter." });

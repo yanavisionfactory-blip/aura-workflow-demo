@@ -194,6 +194,43 @@ def test_intent_keeps_aura_importer_and_respects_an_explicit_omission():
     assert "aura" in {item["slug"] for item in intent_bounded_tool_inventory(PROMPT, INVENTORY)}
 
 
+@pytest.mark.parametrize("video_prompt", [
+    ("Review this Frame.io video carefully from beginning to end. Identify errors, "
+    "poor transitions, spelling mistakes and audio problems. Provide feedback with "
+    "exact video timestamps and recommended corrections. Organize the feedback "
+     "in chronological order. Do not post comments or modify the video."),
+    "Analyze the clip in Frame.io and give detailed production feedback in AURA.",
+])
+def test_new_video_feedback_does_not_require_existing_reviewer_comments(video_prompt):
+    from app.request_contracts import validate_requested_operations
+
+    video_plan = plan(step("review_video", "frameio.video.review", "frameio"))
+    inventory = [{"slug": "frameio", "name": "Frame.io",
+                  "allowed_operations": ["frameio.video.review"]}]
+    assert requested_proofing_sources(video_prompt) == set()
+    validate_requested_operations(video_prompt, video_plan, {"frameio.video.review"}, inventory, {})
+
+
+@pytest.mark.parametrize("source_request", [
+    "Also incorporate existing reviewer feedback from Frame.io.",
+    "Read Frame.io comments before producing the feedback.",
+    "Use the current feedback from Frame.io.",
+    "Prepare a revision brief from Frame.io feedback.",
+    "Also read PageProof feedback.",
+])
+def test_video_analysis_cannot_replace_requested_reviewer_evidence(source_request):
+    request = "Review the Frame.io video and provide timestamped feedback. " + source_request
+    with pytest.raises(ProofingSourceError, match="Reviewer feedback is missing"):
+        validate_proofing_sources(request, plan(step("review_video", "frameio.video.review", "frameio")),
+                                 INVENTORY, {})
+
+
+def test_video_step_alone_cannot_reclassify_a_feedback_brief():
+    with pytest.raises(ProofingSourceError, match="Reviewer feedback is missing"):
+        validate_proofing_sources(PROMPT, plan(step("review_video", "frameio.video.review", "frameio")),
+                                 INVENTORY, {})
+
+
 @pytest.mark.parametrize("constraint", [
     "No Frame.io or PageProof connection is needed.",
     "Do not use Frame.io or PageProof.",

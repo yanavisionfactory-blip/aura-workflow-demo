@@ -11,6 +11,7 @@ test("video operations describe the production review despite generic planner re
       const content = videoReviewPlanContent(step);
       assert.equal(operationStepTitle(step), "Review the video and prepare production feedback");
       assert.match(content.iWill, /full timeline.*sampled frames and audio/);
+      assert.match(content.iWill, /with AURA Intelligence/);
       assert.match(content.iWill, /spelling mistakes, audio problems, and visual distractions/);
       assert.match(content.iWill, /chronological order with timestamps, observed issues, and recommended production fixes/);
       assert.match(content.iWill, /brief defects may be missed and audio times are approximate/);

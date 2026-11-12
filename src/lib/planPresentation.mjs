@@ -5,7 +5,7 @@ export function videoReviewPlanContent(step = {}) {
   const source = step.operation === "frameio.video.review" ? "selected Frame.io video version" : "uploaded video";
   return {
     title: "Review the video and prepare production feedback",
-    iWill: `review the ${source} across its full timeline using sampled frames and audio, following your instructions. Identify errors, inconsistencies, poor transitions, unclear messaging, incorrect graphics, spelling mistakes, audio problems, and visual distractions. Return feedback in chronological order with timestamps, observed issues, and recommended production fixes. Visual timestamps come from sampled frames; brief defects may be missed and audio times are approximate`,
+    iWill: `review the ${source} across its full timeline using sampled frames and audio with AURA Intelligence, following your instructions. Identify errors, inconsistencies, poor transitions, unclear messaging, incorrect graphics, spelling mistakes, audio problems, and visual distractions. Return feedback in chronological order with timestamps, observed issues, and recommended production fixes. Visual timestamps come from sampled frames; brief defects may be missed and audio times are approximate`,
   };
 }
 

@@ -102,6 +102,29 @@ def requested_proofing_sources(prompt: str) -> set[str]:
         return set()
     if not re.search(r"\b(?:approvals?|feedback|revision|proofing|briefs?)\b", prompt, re.IGNORECASE):
         return set()
+    # Feedback produced by inspecting a video is an output, not a request to
+    # retrieve pre-existing reviewer comments. Keep the distinction independent
+    # of the proposed plan: a planner cannot waive a requested evidence source
+    # merely by choosing a video-analysis operation.
+    intent = re.sub(r"\bframe\.io\b", "Frameio", prompt, flags=re.IGNORECASE)
+    video_review = re.search(
+        r"\b(?:review|inspect|check|analy[sz]e)\b[^.!?\n]{0,100}"
+        r"\b(?:video|clip|footage|mp4|mov)\b", intent, re.IGNORECASE,
+    )
+    generated_feedback = re.search(
+        r"\b(?:provide|give|generate|produce|return|deliver|create|write)\b"
+        r"[^.!?\n]{0,60}\bfeedback\b", intent, re.IGNORECASE,
+    )
+    reviewer_evidence = re.search(
+        r"\b(?:approvals?|revision|proofing|briefs?)\b"
+        r"|\b(?:reviewer|client|customer|stakeholder|existing|saved|current|received|supplied)"
+        r"\s+(?:review\s+)?(?:feedback|comments|notes)\b"
+        r"|\b(?:read|fetch|retrieve|pull|load|collect|summari[sz]e|consolidate|incorporate|"
+        r"use|based on|from)\b[^.!?\n]{0,60}\b(?:feedback|comments)\b",
+        intent, re.IGNORECASE,
+    )
+    if video_review and generated_feedback and not reviewer_evidence:
+        return set()
     prompt = proofing_intent_text(prompt)
     sources = set()
     for source, pattern in (("frameio", r"frame[.\s-]?io"), ("pageproof", r"page\s?proof")):

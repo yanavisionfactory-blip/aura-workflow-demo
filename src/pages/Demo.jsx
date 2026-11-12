@@ -56,6 +56,7 @@ import {
 import { campaignRepeatPrompt, hasDurablePlan, planningRequestPrompt, savedRunResumeView, planningRevisionOutcome, shouldRestoreRememberedRun, workflowInputPrompt } from "@/lib/runtimePlan.mjs";
 import { operationStepTitle, videoReviewPlanContent, weatherStepTitle } from "@/lib/planPresentation.mjs";
 import { primaryResultFromOutputs } from "@/lib/resultPresentation.mjs";
+import { operationProviderName } from "@/lib/providerDisplay.mjs";
 import { savedRunResults } from "@/lib/savedRunResults.mjs";
 import { normalizeResultSuggestions, resultSuggestionsPrompt, RESULT_SUGGESTIONS_SCHEMA } from "@/lib/resultSuggestions.mjs";
 import { alignExecutionSteps } from "@/lib/executionSteps.mjs";
@@ -73,6 +74,7 @@ const PLANNING_POLL_INTERVAL_MS = 400;
 const PLANNING_TRANSIENT_FAILURE_LIMIT = 3;
 
 const planToolName = (step) => {
+  if (step.operation === "frameio.video.review") return operationProviderName(step.tool_slug, step.operation);
   if (step.operation === "report.compose") return "ChatGPT";
   if (step.tool_slug === "google") {
     if (step.operation.startsWith("gmail.")) return "Gmail";
