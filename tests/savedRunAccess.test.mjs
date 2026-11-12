@@ -22,6 +22,7 @@ const mocks = {
   "@/lib/auraApi": "export const getPythonRun = (...args) => globalThis.__access.read(...args);",
   "@clerk/react": 'import React from "react"; export const UserButton = () => React.createElement("button", null, "Manage account");',
   "@/components/aura/WorkspaceShell": "export default ({children}) => children;",
+  "@/pages/Demo": "export default () => null;",
   "@/components/aura/ResultsView": 'import React from "react"; export default ({backendRunId, prompt, onRepeatWorkflow}) => React.createElement("div", null, `Loaded ${backendRunId}`, React.createElement("button", {onClick: () => onRepeatWorkflow(prompt)}, "Run again"));',
 };
 before(async () => {

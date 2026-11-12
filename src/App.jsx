@@ -57,7 +57,7 @@ function UpdateNotice() {
 
 function AuthLanding() {
   const [mode, setMode] = useState("sign-in");
-  const productUrl = `${window.location.origin}${import.meta.env.BASE_URL}`;
+  const productUrl = `${window.location.origin}${window.location.pathname}${window.location.search}`;
 
   return (
     <main className="min-h-screen bg-[#080d1b] text-white grid place-items-center p-6">
@@ -98,6 +98,7 @@ function ProductRoutes() {
         <Route path="/results/collect" element={<CollectResults />} />
         <Route path="/results/:deliveryId" element={<DeliveryResults />} />
         <Route path="/runs/:runId" element={<SavedRunResults />} />
+        <Route path="/runs/:runId/recover" element={<SavedRunResults recovery />} />
         <Route path="/runs/:runId/tools/:toolSlug" element={<SimulatedCMSTool />} />
         <Route path="/runs/:runId/demo/seo-audit" element={<SeoAuditDemo />} />
         <Route path="*" element={<PageNotFound />} />

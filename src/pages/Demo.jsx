@@ -301,7 +301,7 @@ const RESULTS_SCHEMA = {
   },
 };
 
-export default function Demo() {
+export default function Demo({ initialRecoveryRun = null }) {
   const location = useLocation();
   const [inputPrompt, setInputPrompt] = useState(() => workflowInputPrompt(location));
   const [phase, setPhase] = useState("input");
@@ -343,21 +343,23 @@ export default function Demo() {
   const omittedToolsRef = useRef([]);
 
   useEffect(() => {
-    if (location.state?.newWorkflow || inputPrompt) return undefined;
-    const remembered = location.state?.resumeRunId || rememberedActivePythonRun();
+    if (!initialRecoveryRun && (location.state?.newWorkflow || inputPrompt)) return undefined;
+    const remembered = initialRecoveryRun?.id || location.state?.resumeRunId || rememberedActivePythonRun();
     if (!remembered) return undefined;
     const generation = pythonPollGenerationRef.current;
     let mounted = true;
-    getPythonRun(remembered).then((run) => {
+    const request = initialRecoveryRun ? Promise.resolve(initialRecoveryRun) : getPythonRun(remembered);
+    request.then((run) => {
       if (!mounted || !shouldRestoreRememberedRun({
         rememberedRunId: remembered,
-        currentRememberedRunId: location.state?.resumeRunId || rememberedActivePythonRun(),
+        currentRememberedRunId: initialRecoveryRun?.id || location.state?.resumeRunId || rememberedActivePythonRun(),
         startedAtGeneration: generation,
         currentGeneration: pythonPollGenerationRef.current,
         hasCurrentIntent: Boolean(originalPromptRef.current),
       })) return;
       const resumeView = savedRunResumeView(run);
       if (!resumeView) return;
+      if (initialRecoveryRun && resumeView !== "recovery") return;
       const intent = String(run.prompt || run.plan?.interpretation || "")
         .split("\n\nThe user reviewed the proposed workflow and requested this change:")[0];
       const disposition = planningDisposition(run);
