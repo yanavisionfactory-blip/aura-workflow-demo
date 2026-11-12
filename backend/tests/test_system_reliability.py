@@ -115,6 +115,8 @@ def _valid_schema_value(schema, root=None):
         return "aura@example.com"
     if schema.get("pattern") == "^[a-f0-9]{64}$":
         return "a" * 64
+    if schema.get("pattern") == r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$":
+        return "11111111-1111-4111-8111-111111111111"
     if schema.get("pattern") == "^[0-9]+$":
         return "123"
     if schema.get("pattern") == "^(act_)?[0-9]{1,40}$":
