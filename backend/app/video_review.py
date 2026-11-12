@@ -31,6 +31,12 @@ MAX_BYTES = 50 * 1024 * 1024
 MAX_DURATION = 120
 MAX_FRAMES = 500
 CHUNK_SECONDS = 20
+FRAMEIO_UUID_PATTERN = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+FRAMEIO_TARGET_MESSAGE = (
+    "Select the exact video version in Frame.io before reviewing it. "
+    "An uploaded MP4, filename, or share link is not a Frame.io file ID. "
+    "The video review has not started; completed steps are preserved."
+)
 DEFAULT_INSTRUCTIONS = (
     "Review this video from beginning to end. Identify errors, inconsistencies, poor "
     "transitions, unclear messaging, incorrect graphics, spelling mistakes, audio "
@@ -48,9 +54,29 @@ class VideoReviewRequest(BaseModel):
 
 class FrameioVideoRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    account_id: str
-    file_id: str
+    account_id: str = Field(pattern=FRAMEIO_UUID_PATTERN, description="Exact connected Frame.io account UUID.")
+    file_id: str = Field(pattern=FRAMEIO_UUID_PATTERN, description="Exact Frame.io file-version UUID, never an uploaded file reference, filename, or share URL.")
     instructions: str = Field(default=DEFAULT_INSTRUCTIONS, max_length=6000)
+
+
+def frameio_review_target(arguments: dict, context: dict) -> dict | None:
+    """Validate known targets before Start; defer only genuine prior-step references."""
+    from .workflow_context import WorkflowContextError, referenced_step_keys, resolve_value
+
+    target, pending = {}, False
+    for key in ("account_id", "file_id"):
+        value = arguments.get(key)
+        if referenced_step_keys(value):
+            pending = True
+            continue
+        try:
+            value = resolve_value(value, context)
+        except WorkflowContextError:
+            raise ValueError(FRAMEIO_TARGET_MESSAGE) from None
+        if not isinstance(value, str) or not re.fullmatch(FRAMEIO_UUID_PATTERN, value):
+            raise ValueError(FRAMEIO_TARGET_MESSAGE)
+        target[key] = value
+    return None if pending else target
 
 
 class Finding(BaseModel):
