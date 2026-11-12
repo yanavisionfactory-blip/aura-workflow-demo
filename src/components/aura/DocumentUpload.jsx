@@ -1,9 +1,8 @@
 import { useRef, useState } from "react";
 import { FileUp, Loader2 } from "lucide-react";
 import { aura } from "@/api/auraClient";
+import { uploadBatchError } from "@/lib/uploadLimits.mjs";
 
-const MAX_DOCUMENTS = 8;
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const hasFiles = (transfer) => Array.from(transfer?.types || []).includes("Files")
   || Array.from(transfer?.items || []).some((item) => item.kind === "file")
   || transfer?.files?.length > 0;
@@ -24,12 +23,9 @@ export default function DocumentUpload({ documents = [], onAttach, compact = fal
       return;
     }
     setError(""); setStatus("");
-    if (files.length + documents.length > MAX_DOCUMENTS) {
-      setError("Attach no more than eight documents to one workflow.");
-      return;
-    }
-    if (files.some((file) => file.size > MAX_FILE_BYTES)) {
-      setError("Each document must be 10 MB or smaller.");
+    const validationError = uploadBatchError(files, documents);
+    if (validationError) {
+      setError(validationError);
       return;
     }
     pending.current = true;
@@ -87,7 +83,7 @@ export default function DocumentUpload({ documents = [], onAttach, compact = fal
       className={`flex w-full flex-col items-center justify-center gap-2 rounded-xl border border-dashed transition-all disabled:opacity-50 ${compact ? "py-6" : "py-8"} ${dragging ? "border-primary bg-primary/15" : "border-white/15 hover:border-primary/40 hover:bg-primary/5"}`}>
       {uploading ? <Loader2 className="h-5 w-5 animate-spin text-primary" /> : <FileUp className="h-5 w-5 text-primary" />}
       <span className={`${compact ? "text-xs" : "text-sm"} font-medium`}>{uploading ? "Attaching documents…" : dragging ? "Drop documents here" : "Drop files here or choose documents"}</span>
-      <span className="px-3 text-[11px] text-muted-foreground">PDF, DOCX, CSV, spreadsheets and images · Up to 8 files, 10 MB each</span>
+      <span className="px-3 text-[11px] text-muted-foreground">MP4/MOV video, PDF, DOCX, CSV, spreadsheets and images · Up to 8 files, 10 MB each</span>
     </button>
     <input ref={fileRef} type="file" multiple aria-label="Choose documents" className="hidden"
       onChange={(event) => {

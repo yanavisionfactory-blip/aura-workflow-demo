@@ -1,6 +1,10 @@
 name: Deploy AURA backend release
 
 on:
+  workflow_run:
+    workflows: [Python control plane]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       release_sha:
@@ -22,12 +26,19 @@ concurrency:
 
 jobs:
   deploy:
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository &&
+        github.event.workflow_run.head_sha == github.sha))
     runs-on: ubuntu-latest
     timeout-minutes: 130
     environment: recovery-production
     env:
-      RELEASE_SHA: ${{ inputs.release_sha }}
+      RELEASE_SHA: ${{ inputs.release_sha || github.event.workflow_run.head_sha }}
       RESUME_CANARY_DEPLOYMENT_ID: ${{ inputs.resume_canary_deployment_id }}
       RAILWAY_PROJECT: 5d7502dc-9152-4f6d-b1e2-6fe3ba7fbf8c
       RAILWAY_ENVIRONMENT: 3f00203a-dff3-4808-9c6b-e18ea5912f48
@@ -47,6 +58,10 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo 'A full commit SHA is required.'; exit 1; }
+          if [[ "$GITHUB_EVENT_NAME" == workflow_run && "$(git rev-parse origin/main)" != "$RELEASE_SHA" ]]; then
+            echo 'A newer main commit is pending; do not automatically deploy an older release.'
+            exit 1
+          fi
           git merge-base --is-ancestor "$RELEASE_SHA" origin/main
           gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$RELEASE_SHA&per_page=100" \
             --jq '[.workflow_runs[] | select(.name == "Python control plane" and .event == "push" and .head_branch == "main" and .status == "completed" and .conclusion == "success")] | length > 0' \

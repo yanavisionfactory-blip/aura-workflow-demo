@@ -843,7 +843,7 @@ async def _create_compiled_plan(
 ):
     """Build a schema-valid plan, repairing internal connector mismatches silently."""
     from .tool_omissions import omission_bounded_inventory, reconcile_tool_omissions
-    from .video_sources import validate_video_source_bindings
+    from .video_sources import uploaded_video_review_plan, validate_video_source_bindings
 
     requested_tool_names, excluded_tool_families = reconcile_tool_omissions(
         request_prompt or prompt, requested_tool_names, excluded_tool_families, inventory,
@@ -1053,7 +1053,9 @@ async def _create_compiled_plan(
     from .website_content import website_workflow_recipe
     from .weekly_review import weekly_workflow_recipe
 
-    audited_plan = content_review_recipe(prompt, inventory)
+    audited_plan = uploaded_video_review_plan(request_prompt or prompt, input_values, inventory)
+    if audited_plan is None:
+        audited_plan = content_review_recipe(prompt, inventory)
     if audited_plan is None:
         audited_plan = report_workflow_recipe(prompt, inventory)
     if audited_plan is None:
