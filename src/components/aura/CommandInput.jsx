@@ -4,6 +4,7 @@ import { ArrowRight, Sparkles, X, Plus, Check, FileBarChart, Mail, ListChecks, R
 import ValueProp from "./ValueProp";
 import WeeklyReviewSetup from "./WeeklyReviewSetup";
 import ResourceComposer from "./ResourceComposer";
+import DocumentUpload from "./DocumentUpload";
 import { base44 } from "@/api/base44Client";
 import { attachDocument, getAttachedDocuments, removeDocument, subscribeDocuments } from "@/lib/documentStore";
 import { CATALOG, catalogEntryFor } from "@/lib/toolCatalog";
@@ -94,6 +95,11 @@ export default function CommandInput({ onSubmit, disabled, examples, onPickExamp
             rows={2}
             className="flex-1 bg-transparent border-none outline-none resize-none text-sm leading-relaxed placeholder:text-muted-foreground/60 disabled:opacity-50"
           />
+        </div>
+
+        <div className="px-4 pb-3">
+          <DocumentUpload compact documents={documents} onAttach={attachDocument}
+            disabled={disabled || attachingDocuments} onBusyChange={setAttachingDocuments} />
         </div>
 
         {/* Tool hints */}

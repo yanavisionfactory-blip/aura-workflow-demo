@@ -7,7 +7,7 @@ const hasFiles = (transfer) => Array.from(transfer?.types || []).includes("Files
   || Array.from(transfer?.items || []).some((item) => item.kind === "file")
   || transfer?.files?.length > 0;
 
-export default function DocumentUpload({ documents = [], onAttach, compact = false, onBusyChange = undefined }) {
+export default function DocumentUpload({ documents = [], onAttach, compact = false, disabled = false, onBusyChange = undefined }) {
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState("");
@@ -22,6 +22,7 @@ export default function DocumentUpload({ documents = [], onAttach, compact = fal
       setError("Files are still attaching. Drop these again when finished.");
       return;
     }
+    if (disabled) return;
     setError(""); setStatus("");
     const validationError = uploadBatchError(files, documents);
     if (validationError) {
@@ -58,12 +59,12 @@ export default function DocumentUpload({ documents = [], onAttach, compact = fal
       if (!hasFiles(event.dataTransfer)) return;
       event.preventDefault(); event.stopPropagation();
       dragDepth.current += 1;
-      if (!pending.current) setDragging(true);
+      if (!pending.current && !disabled) setDragging(true);
     }}
     onDragOver={(event) => {
       if (!hasFiles(event.dataTransfer)) return;
       event.preventDefault(); event.stopPropagation();
-      event.dataTransfer.dropEffect = pending.current ? "none" : "copy";
+      event.dataTransfer.dropEffect = pending.current || disabled ? "none" : "copy";
     }}
     onDragLeave={(event) => {
       event.preventDefault(); event.stopPropagation();
@@ -79,13 +80,13 @@ export default function DocumentUpload({ documents = [], onAttach, compact = fal
       }
       void attachFiles(Array.from(event.dataTransfer?.files || []));
     }}>
-    <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading}
+    <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading || disabled}
       className={`flex w-full flex-col items-center justify-center gap-2 rounded-xl border border-dashed transition-all disabled:opacity-50 ${compact ? "py-6" : "py-8"} ${dragging ? "border-primary bg-primary/15" : "border-white/15 hover:border-primary/40 hover:bg-primary/5"}`}>
       {uploading ? <Loader2 className="h-5 w-5 animate-spin text-primary" /> : <FileUp className="h-5 w-5 text-primary" />}
-      <span className={`${compact ? "text-xs" : "text-sm"} font-medium`}>{uploading ? "Attaching documents…" : dragging ? "Drop documents here" : "Drop files here or choose documents"}</span>
-      <span className="px-3 text-[11px] text-muted-foreground">MP4/MOV video, PDF, DOCX, CSV, spreadsheets and images · Up to 8 files, 10 MB each</span>
+      <span className={`${compact ? "text-xs" : "text-sm"} font-medium`}>{uploading ? "Attaching files…" : dragging ? "Drop files here" : "Drop video or files here, or browse"}</span>
+      <span className="px-3 text-[11px] text-muted-foreground">MP4/MOV video up to 2 minutes · PDF, DOCX, CSV, spreadsheets and images · Up to 8 files, 10 MB each</span>
     </button>
-    <input ref={fileRef} type="file" multiple aria-label="Choose documents" className="hidden"
+    <input ref={fileRef} type="file" multiple disabled={uploading || disabled} aria-label="Choose documents" className="hidden"
       onChange={(event) => {
         const files = Array.from(event.target.files || []);
         event.target.value = "";

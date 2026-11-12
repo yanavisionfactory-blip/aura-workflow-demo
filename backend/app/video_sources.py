@@ -2,7 +2,42 @@
 
 import re
 
-from .workflow_context import WorkflowContextError, resolve_value
+from .workflow_context import WorkflowContextError, referenced_step_keys, resolve_value
+
+UPLOAD_SOURCE_MESSAGE = (
+    "Attach an MP4 or MOV using the video drop area before creating the review plan. "
+    "Bind file_url to the attachment's file_url and filename to its name (not filename). "
+    "The video review has not started."
+)
+
+
+def validate_uploaded_video_arguments(arguments: dict, context: dict) -> None:
+    """Check input bindings without decoding media or calling a provider.
+
+    Only actual earlier-step references may wait until execution. Missing upload
+    bytes or filename paths must never pass readiness as a verified video source.
+    """
+    resolved = {}
+    for key in ("file_url", "filename"):
+        value = arguments.get(key)
+        if referenced_step_keys(value):
+            continue
+        try:
+            value = resolve_value(value, context)
+        except WorkflowContextError:
+            raise ValueError(UPLOAD_SOURCE_MESSAGE) from None
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(UPLOAD_SOURCE_MESSAGE)
+        resolved[key] = value
+    source = resolved.get("file_url")
+    if source is not None:
+        if not re.fullmatch(
+            r"data:(?:video/(?:mp4|quicktime)|application/octet-stream);base64,[A-Za-z0-9+/]+={0,2}", source,
+        ):
+            raise ValueError(UPLOAD_SOURCE_MESSAGE)
+        if (source.startswith("data:application/octet-stream;") and "filename" in resolved
+                and not resolved["filename"].lower().endswith((".mp4", ".mov"))):
+            raise ValueError(UPLOAD_SOURCE_MESSAGE)
 
 
 def video_upload(document: dict) -> bool:
@@ -85,20 +120,24 @@ def validate_video_source_bindings(plan, inputs: dict | None) -> None:
     Do not substitute assets, alter an approved plan or infer missing provider
     IDs. Valid Frame.io targets can coexist with unrelated attached videos.
     """
-    if not inputs:
-        return
+    inputs = inputs or {}
     key = "attached_documents" if "attached_documents" in inputs else "documents"
     documents = inputs.get(key)
     if not isinstance(documents, list):
-        return
+        documents = []
     uploads = [(index, doc) for index, doc in enumerate(documents)
                if isinstance(doc, dict) and video_upload(doc)]
     for step in plan.steps:
-        for operation, arguments in (
+        variants = [
             (step.operation, step.arguments),
             (step.fallback_operation, step.arguments),
-            (step.operation, step.reduced_scope_arguments),
-        ):
+        ]
+        if step.reduced_scope_arguments:
+            variants.append((step.operation, step.reduced_scope_arguments))
+        for operation, arguments in variants:
+            if operation == "intelligence.video.review":
+                validate_uploaded_video_arguments(arguments or {}, {"inputs": inputs})
+                continue
             if operation != "frameio.video.review":
                 continue
             try:
