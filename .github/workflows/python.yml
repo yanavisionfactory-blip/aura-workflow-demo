@@ -114,3 +114,20 @@ jobs:
         run: pip install -r browser_worker/requirements.txt pytest pytest-asyncio httpx
       - name: Verify browser worker isolation and assistant response matching
         run: python -m pytest browser_worker -q
+      - name: Build browser worker production image
+        run: docker build -t aura-browser-worker:test browser_worker
+      - name: Launch Chromium in the production image
+        run: |
+          docker run --rm --entrypoint python aura-browser-worker:test -c '
+          import asyncio
+          from playwright.async_api import async_playwright
+          async def check():
+              async with async_playwright() as runtime:
+                  browser = await runtime.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
+                  page = await browser.new_page()
+                  await page.set_content("<h1>AURA browser ready</h1>")
+                  assert await page.title() == ""
+                  assert await page.locator("h1").inner_text() == "AURA browser ready"
+                  await browser.close()
+          asyncio.run(check())
+          '
