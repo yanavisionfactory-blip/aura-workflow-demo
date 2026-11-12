@@ -834,3 +834,11 @@ async def screen_tiktok_creators(payload: TikTokScreenRequest) -> dict:
 async def read(payload: ReadRequest) -> dict:
     async with rendered_page(str(payload.url)) as page:
         return await page_evidence(page)
+
+
+if __package__:
+    from .frameio_assistant import install_routes as install_frameio_assistant_routes
+else:
+    from frameio_assistant import install_routes as install_frameio_assistant_routes
+
+install_frameio_assistant_routes(app, require_worker_token, _guard_route)

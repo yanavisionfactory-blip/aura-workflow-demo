@@ -1034,3 +1034,29 @@ class RecoveryProbe(Base):
     guard_run_ids: Mapped[dict] = mapped_column(JSON, default=dict)
     yielded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class FrameioAssistantSession(Base):
+    __tablename__ = "frameio_assistant_sessions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    tool_id: Mapped[str] = mapped_column(ForeignKey("tool_connections.id", ondelete="CASCADE"), index=True)
+    owner: Mapped[str] = mapped_column(String(240))
+    account_id: Mapped[str] = mapped_column(String(36))
+    file_id: Mapped[str] = mapped_column(String(36))
+    project_id: Mapped[str] = mapped_column(String(36))
+    worker_id: Mapped[str] = mapped_column(String(36))
+    ready: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class FrameioAssistantInvocation(Base):
+    __tablename__ = "frameio_assistant_invocations"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    tool_id: Mapped[str] = mapped_column(ForeignKey("tool_connections.id", ondelete="CASCADE"))
+    session_id: Mapped[str] = mapped_column(String(36))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    state: Mapped[str] = mapped_column(String(30), default="dispatching")
+    result: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)

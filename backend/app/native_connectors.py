@@ -106,7 +106,7 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         ],
     },
     "frameio": {
-        "schema_version": "1.1", "catalog_version": 2, "provider_type": "oauth",
+        "schema_version": "1.1", "catalog_version": 3, "provider_type": "oauth",
         "name": "Frame.io", "description": "Read exact Frame.io V4 file versions, reviewer comments and review video with AURA Intelligence.",
         "base_url": "https://api.frame.io", "identity": {"provider": "frameio"},
         "modules": [
@@ -116,6 +116,8 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
             _module("frameio.file.get", "search", "Read the exact selected Frame.io file version. Use its file UUID, not a version stack or a guessed latest version.",
                     required=("account_id", "file_id"), properties={"account_id": _TEXT, "file_id": _TEXT}),
             {**_module("frameio.video.review", "search", "Download the exact connected Frame.io file rendition and use AURA Intelligence to inspect sampled video frames and actual audio from beginning to end. Returns chronological timestamped production feedback in AURA. Supports MP4/MOV up to 120 seconds / 50 MB. This is AURA analysis, not Frame.io AI Assistant or existing comments. No comments are posted."),
+             "input_schema": FrameioVideoRequest.model_json_schema()},
+            {**_module("frameio.assistant.review", "search", "Invoke Frame.io's own in-product AI Assistant and native Video analysis through an authenticated AURA browser session. Returns the actual assistant response and receipt in AURA. Requires separate assistant sign-in for the exact selected account/file before Start. Never substitutes AURA Intelligence; does not publish review comments or modify assets.", permission_scope="read"),
              "input_schema": FrameioVideoRequest.model_json_schema()},
             _module("frameio.comments.list", "search", "Read all comments and replies for one exact file UUID, verifying the file first. Fails if pagination is incomplete or exceeds 1000 comments. Comment completion never proves asset approval.",
                     required=("account_id", "file_id"), properties={"account_id": _TEXT, "file_id": _TEXT}),

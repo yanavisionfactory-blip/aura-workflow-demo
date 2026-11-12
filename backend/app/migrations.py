@@ -3,6 +3,8 @@ from sqlalchemy import text
 from .db import Base, engine
 
 DIRECT_TENANT_TABLES = (
+    "frameio_assistant_sessions",
+    "frameio_assistant_invocations",
     "native_oauth_authorizations",
     "zernio_profiles",
     "zernio_authorizations",
