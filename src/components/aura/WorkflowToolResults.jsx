@@ -53,7 +53,7 @@ export default function WorkflowToolResults({ entries, primary, mainEntry, hasMa
             {!visual && !adsInput && <SourceResults items={completed} />}
             {items.filter((entry) => entry.status !== "completed").map((entry) => <p key={entry.id} className="flex items-start gap-2 text-sm text-amber-200"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{entry.action} · {toolResultStatus(entry)}</p>)}
             {(isPrimary || visual || adsInput) && <ul className="space-y-3">{items.map((entry) => <li key={entry.id} className="flex items-start gap-2 text-xs leading-5 text-muted-foreground">{entry.status === "completed" ? <Check className="mt-1 h-3 w-3 shrink-0 text-emerald-400" /> : <AlertTriangle className="mt-1 h-3 w-3 shrink-0 text-amber-300" />}<span>{entry.action}<span className="block text-[11px]">{toolResultStatus(entry)}{entry.completedAt ? ` · ${new Date(entry.completedAt).toLocaleString()}` : ""}</span></span></li>)}</ul>}
-            <button type="button" onClick={() => onOpen("activity")} className="text-xs text-muted-foreground underline underline-offset-4">View workflow activity</button>
+            <button type="button" onClick={() => issues.length && onOpenRun ? onOpenRun() : onOpen("activity")} className="text-xs text-muted-foreground underline underline-offset-4">{issues.length && onOpenRun ? "Resolve failed step" : "View workflow activity"}</button>
           </div>
         </details>
       </article>;

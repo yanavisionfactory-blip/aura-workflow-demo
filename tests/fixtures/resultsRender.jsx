@@ -42,13 +42,13 @@ export function renderToolWorkspace(packet, activity, initialTool, initialSectio
   return renderToStaticMarkup(<MarketingToolResults packet={packet} activity={activity} initialTool={initialTool} initialSection={initialSection} compact />);
 }
 
-export function ResultsTestView({ run }) {
+export function ResultsTestView({ run, ...callbacks }) {
   const activity = run.steps.map((step) => ({ ...step, stepKey: step.key,
     tool: step.tool_slug, action: step.reason,
   }));
   return <StaticRouter location={`/runs/${run.id}`}>
     <ResultsView results={savedRunResults(run)} activity={activity}
-      backendRunId={run.id} onNewWorkflow={() => {}} onStartWorkflow={() => {}} />
+      backendRunId={run.id} prompt={run.prompt} onNewWorkflow={() => {}} onStartWorkflow={() => {}} {...callbacks} />
   </StaticRouter>;
 }
 

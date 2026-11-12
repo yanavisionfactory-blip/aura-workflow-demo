@@ -1769,6 +1769,13 @@ Generate a results summary in plain, human-friendly language (not technical).
     [reset, handleSubmit]
   );
 
+  const handleRepeatWorkflow = useCallback((prompt) => {
+    const resources = attachedResourcesRef.current;
+    const tools = [...userSelectedToolsRef.current];
+    reset();
+    window.setTimeout(() => handleSubmit(prompt, tools, resources), 0);
+  }, [reset, handleSubmit]);
+
   const handleEditRun = (workflow, approval) => {
     if (!workflow) return;
     const confirmedIntent = campaignRepeatPrompt(workflow.prompt, workflow.steps)
@@ -2012,6 +2019,7 @@ Generate a results summary in plain, human-friendly language (not technical).
                     results={results}
                     onNewWorkflow={reset}
                     onStartWorkflow={handleStartFromPrompt}
+                    onRepeatWorkflow={handleRepeatWorkflow}
                     workflowPrompt={interpretation}
                     activity={execSteps}
                     prompt={originalPrompt}

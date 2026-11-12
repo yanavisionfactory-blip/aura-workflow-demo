@@ -22,7 +22,7 @@ const mocks = {
   "@/lib/auraApi": "export const getPythonRun = (...args) => globalThis.__access.read(...args);",
   "@clerk/react": 'import React from "react"; export const UserButton = () => React.createElement("button", null, "Manage account");',
   "@/components/aura/WorkspaceShell": "export default ({children}) => children;",
-  "@/components/aura/ResultsView": 'import React from "react"; export default ({backendRunId}) => React.createElement("p", null, `Loaded ${backendRunId}`);',
+  "@/components/aura/ResultsView": 'import React from "react"; export default ({backendRunId, prompt, onRepeatWorkflow}) => React.createElement("div", null, `Loaded ${backendRunId}`, React.createElement("button", {onClick: () => onRepeatWorkflow(prompt)}, "Run again"));',
 };
 before(async () => {
   temporary = fs.mkdtempSync(path.join(repo, ".access-test-"));
@@ -91,6 +91,34 @@ test("network failures offer retry without falsely claiming workspace denial", a
     await waitForText(container, /Loaded saved/);
     assert.match(container.textContent, /Loaded saved/);
   } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+test("Run again from a saved result restores its video and only prefills a fresh request", async () => {
+  const video = { name: "original.mp4", file_url: "data:video/mp4;base64,YWI=", size: 2 };
+  const prompt = "Review the attached video with timestamps.";
+  let reads = 0;
+  globalThis.__access = { auth: { workspace: { workspace_id: "a", name: "A" } }, read: async (id) => {
+    reads += 1;
+    return { id, prompt, status: "waiting_for_action", steps: [], inputs: { attached_documents: [video] } };
+  }};
+  ui.replaceAttachedDocuments([{ name: "unrelated.txt", file_url: "data:text/plain;base64,YQ==" }]);
+  let destination;
+  const Input = () => { destination = ui.useLocation(); return React.createElement("p", null, "Fresh input"); };
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(React.createElement(ui.MemoryRouter, { initialEntries: ["/runs/saved"],
+      future: { v7_startTransition: true, v7_relativeSplatPath: true } },
+    React.createElement(ui.Routes, null,
+      React.createElement(ui.Route, { path: "/runs/:runId", element: React.createElement(ui.SavedRunResults) }),
+      React.createElement(ui.Route, { path: "/", element: React.createElement(Input) })))));
+    await waitForText(container, /Loaded saved/);
+    assert.equal(ui.getAttachedDocuments()[0].name, "unrelated.txt"); // Viewing results is read-only.
+    await act(async () => [...container.querySelectorAll("button")].find((b) => b.textContent === "Run again").click());
+    assert.deepEqual(ui.getAttachedDocuments(), [video]);
+    assert.deepEqual(destination.state, { newWorkflow: true, workflowPrompt: prompt });
+    assert.equal(reads, 1);
+  } finally { ui.replaceAttachedDocuments([]); await act(async () => root.unmount()); container.remove(); }
 });
 
 test("account control identifies the signed-in account and offers only listed workspaces", async () => {

@@ -19,7 +19,8 @@ function publish() {
       window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(documents));
     } catch {
       // Large file data stays available in memory for this page even when the
-      // browser declines to cache it in session storage.
+      // browser declines to cache it. Never reload an older, unrelated batch.
+      try { window.sessionStorage.removeItem(STORAGE_KEY); } catch { /* Storage may be disabled. */ }
     }
   }
   listeners.forEach((listener) => listener([...documents]));
@@ -27,6 +28,15 @@ function publish() {
 
 export function getAttachedDocuments() {
   return [...documents];
+}
+
+// A deliberate repeat restores only that run's inputs, never unrelated uploads
+// left in the composer. Approval and execution state are not copied.
+export function replaceAttachedDocuments(values) {
+  documents = (Array.isArray(values) ? values : [])
+    .filter((item) => item?.name && item?.file_url)
+    .map(({ name, file_url, size }) => ({ name, file_url, size }));
+  publish();
 }
 
 export function attachDocument(document) {

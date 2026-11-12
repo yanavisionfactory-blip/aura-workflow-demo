@@ -54,6 +54,38 @@ before(async () => {
 });
 after(() => { if (temporary) fs.rmSync(temporary, { recursive: true, force: true }); });
 
+test("failed video results open recovery and Run again uses the attachment-aware callback", async () => {
+  const dom = new JSDOM("<!doctype html><body><div id='app'></div></body>", { url: "https://aura.example.test" });
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true });
+  const { createRoot } = await import("react-dom/client");
+  const app = document.getElementById("app"), root = createRoot(app);
+  const calls = [];
+  const saved = { id: "old-video", status: "waiting_for_action", prompt: "Review the attached video.",
+    plan: { name: "Review attached Frame.io video" }, steps: [
+      { id: "identity", key: "identity", tool_slug: "frameio", operation: "frameio.identity.get",
+        status: "completed", reason: "Check the connected Frame.io account", output: { provider_result: { accounts: [] } } },
+      { id: "review", key: "review", tool_slug: "frameio", operation: "frameio.video.review",
+        status: "failed", reason: "Review the video", error: "Select the exact Frame.io file UUID.", output: {} },
+    ] };
+  try {
+    await act(async () => root.render(React.createElement(ResultsTestView, { run: saved,
+      onOpenRun: () => calls.push("recovery"),
+      onRepeatWorkflow: (prompt) => calls.push(["repeat", prompt]),
+      onStartWorkflow: () => calls.push("prompt-only"),
+    })));
+    assert.deepEqual(calls, []);
+    const button = (label) => [...app.querySelectorAll("button")].find((item) => item.textContent === label);
+    await act(async () => button("Resolve failed step").click());
+    await act(async () => button("Run again").click());
+    assert.deepEqual(calls, ["recovery", ["repeat", saved.prompt]]);
+    assert.match(app.textContent, /incomplete/);
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+    for (const key of ["window", "document", "IS_REACT_ACT_ENVIRONMENT"]) delete globalThis[key];
+  }
+});
+
 test("Frame.io review keeps its editable brief without the removed change composer", () => {
   const steps = frameioOutputs().map((output) => ({ id: output.step_id || output.step_key, key: output.step_key,
     tool_slug: output.operation.startsWith("frameio") ? "frameio" : "aura", operation: output.operation,
