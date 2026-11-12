@@ -28,6 +28,26 @@ test("public website reads are attributed to web research while composition rema
   assert.deepEqual(entries.map((entry) => entry.tool), ["Web research", "ChatGPT"]);
 });
 
+test("Frame.io video review credits both tools without inventing an extra action", () => {
+  const entries = toolResultEntries([
+    { id: "source", tool: "frameio", status: "completed", output: {
+      operation: "frameio.file.get", provider_result: { id: "exact-video" } } },
+    { id: "review", tool: "frameio", status: "completed", output: {
+      operation: "frameio.video.review", critic: { action: "accept" }, outcome_check: { status: "verified" },
+      provider_result: { status: "draft", analysis_provider: "aura_intelligence", media_analyzed: true,
+        source: { provider: "frameio", vendor_api_called: true, asset_id: "exact-video" },
+        body: "00:01 — Correct the title." } } },
+    { id: "upload", tool: "aura", status: "completed", output: {
+      operation: "intelligence.video.review", critic: { action: "accept" }, outcome_check: { status: "verified" },
+      provider_result: { status: "draft", analysis_provider: "aura_intelligence", body: "Uploaded video review." } } },
+  ]);
+  assert.equal(entries.length, 3);
+  assert.deepEqual(entries.map((entry) => entry.tool), ["Frame.io", "Frame.io + AURA Intelligence", "AURA Intelligence"]);
+  assert.equal(entries[1].preview.provider, "Frame.io + AURA Intelligence");
+  assert.equal(entries[1].response.source.vendor_api_called, true);
+  assert.deepEqual(toolResultGroups(entries).map((group) => group.tool), ["Frame.io", "Frame.io + AURA Intelligence", "AURA Intelligence"]);
+});
+
 test("main output identity retains other actions from the same tool without duplicating the main report", () => {
   const activity = [report("first", "Full first report."), report("main", "Full final report.")];
   const entries = toolResultEntries(activity);

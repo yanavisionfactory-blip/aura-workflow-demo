@@ -1,6 +1,7 @@
 // The connector owns execution; the visible provider follows the actual action.
 // Other AURA utilities are not ChatGPT calls.
 export function operationProviderName(name, operation = "") {
+  if (operation === "frameio.video.review") return "Frame.io + AURA Intelligence";
   if (operation === "intelligence.claude_backup") return "AURA Intelligence";
   if (["web.page.read", "web.search"].includes(operation)) return "Web research";
   return operation === "report.compose" ? "ChatGPT" : name;

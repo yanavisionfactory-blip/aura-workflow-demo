@@ -12,7 +12,7 @@ import {
   visualResultChoices,
 } from "../src/lib/resultPresentation.mjs";
 
-test("accepted video analysis appears as an AURA Intelligence review with timestamped body", () => {
+test("accepted video analysis credits its source and analysis engine with timestamped body", () => {
   for (const operation of ["intelligence.video.review", "frameio.video.review"]) {
     const output = { step_key: "review", operation,
       critic: { action: "accept" }, outcome_check: { status: "verified" },
@@ -21,7 +21,7 @@ test("accepted video analysis appears as an AURA Intelligence review with timest
         summary: "One spelling correction", body: "00:01.500 — Correct the title spelling." } };
     const result = primaryResultFromOutputs([output], {}, { primary_step_key: "review" });
     assert.equal(result.kind, "report");
-    assert.equal(result.provider, "AURA Intelligence");
+    assert.equal(result.provider, operation === "frameio.video.review" ? "Frame.io + AURA Intelligence" : "AURA Intelligence");
     assert.match(result.preview.body, /00:01.500/);
     output.outcome_check.status = "unverified";
     assert.notEqual(primaryResultFromOutputs([output], {}, { primary_step_key: "review" }).kind, "report");

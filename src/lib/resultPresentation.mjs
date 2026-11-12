@@ -521,7 +521,14 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
   let explicitPrimary = presentation?.primary_step_key
     ? completed.find((output) => output.step_key === presentation.primary_step_key)
     : null;
-  const frameio = frameioReviewResult(completed, explicitPrimary);
+  // A file read prepares video analysis; it must not replace the completed
+  // production report with the comments workspace when no primary is selected.
+  const videoReview = [...completed].reverse().find((output) =>
+    ["intelligence.video.review", "frameio.video.review"].includes(output.operation)
+    && output.critic?.action === "accept" && output.outcome_check?.status === "verified"
+    && output.provider_result?.status === "draft"
+    && typeof output.provider_result?.body === "string" && output.provider_result.body.trim());
+  const frameio = frameioReviewResult(completed, explicitPrimary || videoReview);
   if (frameio) return frameio;
   const executive = [...completed].reverse().find((output) => output.operation === "executive.review.prepare"
     && output.critic?.action === "accept" && output.outcome_check?.status === "verified"
@@ -593,7 +600,10 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
       audit, link: null, downloadUrl: null,
     };
     return {
-      title: saved.title || context.title, kind: "report", provider: saved.analysis_provider === "aura_intelligence" ? "AURA Intelligence" : "ChatGPT", providerVerb: "Generated with",
+      title: saved.title || context.title, kind: "report",
+      provider: saved.analysis_provider === "aura_intelligence"
+        ? operationProviderName("AURA Intelligence", report.operation) : "ChatGPT",
+      providerVerb: "Generated with",
       completionTitle: "Review draft ready",
       completionSummary: saved.synthetic
         ? "Fictional client review saved in AURA. All client data is synthetic."
