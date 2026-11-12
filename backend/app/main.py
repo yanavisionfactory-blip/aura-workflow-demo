@@ -5951,6 +5951,7 @@ def _run_blocker(
     requirements,
     attempted_steps: set[str] | frozenset[str] = frozenset(),
     video_target_failures: set[str] | frozenset[str] = frozenset(),
+    empty_audio_failures: set[str] | frozenset[str] = frozenset(),
 ) -> dict | None:
     # Recovery metadata is historical after a terminal transition. It cannot
     # create a new blocker for a verified completion or a cancelled run.
@@ -5959,6 +5960,20 @@ def _run_blocker(
     stored = (run.execution_context or {}).get("__aura_blocker__") or (run.result or {}).get(
         "blocker"
     )
+    if (run.plan_approved and run.status in {RunStatus.waiting_for_action, RunStatus.failed}
+            and (not stored or stored.get("action") == "inspect_run")):
+        # This exact read-only failure has no external mutation to reconcile.
+        # Only project a retry control; fetching history never dispatches work.
+        retry_video = next((step for step in steps
+            if step.id in empty_audio_failures and step.status == StepStatus.failed
+            and (step.tool_slug, step.operation) in {
+                ("aura", "intelligence.video.review"), ("frameio", "frameio.video.review")}
+            and not step.consequential and "provider_result" not in (step.output or {})), None)
+        if retry_video:
+            return {"code": "video_audio_retry_required", "kind": "human_action",
+                    "message": "The audio model returned an empty analysis. The video and approved review request are saved.",
+                    "action": "retry_step", "retryable": True,
+                    "tool_slug": retry_video.tool_slug, "step_id": retry_video.id}
     if (run.status in {RunStatus.waiting_for_action, RunStatus.failed, RunStatus.blocked}
             and (not stored or stored.get("action") == "inspect_run")):
         # Legacy video reads marked dispatch before local UUID validation. That
@@ -6324,12 +6339,14 @@ async def _run_view(session: AsyncSession, run: WorkflowRun) -> dict:
     # Step.error is deliberately sanitized for display. Diagnose legacy local
     # validation from the latest durable attempt, exposing only a fixed code.
     # Older attempts must not hide a newer authorization or provider failure.
-    from .video_review import is_frameio_target_error
+    from .video_review import is_empty_audio_error, is_frameio_target_error
 
     video_target_failures: set[str] = set()
+    empty_audio_failures: set[str] = set()
     failed_video_ids = [step.id for step in steps
                         if step.status == StepStatus.failed and not step.consequential
-                        and step.tool_slug == "frameio" and step.operation == "frameio.video.review"
+                        and (step.tool_slug, step.operation) in {
+                            ("frameio", "frameio.video.review"), ("aura", "intelligence.video.review")}
                         and not (step.output or {}).get("provider_result")]
     if failed_video_ids and run.status in {RunStatus.waiting_for_action, RunStatus.failed, RunStatus.blocked}:
         video_attempts = (await session.scalars(select(StepAttempt).where(
@@ -6343,6 +6360,13 @@ async def _run_view(session: AsyncSession, run: WorkflowRun) -> dict:
                                  if attempt.status == "failed" and attempt.tool_slug == "frameio"
                                  and attempt.operation == "frameio.video.review"
                                  and is_frameio_target_error(attempt.error)}
+        empty_audio_failures = {step_id for step_id, attempt in latest_video_attempts.items()
+                               if attempt.status == "failed"
+                               and (attempt.tool_slug, attempt.operation) in {
+                                   ("aura", "intelligence.video.review"), ("frameio", "frameio.video.review")}
+                               and any(step.id == step_id and step.tool_slug == attempt.tool_slug
+                                       and step.operation == attempt.operation for step in steps)
+                               and is_empty_audio_error(attempt.error)}
     # Start authorizes this pinned text-generation request. Its provider response
     # is the useful review, so let interactive clients complete only this input
     # approval and then stop at the existing durable output checkpoint. Never
@@ -6381,7 +6405,8 @@ async def _run_view(session: AsyncSession, run: WorkflowRun) -> dict:
                                 "tool_slug": step.tool_slug, "operation": step.operation,
                             }, preview.get("arguments") or {})):
                         preparation_ids.add(step.id)
-    blocker = _run_blocker(run, steps, approvals_by_step, requirements, attempted_steps, video_target_failures)
+    blocker = _run_blocker(run, steps, approvals_by_step, requirements, attempted_steps,
+                           video_target_failures, empty_audio_failures)
     from .run_supervisor import public_run_projection
 
     public = public_run_projection(run, blocker)

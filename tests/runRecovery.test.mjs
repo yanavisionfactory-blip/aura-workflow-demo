@@ -10,6 +10,19 @@ import {
   visibleRecoveryStepStatus,
 } from '../src/lib/runRecovery.mjs';
 
+test('empty audio recovery retries the saved video without export or external-write messaging', () => {
+  const value = { status: 'waiting_for_action', plan_approved: true,
+    blocker: { code: 'video_audio_retry_required', action: 'retry_step', retryable: true, step_id: 'video',
+      message: 'The audio model returned an empty analysis.' },
+    steps: [{ id: 'video', tool_slug: 'aura', operation: 'intelligence.video.review', status: 'failed', consequential: false }] };
+  const result = recoveryForRun(value);
+  assert.equal(result.canRetry, true);
+  assert.equal(result.canSkip, false);
+  assert.equal(result.buttonLabel, 'Retry video review');
+  assert.match(result.fix, /same approved request/);
+  assert.doesNotMatch(result.what + result.fix, /export|presentation|external action/);
+});
+
 test('a queued Google Ads quota retry shows its deadline after the server clears the step error', () => {
   const retryAt = new Date(Date.now() + 3_600_000).toISOString();
   const value = { public_status: 'recovering', autonomy_state: {
