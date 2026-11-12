@@ -21,6 +21,7 @@ import { requestNotifyPermission, notifyWorkflowComplete, notifyWorkflowError } 
 import { connectTool } from "@/lib/connectService";
 import { catalogEntryFor } from "@/lib/toolCatalog";
 import { reconcileToolOmissions } from "@/lib/toolOmissions.mjs";
+import { attachedDocumentsFromRun } from "@/lib/runAttachments.mjs";
 import { announceWorkflowHistoryChanged } from "@/lib/workflowHistory.mjs";
 import {
   approvePythonPlan,
@@ -372,6 +373,7 @@ export default function Demo() {
       pythonPlanRef.current = run.plan || null;
       omittedToolsRef.current = [...(run.inputs?.excluded_tool_families || [])];
       userSelectedToolsRef.current = [...(run.inputs?.requested_tools || [])];
+      attachedResourcesRef.current = { documents: attachedDocumentsFromRun(run) };
       originalPromptRef.current = intent;
       lastPlanningIntentRef.current = intent;
       setOriginalPrompt(intent);
@@ -625,8 +627,9 @@ export default function Demo() {
   const startAlternativePlan = useCallback((run, userApproach = "") => {
     if (!run) return;
     const prompt = alternativeRecoveryPrompt(run, userApproach);
+    const resources = { documents: attachedDocumentsFromRun(run) };
     reset();
-    window.setTimeout(() => handleSubmit(prompt), 0);
+    window.setTimeout(() => handleSubmit(prompt, [], resources), 0);
   }, [handleSubmit, reset]);
 
   const handlePickExample = useCallback(
