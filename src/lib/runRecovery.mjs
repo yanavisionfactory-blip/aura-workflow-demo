@@ -1,3 +1,5 @@
+import { uploadedVideoRecovery } from "./runAttachments.mjs";
+
 // Presentation only. The resume endpoint remains the authority for recovery.
 export const needsRecovery = (status) => ["waiting_for_action", "blocked", "failed"].includes(status);
 
@@ -40,6 +42,13 @@ export function recoveryProgressMessage(run = {}, step = {}) {
 export function alternativeRecoveryPrompt(run = {}, userApproach = "") {
   const original = String(run.prompt || "Continue the saved workflow").trim();
   const approach = String(userApproach || "").trim();
+  if (!approach && uploadedVideoRecovery(run)) {
+    // The user explicitly chose "Review uploaded video". Keep the task intact;
+    // a new, unapproved plan uses the separately restored attachment.
+    return /frame[.\s-]?io/i.test(original)
+      ? `${original}\n\nUse the attached uploaded video as the source and AURA Intelligence to review it.`
+      : original;
+  }
   const recovery = recoveryForRun(run);
   const direction = approach
     ? `Use this approach from the user: ${approach}`
@@ -93,6 +102,16 @@ function unboundCreatedWorksheet(run, step) {
 export function recoveryForRun(run = {}) {
   const steps = run.steps || [];
   const blocker = run.blocker;
+  const upload = uploadedVideoRecovery(run);
+  if (upload) return {
+    index: upload.index, stepId: upload.stepId, toolSlug: "frameio",
+    blockerCode: blocker?.code, blockerAction: blocker?.action,
+    what: "The saved Frame.io plan could not select a video.",
+    why: "The review stopped before reading the video because the plan did not contain a valid Frame.io target.",
+    fix: `Prepare a new review using the saved upload, ${upload.document.name}. Review the new plan before starting.`,
+    subtitle: "Your uploaded video and completed account check are saved.",
+    alternativeLabel: "Review uploaded video", canRetry: false, canSkip: false,
+  };
   if (blocker) {
     let blockerIndex = steps.findIndex((step) => step.id === blocker.step_id);
     if (blockerIndex < 0) {

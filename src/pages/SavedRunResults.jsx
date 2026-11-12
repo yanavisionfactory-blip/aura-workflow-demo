@@ -8,6 +8,8 @@ import { operationStepTitle } from "@/lib/planPresentation.mjs";
 import { savedRunActionLocation } from "@/lib/runtimePlan.mjs";
 import { toolResultName } from "@/lib/toolResultViews.mjs";
 import { useAuth } from "@/lib/AuthContext";
+import { attachedDocumentsFromRun } from "@/lib/runAttachments.mjs";
+import { replaceAttachedDocuments } from "@/lib/documentStore";
 
 export default function SavedRunResults() {
   const { runId } = useParams();
@@ -41,6 +43,11 @@ export default function SavedRunResults() {
       {run ? <ResultsView results={savedRunResults(run)} activity={activity} prompt={run.prompt} backendRunId={run.id}
         onOpenRun={() => navigate("/", { state: { resumeRunId: run.id } })}
         onNewWorkflow={() => navigate("/", { state: { newWorkflow: true } })}
+        onRepeatWorkflow={(prompt) => {
+          replaceAttachedDocuments(attachedDocumentsFromRun(run));
+          const next = savedRunActionLocation(prompt);
+          navigate(next.pathname, { state: next.state });
+        }}
         onStartWorkflow={(prompt) => {
           const next = savedRunActionLocation(prompt);
           navigate(next.pathname, { state: next.state });
