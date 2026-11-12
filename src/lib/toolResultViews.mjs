@@ -20,7 +20,7 @@ export function toolResultName(name = "AURA", operation = "") {
   operation ||= "";
   if (["meta-ads-direct", "meta-ads-mcp"].includes(name) || /^agent-meta-ads-[a-f0-9]+$/.test(name)) return "Meta Ads";
   if (operation === "intelligence.video.review") return "AURA Intelligence";
-  if (["frameio.video.review", "frameio.assistant.review"].includes(operation)) return operationProviderName(name, operation);
+  if (operation === "frameio.video.review") return operationProviderName(name, operation);
   if (operation.startsWith("frameio.")) return "Frame.io";
   if (operation.startsWith("meta-ads.")) return "Meta Ads";
   if (["report.compose", "web.page.read", "web.search", "intelligence.claude_backup"].includes(operation)) return operationProviderName(name, operation);

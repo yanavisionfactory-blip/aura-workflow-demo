@@ -129,7 +129,7 @@ def validate_video_source_bindings(plan, inputs: dict | None) -> None:
                if isinstance(doc, dict) and video_upload(doc)]
     for step in plan.steps:
         fallback_operation = getattr(step, "fallback_operation", None)
-        if not {step.operation, fallback_operation} & {"intelligence.video.review", "frameio.video.review", "frameio.assistant.review"}:
+        if not {step.operation, fallback_operation} & {"intelligence.video.review", "frameio.video.review"}:
             continue
         variants = [
             (step.operation, step.arguments),
@@ -141,7 +141,7 @@ def validate_video_source_bindings(plan, inputs: dict | None) -> None:
             if operation == "intelligence.video.review":
                 validate_uploaded_video_arguments(arguments or {}, {"inputs": inputs})
                 continue
-            if operation not in {"frameio.video.review", "frameio.assistant.review"}:
+            if operation != "frameio.video.review":
                 continue
             try:
                 target = resolve_value((arguments or {}).get("file_id"), {"inputs": inputs})

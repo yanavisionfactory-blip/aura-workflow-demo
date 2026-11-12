@@ -7,6 +7,6 @@ RUN apt-get update \
     && pip install --no-cache-dir -r requirements.txt \
     && python -m playwright install --with-deps chromium
 
-COPY app.py frameio_assistant.py ./
+COPY app.py ./
 
 CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8080}"]

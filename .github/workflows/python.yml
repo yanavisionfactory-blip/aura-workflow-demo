@@ -112,7 +112,7 @@ jobs:
           python-version: "3.12"
       - name: Install browser worker test dependencies
         run: pip install -r browser_worker/requirements.txt pytest pytest-asyncio httpx
-      - name: Verify browser worker isolation and assistant response matching
+      - name: Verify browser worker isolation
         run: python -m pytest browser_worker -q
       - name: Build browser worker production image
         run: docker build -t aura-browser-worker:test browser_worker

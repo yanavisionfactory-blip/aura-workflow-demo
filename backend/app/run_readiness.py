@@ -23,13 +23,20 @@ def account_fingerprint(tool, verification):
 
 
 async def check_run_readiness(session, run, plan):
+    from .frameio_assistant_contract import OPERATION, UNAVAILABLE_MESSAGE
+
     now = datetime.now(UTC)
     checks, bindings = [], {}
     required = {}
     for step in plan.steps:
         for slug, op in [(step.tool_slug, step.operation), *([(step.fallback_tool_slug, step.fallback_operation)] if step.fallback_tool_slug and step.fallback_operation else [])]:
+            if op == OPERATION:
+                checks.append({"type": "capability", "tool_slug": slug, "operation": op,
+                               "status": "blocked", "code": "capability_unavailable",
+                               "message": UNAVAILABLE_MESSAGE})
+                continue
             required.setdefault(slug, set()).update({op, *required_reads(op, step.arguments)})
-            if op in {"frameio.video.review", "frameio.assistant.review"}:
+            if op == "frameio.video.review":
                 required[slug].add("frameio.file.get")
     tools = (await session.scalars(select(ToolConnection).where(
         ToolConnection.workspace_id == run.workspace_id, ToolConnection.slug.in_(required),
@@ -91,7 +98,7 @@ async def check_run_readiness(session, run, plan):
             continue
         args = step.arguments or {}
         probe = None
-        if step.operation in {"frameio.video.review", "frameio.assistant.review"}:
+        if step.operation == "frameio.video.review":
             from .video_review import FRAMEIO_TARGET_MESSAGE, frameio_review_target
             try:
                 target = frameio_review_target(args, {
@@ -104,18 +111,6 @@ async def check_run_readiness(session, run, plan):
                 continue
             if target is not None:
                 probe = ("frameio.file.get", target)
-                if step.operation == "frameio.assistant.review":
-                    from urllib.parse import urlencode
-
-                    from .frameio_assistant import readiness
-                    ready = await readiness(session, run.workspace_id, by_slug[step.tool_slug].id,
-                                            target["account_id"], target["file_id"])
-                    checks.append({"type": "assistant", "tool_slug": step.tool_slug,
-                        "operation": step.operation, "status": "passed" if ready else "blocked",
-                        "code": "assistant_ready" if ready else "assistant_signin_required",
-                        "message": "Frame.io AI Assistant is connected for this video." if ready else
-                            "Sign in to Frame.io AI Assistant through AURA for this video, then check again.",
-                        **({} if ready else {"connect_path": "/frameio/assistant?" + urlencode(target)})})
         elif step.operation == "drive.spreadsheet.resolve":
             probe = (step.operation, args)
         elif step.operation == "sheets.append":
@@ -137,7 +132,7 @@ async def check_run_readiness(session, run, plan):
         except Exception:  # noqa: BLE001 — sanitize remote failure before returning diagnostics
             row.update(code="destination_unavailable", message=(
                 "The selected Frame.io video version could not be read with this account. Select an accessible video version."
-                if step.operation in {"frameio.video.review", "frameio.assistant.review"} else
+                if step.operation == "frameio.video.review" else
                 "The selected destination could not be read with this account."))
     report = {"version": 1, "plan_hash": canonical_plan_hash(plan.model_dump(mode="json")),
               "checked_at": now.isoformat(), "expires_at": (now + timedelta(seconds=max(1, get_settings().connection_probe_ttl_seconds))).isoformat(),
