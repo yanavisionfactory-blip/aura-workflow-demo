@@ -160,6 +160,7 @@ def _future_group_review_arguments(
 def _planning_prompt_with_documents(prompt: str, inputs: dict | None) -> str:
     """Add bounded uploaded text to the model call without exposing data URLs."""
     from .campaign_report import resolve_attachment
+    from .video_sources import video_upload, video_upload_hint
     from .weekly_review import resolve_weekly_attachment
 
     campaign_prompt = resolve_attachment(prompt, inputs)
@@ -182,6 +183,9 @@ def _planning_prompt_with_documents(prompt: str, inputs: dict | None) -> str:
         section += (f"\nUpload input reference: {{{{inputs.attached_documents.{document_index}.file_url}}}}"
                     if "attached_documents" in (inputs or {})
                     else f"\nUpload input reference: {{{{inputs.documents.{document_index}.file_url}}}}")
+        if video_upload(document):
+            input_key = "attached_documents" if "attached_documents" in (inputs or {}) else "documents"
+            section += "\n" + video_upload_hint(input_key, document_index)
         if isinstance(data_url, str) and data_url.startswith("data:") and "," in data_url:
             metadata, encoded = data_url.split(",", 1)
             media_type = metadata[5:].split(";", 1)[0].lower()
@@ -835,9 +839,11 @@ async def _create_compiled_plan(
     request_prompt: str | None = None,
     connected_inventory: list[dict] | None = None,
     connection_routes: dict[str, str] | None = None,
+    input_values: dict | None = None,
 ):
     """Build a schema-valid plan, repairing internal connector mismatches silently."""
     from .tool_omissions import omission_bounded_inventory, reconcile_tool_omissions
+    from .video_sources import validate_video_source_bindings
 
     requested_tool_names, excluded_tool_families = reconcile_tool_omissions(
         request_prompt or prompt, requested_tool_names, excluded_tool_families, inventory,
@@ -1079,6 +1085,7 @@ async def _create_compiled_plan(
         audited_plan = None
     if audited_plan is not None:
         reject_excluded_steps(audited_plan)
+        validate_video_source_bindings(audited_plan, input_values)
         _normalize_planned_steps(audited_plan, manifests_by_slug, request_prompt or prompt)
         from .intelligence_backup import add_intelligence_backups
 
@@ -1182,6 +1189,7 @@ async def _create_compiled_plan(
                     preferred_route=preferred_route,
                 )
             reject_excluded_steps(plan)
+            validate_video_source_bindings(plan, input_values)
             validate_selected_tools(plan, selected_targets)
             requested = prompt.casefold()
             # A public forecast has a dedicated source. Never accept a plan
@@ -2010,6 +2018,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                     request_prompt=run.prompt,
                     connected_inventory=connected_inventory,
                     connection_routes=connection_routes,
+                    input_values=run.inputs,
                 )
             validate_plan_connection_routes(plan, connection_routes)
             if excluded_families:
