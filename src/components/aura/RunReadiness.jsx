@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
 import { editedArgumentsForStep } from "@/lib/approvalReview.mjs";
 import { auraRequest } from "@/lib/auraApi";
-import { operationStepTitle } from "@/lib/planPresentation.mjs";
 
-export default function RunReadiness({ runId, plan, backendPlan, steps, preparationSteps = [], onReady }) {
+export default function RunReadiness({ runId, plan, backendPlan, steps, onReady }) {
   const reviewBody = JSON.stringify({ edited_steps: backendPlan?.steps?.map((step, index) => (
     steps?.[index] ? { ...step, arguments: editedArgumentsForStep(steps[index]) } : step
   )) });
@@ -28,12 +27,6 @@ export default function RunReadiness({ runId, plan, backendPlan, steps, preparat
   return <section aria-live="polite" className="my-4 rounded-xl border border-white/10 p-4 text-sm">
     <h3 className="font-semibold">Account and destination checks</h3>
     <p className="mt-1 text-xs text-muted-foreground">AURA checks this plan’s required access before Start and again before execution. New destinations are verified after creation.</p>
-    {preparationSteps.length > 0 && <div className="mt-2 text-xs text-muted-foreground">
-      <p>Background preparation included in this run:</p>
-      <ul className="mt-1 list-disc pl-4">{preparationSteps.map((step, i) => <li key={step.key || i}>
-        {operationStepTitle(step, "Frame.io")}
-      </li>)}</ul>
-    </div>}
     {busy && <p className="mt-2">Checking the selected accounts…</p>}
     {error && <p role="alert" className="mt-2 text-amber-300">{error}</p>}
     <ul className="mt-2 space-y-2">{report?.checks?.map((check, i) => <li key={i}>{check.status === "passed" ? "✓ " : "! "}{check.message}{check.connected_account && <span className="block text-xs text-muted-foreground">Account: {check.connected_account}</span>}</li>)}</ul>
