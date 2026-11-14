@@ -41,6 +41,11 @@ def source_presentation_requested(prompt: str) -> bool:
     if not re.search(r"\bdrive\b|google\s+docs?\b|docs\.google\.com/document/"
                      r"|(?:google|гугл)\s+диск", prompt, re.IGNORECASE):
         return False
+    if not re.search(r"\b(?:folders?|files?|documents?|materials?|read|find|search)\b"
+                     r"|docs\.google\.com/document/|\b(?:папк|документ|материал|прочит|най[дт])\w*"
+                     r"|\b(?:from|using)\b.{0,40}\b(?:drive|google\s+docs?)\b",
+                     prompt, re.IGNORECASE):
+        return False
     requests = re.finditer(r"\b(?:create|prepare|build|make|generate|draft|созда\w*|сдела\w*|"
                           r"подготов\w*|собер\w*)\b[^.!?\n]{0,160}"
                           r"\b(?:presentations?|slide\s*decks?|slides|презентаци\w*|слайд\w*)\b",

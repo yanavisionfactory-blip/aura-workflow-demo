@@ -146,6 +146,7 @@ def test_populated_deck_may_consume_direct_or_composed_source_text():
 def test_existing_deck_lookup_is_not_mistaken_for_new_composition():
     assert not source_presentation_requested("Find the presentation in my Drive folder")
     assert not source_presentation_requested("Create a presentation from the supplied text")
+    assert not source_presentation_requested("Create a presentation about birds and save it in Google Drive")
     assert source_presentation_requirements("Read my Drive folder") == []
     requirements = " ".join(source_presentation_requirements(PROMPT))
     assert "parent / child" in requirements and "actual relevant document contents" in requirements
