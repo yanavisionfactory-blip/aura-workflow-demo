@@ -103,6 +103,8 @@ def source_presentation_requirements(prompt: str) -> list[str]:
         "For a directly supplied Google Doc, read that document without unnecessary folder lookup. "
         "Use the connected Google Docs reader, never public web.page.read for a Drive document. "
         "google-docs.get-document returns textContent and documentId; docs.get returns body and id. "
+        "For report sources bind the complete textContent (or native docs.get body) and source URL, "
+        "not the entire Google Docs receipt with its duplicated text runs, styles and layout data. "
         "When binding a Google Docs reader directly to a Drive search result, use a query restricted "
         "to mimeType = 'application/vnd.google-apps.document'. Do not label the first unfiltered "
         "result as the most relevant document. Keep any broader inventory as separate evidence "
@@ -247,6 +249,36 @@ def bind_document_search_types(prompt: str, plan) -> None:
             )
             # A fallback must not reintroduce the mixed-format selection.
             search.reduced_scope_arguments = None
+
+
+def bind_document_report_text(plan) -> None:
+    """Bind all returned document text, without duplicating the layout receipt.
+
+    Source receipts remain saved by the executor. Only whole-document references
+    in a declared report dependency are converted; searches, selected fields and
+    arbitrary prose keep their original evidence and scope.
+    """
+    by_key = {step.key: step for step in plan.steps}
+    for report in plan.steps:
+        if report.tool_slug != "aura" or report.operation != "report.compose":
+            continue
+        sources = report.arguments.get("sources")
+        for source in sources if isinstance(sources, list) else []:
+            content = source.get("content") if isinstance(source, dict) else None
+            if not isinstance(content, str):
+                continue
+            match = re.fullmatch(
+                r"\{\{steps\.([a-z][a-z0-9_]*)(?:\.(?:output|result|provider_result)(?:\.ret)?|\.ret)?\}\}",
+                content,
+            )
+            read = by_key.get(match[1]) if match else None
+            if (read is None or read.key not in _ancestors(report, by_key)
+                    or plan.steps.index(read) >= plan.steps.index(report)):
+                continue
+            field = {"google-docs.get-document": "textContent", "docs.get": "body"}.get(read.operation)
+            if field:
+                source["content"] = ("Source URL: {{steps." + read.key + ".url}}\n\n"
+                                     "{{steps." + read.key + "." + field + "}}")
 
 
 def validate_source_presentation_plan(prompt: str, plan) -> None:

@@ -13,6 +13,7 @@ from app.models import DispatchIntent, RunStatus, RunStep, StepAttempt, StepStat
 from app.native_connectors import native_manifest
 from app.presentation_sources import (
     SourcePresentationPlanError,
+    bind_document_report_text,
     bind_document_search_types,
     source_presentation_operation_pairs,
     source_presentation_requested,
@@ -258,6 +259,49 @@ def test_query_format_repair_preserves_explicit_scope_and_other_readers(change):
     original = plan.model_dump()
     bind_document_search_types(prompt, plan)
     assert plan.model_dump() == original
+
+
+@pytest.mark.parametrize("suffix", ["", ".output", ".result", ".provider_result", ".ret", ".provider_result.ret"])
+def test_full_docs_receipts_bind_all_text_without_exceeding_report_limit(suffix):
+    from copy import deepcopy
+
+    from app.reports import ReportRequest
+    from app.workflow_context import resolve_value, step_context_value
+
+    plan = valid_plan()
+    plan.steps[1].operation = "google-docs.get-document"
+    report = step("report", "report.compose", {
+        "title": "Evidence", "instructions": "Prepare slides", "presentation": True,
+        "sources": [{"id": "document", "title": "Source", "content": "{{steps.read" + suffix + "}}"}],
+    }, ["read"])
+    report.tool_slug = "aura"
+    plan.steps.insert(2, report)
+    full_text = "Complete first tab.\n" * 300
+    second_text = "Second tab final paragraph."
+    receipt = {"ret": {"documentId": "returned-doc-id", "textContent": full_text,
+        "tabs": [{"textContent": full_text}, {"textContent": second_text}],
+        "body": {"formatting": "layout metadata" * 5000}}}
+    original = deepcopy(receipt)
+    bind_document_report_text(plan)
+    context = {"steps": {"read": step_context_value(receipt, "google-docs.get-document")}}
+    request = ReportRequest.model_validate(resolve_value(report.arguments, context))
+    assert request.sources[0].content == (
+        "Source URL: https://docs.google.com/document/d/returned-doc-id/edit\n\n"
+        + full_text + "\n\n" + second_text)
+    assert receipt == original
+    snapshot = plan.model_dump()
+    bind_document_report_text(plan)
+    assert plan.model_dump() == snapshot
+
+
+@pytest.mark.parametrize("content", ["{{steps.files}}", "{{steps.read.textContent}}", "Use the source as supplied."])
+def test_report_text_binding_preserves_search_receipts_and_explicit_fields(content):
+    plan = valid_plan()
+    report = step("report", "report.compose", {"sources": [{"id": "s", "title": "S", "content": content}]}, ["read"])
+    report.tool_slug = "aura"
+    plan.steps.append(report)
+    bind_document_report_text(plan)
+    assert report.arguments["sources"][0]["content"] == content
 
 
 def test_saved_invalid_plan_shows_repair_without_mutating_or_dispatching():
