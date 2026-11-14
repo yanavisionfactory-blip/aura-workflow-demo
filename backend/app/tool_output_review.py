@@ -27,7 +27,9 @@ def editable_text_output(step) -> bool:
     result = (step.output or {}).get("provider_result", {})
     if (step.status == StepStatus.completed and step.operation == "report.compose"
             and isinstance(result, dict) and isinstance(result.get("body"), str)):
-        return True
+        # Editing the text preview cannot silently leave the published slide
+        # objects unchanged. Typed decks are reviewed as a single structured result.
+        return not isinstance(result.get("presentation"), dict)
     return bool(
         step.status == StepStatus.completed
         and step.operation in {"anthropic.chat", "intelligence.claude_backup"}

@@ -252,8 +252,8 @@ test("an edited confirmed intent cannot reuse the previous durable planning requ
     hasActiveRequest: true,
   }), true);
   assert.equal(shouldStartFreshPlanningRun({
-    nextIntent: "  Read Notion notes and create Jira tasks. ",
-    activeIntent: "read notion notes and create jira tasks",
+    nextIntent: "  Read Notion notes and create Jira tasks  ",
+    activeIntent: "Read Notion notes and create Jira tasks",
     hasActiveRequest: true,
   }), false);
   assert.equal(shouldStartFreshPlanningRun({
@@ -262,4 +262,18 @@ test("an edited confirmed intent cannot reuse the previous durable planning requ
     hasActiveRequest: true,
     revisionInstruction: "Use Jira for the output",
   }), true);
+});
+
+test("folder path corrections preserve Unicode, emoji, punctuation and case", () => {
+  for (const [before, after] of [
+    ["Projects 💖 / Music", "Projects 💜 / Music"],
+    ["Проект / Музыка", "Проект / Ресторан"],
+    ["Guerne / Music", "Güerne / Music"],
+    ["Music-A", "Music A"], ["Music", "music"],
+  ]) {
+    assert.equal(shouldStartFreshPlanningRun({ hasActiveRequest: true,
+      activeIntent: `Read my Drive folder ${before}`, nextIntent: `Read my Drive folder ${after}` }), true);
+  }
+  assert.equal(shouldStartFreshPlanningRun({ hasActiveRequest: true,
+    activeIntent: "Güerne", nextIntent: "Gu\u0308erne" }), false);
 });

@@ -39,7 +39,10 @@ export function shouldStartFreshPlanningRun({
 } = {}) {
   if (!hasActiveRequest) return false;
   if (String(revisionInstruction || "").trim()) return true;
-  return normalizedWords(nextIntent) !== normalizedWords(activeIntent);
+  // Folder names, paths and account identifiers are case/punctuation/Unicode
+  // sensitive. Keyword normalization must not reuse a request for another file.
+  const exactIntent = (value) => String(value || "").normalize("NFC").trim().replace(/\s+/gu, " ");
+  return exactIntent(nextIntent) !== exactIntent(activeIntent);
 }
 
 export function promptConnectionRequirements(prompt = "", catalog = [], connections = {}) {

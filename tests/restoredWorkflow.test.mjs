@@ -130,6 +130,69 @@ test('opening saved results during a provider cooldown restores live progress wi
   }
 });
 
+for (const scenario of ["success", "read_error", "cancel_error", "still_stopping", "already_started"]) {
+  test(`retrying a restored planning failure preserves the full request: ${scenario}`, async () => {
+    const calls = [];
+    const prompt = "Read my Drive folder Projects 💖 / Música and create a presentation for restaurants.";
+    const saved = { id: "saved", status: "waiting_for_action", plan_approved: false, prompt,
+      plan: { name: "Project deck", interpretation: "Create a presentation", steps: [] }, steps: [],
+      blocker: { code: "planning_retry_required", message: "Previous planning failed" } };
+    let reads = 0, releaseRead;
+    const next = { id: "replacement", status: "awaiting_approval", plan_approved: false, prompt,
+      plan: { name: "Project deck", interpretation: "Prepared project slides", steps: [{key: "read", agent: "Reader",
+        tool_slug: "google", operation: "docs.get", arguments: {document_id: "selected"},
+        reason: "Read project", expected_output: "Project text", consequential: false}] }, steps: [] };
+    globalThis.__savedRunHarness = { api(name, args) {
+      calls.push({ name, args });
+      if (name === "rememberedActivePythonRun") return "saved";
+      if (["rememberActivePythonRun", "forgetActivePythonRun"].includes(name)) return;
+      if (name === "getPythonRun") {
+        if (args[0] === "replacement") return Promise.resolve(structuredClone(next));
+        reads++;
+        if (reads === 1) return Promise.resolve(structuredClone(saved));
+        return new Promise((resolve, reject) => { releaseRead = () => scenario === "read_error"
+          ? reject(new Error("Could not check saved run"))
+          : resolve({...structuredClone(saved), plan_approved: scenario === "already_started"}); });
+      }
+      if (name === "cancelPythonRun") {
+        if (scenario === "cancel_error") return Promise.reject(new Error("Could not stop saved run"));
+        return Promise.resolve({id: "saved", status: scenario === "still_stopping" ? "waiting_for_action" : "cancelled"});
+      }
+      if (name === "createPythonRun") return Promise.resolve({id: "replacement"});
+      throw new Error(`Unexpected API call: ${name}`);
+    } };
+    const container = document.createElement("div"); document.body.append(container);
+    const root = createRoot(container);
+    const retry = () => [...container.querySelectorAll("button")].find(item => item.textContent === "Retry planning");
+    try {
+      await act(async () => root.render(React.createElement(MemoryRouter, {
+        future: {v7_startTransition: true, v7_relativeSplatPath: true},
+      }, React.createElement(Demo))));
+      await waitUntil(retry);
+      await act(async () => { Simulate.click(retry()); Simulate.click(retry()); });
+      await waitUntil(() => releaseRead);
+      assert.equal(reads, 2, "double clicks must not start two retry preparations");
+      await act(async () => releaseRead());
+      if (scenario === "success") {
+        await waitUntil(() => container.textContent.includes("Prepared project slides"));
+        const creations = calls.filter(call => call.name === "createPythonRun");
+        assert.equal(creations.length, 1);
+        assert.equal(creations[0].args[0], prompt, "a summary must not replace the source path or original task");
+        assert.equal(calls.filter(call => call.name === "cancelPythonRun").length, 1);
+      } else {
+        const message = {read_error: "Could not check saved run", cancel_error: "Could not stop saved run",
+          still_stopping: "previous attempt is still stopping", already_started: "workflow has already started"}[scenario];
+        await waitUntil(() => container.textContent.includes(message));
+        assert.equal(calls.some(call => call.name === "createPythonRun"), false);
+        assert.equal(calls.some(call => call.name === "forgetActivePythonRun"), false);
+      }
+      assert.equal(calls.some(call => /approvePythonPlan|resumePythonRun/.test(call.name)), false);
+    } finally {
+      await act(async () => root.unmount()); container.remove();
+    }
+  });
+}
+
 for (const failFirst of [false, true]) test(`history edit compiles a fresh durable run before approval${failFirst ? " after a failed planning attempt" : ""}`, async () => {
   const calls = [];
   const prompt = "Create a Plantea KPI dashboard template for September 2026 in Google Sheets, compared to dermalogica.com and bskincaretx.com. Leave unknown actuals blank.";

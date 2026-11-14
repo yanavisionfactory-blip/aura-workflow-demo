@@ -7,6 +7,31 @@ from app.agent_runtime import intent_bounded_tool_inventory
 from app.orchestrator import explicit_disconnected_capabilities
 
 
+@pytest.mark.parametrize("backend", ["native", "pipedream"])
+def test_same_named_marketplace_pack_cannot_replace_the_connected_canva_route(backend):
+    from app.native_connectors import native_manifest
+    from app.orchestrator import _connected_catalog_entry
+
+    broker_operation = "canva.create-design"
+    broker = {"slug": "canva", "name": "Canva", "allowed_operations": [broker_operation]}
+    native = native_manifest("canva")
+    stored = native if backend == "native" else {"provider_type": "pipedream",
+        "capabilities": [{"name": broker_operation, "permission_scope": "write"}]}
+    granted = ["canva.design.get"] if backend == "native" else [broker_operation]
+    connected = {"slug": "canva", "name": "Canva", "connected": True,
+                 "allowed_operations": granted, "granted_operations": list(granted)}
+    before = deepcopy((broker, stored, connected))
+    merged = _connected_catalog_entry(broker, connected, stored)
+    assert merged["granted_operations"] == granted
+    assert (broker, stored, connected) == before
+    if backend == "native":
+        assert "canva.presentation.create" in merged["allowed_operations"]
+        assert broker_operation not in merged["allowed_operations"]
+        assert "canva.presentation.create" not in merged["granted_operations"]
+    else:
+        assert merged["allowed_operations"] == [broker_operation]
+
+
 def inventory():
     return [
         {"slug": "aura", "connected": True, "allowed_operations": ["report.compose"]},

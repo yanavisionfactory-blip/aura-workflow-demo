@@ -169,7 +169,11 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                     "Use synthetic=true for fictional demo inputs. For a new KPI spreadsheet, supply dashboard "
                     "with business_name, reporting_period, companies (business plus competitors), and the target workbook_metadata "
                     "from get-spreadsheet-by-id. This returns validated rows_json and deterministic locale-correct formulas; "
-                    "write rows_json unchanged at A1, then read the evaluated cells back.",
+                    "write rows_json unchanged at A1, then read the evaluated cells back. "
+                    "For a presentation from read project evidence, set presentation=true. Returns "
+                    "validated presentation.title, presentation.subtitle and presentation.phases for "
+                    "canva.presentation.create with layout=slides. Never bind Markdown body or raw "
+                    "document text to Canva phases; phases must be structured slide objects.",
                 ),
                 "input_schema": ReportRequest.model_json_schema(),
             },
