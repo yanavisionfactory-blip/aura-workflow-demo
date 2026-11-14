@@ -250,6 +250,7 @@ async def test_reads_filter_secrets_and_foreign_workflow(config, seeded):
             await call(http, bearer(config), "get_workflow", workspace_id="a", workflow_id="wa")
         )
         assert result["prompt"] == "Alice task"
+        assert result["aura_url"] == "https://aura.example.com/app/workflows/wa"
         assert "variables" not in result
 
 
@@ -269,6 +270,9 @@ async def test_draft_requires_scope_and_never_executes(config, seeded):
         second = payload(await call(http, token, "save_workflow_draft", **args))
         assert first["executed"] is False and first["replayed"] is False
         assert second["id"] == first["id"] and second["replayed"] is True
+        assert first["aura_url"] == second["aura_url"] == (
+            "https://aura.example.com/app/workflows/" + first["id"]
+        )
         conflict = await call(http, token, "save_workflow_draft", **{**args, "prompt": "Different"})
         assert conflict["isError"] is True
         foreign = await call(http, token, "save_workflow_draft", **{**args, "workspace_id": "b"})
@@ -278,6 +282,36 @@ async def test_draft_requires_scope_and_never_executes(config, seeded):
         assert draft.enabled is False and draft.plan == {} and draft.variables == {}
         assert await session.scalar(select(func.count()).select_from(WorkflowRun)) == 0
         assert await session.scalar(select(func.count()).select_from(AuditEvent)) == 1
+
+
+@pytest.mark.parametrize("base", ["https://example.com/app", "https://example.com/app/"])
+def test_draft_link_preserves_deployment_base_without_prompt_or_tokens(base):
+    assert bridge.workflow_url(base, "draft/id") == "https://example.com/app/workflows/draft%2Fid"
+
+
+async def test_browser_can_read_mcp_draft_without_enabling_or_executing_it(config, seeded):
+    from fastapi import HTTPException
+
+    from app import main
+
+    async with client(config) as http:
+        saved = payload(await call(http, bearer(config, scope="aura:read aura:drafts:write"),
+            "save_workflow_draft", workspace_id="a", name="Visa task", prompt="Read Виза 💖 and create slides",
+            request_key="draft-deep-link-0001"))
+    async with seeded() as session:
+        row = await session.get(Workflow, saved["id"])
+        row.variables = {"private": "not-for-the-link-page"}
+        await session.commit()
+        viewed = await main.get_workflow(saved["id"], SimpleNamespace(workspace_id="a"), session)
+        assert viewed["prompt"] == row.prompt and viewed["enabled"] is False
+        assert "variables" not in viewed and "private" not in str(viewed)
+        assert await session.scalar(select(func.count()).select_from(WorkflowRun)) == 0
+        with pytest.raises(HTTPException) as denied:
+            await main.get_workflow(saved["id"], SimpleNamespace(workspace_id="b"), session)
+        assert denied.value.status_code == 404
+        with pytest.raises(HTTPException) as missing:
+            await main.get_workflow("not-found", SimpleNamespace(workspace_id="a"), session)
+        assert missing.value.status_code == 404
 
 
 async def test_body_validation_and_host_protection(config, seeded):

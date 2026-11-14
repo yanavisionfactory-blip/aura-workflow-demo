@@ -676,6 +676,11 @@ export async function getPythonRun(runId) {
   return request(`/v1/runs/${runId}`, { timeoutMs: 10_000 });
 }
 
+export async function getPythonWorkflow(workflowId) {
+  await ensureWorkspace();
+  return request(`/v1/workflows/${encodeURIComponent(workflowId)}`, { timeoutMs: 10_000 });
+}
+
 export async function listPythonRuns({ active = false, limit = 20 } = {}) {
   await ensureWorkspace();
   return request(`/v1/runs?active=${active ? "true" : "false"}&limit=${limit}`);

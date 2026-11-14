@@ -10,7 +10,7 @@ import json
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 from uuid import NAMESPACE_URL, uuid5
 
 import jwt
@@ -154,6 +154,10 @@ def workflow_summary(workflow: Workflow) -> dict:
         "enabled": workflow.enabled,
         "created_at": workflow.created_at.isoformat(),
     }
+
+
+def workflow_url(frontend_url: str, workflow_id: str) -> str:
+    return f"{frontend_url.rstrip('/')}/workflows/{quote(workflow_id, safe='')}"
 
 
 class AuraMCP(FastMCP):
@@ -303,7 +307,8 @@ def build_mcp_server(settings):
             )
             if row is None:
                 raise ValueError("Workflow not found")
-            return {**workflow_summary(row), "prompt": row.prompt}
+            return {**workflow_summary(row), "prompt": row.prompt,
+                    "aura_url": workflow_url(settings.frontend_url, row.id)}
 
     @mcp.tool(
         annotations=ToolAnnotations(
@@ -394,7 +399,7 @@ def build_mcp_server(settings):
                         "Draft may already be saved; retry with the same request_key"
                     ) from None
                 result = {"id": draft_id, "saved": True, "replayed": False, "executed": False}
-        result["aura_url"] = settings.frontend_url
+        result["aura_url"] = workflow_url(settings.frontend_url, result["id"])
         return CallToolResult(content=[TextContent(type="text", text=json.dumps(result))])
 
     return mcp

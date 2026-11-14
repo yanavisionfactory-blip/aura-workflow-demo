@@ -5078,6 +5078,19 @@ async def list_workflows(
     return [_workflow_view(workflow) for workflow in workflows]
 
 
+@app.get("/v1/workflows/{workflow_id}")
+async def get_workflow(
+    workflow_id: str,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    workflow = await session.get(Workflow, workflow_id)
+    if not workflow or workflow.workspace_id != context.workspace_id:
+        raise HTTPException(404, "Workflow not found")
+    # Opening a saved task is read-only and does not expose execution variables.
+    return {key: value for key, value in _workflow_view(workflow).items() if key != "variables"}
+
+
 @app.patch("/v1/workflows/{workflow_id}")
 async def update_workflow(
     workflow_id: str,
