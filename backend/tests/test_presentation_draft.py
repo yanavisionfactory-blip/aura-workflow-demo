@@ -116,6 +116,61 @@ def test_a_shared_report_keeps_its_original_format():
     assert other.arguments == {"document_id": "{{steps.report.body}}"}
 
 
+@pytest.mark.parametrize("phases", [
+    [{"period": "{{steps.report.presentation.phases}}"}],
+    [{"period": "01"}],
+    [],
+    "{{steps.report.presentation.phases}}",
+])
+def test_typed_composer_repairs_malformed_slide_binding_without_a_folder_keyword(phases):
+    candidate = plan()
+    report = PlanStep(key="report", agent="Writer", tool_slug="aura", operation="report.compose",
+        arguments={"title": "Visa", "instructions": "Use the actual document text",
+                   "sources": SOURCES, "presentation": True},
+        depends_on=["read"], reason="Compose slides", expected_output="Typed presentation")
+    candidate.steps.insert(2, report)
+    write = candidate.steps[-1]
+    write.arguments.update(title="{{steps.report.presentation.title}}", phases=phases)
+    write.depends_on = ["report"]
+    manifests = {slug: native_manifest(slug) for slug in ("aura", "google", "canva")}
+    _normalize_planned_steps(candidate, manifests, "Create a Canva presentation from this Google Doc")
+    assert write.arguments["phases"] == "{{steps.report.presentation.phases}}"
+    assert report.arguments["presentation"] is True
+    assert "report" in write.depends_on
+    assert set(write.depends_on) <= {"report", "files", "read"}
+    snapshot = candidate.model_dump()
+    _normalize_planned_steps(candidate, manifests, "Create a Canva presentation from this Google Doc")
+    assert candidate.model_dump() == snapshot
+
+
+@pytest.mark.parametrize("case", ["valid", "undeclared", "unrelated", "ambiguous"])
+def test_slide_repair_does_not_replace_valid_content_or_guess_a_source(case):
+    candidate = plan()
+    report = PlanStep(key="report", agent="Writer", tool_slug="aura", operation="report.compose",
+        arguments={"title": "Visa", "instructions": "Use source text", "sources": SOURCES,
+                   "presentation": True}, depends_on=["read"], reason="Compose", expected_output="Slides")
+    candidate.steps.insert(2, report)
+    write = candidate.steps[-1]
+    write.arguments.update(title="{{steps.report.presentation.title}}", phases=[{"period": "01"}])
+    write.depends_on = ["report"]
+    if case == "valid":
+        write.arguments["phases"] = [{"period": "01", "title": "Custom slide", "items": ["Custom text"]}]
+    elif case == "undeclared":
+        write.depends_on = []
+    elif case == "unrelated":
+        write.arguments["title"] = "Unrelated title"
+    elif case == "ambiguous":
+        other = report.model_copy(deep=True)
+        other.key = "other"
+        candidate.steps.insert(3, other)
+        write.depends_on.append("other")
+        write.arguments["subtitle"] = "{{steps.other.presentation.subtitle}}"
+    from copy import deepcopy
+    before = deepcopy(write.arguments)
+    bind_presentation_composition("Create slides from a document", candidate, {"aura": native_manifest("aura")})
+    assert write.arguments == before
+
+
 async def test_real_resolved_document_content_composes_and_renders_populated_pptx(monkeypatch):
     parse = model_stub(monkeypatch)
     candidate = plan()
