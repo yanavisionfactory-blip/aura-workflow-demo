@@ -425,6 +425,12 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
     }
   };
 
+  if (busy && (plan.compileState === "blocked" || planningFailure)) {
+    return <div className="w-full max-w-5xl mx-auto py-6 text-sm text-muted-foreground">
+      AURA is rebuilding the plan. The previous attempt did not start any external actions.
+    </div>;
+  }
+
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="w-full max-w-5xl mx-auto">
       {/* Header */}

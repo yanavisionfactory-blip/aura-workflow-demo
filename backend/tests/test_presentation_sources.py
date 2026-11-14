@@ -7,10 +7,13 @@ import pytest
 from sqlalchemy import select
 
 from app import llm_planner, main, orchestrator
+from app.agent_runtime import intent_bounded_tool_inventory
 from app.config import get_settings
 from app.models import DispatchIntent, RunStatus, RunStep, StepAttempt, StepStatus, WorkflowRun
 from app.native_connectors import native_manifest
 from app.presentation_sources import (
+    SourcePresentationPlanError,
+    source_presentation_operation_pairs,
     source_presentation_requested,
     source_presentation_requirements,
     validate_source_presentation_plan,
@@ -20,6 +23,67 @@ from app.schemas import PlanStep, WorkflowPlan
 
 PROMPT = ("I have a folder in my Drive, Music project, with project materials. "
           "Please create a presentation for small restaurants to assess its viability.")
+
+
+def source_catalog():
+    return [{"slug": slug, "name": name, "connected": connected,
+             "allowed_operations": operations, "granted_operations": operations if connected else [],
+             "operation_contracts": [{"name": operation, "description": operation,
+                 "input_schema": {"type": "object", "properties": {}}}
+                 for operation in operations]}
+            for slug, name, connected, operations in [
+                ("google-drive", "Google Drive", True,
+                 ["google-drive.find-folder", "google-drive.list-files"]),
+                ("google-docs", "Google Docs", False, ["google-docs.get-document"]),
+                ("canva", "Canva", True,
+                 ["canva.presentation.create", "canva.import.get", "canva.design.get"]),
+                ("aura", "AURA", True, ["report.compose"]),
+                ("gmail", "Gmail", True, ["gmail.send"]),
+            ]]
+
+
+@pytest.mark.parametrize("selected", [[], ["Google Drive"], ["Google Drive", "Canva"]])
+def test_drive_deck_intent_retains_supporting_readers_and_composition_without_granting_access(selected):
+    catalog = source_catalog()
+    bounded = intent_bounded_tool_inventory(PROMPT, catalog, selected)
+    assert {item["slug"] for item in bounded} == {"google-drive", "google-docs", "canva", "aura"}
+    # The direct planner applies intent bounding again. It must be idempotent.
+    assert intent_bounded_tool_inventory(PROMPT, bounded, selected) == bounded
+    docs = next(item for item in bounded if item["slug"] == "google-docs")
+    assert docs["connected"] is False and docs["granted_operations"] == []
+    assert catalog == source_catalog()
+
+
+def test_support_selection_respects_the_available_route_and_nonpresentation_scope():
+    catalog = [item for item in source_catalog() if item["slug"] != "google-docs"]
+    assert not any(slug == "google-docs" for slug, _ in source_presentation_operation_pairs(PROMPT, catalog))
+    assert source_presentation_operation_pairs("Find files in my Drive folder", catalog) == set()
+    assert {item["slug"] for item in intent_bounded_tool_inventory(
+        "Read Google Drive files", source_catalog(), ["Google Drive"])} == {"google-drive"}
+
+
+def test_large_drive_catalog_cannot_crowd_out_source_and_slide_contracts():
+    catalog = source_catalog()
+    distractors = [{"name": f"google-drive.folder-project-presentation-{i}",
+        "description": str(i) + "X" * 5000,
+        "input_schema": {"type": "object", "properties": {}}} for i in range(80)]
+    catalog[0]["allowed_operations"] += [item["name"] for item in distractors]
+    catalog[0]["operation_contracts"] += distractors
+    packed = llm_planner._bounded_planning_catalog({
+        "request": PROMPT, "selected_tools": ["Google Drive", "Canva"],
+        "required_actions": [], "operations": catalog,
+    })
+    offered = {(item["slug"], operation) for item in packed["operations"]
+               for operation in item["allowed_operations"]}
+    assert source_presentation_operation_pairs(PROMPT, catalog) <= offered
+    assert len(offered) < sum(len(item["allowed_operations"]) for item in catalog)
+
+
+def test_source_planning_error_explains_the_missing_read_without_provider_details():
+    error = SourcePresentationPlanError("private provider payload")
+    assert orchestrator.planning_error_message(error) == error.public_message
+    assert "project documents" in error.public_message
+    assert "private provider payload" not in error.public_message
 
 
 def step(key, operation, arguments=None, dependencies=None, *, write=False):
