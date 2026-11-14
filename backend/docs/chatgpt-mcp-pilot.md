@@ -18,6 +18,12 @@ ChatGPT and grants access to their AURA account. No end-user OpenAI API key is u
 There are no run, approve, schedule, send, delete or provider execution tools.
 Draft creation does not invoke AURA's model or consume its API inference budget.
 Users review the saved draft before separately enabling or executing it in AURA.
+`save_workflow_draft` and `get_workflow` return a task-specific `aura_url` at
+`/workflows/:workflowId`. Opening it reads the saved task in the signed-in
+workspace, without enabling it or creating a run. **Build the plan** starts
+normal AURA planning from that saved task; the resulting plan still requires
+the normal **Start** review and connection checks before any provider action.
+The link contains only the workflow ID, not a prompt, credential or access grant.
 
 ## Clerk setup
 

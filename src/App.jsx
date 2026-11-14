@@ -13,6 +13,7 @@ import Demo from "@/pages/Demo";
 import DeliveryResults from "@/pages/DeliveryResults";
 import CollectResults from "@/pages/CollectResults";
 import SavedRunResults from "@/pages/SavedRunResults";
+import SavedWorkflow from "@/pages/SavedWorkflow";
 import SeoAuditDemo from "@/pages/SeoAuditDemo";
 import SimulatedCMSTool from "@/pages/SimulatedCMSTool";
 import MarketingToolsWorkflow from "@/pages/MarketingToolsWorkflow";
@@ -95,6 +96,7 @@ function ProductRoutes() {
       <FrameioBrowserBridge />
       <Routes>
         <Route path="/" element={<Demo />} />
+        <Route path="/workflows/:workflowId" element={<SavedWorkflow />} />
         <Route path="/frameio/assistant" element={<Navigate to="/" replace />} />
         <Route path="/results" element={<DeliveryResults />} />
         <Route path="/marketing-tools" element={<MarketingToolsWorkflow />} />
