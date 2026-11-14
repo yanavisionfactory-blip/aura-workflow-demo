@@ -13,6 +13,7 @@ from app.models import DispatchIntent, RunStatus, RunStep, StepAttempt, StepStat
 from app.native_connectors import native_manifest
 from app.presentation_sources import (
     SourcePresentationPlanError,
+    bind_document_search_types,
     source_presentation_operation_pairs,
     source_presentation_requested,
     source_presentation_requirements,
@@ -219,6 +220,44 @@ def test_google_docs_reader_cannot_consume_a_mixed_format_search():
     plan.steps[0].arguments = {"query": "fullText contains 'visa'"}
     with pytest.raises(SourcePresentationPlanError, match="mixed-format"):
         validate_source_presentation_plan(PROMPT, plan)
+
+
+def test_compiler_prepares_contextual_docs_query_before_validating_reader_format():
+    plan = valid_plan()
+    query = "trashed = false and ('real-parent' in parents) and (fullText contains 'German' or fullText contains 'Германия')"
+    plan.steps[0].arguments = {"query": query, "page_size": 25}
+    plan.steps[0].reduced_scope_arguments = {"query": query}
+    orchestrator._normalize_planned_steps(plan, {}, PROMPT)
+    assert plan.steps[0].arguments == {
+        "query": f"({query}) and mimeType = 'application/vnd.google-apps.document'", "page_size": 25}
+    assert plan.steps[0].reduced_scope_arguments == {"query": plan.steps[0].arguments["query"]}
+    assert plan.steps[1].arguments == {"document_id": "{{steps.files.id}}"}
+    validate_source_presentation_plan(PROMPT, plan)
+    original = plan.model_dump()
+    bind_document_search_types(PROMPT, plan)
+    assert plan.model_dump() == original
+
+
+@pytest.mark.parametrize("change", ["explicit_mime", "bound_query", "shared_sheet", "missing_dependency", "optional_search", "read_only"])
+def test_query_format_repair_preserves_explicit_scope_and_other_readers(change):
+    plan = valid_plan()
+    plan.steps[0].arguments = {"query": "fullText contains 'visa'"}
+    prompt = PROMPT
+    if change == "explicit_mime":
+        plan.steps[0].arguments["query"] += " and mimeType = 'application/pdf'"
+    elif change == "bound_query":
+        plan.steps[0].arguments["query"] = "{{inputs.query}}"
+    elif change == "shared_sheet":
+        plan.steps.insert(2, step("sheet", "sheets.read", {"spreadsheet_id": "{{steps.files.id}}"}, ["files"]))
+    elif change == "missing_dependency":
+        plan.steps[1].depends_on = []
+    elif change == "optional_search":
+        plan.steps[0].optional = True
+    else:
+        prompt = "Find my Drive files by context"
+    original = plan.model_dump()
+    bind_document_search_types(prompt, plan)
+    assert plan.model_dump() == original
 
 
 def test_saved_invalid_plan_shows_repair_without_mutating_or_dispatching():

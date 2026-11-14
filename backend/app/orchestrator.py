@@ -581,7 +581,7 @@ async def ensure_aura_intelligence(session, workspace_id: str) -> ToolConnection
 
 def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict], request_prompt: str = "") -> None:
     from .drive_discovery import bind_discovery_report_sources
-    from .presentation_sources import bind_presentation_composition
+    from .presentation_sources import bind_document_search_types, bind_presentation_composition
     from .sheets_targets import (
         bind_created_worksheets,
         bind_dashboard_metadata,
@@ -590,6 +590,7 @@ def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict], request_p
     )
 
     bind_discovery_report_sources(plan)
+    bind_document_search_types(request_prompt, plan)
     bind_presentation_composition(request_prompt, plan, manifests_by_slug)
     bind_requested_sheet_reads(plan, request_prompt)
     bind_dashboard_metadata(plan, manifests_by_slug)
