@@ -580,6 +580,7 @@ async def ensure_aura_intelligence(session, workspace_id: str) -> ToolConnection
 
 
 def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict], request_prompt: str = "") -> None:
+    from .drive_discovery import bind_discovery_report_sources
     from .presentation_sources import bind_presentation_composition
     from .sheets_targets import (
         bind_created_worksheets,
@@ -588,6 +589,7 @@ def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict], request_p
         bind_required_worksheet_names,
     )
 
+    bind_discovery_report_sources(plan)
     bind_presentation_composition(request_prompt, plan, manifests_by_slug)
     bind_requested_sheet_reads(plan, request_prompt)
     bind_dashboard_metadata(plan, manifests_by_slug)
@@ -1150,6 +1152,9 @@ async def _create_compiled_plan(
     from .presentation_sources import source_presentation_requirements
 
     repair_requirements.extend(source_presentation_requirements(requested_text))
+    from .drive_discovery import discovery_requirements
+
+    repair_requirements.extend(discovery_requirements(requested_text))
     if excluded_tool_families:
         repair_requirements.append(
             "The user's omission overrides earlier app selections and mentions: "
@@ -1308,6 +1313,7 @@ async def _create_compiled_plan(
 def planning_error_message(exc: Exception) -> str:
     """Return a user-facing planning failure without leaking provider payloads."""
     from .audit_sources import AUDIT_SOURCE_MESSAGE, AuditSourceContractError
+    from .drive_discovery import ContextualDiscoveryPlanError
     from .plan_preflight import PlanPreflightError
     from .presentation_sources import SourcePresentationPlanError
     from .proofing import ProofingSourceError
@@ -1325,7 +1331,8 @@ def planning_error_message(exc: Exception) -> str:
             return AUDIT_SOURCE_MESSAGE
         if isinstance(current, ProofingSourceError):
             return str(current)
-        if isinstance(current, (SelectedToolError, PlanPreflightError, SourcePresentationPlanError)):
+        if isinstance(current, (SelectedToolError, PlanPreflightError, SourcePresentationPlanError,
+                                ContextualDiscoveryPlanError)):
             return current.public_message
         chain.append(str(current))
         current = current.__cause__ or current.__context__

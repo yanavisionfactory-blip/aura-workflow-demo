@@ -348,11 +348,13 @@ def _bounded_planning_catalog(payload: dict) -> dict:
     from .request_contracts import user_request_text
 
     request = user_request_text(payload["request"]).casefold()
+    from .drive_discovery import discovery_operation_pairs
     from .presentation_sources import source_presentation_operation_pairs
 
     # Retaining the app is insufficient when its document-read or populated
     # slide contract can still be crowded out by metadata/listing operations.
     required.update(source_presentation_operation_pairs(request, catalog))
+    required.update(discovery_operation_pairs(request, catalog))
     # Selecting many resources must not hide an action the user named exactly.
     # Keep its complete contract, or fail explicitly if the mandatory catalog
     # does not fit. Ordinary word-overlap ranking can otherwise favor unrelated

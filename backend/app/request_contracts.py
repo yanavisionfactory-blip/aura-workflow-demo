@@ -471,12 +471,14 @@ def validate_requested_operations(
 ) -> list[dict]:
     from .audit_sources import validate_audit_sources
     from .dashboard_quality import validate_dashboard_plan
+    from .drive_discovery import validate_contextual_discovery
     from .frameio_assistant_contract import validate_native_assistant_plan
     from .presentation_sources import validate_source_presentation_plan
     from .proofing import validate_proofing_sources
     validate_native_assistant_plan(user_request_text(prompt), plan)
     validate_dashboard_plan(prompt, plan)
     validate_source_presentation_plan(user_request_text(prompt), plan)
+    validate_contextual_discovery(user_request_text(prompt), plan)
     validate_audit_sources(user_request_text(prompt), plan, inventory or [])
     validate_proofing_sources(user_request_text(prompt), plan, inventory or [], manifests or {})
     if (_existing_sheets_recovery(prompt)
