@@ -77,8 +77,10 @@ def test_raw_document_to_slides_gets_an_idempotent_reviewable_composition_step()
     assert preflight_plan(candidate, inventory, manifests, set()).fixes == []
 
 
-def test_composition_keeps_all_upstream_document_reads_and_never_invents_a_missing_reader():
+@pytest.mark.parametrize("reference", ["{{steps.read.body}}", "{{steps.read.ret.body.content.0}}", "{{steps.read}}"])
+def test_composition_keeps_all_upstream_document_reads_and_never_invents_a_missing_reader(reference):
     candidate = plan()
+    candidate.steps[-1].arguments["phases"] = reference
     second = candidate.steps[1].model_copy(deep=True)
     second.key = "second"
     candidate.steps.insert(2, second)

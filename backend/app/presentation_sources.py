@@ -67,7 +67,8 @@ def source_presentation_requirements(prompt: str) -> list[str]:
         "path, find the parent and list its children by parent ID and exact child name; do not "
         "search for the whole slash-separated path as one folder name. Preserve Unicode names. "
         "List the project folder and read the actual relevant document contents using permitted "
-        "content readers. A folder or file listing contains metadata, not the project contents. "
+        "content readers matched to each file's MIME type. Do not open audio, PDF or Office files "
+        "with a Google Docs-only reader. A folder or file listing contains metadata, not the project contents. "
         "Account for every relevant source and disclose unsupported files; do not silently read "
         "only the first file. Use the catalog's real file-content operations, never invent them."),
         ("Create a populated presentation from those content-read outputs, with explicit dependencies "
@@ -113,8 +114,7 @@ def bind_presentation_composition(prompt: str, plan, manifests: dict) -> None:
         phases = write.arguments.get("phases")
         if not isinstance(phases, str):
             continue
-        match = re.fullmatch(r"\{\{steps\.([a-z][a-z0-9_]*)(?:\.(?:output|result|provider_result))?"
-                             r"\.(body|text|phases|presentation\.phases)\}\}", phases)
+        match = re.fullmatch(r"\{\{steps\.([a-z][a-z0-9_]*)(?:\.[A-Za-z0-9_]+)*\}\}", phases)
         source = by_key.get(match[1]) if match else None
         if source is None:
             continue
