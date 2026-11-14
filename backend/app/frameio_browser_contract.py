@@ -3,9 +3,10 @@
 This is not a Frame.io API endpoint. An authenticated browser agent observes
 the native UI and returns its response to the approved AURA run.
 """
+from urllib.parse import urlsplit
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 OPERATION = "frameio.assistant.browser_review"
 WAIT_SECONDS = 600
@@ -32,6 +33,27 @@ class Target(BaseModel):
 class ReviewRequest(Target):
     browser_session_id: UUID
     instructions: str = Field(min_length=20, max_length=6000)
+
+
+class AssetLink(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    asset_url: str = Field(max_length=2000)
+    account_id: UUID | None = None
+
+    @field_validator("asset_url")
+    @classmethod
+    def exact_asset_url(cls, value):
+        url = urlsplit(value.strip())
+        parts = url.path.rstrip("/").split("/")
+        if (url.scheme != "https" or url.netloc not in {"app.frame.io", "next.frame.io"}
+                or len(parts) != 5 or parts[1] != "project" or parts[3] != "view"):
+            raise ValueError("Use the exact Frame.io asset URL: https://app.frame.io/project/PROJECT_UUID/view/FILE_UUID")
+        project_id, file_id = UUID(parts[2]), UUID(parts[4])
+        return f"https://app.frame.io/project/{project_id}/view/{file_id}"
+
+    def target(self, account_id):
+        parts = urlsplit(self.asset_url).path.split("/")
+        return Target(account_id=account_id, project_id=parts[2], file_id=parts[4])
 
 
 class BrowserResult(BaseModel):

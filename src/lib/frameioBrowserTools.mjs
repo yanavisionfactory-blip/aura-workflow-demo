@@ -17,6 +17,20 @@ export function frameioBrowserToolDefinitions(api) {
   };
   const tools = [
     {
+      name: "aura_frameio_prepare_review_from_link",
+      description: "Prepare a native Frame.io AI Assistant review in the current user's AURA workspace from their exact Frame.io asset URL. First visibly confirm the asset and accessible AI Assistant in their Frame.io tab. Resolves the account using only their existing AURA connection; never reuse another person's IDs. No analysis starts until the plan is reviewed and approved. Keep the browser agent active. If discovery reports too many accounts, provide the user's verified account UUID.",
+      inputSchema: schema({ asset_url: { type: "string", maxLength: 2000 }, account_id: uuid,
+        instructions: { type: "string", minLength: 20, maxLength: 6000 },
+        request_key: { type: "string", minLength: 1, maxLength: 150 } }, ["asset_url", "instructions", "request_key"]),
+      execute: async ({ instructions, request_key, ...selected }) => {
+        const connection = await api.request("/v1/frameio-browser/connect-from-link", { method: "POST", body: JSON.stringify(selected) });
+        const run = await api.createRun(`Use Frame.io's own AI Assistant through an attended browser executor.\n\n${instructions}`,
+          null, request_key, { frameio_browser_review: { ...connection.target, instructions, browser_session_id: connection.browser_session_id } });
+        return { ...connection, run_id: run.id, status: run.status,
+          next: "Read the plan, start the approved native review, claim its exact invocation prompt, submit it unchanged to Frame.io AI Assistant and return the fresh response through the completion tool." };
+      },
+    },
+    {
       name: "aura_frameio_prepare_review",
       description: "Prepare an AURA workflow using Frame.io's native AI Assistant. Call only after visibly confirming the exact asset and accessible AI Assistant in an authenticated Frame.io tab. AURA verifies the file through its existing connection, then binds an attended browser executor. This does not start analysis. Keep the agent active; never export browser cookies or credentials.",
       inputSchema: schema({ ...target, instructions: { type: "string", minLength: 20, maxLength: 6000 }, request_key: { type: "string", minLength: 1, maxLength: 150 } }),
