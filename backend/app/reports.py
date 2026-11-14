@@ -19,7 +19,7 @@ from .dashboard_builder import DashboardContext
 from .model_inputs import bounded_input, canonical_execution_evidence
 from .reliability import bounded_model_call
 from .schemas import WorkflowPlan
-from .workflow_context import referenced_paths
+from .workflow_context import referenced_paths, step_context_value
 
 REPORT_PREFIX = "AURA_REPORT_V1\n"
 
@@ -65,6 +65,15 @@ class ReportSource(BaseModel):
             # They are compatibility copies, not additional source evidence. Keep
             # the complete canonical receipt before applying the source-size limit.
             value = canonical_execution_evidence({"steps": {"source": value}})["steps"]["source"]
+        elif isinstance(value, dict):
+            document = value.get("ret", value)
+            if (isinstance(document, dict) and isinstance(document.get("documentId"), str)
+                    and isinstance(document.get("textContent"), str)):
+                # Saved plans can bind the raw Docs object or its provider
+                # envelope. Preserve every returned text tab and identity just
+                # like whole-step bindings, without repeating layout/style data.
+                context = step_context_value({"ret": document}, "google-docs.get-document")
+                value = canonical_execution_evidence({"steps": {"source": context}})["steps"]["source"]
         if isinstance(value, (dict, list)):
             return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
         return value

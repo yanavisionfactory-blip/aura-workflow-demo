@@ -304,6 +304,31 @@ def test_report_text_binding_preserves_search_receipts_and_explicit_fields(conte
     assert report.arguments["sources"][0]["content"] == content
 
 
+@pytest.mark.parametrize("envelope", [False, True])
+def test_saved_raw_docs_source_keeps_all_text_without_layout_overflow(envelope):
+    import json
+    from copy import deepcopy
+
+    from app.reports import ReportRequest
+
+    document = {"documentId": "saved-document", "title": "Visa advice",
+        "textContent": "First tab.", "tabs": [{"textContent": "First tab."}, {"textContent": "Last tab."}],
+        "body": {"formatting": "layout only" * 5000}}
+    raw = {"ret": document} if envelope else document
+    original = deepcopy(raw)
+    request = ReportRequest(title="Visa", instructions="Compose", presentation=True,
+        sources=[{"id": "doc", "title": "Source", "content": raw}])
+    result = json.loads(request.sources[0].content)
+    assert result["textContent"] == "First tab.\n\nLast tab."
+    assert result["documentId"] == "saved-document" and result["title"] == "Visa advice"
+    assert raw == original
+    document["textContent"] = "x" * 30_001
+    document.pop("tabs")
+    with pytest.raises(ValueError, match="30000"):
+        ReportRequest(title="Visa", instructions="Compose", presentation=True,
+            sources=[{"id": "doc", "title": "Source", "content": raw}])
+
+
 def test_saved_invalid_plan_shows_repair_without_mutating_or_dispatching():
     plan = valid_plan()
     plan.steps.pop(1)
