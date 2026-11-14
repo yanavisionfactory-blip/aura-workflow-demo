@@ -72,6 +72,10 @@ class ReportSource(BaseModel):
     @field_validator("content")
     @classmethod
     def reject_source_pointer_prose(cls, value):
+        from .drive_discovery import source_pointer_instruction
+
+        if source_pointer_instruction(value):
+            raise ValueError("Source content is an instruction, not evidence. Bind the actual step output.")
         if re.fullmatch(
             r"\s*(?:use|refer to|see)\s+(?:the\s+)?(?:actual\s+)?(?:completed\s+)?"
             r"(?:output|result)(?:\s+from|\s+of)?\s+(?:action|step)\s*[\w-]+"

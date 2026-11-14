@@ -268,9 +268,11 @@ def intent_bounded_tool_inventory(
 
     # A Drive-to-presentation request needs supporting readers and composition
     # even when an explicitly named/selected app suppresses semantic defaults.
+    from .drive_discovery import discovery_operation_pairs
     from .presentation_sources import source_presentation_operation_pairs
 
     source_tools = {slug for slug, _ in source_presentation_operation_pairs(prompt, inventory)}
+    source_tools.update(slug for slug, _ in discovery_operation_pairs(prompt, inventory))
     selected.update(index for index, item in enumerate(inventory) if item["slug"] in source_tools)
 
     if wants_public_weather:

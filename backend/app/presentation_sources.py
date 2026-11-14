@@ -37,10 +37,14 @@ class SourcePresentationPlanError(ValueError):
 
 
 def source_presentation_requested(prompt: str) -> bool:
-    return bool(re.search(r"\bdrive\b", prompt, re.IGNORECASE)
-        and re.search(r"\bfolders?\b", prompt, re.IGNORECASE)
-        and re.search(r"\b(?:create|prepare|build|make|generate|draft)\b[\s\S]{0,120}"
-                      r"\b(?:presentations?|slide\s*decks?|slides)\b", prompt, re.IGNORECASE))
+    if not (re.search(r"\bdrive\b", prompt, re.IGNORECASE)
+            and re.search(r"\bfolders?\b", prompt, re.IGNORECASE)):
+        return False
+    requests = re.finditer(r"\b(?:create|prepare|build|make|generate|draft)\b[^.!?\n]{0,120}"
+                          r"\b(?:presentations?|slide\s*decks?|slides)\b", prompt, re.IGNORECASE)
+    return any(not re.search(r"\b(?:do\s+not|don't|never|without|not)\s*"
+                             r"(?:\w+\s+){0,2}$", prompt[max(0, match.start() - 40):match.start()],
+                             re.IGNORECASE) for match in requests)
 
 
 def source_presentation_operation_pairs(prompt: str, inventory: list[dict]) -> set[tuple[str, str]]:
