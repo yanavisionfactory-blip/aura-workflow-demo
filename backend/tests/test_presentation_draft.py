@@ -59,6 +59,42 @@ def model_stub(monkeypatch, draft=DRAFT):
     return parse
 
 
+async def test_unused_search_evidence_is_accounted_for_without_false_slide_citations(monkeypatch):
+    from copy import deepcopy
+    draft = deepcopy(DRAFT)
+    draft["excluded_sources"] = [{"source_id": "search", "reason": "Candidate metadata only, not project content."}]
+    model_stub(monkeypatch, draft)
+    request = ReportRequest(title="Project", instructions="Create slides", presentation=True,
+        sources=SOURCES + [{"id": "search", "title": "Drive discovery", "content": "Candidate list"}])
+    result = await presentation_draft.compose_presentation(request)
+    assert result["excluded_sources"] == draft["excluded_sources"]
+    assert "Sources reviewed but not used" in result["body"]
+    assert "Sources: [source_1]" in result["body"]
+    assert "Candidate metadata only" not in str(result["presentation"])
+    assert len(result["sources"]) == 2
+
+
+@pytest.mark.parametrize("case", ["unknown", "overlap", "missing", "duplicate"])
+async def test_exclusions_cannot_hide_invented_missing_or_conflicting_citations(monkeypatch, case):
+    from copy import deepcopy
+    draft = deepcopy(DRAFT)
+    exclusion = {"source_id": "unused", "reason": "Unrelated candidate."}
+    draft["excluded_sources"] = [exclusion]
+    sources = SOURCES + [{"id": "unused", "title": "Other", "content": "Unrelated"}]
+    if case == "unknown":
+        exclusion["source_id"] = "invented"
+    elif case == "overlap":
+        draft["phases"][0]["source_ids"].append("unused")
+    elif case == "missing":
+        draft["excluded_sources"] = []
+    else:
+        draft["excluded_sources"].append(exclusion.copy())
+    model_stub(monkeypatch, draft)
+    with pytest.raises(ValueError, match="exactly the supplied sources"):
+        await presentation_draft.compose_presentation(ReportRequest(
+            title="Project", instructions="Create slides", presentation=True, sources=sources))
+
+
 def test_raw_document_to_slides_gets_an_idempotent_reviewable_composition_step():
     candidate = plan()
     manifests = {slug: native_manifest(slug) for slug in ("aura", "google", "canva")}
