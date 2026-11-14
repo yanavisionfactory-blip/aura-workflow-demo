@@ -361,6 +361,13 @@ def step_context_value(
         value.setdefault("output", result)
         value.setdefault("result", result)
         value.setdefault("provider_result", evidence)
+        if operation == "docs.get":
+            document_id = result.get("id")
+            if isinstance(document_id, str) and re.fullmatch(r"[A-Za-z0-9_-]+", document_id):
+                value.setdefault("url", f"https://docs.google.com/document/d/{document_id}/edit")
+            if isinstance(result.get("body"), str):
+                value.setdefault("text", result["body"])
+                value.setdefault("textContent", result["body"])
         if operation in {"get_ad_accounts", "mcp_meta_ads_get_ad_accounts"} and result.get("is_error") is False:
             # Pipeboard returns the account collection as JSON inside its MCP
             # structured result. Expose the full collection, without selecting
@@ -394,6 +401,7 @@ def step_context_value(
                 document_id = doc.get("documentId") if isinstance(doc, dict) else None
                 if isinstance(document_id, str) and re.fullmatch(r"[A-Za-z0-9_-]+", document_id):
                     value.setdefault("documentId", document_id)
+                    value.setdefault("url", f"https://docs.google.com/document/d/{document_id}/edit")
             if operation == "google-docs.get-document":
                 doc = result.get("ret")
                 if isinstance(doc, dict) and isinstance(doc.get("textContent"), str):
@@ -404,6 +412,7 @@ def step_context_value(
                     ] if isinstance(tabs, list) else []
                     text = "\n\n".join(tab_texts) if tab_texts else doc["textContent"]
                     value.setdefault("textContent", text)
+                    value.setdefault("text", text)
                     # Planners use the same body/content names as the native
                     # Docs reader. Derive them only from returned document
                     # text, including every returned tab; never from metadata
