@@ -165,7 +165,8 @@ const friendlyStepTitle = (step) => {
   if (operation.startsWith("calendar.")) return operation.includes("create") ? "Schedule the event" : "Check the calendar";
   if (operation === "docs.create") return "Create the Google Doc";
   if (operation === "docs.get") return "Read the Google Doc";
-  if (operation === "canva.presentation.create" && step.arguments?.phases?.some((phase) => phase.scene)) {
+  if (operation === "canva.presentation.create" && Array.isArray(step.arguments?.phases)
+      && step.arguments.phases.some((phase) => phase?.scene)) {
     return "Illustrate the poem in Canva";
   }
   if (operation === "canva.presentation.create") return "Make the Canva slide";

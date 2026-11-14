@@ -130,7 +130,7 @@ test('opening saved results during a provider cooldown restores live progress wi
   }
 });
 
-for (const scenario of ["success", "success_revised", "read_error", "cancel_error", "still_stopping", "already_started"]) {
+for (const scenario of ["success", "success_revised", "success_canva_reference", "read_error", "cancel_error", "still_stopping", "already_started"]) {
   test(`retrying a restored planning failure preserves the full request: ${scenario}`, async () => {
     const calls = [];
     const prompt = scenario === "success_revised"
@@ -144,6 +144,10 @@ for (const scenario of ["success", "success_revised", "read_error", "cancel_erro
       plan: { name: "Project deck", interpretation: "Prepared project slides", steps: [{key: "read", agent: "Reader",
         tool_slug: "google", operation: "docs.get", arguments: {document_id: "selected"},
         reason: "Read project", expected_output: "Project text", consequential: false}] }, steps: [] };
+    if (scenario === "success_canva_reference") next.plan.steps.push({key: "canva", agent: "Designer",
+      tool_slug: "canva", operation: "canva.presentation.create", consequential: true,
+      arguments: {title: "Visa checklist", layout: "slides", phases: "{{steps.compose.presentation.phases}}"},
+      reason: "Create the sourced presentation", expected_output: "Populated design"});
     globalThis.__savedRunHarness = { api(name, args) {
       calls.push({ name, args });
       if (name === "rememberedActivePythonRun") return "saved";
