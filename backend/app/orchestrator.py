@@ -1299,6 +1299,7 @@ def planning_error_message(exc: Exception) -> str:
     """Return a user-facing planning failure without leaking provider payloads."""
     from .audit_sources import AUDIT_SOURCE_MESSAGE, AuditSourceContractError
     from .plan_preflight import PlanPreflightError
+    from .presentation_sources import SourcePresentationPlanError
     from .proofing import ProofingSourceError
     from .selected_tools import SelectedToolError
 
@@ -1314,7 +1315,7 @@ def planning_error_message(exc: Exception) -> str:
             return AUDIT_SOURCE_MESSAGE
         if isinstance(current, ProofingSourceError):
             return str(current)
-        if isinstance(current, (SelectedToolError, PlanPreflightError)):
+        if isinstance(current, (SelectedToolError, PlanPreflightError, SourcePresentationPlanError)):
             return current.public_message
         chain.append(str(current))
         current = current.__cause__ or current.__context__
@@ -2273,6 +2274,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
             )
             failure_category = planning_failure_category(exc)
             from .plan_preflight import PlanPreflightError
+            from .presentation_sources import SourcePresentationPlanError
             from .proofing import ProofingSourceError
             from .selected_tools import SelectedToolError
             # A failed model call cannot establish that connecting a catalog
@@ -2354,7 +2356,7 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                 scope_error = str(exc) if str(exc).startswith("Unrequested ") else None
                 pause_direct_planning_failure(
                     run, scope_error=scope_error,
-                    public_message=planning_error_message(exc) if isinstance(exc, (SelectedToolError, PlanPreflightError, ProofingSourceError)) else None,
+                    public_message=planning_error_message(exc) if isinstance(exc, (SelectedToolError, PlanPreflightError, ProofingSourceError, SourcePresentationPlanError)) else None,
                 )
             else:
                 await recover_planning_failure(

@@ -57,6 +57,34 @@ after(async () => {
   if (temporary) fs.rmSync(temporary, { recursive: true, force: true });
 });
 
+test("retrying a failed plan hides stale errors until the new attempt settles", async () => {
+  globalThis.fetch = async (url) => Response.json(new URL(url).pathname === "/v1/tools" ? [] : { marketplace: [] });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  let retries = 0;
+  try {
+    for (const errorState of [{ error: "Reading project documents is missing." },
+      { compileError: "Reading project documents is missing." }]) {
+      const props = { plan: { steps: [], provisional: true, compileState: "blocked", ...errorState },
+        onRetryPlan: () => { retries += 1; } };
+      await act(async () => root.render(React.createElement(PlanView, { ...props, busy: true })));
+      assert.match(container.textContent, /AURA is rebuilding the plan/);
+      assert.doesNotMatch(container.textContent, /couldn't|Reading project documents is missing|Retry planning|Try again/);
+      assert.equal(container.querySelectorAll("button").length, 0);
+      await act(async () => root.render(React.createElement(PlanView, { ...props, busy: false })));
+      assert.match(container.textContent, /Reading project documents is missing/);
+      const retry = [...container.querySelectorAll("button")].find((button) => /Retry planning|Try again/.test(button.textContent));
+      assert.ok(retry && !retry.disabled);
+      await act(async () => retry.click());
+    }
+    assert.equal(retries, 2);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
 test("opening a saved connection gate reuses refreshed exact grants without opening consent", async () => {
   localStorage.setItem("aura_python_workspace_id", "test-workspace");
   const recovered = [], requests = [];

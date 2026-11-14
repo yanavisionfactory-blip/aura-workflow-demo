@@ -11,6 +11,18 @@ CONTENT_READS = {
 FOLDER_READS = {"google-drive.list-files", "drive.files.search"}
 BLANK_DESIGNS = {"canva.design.create", "canva.create-design",
                  "canva-mcp.canva-create-design"}
+SUPPORT_OPERATIONS = CONTENT_READS | FOLDER_READS | {
+    "google-drive.find-folder", "report.compose", "canva.presentation.create",
+    "canva.import.get", "canva.design.get", "canva.export.create", "canva.export.get",
+}
+
+
+class SourcePresentationPlanError(ValueError):
+    public_message = (
+        "AURA couldn't include reading your project documents before creating the presentation. "
+        "Nothing has run. Rebuild the plan with document reading and populated slides; "
+        "changing the folder name alone will not resolve this planning error."
+    )
 
 
 def source_presentation_requested(prompt: str) -> bool:
@@ -18,6 +30,22 @@ def source_presentation_requested(prompt: str) -> bool:
         and re.search(r"\bfolders?\b", prompt, re.IGNORECASE)
         and re.search(r"\b(?:create|prepare|build|make|generate|draft)\b[\s\S]{0,120}"
                       r"\b(?:presentations?|slide\s*decks?|slides)\b", prompt, re.IGNORECASE))
+
+
+def source_presentation_operation_pairs(prompt: str, inventory: list[dict]) -> set[tuple[str, str]]:
+    """Keep supporting contracts already allowed by the route/omission catalog.
+
+    Naming Drive or selecting Canva must not remove the document readers the
+    independent source validator requires. This does not create account grants.
+    """
+    if not source_presentation_requested(prompt):
+        return set()
+    return {
+        (item["slug"], operation)
+        for item in inventory for operation in item.get("allowed_operations", [])
+        if operation in SUPPORT_OPERATIONS
+        or operation.startswith(("google-slides.", "slides."))
+    }
 
 
 def source_presentation_requirements(prompt: str) -> list[str]:
@@ -65,7 +93,7 @@ def validate_source_presentation_plan(prompt: str, plan) -> None:
                      and step.dependency_mode == "all_succeeded"
                      and ancestors(step) & folder_reads}
     if not content_reads:
-        raise ValueError(
+        raise SourcePresentationPlanError(
             "Read the actual project document contents after listing the Drive folder before "
             "creating the presentation. Folder/file metadata cannot supply slide content. "
             "Use a permitted document-content reader and preserve its source references."
@@ -77,7 +105,7 @@ def validate_source_presentation_plan(prompt: str, plan) -> None:
               and step.operation not in BLANK_DESIGNS
               and "export" not in step.operation]
     if not writes:
-        raise ValueError(
+        raise SourcePresentationPlanError(
             "The project needs a populated presentation, not a blank design. Use a permitted "
             "content-creation operation such as canva.presentation.create with the read source text."
         )
@@ -88,13 +116,13 @@ def validate_source_presentation_plan(prompt: str, plan) -> None:
             key in by_key and ancestors(by_key[key]) & content_reads
         ) for key in source_references & upstream)
         if (step.dependency_mode != "all_succeeded" or not upstream & content_reads or not grounded):
-            raise ValueError(
+            raise SourcePresentationPlanError(
                 "Every presentation content write must depend on successful project document reads "
                 "and consume their actual text or an artifact composed from those reads."
             )
     used = set().union(*(ancestors(step) for step in writes))
     if any(step.operation in BLANK_DESIGNS and step.key not in used for step in steps):
-        raise ValueError("Remove the unrelated blank Canva design; deliver the populated source-based presentation.")
+        raise SourcePresentationPlanError("Remove the unrelated blank Canva design; deliver the populated source-based presentation.")
 
 
 def source_presentation_blocker(message: str) -> dict:
