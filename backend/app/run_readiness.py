@@ -3,6 +3,7 @@ import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 
+from fastapi import HTTPException
 from sqlalchemy import select
 
 from .config import get_settings
@@ -24,6 +25,7 @@ def account_fingerprint(tool, verification):
 
 async def check_run_readiness(session, run, plan):
     from .frameio_assistant_contract import OPERATION, UNAVAILABLE_MESSAGE
+    from .frameio_browser_contract import OPERATION as BROWSER_OPERATION
 
     now = datetime.now(UTC)
     checks, bindings = [], {}
@@ -37,6 +39,8 @@ async def check_run_readiness(session, run, plan):
                 continue
             required.setdefault(slug, set()).update({op, *required_reads(op, step.arguments)})
             if op == "frameio.video.review":
+                required[slug].add("frameio.file.get")
+            if op == BROWSER_OPERATION:
                 required[slug].add("frameio.file.get")
     tools = (await session.scalars(select(ToolConnection).where(
         ToolConnection.workspace_id == run.workspace_id, ToolConnection.slug.in_(required),
@@ -84,6 +88,24 @@ async def check_run_readiness(session, run, plan):
     # Check exact, existing targets. Destinations produced by earlier steps are
     # verified by their creation receipt before a dependent step may use them.
     for step in plan.steps:
+        if step.operation == BROWSER_OPERATION:
+            from .frameio_browser import binding_for
+            from .frameio_browser_contract import NOT_CONNECTED, ReviewRequest
+            from .workflow_context import resolve_value
+            try:
+                args = ReviewRequest.model_validate(resolve_value(step.arguments, {
+                    **(run.execution_context or {}), "inputs": run.inputs or {},
+                }))
+                binding = await binding_for(session, run.workspace_id, args)
+                if binding.tool_id != getattr(by_slug.get(step.tool_slug), "id", None):
+                    raise ValueError("Different Frame.io connection")
+                checks.append({"type": "browser_executor", "tool_slug": step.tool_slug,
+                    "operation": step.operation, "status": "passed",
+                    "message": "Attended browser executor connected for this exact Frame.io video. Keep the agent active during execution."})
+            except (ValueError, HTTPException):
+                checks.append({"type": "browser_executor", "tool_slug": step.tool_slug,
+                    "operation": step.operation, "status": "blocked",
+                    "code": "browser_executor_required", "message": NOT_CONNECTED})
         if step.operation == "intelligence.video.review":
             from .video_sources import UPLOAD_SOURCE_MESSAGE, validate_uploaded_video_arguments
             try:
@@ -98,7 +120,9 @@ async def check_run_readiness(session, run, plan):
             continue
         args = step.arguments or {}
         probe = None
-        if step.operation == "frameio.video.review":
+        if step.operation == BROWSER_OPERATION:
+            probe = ("frameio.file.get", {key: args.get(key) for key in ("account_id", "file_id")})
+        elif step.operation == "frameio.video.review":
             from .video_review import FRAMEIO_TARGET_MESSAGE, frameio_review_target
             try:
                 target = frameio_review_target(args, {

@@ -1,4 +1,5 @@
 import RunSupport from "@/pages/RunSupport";
+import FrameioBrowserBridge from "@/lib/FrameioBrowserBridge";
 import { useEffect, useState } from "react";
 import { Show, SignIn, SignUp } from "@clerk/react";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -91,6 +92,7 @@ function ProductRoutes() {
 
   return (
     <>
+      <FrameioBrowserBridge />
       <Routes>
         <Route path="/" element={<Demo />} />
         <Route path="/frameio/assistant" element={<Navigate to="/" replace />} />

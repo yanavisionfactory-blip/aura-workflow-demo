@@ -847,7 +847,8 @@ async def _create_compiled_plan(
     from .tool_omissions import omission_bounded_inventory, reconcile_tool_omissions
     from .video_sources import uploaded_video_review_plan, validate_video_source_bindings
 
-    require_supported_request(user_request_text(request_prompt or prompt))
+    require_supported_request(user_request_text(request_prompt or prompt),
+                              browser_review=bool((input_values or {}).get("frameio_browser_review")))
     requested_tool_names, excluded_tool_families = reconcile_tool_omissions(
         request_prompt or prompt, requested_tool_names, excluded_tool_families, inventory,
     )
@@ -1051,12 +1052,15 @@ async def _create_compiled_plan(
     from .campaign_workflow import campaign_workflow_recipe
     from .content_review import content_review_recipe
     from .executive_review import workflow_recipe as executive_workflow_recipe
+    from .frameio_browser_contract import review_plan as browser_review_plan
     from .reports import report_workflow_recipe
     from .seo_crawl import crawl_review_recipe
     from .website_content import website_workflow_recipe
     from .weekly_review import weekly_workflow_recipe
 
-    audited_plan = uploaded_video_review_plan(request_prompt or prompt, input_values, inventory)
+    audited_plan = browser_review_plan(request_prompt or prompt, input_values, inventory)
+    if audited_plan is None:
+        audited_plan = uploaded_video_review_plan(request_prompt or prompt, input_values, inventory)
     if audited_plan is None:
         audited_plan = content_review_recipe(prompt, inventory)
     if audited_plan is None:
@@ -2446,6 +2450,15 @@ async def review_recorded_result(session, run, step, snapshot, contract, result)
     ) + incomplete_evidence(step.operation, result, contract.get("required_evidence", []))
     if errors:
         return CriticDecision(action="escalate", reasons=errors)
+    if step.operation == "frameio.assistant.browser_review":
+        from .frameio_browser import verify_delivery
+
+        try:
+            check = await verify_delivery(session, run, step, snapshot, contract.get("arguments", {}), result)
+        except ValueError as exc:
+            return CriticDecision(action="escalate", reasons=[str(exc)])
+        step.output = {**step.output, "outcome_check": check}
+        return CriticDecision(action="accept", reasons=[check["scope"]])
     from .sheets_outcomes import worksheet_read_errors
 
     worksheet_errors = worksheet_read_errors(step.operation, contract.get("arguments", {}), result)
@@ -4098,8 +4111,12 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             raise BudgetExceeded("Delivery time budget exhausted")
                         if not manifest_record:
                             raise RuntimeError("Capability provider is not verified")
+                        from .frameio_browser_contract import OPERATION as BROWSER_REVIEW
+                        from .frameio_browser_contract import WAIT_SECONDS as BROWSER_WAIT_SECONDS
                         from .video_review import OPERATIONS as VIDEO_OPERATIONS
                         step_timeout = (
+                            float(BROWSER_WAIT_SECONDS + 30)
+                            if operation == BROWSER_REVIEW else
                             float(get_settings().video_review_timeout_seconds)
                             if operation in VIDEO_OPERATIONS
                             else float(snapshot.policy_snapshot["step_timeout_seconds"])
@@ -4109,7 +4126,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                                 step_timeout,
                                 max(0.01, budget.deadline - time.monotonic()),
                             )
-                            if budget
+                            if budget and operation != BROWSER_REVIEW
                             else step_timeout
                         )
                         broker_pack_id = (active_tool.config or {}).get(
@@ -4118,7 +4135,24 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         release_id = (active_tool.config or {}).get(
                             "connector_release_id"
                         )
-                        if active_tool.config.get("managed_by") == "wordpress_plugin":
+                        if operation == BROWSER_REVIEW:
+                            from .frameio_browser import execute as execute_browser_review
+                            arguments, capability = _prepare_provider_arguments(runtime_manifest, operation, arguments)
+                            confirm_provider_arguments(arguments)
+                            await mark_provider_dispatched()
+                            browser_wait_started = time.monotonic()
+                            try:
+                                result = await asyncio.wait_for(
+                                    execute_browser_review(session, run, step, active_tool, arguments, snapshot),
+                                    timeout=execution_timeout,
+                                )
+                            finally:
+                                # External UI work has its own finite deadline.
+                                # Preserve the remaining model-call budget for
+                                # outcome validation after this attended wait.
+                                if budget:
+                                    budget.deadline += min(time.monotonic() - browser_wait_started, BROWSER_WAIT_SECONDS + 30)
+                        elif active_tool.config.get("managed_by") == "wordpress_plugin":
                             from .wordpress_plugins import execute as execute_wordpress_plugin
                             from .wordpress_plugins import manifest as wordpress_plugin_manifest
 
