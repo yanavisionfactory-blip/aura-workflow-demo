@@ -95,7 +95,7 @@ def bind_presentation_composition(prompt: str, plan, manifests: dict) -> None:
     Keep source reads and write dependencies. This prepares a visible draft
     step; it neither reads files nor changes any external application.
     """
-    if not source_presentation_requested(prompt) or not any(
+    if not any(
         module.get("name") == "report.compose"
         for module in manifests.get("aura", {}).get("capabilities", [])
     ):
@@ -117,7 +117,24 @@ def bind_presentation_composition(prompt: str, plan, manifests: dict) -> None:
             continue
         phases = write.arguments.get("phases")
         if not isinstance(phases, str):
-            continue
+            # A model can wrap the complete composer array in one incomplete
+            # phase, e.g. [{"period": "{{steps.compose.presentation.phases}}"}].
+            # Only repair a malformed shape with one already-bound, declared
+            # report dependency; leave explicit valid slide content unchanged.
+            if not isinstance(phases, list) or (phases and all(
+                isinstance(phase, dict) and {"period", "title", "items"} <= phase.keys()
+                for phase in phases
+            )):
+                continue
+            references = referenced_step_keys(write.arguments)
+            composers = [by_key[key] for key in write.depends_on
+                         if key in references and key in by_key
+                         and by_key[key].tool_slug == "aura"
+                         and by_key[key].operation == "report.compose"
+                         and plan.steps.index(by_key[key]) < plan.steps.index(write)]
+            if len(composers) != 1:
+                continue
+            phases = "{{steps." + composers[0].key + ".presentation.phases}}"
         match = re.fullmatch(r"\{\{steps\.([a-z][a-z0-9_]*)(?:\.[A-Za-z0-9_]+)*\}\}", phases)
         source = by_key.get(match[1]) if match else None
         if source is None:
