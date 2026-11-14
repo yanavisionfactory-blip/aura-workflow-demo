@@ -111,6 +111,8 @@ def _valid_schema_value(schema, root=None):
         return "aura@example.com"
     if schema.get("format") == "uri":
         return "https://example.com/resource"
+    if schema.get("format") == "uuid":
+        return "11111111-1111-4111-8111-111111111111"
     if schema.get("pattern") and "@" in schema["pattern"]:
         return "aura@example.com"
     if schema.get("pattern") == "^[a-f0-9]{64}$":
@@ -127,7 +129,8 @@ def _valid_schema_value(schema, root=None):
         return "2026-09-18"
     if schema.get("pattern") == "^SIMULATED_":
         return "SIMULATED_source.csv"
-    return "value"
+    value = "value".ljust(int(schema.get("minLength", 0)), "x")
+    return value[:int(schema["maxLength"])] if "maxLength" in schema else value
 
 
 @pytest.mark.parametrize("slug", sorted(NATIVE_CONNECTORS))

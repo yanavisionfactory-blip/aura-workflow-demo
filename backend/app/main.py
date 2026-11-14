@@ -386,6 +386,11 @@ async def tenant_session(
     return session
 
 
+from .frameio_browser import install_routes as install_frameio_browser_routes
+
+install_frameio_browser_routes(app, tenant_context, tenant_session)
+
+
 @app.get("/health")
 async def health() -> dict:
     from .release_info import release_sha

@@ -274,6 +274,8 @@ def required_reads(operation, arguments):
     from .outcome_checks import READBACK_OPERATIONS
     read = READBACK_OPERATIONS.get(operation)
     required = {read} if read else set()
+    if operation == "frameio.assistant.browser_review":
+        required.add("frameio.file.get")
     if operation == "google-sheets.update-multiple-rows":
         required.add("google-sheets.get-spreadsheet-info")
     if operation == "notion.page.create" and arguments.get("children"):

@@ -34,6 +34,18 @@ META_COLLECTION = {"type": "object", "required": ["data", "complete", "source_pr
                    "source_provider": {"const": "meta-ads"}, "vendor_api_called": {"const": True},
                    "connection_route": {"const": "direct"}, "retrieved_at": TEXT}}
 KNOWN = {
+    "frameio.assistant.browser_review": ({"type": "object", "required": [
+        "title", "body", "analysis_provider", "input_mode", "execution_mode", "receipt", "limitations", "audio_status",
+    ], "properties": {
+        "title": TEXT, "body": {"type": "string", "minLength": 80},
+        "analysis_provider": {"const": "frameio_ai_assistant"},
+        "input_mode": {"const": "authenticated_browser"},
+        "execution_mode": {"const": "attended_browser_agent"},
+        "receipt": {"type": "object", "required": ["invocation_id", "request_hash", "user_message_id", "assistant_message_id", "verification"],
+                    "properties": {"verification": {"const": "browser_agent_observation"}}},
+        "limitations": {"type": "array", "minItems": 1, "items": TEXT},
+        "audio_status": {"enum": ["reviewed", "unassessed", "absent"]},
+    }}, ["native_assistant_review", "report_body", "browser_observed_evidence"]),
     **{operation: ({"type": "object", "required": [
         "title", "summary", "body", "status", "synthetic", "analysis_provider", "media_analyzed",
         "coverage", "findings", "limitations", "source", "models", "generated_at",

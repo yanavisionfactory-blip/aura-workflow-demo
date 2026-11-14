@@ -14,6 +14,7 @@ from .campaign_report import CampaignReportFields
 from .executive_review import PrepareRequest as ExecutivePrepareRequest
 from .executive_review import SourceRequest as ExecutiveSourceRequest
 from .file_delivery import ATTACHMENTS_SCHEMA
+from .frameio_browser_contract import ReviewRequest as FrameioBrowserRequest
 from .intelligence_backup import BACKUP_OPERATION, ClaudeTextRequest
 from .kpi_pilot import KpiFields
 from .policy import operation_scope
@@ -106,7 +107,7 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         ],
     },
     "frameio": {
-        "schema_version": "1.1", "catalog_version": 4, "provider_type": "oauth",
+        "schema_version": "1.1", "catalog_version": 5, "provider_type": "oauth",
         "name": "Frame.io", "description": "Read exact Frame.io V4 file versions, reviewer comments and review video with AURA Intelligence.",
         "base_url": "https://api.frame.io", "identity": {"provider": "frameio"},
         "modules": [
@@ -117,6 +118,8 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
                     required=("account_id", "file_id"), properties={"account_id": _TEXT, "file_id": _TEXT}),
             {**_module("frameio.video.review", "search", "Download the exact connected Frame.io file rendition and use AURA Intelligence to inspect sampled video frames and actual audio from beginning to end. Returns chronological timestamped production feedback in AURA. Supports MP4/MOV up to 120 seconds / 50 MB. This is AURA analysis, not Frame.io AI Assistant or existing comments. No comments are posted."),
              "input_schema": FrameioVideoRequest.model_json_schema()},
+            {**_module("frameio.assistant.browser_review", "search", "Submit the exact selected video to Frame.io's own AI Assistant through a currently connected, authenticated browser agent. Requires a fresh browser_session_id bound to this account, project and file. The agent must remain active; unattended execution is unavailable. Return the native response unchanged with its audio/visual limitations. Never fall back to AURA Intelligence.", permission_scope="read"),
+             "input_schema": FrameioBrowserRequest.model_json_schema()},
             _module("frameio.comments.list", "search", "Read all comments and replies for one exact file UUID, verifying the file first. Fails if pagination is incomplete or exceeds 1000 comments. Comment completion never proves asset approval.",
                     required=("account_id", "file_id"), properties={"account_id": _TEXT, "file_id": _TEXT}),
         ],
