@@ -36,7 +36,7 @@ DRAFT = {
 def plan():
     return WorkflowPlan(name="Project deck", interpretation=PROMPT, steps=[
         PlanStep(key="files", agent="Reader", tool_slug="google", operation="drive.files.search",
-                 arguments={"query": "Music project"}, reason="Find project documents", expected_output="File IDs"),
+                 arguments={"query": "mimeType = 'application/vnd.google-apps.document'"}, reason="Find project documents", expected_output="File IDs"),
         PlanStep(key="read", agent="Reader", tool_slug="google", operation="docs.get",
                  arguments={"document_id": "{{steps.files.files.0.id}}"}, depends_on=["files"],
                  reason="Read the document", expected_output="Document text"),

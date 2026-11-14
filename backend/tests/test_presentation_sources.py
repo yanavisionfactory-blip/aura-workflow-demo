@@ -111,7 +111,7 @@ def step(key, operation, arguments=None, dependencies=None, *, write=False):
 
 def valid_plan():
     return WorkflowPlan(name="Project presentation", interpretation=PROMPT, steps=[
-        step("files", "drive.files.search", {"query": "Music project"}),
+        step("files", "drive.files.search", {"query": "mimeType = 'application/vnd.google-apps.document'"}),
         step("read", "docs.get", {"document_id": "{{steps.files.id}}"}, ["files"]),
         step("slides", "canva.presentation.create", {
             "title": "Project pilot", "layout": "slides",
@@ -206,11 +206,19 @@ def test_contextual_search_is_valid_discovery_for_a_russian_source_deck():
     prompt = "Найди в Google Drive папку про визу и создай презентацию."
     plan = valid_plan()
     plan.steps[0].operation = "google-drive.search-files"
-    plan.steps[0].arguments = {"query": "fullText contains 'visa'"}
+    plan.steps[0].arguments = {"query": "fullText contains 'visa' and mimeType = 'application/vnd.google-apps.document'"}
     validate_source_presentation_plan(prompt, plan)
     plan.steps[1].depends_on = []
     with pytest.raises(SourcePresentationPlanError):
         validate_source_presentation_plan(prompt, plan)
+
+
+def test_google_docs_reader_cannot_consume_a_mixed_format_search():
+    plan = valid_plan()
+    plan.steps[0].operation = "google-drive.search-files"
+    plan.steps[0].arguments = {"query": "fullText contains 'visa'"}
+    with pytest.raises(SourcePresentationPlanError, match="mixed-format"):
+        validate_source_presentation_plan(PROMPT, plan)
 
 
 def test_saved_invalid_plan_shows_repair_without_mutating_or_dispatching():
