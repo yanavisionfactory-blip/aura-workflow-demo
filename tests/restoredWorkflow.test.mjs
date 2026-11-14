@@ -130,10 +130,12 @@ test('opening saved results during a provider cooldown restores live progress wi
   }
 });
 
-for (const scenario of ["success", "read_error", "cancel_error", "still_stopping", "already_started"]) {
+for (const scenario of ["success", "success_revised", "read_error", "cancel_error", "still_stopping", "already_started"]) {
   test(`retrying a restored planning failure preserves the full request: ${scenario}`, async () => {
     const calls = [];
-    const prompt = "Read my Drive folder Projects 💖 / Música and create a presentation for restaurants.";
+    const prompt = scenario === "success_revised"
+      ? "Read my Drive folder and create a presentation.\n\nThe user reviewed the proposed workflow and requested this change: Use the exact folder path Projects 💖 / Música."
+      : "Read my Drive folder Projects 💖 / Música and create a presentation for restaurants.";
     const saved = { id: "saved", status: "waiting_for_action", plan_approved: false, prompt,
       plan: { name: "Project deck", interpretation: "Create a presentation", steps: [] }, steps: [],
       blocker: { code: "planning_retry_required", message: "Previous planning failed" } };
@@ -173,7 +175,7 @@ for (const scenario of ["success", "read_error", "cancel_error", "still_stopping
       await waitUntil(() => releaseRead);
       assert.equal(reads, 2, "double clicks must not start two retry preparations");
       await act(async () => releaseRead());
-      if (scenario === "success") {
+      if (scenario.startsWith("success")) {
         await waitUntil(() => container.textContent.includes("Prepared project slides"));
         const creations = calls.filter(call => call.name === "createPythonRun");
         assert.equal(creations.length, 1);

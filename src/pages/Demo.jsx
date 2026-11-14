@@ -876,11 +876,19 @@ Write ONE clear, conversational sentence restating what they want — but offer 
     const generation = ++pythonPollGenerationRef.current;
     const isCurrent = () => generation === pythonPollGenerationRef.current
       && failedRunId === pythonRunIdRef.current;
+    let retryIntent = lastPlanningIntentRef.current || originalPromptRef.current || interpretation;
+    let retryRevision = pendingPlanRevisionRef.current?.instruction || "";
     setPlanLoading(true);
     try {
       if (failedRunId) {
         const existing = await getPythonRun(failedRunId);
         if (!isCurrent()) return;
+        // The saved request includes prior corrections (including folder paths)
+        // that the restored UI may shorten for display. Do not append them twice.
+        if (existing.prompt?.trim()) {
+          retryIntent = existing.prompt;
+          retryRevision = "";
+        }
         if (existing.plan_approved || existing.steps?.some((step) =>
           ["running", "completed"].includes(step.status))) {
           throw new Error("This workflow has already started. Open it in My workflows to continue without repeating completed actions.");
@@ -901,8 +909,7 @@ Write ONE clear, conversational sentence restating what they want — but offer 
         pythonPlanRef.current = null;
         runRequestKeyRef.current = null;
       }
-      return await handleConfirm(lastPlanningIntentRef.current || originalPromptRef.current || interpretation,
-        pendingPlanRevisionRef.current?.instruction || "");
+      return await handleConfirm(retryIntent, retryRevision);
     } catch (error) {
       if (!isCurrent()) return;
       setPlan((current) => ({ ...current, provisional: true, compileState: "blocked", error: "",
