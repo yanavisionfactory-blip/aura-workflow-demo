@@ -79,11 +79,12 @@ def source_presentation_operation_pairs(prompt: str, inventory: list[dict]) -> s
     """
     if not source_presentation_requested(prompt):
         return set()
+    canva_requested = bool(re.search(r"\bcanva\b", prompt, re.IGNORECASE))
     return {
         (item["slug"], operation)
         for item in inventory for operation in item.get("allowed_operations", [])
         if operation in SUPPORT_OPERATIONS
-        or operation.startswith(("google-slides.", "slides."))
+        or (not canva_requested and operation.startswith(("google-slides.", "slides.")))
     }
 
 
@@ -102,6 +103,10 @@ def source_presentation_requirements(prompt: str) -> list[str]:
         "For a directly supplied Google Doc, read that document without unnecessary folder lookup. "
         "Use the connected Google Docs reader, never public web.page.read for a Drive document. "
         "google-docs.get-document returns textContent and documentId; docs.get returns body and id. "
+        "When binding a Google Docs reader directly to a Drive search result, use a query restricted "
+        "to mimeType = 'application/vnd.google-apps.document'. Do not label the first unfiltered "
+        "result as the most relevant document. Keep any broader inventory as separate evidence "
+        "and disclose other file formats that were not read. "
         "Bind the content actually returned by that operation. If a reader changes during plan "
         "revision, update every dependent source reference to its actual output contract."),
         ("Create a populated presentation from those content-read outputs, with explicit dependencies "
@@ -221,6 +226,21 @@ def validate_source_presentation_plan(prompt: str, plan) -> None:
     folder_reads = {step.key for step in steps if step.operation in FOLDER_READS
                     and not step.optional and step.condition is None}
     needs_discovery = _folder_discovery_requested(prompt)
+    for read in steps:
+        if read.operation not in {"docs.get", "google-docs.get-document"}:
+            continue
+        for key in referenced_step_keys(read.arguments):
+            search = by_key.get(key)
+            if search is None or search.operation not in {"google-drive.search-files", "drive.files.search"}:
+                continue
+            if not re.search(r"\bmimeType\s*=\s*(['\"])application/vnd\.google-apps\.document\1",
+                             str(search.arguments.get("query", ""))):
+                raise SourcePresentationPlanError(
+                    "A Google Docs reader cannot consume an unfiltered mixed-format Drive search. "
+                    "Restrict its source search with mimeType = 'application/vnd.google-apps.document', "
+                    "keeping any broad inventory separately. Preserve contextual fullText terms and "
+                    "read actual documents before judging their relevance; do not read PDFs as Docs."
+                )
     if any(step.operation == "web.page.read" and _google_doc_url(step.arguments.get("url"))
            for step in steps):
         raise SourcePresentationPlanError(

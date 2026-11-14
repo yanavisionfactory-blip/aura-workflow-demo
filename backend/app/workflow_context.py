@@ -382,6 +382,21 @@ def step_context_value(
             if isinstance(payload, dict) and isinstance(payload.get("data"), list):
                 value.setdefault("data", payload["data"])
         if "ret" in result or "exports" in result:
+            if operation == "google-drive.search-files":
+                receipt = result.get("ret")
+                files = receipt.get("files") if isinstance(receipt, dict) else receipt
+                if isinstance(files, list) and all(
+                    isinstance(file, dict) and isinstance(file.get("id"), str) and file["id"]
+                    for file in files
+                ):
+                    # Preserve the complete candidate collection, including an
+                    # empty result. This exposes no selected file/folder ID and
+                    # does not turn candidate metadata into document content.
+                    value.setdefault("files", files)
+                    if isinstance(receipt, dict):
+                        for field in ("count", "isComplete", "nextPageToken", "incompleteSearch"):
+                            if field in receipt:
+                                value.setdefault(field, receipt[field])
             if operation == "google-sheets.new-spreadsheet":
                 workbook = result.get("ret")
                 spreadsheet_id = workbook.get("spreadsheetId") if isinstance(workbook, dict) else None
