@@ -151,6 +151,50 @@ def test_existing_deck_lookup_is_not_mistaken_for_new_composition():
     assert "parent / child" in requirements and "actual relevant document contents" in requirements
 
 
+@pytest.mark.parametrize("prompt", [
+    "Найди в Google Drive папку про визу в Германию и создай презентацию в Canva.",
+    "Прочитай Google Docs и подготовь слайды о визе.",
+    "Read https://docs.google.com/document/d/real-document-id/edit and create a presentation.",
+])
+def test_multilingual_and_direct_document_requests_keep_source_contracts(prompt):
+    assert source_presentation_requested(prompt)
+    retained = source_presentation_operation_pairs(prompt, source_catalog())
+    assert ("google-docs", "google-docs.get-document") in retained
+    assert ("aura", "report.compose") in retained
+
+
+@pytest.mark.parametrize("prompt", [
+    "Найди в Google Drive папку про визу. Не создавай презентацию.",
+    "Прочитай Google Docs, но не делай слайды.",
+])
+def test_russian_read_only_request_does_not_require_a_write(prompt):
+    assert not source_presentation_requested(prompt)
+
+
+def test_direct_doc_read_does_not_need_an_unrelated_folder_search():
+    prompt = "Read Google Docs and create a presentation."
+    plan = valid_plan()
+    plan.steps.pop(0)
+    plan.steps[0].depends_on = []
+    plan.steps[0].arguments = {"document_id": "real-document-id"}
+    validate_source_presentation_plan(prompt, plan)
+    plan.steps[0].operation = "web.page.read"
+    plan.steps[0].arguments = {"url": "https://docs.google.com/document/d/real-document-id/edit"}
+    with pytest.raises(SourcePresentationPlanError, match="not public web.page.read"):
+        validate_source_presentation_plan(prompt, plan)
+
+
+def test_contextual_search_is_valid_discovery_for_a_russian_source_deck():
+    prompt = "Найди в Google Drive папку про визу и создай презентацию."
+    plan = valid_plan()
+    plan.steps[0].operation = "google-drive.search-files"
+    plan.steps[0].arguments = {"query": "fullText contains 'visa'"}
+    validate_source_presentation_plan(prompt, plan)
+    plan.steps[1].depends_on = []
+    with pytest.raises(SourcePresentationPlanError):
+        validate_source_presentation_plan(prompt, plan)
+
+
 def test_saved_invalid_plan_shows_repair_without_mutating_or_dispatching():
     plan = valid_plan()
     plan.steps.pop(1)

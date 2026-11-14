@@ -42,10 +42,18 @@ async def compose_presentation(request) -> dict:
                     "Each slide has 1–5 items, each at most 90 characters. Cite supplied source IDs for "
                     "every slide, and account for all supplied sources across the slides. Separate project "
                     "facts from proposals and untested demand or pricing assumptions in the slide text. "
-                    "Never infer copyright clearance, commercial-use or public-performance permission "
-                    "from AI generation or the user's marketing claim. Explicitly qualify unverified rights "
-                    "in the slides, as well as in limitations. Disclose missing evidence and unsupported "
-                    "files. If synthetic is true, label the slides as fictional demo data."
+                    "Preserve each explicitly requested category; group related points when space is limited. "
+                    "Historical or undated advice is not verification of current requirements. For legal, "
+                    "visa, medical or financial checklists, distinguish current authoritative evidence "
+                    "from historical user notes. Do not present disputed or unverified amounts, counts, "
+                    "deadlines or eligibility conditions as current rules. Put relevant uncertainty on "
+                    "the affected slides, not only in limitations. Never invent source URLs. "
+                    "Only when rights or licensing are relevant to the requested topic, qualify unverified "
+                    "copyright clearance, commercial-use or public-performance permission; AI generation "
+                    "alone does not establish these rights. Do not add copyright boilerplate to unrelated "
+                    "topics. Disclose missing evidence and unsupported files. If synthetic is true, "
+                    "label the slides as fictional demo data. "
+                    f"Composition date: {datetime.now(UTC).date().isoformat()}."
                 ),
                 input=bounded_input(request.model_dump(mode="json")),
                 text_format=PresentationDraft, reasoning={"effort": "low"}, store=False,

@@ -1,6 +1,7 @@
 """Require document evidence before composing a deck from a Drive folder."""
 
 import re
+from urllib.parse import urlsplit
 
 from .workflow_context import referenced_step_keys
 
@@ -19,7 +20,7 @@ CONTENT_READS = {
     "docs.get", "google-docs.get-document", "sheets.read",
     "google-sheets.get-values-in-range", "google-sheets.read-rows",
 }
-FOLDER_READS = {"google-drive.list-files", "drive.files.search"}
+FOLDER_READS = {"google-drive.list-files", "google-drive.search-files", "drive.files.search"}
 BLANK_DESIGNS = {"canva.design.create", "canva.create-design",
                  "canva-mcp.canva-create-design"}
 SUPPORT_OPERATIONS = CONTENT_READS | FOLDER_READS | {
@@ -37,14 +38,32 @@ class SourcePresentationPlanError(ValueError):
 
 
 def source_presentation_requested(prompt: str) -> bool:
-    if not (re.search(r"\bdrive\b", prompt, re.IGNORECASE)
-            and re.search(r"\bfolders?\b", prompt, re.IGNORECASE)):
+    if not re.search(r"\bdrive\b|google\s+docs?\b|docs\.google\.com/document/"
+                     r"|(?:google|гугл)\s+диск", prompt, re.IGNORECASE):
         return False
-    requests = re.finditer(r"\b(?:create|prepare|build|make|generate|draft)\b[^.!?\n]{0,120}"
-                          r"\b(?:presentations?|slide\s*decks?|slides)\b", prompt, re.IGNORECASE)
+    requests = re.finditer(r"\b(?:create|prepare|build|make|generate|draft|созда\w*|сдела\w*|"
+                          r"подготов\w*|собер\w*)\b[^.!?\n]{0,160}"
+                          r"\b(?:presentations?|slide\s*decks?|slides|презентаци\w*|слайд\w*)\b",
+                          prompt, re.IGNORECASE)
     return any(not re.search(r"\b(?:do\s+not|don't|never|without|not)\s*"
-                             r"(?:\w+\s+){0,2}$", prompt[max(0, match.start() - 40):match.start()],
+                             r"(?:\w+\s+){0,2}$|\b(?:не|нельзя)\s*$",
+                             prompt[max(0, match.start() - 40):match.start()],
                              re.IGNORECASE) for match in requests)
+
+
+def _folder_discovery_requested(prompt: str) -> bool:
+    return bool(re.search(r"\bfolders?\b|\bпапк\w*\b", prompt, re.IGNORECASE))
+
+
+def _google_doc_url(value) -> bool:
+    if not isinstance(value, str) or "{{" in value:
+        return False
+    try:
+        parsed = urlsplit(value)
+        return parsed.hostname == "docs.google.com" and bool(
+            re.match(r"^/document/d/[A-Za-z0-9_-]{10,}(?:/|$)", parsed.path))
+    except ValueError:
+        return False
 
 
 def source_presentation_operation_pairs(prompt: str, inventory: list[dict]) -> set[tuple[str, str]]:
@@ -67,14 +86,19 @@ def source_presentation_requirements(prompt: str) -> list[str]:
     if not source_presentation_requested(prompt):
         return []
     return [
-        ("Resolve the named Drive folder using real discovery reads. For a supplied parent / child "
+        ("When a folder is requested, resolve it using real discovery reads. For a supplied parent / child "
         "path, find the parent and list its children by parent ID and exact child name; do not "
         "search for the whole slash-separated path as one folder name. Preserve Unicode names. "
         "List the project folder and read the actual relevant document contents using permitted "
         "content readers matched to each file's MIME type. Do not open audio, PDF or Office files "
         "with a Google Docs-only reader. A folder or file listing contains metadata, not the project contents. "
         "Account for every relevant source and disclose unsupported files; do not silently read "
-        "only the first file. Use the catalog's real file-content operations, never invent them."),
+        "only the first file. Use the catalog's real file-content operations, never invent them. "
+        "For a directly supplied Google Doc, read that document without unnecessary folder lookup. "
+        "Use the connected Google Docs reader, never public web.page.read for a Drive document. "
+        "google-docs.get-document returns textContent and documentId; docs.get returns body and id. "
+        "Bind the content actually returned by that operation. If a reader changes during plan "
+        "revision, update every dependent source reference to its actual output contract."),
         ("Create a populated presentation from those content-read outputs, with explicit dependencies "
         "and references to the source text (or a report composed from that text). Prefer "
         "report.compose with presentation=true, bound sources from the reads, followed by "
@@ -191,10 +215,18 @@ def validate_source_presentation_plan(prompt: str, plan) -> None:
 
     folder_reads = {step.key for step in steps if step.operation in FOLDER_READS
                     and not step.optional and step.condition is None}
+    needs_discovery = _folder_discovery_requested(prompt)
+    if any(step.operation == "web.page.read" and _google_doc_url(step.arguments.get("url"))
+           for step in steps):
+        raise SourcePresentationPlanError(
+            "Read Google Drive documents with the permitted Google Docs content reader, not "
+            "public web.page.read. Preserve the same document and dependencies; bind textContent "
+            "for google-docs.get-document or body for docs.get. Public pages can use web.page.read."
+        )
     content_reads = {step.key for step in steps if step.operation in CONTENT_READS
                      and not step.optional and step.condition is None
                      and step.dependency_mode == "all_succeeded"
-                     and ancestors(step) & folder_reads}
+                     and (not needs_discovery or ancestors(step) & folder_reads)}
     if not content_reads:
         raise SourcePresentationPlanError(
             "Read the actual project document contents after listing the Drive folder before "
