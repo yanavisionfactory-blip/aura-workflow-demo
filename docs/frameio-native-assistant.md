@@ -7,8 +7,8 @@ browser agent that is already signed into Frame.io and can see its native AI
 Assistant. It is distinct from the withdrawn remote-login adapter below.
 It does not export cookies or expose a remote browser-control URL.
 
-The existing AURA page registers five WebMCP tools when the host browser supports
-that API: prepare, read status, approve/start, claim/poll, and return the native
+The existing AURA page registers six WebMCP tools when the host browser supports
+that API: prepare from IDs or an asset link, read status, approve/start, claim/poll, and return the native
 response. The page renders no additional controls. Safari remains unchanged.
 The browser agent observes the Frame.io UI; it is not an analysis engine.
 
@@ -31,6 +31,28 @@ or enable unattended scheduled runs. Completion is browser-agent evidence,
 not a cryptographically verified Frame.io API receipt; audio access and precise
 timing limitations from Frame.io must be retained. AURA verifies workflow
 delivery, not the correctness or completeness of every media observation.
+
+## External-user demo
+
+`/showcase/darius-bright/` is a separate, no-index static demonstration. It contains
+the selected sample video and a saved original native response, with its coverage
+limits, accessible without an AURA session. It does not expose the owner's run,
+account identifiers, credentials or workspace. Its CSP prevents network API calls.
+It does not simulate a new result when the prompt changes.
+
+The editable prompt and the visitor's exact Frame.io asset URL produce an explicit
+launch request for an active ChatGPT browser agent. The visitor must use their own
+AURA/Frame.io accounts with native AI Assistant available. This is an attended
+browser workflow, not one-click execution from Safari or a public native AI API.
+
+`aura_frameio_prepare_review_from_link` resolves the URL through
+`POST /v1/frameio-browser/connect-from-link`, using only the authenticated workspace's
+verified Frame.io connection. Only exact app.frame.io/next.frame.io project/file
+URLs are accepted; the URL itself is never fetched. Discovery is bounded to ten
+accounts and 45 seconds; larger account lists require an explicit account UUID.
+The asset must match both file and project, and normal verification is repeated
+before creating the owner-bound browser binding. The remaining approval, execution
+and receipt checks are unchanged. Shared review links are not accepted.
 
 ## Withdrawn remote-login adapter
 

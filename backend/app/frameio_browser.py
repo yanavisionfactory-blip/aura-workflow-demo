@@ -7,6 +7,7 @@ import time
 from datetime import UTC, datetime, timedelta
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
+import httpx
 from fastapi import HTTPException
 from sqlalchemy import select
 
@@ -18,6 +19,7 @@ from .frameio_browser_contract import (
     OWNER_PREFIX,
     SESSION_SECONDS,
     WAIT_SECONDS,
+    AssetLink,
     BrowserResult,
     ReviewRequest,
     Target,
@@ -47,7 +49,7 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-async def verify_target(session, tool, target):
+async def connection_credentials(session, tool, operations):
     from .execution_preflight import _connection_credentials
     manifest = await session.scalar(select(CapabilityManifest).where(
         CapabilityManifest.workspace_id == tool.workspace_id,
@@ -58,12 +60,57 @@ async def verify_target(session, tool, target):
     credentials, _, blocker = await _connection_credentials(session, tool, manifest)
     if blocker:
         raise HTTPException(409, "The connected Frame.io account could not be verified.")
+    if not set(operations).issubset(tool.allowed_operations or []):
+        raise HTTPException(403, "The Frame.io connection does not allow the required read operations.")
+    return credentials
+
+
+async def verify_target(session, tool, target):
+    credentials = await connection_credentials(session, tool, ["frameio.file.get"])
     evidence = await frameio.execute(credentials, "frameio.file.get", {
         "account_id": str(target.account_id), "file_id": str(target.file_id),
     }, 15)
-    if (evidence.get("file") or {}).get("project_id") != str(target.project_id):
+    file = evidence.get("file") or {}
+    if file.get("id") != str(target.file_id) or file.get("project_id") != str(target.project_id):
         raise HTTPException(409, "Frame.io did not verify this exact file in the selected project.")
     return evidence
+
+
+async def connect_from_link(session, context, link: AssetLink):
+    """Resolve only the authenticated workspace's accessible exact asset; no URL fetch."""
+    if link.account_id:
+        return await connect(session, context, link.target(link.account_id))
+    tool = await session.scalar(select(ToolConnection).where(
+        ToolConnection.workspace_id == context.workspace_id, ToolConnection.slug == "frameio",
+    ))
+    if not tool:
+        raise HTTPException(409, "Connect your Frame.io account in AURA first.")
+    credentials = await connection_credentials(session, tool, ["frameio.accounts.list", "frameio.file.get"])
+    try:
+        async with asyncio.timeout(45):
+            accounts = await frameio.execute(credentials, "frameio.accounts.list", {"page_size": 10}, 15)
+            rows = accounts.get("data") or []
+            # Never silently truncate discovery or choose an unrelated account.
+            if accounts.get("next_cursor") or not accounts.get("complete") or len(rows) > 10:
+                raise HTTPException(409, "Select your Frame.io account UUID explicitly; automatic discovery is limited to ten accounts.")
+            for account in rows:
+                target = link.target(account["id"])
+                try:
+                    evidence = await frameio.execute(credentials, "frameio.file.get", {
+                        "account_id": str(target.account_id), "file_id": str(target.file_id),
+                    }, 10)
+                except httpx.HTTPStatusError as exc:
+                    if exc.response.status_code in {403, 404}:
+                        continue
+                    raise
+                file = evidence.get("file") or {}
+                if file.get("id") == str(target.file_id) and file.get("project_id") == str(target.project_id):
+                    return await connect(session, context, target)
+    except (TimeoutError, httpx.TimeoutException) as exc:
+        raise HTTPException(504, "Frame.io account discovery timed out. Retry or specify your account UUID.") from exc
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(502, "Frame.io could not verify access to this asset. No review was started.") from exc
+    raise HTTPException(404, "This exact video was not found in your connected Frame.io accounts. Open the asset in your own account and copy its URL.")
 
 
 async def connect(session, context, target: Target):
@@ -299,6 +346,10 @@ def install_routes(app, tenant_context, tenant_session):
     @app.post("/v1/frameio-browser/connect")
     async def connect_route(payload: Target, context=Depends(tenant_context), session=Depends(tenant_session)):
         return await connect(session, context, payload)
+
+    @app.post("/v1/frameio-browser/connect-from-link")
+    async def connect_link_route(payload: AssetLink, context=Depends(tenant_context), session=Depends(tenant_session)):
+        return await connect_from_link(session, context, payload)
 
     @app.post("/v1/frameio-browser/{binding_id}/runs/{run_id}/poll")
     async def poll_route(binding_id: str, run_id: str, context=Depends(tenant_context), session=Depends(tenant_session)):
