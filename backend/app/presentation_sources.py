@@ -214,6 +214,41 @@ def bind_presentation_composition(prompt: str, plan, manifests: dict) -> None:
             write.depends_on.append(source.key)
 
 
+def bind_document_search_types(prompt: str, plan) -> None:
+    """Restrict a proposed Docs source query to the reader's actual format.
+
+    This only prepares an unapproved read query. It keeps the original context,
+    account and location filters, and does not select a file or dispatch a tool.
+    Explicit MIME constraints and searches shared by other content readers are
+    left for validation/replanning instead of silently changing their scope.
+    """
+    if not source_presentation_requested(prompt):
+        return
+    docs_readers = {"docs.get", "google-docs.get-document"}
+    by_key = {step.key: step for step in plan.steps}
+    for read in plan.steps:
+        if read.operation not in docs_readers:
+            continue
+        for key in referenced_step_keys(read.arguments):
+            search = by_key.get(key)
+            if (search is None or search.operation not in {"google-drive.search-files", "drive.files.search"}
+                    or search.consequential or search.optional or search.condition is not None
+                    or key not in read.depends_on or plan.steps.index(search) >= plan.steps.index(read)):
+                continue
+            query = search.arguments.get("query")
+            if (not isinstance(query, str) or not query.strip() or "{{" in query
+                    or re.search(r"\bmimeType\b", query)):
+                continue
+            if any(other.operation in CONTENT_READS - docs_readers
+                   and key in referenced_step_keys(other.arguments) for other in plan.steps):
+                continue
+            search.arguments["query"] = (
+                f"({query}) and mimeType = 'application/vnd.google-apps.document'"
+            )
+            # A fallback must not reintroduce the mixed-format selection.
+            search.reduced_scope_arguments = None
+
+
 def validate_source_presentation_plan(prompt: str, plan) -> None:
     if not source_presentation_requested(prompt):
         return
