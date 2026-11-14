@@ -105,7 +105,7 @@ def test_raw_document_to_slides_gets_an_idempotent_reviewable_composition_step()
     compose = candidate.steps[2]
     assert compose.operation == "report.compose" and compose.arguments["presentation"] is True
     assert compose.depends_on == ["read"] and not compose.consequential
-    assert compose.arguments["sources"][0]["content"] == "{{steps.read}}"
+    assert compose.arguments["sources"][0]["content"] == "Source URL: {{steps.read.url}}\n\n{{steps.read.body}}"
     validate_source_presentation_plan(PROMPT, candidate)
     inventory = [{"slug": slug, "connected": True,
                   "allowed_operations": [module["name"] for module in manifest["capabilities"]]}

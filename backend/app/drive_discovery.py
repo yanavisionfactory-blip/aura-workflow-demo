@@ -42,7 +42,13 @@ def discovery_requirements(prompt: str) -> list[str]:
         "request: OR together language variants/synonyms of one concept, AND together the "
         "different concepts. Do not put a synonym of the first concept in the second group, "
         "which would make the intended intersection meaningless. Prefer specific terms over "
-        "broad words such as application. Preserve any explicit account/location restrictions."),
+        "broad words such as application. Drive fullText contains matches whole tokens, not "
+        "prefixes or word stems: use complete words and relevant inflections, never truncated "
+        "stems such as 'universit' or 'поступлен'. For a phrase use a double-quoted phrase inside "
+        "the query's single quotes, or separate token conditions. Infer distinctive domain terms "
+        "from the goal instead of requiring every literal word from the request. A domain-specific "
+        "term can express a concept even when a country or category is not named verbatim. "
+        "Preserve any explicit account/location restrictions."),
         ("Search results are candidates, not proof that a document or folder is relevant. Read "
         "promising actual document contents with MIME-compatible catalog readers, assess their "
         "meaning against the user's objective, then follow their returned parent metadata to "
