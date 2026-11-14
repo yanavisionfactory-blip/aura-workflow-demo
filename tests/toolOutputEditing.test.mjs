@@ -1,6 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { editableResultText, resultTextEditPrompt, validateResultTextEdit } from "../src/lib/toolOutputEditing.mjs";
+
+test("structured slide previews cannot offer text edits that leave the exported slides unchanged", () => {
+  const step = {status: "completed", operation: "report.compose", output: {provider_result: {
+    body: "Slide preview", presentation: {phases: [{title: "Original slide"}]},
+  }}};
+  assert.equal(editableResultText(step), null);
+  delete step.output.provider_result.presentation;
+  assert.equal(editableResultText(step), "Slide preview");
+});
 import { toolResultEntries } from "../src/lib/toolResultViews.mjs";
 import { primaryResultFromOutputs } from "../src/lib/resultPresentation.mjs";
 
