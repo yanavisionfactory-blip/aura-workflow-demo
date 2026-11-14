@@ -79,11 +79,12 @@ def source_presentation_operation_pairs(prompt: str, inventory: list[dict]) -> s
     """
     if not source_presentation_requested(prompt):
         return set()
+    canva_requested = bool(re.search(r"\bcanva\b", prompt, re.IGNORECASE))
     return {
         (item["slug"], operation)
         for item in inventory for operation in item.get("allowed_operations", [])
         if operation in SUPPORT_OPERATIONS
-        or operation.startswith(("google-slides.", "slides."))
+        or (not canva_requested and operation.startswith(("google-slides.", "slides.")))
     }
 
 

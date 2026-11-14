@@ -79,6 +79,23 @@ def test_large_drive_catalog_cannot_crowd_out_source_and_slide_contracts():
     assert len(offered) < sum(len(item["allowed_operations"]) for item in catalog)
 
 
+def test_canva_request_does_not_reserve_the_entire_google_slides_catalog():
+    catalog = source_catalog() + [{"slug": "google-slides", "name": "Google Slides",
+        "connected": True, "allowed_operations": [f"google-slides.operation-{i}" for i in range(100)],
+        "operation_contracts": [{"name": f"google-slides.operation-{i}", "description": "X" * 5000,
+             "input_schema": {"type": "object", "properties": {}}} for i in range(100)]}]
+    request = PROMPT + " Create it in Canva."
+    required = source_presentation_operation_pairs(request, catalog)
+    assert not any(slug == "google-slides" for slug, _ in required)
+    packed = llm_planner._bounded_planning_catalog({"request": request, "selected_tools": [],
+        "required_actions": [], "operations": catalog})
+    offered = {(item["slug"], op) for item in packed["operations"] for op in item["allowed_operations"]}
+    assert required <= offered
+    assert ("google-docs", "google-docs.get-document") in offered
+    assert ("canva", "canva.presentation.create") in offered
+    assert any(slug == "google-slides" for slug, _ in source_presentation_operation_pairs(PROMPT, catalog))
+
+
 def test_source_planning_error_explains_the_missing_read_without_provider_details():
     error = SourcePresentationPlanError("private provider payload")
     assert orchestrator.planning_error_message(error) == error.public_message

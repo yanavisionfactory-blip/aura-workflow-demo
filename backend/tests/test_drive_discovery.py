@@ -113,6 +113,31 @@ def test_explicit_source_key_disambiguates_declared_searches():
     assert plan.steps[-1].arguments["sources"][0]["content"] == "{{steps.b.provider_result}}"
 
 
+@pytest.mark.parametrize("wrapped", [True, False])
+def test_search_candidates_are_bound_as_a_complete_array_without_selecting_one(wrapped):
+    files = [{"id": "candidate-a", "mimeType": "application/vnd.google-apps.document"},
+             {"id": "candidate-b", "mimeType": "application/pdf"}]
+    receipt = {"ret": {"files": files, "isComplete": False, "nextPageToken": "next"}
+               if wrapped else files}
+    before = deepcopy(receipt)
+    value = step_context_value(receipt, "google-drive.search-files")
+    assert resolve_value("{{steps.search.files[0].id}}", {"steps": {"search": value}}) == "candidate-a"
+    assert value["files"] == files
+    assert "id" not in value and "folderId" not in value
+    assert value["provider_result"] == before == receipt
+    if wrapped:
+        assert value["isComplete"] is False and value["nextPageToken"] == "next"
+
+
+def test_empty_search_stays_empty_and_never_invents_a_document():
+    value = step_context_value({"ret": {"files": [], "count": 0, "isComplete": True}},
+                               "google-drive.search-files")
+    assert value["files"] == [] and value["count"] == 0
+    assert "id" not in value
+    with pytest.raises(ValueError, match="unavailable"):
+        resolve_value("{{steps.search.files[0].id}}", {"steps": {"search": value}})
+
+
 @pytest.mark.parametrize("content", ["User supplied context: appointment in Berlin.",
     "{{steps.search_drive_candidates.ret}}", '{"files": [], "count": 0}',
     "Use the returned search data from the step.\nActual record: visa checklist."])
