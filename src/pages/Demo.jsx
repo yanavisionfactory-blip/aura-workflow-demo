@@ -312,6 +312,7 @@ export default function Demo({ initialRecoveryRun = null }) {
   const [interpretationLoading, setInterpretationLoading] = useState(false);
   const [planLoading, setPlanLoading] = useState(false);
   const planningInFlightRef = useRef(false);
+  const planningRetryRef = useRef(false);
   planningInFlightRef.current = planLoading;
   const [plan, setPlan] = useState(null);
   const [results, setResults] = useState(null);
@@ -869,24 +870,55 @@ Write ONE clear, conversational sentence restating what they want — but offer 
   }, [handleConfirm, interpretation]);
 
   const handleRetryPlanning = useCallback(async () => {
+    if (planningRetryRef.current || planningInFlightRef.current) return;
+    planningRetryRef.current = true;
     const failedRunId = pythonRunIdRef.current;
-    if (failedRunId) {
-      const existing = await getPythonRun(failedRunId).catch(() => null);
-      const stoppedPlanningGate = ["planning_retry_required", "operator_billing_required"]
-        .includes(existing?.blocker?.code);
-      if (stoppedPlanningGate) {
-        await cancelPythonRun(failedRunId);
-      }
-      if (stoppedPlanningGate
-        || (existing && existing.public_status !== "recovering"
-          && ["failed", "blocked", "cancelled", "completed"].includes(existing.status))) {
+    const generation = ++pythonPollGenerationRef.current;
+    const isCurrent = () => generation === pythonPollGenerationRef.current
+      && failedRunId === pythonRunIdRef.current;
+    let retryIntent = lastPlanningIntentRef.current || originalPromptRef.current || interpretation;
+    let retryRevision = pendingPlanRevisionRef.current?.instruction || "";
+    setPlanLoading(true);
+    try {
+      if (failedRunId) {
+        const existing = await getPythonRun(failedRunId);
+        if (!isCurrent()) return;
+        // The saved request includes prior corrections (including folder paths)
+        // that the restored UI may shorten for display. Do not append them twice.
+        if (existing.prompt?.trim()) {
+          retryIntent = existing.prompt;
+          retryRevision = "";
+        }
+        if (existing.plan_approved || existing.steps?.some((step) =>
+          ["running", "completed"].includes(step.status))) {
+          throw new Error("This workflow has already started. Open it in My workflows to continue without repeating completed actions.");
+        }
+        if (existing.public_status === "recovering"
+          || !["waiting_for_action", "failed", "blocked", "cancelled", "completed"].includes(existing.status)) {
+          throw new Error("AURA is still preparing this plan. Check its status before starting another attempt.");
+        }
+        if (existing.status !== "cancelled") {
+          const stopped = await cancelPythonRun(failedRunId);
+          if (!isCurrent()) return;
+          if (stopped.status !== "cancelled") {
+            throw new Error("The previous attempt is still stopping. Try again after its status updates.");
+          }
+        }
         forgetActivePythonRun(failedRunId);
         pythonRunIdRef.current = null;
         pythonPlanRef.current = null;
         runRequestKeyRef.current = null;
       }
+      return await handleConfirm(retryIntent, retryRevision);
+    } catch (error) {
+      if (!isCurrent()) return;
+      setPlan((current) => ({ ...current, provisional: true, compileState: "blocked", error: "",
+        compileError: error?.message || "AURA couldn't retry this plan. The previous attempt is saved; please try again.",
+      }));
+    } finally {
+      planningRetryRef.current = false;
+      if (generation === pythonPollGenerationRef.current) setPlanLoading(false);
     }
-    return handleConfirm(interpretation, pendingPlanRevisionRef.current?.instruction || "");
   }, [handleConfirm, interpretation]);
 
   const handlePlanningConnectionRecovered = async (recoveries, runId) => {

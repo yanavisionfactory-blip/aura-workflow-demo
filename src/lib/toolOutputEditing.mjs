@@ -6,7 +6,11 @@ export function editableResultText(step) {
   if (step?.status !== "completed") return null;
   const operation = step.output?.operation || step.operation;
   const response = step.output?.provider_result;
-  if (operation === "report.compose" && typeof response?.body === "string") return response.body;
+  if (operation === "report.compose" && typeof response?.body === "string") {
+    if (response.presentation && typeof response.presentation === "object"
+        && !Array.isArray(response.presentation)) return null;
+    return response.body;
+  }
   if (["anthropic.chat", "intelligence.claude_backup"].includes(operation)
       && Array.isArray(response?.ret?.content)) {
     const parts = response.ret.content.filter((part) => part?.type === "text" && typeof part.text === "string");

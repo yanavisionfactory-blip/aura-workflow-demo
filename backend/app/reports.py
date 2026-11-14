@@ -87,6 +87,7 @@ class ReportRequest(BaseModel):
     instructions: str = Field(min_length=1, max_length=10_000)
     sources: list[ReportSource] = Field(min_length=1, max_length=20)
     synthetic: bool = False
+    presentation: bool = False
     dashboard: DashboardContext | None = None
     email_quality: EmailQualityContract | None = None
 
@@ -94,6 +95,8 @@ class ReportRequest(BaseModel):
     def distinct_sources(self):
         if len({source.id for source in self.sources}) != len(self.sources):
             raise ValueError("Report source IDs must be distinct")
+        if self.presentation and (self.dashboard or self.email_quality):
+            raise ValueError("Presentation content cannot be combined with dashboard or email composition")
         if self.email_quality:
             if self.dashboard:
                 raise ValueError("Email quality checks cannot be combined with a dashboard")
@@ -118,6 +121,10 @@ async def compose_report(arguments: dict, *, _quality_attempt: int = 0,
     settings = get_settings()
     if not settings.openai_api_key:
         raise RuntimeError("AURA report generation is not configured")
+    if request.presentation:
+        from .presentation_draft import compose_presentation
+
+        return await compose_presentation(request)
     if request.dashboard is not None:
         from .dashboard_builder import compose_dashboard
         if request.synthetic:

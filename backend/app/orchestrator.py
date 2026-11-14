@@ -429,6 +429,14 @@ def _current_capability_manifest(slug: str, stored: dict | None) -> dict:
     return current_capability_manifest(slug, stored)
 
 
+def _connected_catalog_entry(declared: dict, connected: dict, stored: dict | None) -> dict:
+    """Describe the connected route, not a same-named marketplace backend."""
+    manifest = _current_capability_manifest(connected["slug"], stored)
+    operations = [module["name"] for module in manifest.get("capabilities", []) if module.get("name")]
+    return {**declared, **connected, "allowed_operations": operations
+            or declared.get("allowed_operations") or connected["allowed_operations"]}
+
+
 def _operation_is_consequential(
     operation: str,
     capability: dict | None,
@@ -572,6 +580,7 @@ async def ensure_aura_intelligence(session, workspace_id: str) -> ToolConnection
 
 
 def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict], request_prompt: str = "") -> None:
+    from .presentation_sources import bind_presentation_composition
     from .sheets_targets import (
         bind_created_worksheets,
         bind_dashboard_metadata,
@@ -579,6 +588,7 @@ def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict], request_p
         bind_required_worksheet_names,
     )
 
+    bind_presentation_composition(request_prompt, plan, manifests_by_slug)
     bind_requested_sheet_reads(plan, request_prompt)
     bind_dashboard_metadata(plan, manifests_by_slug)
     bind_created_worksheets(plan, manifests_by_slug)
@@ -1919,25 +1929,23 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
         inventory_by_slug = {item["slug"]: item for item in planning_catalog(connected_slugs)}
         inventory_by_slug.update({item["slug"]: item for item in dynamic_inventory})
         inventory_by_slug.update({item["slug"]: item for item in broker_inventory})
+        connected_manifests = {
+            tool.slug: manifests_by_tool[tool.id].manifest
+            for tool in tools if tool.id in manifests_by_tool
+        }
         for item in connected_inventory:
             # The account's grants decide execution, not what the planner is
             # allowed to describe. Preserve the declared connector catalog so
             # missing consent becomes a precise connection request instead of
             # forcing the model to invent a substitute operation.
             declared = inventory_by_slug.get(item["slug"], {})
-            inventory_by_slug[item["slug"]] = {
-                **declared, **item,
-                "allowed_operations": declared.get("allowed_operations")
-                or item["allowed_operations"],
-            }
+            inventory_by_slug[item["slug"]] = _connected_catalog_entry(
+                declared, item, connected_manifests.get(item["slug"]),
+            )
         inventory = list(inventory_by_slug.values())
         manifests_by_slug = dict(dynamic_manifests)
         manifests_by_slug.update(broker_manifests)
-        manifests_by_slug.update({
-            tool.slug: manifests_by_tool[tool.id].manifest
-            for tool in tools
-            if tool.id in manifests_by_tool
-        })
+        manifests_by_slug.update(connected_manifests)
         from .connection_families import capability_family
         from .tool_omissions import omission_bounded_inventory, reconcile_tool_omissions
 

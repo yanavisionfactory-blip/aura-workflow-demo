@@ -11,6 +11,8 @@ from copy import deepcopy
 
 from jsonschema import Draft202012Validator
 
+from .presentation_content import PRESENTATION_SCHEMA
+
 TEXT = {"type": "string"}
 OBJECT = {"type": "object"}
 COLLECTION = {"type": "object", "required": ["results"], "properties": {
@@ -180,6 +182,7 @@ KNOWN = {
             "sources": {"type": "array", "minItems": 1, "items": OBJECT},
             "rows_json": TEXT, "row_count": {"type": "integer"}, "column_count": {"type": "integer"},
             "locale": TEXT, "facts": OBJECT,
+            "presentation": PRESENTATION_SCHEMA,
         },
     }, ["report_body", "supplied_source_evidence"]),
     "notion.search": ({**COLLECTION, "properties": {**COLLECTION["properties"],
