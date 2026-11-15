@@ -346,3 +346,116 @@ async def test_combined_content_bound_discloses_unreviewed_documents(monkeypatch
     result = await drive_materials.execute(broker, "owner", "selected-account", {"semantic_goal": GOAL})
     assert len(result["documents"]) == 2 and not result["ret"]["isComplete"]
     assert "120 KB" in result["unsupported_files"][0]["reason"]
+
+
+async def test_fulltext_candidates_use_provider_relevance_without_order_by(monkeypatch):
+    monkeypatch.setattr(drive_materials, "retrieval_hints", AsyncMock(return_value=["ambient music"]))
+    queries = []
+
+    def respond(method, target, kwargs):
+        params = parse_qs(urlsplit(target).query)
+        queries.append(params)
+        if "fullText contains" in params["q"][0]:
+            if "orderBy" in params:
+                raise PipedreamConnectError("Sorting is not supported for queries with fullText terms",
+                                            retryable=False, status_code=400)
+            return {"files": [], **({"nextPageToken": "page-2"} if "pageToken" not in params else {})}
+        assert params["orderBy"] == ["modifiedTime desc"]
+        return {"files": []}
+
+    result = await drive_materials.execute(Broker(respond), "owner", "selected-account", {"semantic_goal": GOAL})
+    assert result["status"] == "no_verified_match"
+    assert len(queries) == 3 and queries[1]["pageToken"] == ["page-2"]
+
+
+async def test_large_candidate_inventory_is_ranked_without_exceeding_model_budget(monkeypatch):
+    import random
+    import string
+
+    from app.model_inputs import bounded_input
+
+    rng = random.Random(17)
+    candidates = [{**file(f"candidate_{i}", "".join(rng.choices(string.ascii_letters, k=500))),
+                   "description": "".join(rng.choices(string.ascii_letters, k=500))}
+                  for i in range(200)]
+    calls = []
+
+    async def infer(goal, evidence, schema, instruction):
+        bounded_input({"objective": goal, "evidence": evidence})
+        calls.append([item["id"] for item in evidence])
+        # A relevant candidate at the end of the inventory must reach the final ranking.
+        ordered = sorted(evidence, key=lambda item: int(item["id"].split("_")[1]), reverse=True)
+        return material_relevance.CandidateSelection(candidate_ids=[item["id"] for item in ordered[:12]])
+
+    monkeypatch.setattr(material_relevance, "_infer", infer)
+    selected = await material_relevance.select_candidates(GOAL, candidates)
+    assert len(calls) > 1
+    assert set().union(*(set(call) for call in calls)) == {item["id"] for item in candidates}
+    assert [item["id"] for item in selected] == [f"candidate_{i}" for i in range(199, 187, -1)]
+
+
+async def test_download_restricted_file_does_not_abort_other_material_reads(monkeypatch):
+    monkeypatch.setattr(drive_materials, "retrieval_hints", AsyncMock(return_value=[]))
+    restricted = {**file("restricted", "Commercial terms"), "capabilities": {"canDownload": False}}
+    useful = {**file("useful", "Project brief"), "capabilities": {"canDownload": True}}
+    text = "A background music service for small restaurants."
+
+    def respond(method, target, kwargs):
+        if "q=" in target:
+            return {"files": [restricted, useful]}
+        if "/restricted/" in target:
+            raise PipedreamConnectError("Download forbidden", retryable=False, status_code=403)
+        return text.encode()
+
+    async def assess(goal, documents):
+        assert [doc["id"] for doc in documents] == ["useful"]
+        return {"useful": material_relevance.IdentifiedAssessment(candidate_id="useful", relevant=True,
+            reason="Project brief", excerpts=[text])}
+
+    monkeypatch.setattr(drive_materials, "assess_materials", assess)
+    broker = Broker(respond)
+    result = await drive_materials.execute(broker, "owner", "selected-account", {"semantic_goal": GOAL})
+    assert result["status"] == "matched" and not result["ret"]["isComplete"]
+    assert result["unsupported_files"][0]["id"] == "restricted"
+    assert "download" in result["unsupported_files"][0]["reason"].lower()
+    assert all("/restricted/" not in target for _, target, _ in broker.calls)
+    assert "canDownload" in parse_qs(urlsplit(broker.calls[0][1]).query)["fields"][0]
+
+
+@pytest.mark.parametrize("status", [401, 403, 429, 503])
+async def test_live_authorization_and_provider_errors_still_stop_discovery(monkeypatch, status):
+    monkeypatch.setattr(drive_materials, "retrieval_hints", AsyncMock(return_value=[]))
+    assess = AsyncMock()
+    monkeypatch.setattr(drive_materials, "assess_materials", assess)
+
+    def respond(method, target, kwargs):
+        if "q=" in target:
+            return {"files": [file("source", "Brief")]}
+        raise PipedreamConnectError("Provider refused content", retryable=status in {429, 503},
+                                    status_code=status)
+
+    with pytest.raises(PipedreamConnectError) as error:
+        await drive_materials.execute(Broker(respond), "owner", "selected-account", {"semantic_goal": GOAL})
+    assert error.value.status_code == status
+    assess.assert_not_awaited()
+
+
+async def test_only_restricted_materials_cannot_feed_a_presentation(monkeypatch):
+    monkeypatch.setattr(drive_materials, "retrieval_hints", AsyncMock(return_value=[]))
+    broker = Broker(lambda *_: {"files": [
+        {**file("restricted", "Brief"), "capabilities": {"canDownload": False}}]})
+    result = await drive_materials.execute(broker, "owner", "selected-account", {"semantic_goal": GOAL})
+    assert result["status"] == "no_verified_match" and not result["sources"]
+    assert not result["documents"] and len(broker.calls) == 1
+    context = {"steps": {"discover": step_context_value(result, drive_materials.OPERATION)}}
+    with pytest.raises(DriveFolderIdentityError, match="No folder ID is required"):
+        resolve_value("{{steps.discover.sources}}", context)
+
+
+@pytest.mark.parametrize("ids", [["unknown"], ["known", "known"]])
+async def test_candidate_ranking_cannot_invent_or_duplicate_identities(monkeypatch, ids):
+    candidates = [file("known", "Brief")] + [file(str(i), "Notes") for i in range(12)]
+    monkeypatch.setattr(material_relevance, "_infer", AsyncMock(return_value=
+        material_relevance.CandidateSelection(candidate_ids=ids)))
+    with pytest.raises(ValueError, match="unknown or duplicate"):
+        await material_relevance.select_candidates(GOAL, candidates)

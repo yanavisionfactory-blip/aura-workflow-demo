@@ -23,7 +23,8 @@ MAX_BYTES = 8_000_000
 MAX_TEXT_BYTES = 60_000
 MAX_TOTAL_TEXT_BYTES = 120_000
 ID = re.compile(r"[A-Za-z0-9_-]{1,200}")
-FIELDS = "nextPageToken,incompleteSearch,files(id,name,mimeType,parents,webViewLink,description,size)"
+FIELDS = ("nextPageToken,incompleteSearch,files(id,name,mimeType,parents,webViewLink,"
+          "description,size,capabilities(canDownload))")
 
 
 def normalized_name(value):
@@ -61,13 +62,16 @@ async def execute(broker, external_user_id, account_id, arguments):
             raise PipedreamConnectError("Google Drive returned an invalid discovery response", retryable=False)
         return result
 
-    async def listing(query):
+    async def listing(query, *, fulltext=False):
         rows, tokens = [], set()
         token = None
         for _ in range(2):
             params = {"q": query, "pageSize": 100, "fields": FIELDS,
-                      "supportsAllDrives": "true", "includeItemsFromAllDrives": "true",
-                      "orderBy": "modifiedTime desc"}
+                      "supportsAllDrives": "true", "includeItemsFromAllDrives": "true"}
+            # Drive rejects orderBy with fullText terms; those results already
+            # use provider relevance order. Retain recency for broad inventory.
+            if not fulltext:
+                params["orderBy"] = "modifiedTime desc"
             if token:
                 params["pageToken"] = token
             result = await request("", params)
@@ -139,16 +143,24 @@ async def execute(broker, external_user_id, account_id, arguments):
             clauses = ["fullText contains " + query_literal(
                 '"' + hint.replace('"', '') + '"' if " " in hint else hint) for hint in hints]
             inventory = await listing(f"trashed = false and mimeType != '{FOLDER}' and ("
-                                      + " or ".join(clauses) + ")")
+                                      + " or ".join(clauses) + ")", fulltext=True)
         broad = await listing(f"trashed = false and mimeType != '{FOLDER}'")
         found = {file["id"] for file in inventory}
         inventory.extend(file for file in broad if file["id"] not in found)
         if len(inventory) > MAX_FILES:
             limitations.append("Merged candidate inventory exceeds the review bound; coverage is partial.")
-    candidates = [f for f in inventory[:MAX_FILES] if f["mimeType"] in READABLE]
-    unsupported = [{"id": f["id"], "name": f["name"], "mimeType": f["mimeType"],
-                    "reason": "This content format is not read by semantic discovery."}
-                   for f in inventory if f["mimeType"] not in READABLE]
+    candidates = []
+    for index, file in enumerate(inventory):
+        capabilities = file.get("capabilities") or {}
+        reason = ("The selected account cannot download this file; its content was not read."
+                  if isinstance(capabilities, dict) and capabilities.get("canDownload") is False
+                  else "This content format is not read by semantic discovery."
+                  if file["mimeType"] not in READABLE else None)
+        if reason:
+            unsupported.append({"id": file["id"], "name": file["name"],
+                                "mimeType": file["mimeType"], "reason": reason})
+        elif index < MAX_FILES:
+            candidates.append(file)
     selected = await select_candidates(goal, candidates)
     if len(selected) < len(candidates):
         limitations.append("At most 12 prioritized candidate documents were read; remaining contents are unreviewed.")

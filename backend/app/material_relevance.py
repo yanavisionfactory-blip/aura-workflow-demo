@@ -6,7 +6,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
 from .config import get_settings
-from .model_inputs import bounded_input
+from .model_inputs import ModelInputTooLarge, bounded_input
 from .reliability import bounded_model_call
 
 
@@ -71,15 +71,44 @@ async def select_candidates(goal, candidates):
     previews = [{key: (value[:500] if isinstance(value, str) else value)
                  for key, value in candidate.items() if key in {"id", "name", "mimeType", "description", "parents"}}
                 for candidate in candidates]
-    chosen = await _infer(goal, previews, CandidateSelection,
-        "Prioritize up to 12 supplied candidate IDs for actual content reading. Metadata is only "
-        "a retrieval hint. Include plausible neutral or differently named documents; exact keyword "
-        "overlap is not required. Return only IDs in this evidence, without duplicates.")
     by_id = {candidate["id"]: candidate for candidate in candidates}
-    ids = chosen.candidate_ids
-    if len(ids) != len(set(ids)) or not set(ids) <= by_id.keys():
-        raise ValueError("Source selection referenced unknown or duplicate candidates")
-    return [by_id[key] for key in ids]
+    while len(previews) > 12:
+        finalists = []
+        for batch in _evidence_batches(goal, previews):
+            if len(batch) <= 12:
+                finalists.extend(batch)
+                continue
+            chosen = await _infer(goal, batch, CandidateSelection,
+                "Prioritize up to 12 supplied candidate IDs for actual content reading. Metadata is only "
+                "a retrieval hint. Include plausible neutral or differently named documents; exact keyword "
+                "overlap is not required. Return only IDs in this evidence, without duplicates.")
+            supplied = {candidate["id"]: candidate for candidate in batch}
+            ids = chosen.candidate_ids
+            if len(ids) != len(set(ids)) or not set(ids) <= supplied.keys():
+                raise ValueError("Source selection referenced unknown or duplicate candidates")
+            finalists.extend(supplied[key] for key in ids)
+        if len(finalists) >= len(previews):
+            raise ModelInputTooLarge("Candidate metadata exceeds the bounded ranking budget")
+        previews = finalists
+    return [by_id[item["id"]] for item in previews]
+
+
+def _evidence_batches(goal, evidence):
+    """Partition complete records before a model call, without dropping candidates."""
+    batches, pending = [], []
+    for item in evidence:
+        # An individually oversized record cannot be fixed by moving it to a
+        # new batch. Fail explicitly instead of sending an over-budget request.
+        bounded_input({"objective": goal, "evidence": [item]})
+        try:
+            bounded_input({"objective": goal, "evidence": [*pending, item]})
+        except ModelInputTooLarge:
+            batches.append(pending)
+            pending = []
+        pending.append(item)
+    if pending:
+        batches.append(pending)
+    return batches
 
 
 async def assess_material(goal, title, text):
@@ -101,22 +130,8 @@ async def assess_material(goal, title, text):
 
 async def assess_materials(goal, documents):
     """Batch complete contents; never trim text to make a model call fit."""
-    from .model_inputs import ModelInputTooLarge
-
-    batches, pending = [], []
-    for doc in documents:
-        try:
-            bounded_input({"objective": goal, "evidence": [*pending, doc]})
-        except ModelInputTooLarge:
-            if not pending:
-                raise
-            batches.append(pending)
-            pending = []
-        pending.append(doc)
-    if pending:
-        batches.append(pending)
     results = {}
-    for batch in batches:
+    for batch in _evidence_batches(goal, documents):
         result = await _infer(goal, batch, MaterialAssessments,
             "Read every document's complete text. Return exactly one assessment per supplied ID. "
             "Select by substantive meaning, not keyword overlap or matching names. Indirect "
