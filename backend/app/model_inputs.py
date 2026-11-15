@@ -27,6 +27,47 @@ def is_input_limit(exc):
     ))
 
 
+def _discovery_review_evidence(value):
+    """Keep read content exact; summarize only unreviewed discovery metadata.
+
+    The execution receipt retains the entire inventory and provider pages. They
+    are candidate metadata, not content evidence, and can otherwise consume the
+    whole review budget after a successful bounded document read.
+    """
+    returned = value.get("ret")
+    if (value.get("aura_transport") != "semantic_drive_read_v1"
+            or value.get("external_writes") is not False
+            or not isinstance(returned, dict) or not isinstance(returned.get("files"), list)
+            or not all(isinstance(value.get(key), list) for key in ("documents", "sources", "assessments"))):
+        return value
+
+    def metadata(rows):
+        return {"count": len(rows), "sha256": hashlib.sha256(encoded(rows).encode()).hexdigest(),
+                "source_kind": "Metadata only; full list retained in the saved receipt. "
+                               "This summary is not evidence of document contents or relevance."}
+
+    files = returned["files"]
+    result = {**value, "ret": {**returned, "files": metadata(files)}}
+    # step_context_value exposes the same inventory at a compatibility path.
+    if value.get("files") == files:
+        result["files"] = result["ret"]["files"]
+    pages = []
+    for page in value.get("provider_pages", []):
+        response = page.get("response") if isinstance(page, dict) else None
+        if isinstance(response, dict) and isinstance(response.get("files"), list):
+            page = {**page, "response": {**response, "files": metadata(response["files"])}}
+        pages.append(page)
+    result["provider_pages"] = pages
+    unread = value.get("unsupported_files")
+    if isinstance(unread, list):
+        reasons = {}
+        for file in unread:
+            reason = str(file.get("reason", "Unreviewed content")) if isinstance(file, dict) else "Unreviewed content"
+            reasons[reason] = reasons.get(reason, 0) + 1
+        result["unsupported_files"] = {**metadata(unread), "reasons": reasons}
+    return result
+
+
 def semantic_evidence(value):
     """Project MIME transport bytes for model review without altering receipts.
 
@@ -38,6 +79,7 @@ def semantic_evidence(value):
         return [semantic_evidence(item) for item in value]
     if not isinstance(value, dict):
         return value
+    value = _discovery_review_evidence(value)
     result = {key: semantic_evidence(item) for key, item in value.items()}
     upload = value.get("file_url")
     if isinstance(upload, str) and upload.startswith("data:") and "," in upload:

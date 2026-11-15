@@ -102,6 +102,82 @@ def test_oversize_input_is_rejected_before_runner(monkeypatch):
     assert not calls
 
 
+def large_discovery_receipt():
+    import random
+    import string
+
+    rng = random.Random(21)
+    files = [{"id": f"candidate_{i}", "name": f"Project material {i}",
+              "description": "".join(rng.choices(string.ascii_letters, k=500))} for i in range(400)]
+    documents = [{"id": f"candidate_{i}", "title": f"Read document {i}",
+                  "text": str(i) + "project evidence " * 3500 + f"Final caveat {i}: rights unverified."}
+                 for i in range(2)]
+    return {"aura_transport": "semantic_drive_read_v1", "external_writes": False,
+        "ret": {"files": files, "isComplete": False, "status": "matched"}, "status": "matched",
+        "provider_pages": [{"query": f"query_{i}", "response": {"files": files[i * 100:(i + 1) * 100],
+                             "nextPageToken": "another-page", "incompleteSearch": True}} for i in range(4)],
+        "documents": documents,
+        "sources": [{"id": "material_1", "title": "Relevant", "content": documents[0]["text"][-50:]}],
+        "assessments": [{"candidate_id": "candidate_0", "relevant": True},
+                        {"candidate_id": "candidate_1", "relevant": False}],
+        "scope_folders": [{"id": "project", "name": "Brisa Studio"}],
+        "unsupported_files": [{"id": "unread", "name": "License terms", "reason": "Download restricted."}],
+        "limitations": ["Coverage is partial; unreviewed files may contain material constraints."]}
+
+
+def test_discovery_review_keeps_full_read_text_and_coverage_within_budget():
+    from app.model_inputs import encoded, semantic_evidence
+    from app.workflow_context import step_context_value
+
+    receipt = large_discovery_receipt()
+    before = encoded(receipt)
+    with pytest.raises(ModelInputTooLarge):
+        evidence_chunks(pack(receipt))
+    for original in (receipt, step_context_value(receipt, "google-drive.search-files")):
+        projected = semantic_evidence(original)
+        assert len(evidence_chunks(pack(projected))) <= 12
+        assert projected["documents"] == receipt["documents"]
+        assert projected["sources"] == receipt["sources"]
+        assert projected["assessments"] == receipt["assessments"]
+        assert projected["limitations"] == receipt["limitations"]
+        assert projected["scope_folders"] == receipt["scope_folders"]
+        assert projected["ret"]["files"]["count"] == 400
+        assert projected["ret"]["files"]["sha256"] == hashlib.sha256(encoded(receipt["ret"]["files"]).encode()).hexdigest()
+        assert projected["ret"]["isComplete"] is False
+        assert projected["unsupported_files"]["reasons"] == {"Download restricted.": 1}
+        assert projected["provider_pages"][0]["response"]["nextPageToken"] == "another-page"
+        assert projected["provider_pages"][0]["response"]["incompleteSearch"] is True
+        assert semantic_evidence(projected) == projected
+    assert encoded(receipt) == before
+
+
+async def test_discovery_can_reach_critic_and_final_review_after_large_search(monkeypatch):
+    receipt = large_discovery_receipt()
+    seen = []
+
+    async def read(agent, payload, **kwargs):
+        bounded_input(payload)
+        seen.append(payload["source_fragment"])
+        return {"relevant_evidence": "Read the complete supplied fragment.",
+                "source_limitations": receipt["limitations"], "unprocessed_source_paths": []}
+
+    monkeypatch.setattr(agent_runtime, "_run", read)
+    for key, evidence in (("provider_result", receipt), ("accepted_artifacts", [{
+        "operation": "google-drive.search-files", "provider_result": receipt}])):
+        result = await agent_runtime._prepare_action_evidence({key: evidence}, key)
+        assert result[key]["processed_chunks"] <= 12
+    assert any("Final caveat 0: rights unverified." in fragment for fragment in seen)
+    assert any("Final caveat 1: rights unverified." in fragment for fragment in seen)
+
+
+def test_discovery_projection_does_not_summarize_legacy_search_or_document_content():
+    from app.model_inputs import semantic_evidence
+
+    receipt = large_discovery_receipt()
+    del receipt["aura_transport"]
+    assert semantic_evidence(receipt) == receipt
+
+
 def test_materializer_does_not_retry_provider_context_rejection(monkeypatch):
     calls = []
     async def run(*args, **kwargs):
