@@ -197,7 +197,8 @@ async def test_import_receipt_is_not_treated_as_populated_success(monkeypatch):
     assert len(broker.calls) == 2
 
 
-def test_source_plan_binds_semantic_evidence_to_populated_slides():
+@pytest.mark.parametrize("source_count", [1, 2])
+def test_source_plan_binds_semantic_evidence_to_populated_slides(source_count):
     def step(key, op, args, deps=(), slug="aura", write=False):
         return PlanStep(key=key, agent="Researcher", tool_slug=slug, operation=op,
             arguments=args, depends_on=list(deps), consequential=write, reason="Project materials",
@@ -205,7 +206,8 @@ def test_source_plan_binds_semantic_evidence_to_populated_slides():
     plan = WorkflowPlan(name="Project", interpretation=GOAL, steps=[
         step("discover", drive_materials.OPERATION, {"semantic_goal": GOAL}, slug="google-drive"),
         step("compose", "report.compose", {"title": "Brief", "instructions": GOAL,
-            "sources": [{"id": "project", "title": "Sources", "content": "{{steps.discover}}"}]}, ["discover"]),
+            "sources": [{"id": f"project_{index}", "title": "Sources", "content": "{{steps.discover}}"}
+                        for index in range(source_count)]}, ["discover"]),
         step("create", "google-slides.create-presentation", {"title": "Project"}, ["compose"],
              "google-slides", True)])
     manifests = {"aura": native_manifest("aura"), "google-slides": {"capabilities":
@@ -214,6 +216,13 @@ def test_source_plan_binds_semantic_evidence_to_populated_slides():
     assert plan.steps[1].arguments["sources"] == "{{steps.discover.sources}}"
     assert plan.steps[2].arguments == {"presentation": "{{steps.compose.presentation}}"}
     validate_source_presentation_plan(GOAL, plan)
+    for unselected in ["{{steps.discover.ret.files}}", "{{steps.discover.documents}}", "{{steps.discover}}"]:
+        plan.steps[1].arguments["sources"] = [
+            {"id": "unselected", "title": "Metadata", "content": unselected},
+            {"id": "other", "title": "Other", "content": "{{steps.other.text}}"}]
+        with pytest.raises(ValueError, match="verified sources"):
+            validate_source_presentation_plan(GOAL, plan)
+    plan.steps[1].arguments["sources"] = "{{steps.discover.sources}}"
     _prepare_provider_arguments(manifests["google-slides"], "google-slides.create-presentation", {"presentation": DECK})
     for cap in manifests["google-slides"]["capabilities"]:
         Draft202012Validator.check_schema(cap["input_schema"])
