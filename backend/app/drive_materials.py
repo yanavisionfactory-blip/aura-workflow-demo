@@ -39,12 +39,17 @@ async def execute(broker, external_user_id, account_id, arguments):
     from .pipedream_connect import PipedreamConnectError
 
     goal = arguments.get("semantic_goal")
+    user_request = arguments.get("user_request")
     path = arguments.get("folder_path", [])
     if (not isinstance(goal, str) or not 10 <= len(goal) <= 10000
-            or set(arguments) - {"semantic_goal", "folder_path"}
+            or set(arguments) - {"semantic_goal", "folder_path", "user_request"}
+            or ("user_request" in arguments and (not isinstance(user_request, str)
+                or not 1 <= len(user_request) <= 20000))
             or not isinstance(path, list) or len(path) > 8
             or any(not isinstance(part, str) or not part.strip() or len(part) > 400 for part in path)):
         raise ValueError("Semantic Drive search needs an objective and optional folder path segments")
+    if user_request is not None:
+        goal = {"user_request": user_request, "discovery_task": goal}
     verification = await broker.verify_account(external_user_id, "google_drive", account_id)
     if verification.get("ok") is not True:
         raise PipedreamConnectError("Google Drive authorization is required", retryable=False, status_code=403)

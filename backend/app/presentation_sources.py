@@ -249,6 +249,31 @@ def bind_presentation_composition(prompt: str, plan, manifests: dict) -> None:
             write.depends_on.append(source.key)
 
 
+def bind_presentation_brief(prompt: str, plan) -> None:
+    """Preserve the original objective separately from planner-written summaries.
+
+    Only source reads and typed composers upstream of the requested deck receive
+    this context. Existing discovery tasks, path restrictions and composition
+    instructions remain intact; this does not select files or add operations.
+    """
+    from .request_contracts import user_request_text
+
+    request = user_request_text(prompt)
+    if not source_presentation_requested(request):
+        return
+    by_key = {step.key: step for step in plan.steps}
+    ancestors = set()
+    for step in plan.steps:
+        if step.operation in {"google-slides.create-presentation", "canva.presentation.create"}:
+            ancestors.update(_ancestors(step, by_key))
+    for step in plan.steps:
+        if step.key in ancestors and (semantic_content_read(step) or (
+            step.tool_slug == "aura" and step.operation == "report.compose"
+            and step.arguments.get("presentation") is True
+        )):
+            step.arguments["user_request"] = request
+
+
 def bind_document_search_types(prompt: str, plan) -> None:
     """Restrict a proposed Docs source query to the reader's actual format.
 

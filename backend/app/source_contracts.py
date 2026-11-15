@@ -24,11 +24,24 @@ def upgrade_capabilities(provider, capabilities):
             legacy = deepcopy(schema)
             # Keep the exact legacy query contract as a separate branch. Semantic
             # scope cannot accidentally be combined with a different query/drive.
-            if capability.get("metadata", {}).get("aura_source_contract") == 1:
+            version = capability.get("metadata", {}).get("aura_source_contract")
+            if version == 2:
+                continue
+            request_context = {"type": "string", "minLength": 1, "maxLength": 20000,
+                "description": "Complete original user brief, retained alongside the discovery task."}
+            if version == 1:
+                # Update the existing semantic branch in place. Wrapping the v1
+                # schema again would make its legacy and semantic modes overlap.
+                schema["properties"]["user_request"] = deepcopy(request_context)
+                semantic = next(branch for branch in schema["oneOf"]
+                    if branch.get("required") == ["semantic_goal"])
+                semantic["properties"]["user_request"] = deepcopy(request_context)
+                capability["metadata"]["aura_source_contract"] = 2
                 continue
             semantic = {"type": "object", "additionalProperties": False,
                 "required": ["semantic_goal"], "properties": {
                     "semantic_goal": {"type": "string", "minLength": 10, "maxLength": 10000},
+                    "user_request": request_context,
                     "folder_path": {"type": "array", "maxItems": 8,
                         "items": {"type": "string", "minLength": 1, "maxLength": 400}},
                 }}
@@ -66,7 +79,8 @@ def upgrade_capabilities(provider, capabilities):
                 + capability.get("description", ""))[:4000]
         else:
             continue
-        capability["metadata"] = {**capability.get("metadata", {}), "aura_source_contract": 1}
+        capability["metadata"] = {**capability.get("metadata", {}),
+            "aura_source_contract": 2 if provider == "google-drive" else 1}
     return result
 
 
@@ -107,7 +121,7 @@ async def refresh_source_contract(session, tool, manifest):
         released = BrokerCapabilityPack(backend="pipedream", provider_slug=tool.slug,
             display_name=pack.display_name, version=(version or 0) + 1, status="released",
             definition=definition, definition_hash=digest, certified_at=datetime.now(UTC),
-            evidence={"source_pack_id": pack.id, "source_contract_version": 1,
+            evidence={"source_pack_id": pack.id, "source_contract_version": 2,
                 "checks": ["same_account", "same_operations", "read_write_scopes_unchanged",
                            "fixed_google_routes", "source_relevance_verified", "saved_slides_verified"]})
         released.signature = hmac.new(get_settings().connector_release_signing_key.encode(),
@@ -120,5 +134,5 @@ async def refresh_source_contract(session, tool, manifest):
         "capability_pack_hash": released.definition_hash, "capability_pack_version": released.version}
     # Do not add any allowed operation or replace the selected account.
     manifest.manifest = released.definition
-    manifest.verification = {**(manifest.verification or {}), "source_contract_version": 1,
+    manifest.verification = {**(manifest.verification or {}), "source_contract_version": 2,
                              "capability_pack_id": released.id}
