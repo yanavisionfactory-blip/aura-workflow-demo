@@ -317,3 +317,17 @@ async def test_signed_contract_upgrade_preserves_old_pack_and_account_permission
         await source_contracts.refresh_source_contract(session, tool, manifest)
         assert tool.config["capability_pack_id"] == new_id
         assert len((await session.scalars(select(BrokerCapabilityPack))).all()) == 2
+
+
+async def test_combined_content_bound_discloses_unreviewed_documents(monkeypatch):
+    monkeypatch.setattr(drive_materials, "retrieval_hints", AsyncMock(return_value=[]))
+    rows = [file(str(index), "Notes " + str(index)) for index in range(3)]
+    broker = Broker(lambda method, target, kw: {"files": rows} if "q=" in target else b"a" * 60_000)
+    async def assess(goal, documents):
+        assert len(documents) == 2 and all(len(doc["text"]) == 60_000 for doc in documents)
+        return {doc["id"]: material_relevance.IdentifiedAssessment(candidate_id=doc["id"],
+            relevant=True, reason="Reviewed the entire supplied source", excerpts=["a" * 100]) for doc in documents}
+    monkeypatch.setattr(drive_materials, "assess_materials", assess)
+    result = await drive_materials.execute(broker, "owner", "selected-account", {"semantic_goal": GOAL})
+    assert len(result["documents"]) == 2 and not result["ret"]["isComplete"]
+    assert "120 KB" in result["unsupported_files"][0]["reason"]

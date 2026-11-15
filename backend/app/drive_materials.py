@@ -21,6 +21,7 @@ MAX_FILES = 200
 MAX_READS = 12
 MAX_BYTES = 8_000_000
 MAX_TEXT_BYTES = 60_000
+MAX_TOTAL_TEXT_BYTES = 120_000
 ID = re.compile(r"[A-Za-z0-9_-]{1,200}")
 FIELDS = "nextPageToken,incompleteSearch,files(id,name,mimeType,parents,webViewLink,description,size)"
 
@@ -190,6 +191,18 @@ async def execute(broker, external_user_id, account_id, arguments):
                 return file, None, "This file could not be parsed as readable text."
 
     reads = await asyncio.gather(*(read(file) for file in selected[:MAX_READS]))
+    # Keep the exact texts within the downstream evidence-reader budget too.
+    # Oversized groups remain explicit unread coverage, never truncated facts.
+    bounded_reads, total_text = [], 0
+    for file, content, error in reads:
+        if content is not None:
+            size = len(content["text"].encode())
+            if total_text + size > MAX_TOTAL_TEXT_BYTES:
+                content, error = None, "Combined source text exceeds the 120 KB review limit; this file remains unreviewed."
+            else:
+                total_text += size
+        bounded_reads.append((file, content, error))
+    reads = bounded_reads
     documents, sources, assessments = [], [], []
     reviewed = await assess_materials(goal, [
         {"id": file["id"], "title": file["name"], "text": content["text"]}
