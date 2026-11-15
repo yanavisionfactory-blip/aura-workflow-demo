@@ -37,6 +37,10 @@ def discovery_requirements(prompt: str) -> list[str]:
     if not contextual_drive_requested(prompt):
         return []
     return [
+        ("Prefer google-drive.search-files semantic_goal when available: supply the objective "
+        "and optional folder_path segments. It reads documents and assesses meaning instead of "
+        "requiring matching keywords. Its sources output is verified content; the legacy query "
+        "mode returns only candidate metadata. Never combine the two modes."),
         ("Find Drive material by context, not an assumed exact folder name. Use a permitted "
         "Drive fullText search over files, not only folders. Derive distinct concepts from the "
         "request: OR together language variants/synonyms of one concept, AND together the "
@@ -121,6 +125,9 @@ def validate_contextual_discovery(prompt: str, plan) -> None:
         return
     searches = [step for step in plan.steps if step.operation in SEARCH_OPERATIONS
                 and not step.optional and step.condition is None]
+    if any(isinstance(step.arguments.get("semantic_goal"), str)
+           and step.arguments["semantic_goal"].strip() for step in searches):
+        return
     if not any(re.search(r"\bfullText\s+contains\b", str(step.arguments.get("query", "")), re.IGNORECASE)
                for step in searches):
         raise ContextualDiscoveryPlanError(

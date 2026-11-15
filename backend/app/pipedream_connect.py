@@ -440,8 +440,13 @@ class PipedreamClient:
         *,
         authenticated: bool = True,
         retry_safe: bool | None = None,
+        response_bytes_limit: int | None = None,
         **kwargs: Any,
-    ) -> dict[str, Any] | list[Any]:
+    ) -> dict[str, Any] | list[Any] | bytes:
+        if response_bytes_limit is not None and (
+            method != "GET" or not 1 <= response_bytes_limit <= 8_000_000
+        ):
+            raise ValueError("Binary reads require a bounded GET")
         parsed = urlsplit(self.base_url)
         if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
             raise PipedreamConnectError("The connector network endpoint is invalid", retryable=False)
@@ -455,12 +460,19 @@ class PipedreamClient:
         for attempt in range(3):
             try:
                 async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
-                    response = await client.request(
-                        method,
-                        f"{self.base_url}{path}",
-                        headers=headers,
-                        **kwargs,
-                    )
+                    if response_bytes_limit is None:
+                        response = await client.request(
+                            method, f"{self.base_url}{path}", headers=headers, **kwargs,
+                        )
+                    else:
+                        async with client.stream(method, f"{self.base_url}{path}", headers=headers, **kwargs) as response:
+                            body = bytearray()
+                            async for chunk in response.aiter_bytes():
+                                body.extend(chunk)
+                                if len(body) > response_bytes_limit:
+                                    raise PipedreamConnectError("File exceeds the content reading limit", retryable=False)
+                            response = httpx.Response(response.status_code, headers=response.headers,
+                                                      content=bytes(body), request=response.request)
             except httpx.HTTPError as exc:
                 if retry_safe and attempt < 2:
                     await asyncio.sleep(0.15 * (2**attempt))
@@ -499,6 +511,8 @@ class PipedreamClient:
             # Do not report successful remote revocation as malformed JSON.
             if method.upper() == "DELETE" and response.status_code == 204:
                 return {}
+            if response_bytes_limit is not None:
+                return response.content
             try:
                 result = response.json()
             except ValueError as exc:
@@ -930,6 +944,20 @@ class PipedreamClient:
         from .analytics_discovery import execute as execute_analytics_discovery
         from .analytics_discovery import handles as handles_analytics_discovery
 
+        if (transport_type == "pipedream_action" and provider == "google-drive"
+                and capability.get("name") == "google-drive.search-files"
+                and "semantic_goal" in arguments):
+            from .drive_materials import execute as discover_materials
+
+            return await discover_materials(self, external_user_id, account_id, arguments)
+
+        if (transport_type == "pipedream_action" and provider == "google-slides"
+                and capability.get("name") == "google-slides.create-presentation"
+                and "presentation" in arguments):
+            from .slides_materials import execute as create_populated_slides
+
+            return await create_populated_slides(self, external_user_id, account_id, arguments)
+
         if (transport_type in {"pipedream_action", "pipedream_mcp"}
                 and provider == "google-sheets"
                 and capability.get("name") == "google-sheets.get-spreadsheet-info"):
@@ -1146,6 +1174,9 @@ def compile_action_manifest(
                 },
             }
         )
+    from .source_contracts import upgrade_capabilities
+
+    capabilities = upgrade_capabilities(provider, capabilities)
     if not capabilities:
         raise PipedreamConnectError("This app has no safe executable actions", retryable=False)
     return {

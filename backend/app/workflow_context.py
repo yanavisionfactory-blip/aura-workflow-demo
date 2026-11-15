@@ -26,8 +26,8 @@ class DriveFolderIdentityError(WorkflowContextError):
     def __init__(self):
         super().__init__(
             "Google Drive did not identify one matching project folder. "
-            "Provide the exact Google Drive folder link or ID and confirm that "
-            "the connected Google account can access it, then revise the remaining plan."
+            "Review the matching folders or describe the project and its contents so "
+            "AURA can search within the connected account, then revise the remaining plan."
         )
 
     def blocker(self, step_id: str) -> dict[str, Any]:
@@ -38,12 +38,20 @@ class DriveFolderIdentityError(WorkflowContextError):
         }
 
 
+class DriveMaterialIdentityError(DriveFolderIdentityError):
+    def __init__(self):
+        WorkflowContextError.__init__(self,
+            "AURA has not verified relevant project content in the connected Drive account. "
+            "Review the discovery results and coverage, or describe the project or location more "
+            "precisely. No folder ID is required and no presentation has been created.")
+
+
 # Planners sometimes assume a files envelope around Pipedream's folder result.
 # Resolve these identity paths from the single confirmed match, never by taking
 # the first raw search result. Keep ret/exports/provider_result unchanged.
 DRIVE_FOLDER_ID_PATHS = frozenset({
     "id", "folderId", "folder_id", "folder.id", "files.0.id", "folders.0.id",
-    "ret.id", "ret.0.id", "ret.folder.id", "ret.files.0.id", "ret.folders.0.id",
+    "ret.id", "ret.folderId", "ret.folder_id", "ret.0.id", "ret.folder.id", "ret.files.0.id", "ret.folders.0.id",
     "ret.data.files.0.id", "exports.folder.id", "exports.files.0.id",
 })
 
@@ -120,6 +128,10 @@ def _lookup(context: dict[str, Any], path: str) -> Any:
     step_key, _, suffix = field.partition(".")
     steps = context.get("steps")
     step_value = steps.get(step_key) if isinstance(steps, dict) else None
+    if (root == "steps" and suffix == "sources" and isinstance(step_value, dict)
+            and step_value.get("aura_transport") == "semantic_drive_read_v1"
+            and step_value.get("status") != "matched"):
+        raise DriveMaterialIdentityError()
     if (root == "steps" and suffix in DRIVE_FOLDER_ID_PATHS
             and isinstance(step_value, dict)
             and "__aura_drive_folder_identity__" in step_value):
@@ -382,6 +394,17 @@ def step_context_value(
             if isinstance(payload, dict) and isinstance(payload.get("data"), list):
                 value.setdefault("data", payload["data"])
         if "ret" in result or "exports" in result:
+            if operation == "google-drive.get-folder-id-for-path":
+                # This action returns the ID string itself, not {folderId: ...}.
+                # Only an actual provider result establishes identity. Preserve
+                # ret verbatim and resolve compatibility paths through the marker.
+                folder_id = result.get("ret")
+                identity = ({"id": folder_id} if isinstance(folder_id, str)
+                            and re.fullmatch(r"[A-Za-z0-9_-]{10,200}", folder_id) else {})
+                value["__aura_drive_folder_identity__"] = identity
+                if identity:
+                    value.setdefault("id", folder_id)
+                    value.setdefault("folderId", folder_id)
             if operation == "google-drive.search-files":
                 receipt = result.get("ret")
                 files = receipt.get("files") if isinstance(receipt, dict) else receipt

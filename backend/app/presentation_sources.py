@@ -29,6 +29,12 @@ SUPPORT_OPERATIONS = CONTENT_READS | FOLDER_READS | {
 }
 
 
+def semantic_content_read(step):
+    return (step.operation == "google-drive.search-files"
+            and isinstance(step.arguments.get("semantic_goal"), str)
+            and bool(step.arguments["semantic_goal"].strip()))
+
+
 class SourcePresentationPlanError(ValueError):
     public_message = (
         "AURA couldn't include reading your project documents before creating the presentation. "
@@ -92,6 +98,17 @@ def source_presentation_requirements(prompt: str) -> list[str]:
     if not source_presentation_requested(prompt):
         return []
     return [
+        ("When google-drive.search-files offers semantic_goal, prefer that content-discovery mode "
+        "for project materials. Pass the user's complete objective as semantic_goal. If a folder "
+        "path was supplied, pass its separate Unicode segments as folder_path; preserve the "
+        "requested location. Do not combine semantic_goal with query or drive. It inventories "
+        "candidates, reads supported contents and verifies relevance by meaning, returning sources. "
+        "Bind report.compose sources={{steps.discover.sources}} with presentation=true and an "
+        "explicit dependency. Do not add a first-file Google Docs read: discovery has already read "
+        "and assessed the actual documents. Unsupported files and coverage remain in the receipt. "
+        "For google-slides.create-presentation, pass presentation={{steps.compose.presentation}} "
+        "when offered. The title-only variant is a blank shell, not a content write. Verify with "
+        "google-slides.get-presentation using the actual presentationId returned."),
         ("When a folder is requested, resolve it using real discovery reads. For a supplied parent / child "
         "path, find the parent and list its children by parent ID and exact child name; do not "
         "search for the whole slash-separated path as one folder name. Preserve Unicode names. "
@@ -146,6 +163,22 @@ def bind_presentation_composition(prompt: str, plan, manifests: dict) -> None:
         return f"presentation_content_{number}"
 
     for write in list(plan.steps):
+        if write.operation == "google-slides.create-presentation" and source_presentation_requested(prompt):
+            capability = next((item for item in manifests.get(write.tool_slug, {}).get("capabilities", [])
+                               if item.get("name") == write.operation), {})
+            if ("presentation" in capability.get("input_schema", {}).get("properties", {})
+                    and not write.arguments.get("presentationId")):
+                ancestors = _ancestors(write, by_key)
+                composers = [step for step in plan.steps if step.key in ancestors
+                             and step.operation == "report.compose" and step.tool_slug == "aura"
+                             and not step.arguments.get("dashboard") and not step.arguments.get("email_quality")]
+                if len(composers) == 1:
+                    composer = composers[0]
+                    composer.arguments["presentation"] = True
+                    write.arguments = {"presentation": "{{steps." + composer.key + ".presentation}}"}
+                    if composer.key not in write.depends_on:
+                        write.depends_on.append(composer.key)
+            continue
         if write.operation != "canva.presentation.create":
             continue
         write.arguments.setdefault("layout", "slides")
@@ -263,6 +296,15 @@ def bind_document_report_text(plan) -> None:
         if report.tool_slug != "aura" or report.operation != "report.compose":
             continue
         sources = report.arguments.get("sources")
+        semantic = [step for step in plan.steps if step.key in _ancestors(report, by_key)
+                    and semantic_content_read(step)]
+        if len(semantic) == 1 and (
+            isinstance(sources, str) and referenced_step_keys(sources) == {semantic[0].key}
+            or isinstance(sources, list) and len(sources) == 1
+            and referenced_step_keys(sources) == {semantic[0].key}
+        ):
+            report.arguments["sources"] = "{{steps." + semantic[0].key + ".sources}}"
+            continue
         for source in sources if isinstance(sources, list) else []:
             content = source.get("content") if isinstance(source, dict) else None
             if not isinstance(content, str):
@@ -315,10 +357,10 @@ def validate_source_presentation_plan(prompt: str, plan) -> None:
             "public web.page.read. Preserve the same document and dependencies; bind textContent "
             "for google-docs.get-document or body for docs.get. Public pages can use web.page.read."
         )
-    content_reads = {step.key for step in steps if step.operation in CONTENT_READS
+    content_reads = {step.key for step in steps if (step.operation in CONTENT_READS or semantic_content_read(step))
                      and not step.optional and step.condition is None
                      and step.dependency_mode == "all_succeeded"
-                     and (not needs_discovery or ancestors(step) & folder_reads)}
+                     and (not needs_discovery or semantic_content_read(step) or ancestors(step) & folder_reads)}
     if not content_reads:
         raise SourcePresentationPlanError(
             "Read the actual project document contents after listing the Drive folder before "
@@ -337,6 +379,12 @@ def validate_source_presentation_plan(prompt: str, plan) -> None:
             "content-creation operation such as canva.presentation.create with the read source text."
         )
     for step in writes:
+        if step.operation == "google-slides.create-presentation" and not step.arguments.get("presentation"):
+            raise SourcePresentationPlanError(
+                "Google Slides title-only creation produces a blank presentation. Bind its "
+                "presentation argument to a source-grounded report.compose presentation output; "
+                "title references alone cannot populate slides."
+            )
         upstream = ancestors(step)
         source_references = referenced_step_keys(step.arguments)
         grounded = any(key in content_reads or (

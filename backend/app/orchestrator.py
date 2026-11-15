@@ -1889,6 +1889,9 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
         request_text = run.prompt.casefold()
         selected_names = {name.casefold() for name in requested_tools}
         for tool in tools:
+            from .source_contracts import refresh_source_contract
+
+            await refresh_source_contract(session, tool, manifests_by_tool.get(tool.id))
             refresh_native_connection_contract(tool)
             refresh_granted_readbacks(tool)
             # Browser discovery may call a remote service. Refresh only an app
@@ -4138,6 +4141,8 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         from .frameio_browser_contract import WAIT_SECONDS as BROWSER_WAIT_SECONDS
                         from .video_review import OPERATIONS as VIDEO_OPERATIONS
                         step_timeout = (
+                            150.0 if operation == "google-drive.search-files"
+                            and "semantic_goal" in arguments else
                             float(BROWSER_WAIT_SECONDS + 30)
                             if operation == BROWSER_REVIEW else
                             float(get_settings().video_review_timeout_seconds)
