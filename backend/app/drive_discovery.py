@@ -1,6 +1,7 @@
 """Plan contextual Drive discovery and preserve the evidence it returns."""
 
 import re
+from copy import deepcopy
 
 from .workflow_context import referenced_paths
 
@@ -94,6 +95,12 @@ def bind_discovery_report_sources(plan) -> None:
     """
     prior = {}
     for step in plan.steps:
+        if step.operation == "google-drive.search-files" and step.arguments.get("semantic_goal"):
+            # An optional folder path is still a user scope restriction. The
+            # generic reduced-read fallback must not remove it or switch this
+            # content read into the legacy metadata-only search mode. Equal
+            # arguments suppress that fallback while preserving normal retries.
+            step.reduced_scope_arguments = deepcopy(step.arguments)
         if step.tool_slug == "aura" and step.operation == "report.compose":
             candidates = {key: prior[key] for key in step.depends_on
                           if key in prior and prior[key].operation in SEARCH_OPERATIONS

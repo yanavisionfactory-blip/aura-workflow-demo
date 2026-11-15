@@ -213,6 +213,12 @@ def test_source_plan_binds_semantic_evidence_to_populated_slides(source_count):
     manifests = {"aura": native_manifest("aura"), "google-slides": {"capabilities":
         upgrade_capabilities("google-slides", [capability("google-slides", "google-slides.create-presentation", True)])}}
     _normalize_planned_steps(plan, manifests, GOAL)
+    assert plan.steps[0].reduced_scope_arguments == plan.steps[0].arguments
+    plan.steps[0].arguments["folder_path"] = ["ChatGPT on the goooo! 💖", "Brisa Studio"]
+    plan.steps[0].reduced_scope_arguments = {"query": ""}
+    _normalize_planned_steps(plan, manifests, GOAL)
+    assert plan.steps[0].reduced_scope_arguments == plan.steps[0].arguments
+    assert plan.steps[0].reduced_scope_arguments is not plan.steps[0].arguments
     assert plan.steps[1].arguments["sources"] == "{{steps.discover.sources}}"
     assert plan.steps[2].arguments == {"presentation": "{{steps.compose.presentation}}"}
     validate_source_presentation_plan(GOAL, plan)
