@@ -3,7 +3,7 @@
 import re
 from urllib.parse import urlsplit
 
-from .workflow_context import referenced_step_keys
+from .workflow_context import referenced_paths, referenced_step_keys
 
 
 def _ancestors(step, by_key):
@@ -300,7 +300,7 @@ def bind_document_report_text(plan) -> None:
                     and semantic_content_read(step)]
         if len(semantic) == 1 and (
             isinstance(sources, str) and referenced_step_keys(sources) == {semantic[0].key}
-            or isinstance(sources, list) and len(sources) == 1
+            or isinstance(sources, list) and sources
             and referenced_step_keys(sources) == {semantic[0].key}
         ):
             report.arguments["sources"] = "{{steps." + semantic[0].key + ".sources}}"
@@ -361,6 +361,19 @@ def validate_source_presentation_plan(prompt: str, plan) -> None:
                      and not step.optional and step.condition is None
                      and step.dependency_mode == "all_succeeded"
                      and (not needs_discovery or semantic_content_read(step) or ancestors(step) & folder_reads)}
+    semantic_keys = {step.key for step in steps if semantic_content_read(step)}
+    for step in steps:
+        if step.operation in FOLDER_READS:
+            continue
+        for path in referenced_paths(step.arguments):
+            if any((path == "steps." + key or path.startswith("steps." + key + "."))
+                   and not (path == "steps." + key + ".sources"
+                            or path.startswith(("steps." + key + ".sources.",
+                                                "steps." + key + ".sources["))) for key in semantic_keys):
+                raise SourcePresentationPlanError(
+                    "Use semantic discovery's verified sources output for project evidence. "
+                    "Candidate metadata and unselected documents are not verified relevant sources."
+                )
     if not content_reads:
         raise SourcePresentationPlanError(
             "Read the actual project document contents after listing the Drive folder before "
