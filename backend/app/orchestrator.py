@@ -584,6 +584,7 @@ def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict], request_p
     from .presentation_sources import (
         bind_document_report_text,
         bind_document_search_types,
+        bind_presentation_brief,
         bind_presentation_composition,
     )
     from .sheets_targets import (
@@ -593,9 +594,10 @@ def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict], request_p
         bind_required_worksheet_names,
     )
 
-    bind_discovery_report_sources(plan)
     bind_document_search_types(request_prompt, plan)
     bind_presentation_composition(request_prompt, plan, manifests_by_slug)
+    bind_presentation_brief(request_prompt, plan)
+    bind_discovery_report_sources(plan)
     bind_document_report_text(plan)
     bind_requested_sheet_reads(plan, request_prompt)
     bind_dashboard_metadata(plan, manifests_by_slug)

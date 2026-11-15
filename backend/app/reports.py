@@ -98,6 +98,8 @@ class ReportRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str = Field(min_length=1, max_length=200)
     instructions: str = Field(min_length=1, max_length=10_000)
+    user_request: str | None = Field(default=None, min_length=1, max_length=20_000,
+        description="Complete original user brief; step instructions specialize this request.")
     sources: list[ReportSource] = Field(min_length=1, max_length=20)
     synthetic: bool = False
     presentation: bool = False
