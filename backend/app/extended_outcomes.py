@@ -17,6 +17,7 @@ EXTRA_READBACK = {
     "mailchimp.campaign.create": "mailchimp.campaign.get", "mailchimp.campaign.send": "mailchimp.campaign.get",
     "canva.design.create": "canva.design.get", "canva.export.create": "canva.export.get",
     "canva.presentation.create": "canva.import.get",
+    "google-slides.create-presentation": "google-slides.get-presentation",
     "tiktok.video.upload.init": "tiktok.post.status.get", "tiktok.video.publish.init": "tiktok.post.status.get",
     "jira.issues.create_from_blocks": "jira.issue.get",
 }
@@ -34,6 +35,13 @@ def build_extended(operation, a, receipt):
     if not read:
         return None
     rid = str(receipt.get("id") or "")
+    if operation == "google-slides.create-presentation":
+        saved = receipt.get("ret", receipt)
+        rid = str(receipt.get("presentationId") or saved.get("presentationId") or saved.get("id") or "")
+        if not rid:
+            raise ValueError("Google Slides did not return the created presentation identity")
+        return OutcomeCheck(read, {"presentationId": rid}, rid,
+                            {"presentation": a.get("presentation"), "title": a.get("title")}, "google_slides")
     if operation == "x.posts.create":
         rid = str(receipt.get("data", {}).get("id") or "")
         return OutcomeCheck(read, {"post_id": rid}, rid, {"text": a["text"]}, "x_post")
@@ -160,6 +168,20 @@ def evaluate_extended(check, observed):
     from .outcome_checks import _matches, _same_id, evaluate_outcome_check
     def result(status, reason):
         return {"status": status, "reasons": [reason]}
+    if check.kind == "google_slides":
+        from .slides_materials import verify_slides
+
+        saved = observed.get("ret", observed)
+        if not isinstance(saved, dict) or saved.get("presentationId") != check.resource_id:
+            return result("failed", "Saved presentation identity differs from the create receipt")
+        if check.expected.get("presentation"):
+            try:
+                verify_slides(saved, check.expected["presentation"])
+            except ValueError as exc:
+                return result("failed", str(exc))
+        elif saved.get("title") != check.expected.get("title"):
+            return result("failed", "Saved presentation title differs from the approved title")
+        return result("verified", "Saved Google Slides content matches the approved presentation")
     if check.kind == "compound":
         rows = observed.get("checks", [])
         if len(rows) != len(check.checks):

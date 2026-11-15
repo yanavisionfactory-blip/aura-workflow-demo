@@ -17,6 +17,10 @@ export default function RunSupportAccess({ runId, compact = false }) {
   }, [open, runId, endpoint]);
   if (!runId) return null;
   return <section className={`my-4 ${compact && !open ? "text-xs text-muted-foreground" : "rounded-xl border border-white/10 p-4 text-sm"}`}>
+    <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+      <span className="break-all">Run ID: {runId}</span>
+      <a className="underline" href={`${import.meta.env.BASE_URL}runs/${encodeURIComponent(runId)}`}>Open saved run</a>
+    </div>
     <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="font-medium">Get help with this run</button>
     {open && <div className="mt-3 space-y-3">
       <p className="text-muted-foreground">Share this run’s status, operation names and whether receipts and verification were saved. Prompts, account details, sheet contents and credentials are excluded. Anyone with the link can read these diagnostics until it expires or you revoke it. The link cannot change or resume your run.</p>

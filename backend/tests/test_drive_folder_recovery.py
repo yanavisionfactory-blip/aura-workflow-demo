@@ -53,7 +53,7 @@ def test_missing_or_ambiguous_folder_never_becomes_a_generated_or_first_result_i
     context = {"steps": {"find_project_folder": step_context_value(
         receipt, "google-drive.find-folder", ARGS,
     )}}
-    with pytest.raises(DriveFolderIdentityError, match="exact Google Drive folder link"):
+    with pytest.raises(DriveFolderIdentityError, match="describe the project and its contents"):
         resolve_value("{{steps.find_project_folder." + path + "}}", context)
     assert resolve_value("{{steps.find_project_folder.provider_result}}", context) == receipt
 
@@ -81,7 +81,7 @@ def test_existing_paused_run_explains_missing_folder_from_saved_receipt():
     assert blocker["code"] == "resource_selection_required"
     assert blocker["action"] == "choose_resource"
     assert blocker["retryable"] is False
-    assert "folder link or ID" in blocker["message"]
+    assert "describe the project and its contents" in blocker["message"]
     assert public_run_projection(run, blocker)["public_status"] == "waiting_for_action"
     assert (run.execution_context, source.output, failed.output) == before
 
