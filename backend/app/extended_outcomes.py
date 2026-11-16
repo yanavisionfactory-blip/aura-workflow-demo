@@ -4,6 +4,7 @@ import hashlib
 from dataclasses import replace
 
 EXTRA_READBACK = {
+    "excel.estimate.create": "excel.estimate.get",
     "google-sheets.update-multiple-rows": "google-sheets.read-rows",
     "google-sheets.new-spreadsheet": "google-sheets.get-spreadsheet-info",
     "x.posts.create": "x.posts.get",
@@ -25,6 +26,13 @@ EXTRA_READBACK = {
 
 def build_extended(operation, a, receipt):
     from .outcome_checks import OutcomeCheck
+    if operation == "excel.estimate.create":
+        from .estimating_contract import EstimateResult
+        checked = EstimateResult.model_validate(receipt).model_dump(mode="json")
+        if any(checked[field] != a[field] for field in ("takeoff_snapshot_id", "rates_snapshot_id", "currency")):
+            raise ValueError("Estimate receipt does not match the approved snapshots")
+        return OutcomeCheck("excel.estimate.get", {"report_id": checked["report_id"]},
+            checked["report_id"], checked, "desktop_estimate")
     if operation == "google-sheets.update-multiple-rows":
         from .sheets_write_outcomes import update_check
         return update_check(a, receipt)
@@ -153,6 +161,15 @@ def leaves(check):
 
 
 def evaluate_extended(check, observed):
+    if check.kind == "desktop_estimate":
+        from .estimating_contract import EstimateResult
+        try:
+            verified = EstimateResult.model_validate(observed).model_dump(mode="json")
+            matches = verified == check.expected and verified["report_id"] == check.resource_id
+        except ValueError:
+            matches = False
+        return {"status": "verified" if matches else "failed",
+                "reasons": [] if matches else ["Saved Excel workbook differs from its creation receipt"]}
     if check.kind == "broker_sheets_update":
         from .sheets_write_outcomes import evaluate_update
         return evaluate_update(check, observed)

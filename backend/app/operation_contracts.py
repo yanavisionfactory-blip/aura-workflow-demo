@@ -548,6 +548,15 @@ KNOWN.update({
     "mailchimp.campaign.get": ({"type": "object", "required": ["id", "status"], "properties": {"id": TEXT, "status": TEXT}}, ["campaign_state"]),
 })
 
+from .estimating_contract import DEFINITIONS as ESTIMATING_DEFINITIONS
+
+for _operation, (_, _, _result, _) in ESTIMATING_DEFINITIONS.items():
+    if _result:
+        KNOWN[_operation] = (_result.model_json_schema(), [
+            "takeoff_rows" if _operation.startswith("planswift.") else
+            "rate_rows" if _operation == "excel.rates.read" else
+            "rate_book_names" if _operation == "excel.ratebooks.list" else "excel_estimate"])
+
 from .outcome_checks import READBACK_OPERATIONS as READBACK
 
 
@@ -649,7 +658,7 @@ def enrich_operation(module: dict) -> dict:
             "uncertain_write": "reconcile_before_retry"},
         "pagination": "bounded_recursive" if operation == "notion.blocks.children.list" else "provider_cursor" if any(word in operation for word in ("list", "search")) or (value.get("transport") or {}).get("type") == "nango_records" else "not_applicable",
         "reconciliation": "read_known_resource" if operation in {"notion.page.update", "jira.issue.update"} else "receipt_readback_or_pause" if readback_operation else "pause_if_uncertain",
-        "concurrent_read": read and typed,
+        "concurrent_read": read and typed and operation not in ESTIMATING_DEFINITIONS,
         "execution_ready": False, "certification": "live_conformance_required"}
     contract["hash"] = hashlib.sha256(json.dumps({"input": value.get("input_schema"),
         "output": schema, "contract": contract}, sort_keys=True).encode()).hexdigest()

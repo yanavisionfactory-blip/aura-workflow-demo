@@ -173,6 +173,20 @@ async def _connection_credentials(
     manifest: CapabilityManifest,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
     """Return credentials, verification and a human blocker when one is required."""
+    if tool.config.get("managed_by") == "desktop_estimating":
+        from . import desktop_estimating as desktop
+        credentials = CredentialVault().decrypt(tool.encrypted_credentials)
+        try:
+            verification = await desktop.verify(credentials, tool.slug)
+        except desktop.DesktopConnectionError as exc:
+            if exc.retryable:
+                raise RuntimeError("provider_temporarily_unavailable") from exc
+            return None, None, _blocker("connection_unusable", str(exc), action="reconnect_account",
+                tool_slug=tool.slug, connection_id=tool.id)
+        manifest.manifest = desktop.manifest(tool.slug, credentials["instance_id"])
+        manifest.verification, manifest.status, manifest.verified_at = verification, "verified", _now()
+        tool.allowed_operations = allowed_operations(manifest.manifest)
+        return credentials, verification, None
     if tool.config.get("managed_by") == "zernio":
         from .zernio_connect import ZernioError, verify_tool
         try:

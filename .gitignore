@@ -16,6 +16,7 @@ dist
 dist-ssr
 *.local
 .venv/
+pytest-of-*/
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -45,3 +46,7 @@ backend/.pytest_cache/
 backend/.ruff_cache/
 backend/**/__pycache__/
 backend/uv.lock
+
+# Built Windows connector package (source lives in integrations/desktop-estimating)
+public/downloads/aura-desktop-estimating.zip
+.venv/

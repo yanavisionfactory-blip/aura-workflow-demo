@@ -4,6 +4,8 @@
 
 const ICONS = {
   google: "✨",
+  planswift: "📐",
+  "excel-desktop": "📊",
   gmail: "📧",
   "google-drive": "🗂️",
   "google-docs": "📄",

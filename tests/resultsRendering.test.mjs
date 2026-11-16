@@ -40,6 +40,7 @@ before(async () => {
         if (id === "\0no-account-access") return `export const base44 = {};
           export function ensureWorkspace() { throw new Error("Render tests cannot access workspaces"); }
           export function auraRequest() { throw new Error("Render tests cannot access support APIs"); }
+          export function downloadDesktopEstimate() { throw new Error("Render tests cannot download live workbooks"); }
           export function createWorkflowSchedule() { throw new Error("Render tests cannot execute workflows"); }
           export function getPythonRun() { throw new Error("Render tests cannot read live workflows"); }
           export const pythonRuntimeEnabled = false;
@@ -53,6 +54,19 @@ before(async () => {
   ({ render, renderToolWorkspace, renderSheetReview, renderSheetCard, renderActionScreen, renderApproval, renderExecution, renderPlan, ResultsTestView } = await import(pathToFileURL(path.join(temporary, "render.mjs"))));
 });
 after(() => { if (temporary) fs.rmSync(temporary, { recursive: true, force: true }); });
+
+test("verified desktop estimates restore as a native downloadable Excel result", () => {
+  const receipt = { report_id: "a".repeat(64), status: "draft", total: 88.55,
+    currency: "USD", row_count: 2, formula_errors: 0, recalculated_with: "Microsoft Excel" };
+  const html = render({ id: "estimating", status: "completed", prompt: "Create an estimate",
+    plan: { name: "PlanSwift to Excel" }, steps: [{ id: "estimate", key: "estimate",
+      tool_slug: "excel-desktop", operation: "excel.estimate.create", status: "completed",
+      output: { operation: "excel.estimate.create", step_key: "estimate",
+        critic: { action: "accept" }, outcome_check: { status: "verified" }, provider_result: receipt } }] });
+  assert.match(html, /Download Excel estimate/);
+  assert.match(html, /88\.55/);
+  assert.match(html, /Draft construction estimate/);
+});
 
 test("failed video results open recovery and Run again uses the attachment-aware callback", async () => {
   const dom = new JSDOM("<!doctype html><body><div id='app'></div></body>", { url: "https://aura.example.test" });

@@ -1564,6 +1564,8 @@ async def managed_connector_status(
         )
     from . import shopify_client_credentials as shopify
     native_catalog.append(shopify.catalog_entry())
+    from . import desktop_estimating
+    native_catalog.extend(desktop_estimating.catalog())
     from .mcp_oauth import managed_mcp_catalog
     native_catalog.extend(managed_mcp_catalog(hubspot_enabled=settings.hubspot_connection_mode == "mcp"))
     native_catalog.extend(await wordpress_plugins.catalog(session, context.workspace_id))
@@ -1772,6 +1774,10 @@ async def search_connector_broker_apps(
     shopify_entry = shopify.catalog_entry()
     if matches(shopify_entry):
         entries[shopify.SLUG] = shopify_entry
+    from . import desktop_estimating
+    for item in desktop_estimating.catalog():
+        if matches(item):
+            entries[item["provider"]] = item
 
     for slug, definition in PROVIDERS.items():
         native_backend = _builtin_connection_backend(definition, nango_configured=nango.configured)
@@ -2676,6 +2682,13 @@ async def create_connector_broker_session(
     """Select the best connector plane and return only a short-lived browser grant."""
     provider = requested_marketplace_entry(provider)["provider"]
     provider = wordpress_plugins.provider_slug(provider)
+    from . import desktop_estimating
+    if provider in desktop_estimating.PROVIDERS:
+        if connection_id:
+            selected = await session.get(ToolConnection, connection_id)
+            if not selected or selected.workspace_id != context.workspace_id or selected.slug != provider:
+                raise HTTPException(404, "Connection not found")
+        return {"backend": desktop_estimating.BACKEND, "provider": provider, "connection_id": connection_id}
     if provider == "hubspot" and settings.hubspot_connection_mode == "mcp":
         provider = "hubspot-mcp"
     if provider in {"frame-io-mcp", "pageproof-mcp", "meta-ads-mcp", "hubspot-mcp"}:
@@ -4030,6 +4043,99 @@ async def receive_webhook(
     return {"delivery_id": delivery.id, "run_id": run.id, "status": "queued"}
 
 
+@app.post("/v1/desktop-estimating/connect", status_code=201)
+async def connect_desktop_estimating(
+    request: Request,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+) -> dict:
+    from . import desktop_estimating as desktop
+    if context.role not in {"owner", "admin"}:
+        raise HTTPException(403, "A workspace administrator must connect the workstation")
+    body = await request.body()
+    if len(body) > 8000:
+        raise HTTPException(422, "Invalid desktop connection form")
+    try:
+        payload = desktop.ConnectRequest.model_validate_json(body)
+    except ValueError:
+        raise HTTPException(422, "Enter a supported app, HTTPS connector URL and connection key") from None
+    tool = await session.scalar(select(ToolConnection).where(
+        ToolConnection.workspace_id == context.workspace_id, ToolConnection.slug == payload.provider))
+    if payload.connection_id and (not tool or tool.id != payload.connection_id):
+        raise HTTPException(404, "Connection not found")
+    if tool and tool.config.get("managed_by") != desktop.BACKEND:
+        raise HTTPException(409, "Disconnect the existing application route before changing its connection method")
+    credentials = {"endpoint": payload.endpoint, "access_token": payload.connection_key.get_secret_value()}
+    try:
+        verification = await desktop.verify(credentials, payload.provider)
+    except (desktop.DesktopConnectionError, ConnectorError) as exc:
+        raise HTTPException(409, str(exc)) from None
+    instance_id = verification["identity"]["id"]
+    if tool and tool.enabled and tool.encrypted_credentials and tool.external_account_id != instance_id:
+        raise HTTPException(409, "Disconnect the existing workstation before choosing a different one")
+    peers = (await session.scalars(select(ToolConnection).where(
+        ToolConnection.workspace_id == context.workspace_id,
+        ToolConnection.slug.in_(desktop.PROVIDERS), ToolConnection.enabled.is_(True)))).all()
+    if any(peer.external_account_id != instance_id for peer in peers):
+        raise HTTPException(409, "PlanSwift and Excel must connect to the same Windows workstation")
+    credentials["instance_id"] = instance_id
+    contract = desktop.manifest(payload.provider, instance_id)
+    if not tool:
+        tool = ToolConnection(workspace_id=context.workspace_id, slug=payload.provider,
+                              display_name=desktop.PROVIDERS[payload.provider], kind=ToolKind.api_key)
+        session.add(tool)
+        await session.flush()
+    tool.base_url = payload.endpoint
+    tool.config = {"managed_by": desktop.BACKEND, "canonical_provider": payload.provider}
+    tool.encrypted_credentials = CredentialVault().encrypt(credentials)
+    tool.external_account_id = instance_id
+    tool.allowed_operations = [item["name"] for item in contract["capabilities"]]
+    tool.enabled = True
+    record = await session.scalar(select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id))
+    if not record:
+        record = CapabilityManifest(workspace_id=context.workspace_id, tool_id=tool.id, provider_type=desktop.BACKEND)
+        session.add(record)
+    record.status, record.manifest, record.verification = "verified", contract, verification
+    record.verified_at = datetime.now(UTC)
+    session.add(AuditEvent(workspace_id=context.workspace_id, actor=context.subject,
+        event_type="connector.desktop_verified", payload={"tool_id": tool.id, "application": payload.provider,
+        "instance_id": instance_id, "allowed_operations": tool.allowed_operations}))
+    resumed = await _satisfy_matching_connection_requirements(session, context, tool)
+    await session.commit()
+    if resumed:
+        await dispatch_pending(context.workspace_id)
+    return {"id": tool.id, "status": "verified", "verification": verification}
+
+
+@app.get("/v1/desktop-estimating/reports/{report_id}/download")
+async def download_desktop_estimate(
+    report_id: str,
+    context: TenantContext = Depends(tenant_context),
+    session: AsyncSession = Depends(tenant_session),
+):
+    from fastapi.responses import Response
+
+    from . import desktop_estimating as desktop
+    from .estimating_contract import ReportRequest
+    try:
+        ReportRequest(report_id=report_id)
+    except ValueError:
+        raise HTTPException(404, "Report not found") from None
+    tool = await session.scalar(select(ToolConnection).where(
+        ToolConnection.workspace_id == context.workspace_id, ToolConnection.slug == "excel-desktop",
+        ToolConnection.enabled.is_(True)))
+    if (not tool or tool.config.get("managed_by") != desktop.BACKEND
+            or "excel.estimate.get" not in tool.allowed_operations):
+        raise HTTPException(404, "Connect the Excel workstation that owns this report")
+    try:
+        data = await desktop.download(CredentialVault().decrypt(tool.encrypted_credentials), report_id)
+    except (ValueError, ConnectorError):
+        raise HTTPException(409, "The report could not be verified. Check the Windows connector and retry.") from None
+    return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="Estimate-{report_id[:12]}.xlsx"',
+                             "Cache-Control": "no-store"})
+
+
 @app.post("/v1/shopify/client-credentials/connect", status_code=201)
 async def connect_shopify_client_credentials(
     request: Request,
@@ -4198,6 +4304,23 @@ async def test_connection(
     )
     if not manifest:
         raise HTTPException(409, "Connection has no discovered capability manifest")
+    if tool.config.get("managed_by") == "desktop_estimating":
+        from . import desktop_estimating as desktop
+        if not tool.enabled or not tool.encrypted_credentials:
+            return {"id": tool.id, "status": "revoked", "verification": {"ok": False, "reason": "Reconnect the Windows workstation"}}
+        try:
+            result = await desktop.verify(CredentialVault().decrypt(tool.encrypted_credentials), tool.slug)
+        except (desktop.DesktopConnectionError, ConnectorError) as exc:
+            result = {"ok": False, "reason": str(exc), "retryable": getattr(exc, "retryable", False)}
+        manifest.verification = result
+        manifest.status = "verified" if result.get("ok") else "degraded"
+        manifest.verified_at = datetime.now(UTC)
+        if result.get("ok"):
+            manifest.manifest = desktop.manifest(tool.slug, tool.external_account_id)
+            tool.allowed_operations = [item["name"] for item in manifest.manifest["capabilities"]]
+            tool.enabled = True
+        await session.commit()
+        return {"id": tool.id, "status": manifest.status, "verification": result}
     if tool.config.get("managed_by") == "zernio":
         try:
             result = await zernio_connect.verify_tool(tool, settings)

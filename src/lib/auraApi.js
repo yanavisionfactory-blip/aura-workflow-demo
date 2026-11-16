@@ -1,5 +1,6 @@
 import { createFrontendClient } from "@pipedream/sdk/browser";
 import { shopifyCredentialDialog } from "@/lib/shopifyCredentialDialog";
+import { desktopEstimatingDialog } from "@/lib/desktopEstimatingDialog";
 import { redirectConnectorAuthorization } from "@/lib/connectionNavigation.mjs";
 import { connectionTask, connectionPollDelay, CONNECTION_REQUEST_TIMEOUT_MS, CONNECTION_CANCELLED } from "@/lib/connectionAttempt.mjs";
 
@@ -79,6 +80,26 @@ async function request(path, options = {}) {
 }
 
 export const auraRequest = request;
+
+export async function downloadDesktopEstimate(reportId) {
+  if (!/^[a-f0-9]{64}$/.test(reportId)) throw new Error("Invalid estimate identifier.");
+  await ensureWorkspace();
+  return connectionTask(async (signal) => {
+    const get = async (refresh = false) => fetch(`${API_URL}/v1/desktop-estimating/reports/${reportId}/download`, {
+      signal, headers: { "X-Workspace-Id": rememberedWorkspaceId(),
+        Authorization: `Bearer ${tokenProvider ? await tokenProvider(refresh ? { skipCache: true } : undefined) : ""}` },
+    });
+    let response = await get();
+    if (response.status === 401 && tokenProvider) response = await get(true);
+    if (!response.ok) throw new Error(messageFrom(await response.json().catch(() => ({})), response.status));
+    if (!response.headers.get("content-type")?.includes("spreadsheetml.sheet")) throw new Error("AURA did not receive an Excel workbook.");
+    const url = URL.createObjectURL(await response.blob());
+    const anchor = document.createElement("a");
+    anchor.href = url; anchor.download = `Estimate-${reportId.slice(0, 12)}.xlsx`;
+    document.body.append(anchor); anchor.click(); anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }, { timeoutMs: 120000 });
+}
 
 export async function ensureWorkspace() {
   const existing = localStorage.getItem(WORKSPACE_KEY);
@@ -538,6 +559,16 @@ export async function authorizeConnectorBroker(
     const tools = await listPythonTools();
     const tool = tools.find((item) => item.id === result.id);
     if (!tool || result.status !== "verified") throw new Error("Shopify access could not be verified.");
+    return { connected: true, managed: true, backend: session.backend, tool };
+  }
+  if (session.backend === "desktop_estimating") {
+    if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
+    const result = await desktopEstimatingDialog((payload) => request(
+      "/v1/desktop-estimating/connect", { method: "POST", body: JSON.stringify(payload), timeoutMs: 120000, signal },
+    ), session, signal);
+    const tools = await listPythonTools({ signal });
+    const tool = tools.find((item) => item.id === result.id);
+    if (!tool || result.status !== "verified") throw new Error("The desktop application could not be verified.");
     return { connected: true, managed: true, backend: session.backend, tool };
   }
   if (session.backend === "nango") {
