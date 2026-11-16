@@ -1362,6 +1362,8 @@ def planning_error_message(exc: Exception) -> str:
 
 _PROMPT_CAPABILITY_ALIASES = {
     "meta-ads": {"meta ads", "facebook ads", "meta advertising"},
+    "excel-desktop": {"desktop excel", "desktop microsoft excel", "excel ratebooks list",
+                      "excel rates read", "excel estimate create", "excel estimate get"},
 }
 
 
@@ -2006,6 +2008,16 @@ async def _plan_run(run_id: str, workspace_id: str) -> None:
                                  if capability_family(app) not in excluded_families}
             connection_routes = selected_connection_routes(route_choices, inventory)
             requirement_inventory = route_bounded_inventory(requirement_inventory, connection_routes)
+            from .estimating_contract import PROVIDERS as desktop_providers
+
+            # These tools require a verified Windows workstation. Surface the
+            # actual missing connection before asking a model to construct calls
+            # with job/rate-book inputs that cannot yet be discovered.
+            missing_desktop = [slug for slug in explicit_disconnected_capabilities(
+                run.prompt, requirement_inventory,
+            ) if slug in desktop_providers]
+            if missing_desktop:
+                raise ConnectionRequiredError(missing_desktop)
             from .plan_reuse import reuse_saved_plan
             from .request_contracts import validate_requested_operations
 
