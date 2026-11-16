@@ -55,12 +55,20 @@ def catalog():
     } for slug, name in PROVIDERS.items()]
 
 
-def manifest(provider, instance_id):
+def manifest(provider, instance_id=None):
     from .operation_contracts import enrich_operation
     return {"schema_version": "1.1", "provider_type": BACKEND,
             "name": PROVIDERS[provider], "base_url": "workstation-managed",
-            "identity": {"provider": provider, "instance_id": instance_id},
+            "identity": {"provider": provider, **({"instance_id": instance_id} if instance_id else {})},
             "capabilities": [enrich_operation(item) for item in modules(provider)]}
+
+
+def planning_catalog(connected_slugs):
+    """Describe real desktop actions before pairing, without granting access."""
+    return [{"slug": slug, "name": name, "canonical_provider": slug,
+             "kind": BACKEND, "allowed_operations": [item["name"] for item in modules(slug)],
+             "connected": slug in connected_slugs}
+            for slug, name in PROVIDERS.items()]
 
 
 async def _request(credentials, path, *, payload=None, timeout=30, binary=False):

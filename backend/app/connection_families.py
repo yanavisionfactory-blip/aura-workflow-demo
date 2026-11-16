@@ -51,6 +51,28 @@ def proofing_intent_text(text: str) -> str:
     )
 
 
+def messaging_intent_text(text: str) -> str:
+    """Do not discover a messaging app solely because delivery was forbidden.
+
+    Remove only the negative mention, preserving independent requests to read
+    the same app. This narrows discovery; it does not authorize any writes.
+    Accept both original and word-normalized request text.
+    """
+    provider = (
+        r"(?:e[\s-]?mails?|g[\s-]?mail|discord|slack|telegram|"
+        r"(?:microsoft\s+)?(?:teams|outlook))"
+        r"(?:\s+(?:messages?|notifications?|emails?))?"
+    )
+    providers = provider + r"(?:\s*(?:,\s*(?:(?:and|or)\s+)?|\s+(?:and|or|nor)\s+)" + provider + r")*"
+    return re.sub(
+        r"\b(?:(?:no|without)(?:\s+sending)?|"
+        r"(?:do not|don['’]t|don t|never)\s+(?:send|post|publish|deliver|forward))\s+"
+        r"(?:(?:any|external|new)\s+)?"
+        r"(?:(?:messages?|notifications?)\s+(?:to|in|on|via|through)\s+)?"
+        + providers + r"\b", " ", text, flags=re.IGNORECASE,
+    )
+
+
 def provider_intent_text(text: str, family: str) -> str:
     """An Ads product mention does not request its separate community account.
 
@@ -61,6 +83,9 @@ def provider_intent_text(text: str, family: str) -> str:
     """
     if family in {"frameio", "pageproof"}:
         return proofing_intent_text(text)
+    if family in {"gmail", "google", "discord", "slack", "telegram", "teams",
+                  "microsoft-teams", "outlook", "microsoft-outlook"}:
+        return messaging_intent_text(text)
     if family == "segment":
         # A time segment or audience segment in supplied content is not the
         # analytics product. Preserve explicit account/API references and any
