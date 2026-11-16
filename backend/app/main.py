@@ -273,6 +273,11 @@ async def canary_read_only(request: Request, call_next):
 
 @app.on_event("startup")
 async def startup() -> None:
+    if getattr(settings, "managed_agents_enabled", False):
+        from .managed_agents import probe_access
+        app.state.managed_agents_probe = await probe_access()
+        if not app.state.managed_agents_probe.get("ready"):
+            logger.warning("Managed Agents API readiness failed: %s", app.state.managed_agents_probe)
     if settings.canary_mode:
         # A release canary must never migrate or dispatch customer work.
         return
@@ -412,6 +417,10 @@ def production_configuration_checks() -> dict[str, bool]:
 async def readiness() -> dict:
     from .release_info import release_sha
     checks = production_configuration_checks()
+    if getattr(settings, "managed_agents_enabled", False):
+        checks["managed_agents"] = bool(
+            getattr(app.state, "managed_agents_probe", {}).get("ready")
+        )
     try:
         async with engine.connect() as connection:
             await connection.execute(text("SELECT 1"))

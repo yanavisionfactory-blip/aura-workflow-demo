@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import io
+import json
 import re
 import unicodedata
 from urllib.parse import quote, urlencode
@@ -237,14 +238,35 @@ async def execute(broker, external_user_id, account_id, arguments):
                         else "Selected verbatim passages from the fully reviewed document:\n\n"
                         + "\n\n".join(assessment.excerpts))
             sources.append({"id": f"material_{len(sources) + 1}", "title": file["name"][:200],
-                            "content": f"Source: {url}\n\n{evidence}"})
+                            "content": (f"Source: {url}\nDrive file ID: {file['id']}\n"
+                                        f"Read SHA-256: {content['sha256']}\n\n{evidence}")})
     if unsupported:
         limitations.append(f"{len(unsupported)} files were not content-reviewed; see unsupported_files.")
     status = "matched" if sources else "no_verified_match"
     if sources:
+        # Downstream composers normally bind only `sources`, not the full
+        # discovery receipt. Keep provider identities and scope in that exact
+        # evidence path; citation aliases are not Google Drive file IDs.
+        relevant_ids = {item["id"] for item in assessments if item["relevant"]}
+        provenance = {
+            "requested_folder_path": path,
+            "scope_folders": [{"id": folder["id"], "name": folder["name"][:400],
+                               "parents": folder.get("parents", [])} for folder in scope_folders],
+            "read_files": [{"drive_file_id": doc["id"], "name": doc["name"][:200],
+                            "sha256": doc["sha256"], "relevant": doc["id"] in relevant_ids}
+                           for doc in documents],
+            "reviewed_file_count": len(documents),
+            "relevant_file_count": len(sources),
+            "unsupported_file_count": len(unsupported),
+            "is_complete": not limitations,
+        }
         sources.append({"id": "discovery_coverage", "title": "Source discovery coverage",
-            "content": "Coverage information, not project facts.\n" + "\n".join(limitations or [
-                "All returned supported candidate contents were assessed."])})
+            "content": ("Discovery metadata, not a Drive file or project facts. "
+                "Do not count this entry as a file read. Source IDs such as material_1 are "
+                "citation labels; drive_file_id identifies the provider file.\n"
+                + json.dumps(provenance, ensure_ascii=False) + "\nCoverage limitations:\n"
+                + "\n".join(limitations or [
+                    "All returned supported candidate contents were assessed."]))})
     return {"ret": {"files": inventory, "isComplete": not limitations, "status": status},
             "status": status, "sources": sources, "documents": documents,
             "assessments": assessments, "scope_folders": scope_folders,

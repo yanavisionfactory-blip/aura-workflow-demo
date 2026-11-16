@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
 from .approval_readiness import unfinished_action_content
 from .config import get_settings
+from .managed_agents import structured_response
 from .model_inputs import bounded_input
 from .reliability import bounded_model_call
 from .schemas import WorkflowPlan
@@ -449,7 +450,7 @@ async def prepare_marketing(request, sources, pages, settings):
                        "related_page_evidence": reference}
             feedback = ""
             for attempt in range(2):
-                response = await bounded_model_call(lambda feedback=feedback: client.responses.parse(
+                response = await bounded_model_call(lambda feedback=feedback: structured_response(client,
                     model=settings.openai_model, reasoning={"effort": "low"}, store=False,
                     instructions=instructions + feedback, input=bounded_input(payload), text_format=page_schema,
                 ), settings.model_call_timeout_seconds)
@@ -560,7 +561,7 @@ async def prepare_standard(payload, instructions, draft_schema, pages, sources, 
         draft = None
         feedback = ""
         for attempt in range(2):
-            response = await bounded_model_call(lambda feedback=feedback: client.responses.parse(
+            response = await bounded_model_call(lambda feedback=feedback: structured_response(client,
                 model=settings.openai_model, reasoning={"effort": "low"}, store=False,
                 instructions=instructions + feedback, input=bounded_input(payload), text_format=draft_schema,
             ), settings.model_call_timeout_seconds)

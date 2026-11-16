@@ -62,6 +62,15 @@ def source_presentation_requested(prompt: str) -> bool:
                              re.IGNORECASE) for match in requests)
 
 
+def canva_destination_requested(prompt: str) -> bool:
+    positive = re.sub(
+        r"\b(?:not|without|no|instead of|rather than|не|без)\s+"
+        r"(?:(?:use|using|create|make|prepare)\s+)?(?:(?:it|the presentation)\s+)?"
+        r"(?:(?:in|on|with|в)\s+)?canva\b", " ", prompt, flags=re.IGNORECASE,
+    )
+    return bool(re.search(r"\bcanva\b", positive, re.IGNORECASE))
+
+
 def _folder_discovery_requested(prompt: str) -> bool:
     return bool(re.search(r"\bfolders?\b|\bпапк\w*\b", prompt, re.IGNORECASE))
 
@@ -415,6 +424,12 @@ def validate_source_presentation_plan(prompt: str, plan) -> None:
         raise SourcePresentationPlanError(
             "The project needs a populated presentation, not a blank design. Use a permitted "
             "content-creation operation such as canva.presentation.create with the read source text."
+        )
+    if (canva_destination_requested(prompt)
+            and not any(step.tool_slug.startswith("canva") for step in writes)):
+        raise SourcePresentationPlanError(
+            "The requested destination is Canva. A Google presentation or document cannot "
+            "replace the populated Canva design. Preserve Drive as the source and Canva as the destination."
         )
     for step in writes:
         if step.operation == "google-slides.create-presentation" and not step.arguments.get("presentation"):

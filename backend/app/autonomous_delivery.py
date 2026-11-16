@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, select
 
 from .agent_runtime import is_governed_derivative_step, supervise_recovery
+from .agent_telemetry import trace_run
 from .config import get_settings
 from .db import SessionLocal, set_tenant_context
 from .managed_connectors import managed_connection_reference, managed_connector_client
@@ -661,6 +662,7 @@ async def _revalidate_connection(session, run, step) -> tuple[bool, bool]:
     return True, False
 
 
+@trace_run
 async def autonomously_recover_run(run_id: str, workspace_id: str) -> str:
     """Schedule a fresh delivery for one safe recovery action.
 

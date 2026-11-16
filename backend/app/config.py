@@ -30,6 +30,10 @@ class Settings(BaseSettings):
 
     openai_api_key: str = ""
     openai_model: str = "gpt-5.4-mini"
+    # Deployment switch for the shared managed runtime across all workflow types.
+    managed_agents_enabled: bool = False
+    managed_agents_model: str = "gpt-6-astra"
+    managed_agents_timeout_seconds: int = Field(default=90, ge=10, le=180)
     video_audio_model: str = "gpt-audio-1.5"
     video_review_timeout_seconds: int = Field(default=150, ge=30, le=300)
     # One structured model response followed by the existing deterministic

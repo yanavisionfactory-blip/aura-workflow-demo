@@ -13,6 +13,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 from .agent_telemetry import record_agent_call
 from .argument_output import ArgumentOutputSchema
 from .config import get_settings
+from .managed_agents import active as managed_agents_active
+from .managed_agents import run_structured
 from .model_inputs import (
     ModelInputTooLarge,
     bounded_input,
@@ -793,6 +795,11 @@ def build_agents() -> dict[str, Agent]:
 
 
 async def _run(agent: Agent, payload: dict, max_turns: int = 8):
+    if managed_agents_active():
+        result = await run_structured(
+            agent.name, agent.instructions, bounded_input(payload), agent.output_type,
+        )
+        return result.final_output
     started = perf_counter()
     result = None
     try:
@@ -1325,7 +1332,7 @@ async def supervise_plan(
         reason="Deterministic plan and capability checks passed",
     )
     settings = get_settings()
-    if not settings.agent_managed_execution_enabled or not settings.openai_api_key:
+    if not (settings.agent_managed_execution_enabled or managed_agents_active()) or not settings.openai_api_key:
         return fallback, "deterministic_fallback"
     agent = _agent(
         "AURA Senior Orchestrator",
@@ -1378,7 +1385,7 @@ async def supervise_execution(
         delegations=fallback_delegations,
     )
     settings = get_settings()
-    if not settings.agent_managed_execution_enabled or not settings.openai_api_key:
+    if not (settings.agent_managed_execution_enabled or managed_agents_active()) or not settings.openai_api_key:
         return fallback, "deterministic_fallback"
     try:
         decision = ExecutionSupervision.model_validate(
@@ -1437,7 +1444,7 @@ async def supervise_recovery(
         raise ValueError("At least one safe recovery option is required")
     fallback = options[0]
     settings = get_settings()
-    if not settings.agent_managed_execution_enabled or not settings.openai_api_key:
+    if not (settings.agent_managed_execution_enabled or managed_agents_active()) or not settings.openai_api_key:
         return fallback, "deterministic_fallback", "First safe recovery option"
     try:
         diagnosis = RecoveryDiagnosis(
@@ -1512,7 +1519,7 @@ async def prepare_execution_directive(
         reason="Approved arguments passed deterministic runtime policy",
     )
     settings = get_settings()
-    if not settings.agent_managed_execution_enabled or not settings.openai_api_key:
+    if not (settings.agent_managed_execution_enabled or managed_agents_active()) or not settings.openai_api_key:
         return expected, "deterministic_fallback"
     agent = _agent(
         execution_agent,
