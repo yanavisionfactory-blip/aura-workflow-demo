@@ -6,6 +6,7 @@ poll resumes that turn; it never resubmits an already recorded turn or a provide
 """
 
 import asyncio
+import copy
 import hashlib
 import json
 import logging
@@ -17,8 +18,10 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from agents import AgentOutputSchema, AgentOutputSchemaBase
+from agents.exceptions import UserError
+from agents.strict_schema import ensure_strict_json_schema
 from openai import AsyncOpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from .config import get_settings
@@ -43,16 +46,48 @@ class ManagedAgentError(RuntimeError):
 
 class _ProbeResult(BaseModel):
     destination: str
+    notes: list[str] = Field(default_factory=list)
+
+
+class _OpenProbeResult(_ProbeResult):
+    details: dict[str, str]
+
+
+def _wire_schema(schema):
+    original = schema.json_schema()
+    def open_values(value):
+        if isinstance(value, dict):
+            return (value.get("additionalProperties", False) is not False
+                    or value.get("items") == {}
+                    or any(open_values(child) for child in value.values()))
+        return isinstance(value, list) and any(open_values(child) for child in value)
+
+    try:
+        if open_values(original):
+            raise UserError("Dynamic schema values require an envelope")
+        return ensure_strict_json_schema(copy.deepcopy(original)), False
+    except UserError:
+        # Dynamic provider arguments cannot be made closed without losing keys.
+        # Use a strict transport envelope and validate its decoded value against
+        # the unchanged original schema before any AURA action is considered.
+        return {"type": "object", "properties": {"result_json": {"type": "string"}},
+                "required": ["result_json"], "additionalProperties": False}, True
 
 
 async def _create_session(client, instructions, model_input, schema, key):
     # Conversation-only sessions require initial input. Keep this exact request
     # shared by readiness and real calls, so the probe tests the live contract.
+    wire_schema, wrapped = _wire_schema(schema)
+    if wrapped:
+        instructions += ("\nReturn a JSON object with one field, result_json, containing the complete "
+                         "JSON-encoded result matching this schema. Preserve all dynamic object keys. "
+                         "Do not include Markdown fences. Result schema: "
+                         + json.dumps(schema.json_schema(), ensure_ascii=False))
     return await client.beta.agents.sessions.create(
         agent={"model": get_settings().managed_agents_model,
                "instructions": instructions, "tools": [],
                "multi_agent": {"enabled": False},
-               "text": {"format": {"type": "json_schema", "schema": schema.json_schema()}}},
+               "text": {"format": {"type": "json_schema", "schema": wire_schema}}},
         environment={"type": "none"}, input=model_input,
         metadata={"aura_call_key": key},
     )
@@ -76,21 +111,25 @@ async def _reconcile_session(client, key):
 async def probe_access() -> dict:
     """One bounded synthetic turn on startup; no workspace content or tools."""
     settings = get_settings()
-    session_id = None
+    session_ids = []
     try:
         async with asyncio.timeout(settings.managed_agents_timeout_seconds):
             async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0,
                                    timeout=20) as client:
-                schema = AgentOutputSchema(_ProbeResult)
-                key = "probe-" + uuid4().hex
-                session = await _create_session(client, "Return the requested destination exactly.",
-                    'Synthetic readiness test. Return {"destination":"canva"}.', schema, key)
-                session_id = session.id
-                if await _reconcile_session(client, key) != session_id:
-                    raise ManagedAgentError("Managed readiness receipt did not match")
-                result = await _wait_result(client, session_id, schema)
-                if result.final_output.destination != "canva":
-                    raise ManagedAgentError("Managed readiness result did not match")
+                for output_type in (_ProbeResult, _OpenProbeResult):
+                    schema = AgentOutputSchema(output_type, strict_json_schema=False)
+                    key = "probe-" + uuid4().hex
+                    session = await _create_session(client, "Return the requested destination exactly.",
+                        'Synthetic readiness test. Return destination="canva", notes=[] and '
+                        'details={"check":"ok"} when details is declared in the result schema.', schema, key)
+                    session_ids.append(session.id)
+                    if await _reconcile_session(client, key) != session.id:
+                        raise ManagedAgentError("Managed readiness receipt did not match")
+                    result = await _wait_result(client, session.id, schema)
+                    if result.final_output.destination != "canva":
+                        raise ManagedAgentError("Managed readiness result did not match")
+                    if output_type is _OpenProbeResult and result.final_output.details != {"check": "ok"}:
+                        raise ManagedAgentError("Managed readiness dynamic values did not match")
                 return {"ready": True, "model": settings.managed_agents_model}
     except Exception as exc:  # noqa: BLE001 - readiness must fail closed without exposing payloads
         failure = {"ready": False, "error_type": type(exc).__name__,
@@ -108,7 +147,7 @@ async def probe_access() -> dict:
                 failure["schema_message"] = message[:500]
         return failure
     finally:
-        if session_id:
+        for session_id in session_ids:
             # Synthetic readiness sessions are disposable; never delete run sessions here.
             try:
                 async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0,
@@ -182,7 +221,13 @@ async def _wait_result(client, session_id, output_schema):
                       and item.phase == "final_answer"]
             if len(finals) != 1:
                 raise ManagedAgentError("Managed turn has no unique completed final answer")
-            value = output_schema.validate_json(finals[0].output_text)
+            raw = finals[0].output_text
+            if _wire_schema(output_schema)[1]:
+                envelope = json.loads(raw)
+                if not isinstance(envelope, dict) or set(envelope) != {"result_json"} or not isinstance(envelope["result_json"], str):
+                    raise ManagedAgentError("Managed structured envelope is invalid")
+                raw = envelope["result_json"]
+            value = output_schema.validate_json(raw)
             return SimpleNamespace(final_output=value, session_id=session_id, turn_id=turn.id,
                 context_wrapper=SimpleNamespace(usage=turn.usage),
                 backend="openai_agents_api", model=get_settings().managed_agents_model)
@@ -208,7 +253,7 @@ async def run_structured(name: str, instructions: str, model_input: str, output_
         "destination providers; do not substitute another app."
     )
     fingerprint = json.dumps([scope.workspace_id, scope.run_id, name,
-        settings.managed_agents_model, instructions, model_input, schema.json_schema()],
+        settings.managed_agents_model, "strict-wire-v1", instructions, model_input, schema.json_schema()],
         sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     key = hashlib.sha256(fingerprint.encode()).hexdigest()
     started, result = perf_counter(), None

@@ -160,9 +160,65 @@ async def test_startup_probe_uses_working_create_and_reconcile_contract(monkeypa
 
     monkeypatch.setattr(managed, "AsyncOpenAI", lambda **_: Client())
     monkeypatch.setattr(managed, "_wait_result", AsyncMock(return_value=NS(
-        final_output=Answer(destination="canva"))))
+        final_output=NS(destination="canva", details={"check": "ok"}))))
     assert (await managed.probe_access())["ready"]
-    sessions.delete.assert_awaited_once_with("probe-session")
+    assert sessions.create.await_count == sessions.delete.await_count == 2
+    assert sessions.create.call_args_list[0].kwargs["agent"]["text"]["format"]["schema"]["required"] == ["destination", "notes"]
+    assert sessions.create.call_args_list[1].kwargs["agent"]["text"]["format"]["schema"]["required"] == ["result_json"]
+
+
+def test_critic_defaults_are_normalized_for_strict_api_without_mutation():
+    from app.schemas import CriticDecision
+
+    schema = AgentOutputSchema(CriticDecision, strict_json_schema=False)
+    original = json.dumps(schema.json_schema(), sort_keys=True)
+    wire, wrapped = managed._wire_schema(schema)
+    assert not wrapped
+    assert wire["additionalProperties"] is False
+    assert set(wire["required"]) == set(wire["properties"])
+    assert json.dumps(schema.json_schema(), sort_keys=True) == original
+
+
+async def test_dynamic_arguments_round_trip_without_losing_keys(managed_runtime):
+    from app.schemas import ExecutionDirective
+
+    state, _ = managed_runtime
+    expected = {"action": "execute", "step_key": "write", "tool_slug": "canva",
+                "operation": "canva.presentation.create", "reason": "Approved content",
+                "arguments": {"custom_key": {"nested": [1, "value"]}}}
+    state["final"] = json.dumps({"result_json": json.dumps(expected)})
+    result = await managed.run_structured("Executor", "Preserve arguments", "synthetic", ExecutionDirective)
+    assert result.final_output.model_dump() == expected
+
+
+@pytest.mark.parametrize("raw", ["{}", '{"result_json":{}}', '{"result_json":"{}"}',
+                                  '{"result_json":"not json"}', '{"result_json":"{}","extra":true}'])
+async def test_dynamic_envelope_cannot_bypass_original_validation(managed_runtime, raw):
+    from app.schemas import ExecutionDirective
+
+    state, _ = managed_runtime
+    state["final"] = raw
+    with pytest.raises((managed.ManagedAgentError, ModelBehaviorError)):
+        await managed.run_structured("Executor", "Preserve arguments", "synthetic", ExecutionDirective)
+
+
+async def test_all_builtin_agent_output_contracts_have_strict_wire_format(managed_runtime):
+    def check(node):
+        if isinstance(node, dict):
+            if node.get("type") == "object":
+                assert node.get("additionalProperties") is False
+                assert set(node.get("required", [])) == set(node.get("properties", {}))
+            for value in node.values():
+                check(value)
+        elif isinstance(node, list):
+            for value in node:
+                check(value)
+
+    for agent in agent_runtime.build_agents().values():
+        schema = agent.output_type if isinstance(agent.output_type, managed.AgentOutputSchemaBase) else AgentOutputSchema(
+            agent.output_type, strict_json_schema=False)
+        wire, _ = managed._wire_schema(schema)
+        check(wire)
 
 
 async def test_audit_and_metrics_keep_ids_not_evidence_or_credentials(managed_runtime, database):

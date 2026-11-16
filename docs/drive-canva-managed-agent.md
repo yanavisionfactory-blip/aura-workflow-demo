@@ -41,7 +41,11 @@ the call waits for reconciliation and never blindly resubmits. Saved session IDs
 resume their existing root turn. Run execution locks serialize run deliveries;
 remote sessions have no tools and cannot execute provider writes themselves.
 Readiness uses the same create-with-input request and metadata reconciliation as
-real calls, then validates a completed structured result.
+real calls. It validates both a closed structured result with defaulted fields
+and an open dictionary result. Every role uses strict wire schemas; dynamic
+provider dictionaries travel in a JSON-string envelope and are decoded and
+validated against their original contract before AURA can use them. This preserves
+arbitrary argument keys without sending unsupported open schemas to the API.
 
 Only a completed root turn with one completed final message that validates
 against the original output schema is accepted. Idle sessions, commentary,
