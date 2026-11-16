@@ -20,6 +20,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from .config import get_settings
+from .managed_agents import structured_response
 from .model_inputs import bounded_input
 from .reliability import bounded_model_call
 from .schemas import OutcomeVerification, UnifiedDeliverable, WorkflowPlan
@@ -381,7 +382,7 @@ async def prepare_review(arguments):
     attempts = 1
     async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=1) as client:
         async def generate(input_payload, prompt):
-            response = await bounded_model_call(lambda: client.responses.parse(
+            response = await bounded_model_call(lambda: structured_response(client,
                 model=settings.openai_model, reasoning={"effort": "low"}, store=False,
                 instructions=prompt, input=bounded_input(input_payload), text_format=grounded_narrative,
             ), settings.model_call_timeout_seconds)

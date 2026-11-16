@@ -1,11 +1,13 @@
-# Drive → Canva with OpenAI Agents API
+# Managed OpenAI agent runtime for AURA
 
 ## Scope and activation
 
-The opt-in pilot routes source-based Canva presentations through OpenAI's managed
-agent sessions for planning, execution decisions, composition and verification.
-It does not substitute Google Slides or create a Google document. Other tasks keep
-their existing runtime. AURA's provider gateway, account binding, immutable plans,
+When enabled, every workflow uses OpenAI's managed agent sessions for planning,
+execution decisions, text composition, verification and recovery. The user's
+chosen sources and destinations remain authoritative across Canva, Google apps,
+CRM, email, research and other connected providers. Specialized multimodal and
+built-in web-search calls keep their native model/tool contracts under the same
+workflow supervisor; image/audio inputs are never flattened into text. AURA's provider gateway, account binding, immutable plans,
 approval checks, completed checkpoints and uncertain-write reconciliation remain
 authoritative. The managed reasoning sessions receive no provider credentials,
 MCP servers, browser, shell or direct write tools.
@@ -43,7 +45,16 @@ failed/cancelled turns and unexpected required actions are not success. AURA
 does not silently replace a failed managed composition with an unverified result.
 Existing bounded deterministic manager fallbacks remain separately labelled.
 
-## Live acceptance
+## Live acceptance across workflows
+
+Run the synthetic readiness probe, inspect real managed-session metrics, and
+exercise read-only tasks outside Canva (for example a source-grounded report).
+Regression tests cover CRM, Calendar, email drafts, Sheets and Canva routing,
+shared call budgets, multimodal inputs and tenant isolation. Use only already
+authorized provider writes in live acceptance; enabling this runtime grants no
+new account permissions or blanket send authority.
+
+### Drive → Canva acceptance
 
 Use an isolated synthetic Drive parent with Unicode and an emoji in its name,
 containing a project child folder. Put two relevant text documents in the child,

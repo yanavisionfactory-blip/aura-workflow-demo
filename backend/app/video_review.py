@@ -25,6 +25,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
 from .config import get_settings
+from .managed_agents import structured_response
 from .reliability import bounded_model_call
 
 OPERATIONS = frozenset({"intelligence.video.review", "frameio.video.review"})
@@ -338,7 +339,7 @@ async def _analyze(media: dict, instructions: str) -> ReviewDraft:
                                 {"type": "input_image", "detail": "high", "image_url":
                                  "data:image/jpeg;base64," + base64.b64encode(path.read_bytes()).decode()}])
             async with gate:
-                response = await bounded_model_call(lambda: client.responses.parse(
+                response = await bounded_model_call(lambda: structured_response(client,
                     model=settings.openai_model, instructions=common,
                     input=[{"role": "user", "content": content}], text_format=ReviewDraft,
                     store=False, max_output_tokens=6000,
@@ -377,7 +378,7 @@ async def _analyze(media: dict, instructions: str) -> ReviewDraft:
                 if not task.done():
                     task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
-        response = await bounded_model_call(lambda: client.responses.parse(
+        response = await bounded_model_call(lambda: structured_response(client,
             model=settings.openai_model, instructions=common +
             "Merge the supplied actual visual/audio analyses into one chronological production "
             "review. Preserve supported observations and concrete corrections, deduplicate overlaps. "

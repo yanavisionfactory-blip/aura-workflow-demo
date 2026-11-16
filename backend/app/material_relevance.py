@@ -6,6 +6,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
 from .config import get_settings
+from .managed_agents import structured_response
 from .model_inputs import ModelInputTooLarge, bounded_input
 from .reliability import bounded_model_call
 
@@ -48,7 +49,7 @@ class MaterialAssessments(BaseModel):
 async def _infer(goal, evidence, schema, instruction):
     settings = get_settings()
     async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=1) as client:
-        response = await bounded_model_call(lambda: client.responses.parse(
+        response = await bounded_model_call(lambda: structured_response(client,
             model=settings.openai_model, text_format=schema,
             instructions=("Assess relevance to the user's objective by meaning across languages. "
                 "When supplied, user_request is the complete original brief and discovery_task is "

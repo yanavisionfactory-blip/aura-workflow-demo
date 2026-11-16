@@ -16,6 +16,7 @@ from .content_quality import (
     quality_instructions,
 )
 from .dashboard_builder import DashboardContext
+from .managed_agents import structured_response
 from .model_inputs import bounded_input, canonical_execution_evidence
 from .reliability import bounded_model_call
 from .schemas import WorkflowPlan
@@ -154,7 +155,7 @@ async def compose_report(arguments: dict, *, _quality_attempt: int = 0,
     payload = bounded_input(model_input)
     async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=1) as client:
         response = await bounded_model_call(
-            lambda: client.responses.parse(
+            lambda: structured_response(client,
                 model=settings.openai_model,
                 instructions=(
                     "Prepare a complete reviewable report from the supplied sources. "

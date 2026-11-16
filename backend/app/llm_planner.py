@@ -678,7 +678,7 @@ async def create_llm_plan(
         from .managed_agents import run_structured
         managed = managed_agents_active()
         if managed:
-            response = await run_structured("Drive to Canva Planner", instructions, payload,
+            response = await run_structured("AURA Workflow Planner", instructions, payload,
                                             _catalog_plan_format(planning_data['operations']))
             parsed = response.final_output
         else:

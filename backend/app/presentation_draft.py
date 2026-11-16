@@ -74,7 +74,7 @@ async def compose_presentation(request) -> dict:
     from .managed_agents import run_structured
     managed = managed_agents_active()
     if managed:
-        response = await run_structured("Canva Presentation Composer", instructions,
+        response = await run_structured("Presentation Composer", instructions,
             bounded_input(request.model_dump(mode="json")), PresentationDraft)
         parsed = response.final_output
     else:

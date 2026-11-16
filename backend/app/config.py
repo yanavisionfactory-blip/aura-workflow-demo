@@ -30,7 +30,7 @@ class Settings(BaseSettings):
 
     openai_api_key: str = ""
     openai_model: str = "gpt-5.4-mini"
-    # Opt-in pilot: only source-based Canva presentations use the managed harness.
+    # Deployment switch for the shared managed runtime across all workflow types.
     managed_agents_enabled: bool = False
     managed_agents_model: str = "gpt-6-astra"
     managed_agents_timeout_seconds: int = Field(default=90, ge=10, le=180)

@@ -149,17 +149,57 @@ async def test_scope_is_required_even_with_feature_enabled(monkeypatch):
         await invoke()
 
 
-@pytest.mark.parametrize("prompt,expected", [
-    ("Read my Google Drive folder and create a presentation in Canva.", True),
-    ("Прочитай материалы в папке Google Drive и создай презентацию в Canva.", True),
-    ("Read my Google Drive folder and create a presentation in Google Slides.", False),
-    ("Read my Drive folder and create a presentation in Google Slides, not Canva.", False),
-    ("Read my Drive folder and create a presentation. Do not create it in Canva.", False),
-    ("Create a presentation in Canva about the weather.", False),
-    ("Read a Drive document; do not create a presentation in Canva.", False),
+@pytest.mark.parametrize("prompt", [
+    "Read my Google Drive folder and create a presentation in Canva.",
+    "Prepare a CRM pipeline report in AURA.",
+    "Create a calendar event tomorrow at noon.",
+    "Draft an email based on the supplied notes.",
+    "Create a KPI dashboard in Google Sheets.",
+    "Read my Drive folder and create a presentation in Google Slides, not Canva.",
 ])
-def test_pilot_scope(prompt, expected):
-    assert managed.drive_canva_requested(prompt) is expected
+async def test_all_workflow_types_use_managed_scope(managed_runtime, database, prompt):
+    async with database() as session:
+        run = await session.get(WorkflowRun, "r")
+        run.prompt = prompt
+        await session.commit()
+    token = managed.current_run.set(None)
+
+    @agent_telemetry.trace_run
+    async def task(run_id, workspace_id):
+        assert managed.active()
+        return await invoke()
+
+    try:
+        assert (await task("r", "w")).backend == "openai_agents_api"
+        assert managed.current_run.get() is None
+    finally:
+        managed.current_run.reset(token)
+
+
+async def test_text_specialists_share_existing_budget(managed_runtime):
+    from time import monotonic
+
+    from app.reliability import CallBudget, bounded_model_call, model_budget
+
+    client = NS(responses=NS(parse=AsyncMock(side_effect=AssertionError("Legacy text call"))))
+    budget = CallBudget(monotonic() + 10, 1)
+    token = model_budget.set(budget)
+    try:
+        result = await bounded_model_call(lambda: managed.structured_response(client,
+            model="legacy-model", instructions="Return requested provider", input="synthetic",
+            text_format=Answer), 10)
+        assert result.output_parsed.destination == "canva"
+        assert budget.remaining_calls == 0
+    finally:
+        model_budget.reset(token)
+
+
+async def test_multimodal_specialist_keeps_image_input(managed_runtime):
+    client = NS(responses=NS(parse=AsyncMock(return_value="image-reviewed")))
+    kwargs = {"input": [{"role": "user", "content": [{"type": "input_image", "image_url": "test"}]}],
+              "text_format": Answer}
+    assert await managed.structured_response(client, **kwargs) == "image-reviewed"
+    client.responses.parse.assert_awaited_once_with(**kwargs)
 
 
 async def test_trace_scope_is_selected_and_cleared_after_failure(managed_runtime, monkeypatch):

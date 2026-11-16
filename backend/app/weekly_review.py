@@ -19,6 +19,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
 from .config import get_settings
+from .managed_agents import structured_response
 from .model_inputs import bounded_input
 from .reliability import bounded_model_call
 from .schemas import WorkflowPlan
@@ -402,7 +403,7 @@ async def prepare_review(arguments: dict) -> dict:
     model_attempts = 1
     async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=1) as client:
         response = await bounded_model_call(
-            lambda: client.responses.parse(
+            lambda: structured_response(client,
                 model=settings.openai_model, reasoning={"effort": "low"}, store=False,
                 instructions=(
                     ("Prepare a weekly review for a REAL selected client using individually labelled approved exports and/or SIMULATED scenarios. Simulated source metrics are fictional, never actual client performance. Every summary claim about those sources and every proposal based on them must say SIMULATED and requires real-data validation before implementation. Never combine simulated spend with real spend or infer actual client results from a scenario. " if mixed else "Prepare a complete weekly review from user-approved exports for the selected client. " if approved else "Prepare a complete weekly-review narrative for the explicitly FICTIONAL client using SYNTHETIC exports. ")
@@ -440,7 +441,7 @@ async def prepare_review(arguments: dict) -> dict:
             validation_feedback = str(validation_error)
             model_attempts = 2
             repaired = await bounded_model_call(
-                lambda: client.responses.parse(
+                lambda: structured_response(client,
                     model=settings.openai_model, reasoning={"effort": "low"}, store=False,
                     instructions=(
                         "Repair the supplied AURA weekly-review draft using the exact validation error and source rows. "

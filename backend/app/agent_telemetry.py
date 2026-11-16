@@ -54,9 +54,13 @@ def trace_run(function):
     @wraps(function)
     async def wrapped(run_id: str, workspace_id: str):
         from .db import SessionLocal, set_tenant_context
-        from .managed_agents import ManagedRun, current_run, drive_canva_requested
+        from .managed_agents import ManagedRun, current_run
         from .models import AuditEvent, WorkflowRun
 
+        # Recovery invoked inside an active delivery shares its original budget
+        # and metrics; standalone recovery establishes the same tenant boundary.
+        if current_run.get() == ManagedRun(run_id, workspace_id):
+            return await function(run_id, workspace_id)
         records: list[dict] = []
         from time import monotonic
 
@@ -71,8 +75,7 @@ def trace_run(function):
                 async with SessionLocal() as session:
                     await set_tenant_context(session, workspace_id)
                     run = await session.get(WorkflowRun, run_id)
-                    if (run is not None and run.workspace_id == workspace_id
-                            and drive_canva_requested(run.prompt)):
+                    if run is not None and run.workspace_id == workspace_id:
                         current_run.set(ManagedRun(run_id, workspace_id))
             return await function(run_id, workspace_id)
         finally:
