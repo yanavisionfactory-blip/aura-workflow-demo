@@ -25,6 +25,16 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from .config import get_settings
+from .review_failures import QUOTA_CODES
+
+TURN_ERROR_CODES = QUOTA_CODES | frozenset({
+    "context_length_exceeded", "max_output_tokens", "session_budget_exceeded",
+    "rate_limit_exceeded", "flex_unavailable", "server_overloaded", "cyber_policy",
+    "misalignment_policy_violation", "connection_failed", "server_error",
+    "authentication_error", "invalid_request", "resource_not_found", "sandbox_error",
+    "executor_version_incompatible", "active_turn_not_steerable", "request_timeout",
+    "internal_error",
+})
 
 
 @dataclass(frozen=True)
@@ -42,6 +52,10 @@ def active() -> bool:
 
 class ManagedAgentError(RuntimeError):
     """Content-free failures safe to include in ordinary runtime diagnostics."""
+
+    def __init__(self, message: str, *, code: str | None = None):
+        self.code = code if isinstance(code, str) and code in TURN_ERROR_CODES else None
+        super().__init__(message + (f" ({self.code})" if self.code else ""))
 
 
 class _ProbeResult(BaseModel):
@@ -206,13 +220,14 @@ async def _root_turn(client, session_id):
 async def _wait_result(client, session_id, output_schema):
     while True:
         session = await client.beta.agents.sessions.retrieve(session_id)
-        if session.status == "failed":
-            raise ManagedAgentError("Managed session failed")
         if session.required_actions or session.status == "requires_action":
             raise ManagedAgentError("Managed reasoning requested an unauthorized tool or approval")
         turn = await _root_turn(client, session_id)
         if turn is not None and turn.status in {"failed", "cancelled"}:
-            raise ManagedAgentError(f"Managed root turn {turn.status}")
+            raise ManagedAgentError(f"Managed root turn {turn.status}",
+                code=getattr(getattr(turn, "error", None), "code", None))
+        if session.status == "failed":
+            raise ManagedAgentError("Managed session failed")
         if turn is not None and turn.status == "completed":
             page = await client.beta.agents.sessions.items.list(session_id, limit=100, order="desc")
             finals = [item for item in page.data
