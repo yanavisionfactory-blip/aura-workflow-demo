@@ -334,6 +334,11 @@ def _friendly_execution_error(error: str | None) -> str:
         return "Google Sheets returned no unambiguous matching tab. Choose the exact worksheet before writing."
     if "the connected app rejected this action's inputs" in detail:
         return "The connected app rejected the target or values for this step. Review the saved action before trying again."
+    if "credit_balance_exhausted" in detail:
+        return (
+            "The API account for this app has insufficient credits. "
+            "Add API credits before running this action again. Completed work is preserved."
+        )
     if quota_error_text(detail):
         return (
             "The API account for this app has reached a billing or usage limit. "

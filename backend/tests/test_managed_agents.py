@@ -136,7 +136,8 @@ async def test_account_limit_keeps_safe_code_and_stops_repair(managed_runtime, s
     assert classify_failure(error, read=True).category == "budget_exhausted"
     assert not classify_failure(error, read=True).retryable
     assert "OpenAI API" in planning_error_message(error)
-    assert "billing or usage limit" in _friendly_execution_error(str(error))
+    expected = "insufficient credits" if code == "credit_balance_exhausted" else "billing or usage limit"
+    assert expected in _friendly_execution_error(str(error))
     assert state["created"] == 1
     sessions.items.list.assert_not_called()
 
