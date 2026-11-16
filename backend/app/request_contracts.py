@@ -39,7 +39,7 @@ _ALIASES = {
     "notion": ("notion",),
     "canva": ("canva",),
 }
-_NEGATION = re.compile(r"\b(?:do not|don't|never|without|no)\s+$", re.IGNORECASE)
+_NEGATION = re.compile(r"\b(?:do not|don't|don’t|never|without|no)\b", re.IGNORECASE)
 _NEGATED_DELIVERY = re.compile(
     r"\b(?:do not|don't|never|without)\s+"
     r"(?:[^.!?;\n]{0,160}?\s+(?:or|nor)\s+)?(?:send|email|mail|deliver)\b",
@@ -70,6 +70,19 @@ _CALENDAR_EVENT_TARGET = re.compile(
     r"\s+(?:to|in|on)\s+(?:(?:my|the)\s+)?(?:google\s+)?calendar\b",
     re.IGNORECASE,
 )
+
+
+def _negated_action(text: str, position: int) -> bool:
+    """Keep a prohibition across a coordinated list, until an explicit contrast.
+
+    Commas and 'or' do not reset 'do not': 'do not access files, send email,
+    create calendar events or share documents' contains no requested writes.
+    A new sentence or 'but/instead/then' can introduce an affirmative action.
+    Operation-name dots remain inside the same clause.
+    """
+    prefix = re.split(r"[!?;\n]|\.(?=\s|$)", text[:position])[-1]
+    prefix = re.split(r"\b(?:but|however|instead|then|yet)\b", prefix, flags=re.IGNORECASE)[-1]
+    return bool(_NEGATION.search(prefix))
 
 
 def user_request_text(prompt: str) -> str:
@@ -149,6 +162,9 @@ def requested_external_operations(prompt: str) -> set[str]:
     if reviewed_delivery:
         return {"gmail.send"}
     for clause in re.split(r"[.!?;\n]+", prompt.casefold()):
+        actions = list(_ACTION.finditer(clause))
+        if actions and all(_negated_action(clause, action.start()) for action in actions):
+            continue
         if _NEGATED_DELIVERY.search(clause):
             continue
         if (re.search(r"\b(?:draft|compose|write|prepare)\b.{0,120}"
@@ -258,9 +274,7 @@ def requested_effects(prompt: str, inventory: list[dict], manifests: dict) -> li
             + re.escape(operation) + r"(?![\w-]|\.[\w-])", re.IGNORECASE,
         )
         for match in call.finditer(prompt):
-            lead = prompt[max(0, match.start() - 50):match.start()]
-            if re.search(r"\b(?:do not|don't|never|without|no)(?:\s+\w+){0,3}\s+$",
-                         lead, re.IGNORECASE):
+            if _negated_action(prompt, match.start()):
                 continue
             kind = next((kind for kind in _OPERATION_VERBS
                          if _operation_matches(kind, module)), None)
@@ -274,7 +288,7 @@ def requested_effects(prompt: str, inventory: list[dict], manifests: dict) -> li
             # transmit it. An adjacent Gmail source does not change that.
             actions = [action for action in actions if action.group() != "email"]
         for index, action in enumerate(actions):
-            if _NEGATION.search(clause[max(0, action.start() - 20):action.start()]):
+            if _negated_action(clause, action.start()):
                 continue
             kind = next(k for k, verbs in _VERBS.items() if action.group() in verbs)
             tail = clause[action.end():actions[index + 1].start() if index + 1 < len(actions) else None]
