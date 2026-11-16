@@ -1322,6 +1322,7 @@ def planning_error_message(exc: Exception) -> str:
     """Return a user-facing planning failure without leaking provider payloads."""
     from .audit_sources import AUDIT_SOURCE_MESSAGE, AuditSourceContractError
     from .drive_discovery import ContextualDiscoveryPlanError
+    from .model_failures import is_model_quota_error
     from .plan_preflight import PlanPreflightError
     from .presentation_sources import SourcePresentationPlanError
     from .proofing import ProofingSourceError
@@ -1345,11 +1346,7 @@ def planning_error_message(exc: Exception) -> str:
         chain.append(str(current))
         current = current.__cause__ or current.__context__
     lowered = " ".join(chain).lower()
-    if (
-        "insufficient_quota" in lowered
-        or "credit_balance_exhausted" in lowered
-        or "no credits remaining" in lowered
-    ):
+    if is_model_quota_error(exc):
         from .run_supervisor import PLANNING_QUOTA_MESSAGE
 
         return PLANNING_QUOTA_MESSAGE

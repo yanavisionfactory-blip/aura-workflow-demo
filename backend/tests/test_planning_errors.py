@@ -8,6 +8,8 @@ from sqlalchemy import select
 from app import main, orchestrator
 from app.agent_runtime import _stop_model_retry
 from app.config import get_settings
+from app.managed_agents import ManagedAgentError
+from app.model_failures import MODEL_QUOTA_CODES
 from app.models import ConnectionRequirement, DispatchIntent, RunStatus, WorkflowRun, Workspace
 from app.native_connectors import NativeConnectorError, native_manifest
 from app.orchestrator import (
@@ -47,13 +49,51 @@ def test_exhausted_api_credits_are_explained_without_raw_provider_payload() -> N
 
     message = planning_error_message(error)
 
-    assert "credits are exhausted" in message
+    assert "usage or billing limit" in message
     assert "OpenAI API" in message
     assert "{'error'" not in message
 
 
 def test_exhausted_api_credits_do_not_retry_a_staged_planner() -> None:
     assert _stop_model_retry(RuntimeError("Error code: 429 credit_balance_exhausted")) is True
+
+
+@pytest.mark.parametrize("code", sorted(MODEL_QUOTA_CODES))
+def test_wrapped_account_limits_stop_retries_without_exposing_provider_prose(code):
+    from app.managed_agents import FAILURE_CODES
+    from app.run_supervisor import planning_failure_category
+
+    error = (ManagedAgentError("Managed root turn failed", provider_error={
+        "code": code, "message": "private provider payload"}) if code in FAILURE_CODES
+        else RuntimeError(code + ": private provider payload"))
+    wrapped = RuntimeError("Planner recovery exhausted")
+    wrapped.__cause__ = error
+    assert _stop_model_retry(wrapped) is True
+    assert planning_failure_category(wrapped) == "operator_quota"
+    message = planning_error_message(wrapped)
+    assert "AURA administrator" in message and "usage or billing limit" in message
+    assert "private provider payload" not in message
+
+
+@pytest.mark.parametrize("code", ["rate_limit_exceeded", "session_budget_exceeded", "max_output_tokens"])
+def test_other_managed_limits_are_not_misreported_as_billing(code):
+    from app.model_failures import is_model_quota_error
+
+    error = ManagedAgentError("Managed root turn failed", provider_error={"code": code})
+    assert is_model_quota_error(error) is False
+
+
+async def test_staged_planner_does_not_repeat_managed_account_limit(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from app import agent_runtime
+
+    call = AsyncMock(side_effect=ManagedAgentError("Managed root turn failed", provider_error={
+        "code": "usage_limit_exceeded", "message": "private provider payload"}))
+    monkeypatch.setattr(agent_runtime, "_run", call)
+    with pytest.raises(ManagedAgentError):
+        await agent_runtime._run_planner(None, {})
+    call.assert_awaited_once()
 
 
 def test_wrapped_exhausted_api_credits_keep_the_operational_category() -> None:
@@ -65,7 +105,7 @@ def test_wrapped_exhausted_api_credits_keep_the_operational_category() -> None:
     except RuntimeError as wrapped_error:
         message = planning_error_message(wrapped_error)
 
-    assert "credits are exhausted" in message
+    assert "usage or billing limit" in message
     assert "Planner recovery exhausted" not in message
 
 
@@ -112,7 +152,7 @@ async def test_workspace_ai_reports_exhausted_credits_without_a_server_error(mon
     with pytest.raises(HTTPException) as error:
         await main.generate_workspace_json(AiGenerateRequest(prompt="Draft a story"), None)
     assert error.value.status_code == 503
-    assert "credits are exhausted" in error.value.detail
+    assert "usage or billing limit" in error.value.detail
     assert "private provider payload" not in error.value.detail
 
 
@@ -161,8 +201,9 @@ def test_negative_provider_mention_does_not_hide_another_required_account():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("planner_mode", ["agent", "llm"])
+@pytest.mark.parametrize("managed", [False, True])
 async def test_model_quota_failure_precedes_inferred_app_connection(
-    database, monkeypatch, planner_mode,
+    database, monkeypatch, planner_mode, managed,
 ):
     monkeypatch.setattr(orchestrator, "SessionLocal", database)
     monkeypatch.setattr(get_settings(), "planner_mode", planner_mode)
@@ -174,6 +215,9 @@ async def test_model_quota_failure_precedes_inferred_app_connection(
         return inventory + [{"slug": "slack", "name": "Slack", "connected": False}]
 
     async def quota_failure(*_args, **_kwargs):
+        if managed:
+            raise ManagedAgentError("Managed root turn failed", provider_error={
+                "code": "usage_limit_exceeded", "message": "private provider payload"})
         raise RuntimeError("credit_balance_exhausted: private provider payload")
 
     monkeypatch.setattr("app.connector_engineer.dynamic_planning_catalog", empty_catalog)
@@ -192,7 +236,8 @@ async def test_model_quota_failure_precedes_inferred_app_connection(
         run = await session.get(WorkflowRun, "quota-routing")
         assert run.status == RunStatus.waiting_for_action
         assert run.execution_context["__aura_blocker__"]["code"] == "operator_billing_required"
-        assert "credits are exhausted" in run.error
+        assert "usage or billing limit" in run.error
+        assert run.execution_context["__aura_blocker__"]["retryable"] is False
         assert "private provider payload" not in str(run.execution_context)
         assert await session.scalar(select(ConnectionRequirement)) is None
         assert await session.scalar(select(DispatchIntent)) is None

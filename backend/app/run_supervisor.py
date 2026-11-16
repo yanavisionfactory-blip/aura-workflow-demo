@@ -16,13 +16,15 @@ from typing import Any, Literal
 
 from sqlalchemy import select
 
+from .model_failures import is_model_quota_error
 from .models import AuditEvent, DispatchIntent, RunStatus, WorkflowRun
 
 SUPERVISOR_KEY = "__aura_supervisor__"
 SUPERVISOR_VERSION = 2
 PLANNING_QUOTA_MESSAGE = (
-    "AURA's AI planning credits are exhausted. Restore credits on the OpenAI API "
-    "account configured for this workspace, then try again."
+    "AURA's AI planning service has reached an OpenAI API usage or billing limit. "
+    "The AURA administrator must resolve the limit on its configured API account before retrying. "
+    "Your connected apps do not need to be reconnected. No action has started."
 )
 
 
@@ -308,14 +310,7 @@ def planning_failure_category(exc: BaseException) -> str:
         for marker in ("invalid api key", "authentication", "unauthorized", "forbidden")
     ):
         return "operator_credential"
-    if any(
-        marker in detail
-        for marker in (
-            "insufficient_quota",
-            "credit_balance_exhausted",
-            "no credits remaining",
-        )
-    ):
+    if is_model_quota_error(exc):
         return "operator_quota"
     if status == 429 or "rate limit" in detail or "error code: 429" in detail:
         return "rate_limited"
