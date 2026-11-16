@@ -15,6 +15,7 @@ from .argument_output import ArgumentOutputSchema
 from .config import get_settings
 from .managed_agents import active as managed_agents_active
 from .managed_agents import run_structured
+from .model_failures import is_model_quota_error
 from .model_inputs import (
     ModelInputTooLarge,
     bounded_input,
@@ -66,8 +67,7 @@ class ConnectionRequiredError(RuntimeError):
 def _stop_model_retry(exc: Exception) -> bool:
     from .reliability import BudgetExceeded
     status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
-    details = str(exc).casefold()
-    if any(marker in details for marker in ("insufficient_quota", "credit_balance_exhausted", "no credits remaining")):
+    if is_model_quota_error(exc):
         return True
     return is_input_limit(exc) or isinstance(exc, BudgetExceeded) or (
         isinstance(status, int) and 400 <= status < 500 and status not in {408, 409, 429})
@@ -827,12 +827,9 @@ async def _run_planner(agent: Agent, payload: dict, max_turns: int = 8) -> Plann
             return PlanningBundle.model_validate(raw)
         except Exception as exc:
             lowered = str(exc).lower()
-            permanent = any(
+            permanent = is_model_quota_error(exc) or any(
                 marker in lowered
                 for marker in (
-                    "insufficient_quota",
-                    "credit_balance_exhausted",
-                    "no credits remaining",
                     "invalid_api_key",
                     "authentication_error",
                 )
