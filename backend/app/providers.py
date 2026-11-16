@@ -653,6 +653,15 @@ class ProviderExecutor:
             arguments = coerce_module_arguments(
                 self.capability_manifest, operation, arguments
             )
+        from . import desktop_estimating
+        if operation in desktop_estimating.DEFINITIONS:
+            capability_for(self.capability_manifest, operation)
+            identity = self.capability_manifest.get("identity") or {}
+            if (self.capability_manifest.get("provider_type") != desktop_estimating.BACKEND
+                    or identity.get("instance_id") != self.credentials.get("instance_id")):
+                raise ValueError("Estimating requires its own verified Windows connection")
+            return await desktop_estimating.execute(self.credentials, identity.get("provider"),
+                operation, arguments, timeout=self.timeout_seconds)
         from . import reddit_ads, zernio_connect
         if operation in reddit_ads.OPERATIONS:
             capability_for(self.capability_manifest, operation)

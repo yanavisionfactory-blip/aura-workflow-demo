@@ -83,7 +83,7 @@ async function connectToolAttempt(toolName, opts) {
     const knownProvider = knownAccount?.slug || requestedProvider || knownEntry?.provider;
     const knownBackend = knownAccount?.connection_backend || knownRoute?.connectionBackend || knownEntry?.connectionBackend;
     if (knownEntry?.connectable && knownProvider && !usesSameTabAuthorization(knownProvider, knownAccount)
-      && !["pipedream", "wordpress_plugin", "shopify_client_credentials"].includes(knownBackend)) {
+      && !["pipedream", "wordpress_plugin", "shopify_client_credentials", "desktop_estimating"].includes(knownBackend)) {
       authorizationWindow = reserveAuthorizationWindow(knownProvider);
     }
     const bounded = (operation) => connectionTask(operation, { signal: opts.signal, timeoutMs: CONNECTION_REQUEST_TIMEOUT_MS });
@@ -110,7 +110,7 @@ async function connectToolAttempt(toolName, opts) {
     const authorizationProvider = existing?.slug || provider;
     const backend = existing?.connection_backend || requestedRoute?.connectionBackend || entry.connectionBackend;
     const sameTab = usesSameTabAuthorization(authorizationProvider, existing);
-    if (!authorizationWindow && !sameTab && !["pipedream", "wordpress_plugin", "shopify_client_credentials"].includes(backend)) authorizationWindow = reserveAuthorizationWindow(authorizationProvider);
+    if (!authorizationWindow && !sameTab && !["pipedream", "wordpress_plugin", "shopify_client_credentials", "desktop_estimating"].includes(backend)) authorizationWindow = reserveAuthorizationWindow(authorizationProvider);
     const result = await authorizeConnectorBroker(authorizationProvider, {
       connection: existing,
       timeoutMs: 600000,
@@ -170,7 +170,7 @@ export async function hydrateConnections({ force = false } = {}) {
     const tools = await listPythonTools();
     const health = await Promise.all(tools.map(async (tool) => {
       if (!tool.enabled) return { tool, connected: false };
-      if (tool.kind !== "oauth" && !["wordpress_plugin", "shopify_client_credentials"].includes(tool.connection_backend)) {
+      if (tool.kind !== "oauth" && !["wordpress_plugin", "shopify_client_credentials", "desktop_estimating"].includes(tool.connection_backend)) {
         return { tool, connected: isVerifiedConnection(tool) };
       }
       try {
@@ -237,7 +237,7 @@ export async function reconnectTool(toolName, connectionId = null) {
     const provider = tool.slug || providerForTool(toolName);
     if (!provider) throw new Error(`${toolName} has no reconnectable provider.`);
     const sameTab = usesSameTabAuthorization(provider, tool);
-    if (!sameTab && !["pipedream", "shopify_client_credentials"].includes(tool.connection_backend)) {
+    if (!sameTab && !["pipedream", "shopify_client_credentials", "desktop_estimating"].includes(tool.connection_backend)) {
       authorizationWindow = reserveAuthorizationWindow(provider, true);
     }
     const result = await authorizeConnectorBroker(provider, {

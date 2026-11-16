@@ -4143,6 +4143,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                         from .frameio_browser_contract import WAIT_SECONDS as BROWSER_WAIT_SECONDS
                         from .video_review import OPERATIONS as VIDEO_OPERATIONS
                         step_timeout = (
+                            120.0 if (active_tool.config or {}).get("managed_by") == "desktop_estimating" else
                             150.0 if operation == "google-drive.search-files"
                             and "semantic_goal" in arguments else
                             float(BROWSER_WAIT_SECONDS + 30)
@@ -4342,6 +4343,8 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                                     else "step_timeout_seconds"
                                 ]
                             )
+                            if (active_tool.config or {}).get("managed_by") == "desktop_estimating":
+                                provider_timeout = min(110.0, execution_timeout)
                             if (active_tool.config or {}).get("managed_by") == "agent_gateway":
                                 provider_timeout = min(
                                     provider_timeout,

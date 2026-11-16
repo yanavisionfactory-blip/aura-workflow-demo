@@ -14,6 +14,7 @@ on:
       - "scripts/deploy_backend_release.py"
       - "scripts/tests/test_backend_release.py"
       - "integrations/wordpress/**"
+      - "integrations/desktop-estimating/**"
       - "docker-compose.yml"
       - ".github/workflows/**"
 
@@ -57,7 +58,7 @@ jobs:
       - name: Compile
         run: python -m compileall -q app
       - name: Lint
-        run: ruff check --config pyproject.toml app tests ../scripts/deploy_backend_release.py ../scripts/tests/test_backend_release.py
+        run: ruff check --config pyproject.toml app tests ../integrations/desktop-estimating ../scripts/deploy_backend_release.py ../scripts/tests/test_backend_release.py
       - name: Validate WordPress plugin bridge
         run: |
           php -l ../integrations/wordpress/aura-seo-bridge/aura-seo-bridge.php

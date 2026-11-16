@@ -44,6 +44,17 @@ FastAPI web service, Celery worker, private Postgres database and durable job
 queue. Existing production data and encryption keys must be transferred before
 the frontend is switched to the new API.
 
+## PlanSwift and desktop Excel connected estimating
+
+The first-party Windows connector exposes PlanSwift takeoff reads and Excel
+rate-book/report operations in AURA's tool catalog. Install the downloadable
+connector on the estimator's workstation, then connect **PlanSwift** and
+**Microsoft Excel (Desktop)** using the same authenticated HTTPS bridge.
+See [installation, supported calculations and live acceptance checklist](integrations/desktop-estimating/README.md).
+The connector reads existing measurements, creates a new draft workbook and
+requires actual Excel recalculation plus deterministic read-back before success.
+Portable tests do not substitute for the required Windows application acceptance run.
+
 ## Frontend
 
 ```bash

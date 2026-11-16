@@ -19,6 +19,7 @@ import MarketingResultsSummary from "./MarketingResultsSummary";
 import GoogleSheetsResult from "./GoogleSheetsResult";
 import FrameioReviewResult from "./FrameioReviewResult";
 import CanvaResult from "./CanvaResult";
+import DesktopEstimateResult from "./DesktopEstimateResult";
 
 const readableDetail = (value = "") => readableResultText(value)
   .split(/\n/)
@@ -84,6 +85,7 @@ function PresentationPreview({ presentation, thumbnailUrl, onImageError }) {
 }
 
 export default function ResultPreview({ result, results, activity = [], backendRunId, onCanvaScreen }) {
+  if (result.kind === "desktop_estimate") return <DesktopEstimateResult receipt={result.receipt} />;
   if (result.kind === "frameio_review") return <FrameioReviewResult result={result} backendRunId={backendRunId} />;
   if (result.kind === "spreadsheet") return <GoogleSheetsResult result={result} backendRunId={backendRunId} />;
   if (result.kind === "marketing_tools") return <MarketingResultsSummary packet={result.packet} activity={activity} />;

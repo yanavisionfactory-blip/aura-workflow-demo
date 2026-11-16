@@ -569,6 +569,23 @@ export function primaryResultFromOutputs(outputs = [], context = {}, presentatio
     packet: weekly.provider_result.packet, link: null, downloadUrl: null,
   };
   const spreadsheet = googleSheetsResult(completed, context, explicitPrimary);
+  const estimate = [...completed].reverse().find((output) => ["excel.estimate.create", "excel.estimate.get"].includes(output.operation)
+    && (!explicitPrimary || explicitPrimary === output)
+    && output.critic?.action === "accept"
+    && output.outcome_check?.status === "verified"
+    && output.provider_result?.status === "draft"
+    && output.provider_result?.recalculated_with === "Microsoft Excel"
+    && output.provider_result?.formula_errors === 0
+    && /^[a-f0-9]{64}$/.test(output.provider_result?.report_id || "")
+    && Number.isFinite(output.provider_result?.total)
+    && /^(USD|CAD|EUR|GBP|AUD|NZD)$/.test(output.provider_result?.currency || ""));
+  if (estimate && (!explicitPrimary || explicitPrimary === estimate)) return {
+    kind: "desktop_estimate", title: "Draft Excel estimate", provider: "Microsoft Excel (Desktop)",
+    sourceStepId: estimate.step_id, sourceStepKey: estimate.step_key, receipt: estimate.provider_result,
+    completionTitle: "Draft estimate saved in Excel",
+    completionSummary: "The workbook was recalculated and read back on the connected Windows workstation.",
+    link: null, downloadUrl: null,
+  };
   if (spreadsheet) return spreadsheet;
   const chat = [...completed].reverse().find((output) => ["anthropic.chat", "intelligence.claude_backup"].includes(output.operation)
     && output.critic?.action === "accept" && output.outcome_check?.status === "verified"
