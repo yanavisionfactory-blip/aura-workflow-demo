@@ -83,6 +83,22 @@ def provider_intent_text(text: str, family: str) -> str:
     """
     if family in {"frameio", "pageproof"}:
         return proofing_intent_text(text)
+    if family in {"excel-desktop", "excel", "microsoft-excel", "microsoft-excel-online"}:
+        # A Windows workbook is not a Microsoft 365 workbook. Both catalogs
+        # contain "Excel", but their resource IDs and executors differ.
+        desktop = r"\b(?:(?:microsoft\s+)?excel\s*[(-]?\s*desktop\b\)?|desktop\s+(?:microsoft\s+)?excel\b)"
+        has_desktop = bool(re.search(desktop, text, flags=re.IGNORECASE) or re.search(
+            r"\bexcel[.\s]+(?:ratebooks[.\s]+list|rates[.\s]+read|estimate[.\s]+(?:create|get))\b",
+            text, flags=re.IGNORECASE,
+        ))
+        cloud = r"\b(?:(?:microsoft\s+)?excel\s+(?:online|web|cloud)|(?:online|web|cloud)\s+(?:microsoft\s+)?excel)\b"
+        if family == "excel-desktop":
+            if not has_desktop:
+                return re.sub(r"\b(?:microsoft\s+)?excel\b", " ", text, flags=re.IGNORECASE)
+        elif has_desktop:
+            if not re.search(cloud, text, flags=re.IGNORECASE):
+                return re.sub(r"\b(?:microsoft\s+)?excel\b", " ", text, flags=re.IGNORECASE)
+            return re.sub(desktop, " ", text, flags=re.IGNORECASE)
     if family in {"gmail", "google", "discord", "slack", "telegram", "teams",
                   "microsoft-teams", "outlook", "microsoft-outlook"}:
         return messaging_intent_text(text)
