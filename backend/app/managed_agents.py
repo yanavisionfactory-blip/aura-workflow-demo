@@ -43,6 +43,32 @@ def active() -> bool:
 class ManagedAgentError(RuntimeError):
     """Content-free failures safe to include in ordinary runtime diagnostics."""
 
+    def __init__(self, message, *, provider_error=None):
+        self.provider_code = failure_details(provider_error)["code"]
+        self.provider_message = (provider_error.get("message", "") if isinstance(provider_error, dict)
+                                 else getattr(provider_error, "message", ""))
+        super().__init__(message + (f" ({self.provider_code})" if provider_error else ""))
+
+
+FAILURE_CODES = {
+    "context_length_exceeded", "max_output_tokens", "session_budget_exceeded", "usage_limit_exceeded",
+    "project_spend_limit_exceeded", "organization_spend_limit_exceeded", "organization_usage_limit_exceeded",
+    "billing_not_active", "credit_balance_exhausted", "rate_limit_exceeded", "flex_unavailable",
+    "server_overloaded", "cyber_policy", "misalignment_policy_violation", "connection_failed",
+    "server_error", "authentication_error", "invalid_request", "resource_not_found", "sandbox_error",
+    "executor_version_incompatible", "active_turn_not_steerable", "request_timeout", "internal_error",
+}
+
+
+def failure_details(error):
+    """Expose only documented categories and fixed diagnostic markers, never provider prose."""
+    code = error.get("code") if isinstance(error, dict) else getattr(error, "code", None)
+    message = error.get("message", "") if isinstance(error, dict) else getattr(error, "message", "")
+    markers = [word for word in ("schema", "additionalProperties", "anyOf", "oneOf", "$defs",
+               "maxItems", "minItems", "pattern", "unsupported", "model", "context", "tokens", "quota")
+               if isinstance(message, str) and word.casefold() in message.casefold()]
+    return {"code": code if isinstance(code, str) and code in FAILURE_CODES else "unknown", "markers": markers}
+
 
 class _ProbeResult(BaseModel):
     destination: str
@@ -130,10 +156,41 @@ async def probe_access() -> dict:
                         raise ManagedAgentError("Managed readiness result did not match")
                     if output_type is _OpenProbeResult and result.final_output.details != {"check": "ok"}:
                         raise ManagedAgentError("Managed readiness dynamic values did not match")
+                # Probe the actual catalog-constrained planner format too. A tiny
+                # two-field result cannot certify the union used by live plans.
+                from .llm_planner import _catalog_plan_format
+
+                catalog = [{"slug": slug, "allowed_operations": operations} for slug, operations in (
+                    ("google-drive", ["google-drive.search-files"]),
+                    ("google-docs", ["google-docs.get-document"]),
+                    ("google-slides", ["google-slides.create-presentation"]),
+                    ("canva", ["canva.presentation.create"]),
+                    ("gmail", ["gmail.draft.create"]),
+                    ("aura", ["report.compose"]),
+                )]
+                schema = AgentOutputSchema(_catalog_plan_format(catalog), strict_json_schema=False)
+                expected = {"name": "Synthetic planner probe", "interpretation": "No external work",
+                    "steps": [{"key": "probe", "agent": "Planner", "tool_slug": "aura",
+                    "operation": "report.compose", "arguments_json": "{}", "reason": "Synthetic check",
+                    "expected_output": "No execution", "consequential": False, "depends_on": [],
+                    "required_evidence": []}]}
+                session = await _create_session(client, "Return exactly the supplied synthetic plan. Do not execute it.",
+                    json.dumps(expected), schema, "probe-" + uuid4().hex)
+                session_ids.append(session.id)
+                result = await _wait_result(client, session.id, schema)
+                if result.final_output.model_dump() != expected:
+                    raise ManagedAgentError("Managed readiness planner result did not match")
                 return {"ready": True, "model": settings.managed_agents_model}
     except Exception as exc:  # noqa: BLE001 - readiness must fail closed without exposing payloads
         failure = {"ready": False, "error_type": type(exc).__name__,
                    "status_code": getattr(exc, "status_code", None)}
+        if isinstance(exc, ManagedAgentError):
+            failure["provider_code"] = exc.provider_code
+            # Only fixed synthetic inputs enter this probe; runtime exceptions
+            # never put this prose in their string representation or logs.
+            message = exc.provider_message
+            if isinstance(message, str) and not re.search(r"sk-|bearer|api.key|token|secret", message, re.IGNORECASE):
+                failure["probe_message"] = message[:600]
         for field in ("code", "param"):
             value = getattr(exc, field, None)
             if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.\[\]-]{1,120}", value):
@@ -207,12 +264,12 @@ async def _wait_result(client, session_id, output_schema):
     while True:
         session = await client.beta.agents.sessions.retrieve(session_id)
         if session.status == "failed":
-            raise ManagedAgentError("Managed session failed")
+            raise ManagedAgentError("Managed session failed", provider_error=getattr(session, "error", None))
         if session.required_actions or session.status == "requires_action":
             raise ManagedAgentError("Managed reasoning requested an unauthorized tool or approval")
         turn = await _root_turn(client, session_id)
         if turn is not None and turn.status in {"failed", "cancelled"}:
-            raise ManagedAgentError(f"Managed root turn {turn.status}")
+            raise ManagedAgentError(f"Managed root turn {turn.status}", provider_error=getattr(turn, "error", None))
         if turn is not None and turn.status == "completed":
             page = await client.beta.agents.sessions.items.list(session_id, limit=100, order="desc")
             finals = [item for item in page.data

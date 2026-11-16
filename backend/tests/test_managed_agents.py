@@ -50,7 +50,7 @@ async def managed_runtime(monkeypatch, database):
 
     async def turns(*args, **kwargs):
         return NS(data=[NS(id="turn-test", status=state["turn_status"], subagent_id=None,
-                           usage=None)] if state["turns"] else [])
+                           error=state.get("error"), usage=None)] if state["turns"] else [])
 
     async def list_sessions(**kwargs):
         assert kwargs["metadata"] == state["metadata"]
@@ -159,12 +159,35 @@ async def test_startup_probe_uses_working_create_and_reconcile_contract(monkeypa
             return False
 
     monkeypatch.setattr(managed, "AsyncOpenAI", lambda **_: Client())
-    monkeypatch.setattr(managed, "_wait_result", AsyncMock(return_value=NS(
-        final_output=NS(destination="canva", details={"check": "ok"}))))
+    async def result(_client, _session_id, schema):
+        if schema.name() == "CatalogWorkflowPlan":
+            return NS(final_output=schema.validate_json(seen["input"]))
+        return NS(final_output=NS(destination="canva", details={"check": "ok"}))
+
+    monkeypatch.setattr(managed, "_wait_result", AsyncMock(side_effect=result))
     assert (await managed.probe_access())["ready"]
-    assert sessions.create.await_count == sessions.delete.await_count == 2
+    assert sessions.create.await_count == sessions.delete.await_count == 3
     assert sessions.create.call_args_list[0].kwargs["agent"]["text"]["format"]["schema"]["required"] == ["destination", "notes"]
     assert sessions.create.call_args_list[1].kwargs["agent"]["text"]["format"]["schema"]["required"] == ["result_json"]
+    planner_wire = sessions.create.call_args_list[2].kwargs["agent"]["text"]["format"]["schema"]
+    assert len(planner_wire["properties"]["steps"]["items"]["anyOf"]) == 6
+
+
+async def test_failed_turn_preserves_category_without_logging_provider_content(managed_runtime):
+    state, _ = managed_runtime
+    state.update(turn_status="failed", error=NS(code="invalid_request",
+        message="Private user content and sk-secret in unsupported anyOf schema"))
+    with pytest.raises(managed.ManagedAgentError) as failure:
+        await invoke()
+    assert failure.value.provider_code == "invalid_request"
+    assert str(failure.value) == "Managed root turn failed (invalid_request)"
+    assert "Private" not in str(failure.value) and "sk-secret" not in str(failure.value)
+
+
+@pytest.mark.parametrize("code", ["private-client-name", None, {"secret": "value"}])
+def test_unknown_failure_details_never_expose_arbitrary_codes_or_messages(code):
+    assert managed.failure_details({"code": code, "message": "private data"}) == {
+        "code": "unknown", "markers": []}
 
 
 def test_critic_defaults_are_normalized_for_strict_api_without_mutation():

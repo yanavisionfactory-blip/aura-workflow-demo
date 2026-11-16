@@ -86,3 +86,54 @@ async def log_recent_stops_safely() -> None:
         await asyncio.wait_for(log_recent_stops(), timeout=15)
     except Exception as exc:  # noqa: BLE001 - startup diagnostics must never stop the API
         logger.warning('Workflow stop summary unavailable error_type=%s', type(exc).__name__)
+
+
+async def log_recent_managed_failures() -> None:
+    """Read already-recorded failed turns; never start, retry or read their outputs."""
+    from openai import AsyncOpenAI
+
+    from .config import get_settings
+    from .managed_agents import failure_details
+    from .scheduler_runtime import _workspace_ids
+
+    settings = get_settings()
+    if not settings.managed_agents_enabled:
+        return
+    cutoff = datetime.now(UTC) - timedelta(days=1)
+    candidates, seen = [], set()
+    for wid in await _workspace_ids():
+        async with SessionLocal() as session:
+            await set_tenant_context(session, wid)
+            events = (await session.scalars(select(AuditEvent).join(WorkflowRun,
+                AuditEvent.run_id == WorkflowRun.id).where(
+                AuditEvent.workspace_id == wid, WorkflowRun.workspace_id == wid,
+                WorkflowRun.status.in_([RunStatus.failed, RunStatus.waiting_for_action, RunStatus.blocked]),
+                AuditEvent.created_at >= cutoff,
+                AuditEvent.event_type == "run.managed_agent_session",
+                AuditEvent.actor == "openai-agents-api",
+            ).order_by(AuditEvent.created_at.desc()).limit(12))).all()
+            for event in events:
+                sid = (event.payload or {}).get("session_id")
+                if isinstance(sid, str) and sid.startswith("sess_") and sid not in seen:
+                    seen.add(sid)
+                    candidates.append((event.created_at, event.run_id, sid))
+    # Recent incidents must not be crowded out by the first workspace visited.
+    async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0, timeout=5) as client:
+        for _, run_id, sid in sorted(candidates, reverse=True)[:6]:
+            try:
+                turns = await client.beta.agents.sessions.turns.list(sid, limit=10, order="desc")
+                for turn in turns.data:
+                    if turn.subagent_id is None and turn.status == "failed":
+                        logger.warning("MANAGED_AGENT_STOP %s", json.dumps({
+                            "run_id": run_id, "session_id": sid, "turn_id": turn.id,
+                            **failure_details(getattr(turn, "error", None)),
+                        }, separators=(",", ":")))
+            except Exception as exc:  # noqa: BLE001 - bounded read-only diagnostics
+                logger.warning("Managed turn summary unavailable error_type=%s", type(exc).__name__)
+
+
+async def log_recent_managed_failures_safely() -> None:
+    try:
+        await asyncio.wait_for(log_recent_managed_failures(), timeout=15)
+    except Exception as exc:  # noqa: BLE001 - diagnostics cannot stop the API
+        logger.warning("Managed failure summary unavailable error_type=%s", type(exc).__name__)
