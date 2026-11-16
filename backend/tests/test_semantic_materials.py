@@ -1,6 +1,8 @@
 """Regression of the reported folder binding and source-to-slide execution path."""
 
 import base64
+import hashlib
+import json
 from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -15,6 +17,7 @@ from app.native_connectors import native_manifest
 from app.orchestrator import _normalize_planned_steps, _prepare_provider_arguments
 from app.pipedream_connect import PipedreamConnectError
 from app.presentation_sources import validate_source_presentation_plan
+from app.reports import ReportRequest
 from app.schemas import PlanStep, WorkflowPlan
 from app.source_contracts import upgrade_capabilities
 from app.workflow_context import DriveFolderIdentityError, resolve_value, step_context_value
@@ -131,6 +134,33 @@ async def test_path_discovery_reads_and_semantically_selects_actual_contents(mon
     assert result["unsupported_files"][0]["id"] == "demo"
     assert not result["ret"]["isComplete"]
     broker.verify_account.assert_awaited_once_with("owner", "google_drive", "selected-account")
+
+    # This is the actual downstream binding: metadata must survive even when
+    # the composer never receives the full receipt or its scope_folders key.
+    bound = resolve_value("{{steps.discover.sources}}", {"steps": {
+        "discover": step_context_value(result, drive_materials.OPERATION)}})
+    request = ReportRequest(title="QA preflight", instructions="Report folder and file identities",
+                            sources=bound)
+    source, coverage = request.sources
+    assert source.id == "material_1"  # A stable citation label, not a provider ID.
+    digest = hashlib.sha256(contents["useful"].encode()).hexdigest()
+    assert "Drive file ID: useful\n" in source.content
+    assert f"Read SHA-256: {digest}\n" in source.content
+    assert "not a Drive file" in coverage.content
+    metadata = json.loads(coverage.content.splitlines()[1])
+    assert metadata["scope_folders"] == [
+        {"id": "parent", "name": "ChatGPT on the goooo! 💖", "parents": []},
+        {"id": "project", "name": "Brisa Studio", "parents": ["parent"]}]
+    assert metadata["read_files"] == [
+        {"drive_file_id": identifier, "name": name,
+         "sha256": hashlib.sha256(contents[identifier].encode()).hexdigest(), "relevant": relevant}
+        for identifier, name, relevant in [("useful", "Notes 07", True),
+                                           ("irrelevant", "AI music restaurants", False)]]
+    assert metadata["reviewed_file_count"] == 2
+    assert metadata["relevant_file_count"] == 1
+    assert metadata["unsupported_file_count"] == 1
+    assert metadata["is_complete"] is False
+    assert contents["irrelevant"] not in coverage.content
 
 
 async def test_ambiguous_folder_does_not_read_first_match_or_broaden_scope():
@@ -255,6 +285,10 @@ async def test_unscoped_search_reads_neutral_name_without_keyword_hit(monkeypatc
     result = await drive_materials.execute(Broker(respond), "owner", "selected-account", {"semantic_goal": GOAL})
     assert result["sources"][0]["title"] == "2026-10-07"
     assert len(calls) == 3
+    metadata = json.loads(result["sources"][-1]["content"].splitlines()[1])
+    assert metadata["requested_folder_path"] == [] and metadata["scope_folders"] == []
+    assert metadata["reviewed_file_count"] == metadata["relevant_file_count"] == 1
+    assert metadata["is_complete"] is True
 
 
 async def test_malformed_pdf_is_disclosed_without_fabricated_sources(monkeypatch):
