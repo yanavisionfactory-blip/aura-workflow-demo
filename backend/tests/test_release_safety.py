@@ -17,6 +17,19 @@ async def test_canary_cannot_migrate_or_execute_customer_work(monkeypatch):
     next_handler.assert_not_awaited()
 
 
+async def test_managed_agent_canary_checks_access_without_customer_dispatch(monkeypatch):
+    from app import managed_agents
+    monkeypatch.setattr(main, "settings", SimpleNamespace(canary_mode=True, managed_agents_enabled=True))
+    probe = AsyncMock(return_value={"ready": False, "status_code": 403})
+    migration = AsyncMock(side_effect=AssertionError("Canary must not migrate"))
+    monkeypatch.setattr(managed_agents, "probe_access", probe)
+    monkeypatch.setattr(main, "migrate_database", migration)
+    await main.startup()
+    assert main.app.state.managed_agents_probe["ready"] is False
+    probe.assert_awaited_once()
+    migration.assert_not_awaited()
+
+
 def test_model_comparison_uses_identical_fixtures_and_strict_grading():
     import json
     assert len(CASES) == 8

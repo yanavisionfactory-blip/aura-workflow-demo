@@ -416,6 +416,12 @@ def validate_source_presentation_plan(prompt: str, plan) -> None:
             "The project needs a populated presentation, not a blank design. Use a permitted "
             "content-creation operation such as canva.presentation.create with the read source text."
         )
+    if (re.search(r"\bcanva\b", prompt, re.IGNORECASE)
+            and not any(step.tool_slug.startswith("canva") for step in writes)):
+        raise SourcePresentationPlanError(
+            "The requested destination is Canva. A Google presentation or document cannot "
+            "replace the populated Canva design. Preserve Drive as the source and Canva as the destination."
+        )
     for step in writes:
         if step.operation == "google-slides.create-presentation" and not step.arguments.get("presentation"):
             raise SourcePresentationPlanError(

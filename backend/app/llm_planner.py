@@ -674,23 +674,32 @@ async def create_llm_plan(
         "For revisions, honor the latest change and remove replaced providers."
     )
     async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=1) as client:
-        response = await bounded_model_call(
-            lambda: client.responses.parse(
-                model=settings.openai_model,
-                instructions=instructions,
-                input=payload,
-                # Constrain to the packed catalog actually visible in input,
-                # not every action from all selected connected resources.
-                text_format=_catalog_plan_format(planning_data['operations']),
-                store=False,
-            ),
-            settings.model_call_timeout_seconds,
-        )
+        from .managed_agents import active as managed_agents_active
+        from .managed_agents import run_structured
+        managed = managed_agents_active()
+        if managed:
+            response = await run_structured("Drive to Canva Planner", instructions, payload,
+                                            _catalog_plan_format(planning_data['operations']))
+            parsed = response.final_output
+        else:
+            response = await bounded_model_call(
+                lambda: client.responses.parse(
+                    model=settings.openai_model,
+                    instructions=instructions,
+                    input=payload,
+                    # Constrain to the packed catalog actually visible in input,
+                    # not every action from all selected connected resources.
+                    text_format=_catalog_plan_format(planning_data['operations']),
+                    store=False,
+                ),
+                settings.model_call_timeout_seconds,
+            )
+            parsed = response.output_parsed
         model_ms = round((perf_counter() - started) * 1000)
-        if response.output_parsed is None:
+        if parsed is None:
             raise ValueError("The model did not return a usable workflow plan")
         compact, repaired_keys, repair_ms = await _repair_argument_json(
-            client, response.output_parsed, relevant, settings,
+            client, parsed, relevant, settings,
         )
     try:
         plan = normalize_plan_graph(_expand_compact_plan(compact))
@@ -701,7 +710,8 @@ async def create_llm_plan(
         raise PlanGraphValidationError(compact, exc) from exc
     operations = [step.operation.lower() for step in plan.steps]
     plan.planning_artifacts.update({
-        "planner_recovery_mode": "direct_llm",
+        "planner_recovery_mode": "managed_agents_api" if managed else "direct_llm",
+        **({"managed_agent_session_id": response.session_id} if managed else {}),
         "argument_json_repaired_steps": repaired_keys,
         "objective_spec": {
             "goal": prompt,

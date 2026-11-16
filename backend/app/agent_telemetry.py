@@ -10,7 +10,8 @@ from .config import get_settings
 calls: ContextVar[list[dict] | None] = ContextVar("agent_calls", default=None)
 
 
-def record_agent_call(name: str, started: float, result: object) -> None:
+def record_agent_call(name: str, started: float, result: object, *,
+                      backend: str = "agents_sdk", model: str | None = None) -> None:
     records = calls.get()
     if records is None:
         return
@@ -39,7 +40,11 @@ def record_agent_call(name: str, started: float, result: object) -> None:
             "total_tokens": getattr(usage, "total_tokens", None),
             "cost_usd": None,
             "estimated_cost_usd": estimate,
-            "model": settings.openai_model,
+            "model": model or settings.openai_model,
+            "backend": backend,
+            **({"session_id": result.session_id, "turn_id": result.turn_id}
+               if result is not None and getattr(result, "backend", None) == "openai_agents_api"
+               else {}),
         }
     )
 
@@ -48,7 +53,8 @@ def trace_run(function):
     @wraps(function)
     async def wrapped(run_id: str, workspace_id: str):
         from .db import SessionLocal, set_tenant_context
-        from .models import AuditEvent
+        from .managed_agents import ManagedRun, current_run, drive_canva_requested
+        from .models import AuditEvent, WorkflowRun
 
         records: list[dict] = []
         from time import monotonic
@@ -58,9 +64,18 @@ def trace_run(function):
         started = perf_counter()
         budget_token = model_budget.set(CallBudget(monotonic() + settings.delivery_budget_seconds, settings.max_model_calls_per_delivery))
         token = calls.set(records)
+        managed_token = current_run.set(None)
         try:
+            if settings.managed_agents_enabled:
+                async with SessionLocal() as session:
+                    await set_tenant_context(session, workspace_id)
+                    run = await session.get(WorkflowRun, run_id)
+                    if (run is not None and run.workspace_id == workspace_id
+                            and drive_canva_requested(run.prompt)):
+                        current_run.set(ManagedRun(run_id, workspace_id))
             return await function(run_id, workspace_id)
         finally:
+            current_run.reset(managed_token)
             calls.reset(token)
             model_budget.reset(budget_token)
             try:
