@@ -33,12 +33,15 @@ call fingerprints, model identity and usage; no evidence text or credentials.
 ## Recovery contract
 
 Each call is keyed by workspace, run, agent, model, instructions, bounded input and
-output schema. Its session ID is committed in a tenant-scoped audit row before
-submitting input. Event submission uses the API's idempotency key. After a lost
-acknowledgement or worker restart, AURA checks the saved session's root turn and
-retrieves its final output instead of repeating submitted work. An interrupted
-session creation can leave an empty idle session, but cannot start model work or
-any external effect. Run execution locks serialize run deliveries.
+output schema. A tenant-scoped intent record is committed before creating the
+session with its required initial input. Automatic SDK create retries are disabled.
+After a lost acknowledgement, AURA reconciles the exact opaque call key through
+session metadata instead of creating again. If the receipt is not yet visible,
+the call waits for reconciliation and never blindly resubmits. Saved session IDs
+resume their existing root turn. Run execution locks serialize run deliveries;
+remote sessions have no tools and cannot execute provider writes themselves.
+Readiness uses the same create-with-input request and metadata reconciliation as
+real calls, then validates a completed structured result.
 
 Only a completed root turn with one completed final message that validates
 against the original output schema is accepted. Idle sessions, commentary,

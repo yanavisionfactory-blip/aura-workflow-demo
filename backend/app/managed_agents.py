@@ -14,6 +14,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from time import perf_counter
 from types import SimpleNamespace
+from uuid import uuid4
 
 from agents import AgentOutputSchema, AgentOutputSchemaBase
 from openai import AsyncOpenAI
@@ -44,6 +45,34 @@ class _ProbeResult(BaseModel):
     destination: str
 
 
+async def _create_session(client, instructions, model_input, schema, key):
+    # Conversation-only sessions require initial input. Keep this exact request
+    # shared by readiness and real calls, so the probe tests the live contract.
+    return await client.beta.agents.sessions.create(
+        agent={"model": get_settings().managed_agents_model,
+               "instructions": instructions, "tools": [],
+               "multi_agent": {"enabled": False},
+               "text": {"format": {"type": "json_schema", "schema": schema.json_schema()}}},
+        environment={"type": "none"}, input=model_input,
+        metadata={"aura_call_key": key},
+    )
+
+
+async def _reconcile_session(client, key):
+    # Metadata filtering is eventually consistent. Never turn a missing result
+    # into another create: a lost acknowledgement must not duplicate model work.
+    for _ in range(10):
+        page = await client.beta.agents.sessions.list(
+            metadata={"aura_call_key": key}, limit=2, order="desc")
+        matches = [s for s in page.data if s.metadata.get("aura_call_key") == key]
+        if len(matches) > 1 or getattr(page, "has_more", False):
+            raise ManagedAgentError("Managed call has ambiguous session receipts")
+        if matches:
+            return matches[0].id
+        await asyncio.sleep(1)
+    raise ManagedAgentError("Managed session creation is awaiting reconciliation; no duplicate submitted")
+
+
 async def probe_access() -> dict:
     """One bounded synthetic turn on startup; no workspace content or tools."""
     settings = get_settings()
@@ -53,15 +82,12 @@ async def probe_access() -> dict:
             async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0,
                                    timeout=20) as client:
                 schema = AgentOutputSchema(_ProbeResult)
-                session = await client.beta.agents.sessions.create(
-                    agent={"model": settings.managed_agents_model, "tools": [],
-                           "multi_agent": {"enabled": False},
-                           "instructions": "Return the requested destination exactly.",
-                           "text": {"format": {"type": "json_schema", "schema": schema.json_schema()}}},
-                    environment={"type": "none"},
-                    input='Synthetic readiness test. Return {"destination":"canva"}.',
-                )
+                key = "probe-" + uuid4().hex
+                session = await _create_session(client, "Return the requested destination exactly.",
+                    'Synthetic readiness test. Return {"destination":"canva"}.', schema, key)
                 session_id = session.id
+                if await _reconcile_session(client, key) != session_id:
+                    raise ManagedAgentError("Managed readiness receipt did not match")
                 result = await _wait_result(client, session_id, schema)
                 if result.final_output.destination != "canva":
                     raise ManagedAgentError("Managed readiness result did not match")
@@ -94,7 +120,7 @@ async def probe_access() -> dict:
                 )
 
 
-async def _saved_session(scope: ManagedRun, key: str) -> str | None:
+async def _session_checkpoint(scope: ManagedRun, key: str) -> dict | None:
     from .db import SessionLocal, set_tenant_context
     from .models import AuditEvent
 
@@ -106,11 +132,15 @@ async def _saved_session(scope: ManagedRun, key: str) -> str | None:
             AuditEvent.event_type == "run.managed_agent_session",
             AuditEvent.payload["call_key"].as_string() == key,
         ).order_by(AuditEvent.created_at.desc()).limit(1))
-        saved = rows.first()
-        return saved.get("session_id") if saved else None
+        return rows.first()
 
 
-async def _save_session(scope: ManagedRun, key: str, session_id: str, name: str) -> None:
+async def _saved_session(scope: ManagedRun, key: str) -> str | None:
+    saved = await _session_checkpoint(scope, key)
+    return saved.get("session_id") if saved else None
+
+
+async def _save_session(scope: ManagedRun, key: str, session_id: str | None, name: str) -> None:
     from .db import SessionLocal, set_tenant_context
     from .models import AuditEvent, WorkflowRun
 
@@ -184,28 +214,20 @@ async def run_structured(name: str, instructions: str, model_input: str, output_
     started, result = perf_counter(), None
 
     async def run():
-        async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=1,
+        async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0,
                                timeout=20) as client:
-            session_id = await _saved_session(scope, key)
-            if not session_id:
-                session = await client.beta.agents.sessions.create(
-                    agent={"model": settings.managed_agents_model,
-                           "instructions": instructions, "tools": [],
-                           "multi_agent": {"enabled": False},
-                           "text": {"format": {"type": "json_schema", "schema": schema.json_schema()}}},
-                    environment={"type": "none"},
-                    metadata={"aura_call_key": key},
-                )
+            checkpoint = await _session_checkpoint(scope, key)
+            session_id = checkpoint.get("session_id") if checkpoint else None
+            if checkpoint is None:
+                # Record intent before the create-with-input request. If its
+                # response is lost, retries reconcile metadata instead of create.
+                await _save_session(scope, key, None, name)
+                session = await _create_session(client, instructions, model_input, schema, key)
                 session_id = session.id
-                # Persist BEFORE submitting input. An interrupted creation can leave only an
-                # idle, empty session; no model work or external effects have started.
                 await _save_session(scope, key, session_id, name)
-            turn = await _root_turn(client, session_id)
-            if turn is None:
-                await client.beta.agents.sessions.events.create(session_id,
-                    idempotency_key=key,
-                    events=[{"type": "agent.session.input.message", "input": [{"role": "user",
-                             "content": [{"type": "input_text", "text": model_input}]}]}])
+            elif not session_id:
+                session_id = await _reconcile_session(client, key)
+                await _save_session(scope, key, session_id, name)
             return await _wait_result(client, session_id, schema)
 
     try:
