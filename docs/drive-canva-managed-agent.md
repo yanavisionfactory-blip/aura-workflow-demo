@@ -14,8 +14,9 @@ MCP servers, browser, shell or direct write tools.
 
 Set `MANAGED_AGENTS_ENABLED=true` on the API and execution-worker services only
 after the isolated canary succeeds. Defaults: `MANAGED_AGENTS_MODEL=gpt-6-astra`,
-`MANAGED_AGENTS_TIMEOUT_SECONDS=90`, `MANAGED_AGENTS_SPEND_LIMIT_CENTS=100` per
-session. Existing per-delivery time and model-call limits still apply. No
+`MANAGED_AGENTS_TIMEOUT_SECONDS=90`. Existing per-delivery time and model-call
+limits still apply. The live API rejects the newer SDK's `spend_control` parameter;
+this integration does not claim a provider-enforced dollar cap. No
 `PLANNER_MODE` or global agent-execution flag change is necessary.
 
 The existing server `OPENAI_API_KEY` must permit `api.agents.read`,

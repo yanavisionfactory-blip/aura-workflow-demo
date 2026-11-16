@@ -34,7 +34,6 @@ class Settings(BaseSettings):
     managed_agents_enabled: bool = False
     managed_agents_model: str = "gpt-6-astra"
     managed_agents_timeout_seconds: int = Field(default=90, ge=10, le=180)
-    managed_agents_spend_limit_cents: int = Field(default=100, ge=1, le=1000)
     video_audio_model: str = "gpt-audio-1.5"
     video_review_timeout_seconds: int = Field(default=150, ge=30, le=300)
     # One structured model response followed by the existing deterministic

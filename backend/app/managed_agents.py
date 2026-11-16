@@ -59,7 +59,6 @@ async def probe_access() -> dict:
                            "instructions": "Return the requested destination exactly.",
                            "text": {"format": {"type": "json_schema", "schema": schema.json_schema()}}},
                     environment={"type": "none"},
-                    spend_control={"limit": settings.managed_agents_spend_limit_cents},
                     input='Synthetic readiness test. Return {"destination":"canva"}.',
                 )
                 session_id = session.id
@@ -195,7 +194,6 @@ async def run_structured(name: str, instructions: str, model_input: str, output_
                            "multi_agent": {"enabled": False},
                            "text": {"format": {"type": "json_schema", "schema": schema.json_schema()}}},
                     environment={"type": "none"},
-                    spend_control={"limit": settings.managed_agents_spend_limit_cents},
                     metadata={"aura_call_key": key},
                 )
                 session_id = session.id

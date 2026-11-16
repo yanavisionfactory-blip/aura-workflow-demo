@@ -35,6 +35,7 @@ async def managed_runtime(monkeypatch, database):
 
     async def create(**kwargs):
         assert "input" not in kwargs  # Durable checkpoint must precede submission.
+        assert "spend_control" not in kwargs  # Live API rejects this newer SDK parameter.
         assert kwargs["environment"] == {"type": "none"}
         assert kwargs["agent"]["tools"] == []
         state["created"] += 1
