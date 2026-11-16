@@ -282,10 +282,11 @@ async def startup() -> None:
         # A release canary must never migrate or dispatch customer work.
         return
     await migrate_database()
-    from .internal_diagnostics import log_recent_stops_safely
+    from .internal_diagnostics import log_recent_managed_failures_safely, log_recent_stops_safely
     from .scheduler_runtime import recover_recorded_jira_readbacks
 
     await log_recent_stops_safely()
+    await log_recent_managed_failures_safely()
     # A saved Jira bulk receipt must be checked after a verifier fix even in
     # deployments where the periodic recovery scheduler is disabled. The
     # recovered step has a recorded result, so execution only reads Jira.
