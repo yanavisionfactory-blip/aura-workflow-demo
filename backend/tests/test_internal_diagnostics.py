@@ -2,6 +2,8 @@ import json
 from types import SimpleNamespace as NS
 from unittest.mock import AsyncMock
 
+import pytest
+
 from app.internal_diagnostics import failure_category
 
 
@@ -11,7 +13,8 @@ def test_stop_category_never_exposes_raw_provider_or_customer_content():
     assert failure_category({'internal_error':'[private-token] secret'}) is None
 
 
-async def test_managed_diagnostics_read_only_failed_tenant_bound_sessions(database, monkeypatch, caplog):
+@pytest.mark.parametrize("status", ["failed", "waiting_for_action", "blocked"])
+async def test_managed_diagnostics_read_only_failed_tenant_bound_sessions(database, monkeypatch, caplog, status):
     import openai
 
     from app import internal_diagnostics as diagnostics
@@ -35,7 +38,7 @@ async def test_managed_diagnostics_read_only_failed_tenant_bound_sessions(databa
     monkeypatch.setattr(openai, "AsyncOpenAI", lambda **_: Client())
     async with database() as session:
         session.add_all([Workspace(id="w", name="One"), Workspace(id="other", name="Two")])
-        session.add_all([WorkflowRun(id="r", workspace_id="w", prompt="private", status=RunStatus.failed),
+        session.add_all([WorkflowRun(id="r", workspace_id="w", prompt="private", status=RunStatus(status)),
             WorkflowRun(id="other-r", workspace_id="other", prompt="private", status=RunStatus.failed),
             WorkflowRun(id="active", workspace_id="w", prompt="private", status=RunStatus.running)])
         for run_id, sid, actor in [("r", "sess_good", "openai-agents-api"),

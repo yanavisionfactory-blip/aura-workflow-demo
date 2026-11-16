@@ -107,7 +107,8 @@ async def log_recent_managed_failures() -> None:
             events = (await session.scalars(select(AuditEvent).join(WorkflowRun,
                 AuditEvent.run_id == WorkflowRun.id).where(
                 AuditEvent.workspace_id == wid, WorkflowRun.workspace_id == wid,
-                WorkflowRun.status == RunStatus.failed, AuditEvent.created_at >= cutoff,
+                WorkflowRun.status.in_([RunStatus.failed, RunStatus.waiting_for_action, RunStatus.blocked]),
+                AuditEvent.created_at >= cutoff,
                 AuditEvent.event_type == "run.managed_agent_session",
                 AuditEvent.actor == "openai-agents-api",
             ).order_by(AuditEvent.created_at.desc()).limit(12))).all()
