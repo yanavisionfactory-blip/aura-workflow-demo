@@ -153,6 +153,8 @@ async def test_scope_is_required_even_with_feature_enabled(monkeypatch):
     ("Read my Google Drive folder and create a presentation in Canva.", True),
     ("Прочитай материалы в папке Google Drive и создай презентацию в Canva.", True),
     ("Read my Google Drive folder and create a presentation in Google Slides.", False),
+    ("Read my Drive folder and create a presentation in Google Slides, not Canva.", False),
+    ("Read my Drive folder and create a presentation. Do not create it in Canva.", False),
     ("Create a presentation in Canva about the weather.", False),
     ("Read a Drive document; do not create a presentation in Canva.", False),
 ])

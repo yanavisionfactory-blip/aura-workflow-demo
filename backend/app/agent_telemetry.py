@@ -28,6 +28,7 @@ def record_agent_call(name: str, started: float, result: object, *,
         input_tokens is not None
         and output_tokens is not None
         and all(rate is not None for rate in rates)
+        and (model is None or model == settings.openai_model)
     ):
         estimate = (input_tokens * rates[0] + output_tokens * rates[1]) / 1_000_000
     records.append(

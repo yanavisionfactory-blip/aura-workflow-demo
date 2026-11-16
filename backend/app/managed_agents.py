@@ -32,11 +32,9 @@ current_run: ContextVar[ManagedRun | None] = ContextVar("managed_agent_run", def
 
 
 def drive_canva_requested(prompt: str) -> bool:
-    import re
+    from .presentation_sources import canva_destination_requested, source_presentation_requested
 
-    from .presentation_sources import source_presentation_requested
-
-    return bool(re.search(r"\bcanva\b", prompt, re.IGNORECASE)) and source_presentation_requested(prompt)
+    return canva_destination_requested(prompt) and source_presentation_requested(prompt)
 
 
 def active() -> bool:
