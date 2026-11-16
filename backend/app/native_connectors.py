@@ -723,6 +723,12 @@ def native_manifest(slug: str) -> dict[str, Any]:
 
 def current_capability_manifest(slug: str, stored: dict[str, Any] | None) -> dict[str, Any]:
     """Use the contract for the backend that owns this verified connection."""
+    from . import desktop_estimating
+
+    if slug in desktop_estimating.PROVIDERS:
+        # Catalog descriptions contain no workstation identity. Preserve the
+        # verified connection's binding; only preflight can grant execution.
+        return stored or desktop_estimating.manifest(slug)
     if stored:
         capabilities = stored.get("capabilities") or []
         is_signed_network_contract = stored.get("provider_type") in {
@@ -754,6 +760,8 @@ def _direct_meta_configured() -> bool:
 
 def planning_catalog(connected_slugs: set[str] | None = None) -> list[dict[str, Any]]:
     """Expose catalog capabilities for proposals without granting execution access."""
+    from . import desktop_estimating
+
     connected = connected_slugs or set()
     native = [
         {
@@ -778,7 +786,7 @@ def planning_catalog(connected_slugs: set[str] | None = None) -> list[dict[str, 
         for slug, name in UNIVERSAL_PLANNING_CONNECTORS.items()
         if slug in connected
     ]
-    return native + universal
+    return native + universal + desktop_estimating.planning_catalog(connected)
 
 
 def public_catalog(slug: str) -> dict[str, Any]:
