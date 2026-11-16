@@ -34,33 +34,38 @@ async def managed_runtime(monkeypatch, database):
              "turn_status": "completed", "final_phase": "final_answer", "final": '{"destination":"canva"}'}
 
     async def create(**kwargs):
-        assert "input" not in kwargs  # Durable checkpoint must precede submission.
+        assert kwargs["input"]  # Live API requires initial input for environment=none.
         assert "spend_control" not in kwargs  # Live API rejects this newer SDK parameter.
         assert kwargs["environment"] == {"type": "none"}
         assert kwargs["agent"]["tools"] == []
+        key = kwargs["metadata"]["aura_call_key"]
+        assert await managed._session_checkpoint(managed.current_run.get(), key) is not None
+        state["metadata"] = kwargs["metadata"]
         state["created"] += 1
-        return NS(id="session-test")
+        state["submitted"] += 1
+        state["turns"] = ["turn-test"]
+        if state.get("disconnect_after_submit"):
+            raise ConnectionError("Synthetic lost acknowledgement")
+        return NS(id="session-test", metadata=state["metadata"])
 
     async def turns(*args, **kwargs):
         return NS(data=[NS(id="turn-test", status=state["turn_status"], subagent_id=None,
                            usage=None)] if state["turns"] else [])
 
-    async def submit(*args, **kwargs):
-        # The ID is committed before the first model input is sent.
-        assert await managed._saved_session(managed.current_run.get(), kwargs["idempotency_key"])
-        state["submitted"] += 1
-        state["turns"] = ["turn-test"]
-        if state.get("disconnect_after_submit"):
-            raise ConnectionError("Synthetic lost acknowledgement")
+    async def list_sessions(**kwargs):
+        assert kwargs["metadata"] == state["metadata"]
+        return NS(data=[] if state.get("hide_receipt") else [
+            NS(id="session-test", metadata=state["metadata"])], has_more=False)
 
     async def items(*args, **kwargs):
         return NS(data=[NS(type="message", role="assistant", turn_id="turn-test",
                           status="completed", phase=state["final_phase"], output_text=state["final"])])
 
     sessions = NS(create=AsyncMock(side_effect=create),
+        list=AsyncMock(side_effect=list_sessions),
         retrieve=AsyncMock(side_effect=lambda *_: NS(status=state["status"], required_actions=state["actions"])),
         turns=NS(list=AsyncMock(side_effect=turns)), items=NS(list=AsyncMock(side_effect=items)),
-        events=NS(create=AsyncMock(side_effect=submit)))
+        events=NS(create=AsyncMock(side_effect=AssertionError("Never resubmit initial input"))))
 
     class Client:
         async def __aenter__(self):
@@ -112,10 +117,52 @@ async def test_only_completed_valid_final_is_accepted(managed_runtime, change):
 async def test_tenant_scope_cannot_load_another_workspaces_session(managed_runtime):
     _, sessions = managed_runtime
     await invoke()
-    key = sessions.events.create.call_args.kwargs["idempotency_key"]
+    key = sessions.create.call_args.kwargs["metadata"]["aura_call_key"]
     assert await managed._saved_session(managed.ManagedRun("r", "other"), key) is None
     with pytest.raises(managed.ManagedAgentError):
         await managed._save_session(managed.ManagedRun("r", "other"), key, "bad", "Composer")
+
+
+async def test_missing_receipt_never_repeats_create(managed_runtime, monkeypatch):
+    state, sessions = managed_runtime
+    state["disconnect_after_submit"] = True
+    with pytest.raises(ConnectionError):
+        await invoke()
+    state["hide_receipt"] = True
+    monkeypatch.setattr(managed.asyncio, "sleep", AsyncMock())
+    with pytest.raises(managed.ManagedAgentError, match="awaiting reconciliation"):
+        await invoke()
+    assert state["created"] == 1
+    sessions.events.create.assert_not_called()
+
+
+async def test_startup_probe_uses_working_create_and_reconcile_contract(monkeypatch):
+    seen = {}
+
+    async def create(**kwargs):
+        assert kwargs["input"]
+        assert kwargs["environment"] == {"type": "none"}
+        seen.update(kwargs)
+        return NS(id="probe-session")
+
+    async def listing(**kwargs):
+        assert kwargs["metadata"] == seen["metadata"]
+        return NS(data=[NS(id="probe-session", metadata=seen["metadata"])], has_more=False)
+
+    sessions = NS(create=AsyncMock(side_effect=create), list=AsyncMock(side_effect=listing),
+                  delete=AsyncMock())
+
+    class Client:
+        async def __aenter__(self):
+            return NS(beta=NS(agents=NS(sessions=sessions)))
+        async def __aexit__(self, *_):
+            return False
+
+    monkeypatch.setattr(managed, "AsyncOpenAI", lambda **_: Client())
+    monkeypatch.setattr(managed, "_wait_result", AsyncMock(return_value=NS(
+        final_output=Answer(destination="canva"))))
+    assert (await managed.probe_access())["ready"]
+    sessions.delete.assert_awaited_once_with("probe-session")
 
 
 async def test_audit_and_metrics_keep_ids_not_evidence_or_credentials(managed_runtime, database):
