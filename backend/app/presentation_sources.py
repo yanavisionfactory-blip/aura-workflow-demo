@@ -114,7 +114,11 @@ def source_presentation_requirements(prompt: str) -> list[str]:
         "candidates, reads supported contents and verifies relevance by meaning, returning sources. "
         "Bind report.compose sources={{steps.discover.sources}} with presentation=true and an "
         "explicit dependency. Do not add a first-file Google Docs read: discovery has already read "
-        "and assessed the actual documents. Unsupported files and coverage remain in the receipt. "
+        "and assessed the actual documents. Every downstream reference to semantic discovery, "
+        "including references inside instructions, must use its .sources output. The sources "
+        "already include a discovery_coverage entry with real Drive file IDs, folder scope, "
+        "unsupported-file counts and limitations. Do not bind .documents, .files, .ret, "
+        ".scope_folders, .unsupported_files, .limitations or the whole discovery receipt. "
         "For google-slides.create-presentation, pass presentation={{steps.compose.presentation}} "
         "when offered. The title-only variant is a blank shell, not a content write. Verify with "
         "google-slides.get-presentation using the actual presentationId returned."),
@@ -399,14 +403,21 @@ def validate_source_presentation_plan(prompt: str, plan) -> None:
     for step in steps:
         if step.operation in FOLDER_READS:
             continue
-        for path in referenced_paths(step.arguments):
-            if any((path == "steps." + key or path.startswith("steps." + key + "."))
+        for path in sorted(referenced_paths(step.arguments)):
+            invalid_source = next((key for key in sorted(semantic_keys)
+                   if (path == "steps." + key or path.startswith("steps." + key + "."))
                    and not (path == "steps." + key + ".sources"
                             or path.startswith(("steps." + key + ".sources.",
-                                                "steps." + key + ".sources["))) for key in semantic_keys):
+                                                "steps." + key + ".sources[")))), None)
+            if invalid_source:
                 raise SourcePresentationPlanError(
                     "Use semantic discovery's verified sources output for project evidence. "
-                    "Candidate metadata and unselected documents are not verified relevant sources."
+                    "Candidate metadata and unselected documents are not verified relevant sources. "
+                    f"Step '{step.key}' references '{{{{{path}}}}}'. Replace that binding with "
+                    f"'{{{{steps.{invalid_source}.sources}}}}', including when it appears inside "
+                    "instructions. Real Drive file IDs, folder scope, unsupported-file counts "
+                    "and limitations are already included in its discovery_coverage source entry. "
+                    "Keep the requested scope and the existing content-reading steps."
                 )
     if not content_reads:
         raise SourcePresentationPlanError(

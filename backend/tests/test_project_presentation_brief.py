@@ -10,7 +10,7 @@ from test_semantic_materials import Broker, capability, file
 from app import drive_materials, presentation_draft
 from app.native_connectors import native_manifest
 from app.orchestrator import _normalize_planned_steps, _prepare_provider_arguments
-from app.presentation_sources import validate_source_presentation_plan
+from app.presentation_sources import SourcePresentationPlanError, validate_source_presentation_plan
 from app.reports import ReportRequest
 from app.schemas import PlanStep, WorkflowPlan
 from app.source_contracts import upgrade_capabilities
@@ -38,6 +38,22 @@ def project_plan(destination):
              else "canva.presentation.create", {"title": "Music"} if destination == "google-slides"
              else {"title": "Music", "phases": "{{steps.compose.body}}"}, ["compose"], True),
     ])
+
+
+@pytest.mark.parametrize("field", ["documents", "files", "limitations", "scope_folders", "ret"])
+def test_source_repair_names_invalid_binding_and_verified_coverage(field):
+    plan = project_plan("canva")
+    report = plan.steps[1]
+    report.arguments["instructions"] += " Coverage: {{steps.discover." + field + "}}"
+    with pytest.raises(SourcePresentationPlanError) as caught:
+        validate_source_presentation_plan(PROMPT, plan)
+    message = str(caught.value)
+    assert "Step 'compose'" in message
+    assert "{{steps.discover." + field + "}}" in message
+    assert "{{steps.discover.sources}}" in message
+    assert "discovery_coverage" in message
+    # Diagnostic guidance must not silently accept or rewrite unverified inputs.
+    assert "{{steps.discover." + field + "}}" in report.arguments["instructions"]
 
 
 @pytest.mark.parametrize("destination", ["google-slides", "canva"])
