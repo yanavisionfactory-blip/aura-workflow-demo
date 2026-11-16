@@ -50,7 +50,7 @@ async def managed_runtime(monkeypatch, database):
 
     async def turns(*args, **kwargs):
         return NS(data=[NS(id="turn-test", status=state["turn_status"], subagent_id=None,
-                           usage=None)] if state["turns"] else [])
+                           usage=None, error=state.get("turn_error"))] if state["turns"] else [])
 
     async def list_sessions(**kwargs):
         assert kwargs["metadata"] == state["metadata"]
@@ -114,6 +114,51 @@ async def test_only_completed_valid_final_is_accepted(managed_runtime, change):
         await invoke()
 
 
+@pytest.mark.parametrize("session_status", ["idle", "failed"])
+@pytest.mark.parametrize("code", sorted(managed.QUOTA_CODES))
+async def test_account_limit_keeps_safe_code_and_stops_repair(managed_runtime, session_status, code):
+    from app.orchestrator import _friendly_execution_error, planning_error_message
+    from app.reliability import classify_failure
+    from app.review_failures import review_failure
+    from app.run_supervisor import planning_failure_category
+
+    state, sessions = managed_runtime
+    state.update(status=session_status, turn_status="failed",
+                 turn_error=NS(code=code, message="private payload sk-do-not-log"))
+    with pytest.raises(managed.ManagedAgentError) as caught:
+        await invoke()
+    error = caught.value
+    assert error.code == code and code in str(error)
+    assert "private" not in str(error) and "sk-" not in str(error)
+    assert agent_runtime._stop_model_retry(error)
+    assert planning_failure_category(error) == "operator_quota"
+    assert review_failure(error) == "quota"
+    assert classify_failure(error, read=True).category == "budget_exhausted"
+    assert not classify_failure(error, read=True).retryable
+    assert "OpenAI API" in planning_error_message(error)
+    expected = "insufficient credits" if code == "credit_balance_exhausted" else "billing or usage limit"
+    assert expected in _friendly_execution_error(str(error))
+    assert state["created"] == 1
+    sessions.items.list.assert_not_called()
+
+
+async def test_unknown_turn_error_never_leaks_provider_text(managed_runtime):
+    state, _ = managed_runtime
+    state.update(turn_status="failed", turn_error=NS(code="private-payload", message="secret"))
+    with pytest.raises(managed.ManagedAgentError) as caught:
+        await invoke()
+    assert caught.value.code is None
+    assert str(caught.value) == "Managed root turn failed"
+
+
+async def test_planner_does_not_retry_terminal_account_limit(monkeypatch):
+    call = AsyncMock(side_effect=managed.ManagedAgentError("Managed root turn failed", code="usage_limit_exceeded"))
+    monkeypatch.setattr(agent_runtime, "_run", call)
+    with pytest.raises(managed.ManagedAgentError):
+        await agent_runtime._run_planner(NS(), {})
+    call.assert_awaited_once()
+
+
 async def test_tenant_scope_cannot_load_another_workspaces_session(managed_runtime):
     _, sessions = managed_runtime
     await invoke()
@@ -165,6 +210,21 @@ async def test_startup_probe_uses_working_create_and_reconcile_contract(monkeypa
     assert sessions.create.await_count == sessions.delete.await_count == 2
     assert sessions.create.call_args_list[0].kwargs["agent"]["text"]["format"]["schema"]["required"] == ["destination", "notes"]
     assert sessions.create.call_args_list[1].kwargs["agent"]["text"]["format"]["schema"]["required"] == ["result_json"]
+
+
+async def test_startup_probe_reports_account_limit_without_provider_payload(monkeypatch):
+    sessions = NS(delete=AsyncMock())
+    client = AsyncMock()
+    client.__aenter__.return_value = NS(beta=NS(agents=NS(sessions=sessions)))
+    monkeypatch.setattr(managed, "AsyncOpenAI", lambda **_: client)
+    monkeypatch.setattr(managed, "_create_session", AsyncMock(return_value=NS(id="probe")))
+    monkeypatch.setattr(managed, "_reconcile_session", AsyncMock(return_value="probe"))
+    monkeypatch.setattr(managed, "_wait_result", AsyncMock(side_effect=managed.ManagedAgentError(
+        "Managed root turn failed", code="usage_limit_exceeded")))
+    result = await managed.probe_access()
+    assert result == {"ready": False, "error_type": "ManagedAgentError",
+                      "status_code": None, "api_code": "usage_limit_exceeded"}
+    sessions.delete.assert_awaited_once_with("probe")
 
 
 def test_critic_defaults_are_normalized_for_strict_api_without_mutation():

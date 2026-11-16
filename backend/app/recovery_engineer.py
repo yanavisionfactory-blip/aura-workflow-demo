@@ -206,7 +206,7 @@ def diagnose_run(
     completed = [step.step_key for step in steps if step.status == StepStatus.completed]
     blocker = (run.execution_context or {}).get("__aura_blocker__") or {}
     blocker_code = blocker.get("code")
-    human_action = blocker_code in HUMAN_ACTION_CODES or normalized in {
+    human_action = category == "operator_quota" or blocker_code in HUMAN_ACTION_CODES or normalized in {
         RecoveryCategory.authorization_required,
         RecoveryCategory.uncertain_external_effect,
     }
@@ -709,6 +709,16 @@ async def dispatch_isolated_code_repair(incident: RecoveryIncident) -> bool:
         async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
             response = await client.post(url, headers=headers, json=payload)
         response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        incident.status = "awaiting_sandbox"
+        incident.sandbox_result = {
+            "configured": True,
+            "reason_code": ("sandbox_authorization_required" if status in {401, 403}
+                            else "sandbox_dispatch_failed"),
+            "http_status": status,
+        }
+        return False
     except (httpx.HTTPError, ValueError):
         incident.status = "awaiting_sandbox"
         incident.sandbox_result = {

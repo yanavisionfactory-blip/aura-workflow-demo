@@ -65,9 +65,11 @@ class ConnectionRequiredError(RuntimeError):
 
 def _stop_model_retry(exc: Exception) -> bool:
     from .reliability import BudgetExceeded
+    from .review_failures import quota_error_text, review_failure
     status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
     details = str(exc).casefold()
-    if any(marker in details for marker in ("insufficient_quota", "credit_balance_exhausted", "no credits remaining")):
+    if (review_failure(exc) == "quota" or quota_error_text(details)
+            or getattr(exc, "code", None) == "authentication_error"):
         return True
     return is_input_limit(exc) or isinstance(exc, BudgetExceeded) or (
         isinstance(status, int) and 400 <= status < 500 and status not in {408, 409, 429})
@@ -837,7 +839,7 @@ async def _run_planner(agent: Agent, payload: dict, max_turns: int = 8) -> Plann
                     "authentication_error",
                 )
             )
-            if permanent or is_input_limit(exc) or attempt == 2:
+            if permanent or _stop_model_retry(exc) or attempt == 2:
                 raise
             await asyncio.sleep(attempt + 1)
             attempt_payload = {

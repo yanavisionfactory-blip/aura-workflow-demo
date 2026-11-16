@@ -299,6 +299,8 @@ def _exception_chain(exc: BaseException) -> str:
 
 def planning_failure_category(exc: BaseException) -> str:
     """Classify without storing a raw provider response in workflow state."""
+    from .review_failures import quota_error_text, review_failure
+
     detail = _exception_chain(exc)
     status = getattr(exc, "status_code", None) or getattr(
         getattr(exc, "response", None), "status_code", None
@@ -308,16 +310,9 @@ def planning_failure_category(exc: BaseException) -> str:
         for marker in ("invalid api key", "authentication", "unauthorized", "forbidden")
     ):
         return "operator_credential"
-    if any(
-        marker in detail
-        for marker in (
-            "insufficient_quota",
-            "credit_balance_exhausted",
-            "no credits remaining",
-        )
-    ):
+    if review_failure(exc) == "quota" or quota_error_text(detail):
         return "operator_quota"
-    if status == 429 or "rate limit" in detail or "error code: 429" in detail:
+    if review_failure(exc) == "rate_limit" or "rate limit" in detail or "error code: 429" in detail:
         return "rate_limited"
     if any(marker in detail for marker in ("timeout", "timed out", "deadline")):
         return "timeout"

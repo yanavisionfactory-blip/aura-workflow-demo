@@ -43,7 +43,7 @@ def classify_failure(exc: Exception, *, read: bool) -> Failure:
             return Failure("authorization_required", False)
     if getattr(exc, "upstream_code", None) == "credit_balance_exhausted" or review_failure(exc) == "quota":
         return Failure("budget_exhausted", False)
-    if status in (401, 403):
+    if status in (401, 403) or getattr(exc, "code", None) == "authentication_error":
         return Failure("authorization_required", False)
     if isinstance(exc, BudgetExceeded):
         return Failure("budget_exhausted", False)

@@ -108,7 +108,9 @@ async def test_planning_failure_is_retried_without_becoming_user_failure(databas
         assert public["supervisor"]["browser_independent"] is True
 
 
-async def test_exhausted_api_credits_stop_retries_and_show_operator_action(database):
+@pytest.mark.parametrize("code", ["credit_balance_exhausted", "usage_limit_exceeded",
+                                 "organization_usage_limit_exceeded", "billing_not_active"])
+async def test_exhausted_api_credits_stop_retries_and_show_operator_action(database, code):
     async with database() as session:
         run = WorkflowRun(
             id="quota-run", workspace_id="workspace", prompt="Pilot plan", status=RunStatus.planning,
@@ -117,7 +119,7 @@ async def test_exhausted_api_credits_stop_retries_and_show_operator_action(datab
         await session.commit()
 
         outcome = await recover_planning_failure(
-            session, run, RuntimeError("credit_balance_exhausted: private payload"),
+            session, run, RuntimeError(f"{code}: private payload"),
             max_attempts=3, base_delay_seconds=1, max_delay_seconds=30,
         )
         await session.commit()

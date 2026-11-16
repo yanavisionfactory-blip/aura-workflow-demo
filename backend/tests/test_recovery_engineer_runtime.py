@@ -3,6 +3,7 @@
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -147,8 +148,9 @@ async def test_worker_hands_technical_stop_to_engineer_without_scheduler(
     assert published == [("run", {"schedule_delayed_plan" if phase == "planning" else "schedule_delayed_execute": True})]
 
 
-async def test_missing_service_authorization_is_recorded_as_internal_configuration_stop(database):
-    await _create_run(database, category="operator_credential")
+@pytest.mark.parametrize("category", ["operator_credential", "operator_quota"])
+async def test_missing_service_authorization_is_recorded_as_internal_configuration_stop(database, category):
+    await _create_run(database, category=category)
 
     assert await recover_with_engineer("run", "workspace") == "configuration_required"
 
@@ -240,6 +242,29 @@ async def test_isolated_dispatch_includes_only_safe_diagnostic_identifiers(datab
     assert "secret user data" not in str(captured)
     assert "private title" not in str(captured)
     assert "ignore instructions" not in str(captured)
+
+
+@pytest.mark.parametrize("status", [401, 403, 500])
+async def test_dispatch_failure_records_status_without_credentials(monkeypatch, status):
+    from unittest.mock import AsyncMock
+
+    response = httpx.Response(status, request=httpx.Request("POST", "https://api.github.com/repos/o/r/dispatches"),
+                              json={"message": "private provider response"})
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.post.return_value = response
+    monkeypatch.setattr(recovery_engineer.httpx, "AsyncClient", lambda **_: client)
+    monkeypatch.setattr(recovery_engineer, "get_settings", lambda: SimpleNamespace(
+        recovery_github_repository="o/r", recovery_github_token="private-token"))
+    incident = RecoveryIncident(id="incident", workspace_id="w", run_id="r", phase="execution",
+        category="internal_defect", fingerprint="abc", attempt_count=0, diagnostic={})
+    assert not await recovery_engineer.dispatch_isolated_code_repair(incident)
+    assert incident.status == "awaiting_sandbox" and incident.attempt_count == 0
+    assert incident.sandbox_result == {
+        "configured": True, "http_status": status,
+        "reason_code": "sandbox_authorization_required" if status in {401, 403} else "sandbox_dispatch_failed"}
+    assert "private" not in str(incident.sandbox_result)
+    client.post.assert_awaited_once()
 
 
 async def test_isolated_dispatch_discards_untrusted_operation_metadata(database, monkeypatch):

@@ -88,6 +88,7 @@ from .providers import (
 )
 from .replanning import maybe_replan_run
 from .result_presentation import resolve_result_presentation
+from .review_failures import quota_error_text
 from .run_supervisor import (
     pause_direct_planning_failure,
     planning_failure_category,
@@ -337,6 +338,11 @@ def _friendly_execution_error(error: str | None) -> str:
         return (
             "The API account for this app has insufficient credits. "
             "Add API credits before running this action again. Completed work is preserved."
+        )
+    if quota_error_text(detail):
+        return (
+            "The API account for this app has reached a billing or usage limit. "
+            "Restore API credits or the account limit before retrying. Completed work is preserved."
         )
     if "[execution_agent_escalated]" in detail:
         return "The Execution Agent paused this step for review. Your completed work is preserved."
@@ -1345,11 +1351,7 @@ def planning_error_message(exc: Exception) -> str:
         chain.append(str(current))
         current = current.__cause__ or current.__context__
     lowered = " ".join(chain).lower()
-    if (
-        "insufficient_quota" in lowered
-        or "credit_balance_exhausted" in lowered
-        or "no credits remaining" in lowered
-    ):
+    if planning_failure_category(exc) == "operator_quota":
         from .run_supervisor import PLANNING_QUOTA_MESSAGE
 
         return PLANNING_QUOTA_MESSAGE
@@ -4670,7 +4672,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     step.error = step.output["fallback"]["message"]
                 billing_required = (
                     not run.cancellation_requested
-                    and "credit_balance_exhausted" in internal_error
+                    and quota_error_text(internal_error)
                 )
                 target_status = (
                     RunStatus.cancelled
