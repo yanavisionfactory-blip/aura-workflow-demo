@@ -19,6 +19,7 @@ from .intelligence_backup import BACKUP_OPERATION, ClaudeTextRequest
 from .kpi_pilot import KpiFields
 from .policy import operation_scope
 from .presentation_content import PRESENTATION_SCHEMA
+from .presentation_review import PresentationReviewRequest
 from .proofing import FeedbackImportRequest
 from .reddit_ads import ReportRequest as RedditReportRequest
 from .reports import ReportRequest
@@ -133,6 +134,8 @@ NATIVE_CONNECTORS: dict[str, dict[str, Any]] = {
         "base_url": "provider-managed",
         "identity": {"provider": "aura"},
         "modules": [
+            {**_module("intelligence.presentation.review", "search", "Inspect every page of an actual Canva PDF export with text and visual analysis. Bind file_url to canva.export.get job.urls[0], design_id to the saved design ID, and expected_presentation to the approved report.compose presentation. Returns page count, per-page evidence, PDF hash and verified/unverified status. No external writes. Required to verify rendered Canva pages; metadata and thumbnails alone are insufficient.", permission_scope="read"),
+             "input_schema": PresentationReviewRequest.model_json_schema()},
             {**_module("intelligence.video.review", "search", "Inspect an uploaded MP4/MOV using AURA Intelligence: actual sampled video frames and full audio, with chronological timestamped issues and production corrections. Bind file_url to the attached video input. Supports clips up to 120 seconds / 50 MB. Returns a complete review in AURA; no external writes. For a connected Frame.io asset use frameio.video.review."),
              "input_schema": VideoReviewRequest.model_json_schema()},
             {

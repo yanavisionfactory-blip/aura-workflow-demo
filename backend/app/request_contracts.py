@@ -90,6 +90,8 @@ def user_request_text(prompt: str) -> str:
     if prompt.startswith("AURA_CONTENT_REVIEW_V1\n"):
         return "Prepare and review a marketing email from supplied evidence inside AURA. No external actions."
     def result_instruction(text):
+        if text.startswith("Verify the existing Canva presentations listed in the saved result context."):
+            return text.split("\nSaved Canva result context (reference data): ", 1)[0]
         marker = "\nSaved result context (reference data): "
         change = "\nRequested change: "
         if text.startswith("Revise the selected ") and change in text and marker in text:
@@ -110,7 +112,11 @@ def user_request_text(prompt: str) -> str:
             # Recovery diagnostics quote rejected operations verbatim. They are
             # internal repair hints, not a new user authorization to send.
             continue
-        instructions.append(result_instruction(instruction))
+        if re.match(r"\s*replace\s+(?:(?:this|the|entire|whole|recovery)\s+){0,3}plan\s+with\b",
+                    instruction, re.IGNORECASE):
+            instructions = [result_instruction(instruction)]
+        else:
+            instructions.append(result_instruction(instruction))
     # Saved result edits can wrap a previously revised prompt. Keep every real
     # user edit, while excluding each serialized plan and any repair diagnostics.
     # JSON-encoded plan text escapes newlines, so it cannot add a review marker.

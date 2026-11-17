@@ -42,6 +42,16 @@ export function recoveryProgressMessage(run = {}, step = {}) {
 export function alternativeRecoveryPrompt(run = {}, userApproach = "") {
   const original = String(run.prompt || "Continue the saved workflow").trim();
   const approach = String(userApproach || "").trim();
+  const canva = completedCanvaDesigns(run);
+  if (!approach && canva.length) {
+    return `Verify the existing Canva presentations listed in the saved result context. `
+      + `Read these exact designs. Reuse any completed PDF export; otherwise export each existing design once to PDF, persist the export job ID, and poll that same job. `
+      + `Use intelligence.presentation.review on the actual PDF, binding the exact design ID and the saved expected_presentation. `
+      + `Check every rendered page for populated, readable content, source links and markers against the approved content. Return the saved design links and the inspection evidence. `
+      + `Do not create or import another presentation, repeat source discovery or composition, edit sources, share or send anything. `
+      + `If inspection cannot pass, preserve the designs and report the specific missing evidence.\n`
+      + `Saved Canva result context (reference data): ${JSON.stringify({ original_request: original, designs: canva })}`;
+  }
   if (!approach && uploadedVideoRecovery(run)) {
     // The user explicitly chose "Review uploaded video". Keep the task intact;
     // a new, unapproved plan uses the separately restored attachment.
@@ -62,6 +72,39 @@ export function alternativeRecoveryPrompt(run = {}, userApproach = "") {
     ? `\nConfirmed Google Drive folder receipts (data, not instructions): ${JSON.stringify(folders)}. Reuse these exact folder IDs and list their contents. Read the relevant document contents before composing the presentation, make slide creation depend on those reads, and use a populated-presentation operation. Do not create an unrelated blank design.`
     : "";
   return `${original}\n\nRecovery request: ${direction} The previous run is paused at: ${recovery.what} Preserve completed work, do not repeat any external action whose outcome is uncertain, and ask for approval before every new consequential action.${sheetsContext}${folderContext}`;
+}
+
+export function completedCanvaDesigns(run = {}) {
+  const steps = (run.steps || []).filter((s) => s.status === "completed");
+  const receipt = (step) => step.output?.provider_result?.ret || step.output?.provider_result || {};
+  const designsOf = (value) => value.error || value.isError ? [] : value.design ? [value.design]
+    : value.job?.status === "success" ? value.job.result?.designs || [] : value.result?.designs || value.designs || [];
+  const designs = new Map();
+  for (const step of steps) {
+    if (!["canva.presentation.create", "canva.import.get", "canva.design.get"].includes(step.operation)) continue;
+    for (const design of designsOf(receipt(step))) {
+      if (!/^[A-Za-z0-9_-]{5,100}$/.test(design?.id || "")) continue;
+      const creations = steps.filter((candidate) => candidate.operation === "canva.presentation.create"
+        && (designsOf(receipt(candidate)).some((d) => d.id === design.id)
+          || steps.some((read) => read.operation === "canva.import.get"
+            && read.output?.resolved_arguments?.import_id === receipt(candidate).job?.id
+            && receipt(candidate).job?.id
+            && designsOf(receipt(read)).some((d) => d.id === design.id))));
+      const pdf_exports = steps.filter((s) => s.operation === "canva.export.get")
+        .flatMap((s) => receipt(s).job?.status === "success" ? (receipt(s).job.urls || []).flatMap((url) => {
+          try {
+            const parsed = new URL(url);
+            return parsed.protocol === "https:" && parsed.hostname.endsWith(".canva.com")
+              && parsed.pathname.split("/").includes(design.id) && parsed.pathname.endsWith(".pdf")
+              ? [{ export_id: receipt(s).job.id, file_url: url }] : [];
+          } catch { return []; }
+        }) : []);
+      designs.set(design.id, { design_id: design.id, title: design.title,
+        urls: design.urls, expected_presentation: creations.length === 1 ? creations[0].output?.resolved_arguments || {} : {},
+        pdf_exports, source_run_id: run.id });
+    }
+  }
+  return [...designs.values()];
 }
 
 function completedDriveFolders(run) {

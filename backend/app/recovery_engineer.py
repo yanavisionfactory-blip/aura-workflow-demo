@@ -49,7 +49,7 @@ from .schemas import WorkflowPlan
 
 RECOVERY_ENGINEER_VERSION = 1
 ACTIVE_INCIDENT_STATUSES = frozenset(
-    {"queued", "diagnosing", "repairing", "testing", "canary", "awaiting_sandbox"}
+    {"queued", "diagnosing", "repairing", "testing", "canary", "awaiting_sandbox", "configuration_required"}
 )
 CODE_REPAIR_AFTER_BUDGET = frozenset(
     {
@@ -709,6 +709,19 @@ async def dispatch_isolated_code_repair(incident: RecoveryIncident) -> bool:
         async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
             response = await client.post(url, headers=headers, json=payload)
         response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in (401, 403):
+            incident.status = "configuration_required"
+            incident.sandbox_result = {
+                "configured": True,
+                "reason_code": "sandbox_dispatch_authorization_required",
+                "http_status": exc.response.status_code,
+                "required_action": "Restore the repository dispatch credential; completed work is preserved",
+            }
+            return False
+        incident.status = "awaiting_sandbox"
+        incident.sandbox_result = {"configured": True, "reason_code": "sandbox_dispatch_failed"}
+        return False
     except (httpx.HTTPError, ValueError):
         incident.status = "awaiting_sandbox"
         incident.sandbox_result = {
@@ -777,7 +790,7 @@ async def recover_with_engineer(run_id: str, workspace_id: str) -> str:
             return "configuration_required"
 
         incident = await open_recovery_incident(session, run, diagnostic, program)
-        if incident.status in {"repairing", "testing", "canary", "awaiting_sandbox"}:
+        if incident.status in {"repairing", "testing", "canary", "awaiting_sandbox", "configuration_required"}:
             return incident.status
 
         phase_attempts = recovery_counter(
@@ -877,8 +890,13 @@ async def recover_with_engineer(run_id: str, workspace_id: str) -> str:
 
         dispatched = await dispatch_isolated_code_repair(incident)
         _record_code_attempt(run, diagnostic, incident)
+        if incident.status == "configuration_required":
+            transition_run(run, RunStatus.blocked, reason="recovery_dispatch_authorization_required",
+                actor="recovery-engineer", phase="code", supervisor_status="operator_attention",
+                error="Automatic code repair cannot authenticate to GitHub. Restore the repository dispatch credential. Saved workflow results will not repeat.",
+                dispatch=None, allow_same=run.status == RunStatus.blocked)
         await session.commit()
-        return "repairing" if dispatched else "awaiting_sandbox"
+        return "repairing" if dispatched else incident.status
 
 
 async def acknowledge_repair_result(

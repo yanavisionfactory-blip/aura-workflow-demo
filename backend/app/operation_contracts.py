@@ -36,6 +36,19 @@ META_COLLECTION = {"type": "object", "required": ["data", "complete", "source_pr
                    "source_provider": {"const": "meta-ads"}, "vendor_api_called": {"const": True},
                    "connection_route": {"const": "direct"}, "retrieved_at": TEXT}}
 KNOWN = {
+    "intelligence.presentation.review": ({"type": "object", "required": [
+        "title", "body", "design_id", "page_count", "pages", "verification", "evidence", "provider_writes",
+    ], "properties": {
+        "title": TEXT, "body": TEXT, "design_id": TEXT,
+        "page_count": {"type": "integer", "minimum": 1, "maximum": 12},
+        "pages": {"type": "array", "minItems": 1, "maxItems": 12, "items": OBJECT},
+        "verification": {"type": "object", "required": ["status", "issues", "limitations"],
+                         "properties": {"status": {"enum": ["verified", "unverified"]}}},
+        "evidence": {"type": "object", "required": ["kind", "sha256", "size"],
+                     "properties": {"kind": {"const": "actual_canva_pdf_text_and_page_images"},
+                                    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}},
+        "provider_writes": {"const": False},
+    }}, ["report_body", "rendered_page_inspection", "pdf_hash", "page_content"]),
     "frameio.assistant.browser_review": ({"type": "object", "required": [
         "title", "body", "analysis_provider", "input_mode", "execution_mode", "receipt", "limitations", "audio_status",
     ], "properties": {

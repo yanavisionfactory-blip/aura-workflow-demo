@@ -3,12 +3,36 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   alternativeRecoveryPrompt,
+  completedCanvaDesigns,
   needsRecovery,
   recoveryProgressMessage,
   recoveryForRun,
   providerCooldown,
   visibleRecoveryStepStatus,
 } from '../src/lib/runRecovery.mjs';
+
+test('Canva recovery carries exact saved designs, copy and export without creation instructions', () => {
+  const design = { id: 'Design123', title: 'Saved deck', urls: { edit_url: 'https://www.canva.com/design/Design123/edit' } };
+  const expected = { title: 'Saved deck', layout: 'slides', phases: [{ period: 'Offer', title: 'Offer', items: ['QA-MARKER'] }] };
+  const value = { id: 'original-run', prompt: 'Read Drive folder files and create a presentation in Canva.', steps: [
+    { id: 'create', operation: 'canva.presentation.create', status: 'completed', output: { resolved_arguments: expected, provider_result: { job: { id: 'import123', status: 'pending' } } } },
+    { id: 'read', operation: 'canva.import.get', status: 'completed', output: { resolved_arguments: { import_id: 'import123' }, provider_result: { job: { id: 'import123', status: 'success', result: { designs: [design] } } } } },
+    { id: 'get', operation: 'canva.design.get', status: 'completed', output: { provider_result: { design } } },
+    { id: 'export', operation: 'canva.export.get', status: 'completed', output: { provider_result: { job: { id: 'export123', status: 'success', urls: ['https://export-download.canva.com/path/Design123/deck.pdf'] } } } },
+  ] };
+  const designs = completedCanvaDesigns(value);
+  assert.equal(designs.length, 1);
+  assert.deepEqual(designs[0].expected_presentation, expected);
+  assert.equal(designs[0].pdf_exports[0].export_id, 'export123');
+  const prompt = alternativeRecoveryPrompt(value);
+  assert.match(prompt, /^Verify the existing Canva/);
+  assert.match(prompt, /intelligence.presentation.review/);
+  assert.match(prompt, /Do not create or import another presentation/);
+  assert.doesNotMatch(prompt.split('\nSaved Canva result context')[0], /Read Drive folder files and create/);
+  assert.equal(completedCanvaDesigns({ ...value, steps: value.steps.slice(0, 1) }).length, 0);
+  const unrelated = completedCanvaDesigns({ ...value, steps: [value.steps[0], { ...value.steps[2], output: { provider_result: { design: { id: 'OtherDesign' } } } }] });
+  assert.deepEqual(unrelated[0].expected_presentation, {});
+});
 
 test('empty audio recovery retries the saved video without export or external-write messaging', () => {
   const value = { status: 'waiting_for_action', plan_approved: true,

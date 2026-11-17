@@ -78,6 +78,28 @@ sharing, messaging, source edits or Google output files. Review the visible plan
 3. `canva.presentation.create` receives `layout=slides` and the composed phases.
 4. Import completion and final design readback use the actual returned job/design
    IDs. Polling an existing import is a read; it must not create a second import.
+5. Source-based Canva drafts include a visible PDF export, polling of that saved
+   export job, and `intelligence.presentation.review`. The reviewer downloads only
+   the bound Canva export, checks page count and approved text with a PDF parser,
+   and supplies the actual PDF page images to the visual model. Every page needs
+   an assessment; missing copy, unreadable content or incomplete inspection blocks
+   final completion. Metadata and a first-page thumbnail cannot pass this gate.
+
+Recovery of a completed Canva import preserves its design IDs and approved copy.
+The recovery prompt requests inspection of those saved designs, reuses completed
+PDF exports, and excludes the original creation request from new-action routing.
+An explicit replacement of the whole plan also replaces earlier action requirements.
+No successful or uncertain import is repeated to repair verification.
+
+The page reviewer uses the existing Responses multimodal path and delivery budget;
+text planning and synthesis continue to use managed agent sessions. It is bounded
+to 8 MB and 12 pages. Managed report composition receives its configured model
+timeout plus execution overhead instead of being cancelled by the default 30-second
+provider timeout.
+
+GitHub dispatch 401/403 failures stop as `configuration_required`, preserving the
+incident and completed workflow outputs. Restoring the repository dispatch credential
+is an operator action; another model or deployment cannot repair an expired token.
 
 | Case | Required evidence |
 | --- | --- |
