@@ -766,6 +766,7 @@ class ProviderExecutor:
             "jira.issue.update": self._jira_issue_update,
             "weather.forecast": self._weather_forecast,
             "report.compose": self._report_compose,
+            "intelligence.presentation.review": self._presentation_review,
             "intelligence.video.review": self._video_review,
             "intelligence.claude_backup": self._claude_backup,
             "proofing.feedback.import": self._proofing_feedback_import,
@@ -1386,6 +1387,11 @@ class ProviderExecutor:
         from .reports import compose_report
 
         return await compose_report(a)
+
+    async def _presentation_review(self, a: dict) -> dict:
+        from .presentation_review import review_presentation
+
+        return await review_presentation(a)
 
     async def _claude_backup(self, a: dict) -> dict:
         from .intelligence_backup import generate_claude_backup

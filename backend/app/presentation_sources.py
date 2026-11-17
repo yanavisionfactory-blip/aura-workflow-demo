@@ -26,6 +26,7 @@ BLANK_DESIGNS = {"canva.design.create", "canva.create-design",
 SUPPORT_OPERATIONS = CONTENT_READS | FOLDER_READS | {
     "google-drive.find-folder", "report.compose", "canva.presentation.create",
     "canva.import.get", "canva.design.get", "canva.export.create", "canva.export.get",
+    "intelligence.presentation.review",
 }
 
 
@@ -44,6 +45,8 @@ class SourcePresentationPlanError(ValueError):
 
 
 def source_presentation_requested(prompt: str) -> bool:
+    from .request_contracts import user_request_text
+    prompt = user_request_text(prompt)
     if not re.search(r"\bdrive\b|google\s+docs?\b|docs\.google\.com/document/"
                      r"|(?:google|гугл)\s+диск", prompt, re.IGNORECASE):
         return False
@@ -152,7 +155,87 @@ def source_presentation_requirements(prompt: str) -> list[str]:
         "A presentation 'to send' does not require emailing or drafting an email. Distinguish "
         "documented project facts from proposed pricing, demand assumptions, and unverified "
         "commercial-use or public-performance rights."),
+        ("For Canva, inspect the saved pages: create one PDF export of the actual design ID, "
+         "poll its existing job with canva.export.get, then use intelligence.presentation.review "
+         "with file_url={{steps.pdf_read.job.urls[0]}}, design_id from the completed import and "
+         "expected_presentation={{steps.compose.presentation}}. This reads the actual PDF text "
+         "and page images. Design metadata alone is not visual verification. Never repeat creation "
+         "to repair a review of an existing design."),
     ]
+
+
+def bind_canva_verification(plan, manifests, request_prompt=""):
+    """Complete a draft's native Canva verification path before approval.
+
+    This adds visible, governed derivative-export/read steps, never dispatches them.
+    Do not modify an existing inspection path or guess a different provider contract.
+    """
+    from .schemas import PlanStep
+
+    if not source_presentation_requested(request_prompt):
+        return
+    available = {slug: {cap.get("name") for cap in manifest.get("capabilities", [])}
+                 for slug, manifest in manifests.items()}
+    if "intelligence.presentation.review" not in available.get("aura", set()):
+        return
+    by_key = {step.key: step for step in plan.steps}
+
+    def key(prefix):
+        value, count = prefix, 1
+        while value in by_key:
+            count += 1
+            value = f"{prefix}_{count}"
+        return value
+
+    def add(prefix, tool, operation, arguments, depends, consequential=False):
+        step = PlanStep(key=key(prefix), tool_slug=tool, operation=operation,
+                        agent="Presentation verifier",
+                        reason=prefix.replace("_", " ").capitalize(),
+                        expected_output="Saved provider evidence for the existing presentation",
+                        arguments=arguments,
+                        depends_on=sorted(set(depends) | referenced_step_keys(arguments)),
+                        consequential=consequential)
+        plan.steps.append(step)
+        by_key[step.key] = step
+        return step
+
+    for creation in list(plan.steps):
+        if (creation.operation != "canva.presentation.create" or creation.optional
+                or creation.condition is not None or creation.arguments.get("layout") != "slides"):
+            continue
+        if not {"canva.import.get", "canva.export.create", "canva.export.get"} <= available.get(creation.tool_slug, set()):
+            continue
+        related = [step for step in plan.steps if creation.key in _ancestors(step, by_key)]
+        if any(step.operation == "intelligence.presentation.review" for step in related):
+            continue
+        reads = [step for step in related if step.operation == "canva.import.get"
+                 and not step.optional and step.condition is None]
+        if len(reads) > 1:
+            continue
+        read = reads[0] if reads else add("read_saved_import", creation.tool_slug, "canva.import.get",
+            {"import_id": "{{steps." + creation.key + ".job.id}}"}, [creation.key])
+        design = "{{steps." + read.key + ".job.result.designs[0].id}}"
+        exports = [step for step in related if step.operation == "canva.export.create"
+                   and step.arguments.get("format") == "pdf"
+                   and not step.optional and step.condition is None]
+        if len(exports) > 1:
+            continue
+        if exports and exports[0].arguments.get("design_id") != design:
+            # Ask the planner to fix the binding instead of adding a second export.
+            raise SourcePresentationPlanError("Bind the existing PDF export to the saved import design ID: " + design)
+        export = exports[0] if exports else add("export_saved_pdf", creation.tool_slug, "canva.export.create",
+            {"design_id": design, "format": "pdf"}, [read.key], True)
+        export_reads = [step for step in plan.steps if step.operation == "canva.export.get"
+                        and export.key in _ancestors(step, by_key) and not step.optional and step.condition is None]
+        if len(export_reads) > 1:
+            continue
+        pdf = export_reads[0] if export_reads else add("read_saved_pdf", creation.tool_slug, "canva.export.get",
+            {"export_id": "{{steps." + export.key + ".job.id}}"}, [export.key])
+        add("inspect_saved_pages", "aura", "intelligence.presentation.review",
+            {"file_url": "{{steps." + pdf.key + ".job.urls[0]}}", "design_id": design,
+             "expected_presentation": dict(creation.arguments),
+             "instructions": "Inspect every rendered page against the approved content, including sources and markers. "
+                             "Check readability, clipping, overlaps and proposal/rights caveats."}, [pdf.key, creation.key])
 
 
 def bind_presentation_composition(prompt: str, plan, manifests: dict) -> None:

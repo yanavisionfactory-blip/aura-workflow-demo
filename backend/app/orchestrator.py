@@ -582,6 +582,7 @@ async def ensure_aura_intelligence(session, workspace_id: str) -> ToolConnection
 def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict], request_prompt: str = "") -> None:
     from .drive_discovery import bind_discovery_report_sources
     from .presentation_sources import (
+        bind_canva_verification,
         bind_document_report_text,
         bind_document_search_types,
         bind_presentation_brief,
@@ -599,6 +600,7 @@ def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict], request_p
     bind_presentation_brief(request_prompt, plan)
     bind_discovery_report_sources(plan)
     bind_document_report_text(plan)
+    bind_canva_verification(plan, manifests_by_slug, request_prompt)
     bind_requested_sheet_reads(plan, request_prompt)
     bind_dashboard_metadata(plan, manifests_by_slug)
     bind_created_worksheets(plan, manifests_by_slug)
@@ -4155,6 +4157,10 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             120.0 if (active_tool.config or {}).get("managed_by") == "desktop_estimating" else
                             150.0 if operation == "google-drive.search-files"
                             and "semantic_goal" in arguments else
+                            150.0 if operation == "intelligence.presentation.review" else
+                            max(float(snapshot.policy_snapshot["step_timeout_seconds"]),
+                                float(get_settings().managed_agents_timeout_seconds) + 15)
+                            if operation == "report.compose" and get_settings().managed_agents_enabled else
                             float(BROWSER_WAIT_SECONDS + 30)
                             if operation == BROWSER_REVIEW else
                             float(get_settings().video_review_timeout_seconds)
@@ -4939,6 +4945,9 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 step.output = {**step.output, "outcome_check": check}
                 await session.commit()
             if check.get("status") not in {"verified", "unsupported"}:
+                outcome_failures.append(step.step_key)
+            if (step.operation == "intelligence.presentation.review"
+                    and (step.output.get("provider_result") or {}).get("verification", {}).get("status") != "verified"):
                 outcome_failures.append(step.step_key)
         outputs = [step.output for step in steps if step.status == StepStatus.completed]
         outputs_by_step = {

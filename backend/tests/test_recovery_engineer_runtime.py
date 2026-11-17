@@ -3,6 +3,7 @@
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -18,6 +19,30 @@ from app.models import (
 )
 from app.recovery_engineer import acknowledge_repair_result, recover_with_engineer
 from app.run_supervisor import public_run_projection
+
+
+@pytest.mark.parametrize("status", [401, 403])
+async def test_dispatch_auth_failure_is_configuration_stop_without_leaking_response(monkeypatch, status):
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+        async def post(self, url, **kwargs):
+            return httpx.Response(status, request=httpx.Request("POST", url), text="private credential failure")
+    monkeypatch.setattr(recovery_engineer.httpx, "AsyncClient", Client)
+    monkeypatch.setattr(recovery_engineer, "get_settings", lambda: SimpleNamespace(
+        recovery_github_repository="owner/repo", recovery_github_token="secret"))
+    incident = RecoveryIncident(id="incident", workspace_id="workspace", run_id="run",
+        phase="verification", category="verification_incomplete", fingerprint="0123456789abcdef", attempt_count=0)
+    assert not await recovery_engineer.dispatch_isolated_code_repair(incident)
+    assert incident.status == "configuration_required"
+    assert incident.sandbox_result["reason_code"] == "sandbox_dispatch_authorization_required"
+    assert "private" not in str(incident.sandbox_result)
+    assert "secret" not in str(incident.sandbox_result)
+    assert "configuration_required" in recovery_engineer.ACTIVE_INCIDENT_STATUSES
 
 
 @pytest.fixture

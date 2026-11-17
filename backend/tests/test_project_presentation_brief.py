@@ -66,7 +66,7 @@ def test_exact_customer_request_survives_abridged_planner_arguments(destination)
             capability("google-slides", "google-slides.create-presentation", True)])}}
     _normalize_planned_steps(plan, manifests, PROMPT)
     validate_source_presentation_plan(PROMPT, plan)
-    discover, compose, create = plan.steps
+    discover, compose, create = plan.steps[:3]
     assert discover.arguments["user_request"] == PROMPT
     assert compose.arguments["user_request"] == PROMPT
     assert discover.arguments["semantic_goal"] == "Find music materials"
@@ -75,7 +75,11 @@ def test_exact_customer_request_survives_abridged_planner_arguments(destination)
     assert compose.arguments["instructions"] == "Summarize the materials in four slides"
     assert compose.arguments["sources"] == "{{steps.discover.sources}}"
     assert create.tool_slug == destination
-    assert len(plan.steps) == 3  # Preparing something "to send" adds no email action.
+    assert [step.operation for step in plan.steps[3:]] == (
+        ["canva.import.get", "canva.export.create", "canva.export.get", "intelligence.presentation.review"]
+        if destination == "canva" else []
+    )
+    assert not any("mail" in step.operation or "send" in step.operation for step in plan.steps)
     _prepare_provider_arguments(manifests["google-drive"], discover.operation, discover.arguments)
     snapshot = plan.model_dump()
     _normalize_planned_steps(plan, manifests, PROMPT)
