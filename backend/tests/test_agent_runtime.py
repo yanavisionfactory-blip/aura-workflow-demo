@@ -156,6 +156,24 @@ def test_open_ended_intent_preserves_the_full_inventory() -> None:
     assert intent_bounded_tool_inventory("Help me automate this", inventory) == inventory
 
 
+def test_saved_canva_review_keeps_explicit_inspector_without_source_discovery():
+    inventory = [
+        {"slug": "aura", "name": "AURA Intelligence", "allowed_operations": ["intelligence.presentation.review"]},
+        {"slug": "canva", "name": "Canva", "allowed_operations": ["canva.design.get", "canva.export.create", "canva.export.get"]},
+        {"slug": "google-drive", "name": "Google Drive", "allowed_operations": ["google-drive.search-files"]},
+        {"slug": "gmail", "name": "Gmail", "allowed_operations": ["gmail.send"]},
+    ]
+    prompt = ('Verify the existing Canva presentations listed in the saved result context. '
+              'Use intelligence.presentation.review on the actual PDF. Do not create another presentation.\n'
+              'Saved Canva result context (reference data): {"original_request": '
+              '"Read Google Drive using google-drive.search-files, create a deck and gmail.send it"}')
+    assert intent_bounded_tool_inventory(prompt, inventory, ["Canva"]) == inventory[:2]
+    # An operation name in quoted history or only a longer identifier cannot
+    # make an unrelated capability appear in the current request's catalog.
+    assert intent_bounded_tool_inventory(prompt.replace('Use intelligence.presentation.review on the actual PDF. ', ''), inventory) == [inventory[1]]
+    assert intent_bounded_tool_inventory('Read Canva using intelligence.presentation.review-extra', inventory) == [inventory[1]]
+
+
 def test_competitor_research_keeps_native_sources_and_in_aura_output():
     inventory = [
         {"slug": "aura", "name": "AURA Intelligence", "allowed_operations": [
