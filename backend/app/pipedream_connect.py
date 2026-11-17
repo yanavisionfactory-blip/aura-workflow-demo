@@ -441,6 +441,7 @@ class PipedreamClient:
         authenticated: bool = True,
         retry_safe: bool | None = None,
         response_bytes_limit: int | None = None,
+        allow_empty_response: bool = False,
         **kwargs: Any,
     ) -> dict[str, Any] | list[Any] | bytes:
         if response_bytes_limit is not None and (
@@ -509,7 +510,7 @@ class PipedreamClient:
                 )
             # Deleting a connected account succeeds with an empty 204 response.
             # Do not report successful remote revocation as malformed JSON.
-            if method.upper() == "DELETE" and response.status_code == 204:
+            if response.status_code == 204 and (method.upper() == "DELETE" or allow_empty_response):
                 return {}
             if response_bytes_limit is not None:
                 return response.content
@@ -882,6 +883,8 @@ class PipedreamClient:
         account_id: str,
         transport: dict[str, Any],
         arguments: dict[str, Any],
+        *,
+        allow_empty_response: bool = False,
     ) -> dict[str, Any]:
         method = str(transport.get("method") or "").upper()
         target = str(transport.get("path") or "")
@@ -915,6 +918,8 @@ class PipedreamClient:
         }
         if "body" in arguments:
             request_kwargs["json"] = arguments["body"]
+        if allow_empty_response:
+            request_kwargs["allow_empty_response"] = True
         result = await self._request(
             method,
             (

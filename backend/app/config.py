@@ -72,6 +72,10 @@ class Settings(BaseSettings):
     # repository. Source repair and tests execute in an isolated CI runner.
     recovery_github_repository: str = ""
     recovery_github_token: str = ""
+    # Explicit operator opt-in: use this workspace's existing GitHub OAuth
+    # connection for the fixed recovery repository. Never use an incident's
+    # tenant connection or retrieve/export the provider's token.
+    recovery_github_connection_workspace_id: str = ""
     recovery_pipeline_callback_secret: str = ""
     max_autonomous_step_recoveries: int = Field(default=3, ge=1, le=8)
     max_autonomous_review_recoveries: int = Field(default=3, ge=1, le=8)

@@ -1,0 +1,25 @@
+name: AURA recovery GitHub authorization probe
+run-name: AURA recovery auth probe ${{ github.event.client_payload.probe_id }}
+
+on:
+  repository_dispatch:
+    types: [aura_recovery_auth_probe]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify content-free dispatch metadata
+        env:
+          PROBE_ID: ${{ github.event.client_payload.probe_id }}
+          RELEASE_SHA: ${{ github.event.client_payload.release_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$PROBE_ID" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$ ]]
+          [[ "$RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          echo 'The deployed AURA service authenticated and triggered this probe. No code repair or deployment was run.'

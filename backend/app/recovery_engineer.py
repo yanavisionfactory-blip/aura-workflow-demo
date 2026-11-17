@@ -667,7 +667,8 @@ def _record_code_attempt(
 async def dispatch_isolated_code_repair(incident: RecoveryIncident) -> bool:
     """Dispatch only content-free incident metadata to an isolated GitHub runner."""
     settings = get_settings()
-    if not settings.recovery_github_repository or not settings.recovery_github_token:
+    managed_connection = bool(getattr(settings, "recovery_github_connection_workspace_id", ""))
+    if not settings.recovery_github_repository or not (settings.recovery_github_token or managed_connection):
         incident.status = "awaiting_sandbox"
         incident.sandbox_result = {
             "configured": False,
@@ -708,10 +709,29 @@ async def dispatch_isolated_code_repair(incident: RecoveryIncident) -> bool:
         "Authorization": f"Bearer {settings.recovery_github_token}",
         "X-GitHub-Api-Version": "2022-11-28",
     }
+    from .pipedream_connect import PipedreamConnectError
+    from .recovery_github import RecoveryGitHubConfigurationError, dispatch_with_connection
+
     try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
-            response = await client.post(url, headers=headers, json=payload)
-        response.raise_for_status()
+        if managed_connection:
+            await dispatch_with_connection(payload)
+        else:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
+                response = await client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+    except (PipedreamConnectError, RecoveryGitHubConfigurationError) as exc:
+        status = getattr(exc, "status_code", None)
+        uncertain = bool(getattr(exc, "effect_uncertain", False))
+        needs_configuration = isinstance(exc, RecoveryGitHubConfigurationError) or status in {401, 403}
+        incident.status = "configuration_required" if needs_configuration or uncertain else "awaiting_sandbox"
+        incident.sandbox_result = {
+            "configured": True, "transport": "managed_github_connection",
+            "reason_code": ("sandbox_dispatch_outcome_uncertain" if uncertain else
+                            "sandbox_dispatch_authorization_required" if needs_configuration else
+                            "sandbox_dispatch_failed"),
+            "http_status": status,
+        }
+        return False
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code in (401, 403):
             incident.status = "configuration_required"
@@ -736,6 +756,7 @@ async def dispatch_isolated_code_repair(incident: RecoveryIncident) -> bool:
     incident.attempt_count += 1
     incident.sandbox_result = {
         "configured": True,
+        "transport": "managed_github_connection" if managed_connection else "repository_token",
         "dispatch": "accepted",
         "dispatched_at": datetime.now(UTC).isoformat(),
     }

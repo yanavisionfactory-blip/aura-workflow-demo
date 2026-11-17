@@ -77,7 +77,8 @@ the following values.
 | `MAX_RECOVERY_ENGINEER_ATTEMPTS` | Bounded workflow-repair attempts; default `3` |
 | `CONNECTION_PROBE_TTL_SECONDS` | Maximum age of a plan-bound successful probe; default `60` |
 | `RECOVERY_GITHUB_REPOSITORY` | `yanavisionfactory-blip/aura-workflow-demo` |
-| `RECOVERY_GITHUB_TOKEN` | Fine-grained token able to dispatch workflows in that repository; never expose it to the browser |
+| `RECOVERY_GITHUB_CONNECTION_WORKSPACE_ID` | Optional explicit operator workspace whose existing, verified GitHub connection dispatches to the fixed repository through Pipedream. Never selected from an incident's tenant or prompt; no provider token is retrieved or exported. Takes precedence over the legacy token. |
+| `RECOVERY_GITHUB_TOKEN` | Legacy alternative when no managed operator workspace is configured: fine-grained token with repository Contents: write for repository dispatch; never expose it to the browser |
 | `RECOVERY_PIPELINE_CALLBACK_SECRET` | Random callback HMAC secret; identical to the GitHub Actions secret |
 
 ### GitHub Actions secrets and environments
@@ -96,6 +97,19 @@ must use separate non-customer data stores and no production provider credential
 the workflow file on the default branch because GitHub accepts `repository_dispatch`
 only there; the repair checkout and generated PR deliberately target `main`, the
 single Railway and GitHub Pages release branch.
+
+For the managed connection route, run `python -m app.recovery_github` in the
+production worker's pre-deploy environment after the separate canary passes.
+The command sends only a random probe ID and immutable release SHA, then waits
+for its exact `AURA recovery GitHub authorization probe` job to succeed. It
+does not invoke Codex, edit code, resume customer workflows, or deploy anything.
+The worker rollout stops if account ownership, authorization, or job completion
+cannot be proven. Keep the canary free of production provider credentials.
+
+An uncertain dispatch is never automatically repeated or retried using a
+different credential. Reconcile GitHub before retrying that incident. An
+authorization failure remains visible as a configuration problem; it does not
+discard completed workflow receipts.
 
 ## Release acceptance
 
