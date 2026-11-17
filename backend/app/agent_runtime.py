@@ -234,6 +234,14 @@ def intent_bounded_tool_inventory(
             external_matches.add(index)
 
     selected = set(external_matches)
+    # An explicitly requested operation must survive provider-name filtering.
+    # Saved result/reference data was removed above by user_request_text; this
+    # only keeps an existing catalog capability, never creates an account grant.
+    selected.update(
+        index for index, item in enumerate(inventory)
+        if any(re.search(r"(?<![\w.-])" + re.escape(operation.casefold()) + r"(?![\w-]|\.\w)", original)
+               for operation in item.get("allowed_operations") or [])
+    )
     if wants_google_disk:
         selected.update(
             index for index, item in enumerate(inventory)

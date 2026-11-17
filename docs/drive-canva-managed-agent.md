@@ -91,6 +91,15 @@ PDF exports, and excludes the original creation request from new-action routing.
 An explicit replacement of the whole plan also replaces earlier action requirements.
 No successful or uncertain import is repeated to repair verification.
 
+The page reviewer renders every PDF page locally with Poppler and supplies numbered
+PNG images alongside extracted text and computed file/image hashes. It does not rely
+on a model or file-ingestion layer to decide whether to expose PDF page images.
+Rendering is limited to 30 seconds, 1,800 pixels per dimension and 12 MB of output;
+timeout or cancellation terminates the decoder. All pages must be present before
+inspection begins. Production and CI install the same Poppler command-line tools.
+Explicitly requested operation names survive tool selection even when the only
+named external destination is Canva; quoted saved history does not select tools.
+
 The page reviewer uses the existing Responses multimodal path and delivery budget;
 text planning and synthesis continue to use managed agent sessions. It is bounded
 to 8 MB and 12 pages. Managed report composition receives its configured model
