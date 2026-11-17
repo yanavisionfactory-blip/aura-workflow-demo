@@ -97,7 +97,7 @@ async def test_search_requires_hosted_retrieval_with_bounded_calls_and_existing_
 
     result = await web_research.search_public_web({"query": "  brand serum  ", "limit": 50})
     assert result["results"][0]["url"] == "https://brand.example"
-    assert clients == [{"api_key": "test-configured-key", "max_retries": 1}]
+    assert clients == [{"api_key": "test-configured-key", "max_retries": 0}]
     request = create.await_args.kwargs
     assert request["model"] == "configured-model"
     assert json.loads(request["input"]) == {"query": "brand serum", "maximum_sources": 20}

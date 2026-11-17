@@ -40,6 +40,7 @@ def agent_settings() -> SimpleNamespace:
         agent_managed_execution_enabled=True,
         openai_api_key="configured",
         openai_model="test-model",
+        model_max_output_tokens=12000,
     )
 
 

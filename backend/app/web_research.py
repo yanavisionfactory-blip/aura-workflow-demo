@@ -65,7 +65,7 @@ async def search_public_web(arguments):
         raise PublicSearchUnavailable("Public web search is not configured for this workspace.")
     query = str(arguments["query"]).strip()
     limit = max(1, min(int(arguments.get("limit", 10)), 20))
-    async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=1) as client:
+    async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0) as client:
         response = await bounded_model_call(
             lambda: client.responses.create(
                 model=settings.openai_model,

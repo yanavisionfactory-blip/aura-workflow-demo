@@ -440,7 +440,7 @@ async def prepare_marketing(request, sources, pages, settings):
     reference = [{"key": source["key"], "url": source["url"], "title": source["title"],
                   "excerpt": source["excerpt"], "links": source["links"][:40]}
                  for source in sources if source["role"] == "page"]
-    async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=1) as client:
+    async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0) as client:
         async def one_page(source):
             page_schema = create_model("SelectedMarketingPage", __base__=schema,
                                        page_id=(Literal[source["key"]], ...))
@@ -557,7 +557,7 @@ async def prepare_content(arguments):
 
 
 async def prepare_standard(payload, instructions, draft_schema, pages, sources, settings):
-    async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=1) as client:
+    async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0) as client:
         draft = None
         feedback = ""
         for attempt in range(2):

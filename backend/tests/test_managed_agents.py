@@ -326,7 +326,8 @@ async def test_multimodal_specialist_keeps_image_input(managed_runtime):
     kwargs = {"input": [{"role": "user", "content": [{"type": "input_image", "image_url": "test"}]}],
               "text_format": Answer}
     assert await managed.structured_response(client, **kwargs) == "image-reviewed"
-    client.responses.parse.assert_awaited_once_with(**kwargs)
+    client.responses.parse.assert_awaited_once_with(**kwargs,
+        max_output_tokens=managed.get_settings().model_max_output_tokens)
 
 
 async def test_trace_scope_is_selected_and_cleared_after_failure(managed_runtime, monkeypatch):

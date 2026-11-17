@@ -13,8 +13,12 @@ def is_model_quota_error(exc: BaseException) -> bool:
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         detail = str(current).casefold()
-        code = getattr(current, "provider_code", None)
-        if (isinstance(code, str) and code in MODEL_QUOTA_CODES
+        codes = [getattr(current, field, None) for field in ("provider_code", "code", "upstream_code")]
+        body = getattr(current, "body", None)
+        error = body.get("error", body) if isinstance(body, dict) else {}
+        if isinstance(error, dict):
+            codes.append(error.get("code"))
+        if (any(isinstance(code, str) and code in MODEL_QUOTA_CODES for code in codes)
                 or any(marker in detail for marker in (*MODEL_QUOTA_CODES, "no credits remaining"))):
             return True
         current = current.__cause__ or current.__context__

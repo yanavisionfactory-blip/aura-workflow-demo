@@ -401,7 +401,7 @@ async def prepare_review(arguments: dict) -> dict:
             {key: value for key, value in source.items() if key not in {"inputCsv", "execution"}}
             for source in sources], "computed_comparisons": [item["comparison"] for item in checked]}
     model_attempts = 1
-    async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=1) as client:
+    async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0) as client:
         response = await bounded_model_call(
             lambda: structured_response(client,
                 model=settings.openai_model, reasoning={"effort": "low"}, store=False,

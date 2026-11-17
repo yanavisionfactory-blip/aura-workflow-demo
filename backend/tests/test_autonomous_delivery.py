@@ -885,6 +885,7 @@ async def test_delivery_supervisor_cannot_invent_recovery_authority(monkeypatch)
             agent_managed_execution_enabled=True,
             openai_api_key="configured",
             openai_model="test-model",
+            model_max_output_tokens=12000,
         ),
     )
 
@@ -911,6 +912,7 @@ async def test_diagnostician_and_incident_commander_collaborate(monkeypatch):
             agent_managed_execution_enabled=True,
             openai_api_key="configured",
             openai_model="test-model",
+            model_max_output_tokens=12000,
         ),
     )
     responses = iter(

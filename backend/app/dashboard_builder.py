@@ -213,7 +213,7 @@ async def compose_dashboard(request):
     settings = get_settings()
     payload = {"instructions": request.instructions, "dashboard": context.model_dump(),
                "sources": [source.model_dump() for source in request.sources]}
-    async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=1) as client:
+    async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0) as client:
         for attempt in range(3):
             response = await bounded_model_call(lambda: structured_response(client,
                 model=settings.openai_model,

@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     max_restart_recoveries: int = Field(default=3, ge=1, le=10)
     max_provider_attempts: int = Field(default=3, ge=1, le=5)
     max_model_calls_per_delivery: int = Field(default=16, ge=1, le=40)
+    # Shared across planning, execution and later recovery attempts for one run.
+    max_model_calls_per_run: int = Field(default=40, ge=1, le=200)
+    model_max_output_tokens: int = Field(default=12000, ge=1024, le=32000)
+    direct_model_probe_enabled: bool = False
     delivery_budget_seconds: int = Field(default=180, ge=30, le=600)
     model_call_timeout_seconds: int = Field(default=30, ge=5, le=90)
     agent_managed_execution_enabled: bool = False

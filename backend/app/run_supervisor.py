@@ -280,6 +280,7 @@ HUMAN_ACTION_CODES = frozenset(
         "tool_output_review_required",
         "planning_retry_required",
         "operator_billing_required",
+        "operator_model_budget_required",
         "pilot_details_required",
         "external_submission_approval_required",
         "external_effect_uncertain",
@@ -302,6 +303,9 @@ def _exception_chain(exc: BaseException) -> str:
 def planning_failure_category(exc: BaseException) -> str:
     """Classify without storing a raw provider response in workflow state."""
     detail = _exception_chain(exc)
+    from .model_limits import LIMIT_CODE
+    if LIMIT_CODE in detail:
+        return "operator_model_budget"
     status = getattr(exc, "status_code", None) or getattr(
         getattr(exc, "response", None), "status_code", None
     )
@@ -416,24 +420,27 @@ async def recover_planning_failure(
     }
 
     now = datetime.now(UTC)
-    if category == "operator_quota":
+    if category in {"operator_quota", "operator_model_budget"}:
+        from .model_limits import LIMIT_MESSAGE
+        budget_limit = category == "operator_model_budget"
+        message = LIMIT_MESSAGE if budget_limit else PLANNING_QUOTA_MESSAGE
         state.update(status="operator_action_required", next_attempt_at=None)
         context[SUPERVISOR_KEY] = state
         run.execution_context = context
         transition_run(
             run,
             RunStatus.waiting_for_action,
-            reason="planning_api_credits_exhausted",
+            reason="planning_model_budget_exhausted" if budget_limit else "planning_api_credits_exhausted",
             actor="run-supervisor",
             phase="planning",
             supervisor_status="human_action_required",
-            error=PLANNING_QUOTA_MESSAGE,
+            error=message,
             result={"status": "planning_unavailable", "completed_work_preserved": True},
             blocker={
                 "kind": "human_action",
-                "code": "operator_billing_required",
-                "message": PLANNING_QUOTA_MESSAGE,
-                "action": "restore_api_credits",
+                "code": "operator_model_budget_required" if budget_limit else "operator_billing_required",
+                "message": message,
+                "action": "review_run_budget" if budget_limit else "restore_api_credits",
                 "retryable": False,
             },
             dispatch=None,
