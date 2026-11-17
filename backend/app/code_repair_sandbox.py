@@ -35,6 +35,7 @@ PROTECTED_PATHS = frozenset(
         "backend/app/migrations.py",
         "backend/app/models.py",
         "backend/app/security.py",
+        "backend/app/recovery_github.py",
     }
 )
 PROTECTED_PREFIXES = (".github/", ".codex/", "infra/", "deploy/")

@@ -28,6 +28,7 @@ SUPPORT_OPERATIONS = CONTENT_READS | FOLDER_READS | {
     "canva.import.get", "canva.design.get", "canva.export.create", "canva.export.get",
     "intelligence.presentation.review",
 }
+PRESENTATION_READS = {"canva.import.get", "canva.design.get", "google-slides.get-presentation", "slides.get"}
 
 
 def semantic_content_read(step):
@@ -281,6 +282,24 @@ def bind_presentation_composition(prompt: str, plan, manifests: dict) -> None:
         if write.arguments["layout"] != "slides":
             continue
         phases = write.arguments.get("phases")
+        if source_presentation_requested(prompt):
+            # Source-dependent content cannot be known at planning time. If
+            # one typed composer is already upstream, bind its actual slides
+            # instead of a static outline, title-only reference, or wrapper.
+            # Preserve ambiguous flows and explicit other source references
+            # for validation rather than guessing between project documents.
+            upstream = _ancestors(write, by_key)
+            composers = [candidate for candidate in plan.steps[:plan.steps.index(write)]
+                         if candidate.key in upstream and candidate.tool_slug == "aura"
+                         and candidate.operation == "report.compose"
+                         and candidate.arguments.get("presentation") is True
+                         and not candidate.optional and candidate.condition is None
+                         and candidate.dependency_mode == "all_succeeded"
+                         and any((by_key[key].operation in CONTENT_READS or semantic_content_read(by_key[key]))
+                                 for key in _ancestors(candidate, by_key) if key in by_key)]
+            references = referenced_step_keys(phases)
+            if len(composers) == 1 and (not references or references == {composers[0].key}):
+                phases = "{{steps." + composers[0].key + ".presentation.phases}}"
         if not isinstance(phases, str):
             # A model can wrap the complete composer array in one incomplete
             # phase, e.g. [{"period": "{{steps.compose.presentation.phases}}"}].
@@ -513,6 +532,7 @@ def validate_source_presentation_plan(prompt: str, plan) -> None:
               and (step.tool_slug.startswith(("canva", "google-slides"))
                    or step.operation.startswith("slides."))
               and step.operation not in BLANK_DESIGNS
+              and step.operation not in PRESENTATION_READS
               and "export" not in step.operation]
     if not writes:
         raise SourcePresentationPlanError(
@@ -540,7 +560,10 @@ def validate_source_presentation_plan(prompt: str, plan) -> None:
         if (step.dependency_mode != "all_succeeded" or not upstream & content_reads or not grounded):
             raise SourcePresentationPlanError(
                 "Every presentation content write must depend on successful project document reads "
-                "and consume their actual text or an artifact composed from those reads."
+                "and consume their actual text or an artifact composed from those reads. "
+                f"Invalid step: {step.key} ({step.operation}). "
+                "For Canva bind phases={{steps.COMPOSER.presentation.phases}} and depend on COMPOSER; "
+                "its sources must reference a successful content reader. Preserve the requested folder scope."
             )
     used = set().union(*(ancestors(step) for step in writes))
     if any(step.operation in BLANK_DESIGNS and step.key not in used for step in steps):

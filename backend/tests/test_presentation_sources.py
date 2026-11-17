@@ -122,6 +122,47 @@ def valid_plan():
     ])
 
 
+@pytest.mark.parametrize("phases", [None, [], [{"period": "Pilot", "title": "Invented", "items": ["Unverified"]}],
+                                      "{{steps.compose.title}}"])
+def test_first_source_plan_binds_actual_composed_slides_without_model_retry(phases):
+    from app.presentation_sources import bind_presentation_composition
+
+    plan = valid_plan()
+    plan.steps.insert(2, step("compose", "report.compose", {
+        "presentation": True, "sources": [{"content": "{{steps.read.text}}"}],
+    }, ["read"]))
+    plan.steps[2].tool_slug = "aura"
+    plan.steps[-1].depends_on = ["compose"]
+    plan.steps[-1].arguments["phases"] = phases
+    before = plan.steps[0].model_dump()
+    bind_presentation_composition(PROMPT, plan, {"aura": native_manifest("aura")})
+    assert plan.steps[-1].arguments["phases"] == "{{steps.compose.presentation.phases}}"
+    assert plan.steps[0].model_dump() == before
+    validate_source_presentation_plan(PROMPT, plan)
+
+
+def test_source_binding_does_not_choose_between_two_composers():
+    from app.presentation_sources import bind_presentation_composition
+
+    plan = valid_plan()
+    for key in ["first", "second"]:
+        composer = step(key, "report.compose", {"presentation": True,
+            "sources": [{"content": "{{steps.read.text}}"}]}, ["read"])
+        composer.tool_slug = "aura"
+        plan.steps.insert(-1, composer)
+    plan.steps[-1].depends_on = ["first", "second"]
+    plan.steps[-1].arguments["phases"] = [{"period": "P", "title": "T", "items": ["Unknown"]}]
+    bind_presentation_composition(PROMPT, plan, {"aura": native_manifest("aura")})
+    with pytest.raises(SourcePresentationPlanError, match="Invalid step: slides"):
+        validate_source_presentation_plan(PROMPT, plan)
+
+
+def test_canva_metadata_read_marked_consequential_is_not_content_creation():
+    plan = valid_plan()
+    plan.steps.insert(0, step("existing", "canva.design.get", {"design_id": "existing-design"}, write=True))
+    validate_source_presentation_plan(PROMPT, plan)
+
+
 @pytest.mark.parametrize("change", ["missing_read", "metadata_read", "optional_read",
     "conditional_read", "no_folder_dependency", "no_deck_dependency", "unbound_content",
     "blank_design", "unrelated_blank", "all_settled"])
