@@ -4157,7 +4157,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                             120.0 if (active_tool.config or {}).get("managed_by") == "desktop_estimating" else
                             150.0 if operation == "google-drive.search-files"
                             and "semantic_goal" in arguments else
-                            150.0 if operation == "intelligence.presentation.review" else
+                            180.0 if operation == "intelligence.presentation.review" else
                             max(float(snapshot.policy_snapshot["step_timeout_seconds"]),
                                 float(get_settings().managed_agents_timeout_seconds) + 15)
                             if operation == "report.compose" and get_settings().managed_agents_enabled else

@@ -4,11 +4,14 @@ import asyncio
 import base64
 import json
 import re
+import tempfile
 import unicodedata
 from io import BytesIO
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from openai import AsyncOpenAI
+from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field
 from pypdf import PdfReader
 
@@ -68,7 +71,47 @@ def inspect_pdf(data, expected):
     return texts, issues
 
 
-def review_result(data, texts, issues, visual, design_id):
+async def render_pages(data, page_count):
+    """Render every bounded PDF page; kill the decoder on timeout/cancellation."""
+    if not 1 <= page_count <= 12:
+        raise ValueError("Presentation page count exceeds the rendering budget")
+    with tempfile.TemporaryDirectory(prefix="aura-presentation-") as directory:
+        root = Path(directory)
+        source = root / "presentation.pdf"
+        source.write_bytes(data)
+        process = await asyncio.create_subprocess_exec(
+            "pdftoppm", "-png", "-cropbox", "-scale-to", "1800", "-f", "1",
+            "-l", str(page_count), str(source), str(root / "page"),
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            await asyncio.wait_for(process.wait(), 30)
+        except BaseException:
+            if process.returncode is None:
+                process.kill()
+            await process.wait()
+            raise
+        if process.returncode:
+            raise ValueError("Could not render the saved presentation pages")
+        files = sorted(root.glob("page-*.png"), key=lambda path: int(path.stem.split("-")[-1]))
+        if [int(path.stem.split("-")[-1]) for path in files] != list(range(1, page_count + 1)):
+            raise ValueError("Rendered images do not cover every PDF page")
+        images, total = [], 0
+        for path in files:
+            total += path.stat().st_size
+            if total > 12 * 1024 * 1024:
+                raise ValueError("Rendered pages exceed the image review budget")
+            data = path.read_bytes()
+            with Image.open(BytesIO(data)) as image:
+                if image.format != "PNG" or max(image.size) > 1800:
+                    raise ValueError("Invalid rendered page image")
+                dimensions = {"width": image.width, "height": image.height}
+                image.verify()
+            images.append((data, dimensions))
+        return images
+
+
+def review_result(data, texts, issues, visual, design_id, image_evidence=None):
     expected_pages = list(range(1, len(texts) + 1))
     if sorted(row.page for row in visual.pages) != expected_pages:
         raise ValueError("Visual review did not cover each PDF page exactly once")
@@ -89,7 +132,8 @@ def review_result(data, texts, issues, visual, design_id):
             "design_id": design_id, "page_count": len(texts), "pages": pages,
             "verification": {"status": "verified" if verified else "unverified",
                              "issues": issues, "limitations": visual.limitations},
-            "evidence": {"kind": "actual_canva_pdf_text_and_page_images", **fingerprint(data)},
+            "evidence": {"kind": "actual_canva_pdf_text_and_page_images", **fingerprint(data),
+                         "page_images": image_evidence or []},
             "provider_writes": False}
 
 
@@ -103,6 +147,18 @@ async def review_presentation(arguments):
         raise ValueError("Expected presentation exceeds the review budget")
     data = await download_pdf(request.file_url)
     texts, issues = await asyncio.to_thread(inspect_pdf, data, expected)
+    images = await render_pages(data, len(texts))
+    image_evidence = [{"page": index + 1, **fingerprint(image), **dimensions}
+                      for index, (image, dimensions) in enumerate(images)]
+    content = [{"type": "input_text", "text": json.dumps({"instructions": request.instructions,
+        "page_count": len(texts), "approved_content": expected, "pdf_evidence": fingerprint(data),
+        "extracted_page_text": texts, "rendered_page_images": image_evidence}, ensure_ascii=False)}]
+    for index, (image, _) in enumerate(images):
+        content.extend([
+            {"type": "input_text", "text": f"Actual rendered PDF page {index + 1} of {len(texts)}:"},
+            {"type": "input_image", "image_url": "data:image/png;base64," + base64.b64encode(image).decode(),
+             "detail": "high"},
+        ])
     settings = get_settings()
     async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0) as client:
         response = await bounded_model_call(lambda: structured_response(
@@ -115,15 +171,15 @@ async def review_presentation(arguments):
                           "facts, proposals and unverified rights. Report only supported defects. "
                           "Accurately labelled hypotheses or unverified rights are valid content, "
                           "not inspection limitations; assess whether their caveats are preserved. "
+                          "Each physical page is supplied as an explicitly numbered image with extracted "
+                          "text. Base visual findings on those images. File and page-image hashes are "
+                          "computed by the service and supplied as metadata; do not attempt to infer "
+                          "hashes visually. Check printed source URLs against the approved copy; "
+                          "external website access or legal validation is outside this page inspection. "
                           "Do not claim page inspection from metadata. If any required check cannot "
                           "be performed, state the limitation; never mark it verified."),
-            input=[{"role": "user", "content": [
-                {"type": "input_text", "text": json.dumps({"instructions": request.instructions,
-                    "page_count": len(texts), "approved_content": expected}, ensure_ascii=False)},
-                {"type": "input_file", "filename": "saved-canva-presentation.pdf",
-                 "file_data": "data:application/pdf;base64," + base64.b64encode(data).decode(),
-                 "detail": "high"}]}], text_format=VisualReview,
+            input=[{"role": "user", "content": content}], text_format=VisualReview,
         ), 100)
     if response.output_parsed is None:
         raise ValueError("Presentation inspection returned no completed visual assessment")
-    return review_result(data, texts, issues, response.output_parsed, request.design_id)
+    return review_result(data, texts, issues, response.output_parsed, request.design_id, image_evidence)

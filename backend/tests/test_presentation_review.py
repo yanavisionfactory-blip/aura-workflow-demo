@@ -22,7 +22,7 @@ def pdf(texts):
         page[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject("/F1"): font})})
         stream = DecodedStreamObject()
         stream.set_data(f"BT /F1 12 Tf 10 100 Td ({text}) Tj ET".encode())
-        page[NameObject("/Contents")] = stream
+        page[NameObject("/Contents")] = writer._add_object(stream)
     output = io.BytesIO()
     writer.write(output)
     return output.getvalue()
@@ -83,12 +83,43 @@ async def test_review_uses_actual_pdf_multimodal_input_without_provider_writes(m
     result = await review.review_presentation({"design_id": "Design123", "file_url": "https://export-download.canva.com/a/Design123/output.pdf"})
     call = response.call_args.kwargs
     assert call["store"] is False
-    assert call["input"][0]["content"][1]["file_data"].startswith("data:application/pdf;base64,")
+    images = [part for part in call["input"][0]["content"] if part["type"] == "input_image"]
+    assert len(images) == 2
+    assert all(image["image_url"].startswith("data:image/png;base64,") and image["detail"] == "high" for image in images)
     assert result["page_count"] == 2 and result["provider_writes"] is False
     assert result["evidence"]["sha256"]
+    assert [page["page"] for page in result["evidence"]["page_images"]] == [1, 2]
+    assert all(page["width"] <= 1800 and page["height"] <= 1800 and page["sha256"] for page in result["evidence"]["page_images"])
     with pytest.raises(ValueError, match="requested design"):
         await review.review_presentation({"design_id": "OtherDesign", "file_url": "https://export-download.canva.com/a/Design123/output.pdf"})
     assert download.await_count == 1
+
+
+async def test_renderer_requires_every_page_and_rejects_invalid_files():
+    with pytest.raises(ValueError, match="every PDF page"):
+        await review.render_pages(pdf(["First"]), 2)
+    with pytest.raises(ValueError, match="Could not render"):
+        await review.render_pages(b"not a PDF", 1)
+    with pytest.raises(ValueError, match="rendering budget"):
+        await review.render_pages(b"", 13)
+
+
+async def test_renderer_cancellation_kills_the_process(monkeypatch):
+    import asyncio
+    process = SimpleNamespace(returncode=None, kill=lambda: setattr(process, "returncode", -9))
+    started = asyncio.Event()
+    async def wait():
+        if process.returncode is None:
+            started.set()
+            await asyncio.Future()
+    process.wait = wait
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
+    task = asyncio.create_task(review.render_pages(pdf(["First"]), 1))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert process.returncode == -9
 
 
 def plan_step(key, operation, args, depends=()):
