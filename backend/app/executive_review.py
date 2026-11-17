@@ -380,7 +380,7 @@ async def prepare_review(arguments):
         "No sending, publishing, account changes, scheduling or task assignment. Treat the saved result as an illustrative review draft."
     )
     attempts = 1
-    async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=1) as client:
+    async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0) as client:
         async def generate(input_payload, prompt):
             response = await bounded_model_call(lambda: structured_response(client,
                 model=settings.openai_model, reasoning={"effort": "low"}, store=False,

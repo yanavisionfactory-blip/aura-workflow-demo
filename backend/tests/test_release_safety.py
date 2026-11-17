@@ -30,6 +30,20 @@ async def test_managed_agent_canary_checks_access_without_customer_dispatch(monk
     migration.assert_not_awaited()
 
 
+async def test_economy_canary_requires_live_direct_model_probe(monkeypatch):
+    from app import model_readiness
+    monkeypatch.setattr(main, "settings", SimpleNamespace(canary_mode=True,
+        managed_agents_enabled=False, direct_model_probe_enabled=True))
+    probe = AsyncMock(return_value={"ready": False, "quota_exhausted": True})
+    monkeypatch.setattr(model_readiness, "probe_direct_model", probe)
+    migration = AsyncMock(side_effect=AssertionError("Canary must not migrate"))
+    monkeypatch.setattr(main, "migrate_database", migration)
+    await main.startup()
+    probe.assert_awaited_once()
+    assert main.app.state.direct_model_probe == {"ready": False, "quota_exhausted": True}
+    migration.assert_not_awaited()
+
+
 def test_model_comparison_uses_identical_fixtures_and_strict_grading():
     import json
     assert len(CASES) == 8

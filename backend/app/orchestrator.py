@@ -320,6 +320,11 @@ def _provider_rejection_detail(exc: Exception) -> str | None:
 
 def _friendly_execution_error(error: str | None) -> str:
     from .google_ads_errors import public_message
+    from .model_failures import is_model_quota_error
+    from .model_limits import LIMIT_CODE, LIMIT_MESSAGE
+
+    if LIMIT_CODE in (error or ""):
+        return LIMIT_MESSAGE
 
     ads_error = public_message(error)
     if ads_error:
@@ -333,7 +338,7 @@ def _friendly_execution_error(error: str | None) -> str:
         return "Google Sheets returned no unambiguous matching tab. Choose the exact worksheet before writing."
     if "the connected app rejected this action's inputs" in detail:
         return "The connected app rejected the target or values for this step. Review the saved action before trying again."
-    if "credit_balance_exhausted" in detail:
+    if is_model_quota_error(RuntimeError(detail)):
         return (
             "The API account for this app has insufficient credits. "
             "Add API credits before running this action again. Completed work is preserved."
@@ -4671,9 +4676,12 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                 step.error = _friendly_execution_error(internal_error)
                 if "[aura_intelligence_backup_failed]" in internal_error:
                     step.error = step.output["fallback"]["message"]
+                from .model_failures import is_model_quota_error
+                from .model_limits import LIMIT_CODE
+                budget_required = not run.cancellation_requested and LIMIT_CODE in internal_error
                 billing_required = (
                     not run.cancellation_requested
-                    and "credit_balance_exhausted" in internal_error
+                    and is_model_quota_error(RuntimeError(internal_error))
                 )
                 target_status = (
                     RunStatus.cancelled
@@ -4686,6 +4694,7 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     reason=(
                         "cancellation_observed_after_attempt"
                         if run.cancellation_requested
+                        else "run_model_budget_exhausted" if budget_required
                         else "provider_api_credits_exhausted" if billing_required
                         else "step_recovery_exhausted"
                     ),
@@ -4693,17 +4702,17 @@ async def _execute_run(run_id: str, workspace_id: str) -> None:
                     phase="execution",
                     supervisor_status=(
                         "cancelled" if run.cancellation_requested
-                        else "human_action_required" if billing_required else "recovering"
+                        else "human_action_required" if billing_required or budget_required else "recovering"
                     ),
                     error=step.error,
                     result=_partial_result(outputs, step, step.error),
                     dispatch=None,
                     metadata={"step_id": step.id},
                     **({"blocker": {
-                        "kind": "human_action", "code": "operator_billing_required",
-                        "message": step.error, "action": "restore_api_credits",
+                        "kind": "human_action", "code": "operator_model_budget_required" if budget_required else "operator_billing_required",
+                        "message": step.error, "action": "review_run_budget" if budget_required else "restore_api_credits",
                         "retryable": False, "step_id": step.id,
-                    }} if billing_required else {}),
+                    }} if billing_required or budget_required else {}),
                 )
                 attempts = (
                     await session.scalars(select(StepAttempt).where(StepAttempt.step_id == step.id))

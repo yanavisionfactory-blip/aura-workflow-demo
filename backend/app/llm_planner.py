@@ -214,6 +214,7 @@ async def _repair_argument_json(client, compact, inventory, settings):
     started = perf_counter()
     response = await bounded_model_call(
         lambda: client.responses.parse(
+            max_output_tokens=settings.model_max_output_tokens,
             model=settings.openai_model,
             instructions=(
                 "Repair JSON serialization only for the supplied malformed argument strings. "
@@ -673,7 +674,7 @@ async def create_llm_plan(
         "before exporting its real design id; canva.design.create creates a blank shell. "
         "For revisions, honor the latest change and remove replaced providers."
     )
-    async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=1) as client:
+    async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0) as client:
         from .managed_agents import active as managed_agents_active
         from .managed_agents import run_structured
         managed = managed_agents_active()
@@ -685,6 +686,7 @@ async def create_llm_plan(
             response = await bounded_model_call(
                 lambda: client.responses.parse(
                     model=settings.openai_model,
+                    max_output_tokens=settings.model_max_output_tokens,
                     instructions=instructions,
                     input=payload,
                     # Constrain to the packed catalog actually visible in input,

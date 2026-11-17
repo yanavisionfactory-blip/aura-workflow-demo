@@ -41,7 +41,8 @@ def classify_failure(exc: Exception, *, read: bool) -> Failure:
             return Failure("connector_configuration", False)
         if code.removeprefix("google_ads:") in AUTH_CODES:
             return Failure("authorization_required", False)
-    if getattr(exc, "upstream_code", None) == "credit_balance_exhausted" or review_failure(exc) == "quota":
+    from .model_failures import is_model_quota_error
+    if is_model_quota_error(exc) or review_failure(exc) == "quota":
         return Failure("budget_exhausted", False)
     if status in (401, 403):
         return Failure("authorization_required", False)
@@ -91,6 +92,9 @@ model_budget: ContextVar[CallBudget | None] = ContextVar("model_budget", default
 
 
 async def bounded_model_call(awaitable_factory, timeout: float):
+    from .model_limits import reserve_call
+
     budget = model_budget.get()
     timeout = budget.consume(timeout) if budget else timeout
+    await reserve_call()
     return await asyncio.wait_for(awaitable_factory(), timeout=timeout)

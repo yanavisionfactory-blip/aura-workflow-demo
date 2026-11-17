@@ -8,6 +8,9 @@ MESSAGES = {
 
 
 def review_failure(exc):
+    from .model_failures import is_model_quota_error
+    if is_model_quota_error(exc):
+        return "quota"
     body = getattr(exc, "body", None)
     error = body.get("error", body) if isinstance(body, dict) else {}
     code = getattr(exc, "code", None) or (error.get("code") if isinstance(error, dict) else None)

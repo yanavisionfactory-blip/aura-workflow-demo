@@ -153,7 +153,7 @@ async def compose_report(arguments: dict, *, _quality_attempt: int = 0,
     if _quality_repair:
         model_input["repair_context"] = _quality_repair
     payload = bounded_input(model_input)
-    async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=1) as client:
+    async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0) as client:
         response = await bounded_model_call(
             lambda: structured_response(client,
                 model=settings.openai_model,

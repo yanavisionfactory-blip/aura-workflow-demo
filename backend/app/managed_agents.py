@@ -348,7 +348,8 @@ async def structured_response(client, **kwargs):
     flattened into text). The workflow manager still supervises those operations.
     """
     if not active() or not isinstance(kwargs.get("input"), str):
-        return await client.responses.parse(**kwargs)
+        from .model_limits import response_limits
+        return await client.responses.parse(**response_limits(kwargs))
     output_type = kwargs["text_format"]
     result = await run_structured(
         getattr(output_type, "__name__", "Workflow Specialist"),

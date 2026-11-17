@@ -179,6 +179,7 @@ def _category(value: str | None, phase: RecoveryPhase) -> RecoveryCategory:
         "uncertain_write": RecoveryCategory.uncertain_external_effect,
         "budget_exhausted": RecoveryCategory.budget_exhausted,
         "operator_quota": RecoveryCategory.budget_exhausted,
+        "operator_model_budget": RecoveryCategory.budget_exhausted,
     }
     if value in mapping:
         return mapping[value]
@@ -198,15 +199,17 @@ def diagnose_run(
     """Build a content-free diagnostic from durable evidence."""
     state = supervisor_state(run)
     phase = _phase(state.get("phase"), run)
-    if error is not None and phase == RecoveryPhase.planning:
-        category = planning_failure_category(error)
+    if error is not None:
+        failure = planning_failure_category(error)
+        if phase == RecoveryPhase.planning or failure in {"operator_quota", "operator_model_budget"}:
+            category = failure
     category = category or state.get("last_failure_category")
     normalized = _category(category, phase)
     failed = next((step for step in steps if step.status == StepStatus.failed), None)
     completed = [step.step_key for step in steps if step.status == StepStatus.completed]
     blocker = (run.execution_context or {}).get("__aura_blocker__") or {}
     blocker_code = blocker.get("code")
-    human_action = blocker_code in HUMAN_ACTION_CODES or normalized in {
+    human_action = category in {"operator_quota", "operator_model_budget"} or blocker_code in HUMAN_ACTION_CODES or normalized in {
         RecoveryCategory.authorization_required,
         RecoveryCategory.uncertain_external_effect,
     }

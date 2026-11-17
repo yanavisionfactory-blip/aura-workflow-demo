@@ -55,11 +55,13 @@ def trace_run(function):
     async def wrapped(run_id: str, workspace_id: str):
         from .db import SessionLocal, set_tenant_context
         from .managed_agents import ManagedRun, current_run
+        from .model_limits import ModelScope
+        from .model_limits import scope as limit_scope
         from .models import AuditEvent, WorkflowRun
 
         # Recovery invoked inside an active delivery shares its original budget
         # and metrics; standalone recovery establishes the same tenant boundary.
-        if current_run.get() == ManagedRun(run_id, workspace_id):
+        if limit_scope.get() == ModelScope(run_id, workspace_id):
             return await function(run_id, workspace_id)
         records: list[dict] = []
         from time import monotonic
@@ -70,6 +72,7 @@ def trace_run(function):
         budget_token = model_budget.set(CallBudget(monotonic() + settings.delivery_budget_seconds, settings.max_model_calls_per_delivery))
         token = calls.set(records)
         managed_token = current_run.set(None)
+        limit_token = limit_scope.set(ModelScope(run_id, workspace_id))
         try:
             if settings.managed_agents_enabled:
                 async with SessionLocal() as session:
@@ -79,6 +82,7 @@ def trace_run(function):
                         current_run.set(ManagedRun(run_id, workspace_id))
             return await function(run_id, workspace_id)
         finally:
+            limit_scope.reset(limit_token)
             current_run.reset(managed_token)
             calls.reset(token)
             model_budget.reset(budget_token)

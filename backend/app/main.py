@@ -278,6 +278,11 @@ async def startup() -> None:
         app.state.managed_agents_probe = await probe_access()
         if not app.state.managed_agents_probe.get("ready"):
             logger.warning("Managed Agents API readiness failed: %s", app.state.managed_agents_probe)
+    elif getattr(settings, "direct_model_probe_enabled", False):
+        from .model_readiness import probe_direct_model
+        app.state.direct_model_probe = await probe_direct_model()
+        if not app.state.direct_model_probe.get("ready"):
+            logger.warning("Direct model readiness failed: %s", app.state.direct_model_probe)
     if settings.canary_mode:
         # A release canary must never migrate or dispatch customer work.
         return
@@ -422,6 +427,8 @@ async def readiness() -> dict:
         checks["managed_agents"] = bool(
             getattr(app.state, "managed_agents_probe", {}).get("ready")
         )
+    elif getattr(settings, "direct_model_probe_enabled", False):
+        checks["direct_model"] = bool(getattr(app.state, "direct_model_probe", {}).get("ready"))
     try:
         async with engine.connect() as connection:
             await connection.execute(text("SELECT 1"))

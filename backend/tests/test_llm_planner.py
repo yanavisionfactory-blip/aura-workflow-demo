@@ -89,6 +89,7 @@ def malformed_plan_client(monkeypatch):
     monkeypatch.setattr(llm_planner, "AsyncOpenAI", Client)
     monkeypatch.setattr(llm_planner, "get_settings", lambda: SimpleNamespace(
         openai_api_key="test", openai_model="test-model", model_call_timeout_seconds=30,
+        model_max_output_tokens=12000,
     ))
     return compact, parse
 
@@ -446,6 +447,7 @@ async def test_large_catalog_is_packed_before_the_only_planning_call(monkeypatch
     monkeypatch.setattr(llm_planner, "AsyncOpenAI", Client)
     monkeypatch.setattr(llm_planner, "get_settings", lambda: SimpleNamespace(
         openai_api_key="test", openai_model="test-model", model_call_timeout_seconds=30,
+        model_max_output_tokens=12000,
     ))
     effects = [{"effect": "drive create", "targets": [{
         "tool_slug": "google-drive", "operation": "google-drive.create-file",
@@ -643,6 +645,7 @@ async def test_direct_planner_uses_one_structured_call(monkeypatch):
     monkeypatch.setattr(llm_planner, "AsyncOpenAI", Client)
     monkeypatch.setattr(llm_planner, "get_settings", lambda: SimpleNamespace(
         openai_api_key="test", openai_model="test-model", model_call_timeout_seconds=30,
+        model_max_output_tokens=12000,
     ))
     plan = await llm_planner.create_llm_plan(
         "Read Berlin weather", [{"slug": "aura", "connected": True,
@@ -692,6 +695,7 @@ async def test_one_llm_sukkot_plan_qualifies_bare_canva_and_attachment_reference
     monkeypatch.setattr(llm_planner, "AsyncOpenAI", Client)
     monkeypatch.setattr(llm_planner, "get_settings", lambda: SimpleNamespace(
         openai_api_key="test", openai_model="test-model", model_call_timeout_seconds=30,
+        model_max_output_tokens=12000,
     ))
     manifests = {slug: native_manifest(slug) for slug in ("canva", "google")}
     inventory = [{"slug": slug, "connected": True,

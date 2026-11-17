@@ -48,7 +48,7 @@ class MaterialAssessments(BaseModel):
 
 async def _infer(goal, evidence, schema, instruction):
     settings = get_settings()
-    async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=1) as client:
+    async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0) as client:
         response = await bounded_model_call(lambda: structured_response(client,
             model=settings.openai_model, text_format=schema,
             instructions=("Assess relevance to the user's objective by meaning across languages. "

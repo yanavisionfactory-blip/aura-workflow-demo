@@ -78,10 +78,11 @@ async def compose_presentation(request) -> dict:
             bounded_input(request.model_dump(mode="json")), PresentationDraft)
         parsed = response.final_output
     else:
-        async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=1) as client:
+        async with AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0) as client:
             response = await bounded_model_call(
                 lambda: client.responses.parse(
                     model=settings.openai_model, instructions=instructions,
+                    max_output_tokens=settings.model_max_output_tokens,
                     input=bounded_input(request.model_dump(mode="json")),
                     text_format=PresentationDraft, reasoning={"effort": "low"}, store=False,
                 ), settings.model_call_timeout_seconds,
