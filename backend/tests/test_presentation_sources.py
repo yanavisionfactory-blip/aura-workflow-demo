@@ -83,8 +83,12 @@ def test_large_drive_catalog_cannot_crowd_out_source_and_slide_contracts():
 
 def test_canva_request_does_not_reserve_the_entire_google_slides_catalog():
     catalog = source_catalog() + [{"slug": "google-slides", "name": "Google Slides",
-        "connected": True, "allowed_operations": [f"google-slides.operation-{i}" for i in range(100)],
-        "operation_contracts": [{"name": f"google-slides.operation-{i}", "description": "X" * 5000,
+        "connected": True, "allowed_operations": ["google-slides.create-presentation",
+            "google-slides.get-presentation", *[f"google-slides.operation-{i}" for i in range(100)]],
+        "operation_contracts": [{"name": name, "description": name,
+            "input_schema": {"type": "object", "properties": {}}} for name in
+            ["google-slides.create-presentation", "google-slides.get-presentation"]] + [
+            {"name": f"google-slides.operation-{i}", "description": "X" * 5000,
              "input_schema": {"type": "object", "properties": {}}} for i in range(100)]}]
     request = PROMPT + " Create it in Canva."
     required = source_presentation_operation_pairs(request, catalog)
@@ -96,6 +100,35 @@ def test_canva_request_does_not_reserve_the_entire_google_slides_catalog():
     assert ("google-docs", "google-docs.get-document") in offered
     assert ("canva", "canva.presentation.create") in offered
     assert any(slug == "google-slides" for slug, _ in source_presentation_operation_pairs(PROMPT, catalog))
+
+
+@pytest.mark.parametrize("destination", ["", " Use Google Slides, not Canva."])
+def test_original_project_brief_fits_large_slides_catalog_without_technical_prompt(destination):
+    request = (
+        "Hello! I have a folder in my drive, Brisa Studio, with a project of AI music to sell "
+        "to small restaurantes or likewise places without copyrights. Please create a presentation "
+        "to send to this kind of places in order to understand the viability of such a project. Thank you."
+        + destination
+    )
+    essential = ["google-slides.create-presentation", "google-slides.get-presentation"]
+    modules = [{"name": name, "description": name,
+                "input_schema": {"type": "object", "properties": {}}} for name in essential]
+    modules += [{"name": f"google-slides.operation-{i}", "description": str(i) + "X" * 5000,
+                 "input_schema": {"type": "object", "properties": {}}} for i in range(100)]
+    catalog = source_catalog() + [{"slug": "google-slides", "name": "Google Slides",
+        "connected": True, "allowed_operations": [module["name"] for module in modules],
+        "operation_contracts": modules}]
+    packed = llm_planner._bounded_planning_catalog({
+        "request": request, "selected_tools": [], "required_actions": [], "operations": catalog,
+    })
+    offered = {(item["slug"], operation) for item in packed["operations"]
+               for operation in item["allowed_operations"]}
+    assert packed["request"] == request
+    assert source_presentation_operation_pairs(request, catalog) <= offered
+    assert {("google-slides", name) for name in essential} <= offered
+    assert ("aura", "report.compose") in offered
+    assert ("canva", "canva.presentation.create") in offered
+    assert len(offered) < sum(len(item["allowed_operations"]) for item in catalog)
 
 
 def test_source_planning_error_explains_the_missing_read_without_provider_details():

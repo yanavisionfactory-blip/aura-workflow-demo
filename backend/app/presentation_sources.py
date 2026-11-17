@@ -29,6 +29,7 @@ SUPPORT_OPERATIONS = CONTENT_READS | FOLDER_READS | {
     "intelligence.presentation.review",
 }
 PRESENTATION_READS = {"canva.import.get", "canva.design.get", "google-slides.get-presentation", "slides.get"}
+GOOGLE_PRESENTATION_SUPPORT = {"google-slides.create-presentation", "google-slides.get-presentation", "slides.get"}
 
 
 def semantic_content_read(step):
@@ -98,12 +99,16 @@ def source_presentation_operation_pairs(prompt: str, inventory: list[dict]) -> s
     """
     if not source_presentation_requested(prompt):
         return set()
-    canva_requested = bool(re.search(r"\bcanva\b", prompt, re.IGNORECASE))
+    canva_requested = canva_destination_requested(prompt)
     return {
         (item["slug"], operation)
         for item in inventory for operation in item.get("allowed_operations", [])
         if operation in SUPPORT_OPERATIONS
-        or (not canva_requested and operation.startswith(("google-slides.", "slides.")))
+        # A generic deck request needs creation and read-back, not every
+        # Slides edit/template operation. Reserving the whole provider catalog
+        # can exhaust the planning budget before the model sees the request.
+        # Explicitly requested operations are retained separately by the planner.
+        or (not canva_requested and operation in GOOGLE_PRESENTATION_SUPPORT)
     }
 
 
