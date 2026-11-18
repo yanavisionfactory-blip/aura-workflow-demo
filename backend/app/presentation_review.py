@@ -176,6 +176,10 @@ async def review_presentation(arguments):
                           "computed by the service and supplied as metadata; do not attempt to infer "
                           "hashes visually. Check printed source URLs against the approved copy; "
                           "external website access or legal validation is outside this page inspection. "
+                          "Use limitations only for inability to complete the requested page inspection. "
+                          "Do not list external website access, market validation or copyright clearance "
+                          "as limitations: these are outside this check. Verify that the deck preserves "
+                          "the approved caveats without independently certifying their underlying claims. "
                           "Do not claim page inspection from metadata. If any required check cannot "
                           "be performed, state the limitation; never mark it verified."),
             input=[{"role": "user", "content": content}], text_format=VisualReview,
