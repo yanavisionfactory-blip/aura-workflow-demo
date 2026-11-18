@@ -11,29 +11,44 @@ async function withDocument(run) {
   try { await run(dom); } finally { globalThis.document = original; dom.window.close(); }
 }
 
-test("normal Connect authorizes both apps with no secret or endpoint fields", () => withDocument(async () => {
+test("PlanSwift Connect requests only PlanSwift access without key fields", () => withDocument(async () => {
   let finish;
   const pending = new Promise((resolve) => { finish = resolve; });
   const result = desktopPairingDialog({
-    start: async () => ({ pairing_id: "pair", code: "temporary-authorization-code" }),
+    start: async () => ({ pairing_id: "pair", code: "temporary-authorization-code", provider: "planswift" }),
     status: () => pending,
     cancel: () => assert.fail("Do not cancel a successful grant"),
   }, { provider: "planswift" });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(document.querySelectorAll("input").length, 0);
-  assert.equal(document.querySelector("h2").textContent, "Connect your computer");
+  assert.doesNotMatch(document.querySelector("dialog").textContent, /Excel/);
+  assert.equal(document.querySelector("h2").textContent, "Connect PlanSwift");
   assert.match(document.querySelector("[data-open]").href, /^aura-estimator:\/\/pair\?code=/);
   assert.equal(document.querySelector("[data-open]").hidden, false);
-  finish({ status: "verified", connections: [{ id: "ps", provider: "planswift" }, { id: "xl", provider: "excel-desktop" }] });
+  finish({ status: "verified", connections: [{ id: "ps", provider: "planswift" }] });
   assert.equal((await result).id, "ps");
   assert.equal(document.querySelector("dialog"), null);
+}));
+
+test("Excel Connect has its own name and permissions and never requires PlanSwift", () => withDocument(async (dom) => {
+  const result = desktopPairingDialog({
+    start: async () => ({ pairing_id: "excel-pair", code: "code", provider: "excel-desktop" }),
+    status: async () => ({ status: "waiting" }),
+    cancel: async () => {},
+  }, { provider: "excel-desktop" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(document.querySelector("h2").textContent, "Connect Microsoft Excel (Desktop)");
+  assert.doesNotMatch(document.querySelector("dialog").textContent, /PlanSwift|measurements/);
+  assert.match(document.querySelector("dialog").textContent, /only this app/);
+  document.querySelector("[data-cancel]").dispatchEvent(new dom.window.Event("click"));
+  await assert.rejects(result, /window closed/);
 }));
 
 test("a stalled check reaches a visible deadline and can be cancelled", () => withDocument(async (dom) => {
   const cancelled = [];
   let requestSignal;
   const result = desktopPairingDialog({
-    start: async () => ({ pairing_id: "pair", code: "code" }),
+    start: async () => ({ pairing_id: "pair", code: "code", provider: "excel-desktop" }),
     status: (_id, signal) => { requestSignal = signal; return new Promise(() => {}); },
     cancel: async (id) => cancelled.push(id),
   }, { provider: "excel-desktop" }, undefined, { waitMs: 20, pollMs: 1 });

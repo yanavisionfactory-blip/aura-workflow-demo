@@ -56,10 +56,11 @@ async def paired_api(database, monkeypatch, request):
     await cache.aclose()
 
 
-async def enroll(state, applications=APPS):
-    grant = (await state.api.post(ROOT + "/pairings")).json()
+async def enroll(state, applications=None, provider="excel-desktop"):
+    applications = applications or {provider: APPS[provider]}
+    grant = (await state.api.post(ROOT + "/pairings", json={"provider": provider})).json()
     payload = {"code": grant["code"], "instance_id": state.instance_id,
-               "device_token": TOKEN, "applications": applications}
+               "device_token": TOKEN, "applications": applications, "pairing_protocol": 2}
     response = await state.api.post(ROOT + "/pairings/claim", json=payload)
     return grant, payload, response
 
@@ -87,53 +88,110 @@ async def poll_command(state, task):
     raise AssertionError("The command was not queued")
 
 
-async def test_one_authorization_verifies_both_apps_without_browser_keys(paired_api):
+@pytest.mark.parametrize("provider", ["planswift", "excel-desktop"])
+async def test_one_authorization_verifies_only_the_selected_app(paired_api, provider):
     s = paired_api
-    grant, payload, response = await enroll(s)
+    grant, payload, response = await enroll(s, provider=provider)
     assert response.status_code == 200, response.text
     info = await s.api.post(ROOT + "/pairings/info", json={"code": grant["code"]})
     assert info.json()["workspace_name"] == "Connection test"
+    assert info.json()["provider"] == provider
+    assert info.json()["pairing_protocol"] == 2
     status = await s.api.get(ROOT + "/pairings/" + grant["pairing_id"])
     assert status.json()["status"] == "verified"
-    assert {c["provider"] for c in status.json()["connections"]} == set(APPS)
+    assert {c["provider"] for c in status.json()["connections"]} == {provider}
     assert TOKEN not in status.text + response.text + info.text
     assert "secret_hash" not in status.text
+    assert s.resume.await_count == 1
+    assert s.resume.await_args.args[2].slug == provider
     assert (await s.api.post(ROOT + "/pairings/claim", json=payload)).status_code == 200
     stolen = {**payload, "device_token": "another-device-token-01234567890123456789"}
     assert (await s.api.post(ROOT + "/pairings/claim", json=stolen)).status_code == 409
     async with s.database() as db:
         rows = list((await db.scalars(select(ToolConnection))).all())
-        assert len(rows) == 2 and all(row.enabled for row in rows)
+        assert len(rows) == 1 and rows[0].slug == provider and rows[0].enabled
         assert all(TOKEN not in row.encrypted_credentials for row in rows)
         events = list((await db.scalars(select(AuditEvent))).all())
         assert len(events) == 1
         assert TOKEN not in json.dumps([e.payload for e in events])
 
 
-async def test_missing_app_never_creates_a_half_connection(paired_api):
+@pytest.mark.parametrize("provider", ["planswift", "excel-desktop"])
+async def test_only_the_selected_app_is_required(paired_api, provider):
     s = paired_api
-    apps = {**APPS, "planswift": {"available": False, "version": ""}}
-    grant, payload, response = await enroll(s, apps)
+    apps = {provider: {"available": False, "version": ""}}
+    grant, payload, response = await enroll(s, apps, provider)
     assert response.status_code == 409
-    assert "PlanSwift" in response.text
+    assert pairing.PROVIDERS[provider] in response.text
     status = (await s.api.get(ROOT + "/pairings/" + grant["pairing_id"])).json()
     assert status["status"] == "needs_apps"
     async with s.database() as db:
         assert not list((await db.scalars(select(ToolConnection))).all())
-    assert (await s.api.post(ROOT + "/pairings/claim", json={**payload, "applications": APPS})).status_code == 200
+    assert (await s.api.post(ROOT + "/pairings/claim", json={**payload, "applications": {provider: APPS[provider]}})).status_code == 200
+
+
+async def test_pairing_cannot_implicitly_add_another_app(paired_api):
+    s = paired_api
+    for payload in ({}, {"provider": "both"}, {"provider": ["planswift", "excel-desktop"]}):
+        assert (await s.api.post(ROOT + "/pairings", json=payload)).status_code == 422
+    grant = (await s.api.post(ROOT + "/pairings", json={"provider": "excel-desktop"})).json()
+    payload = {"code": grant["code"], "instance_id": s.instance_id, "device_token": TOKEN,
+               "applications": APPS, "pairing_protocol": 2}
+    assert (await s.api.post(ROOT + "/pairings/claim", json=payload)).status_code == 422
+    payload["applications"] = {"excel-desktop": APPS["excel-desktop"]}
+    payload.pop("pairing_protocol")
+    assert (await s.api.post(ROOT + "/pairings/claim", json=payload)).status_code == 409
+    status = (await s.api.get(ROOT + "/pairings/" + grant["pairing_id"])).json()
+    assert status["status"] == "needs_helper"
+    assert "latest AURA Desktop" in status["message"]
+    async with s.database() as db:
+        assert not list((await db.scalars(select(ToolConnection))).all())
+
+
+async def test_connect_and_revoke_each_app_without_changing_the_other(paired_api):
+    s = paired_api
+    excel_grant, _, response = await enroll(s)
+    assert response.status_code == 200
+    before = await credentials(s)
+    ps_grant, _, response = await enroll(s, provider="planswift")
+    assert response.status_code == 200
+    assert await credentials(s) == before
+    assert (await s.api.get(ROOT + "/pairings/" + excel_grant["pairing_id"])).json()["status"] == "verified"
+    ps_creds = await credentials(s, "planswift")
+    task = asyncio.create_task(desktop.verify(ps_creds, "planswift"))
+    command = await poll_command(s, task)
+    assert command["arguments"] == {"providers": ["planswift"]}
+    auth = {"Authorization": "Bearer " + TOKEN}
+    async with s.database() as db:
+        ps = await db.scalar(select(ToolConnection).where(ToolConnection.slug == "planswift"))
+        ps.enabled = False
+        await db.commit()
+    assert (await s.api.post(device_url(s, "results/" + command["id"]), json={"ok": False}, headers=auth)).status_code == 403
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert (await s.api.get(ROOT + "/pairings/" + ps_grant["pairing_id"])).json()["status"] == "revoked"
+    assert (await s.api.get(ROOT + "/pairings/" + excel_grant["pairing_id"])).json()["status"] == "verified"
+    task = asyncio.create_task(desktop.verify(before, "excel-desktop"))
+    command = await poll_command(s, task)
+    assert command["arguments"] == {"providers": ["excel-desktop"]}
+    envelope = {"protocol": pairing.PROTOCOL, "instance_id": s.instance_id,
+                "applications": {"excel-desktop": APPS["excel-desktop"]}}
+    assert (await s.api.post(device_url(s, "results/" + command["id"]), json={"ok": True, "value": envelope}, headers=auth)).status_code == 200
+    assert (await task)["ok"]
 
 
 async def test_cancel_expiry_and_permissions_fail_closed(paired_api):
     s = paired_api
-    assert (await s.api.post(ROOT + "/pairings", headers={"x-role": "member"})).status_code == 403
-    grant = (await s.api.post(ROOT + "/pairings")).json()
+    assert (await s.api.post(ROOT + "/pairings", json={"provider": "excel-desktop"}, headers={"x-role": "member"})).status_code == 403
+    grant = (await s.api.post(ROOT + "/pairings", json={"provider": "excel-desktop"})).json()
     route = ROOT + "/pairings/" + grant["pairing_id"]
     assert (await s.api.get(route, headers={"x-workspace-id": str(uuid4())})).status_code == 410
     assert (await s.api.delete(route, headers={"x-subject": "other"})).status_code == 404
     assert (await s.api.delete(route)).json()["status"] == "cancelled"
-    payload = {"code": grant["code"], "instance_id": s.instance_id, "device_token": TOKEN, "applications": APPS}
+    payload = {"code": grant["code"], "instance_id": s.instance_id, "device_token": TOKEN, "applications": {"excel-desktop": APPS["excel-desktop"]}, "pairing_protocol": 2}
     assert (await s.api.post(ROOT + "/pairings/claim", json=payload)).status_code == 410
-    grant = (await s.api.post(ROOT + "/pairings")).json()
+    grant = (await s.api.post(ROOT + "/pairings", json={"provider": "excel-desktop"})).json()
     key = pairing.pairing_key(s.workspace_id, grant["pairing_id"])
     saved = json.loads(await s.cache.get(key))
     saved["expires_at"] = 0
@@ -144,8 +202,8 @@ async def test_cancel_expiry_and_permissions_fail_closed(paired_api):
 async def test_replacement_requires_disconnect_and_revoked_members_cannot_claim(paired_api):
     s = paired_api
     await enroll(s)
-    grant = (await s.api.post(ROOT + "/pairings")).json()
-    payload = {"code": grant["code"], "instance_id": str(uuid4()), "device_token": TOKEN, "applications": APPS}
+    grant = (await s.api.post(ROOT + "/pairings", json={"provider": "excel-desktop"})).json()
+    payload = {"code": grant["code"], "instance_id": str(uuid4()), "device_token": TOKEN, "applications": {"excel-desktop": APPS["excel-desktop"]}, "pairing_protocol": 2}
     assert (await s.api.post(ROOT + "/pairings/claim", json=payload)).status_code == 409
     async with s.database() as db:
         member = await db.scalar(select(TenantMembership))

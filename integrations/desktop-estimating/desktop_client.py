@@ -12,7 +12,7 @@ from uuid import UUID
 
 from aura_estimator import bounded_operation
 from estimate_core import Store, get_estimate
-from estimating_contract import DEFINITIONS, PROTOCOL, ReportRequest
+from estimating_contract import DEFINITIONS, PROTOCOL, PROVIDERS, ReportRequest
 
 API_ORIGIN = "https://impartial-emotion-production-49d4.up.railway.app"
 ROOT = "/v1/desktop-estimating"
@@ -77,26 +77,34 @@ class DesktopClient:
             raise ClientError("AURA is unreachable. Check your internet connection; the helper will retry.") from None
 
     def info(self, code):
-        return self.request("/pairings/info", {"code": pairing_code(code)})
+        info = self.request("/pairings/info", {"code": pairing_code(code)})
+        if (info.get("pairing_protocol") != 2 or not isinstance(info.get("provider"), str)
+                or info["provider"] not in PROVIDERS):
+            raise ClientError("Refresh AURA and select the app you want to connect")
+        return info
 
-    def pair(self, code):
+    def pair(self, code, provider):
         code = pairing_code(code)
+        if provider not in PROVIDERS:
+            raise ClientError("Select an app in AURA before approving its connection")
         if self.config.get("workspace_id") not in {None, code.split(".")[0]}:
             raise ClientError("This helper is already paired to another workspace. Disconnect it there before changing workspace.")
         if not self.operation_lock.acquire(blocking=False):
             raise ClientError("The desktop apps are busy. Retry after the current task finishes.")
         try:
-            status = self.execute(self.config, "status", {})
+            status = self.execute(self.config, "status", {"providers": [provider]})
         finally:
             self.operation_lock.release()
         result = self.request("/pairings/claim", {
             "code": code, "instance_id": self.config["instance_id"],
-            "device_token": self.config["device_token"], "applications": status["applications"],
+            "device_token": self.config["device_token"], "applications": status["applications"], "pairing_protocol": 2,
         })
-        if result.get("status") != "verified" or result.get("workspace_id") != code.split(".")[0]:
+        if (result.get("status") != "verified" or result.get("workspace_id") != code.split(".")[0]
+                or result.get("provider") != provider):
             raise ClientError("AURA did not verify the requested workspace")
         self.config["workspace_id"] = result["workspace_id"]
         self.config["workspace_name"] = result["workspace_name"]
+        self.config["authorized_providers"] = sorted(set(self.config.get("authorized_providers", [])) | {provider})
         self.save()
         return result
 
@@ -127,7 +135,11 @@ class DesktopClient:
                 raise ClientError("The workbook is too large")
             return {"ok": True, "workbook_base64": base64.b64encode(path.read_bytes()).decode()}
         if operation == "status":
-            if arguments != {}:
+            if not isinstance(arguments, dict):
+                raise ClientError("Invalid application check")
+            providers = arguments.get("providers") if isinstance(arguments, dict) else None
+            if arguments != {} and (set(arguments) != {"providers"} or not isinstance(providers, list)
+                    or not providers or any(not isinstance(p, str) or p not in PROVIDERS for p in providers)):
                 raise ClientError("Invalid application check")
         elif operation in DEFINITIONS:
             arguments = DEFINITIONS[operation][1].model_validate(arguments).model_dump(mode="json")

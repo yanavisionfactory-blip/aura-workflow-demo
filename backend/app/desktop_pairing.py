@@ -82,17 +82,14 @@ async def body_json(request, limit=8000):
         raise HTTPException(422, "Invalid desktop request") from None
 
 
-def applications_status(value):
-    if not isinstance(value, dict) or set(value) != set(PROVIDERS):
-        raise HTTPException(422, "Both application checks are required")
-    output = {}
-    for provider in PROVIDERS:
-        app = value[provider]
-        if (not isinstance(app, dict) or type(app.get("available")) is not bool
-                or not isinstance(app.get("version"), str) or len(app["version"]) > 80):
-            raise HTTPException(422, "Invalid application check")
-        output[provider] = {"available": app["available"], "version": app["version"]}
-    return output
+def applications_status(value, provider):
+    if not isinstance(value, dict) or set(value) != {provider}:
+        raise HTTPException(422, "Check only the app selected in AURA")
+    app = value[provider]
+    if (not isinstance(app, dict) or type(app.get("available")) is not bool
+            or not isinstance(app.get("version"), str) or len(app["version"]) > 80):
+        raise HTTPException(422, "Invalid application check")
+    return {provider: {"available": app["available"], "version": app["version"]}}
 
 
 async def load_pair(cache, workspace_id, pairing_id):
@@ -100,6 +97,8 @@ async def load_pair(cache, workspace_id, pairing_id):
     if not raw:
         raise HTTPException(410, "This pairing request expired or was cancelled. Click Connect again.")
     pair = json.loads(raw)
+    if pair.get("provider") not in PROVIDERS:
+        raise HTTPException(410, "Refresh AURA and connect each app separately")
     if pair["expires_at"] <= time.time():
         raise HTTPException(410, "This pairing request expired. Click Connect again.")
     return pair
@@ -112,9 +111,9 @@ async def save_pair(cache, workspace_id, pairing_id, pair):
 
 async def pair_is_current(session, workspace_id, pairing_id, pair):
     rows = list((await session.scalars(select(ToolConnection).where(
-        ToolConnection.workspace_id == workspace_id, ToolConnection.slug.in_(PROVIDERS),
+        ToolConnection.workspace_id == workspace_id, ToolConnection.slug == pair["provider"],
         ToolConnection.enabled.is_(True)))).all())
-    if len(rows) != len(PROVIDERS):
+    if len(rows) != 1:
         return False
     for row in rows:
         if row.config.get("pairing_id") != pairing_id:
@@ -155,7 +154,7 @@ async def authenticated_device(session, workspace_id, instance_id, authorization
     return credentials, allowed
 
 
-async def store_connections(session, workspace_id, subject, pairing_id, instance_id, token, applications):
+async def store_connections(session, workspace_id, subject, pairing_id, instance_id, token, applications, provider):
     # Serialize enrollment even if a Redis lock expires while the database stalls.
     if session.get_bind().dialect.name == "postgresql":
         await session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
@@ -166,7 +165,7 @@ async def store_connections(session, workspace_id, subject, pairing_id, instance
     if member is None or member.role not in {"owner", "admin"}:
         raise HTTPException(403, "A workspace administrator must restart pairing")
     rows = list((await session.scalars(select(ToolConnection).where(
-        ToolConnection.workspace_id == workspace_id, ToolConnection.slug.in_(PROVIDERS),
+        ToolConnection.workspace_id == workspace_id, ToolConnection.slug == provider,
     ).with_for_update())).all())
     for row in rows:
         if row.config.get("managed_by") != BACKEND:
@@ -175,44 +174,45 @@ async def store_connections(session, workspace_id, subject, pairing_id, instance
             saved = CredentialVault().decrypt(row.encrypted_credentials)
             if (row.external_account_id != instance_id or saved.get("transport") != "outbound"
                     or not hmac.compare_digest(saved.get("access_token", "").encode(), token.encode())):
-                raise HTTPException(409, "A workstation is already connected. Disconnect it before pairing a replacement.")
+                raise HTTPException(409, f"{PROVIDERS[provider]} is already connected. Disconnect this app before choosing another computer.")
     credentials = {"transport": "outbound", "workspace_id": workspace_id,
-                   "instance_id": instance_id, "access_token": token}
-    result = []
-    for provider, name in PROVIDERS.items():
-        tool = next((row for row in rows if row.slug == provider), None)
-        if tool is None:
-            tool = ToolConnection(workspace_id=workspace_id, slug=provider,
-                                  display_name=name, kind=ToolKind.api_key)
-            session.add(tool)
-            await session.flush()
-        contract = manifest(provider, instance_id)
-        verification = {"ok": True, "identity": {"id": instance_id, "application": name,
-                        "version": applications[provider]["version"]},
-                        "source": "windows_application_probe", "execution_certified": False}
-        tool.base_url = None
-        tool.config = {"managed_by": BACKEND, "canonical_provider": provider,
-                       "transport": "outbound", "pairing_id": pairing_id}
-        tool.encrypted_credentials = CredentialVault().encrypt(credentials)
-        tool.external_account_id = instance_id
-        tool.allowed_operations = [item["name"] for item in contract["capabilities"]]
-        tool.enabled = True
-        record = await session.scalar(select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id))
-        if record is None:
-            record = CapabilityManifest(workspace_id=workspace_id, tool_id=tool.id, provider_type=BACKEND)
-            session.add(record)
-        record.status, record.manifest, record.verification = "verified", contract, verification
-        record.verified_at = datetime.now(UTC)
-        result.append(tool)
+                   "instance_id": instance_id, "access_token": token,
+                   "provider": provider, "pairing_protocol": 2}
+    name = PROVIDERS[provider]
+    tool = next((row for row in rows if row.slug == provider), None)
+    if tool is None:
+        tool = ToolConnection(workspace_id=workspace_id, slug=provider,
+                              display_name=name, kind=ToolKind.api_key)
+        session.add(tool)
+        await session.flush()
+    contract = manifest(provider, instance_id)
+    verification = {"ok": True, "identity": {"id": instance_id, "application": name,
+                    "version": applications[provider]["version"]},
+                    "source": "windows_application_probe", "execution_certified": False}
+    tool.base_url = None
+    tool.config = {"managed_by": BACKEND, "canonical_provider": provider,
+                   "transport": "outbound", "pairing_id": pairing_id}
+    tool.encrypted_credentials = CredentialVault().encrypt(credentials)
+    tool.external_account_id = instance_id
+    tool.allowed_operations = [item["name"] for item in contract["capabilities"]]
+    tool.enabled = True
+    record = await session.scalar(select(CapabilityManifest).where(CapabilityManifest.tool_id == tool.id))
+    if record is None:
+        record = CapabilityManifest(workspace_id=workspace_id, tool_id=tool.id, provider_type=BACKEND)
+        session.add(record)
+    record.status, record.manifest, record.verification = "verified", contract, verification
+    record.verified_at = datetime.now(UTC)
+    result = [tool]
     session.add(AuditEvent(workspace_id=workspace_id, actor=subject,
         event_type="connector.desktop_paired", payload={"instance_id": instance_id,
         "tool_ids": [tool.id for tool in result], "transport": "outbound"}))
     return result
 
 
-def command_for(path, payload):
+def command_for(path, payload, credentials):
     if path == "/v1/status" and payload is None:
-        return {"operation": "status", "arguments": {}}
+        arguments = {"providers": [credentials["provider"]]} if credentials.get("pairing_protocol") == 2 else {}
+        return {"operation": "status", "arguments": arguments}
     if path == "/v1/invoke" and isinstance(payload, dict) and set(payload) == {"operation", "arguments"}:
         operation = payload["operation"]
         if operation in DEFINITIONS:
@@ -224,9 +224,18 @@ def command_for(path, payload):
     raise ValueError("Unsupported desktop operation")
 
 
+def permitted_command(command, allowed):
+    operation = command["operation"]
+    if operation == "status":
+        selected = command["arguments"].get("providers")
+        providers = {DEFINITIONS[name][0] for name in allowed if name in DEFINITIONS}
+        return bool(providers) and (selected is None or set(selected).issubset(providers))
+    return operation in allowed or (operation == "download" and "excel.estimate.get" in allowed)
+
+
 async def relay_request(credentials, path, *, payload=None, timeout=30, binary=False):
     from .desktop_estimating import DesktopConnectionError
-    command = command_for(path, payload)
+    command = command_for(path, payload, credentials)
     prefix = relay_key(credentials)
     command_id = uuid4().hex
     deadline = time.time() + min(max(timeout, 1), 110)
@@ -280,13 +289,17 @@ def register_routes(app, tenant_context, tenant_session, resume, dispatch):
     root = "/v1/desktop-estimating"
 
     @app.post(root + "/pairings", status_code=201)
-    async def create_pairing(context=Depends(tenant_context), session=Depends(tenant_session)):
+    async def create_pairing(request: Request, context=Depends(tenant_context), session=Depends(tenant_session)):
         if context.role not in {"owner", "admin"}:
             raise HTTPException(403, "A workspace administrator must connect these apps")
+        payload = await body_json(request)
+        provider = payload.get("provider")
+        if set(payload) != {"provider"} or not isinstance(provider, str) or provider not in PROVIDERS:
+            raise HTTPException(422, "Select Excel or PlanSwift to connect it separately. Refresh AURA if needed.")
         workspace_id = identifier(context.workspace_id)
         workspace = await session.get(Workspace, workspace_id)
         pairing_id, secret = str(uuid4()), secrets.token_urlsafe(32)
-        pair = {"subject": context.subject, "secret_hash": fingerprint(secret), "status": "waiting",
+        pair = {"subject": context.subject, "provider": provider, "secret_hash": fingerprint(secret), "status": "waiting",
                 "expires_at": int(time.time()) + PAIR_TTL, "workspace_name": workspace.name if workspace else "AURA workspace"}
         async with cache_connection() as cache:
             count = await cache.incr(f"aura:desktop:pair-limit:{workspace_id}")
@@ -296,7 +309,7 @@ def register_routes(app, tenant_context, tenant_session, resume, dispatch):
                 raise HTTPException(429, "Too many pairing attempts. Wait one minute and retry.")
             await save_pair(cache, workspace_id, pairing_id, pair)
         return {"pairing_id": pairing_id, "code": f"{workspace_id}.{pairing_id}.{secret}",
-                "expires_at": pair["expires_at"], "status": "waiting"}
+                "expires_at": pair["expires_at"], "status": "waiting", "provider": provider}
 
     @app.get(root + "/pairings/{pairing_id}")
     async def pairing_status(pairing_id: str, context=Depends(tenant_context), session=Depends(tenant_session)):
@@ -326,7 +339,8 @@ def register_routes(app, tenant_context, tenant_session, resume, dispatch):
             pair = await load_pair(cache, workspace_id, pairing_id)
             if not hmac.compare_digest(pair["secret_hash"], fingerprint(secret)):
                 raise HTTPException(401, "Invalid pairing code")
-            return {"workspace_name": pair["workspace_name"], "expires_at": pair["expires_at"]}
+            return {"workspace_name": pair["workspace_name"], "expires_at": pair["expires_at"],
+                    "provider": pair["provider"], "pairing_protocol": 2}
 
     @app.post(root + "/pairings/claim")
     async def claim_pairing(request: Request):
@@ -336,11 +350,18 @@ def register_routes(app, tenant_context, tenant_session, resume, dispatch):
         token = payload.get("device_token", "")
         if not isinstance(token, str) or not 32 <= len(token) <= 256:
             raise HTTPException(422, "Invalid desktop identity")
-        applications = applications_status(payload.get("applications"))
         async with cache_connection() as cache, cache.lock("aura:desktop:pair-lock:" + workspace_id, timeout=30, blocking_timeout=3):
             pair = await load_pair(cache, workspace_id, pairing_id)
             if not hmac.compare_digest(pair["secret_hash"], fingerprint(secret)):
                 raise HTTPException(401, "Invalid pairing code")
+            if payload.get("pairing_protocol") != 2:
+                message = "Close the old helper and install the latest AURA Desktop from this Connect screen"
+                if pair["status"] != "verified":
+                    pair.update(status="needs_helper", message=message)
+                    await save_pair(cache, workspace_id, pairing_id, pair)
+                raise HTTPException(409, message)
+            provider = pair["provider"]
+            applications = applications_status(payload.get("applications"), provider)
             if pair["status"] == "verified":
                 if pair.get("device_fingerprint") != fingerprint(instance_id + token):
                     raise HTTPException(409, "This pairing code was already used")
@@ -348,7 +369,7 @@ def register_routes(app, tenant_context, tenant_session, resume, dispatch):
                     await set_tenant_context(session, workspace_id)
                     if not await pair_is_current(session, workspace_id, pairing_id, pair):
                         raise HTTPException(409, "This authorization was replaced or disconnected. Start a new connection.")
-                return {"status": "verified", "workspace_id": workspace_id, "workspace_name": pair["workspace_name"]}
+                return {"status": "verified", "provider": provider, "workspace_id": workspace_id, "workspace_name": pair["workspace_name"]}
             pair["applications"] = applications
             missing = [PROVIDERS[key] for key, value in applications.items() if not value["available"] or not value["version"]]
             if missing:
@@ -357,20 +378,20 @@ def register_routes(app, tenant_context, tenant_session, resume, dispatch):
                 raise HTTPException(409, pair["message"])
             async with SessionLocal() as session:
                 await set_tenant_context(session, workspace_id)
-                tools = await store_connections(session, workspace_id, pair["subject"], pairing_id, instance_id, token, applications)
+                tools = await store_connections(session, workspace_id, pair["subject"], pairing_id, instance_id, token, applications, provider)
                 resumed = []
                 for tool in tools:
                     resumed.extend(await resume(session, SimpleNamespace(workspace_id=workspace_id, subject=pair["subject"], role="owner"), tool))
                     await session.flush()
                 await session.commit()
             pair.update(status="verified", connections=[{"id": tool.id, "provider": tool.slug} for tool in tools],
-                        device_fingerprint=fingerprint(instance_id + token), message="PlanSwift and Excel are connected.")
+                        device_fingerprint=fingerprint(instance_id + token), message=PROVIDERS[provider] + " is connected.")
             await save_pair(cache, workspace_id, pairing_id, pair)
             credentials = {"workspace_id": workspace_id, "instance_id": instance_id, "access_token": token}
             await cache.set(relay_key(credentials) + ":online", "1", ex=30)
         if resumed:
             await dispatch(workspace_id)
-        return {"status": "verified", "workspace_id": workspace_id, "workspace_name": pair["workspace_name"]}
+        return {"status": "verified", "provider": provider, "workspace_id": workspace_id, "workspace_name": pair["workspace_name"]}
 
     @app.post(root + "/devices/{workspace_id}/{instance_id}/poll")
     async def poll_device(workspace_id: str, instance_id: str, request: Request):
@@ -391,10 +412,7 @@ def register_routes(app, tenant_context, tenant_session, resume, dispatch):
                 if not raw:
                     continue
                 command = json.loads(raw)
-                operation = command["operation"]
-                permitted = (operation == "status" or operation in allowed
-                             or (operation == "download" and "excel.estimate.get" in allowed))
-                if command["expires_at"] <= time.time() or not permitted:
+                if command["expires_at"] <= time.time() or not permitted_command(command, allowed):
                     continue
                 if await cache.set(prefix + ":claimed:" + command_id, "1", nx=True, ex=COMMAND_TTL):
                     return {"command": command}
@@ -416,9 +434,7 @@ def register_routes(app, tenant_context, tenant_session, resume, dispatch):
             if not raw or not await cache.get(prefix + ":claimed:" + command_id):
                 raise HTTPException(410, "The command expired; no new work was requested")
             command = json.loads(raw)
-            operation = command["operation"]
-            if (operation != "status" and operation not in allowed
-                    and not (operation == "download" and "excel.estimate.get" in allowed)):
+            if not permitted_command(command, allowed):
                 raise HTTPException(403, "This operation was revoked")
             # Results are immutable. Retrying a lost response cannot replace a receipt.
             await cache.set(prefix + ":result:" + command_id, json.dumps(payload), nx=True, ex=COMMAND_TTL)

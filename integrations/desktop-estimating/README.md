@@ -6,32 +6,39 @@ This connector makes installed PlanSwift and Microsoft Excel available as two co
 
 ## Standard connection (no API key or tunnel)
 
-Use the normal **Connect** action for either desktop app in AURA. This opens the
-shared **Connect your computer** authorization flow, not a workflow-specific page.
+Use the normal **Connect** action for the app you want in AURA. The dialog is named
+**Connect PlanSwift** or **Connect Microsoft Excel (Desktop)** and lists only that
+app’s permissions. Each app can be connected, reconnected and disconnected independently.
 
-1. On the Windows computer with licensed PlanSwift and Excel, download and open
+1. On the Windows computer with the selected licensed app, download and open
    **AURA Desktop** from the connection dialog. Select **Install helper** once.
    The executable includes Python and its dependencies. It registers a per-user
    `aura-estimator:` link handler; no administrator account, service, startup task,
    firewall opening or public workstation address is created. Windows controls
    installation and application-launch permission prompts; do not disable them.
 2. Select **Open AURA Desktop** in AURA. The helper shows the workspace and the
-   exact app permissions before its first authorization. It probes both installed
-   applications and pairs them together. A temporary pairing code is available as
+   selected app’s permissions before its first authorization. It checks and connects
+   only that app; the other app does not need to be installed. A temporary pairing code is available as
    a fallback when opening the helper by link is unavailable. No secret key or
    provider API key is requested from the user.
 3. Keep the helper open while AURA works. Use the existing workflow interface.
    If an app is unavailable, the dialog names it. Each browser attempt ends after
    two minutes and offers retry; closing it invalidates an unclaimed pairing.
-   Reopening the installed helper restores its existing authorized connection.
+   Reopening the installed helper restores its existing authorized connections.
+   To connect the other app later, use its own **Connect** button and approve its
+   permissions. Reuse the helper; no second installation is needed.
 
-Pairing requests expire after ten minutes and are scoped to their workspace and
+Connections created by the earlier combined flow remain valid. New authorizations
+require the updated helper and an explicit app selection; old unclaimed combined
+requests expire. If asked to update, close the old helper before opening the latest
+download and selecting **Install helper**.
+
+Pairing requests expire after ten minutes and are scoped to one app, their workspace and
 initiating administrator. Repeated acknowledgement of the same device claim is
 idempotent; another device cannot reuse it. Device credentials are stored in the
 protected local configuration and AURA's encrypted credential vault. Disconnecting
-an app in AURA revokes its actions on the next request; disconnect both to remove
-the workstation's complete access. Replace a connected workstation only after
-disconnecting the previous one.
+an app in AURA revokes its actions on the next request without disconnecting another
+app. Replace an app’s connected workstation only after disconnecting that app.
 
 The helper makes outbound HTTPS requests to AURA's configured production service.
 AURA queues only the bounded estimating operations below, never shell commands,
@@ -65,14 +72,16 @@ An operator can use Cloudflare Tunnel (https://developers.cloudflare.com/cloudfl
 ## Legacy endpoint connection and workflow inputs
 
 1. Existing legacy installations continue using their saved connection. An administrator integrating the legacy bridge programmatically can use the authenticated `/v1/desktop-estimating/connect` endpoint with its HTTPS address, connection key and selected provider. The normal **Connect** UI now uses computer authorization instead.
-2. Legacy **PlanSwift** and **Microsoft Excel (Desktop)** connections must use the **same** address and key. AURA requires both connections to identify the same workstation. Keep the legacy connector and tunnel running while workflows execute or download files.
+2. Legacy **PlanSwift** and **Microsoft Excel (Desktop)** connections are independent too. Keep the relevant legacy connector and tunnel running while workflows execute or download files. A workflow that combines local takeoff and rate snapshots into an estimate requires them on the same computer; connecting an app by itself does not require the other app.
 3. Start a workflow with both tools selected. Supply the exact open job name, drawing revision, rate-book filename, rate date, currency, material waste, markup and tax rules. Explicitly confirm that measurements have been reviewed. Choose **measurements** or **parts**; never price both scopes together.
 
 Example task (replace all placeholders with real job settings):
 
 > Use connected PlanSwift and Microsoft Excel (Desktop). Read the open job “PROJECT NAME”, drawing revision “REVISION”, using measurements only. I have reviewed the measurements and scope. List the rate books and use “Approved-Rates.xlsx” effective YYYY-MM-DD. Create a draft estimate in USD with 5% material waste, 10% markup, and 0% tax on materials. Read back the saved workbook and show the downloadable Excel estimate. Do not send messages.
 
-The plan should contain these connected operations:
+For the combined estimate, connect both apps on the same computer so their local
+snapshots are available to report creation. Other workflows may use one app alone.
+The combined plan should contain these connected operations:
 
 1. `planswift.job.read` -> takeoff `snapshot_id`.
 2. `excel.ratebooks.list`, then `excel.rates.read` -> rates `snapshot_id`.
@@ -96,7 +105,7 @@ creation. These are references to future provider receipts, never generated IDs.
 Explicit references are preserved. Multiple candidates, optional/conditional reads,
 and missing dependencies are not guessed; normal validation blocks incomplete plans.
 Missing measurement review, prices, project selection and tax rules are never filled
-by this handoff. The existing connection checks still require the same workstation.
+by this handoff. The combined estimate still requires snapshots on the same workstation.
 
 An external OpenAI agent can use this execution route through AURA's orchestration;
 the current ChatGPT MCP pilot only inspects connections and saves disabled drafts.

@@ -20,7 +20,7 @@ def run_operation(config, operation, arguments, adapter=None):
     adapter = adapter or WindowsApps(config)
     store = Store(config["data_folder"])
     if operation == "status":
-        return {"applications": adapter.status()}
+        return {"applications": adapter.status(arguments["providers"]) if arguments.get("providers") else adapter.status()}
     request = DEFINITIONS[operation][1].model_validate(arguments).model_dump(mode="json")
     if operation == "planswift.job.read":
         source, rows = adapter.takeoff(request)

@@ -6,6 +6,7 @@ https://github.com/PlanSwift/sdk-examples-2010/blob/master/VB.Net/Microsoft%20Of
 import time
 
 from estimate_core import MAX_ROWS, digest, number, text
+from estimating_contract import PROVIDERS
 
 
 class WindowsApps:
@@ -15,31 +16,44 @@ class WindowsApps:
             dispatch, dispatch_ex = win32com.client.Dispatch, win32com.client.DispatchEx
         self.dispatch, self.dispatch_ex = dispatch, dispatch_ex
         self.progid = config.get("planswift_progid", "PlanSwift9.PlanSwift")
-        if self.progid not in {"PlanSwift9.PlanSwift", "PlanSwift.PlanSwift12"}:
-            raise ValueError("Select the documented PlanSwift 11 or 12 COM program")
 
-    def status(self):
+    def status(self, providers=None):
+        providers = list(PROVIDERS) if providers is None else providers
+        if not providers or any(provider not in PROVIDERS for provider in providers):
+            raise ValueError("Select a supported desktop app")
         applications = {}
+        if "planswift" in providers:
+            applications["planswift"] = self.planswift_status()
+        if "excel-desktop" in providers:
+            applications["excel-desktop"] = self.excel_status()
+        return applications
+
+    def planswift_status(self):
         try:
+            if self.progid not in {"PlanSwift9.PlanSwift", "PlanSwift.PlanSwift12"}:
+                raise ValueError("Select the documented PlanSwift 11 or 12 COM program")
             ps = self.dispatch(self.progid)
             version = str(ps.CurrentVersion)
             if not bool(ps.IsLoaded):
                 raise ValueError("PlanSwift is not loaded")
-            applications["planswift"] = {"available": True, "version": version}
+            return {"available": True, "version": version}
         except Exception:  # noqa: BLE001 -- COM activation errors must yield an unavailable application probe
-            applications["planswift"] = {"available": False, "version": ""}
+            return {"available": False, "version": ""}
+
+    def excel_status(self):
         excel = None
         try:
             excel = self.dispatch_ex("Excel.Application")
-            applications["excel-desktop"] = {"available": True, "version": str(excel.Version)}
+            return {"available": True, "version": str(excel.Version)}
         except Exception:  # noqa: BLE001 -- COM activation errors must yield an unavailable application probe
-            applications["excel-desktop"] = {"available": False, "version": ""}
+            return {"available": False, "version": ""}
         finally:
             if excel is not None:
                 excel.Quit()
-        return applications
 
     def takeoff(self, request):
+        if self.progid not in {"PlanSwift9.PlanSwift", "PlanSwift.PlanSwift12"}:
+            raise ValueError("Select the documented PlanSwift 11 or 12 COM program")
         ps = self.dispatch(self.progid)
         if not bool(ps.IsJobOpen):
             raise ValueError("Open the intended PlanSwift job first")

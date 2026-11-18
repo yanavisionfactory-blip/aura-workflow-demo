@@ -48,7 +48,7 @@ def catalog():
         "provider": slug, "display_name": name, "canonical_provider": slug,
         "aliases": [name, "Excel" if slug == "excel-desktop" else "Plan Swift"],
         "connection_backend": BACKEND, "connection_strategy": "desktop_bridge",
-        "setup_hint": "Authorize AURA Desktop once", "source": "native",
+        "setup_hint": "Connect this app on your Windows computer", "source": "native",
         "auth_mode": "BEARER", "availability": "available", "connectable": True,
         "capability_count": len(modules(slug)), "categories": ["construction", "estimating"],
         "certification_status": "workstation_test_required",

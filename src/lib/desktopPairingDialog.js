@@ -1,13 +1,19 @@
-// Shared computer authorization; pairing grants stay in memory and expire.
+// Shared component, independent app authorization. Grants stay in memory and expire.
+const APPS = {
+  planswift: { name: "PlanSwift", permissions: "Read existing PlanSwift measurements." },
+  "excel-desktop": { name: "Microsoft Excel (Desktop)", permissions: "Read approved Excel rate books; create and download new Excel estimates." },
+};
 export function desktopPairingDialog(api, session, signal, { waitMs = 120000, pollMs = 2000 } = {}) {
   return new Promise((resolve, reject) => {
+    const app = APPS[session.provider];
+    if (!app) { reject(new Error("Select the app you want to connect.")); return; }
     const dialog = document.createElement("dialog");
     dialog.className = "rounded-2xl border border-white/15 bg-[#151421] p-6 text-white shadow-2xl backdrop:bg-black/70 w-[min(92vw,480px)]";
     dialog.setAttribute("aria-labelledby", "aura-computer-title");
     dialog.innerHTML = `<div class="space-y-4">
-      <h2 id="aura-computer-title" class="text-lg font-semibold">Connect your computer</h2>
-      <p class="text-sm text-white/70">Approve access in AURA Desktop on the Windows computer where your apps are installed. One authorization connects PlanSwift and Excel.</p>
-      <p class="text-xs text-white/60">Access: read existing PlanSwift measurements and approved rates; create and download new Excel estimates.</p>
+      <h2 id="aura-computer-title" class="text-lg font-semibold">Connect ${app.name}</h2>
+      <p class="text-sm text-white/70">Approve access to ${app.name} on your Windows computer. This connects only this app.</p>
+      <p class="text-xs text-white/60">Access: ${app.permissions}</p>
       <a class="block text-sm text-violet-300 underline" href="${import.meta.env?.BASE_URL || "/"}downloads/AURA-Desktop.exe" download>Install AURA Desktop for Windows</a>
       <p class="text-xs text-white/60">Install once. No API key or network setup is needed. Keep the desktop app open while AURA works.</p>
       <p data-status role="status" aria-live="polite" class="text-sm">Preparing authorization…</p>
@@ -42,7 +48,7 @@ export function desktopPairingDialog(api, session, signal, { waitMs = 120000, po
     const failed = (message) => {
       if (closed) return;
       stopAttempt(); cancelGrant();
-      status.textContent = "Not connected yet.";
+      status.textContent = "Connection not verified yet.";
       error.textContent = message; error.hidden = false; retry.hidden = false;
     };
     const start = async () => {
@@ -60,6 +66,7 @@ export function desktopPairingDialog(api, session, signal, { waitMs = 120000, po
           return;
         }
         grant = created;
+        if (grant.provider !== session.provider) throw new Error("The connection request does not match this app. Try again.");
         open.href = "aura-estimator://pair?code=" + encodeURIComponent(grant.code);
         open.hidden = copy.hidden = false;
         const poll = async () => {
@@ -71,12 +78,12 @@ export function desktopPairingDialog(api, session, signal, { waitMs = 120000, po
             }
             if (current.status === "verified") {
               const connection = current.connections?.find((item) => item.provider === session.provider);
-              if (!connection?.id) throw new Error("The requested app was not verified. Retry the connection.");
+              if (!connection?.id || current.connections.length !== 1) throw new Error("The requested app was not verified separately. Retry the connection.");
               cleanup(); resolve({ id: connection.id, status: "verified", connections: current.connections });
               return;
             }
             const remaining = Math.max(0, Math.ceil((until - Date.now()) / 1000));
-            status.textContent = current.message || `Waiting for your Windows computer. Open AURA Desktop and approve access. ${remaining}s remaining.`;
+            status.textContent = current.message || `Waiting for approval to connect ${app.name}. Open AURA Desktop on your Windows computer. ${remaining}s remaining.`;
             timer = setTimeout(poll, pollMs);
           } catch (cause) {
             if (!attempt.signal.aborted && !closed) failed(cause.message || "The connection check failed. Try again.");
