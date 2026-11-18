@@ -443,6 +443,22 @@ def bind_document_report_text(plan) -> None:
         sources = report.arguments.get("sources")
         semantic = [step for step in plan.steps if step.key in _ancestors(report, by_key)
                     and semantic_content_read(step)]
+        # A declared dependency on one verified-content discovery already
+        # identifies the evidence. Fill an omitted binding before schema
+        # validation, without guessing files, selecting between reads, or
+        # replacing an explicit source choice. Execution still waits for the
+        # real read and validates the returned sources.
+        if ("sources" not in report.arguments and len(semantic) == 1
+                and report.dependency_mode == "all_succeeded"
+                and not report.optional and report.condition is None
+                and not semantic[0].consequential and not semantic[0].optional
+                and semantic[0].condition is None
+                and semantic[0].dependency_mode == "all_succeeded"
+                and plan.steps.index(semantic[0]) < plan.steps.index(report)
+                and not any(step.operation in CONTENT_READS
+                            for step in plan.steps if step.key in _ancestors(report, by_key))):
+            report.arguments["sources"] = "{{steps." + semantic[0].key + ".sources}}"
+            continue
         if len(semantic) == 1 and (
             isinstance(sources, str) and referenced_step_keys(sources) == {semantic[0].key}
             or isinstance(sources, list) and sources

@@ -12,7 +12,7 @@ from app.native_connectors import native_manifest
 from app.orchestrator import _normalize_planned_steps, _prepare_provider_arguments
 from app.presentation_sources import SourcePresentationPlanError, validate_source_presentation_plan
 from app.reports import ReportRequest
-from app.schemas import PlanStep, WorkflowPlan
+from app.schemas import PlanStep, StepCondition, WorkflowPlan
 from app.source_contracts import upgrade_capabilities
 
 PROMPT = (
@@ -57,8 +57,11 @@ def test_source_repair_names_invalid_binding_and_verified_coverage(field):
 
 
 @pytest.mark.parametrize("destination", ["google-slides", "canva"])
-def test_exact_customer_request_survives_abridged_planner_arguments(destination):
+@pytest.mark.parametrize("sources_omitted", [False, True])
+def test_exact_customer_request_survives_abridged_planner_arguments(destination, sources_omitted):
     plan = project_plan(destination)
+    if sources_omitted:
+        plan.steps[1].arguments.pop("sources")
     manifests = {"aura": native_manifest("aura"), "canva": native_manifest("canva"),
         "google-drive": {"capabilities": upgrade_capabilities("google-drive", [
             capability("google-drive", drive_materials.OPERATION)])},
@@ -102,6 +105,63 @@ def test_existing_source_contract_upgrades_without_nesting_or_changing_legacy_qu
     assert v1 == before
     assert upgraded[0]["transport"] == original["transport"]
     assert upgraded[0]["permission_scope"] == "read"
+
+
+def test_omitted_report_sources_bind_the_single_declared_content_discovery():
+    from app.native_connectors import normalize_planned_module_arguments
+    from app.presentation_sources import bind_document_report_text
+
+    plan = project_plan("canva")
+    read, report = plan.steps[:2]
+    report.arguments.pop("sources")
+    before = read.model_dump()
+    bind_document_report_text(plan)
+    assert report.arguments["sources"] == "{{steps.discover.sources}}"
+    assert read.model_dump() == before
+    normalize_planned_module_arguments(native_manifest("aura"), "report.compose", report.arguments)
+    snapshot = plan.model_dump()
+    bind_document_report_text(plan)
+    assert plan.model_dump() == snapshot
+
+
+@pytest.mark.parametrize("case", ["ambiguous", "optional", "conditional", "failed_dependency",
+                                 "metadata", "other_content", "later_read", "no_dependency",
+                                 "explicit_empty", "explicit_other"])
+def test_missing_source_repair_never_guesses_or_overrides_evidence(case):
+    from app.presentation_sources import bind_document_report_text
+
+    plan = project_plan("canva")
+    read, report = plan.steps[:2]
+    report.arguments.pop("sources")
+    if case == "ambiguous":
+        second = read.model_copy(deep=True)
+        second.key = "other"
+        plan.steps.insert(1, second)
+        report.depends_on.append(second.key)
+    elif case == "optional":
+        read.optional = True
+    elif case == "conditional":
+        read.condition = StepCondition(left="{{inputs.read_project}}", operator="is_true")
+    elif case == "failed_dependency":
+        report.dependency_mode = "all_settled"
+    elif case == "metadata":
+        read.arguments = {"query": "name = 'Brisa Studio'"}
+    elif case == "other_content":
+        second = read.model_copy(deep=True)
+        second.key, second.operation = "other", "google-docs.get-document"
+        plan.steps.insert(1, second)
+        report.depends_on.append(second.key)
+    elif case == "later_read":
+        plan.steps[0], plan.steps[1] = report, read
+    elif case == "no_dependency":
+        report.depends_on = []
+    elif case == "explicit_empty":
+        report.arguments["sources"] = []
+    else:
+        report.arguments["sources"] = "{{inputs.selected_sources}}"
+    before = report.model_dump()
+    bind_document_report_text(plan)
+    assert report.model_dump() == before
 
 
 async def test_original_request_reaches_every_semantic_stage_without_changing_account(monkeypatch):
