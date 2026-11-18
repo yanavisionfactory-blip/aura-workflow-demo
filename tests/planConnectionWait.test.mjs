@@ -343,3 +343,50 @@ test("a restored blocked plan discovers its dedicated Sheets route and recompile
     container.remove();
   }
 });
+
+test("importing a PlanSwift export from a blocked plan requests a revision, never resumes the native plan", async () => {
+  localStorage.setItem("aura_python_workspace_id", "test-workspace");
+  dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  const revisions = [], resumed = [], requests = [];
+  const app = { display_name: "PlanSwift", provider: "planswift", connection_backend: "desktop_estimating", connectable: true };
+  globalThis.fetch = async (url) => {
+    const route = new URL(url).pathname; requests.push(route);
+    if (route === "/v1/tools") return Response.json([]);
+    if (route === "/v1/managed-connectors/status") return Response.json({ marketplace: [app] });
+    if (route === "/v1/connector-broker/apps") return Response.json({ apps: [app] });
+    if (route === "/v1/document-imports/preview") return Response.json({ row_count: 2, sheets: [{}], warnings: [] });
+    throw new Error(`Unexpected route: ${route}`);
+  };
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  const wait = async (predicate) => {
+    for (let i = 0; i < 100 && !predicate(); i++) await act(async () => new Promise(resolve => setTimeout(resolve, 10)));
+    assert.ok(predicate());
+  };
+  try {
+    await act(async () => root.render(React.createElement(PlanView, {
+      plan: { steps: [], compileState: "waiting_for_connection", connectionRequirements: ["planswift"],
+        connectionChecklist: [{ provider_hint: "planswift", status: "pending", required_permissions: ["planswift.job.read"] }] },
+      onRevisePlan: (...args) => { revisions.push(args); return { ok: true }; },
+      onConnectionRecovered: (...args) => resumed.push(args),
+    })));
+    const button = [...container.querySelectorAll("button")].find(item => /Connect/.test(item.textContent) && !item.disabled);
+    assert.ok(button);
+    await act(async () => button.click());
+    await wait(() => document.querySelector("[data-import]"));
+    const input = document.querySelector("input[type=file]");
+    Object.defineProperty(input, "files", { value: [new dom.window.File(["Item,Quantity,Unit\nWall,12,m2"], "plan-takeoff.csv")] });
+    await act(async () => input.dispatchEvent(new dom.window.Event("change")));
+    await wait(() => !document.querySelector("[data-import]").disabled);
+    await act(async () => document.querySelector("[data-import]").click());
+    assert.equal(revisions.length, 1);
+    assert.match(revisions[0][0], /Replace live PlanSwift reads/);
+    assert.equal(revisions[0][1].importedDocument.name, "plan-takeoff.csv");
+    assert.equal(revisions[0][1].importedDocument.source_kind, "export");
+    assert.deepEqual(resumed, []);
+    assert.ok(!requests.some(route => /pairings|planswift\/session/.test(route)));
+  } finally {
+    await act(async () => root.unmount()); container.remove();
+    document.querySelector("dialog [data-cancel]")?.click();
+  }
+});

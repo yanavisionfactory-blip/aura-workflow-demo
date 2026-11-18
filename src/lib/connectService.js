@@ -3,6 +3,8 @@ import { isVerifiedConnection, matchingConnections, selectConnection } from "@/l
 import { clearAuthorizationNavigation, usesSameTabAuthorization } from "@/lib/connectionNavigation.mjs";
 import { googleAdsAccountDialog } from "@/lib/googleAdsAccountDialog";
 import { connectionTask, CONNECTION_REQUEST_TIMEOUT_MS } from "@/lib/connectionAttempt.mjs";
+import { takeoffImportDialog } from "@/lib/takeoffImportDialog";
+import { attachDocument } from "@/lib/documentStore";
 import {
   authorizeConnectorBroker,
   disconnectPythonConnection,
@@ -11,6 +13,7 @@ import {
   listGoogleAdsAccounts,
   listRedditAdsAccounts,
   pythonRuntimeEnabled,
+  previewTakeoffImport,
   reserveAuthorizationWindow,
   searchConnectorBrokerApps,
   selectGoogleAdsAccount,
@@ -82,6 +85,13 @@ async function connectToolAttempt(toolName, opts) {
       ? hydratedTools?.find((tool) => tool.id === opts.connectionId) : null;
     const knownProvider = knownAccount?.slug || requestedProvider || knownEntry?.provider;
     const knownBackend = knownAccount?.connection_backend || knownRoute?.connectionBackend || knownEntry?.connectionBackend;
+    if (knownProvider === "planswift" && !opts.connectionId) {
+      const choice = await takeoffImportDialog(previewTakeoffImport, opts.signal);
+      if (choice.document) {
+        attachDocument(choice.document);
+        return { connected: false, inputAttached: true, document: choice.document, provider: "planswift" };
+      }
+    }
     if (knownEntry?.connectable && knownProvider && !usesSameTabAuthorization(knownProvider, knownAccount)
       && !["pipedream", "wordpress_plugin", "shopify_client_credentials", "desktop_estimating"].includes(knownBackend)) {
       authorizationWindow = reserveAuthorizationWindow(knownProvider);

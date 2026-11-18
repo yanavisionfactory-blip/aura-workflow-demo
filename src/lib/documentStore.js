@@ -1,3 +1,5 @@
+import { documentInput } from "./takeoffImport.mjs";
+
 const STORAGE_KEY = "aura_attached_documents";
 const listeners = new Set();
 
@@ -35,7 +37,7 @@ export function getAttachedDocuments() {
 export function replaceAttachedDocuments(values) {
   documents = (Array.isArray(values) ? values : [])
     .filter((item) => item?.name && item?.file_url)
-    .map(({ name, file_url, size }) => ({ name, file_url, size }));
+    .map(documentInput);
   publish();
 }
 

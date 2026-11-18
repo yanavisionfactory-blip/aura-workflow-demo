@@ -329,3 +329,15 @@ test("new Docs customers get managed consent while existing Workspace routes rem
   }
 });
 
+
+test("Excel resolves to browser sign-in while explicit desktop access stays separate", () => {
+  replaceToolCatalog({ marketplace: [
+    { provider: "microsoft-excel", display_name: "Microsoft Excel", connectable: true, connection_backend: "pipedream" },
+    { provider: "excel-desktop", display_name: "Microsoft Excel (Desktop)", aliases: ["Excel"], connectable: true, connection_backend: "desktop_estimating" },
+    { provider: "planswift", display_name: "PlanSwift", connectable: true, connection_backend: "desktop_estimating" },
+  ] });
+  for (const name of ["Excel", "Excel Online", "Microsoft Excel"]) assert.equal(catalogEntryFor(name).provider, "microsoft-excel");
+  assert.match(catalogEntryFor("Excel").desc, /browser/);
+  assert.equal(catalogEntryFor("Microsoft Excel (Desktop)").provider, "excel-desktop");
+  assert.match(catalogEntryFor("PlanSwift").desc, /Import/);
+});

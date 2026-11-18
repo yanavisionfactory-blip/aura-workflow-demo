@@ -55,6 +55,11 @@ export default function ResourceComposer({ open, onClose, onAddTool, onAddAgent,
   const select = async (tool) => {
     const { name } = tool;
     if (pinnedTools.includes(name)) return;
+    if (tool.provider === "planswift" && !connections[name]) {
+      const result = await connectOne(tool);
+      if (result?.connected) onAddTool(name);
+      return;
+    }
     onAddTool(name);
     if (!connections[name]) await connectOne(tool);
   };
@@ -64,7 +69,9 @@ export default function ResourceComposer({ open, onClose, onAddTool, onAddAgent,
     setConnecting(name);
     setConnectionError("");
     try {
-      await connectTool(name, { provider: tool.provider });
+      const result = await connectTool(name, { provider: tool.provider });
+      if (result.inputAttached) { onAddDocument?.(result.document); setTab("docs"); }
+      return result;
     } catch (error) {
       setConnectionError(error?.message || `AURA couldn't connect ${name}.`);
     } finally {

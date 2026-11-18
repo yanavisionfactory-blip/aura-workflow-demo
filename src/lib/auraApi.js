@@ -81,6 +81,13 @@ async function request(path, options = {}) {
 
 export const auraRequest = request;
 
+export async function previewTakeoffImport(document, signal) {
+  await ensureWorkspace();
+  return request("/v1/document-imports/preview", {
+    method: "POST", body: JSON.stringify(document), signal, timeoutMs: CONNECTION_REQUEST_TIMEOUT_MS,
+  });
+}
+
 export async function downloadDesktopEstimate(reportId) {
   if (!/^[a-f0-9]{64}$/.test(reportId)) throw new Error("Invalid estimate identifier.");
   await ensureWorkspace();

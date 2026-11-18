@@ -569,6 +569,9 @@ test("desktop tools use the shared computer authorization without key fields or 
     throw new Error(`Unexpected desktop request: ${route}`);
   };
   async function authorizeComputer(pending) {
+    // Fresh Connect offers exported data before the optional native route.
+    for (let i = 0; i < 100 && !document.querySelector("dialog"); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    document.querySelector("[data-desktop]")?.click();
     for (let i = 0; i < 100 && !document.querySelector("[data-start]"); i++) await new Promise((resolve) => setTimeout(resolve, 10));
     assert.ok(document.querySelector("[data-start]"));
     document.querySelector("[data-start]").click();
@@ -589,4 +592,94 @@ test("desktop tools use the shared computer authorization without key fields or 
     globalThis.FormData = original.FormData;
     dom.window.close();
   }
+});
+
+test("PlanSwift export validates before attachment and never contacts desktop pairing", async () => {
+  setup();
+  const dom = new JSDOM("<!doctype html><body></body>", { url: "https://aura.test" });
+  const originalDocument = globalThis.document;
+  globalThis.document = dom.window.document;
+  dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  flow.mergeMarketplaceApps([{ provider: "planswift", display_name: "PlanSwift", connectable: true,
+    connection_backend: "desktop_estimating", availability: "available" }]);
+  const requests = [];
+  globalThis.fetch = async (url, options) => {
+    const route = new URL(url).pathname; requests.push(route);
+    assert.equal(route, "/v1/document-imports/preview");
+    const uploaded = JSON.parse(options.body);
+    assert.equal(uploaded.name, "test-takeoff.csv");
+    assert.match(Buffer.from(uploaded.file_url.split(",")[1], "base64").toString(), /Wall,12.750,m2/);
+    return Response.json({ row_count: 2, sheets: [{ name: "Takeoff", row_count: 2 }], warnings: [] });
+  };
+  const controller = new AbortController();
+  const before = flow.getAllConnections();
+  const wait = async (predicate) => {
+    for (let i = 0; i < 100 && !predicate(); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.ok(predicate());
+  };
+  const pending = flow.connectTool("PlanSwift", { provider: "planswift", signal: controller.signal });
+  try {
+    await wait(() => document.querySelector("[data-import]"));
+    assert.equal(document.querySelector("[data-import]").disabled, true);
+    assert.equal(requests.length, 0, "opening the import screen needs no helper session");
+    const input = document.querySelector("input[type=file]");
+    Object.defineProperty(input, "files", { value: [new dom.window.File(["Item,Quantity,Unit\nWall,12.750,m2\n"], "test-takeoff.csv", { type: "text/csv" })] });
+    input.dispatchEvent(new dom.window.Event("change"));
+    await wait(() => !document.querySelector("[data-import]").disabled);
+    assert.match(document.querySelector("[data-status]").textContent, /2 rows/);
+    assert.equal(flow.getAttachedDocuments().some(doc => doc.name === "test-takeoff.csv"), false);
+    document.querySelector("[data-import]").click();
+    const result = await pending;
+    assert.equal(result.connected, false);
+    assert.equal(result.inputAttached, true);
+    assert.equal(result.document.source_app, "planswift");
+    assert.equal(flow.getAttachedDocuments().find(doc => doc.name === "test-takeoff.csv").source_kind, "export");
+    assert.deepEqual(flow.getAllConnections(), before, "import never grants native access");
+    assert.deepEqual(requests, ["/v1/document-imports/preview"]);
+  } finally {
+    controller.abort(); await pending.catch(() => {});
+    flow.getAttachedDocuments().filter(doc => doc.name === "test-takeoff.csv").forEach(doc => flow.removeDocument(doc.file_url, doc.name));
+    globalThis.document = originalDocument; dom.window.close();
+  }
+});
+
+test("failed takeoff validation keeps import disabled and cancellation prevents late attachment", async () => {
+  const dom = new JSDOM("<!doctype html><body></body>");
+  const originalDocument = globalThis.document;
+  globalThis.document = dom.window.document;
+  dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  let finish;
+  const controller = new AbortController();
+  const pending = flow.takeoffImportDialog(() => new Promise((resolve) => { finish = resolve; }), controller.signal);
+  const rejected = assert.rejects(pending, /cancelled/);
+  try {
+    const input = document.querySelector("input[type=file]");
+    Object.defineProperty(input, "files", { value: [new dom.window.File(["Item,Qty\nWall,2"], "cancelled.csv")] });
+    input.dispatchEvent(new dom.window.Event("change"));
+    for (let i = 0; i < 100 && !finish; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.ok(finish);
+    controller.abort(); await rejected;
+    finish({ row_count: 2, sheets: [{}], warnings: [] });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(document.querySelector("dialog"), null);
+    assert.equal(flow.getAttachedDocuments().some(doc => doc.name === "cancelled.csv"), false);
+  } finally { controller.abort(); globalThis.document = originalDocument; dom.window.close(); }
+});
+
+test("ordinary Excel uses the cloud broker without preparing a Windows helper", async () => {
+  setup();
+  flow.mergeMarketplaceApps([
+    { provider: "microsoft-excel", display_name: "Microsoft Excel", connectable: true, connection_backend: "pipedream", connection_strategy: "oauth" },
+    { provider: "excel-desktop", display_name: "Microsoft Excel (Desktop)", aliases: ["Excel"], connectable: true, connection_backend: "desktop_estimating" },
+  ]);
+  const requests = [];
+  globalThis.fetch = async (url) => {
+    const route = new URL(url).pathname; requests.push(route);
+    if (route === "/v1/tools") return Response.json([]);
+    if (route === "/v1/connector-broker/microsoft-excel/session") return Response.json({ detail: "Test stops at Microsoft consent" }, { status: 409 });
+    throw new Error(`Unexpected route ${route}`);
+  };
+  await assert.rejects(flow.connectTool("Excel"), /Microsoft consent/);
+  assert.ok(requests.includes("/v1/connector-broker/microsoft-excel/session"));
+  assert.ok(!requests.some(route => /desktop|planswift/.test(route)));
 });

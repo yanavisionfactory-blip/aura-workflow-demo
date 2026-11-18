@@ -46,7 +46,7 @@ class ConnectRequest(BaseModel):
 def catalog():
     return [{
         "provider": slug, "display_name": name, "canonical_provider": slug,
-        "aliases": [name, "Excel" if slug == "excel-desktop" else "Plan Swift"],
+        "aliases": [name, "Desktop Excel" if slug == "excel-desktop" else "Plan Swift"],
         "connection_backend": BACKEND, "connection_strategy": "desktop_bridge",
         "setup_hint": "Connect this app on your Windows computer", "source": "native",
         "auth_mode": "BEARER", "availability": "available", "connectable": True,
