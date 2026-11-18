@@ -167,13 +167,13 @@ export default function ConnectionsPill() {
   const count = connectedTools.length + agentCards.length;
   const stacked = [...connectedTools, ...agentCards].slice(0, 4);
 
-  const connect = async (tool) => {
+  const connect = async (tool, inputMode) => {
     if ((isMetaConnection(tool) && !connectionsLoaded) || !tool.connectable
-      || (tool.provider !== "planswift" && (tool.connectionId || (tool.isConnected ?? connected[tool.name])))) return;
+      || (inputMode !== "upload" && (tool.connectionId || (tool.isConnected ?? connected[tool.name])))) return;
     setConnecting(tool.rowKey || tool.name);
     setError("");
     try {
-      const result = await connectTool(tool.name, { provider: tool.provider });
+      const result = await connectTool(tool.name, { provider: tool.provider, inputMode });
       if (result.inputAttached) {
         setImportNotice(`${result.document.name} is ready for your next workflow. This is an imported snapshot, not a live app connection.`);
         setTab("documents");
@@ -415,7 +415,7 @@ export default function ConnectionsPill() {
                     {marketplace.map((tool) => {
                       const isConnected = tool.isConnected ?? Boolean(connected[tool.name]);
                       return (
-                        <div key={tool.rowKey || `${tool.provider}:${tool.name}`} data-connection-row={tool.rowKey} className="flex items-center gap-3 rounded-xl p-2.5 transition-colors hover:bg-white/5">
+                        <div key={tool.rowKey || `${tool.provider}:${tool.name}`} data-connection-row={tool.rowKey} className={`flex items-center gap-3 rounded-xl p-2.5 transition-colors hover:bg-white/5 ${tool.provider === "planswift" ? "flex-wrap" : ""}`}>
                           <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-lg border border-white/8 bg-secondary text-base">
                             {tool.logoUrl ? <img src={tool.logoUrl} alt="" className="h-6 w-6 object-contain" /> : tool.icon}
                           </div>
@@ -423,9 +423,17 @@ export default function ConnectionsPill() {
                             <p className="text-sm font-medium">{tool.displayName || tool.name}</p>
                             <p className="text-xs text-muted-foreground">{tool.desc}</p>
                           </div>
-                          {tool.connectionId || isConnected ? (
+                          {tool.provider === "planswift" && tool.connectable ? (
+                            <div className="flex w-full flex-wrap gap-2 pl-12">
+                              {tool.connectionId || isConnected ? (
+                                <button type="button" onClick={() => openConnectionManager(tool)} className="flex items-center gap-1 rounded-lg border border-white/15 px-3 py-2 text-sm">{isConnected && <Check className="h-4 w-4 text-emerald-400" />}Manage</button>
+                              ) : (
+                                <button type="button" onClick={() => connect(tool)} disabled={Boolean(connecting)} className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"><Link2 className="h-4 w-4" />Connect</button>
+                              )}
+                              <button type="button" onClick={() => connect(tool, "upload")} disabled={Boolean(connecting)} className="flex items-center gap-1.5 rounded-lg border border-white/20 px-3 py-2 text-sm hover:bg-white/5 disabled:opacity-50"><Paperclip className="h-4 w-4" />Upload file</button>
+                            </div>
+                          ) : tool.connectionId || isConnected ? (
                             <div className="flex flex-wrap items-center gap-2">
-                              {tool.provider === "planswift" && <button type="button" onClick={() => connect(tool)} disabled={Boolean(connecting)} className="text-xs text-primary disabled:opacity-50">Use data</button>}
                               <button type="button" onClick={() => openConnectionManager(tool)} className={`flex items-center gap-1 text-xs ${isConnected ? "text-emerald-400" : "text-amber-300"}`}>{isConnected && <Check className="h-3.5 w-3.5" />}Manage</button>
                             </div>
                           ) : tool.requestable && catalogSearchQuery !== query.trim().replace(/\s+/g, " ") ? (
@@ -438,7 +446,7 @@ export default function ConnectionsPill() {
                             </button>
                           ) : tool.connectable ? (
                             <button type="button" onClick={() => connect(tool)} disabled={Boolean(connecting) || (isMetaConnection(tool) && !connectionsLoaded)} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-50">
-                              {connecting === (tool.rowKey || tool.name) ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}{connecting === (tool.rowKey || tool.name) ? "Opening…" : tool.provider === "planswift" ? "Use data" : "Connect"}
+                              {connecting === (tool.rowKey || tool.name) ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}{connecting === (tool.rowKey || tool.name) ? "Opening…" : "Connect"}
                             </button>
                           ) : (
                             <span className="rounded-full border border-amber-400/20 bg-amber-400/5 px-2 py-1 text-[10px] text-amber-300">{tool.availability === "requested" ? "Requested" : "Coming soon"}</span>

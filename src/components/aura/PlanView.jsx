@@ -99,15 +99,15 @@ export default function PlanView({
   const [checkingConnections, setCheckingConnections] = useState(false);
   const checkedRequirementsRef = useRef("");
   const connectingRef = useRef(false);
-  const handleConnect = async (tool) => {
+  const handleConnect = async (tool, inputMode) => {
     const controller = new AbortController();
     connectionAttemptRef.current = controller;
     setConnectingTool(tool.name);
-    setConnectionProgress({ phase: "preparing" });
+    setConnectionProgress({ phase: inputMode === "upload" ? "importing" : "preparing" });
     setConnectionErrors((prev) => ({ ...prev, [tool.key]: "" }));
     try {
       const res = await connectTool(tool.name, {
-        provider: tool.provider, signal: controller.signal,
+        provider: tool.provider, signal: controller.signal, inputMode,
         onProgress: (progress) => {
           if (!controller.signal.aborted && connectionAttemptRef.current === controller) setConnectionProgress(progress);
         },
@@ -533,6 +533,7 @@ Preserve unchanged steps exactly. Only modify what the instruction requires.`,
         onCancel={() => connectionAttemptRef.current?.abort(new Error(CONNECTION_CANCELLED))}
         errors={connectionErrors}
         onConnectAll={handleConnectAll}
+        onUploadFile={onRevisePlan ? (tool) => handleConnect(tool, "upload") : undefined}
         onRecheck={handleRecheck}
         onSkipTool={onSkipTool}
         onReplaceTool={onReplaceTool}

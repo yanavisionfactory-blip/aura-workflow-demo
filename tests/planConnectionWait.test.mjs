@@ -370,7 +370,8 @@ test("importing a PlanSwift export from a blocked plan requests a revision, neve
       onRevisePlan: (...args) => { revisions.push(args); return { ok: true }; },
       onConnectionRecovered: (...args) => resumed.push(args),
     })));
-    const button = [...container.querySelectorAll("button")].find(item => /Connect/.test(item.textContent) && !item.disabled);
+    assert.ok([...container.querySelectorAll("button")].some(item => item.textContent === "Connect PlanSwift" && !item.disabled));
+    const button = [...container.querySelectorAll("button")].find(item => item.textContent === "Upload file" && !item.disabled);
     assert.ok(button);
     await act(async () => button.click());
     await wait(() => document.querySelector("[data-import]"));

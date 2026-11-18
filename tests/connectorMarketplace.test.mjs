@@ -339,5 +339,5 @@ test("Excel resolves to browser sign-in while explicit desktop access stays sepa
   for (const name of ["Excel", "Excel Online", "Microsoft Excel"]) assert.equal(catalogEntryFor(name).provider, "microsoft-excel");
   assert.match(catalogEntryFor("Excel").desc, /browser/);
   assert.equal(catalogEntryFor("Microsoft Excel (Desktop)").provider, "excel-desktop");
-  assert.match(catalogEntryFor("PlanSwift").desc, /Import/);
+  assert.match(catalogEntryFor("PlanSwift").desc, /Connect.*upload/);
 });

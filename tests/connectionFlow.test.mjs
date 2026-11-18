@@ -569,11 +569,9 @@ test("desktop tools use the shared computer authorization without key fields or 
     throw new Error(`Unexpected desktop request: ${route}`);
   };
   async function authorizeComputer(pending) {
-    // Fresh Connect offers exported data before the optional native route.
-    for (let i = 0; i < 100 && !document.querySelector("dialog"); i++) await new Promise((resolve) => setTimeout(resolve, 10));
-    document.querySelector("[data-desktop]")?.click();
     for (let i = 0; i < 100 && !document.querySelector("[data-start]"); i++) await new Promise((resolve) => setTimeout(resolve, 10));
     assert.ok(document.querySelector("[data-start]"));
+    assert.equal(document.querySelector("input[type=file]"), null, "Connect opens installed-app setup directly");
     document.querySelector("[data-start]").click();
     for (let i = 0; i < 100 && !finishStatus; i++) await new Promise((resolve) => setTimeout(resolve, 10));
     assert.ok(document.querySelector("dialog"));
@@ -617,7 +615,7 @@ test("PlanSwift export validates before attachment and never contacts desktop pa
     for (let i = 0; i < 100 && !predicate(); i++) await new Promise((resolve) => setTimeout(resolve, 10));
     assert.ok(predicate());
   };
-  const pending = flow.connectTool("PlanSwift", { provider: "planswift", signal: controller.signal });
+  const pending = flow.connectTool("PlanSwift", { provider: "planswift", inputMode: "upload", signal: controller.signal });
   try {
     await wait(() => document.querySelector("[data-import]"));
     assert.equal(document.querySelector("[data-import]").disabled, true);
