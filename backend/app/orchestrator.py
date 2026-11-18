@@ -586,6 +586,7 @@ async def ensure_aura_intelligence(session, workspace_id: str) -> ToolConnection
 
 def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict], request_prompt: str = "") -> None:
     from .drive_discovery import bind_discovery_report_sources
+    from .estimating_handoff import bind_estimate_receipts
     from .presentation_sources import (
         bind_canva_verification,
         bind_document_report_text,
@@ -600,6 +601,7 @@ def _normalize_planned_steps(plan, manifests_by_slug: dict[str, dict], request_p
         bind_required_worksheet_names,
     )
 
+    bind_estimate_receipts(plan)
     bind_document_search_types(request_prompt, plan)
     bind_presentation_composition(request_prompt, plan, manifests_by_slug)
     bind_presentation_brief(request_prompt, plan)
