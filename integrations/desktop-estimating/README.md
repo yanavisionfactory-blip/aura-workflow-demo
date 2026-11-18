@@ -4,7 +4,54 @@ This connector makes installed PlanSwift and Microsoft Excel available as two co
 
 **It does not install PlanSwift/Office, measure drawings, research or approve prices, change PlanSwift data, or certify measurement completeness.** Drawing calibration, scope and measurement review remain the estimator's responsibility. This first version generates the supplied standard workbook layout; arbitrary customer templates and macros are not supported.
 
-## Install on the estimator's workstation
+## Standard connection (no API key or tunnel)
+
+Use the normal **Connect** action for either desktop app in AURA. This opens the
+shared **Connect your computer** authorization flow, not a workflow-specific page.
+
+1. On the Windows computer with licensed PlanSwift and Excel, download and open
+   **AURA Desktop** from the connection dialog. Select **Install helper** once.
+   The executable includes Python and its dependencies. It registers a per-user
+   `aura-estimator:` link handler; no administrator account, service, startup task,
+   firewall opening or public workstation address is created. Windows controls
+   installation and application-launch permission prompts; do not disable them.
+2. Select **Open AURA Desktop** in AURA. The helper shows the workspace and the
+   exact app permissions before its first authorization. It probes both installed
+   applications and pairs them together. A temporary pairing code is available as
+   a fallback when opening the helper by link is unavailable. No secret key or
+   provider API key is requested from the user.
+3. Keep the helper open while AURA works. Use the existing workflow interface.
+   If an app is unavailable, the dialog names it. Each browser attempt ends after
+   two minutes and offers retry; closing it invalidates an unclaimed pairing.
+   Reopening the installed helper restores its existing authorized connection.
+
+Pairing requests expire after ten minutes and are scoped to their workspace and
+initiating administrator. Repeated acknowledgement of the same device claim is
+idempotent; another device cannot reuse it. Device credentials are stored in the
+protected local configuration and AURA's encrypted credential vault. Disconnecting
+an app in AURA revokes its actions on the next request; disconnect both to remove
+the workstation's complete access. Replace a connected workstation only after
+disconnecting the previous one.
+
+The helper makes outbound HTTPS requests to AURA's configured production service.
+AURA queues only the bounded estimating operations below, never shell commands,
+arbitrary paths or scripts. Commands expire, are claimed at most once and are not
+redelivered after a lost response. The helper retries a completed result without
+repeating the application action. An uncertain write still requires saved-report
+reconciliation. A stopped helper produces an offline error, not an endless wait.
+
+The Windows CI build checks the packaged runtime, GUI and workbook dependencies.
+It does not have licensed PlanSwift or Excel and does not certify the real COM
+workflow. The generated executable is not Authenticode signed; signing requires
+the publisher's signing identity. The source archive remains available for review.
+Validate the installed apps using the acceptance checklist below before production
+reliance. Approved rates still belong in `Data/Rates/Approved-Rates.xlsx` beneath
+`%LOCALAPPDATA%/AURA/EstimatingConnector`.
+
+## Advanced: existing HTTPS bridge installation
+
+The original manual endpoint API remains supported for installations that already
+use an organization-managed tunnel. It is not the standard Connect flow.
 
 1. Use a supported Windows workstation with licensed PlanSwift and desktop Excel. Install Python 3.12 from https://www.python.org/downloads/windows/ if needed. PlanSwift 12 requires a 64-bit client and its own registered COM program. Do not install this as a Windows service or on a server/Remote Desktop host: it runs in the signed-in user's desktop session.
 2. Extract the complete AURA connector ZIP into a local folder. Inspect the files and run `./install.ps1 -PlanSwiftVersion 11` in PowerShell (use `12` only for PlanSwift 12). Follow your organization's PowerShell execution policy; the installer does not weaken it. Dependencies are installed in a private virtual environment. No service, startup task, firewall rule or public endpoint is created.
@@ -15,7 +62,7 @@ This connector makes installed PlanSwift and Microsoft Excel available as two co
 
 An operator can use Cloudflare Tunnel (https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) or an equivalent approved service. A temporary developer tunnel is started with `cloudflared tunnel --url http://127.0.0.1:8765` after installing the official client. Its random HTTPS address changes on restart: reconnect both AURA tools when it changes. Use a stable named tunnel for a continuing pilot. AURA does not create or pay for a tunnel account.
 
-## Connect and run in AURA
+## Legacy endpoint connection and workflow inputs
 
 1. In **My Workspace**, search for **PlanSwift**, click **Connect**, and enter the connector's HTTPS address and connection key. AURA probes the actual application and stores the key encrypted.
 2. Connect **Microsoft Excel (Desktop)** with the **same** address and key. AURA requires both connections to identify the same workstation. Keep the connector and tunnel running while workflows execute or download files.

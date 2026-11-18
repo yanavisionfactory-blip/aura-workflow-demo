@@ -11,7 +11,7 @@ New-Item -ItemType Directory -Force -Path $DataFolder | Out-Null
 $CurrentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 & icacls $InstallFolder /inheritance:r /grant:r "${CurrentIdentity}:(OI)(CI)F" "SYSTEM:(OI)(CI)F" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "Could not restrict connector files to this Windows account." }
-foreach ($File in @("aura_estimator.py", "windows_apps.py", "estimate_core.py", "estimating_contract.py", "requirements.txt", "setup_rates.py", "README.md")) {
+foreach ($File in @("aura_estimator.py", "desktop_app.py", "desktop_client.py", "windows_apps.py", "estimate_core.py", "estimating_contract.py", "requirements.txt", "setup_rates.py", "README.md")) {
     Copy-Item (Join-Path $PSScriptRoot $File) (Join-Path $InstallFolder $File) -Force
 }
 & py -3.12 -m venv (Join-Path $InstallFolder ".venv")

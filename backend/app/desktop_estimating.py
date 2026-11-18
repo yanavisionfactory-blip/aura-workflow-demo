@@ -48,7 +48,7 @@ def catalog():
         "provider": slug, "display_name": name, "canonical_provider": slug,
         "aliases": [name, "Excel" if slug == "excel-desktop" else "Plan Swift"],
         "connection_backend": BACKEND, "connection_strategy": "desktop_bridge",
-        "setup_hint": "Connect your Windows workstation", "source": "native",
+        "setup_hint": "Authorize AURA Desktop once", "source": "native",
         "auth_mode": "BEARER", "availability": "available", "connectable": True,
         "capability_count": len(modules(slug)), "categories": ["construction", "estimating"],
         "certification_status": "workstation_test_required",
@@ -72,6 +72,9 @@ def planning_catalog(connected_slugs):
 
 
 async def _request(credentials, path, *, payload=None, timeout=30, binary=False):
+    if credentials.get("transport") == "outbound":
+        from .desktop_pairing import relay_request
+        return await relay_request(credentials, path, payload=payload, timeout=timeout, binary=binary)
     endpoint = normalize_endpoint(str(credentials.get("endpoint") or ""))
     validate_public_endpoint(endpoint)
     token = credentials.get("access_token")

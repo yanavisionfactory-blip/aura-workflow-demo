@@ -1,0 +1,46 @@
+name: Build AURA Desktop
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: x64
+      - name: Install helper build dependencies
+        run: python -m pip install -r integrations/desktop-estimating/requirements.txt pyinstaller==6.16.0
+      - name: Build self-contained Windows helper
+        shell: pwsh
+        run: |
+          Copy-Item backend/app/estimating_contract.py integrations/desktop-estimating/estimating_contract.py
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name AURA-Desktop --paths integrations/desktop-estimating --hidden-import win32timezone --collect-submodules win32com integrations/desktop-estimating/desktop_app.py
+          if ($LASTEXITCODE -ne 0) { throw "Desktop build failed" }
+      - name: Verify packaged Python, COM, GUI and workbook support
+        shell: pwsh
+        run: |
+          $check = Start-Process -FilePath dist/AURA-Desktop.exe -ArgumentList '--self-test' -Wait -PassThru
+          if ($check.ExitCode -ne 0) {
+            if (Test-Path desktop-selftest-error.txt) { Get-Content desktop-selftest-error.txt }
+            throw "Packaged desktop self-test failed"
+          }
+          $checksum = (Get-FileHash dist/AURA-Desktop.exe -Algorithm SHA256).Hash.ToLower()
+          "$checksum  AURA-Desktop.exe" | Set-Content -Encoding ascii dist/AURA-Desktop.sha256
+          "${{ github.sha }}" | Set-Content -Encoding ascii dist/AURA-Desktop.version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aura-desktop-windows
+          path: |
+            dist/AURA-Desktop.exe
+            dist/AURA-Desktop.sha256
+            dist/AURA-Desktop.version
+          if-no-files-found: error
