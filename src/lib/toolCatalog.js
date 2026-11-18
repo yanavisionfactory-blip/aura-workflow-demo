@@ -82,7 +82,7 @@ export const MARKETPLACE = [...NATIVE_FALLBACK];
 
 function description(item) {
   if (item.provider === "microsoft-excel" && item.connectable) return "Sign in with Microsoft in your browser · No installation";
-  if (item.provider === "planswift" && item.connectable) return "Import an Excel or CSV export in your browser · Optional desktop access";
+  if (item.provider === "planswift" && item.connectable) return "Connect the installed app or upload an Excel / CSV export";
   if (item.provider === "excel-desktop" && item.connectable) return "Advanced · Local Windows workbooks via AURA Desktop";
   if (canonicalProvider(item.provider) === "openai") {
     return "Connect with an OpenAI API key. ChatGPT sign-in and conversation history are not connected.";

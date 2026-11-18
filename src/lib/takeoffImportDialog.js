@@ -7,7 +7,7 @@ export function takeoffImportDialog(preview, signal) {
     dialog.className = "rounded-2xl border border-white/15 bg-[#151421] p-6 text-white shadow-2xl backdrop:bg-black/70 w-[min(92vw,500px)] max-h-[90dvh] overflow-y-auto [&_[hidden]]:!hidden";
     dialog.setAttribute("aria-labelledby", "aura-takeoff-title");
     dialog.innerHTML = `<div class="space-y-4">
-      <h2 id="aura-takeoff-title" class="text-xl font-semibold">Use PlanSwift data</h2>
+      <h2 id="aura-takeoff-title" class="text-xl font-semibold">Upload PlanSwift file</h2>
       <p class="text-base text-white/80">Import an Excel or CSV export from PlanSwift. Works in your browser on any device, with no AURA Desktop installation.</p>
       <p class="text-sm text-white/65">Export your takeoff from PlanSwift, then choose the .xlsx or .csv file. Include item names, quantities and units. Connect Excel separately to use an online rate book.</p>
       <label class="block text-sm font-medium" for="aura-takeoff-file">PlanSwift export</label>
@@ -16,10 +16,6 @@ export function takeoffImportDialog(preview, signal) {
       <p data-error role="alert" class="text-sm text-red-300" hidden></p>
       <button data-import type="button" disabled class="w-full rounded-lg bg-violet-500 px-4 py-3 font-medium disabled:opacity-40">Use this export</button>
       <p class="text-sm text-white/65">This imports a snapshot. It does not connect the installed app or create new measurements. Upload a new export when the takeoff changes.</p>
-      <details class="border-t border-white/15 pt-3"><summary class="cursor-pointer text-sm text-white/75">Need access to the installed app?</summary>
-        <p class="my-3 text-sm text-white/65">Live access requires PlanSwift and AURA Desktop on Windows.</p>
-        <button data-desktop type="button" class="rounded-lg border border-white/25 px-4 py-2 text-sm">Connect installed PlanSwift</button>
-      </details>
       <button data-cancel type="button" class="text-sm text-white/75 underline">Cancel</button>
     </div>`;
     const input = dialog.querySelector("input");
@@ -67,7 +63,6 @@ export function takeoffImportDialog(preview, signal) {
       if (limit) { error.textContent = limit; error.hidden = false; return; }
       finish({ document: selected });
     });
-    dialog.querySelector("[data-desktop]").addEventListener("click", () => finish({ desktop: true }));
     dialog.querySelector("[data-cancel]").addEventListener("click", abort);
     dialog.addEventListener("cancel", (event) => { event.preventDefault(); abort(); });
     signal?.addEventListener("abort", abort, { once: true });

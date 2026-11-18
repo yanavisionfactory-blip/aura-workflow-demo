@@ -85,7 +85,7 @@ async function connectToolAttempt(toolName, opts) {
       ? hydratedTools?.find((tool) => tool.id === opts.connectionId) : null;
     const knownProvider = knownAccount?.slug || requestedProvider || knownEntry?.provider;
     const knownBackend = knownAccount?.connection_backend || knownRoute?.connectionBackend || knownEntry?.connectionBackend;
-    if (knownProvider === "planswift" && !opts.connectionId) {
+    if (knownProvider === "planswift" && opts.inputMode === "upload" && !opts.connectionId) {
       const choice = await takeoffImportDialog(previewTakeoffImport, opts.signal);
       if (choice.document) {
         attachDocument(choice.document);

@@ -64,12 +64,12 @@ export default function ResourceComposer({ open, onClose, onAddTool, onAddAgent,
     if (!connections[name]) await connectOne(tool);
   };
 
-  const connectOne = async (tool) => {
+  const connectOne = async (tool, inputMode) => {
     const { name } = tool;
     setConnecting(name);
     setConnectionError("");
     try {
-      const result = await connectTool(name, { provider: tool.provider });
+      const result = await connectTool(name, { provider: tool.provider, inputMode });
       if (result.inputAttached) { onAddDocument?.(result.document); setTab("docs"); }
       return result;
     } catch (error) {
@@ -132,7 +132,7 @@ export default function ResourceComposer({ open, onClose, onAddTool, onAddAgent,
                   const isPinned = pinnedTools.includes(t.name);
                   const isConnecting = connecting === t.name;
                   return (
-                    <div key={t.name} className="flex items-center gap-2 p-1.5 rounded-lg hover:bg-white/5 transition-colors">
+                    <div key={t.name} className={`flex items-center gap-2 p-1.5 rounded-lg hover:bg-white/5 transition-colors ${t.provider === "planswift" ? "flex-wrap" : ""}`}>
                       <div className="w-7 h-7 rounded-lg bg-secondary border border-white/8 flex items-center justify-center text-sm shrink-0">
                         {t.icon}
                       </div>
@@ -140,7 +140,9 @@ export default function ResourceComposer({ open, onClose, onAddTool, onAddAgent,
                         <p className="text-[11px] font-medium truncate">{t.name}</p>
                         <p className="text-[10px] text-muted-foreground/70 truncate">{t.desc}</p>
                       </div>
-                      <div className="flex items-center gap-1 shrink-0">
+                      <div className={`flex items-center gap-1 shrink-0 ${t.provider === "planswift" ? "w-full flex-wrap pl-9" : ""}`}>
+                        {t.provider === "planswift" && <button type="button" onClick={() => connectOne(t, "upload")}
+                          disabled={Boolean(connecting)} className="order-last rounded-lg border border-white/20 px-3 py-2 text-sm hover:bg-white/5 disabled:opacity-50">Upload file</button>}
                         {isPinned ? (
                           <>
                             <span className="flex items-center gap-1 text-[10px] text-emerald-400 pr-0.5">
@@ -149,8 +151,8 @@ export default function ResourceComposer({ open, onClose, onAddTool, onAddAgent,
                             {!isConnected && (
                               <button
                                 onClick={() => connectOne(t)}
-                                disabled={isConnecting}
-                                className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-md text-amber-400 hover:bg-amber-400/10 transition-colors"
+                                disabled={Boolean(connecting)}
+                                className={`flex items-center gap-1 rounded-md text-amber-400 hover:bg-amber-400/10 transition-colors ${t.provider === "planswift" ? "text-sm px-3 py-2" : "text-[10px] px-2 py-1"}`}
                               >
                                 {isConnecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
                                 {isConnecting ? "Connecting…" : "Connect"}
@@ -160,8 +162,8 @@ export default function ResourceComposer({ open, onClose, onAddTool, onAddAgent,
                         ) : (
                           <button
                             onClick={() => select(t)}
-                            disabled={isConnecting}
-                            className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-md text-primary hover:bg-primary/10 transition-colors shrink-0"
+                            disabled={Boolean(connecting)}
+                            className={`flex items-center gap-1 rounded-md text-primary hover:bg-primary/10 transition-colors shrink-0 ${t.provider === "planswift" ? "text-sm px-3 py-2" : "text-[10px] px-2 py-1"}`}
                           >
                             {isConnecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
                             {isConnecting ? "Connecting…" : isConnected ? "Select" : "Connect"}

@@ -46,6 +46,7 @@ export default function PlanConnectionAlert({
   onCancel,
   errors = {},
   onConnectAll,
+  onUploadFile,
   onRecheck,
   onSkipTool,
   onReplaceTool,
@@ -94,7 +95,8 @@ export default function PlanConnectionAlert({
             ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
             : <Plus className="w-3.5 h-3.5" />}
           {isConnecting
-            ? progress?.phase === "replanning" ? "Updating your plan…"
+            ? progress?.phase === "importing" ? "Uploading PlanSwift file…"
+              : progress?.phase === "replanning" ? "Updating your plan…"
               : progress?.phase === "waiting" ? `Waiting for ${connectingTool} sign-in…`
               : progress?.phase === "retrying" ? "Retrying connection check…"
               : progress?.phase === "verifying" ? `Verifying ${connectingTool} access…`
@@ -109,7 +111,8 @@ export default function PlanConnectionAlert({
         </button>
         {isConnecting && progress && <div className="mt-3 text-xs">
           <p role="status" aria-live="polite" className="text-muted-foreground">
-            {progress.phase === "replanning" ? "Rebuilding the plan for your selected connection. Nothing will run before review."
+            {progress.phase === "importing" ? "Choose your export. AURA will prepare a revised plan for review."
+              : progress.phase === "replanning" ? "Rebuilding the plan for your selected connection. Nothing will run before review."
               : progress.phase === "waiting"
               ? progress.focus ? "Finish signing in and approving access in the window AURA opened."
                 : "Finish signing in and approving access in the connection form."
@@ -152,6 +155,12 @@ export default function PlanConnectionAlert({
                   <p className="text-[11px] text-muted-foreground/70 mt-0.5 leading-relaxed">{cap(t.reason)}.</p>
                 )}
                 {error && <p className="mt-1 text-[11px] leading-relaxed text-red-300">{error}</p>}
+                {!connected && t.provider === "planswift" && onUploadFile && (
+                  <button type="button" onClick={() => onUploadFile(t)} disabled={isConnecting || !connectionEnabled}
+                    className="mt-2 rounded-lg border border-white/20 px-3 py-2 text-sm hover:bg-white/5 disabled:opacity-50">
+                    Upload file
+                  </button>
+                )}
                 {!connected && t.alternativeProvider && onSwitchConnection && (
                   <div className="mt-2 rounded-lg border border-primary/25 bg-primary/5 p-2.5">
                     <p className="text-[11px] leading-relaxed text-muted-foreground">
