@@ -1,5 +1,6 @@
 import base64
 import io
+import zipfile
 from unittest.mock import AsyncMock
 
 import httpx
@@ -67,6 +68,33 @@ def test_uncalculated_xlsx_formula_cannot_become_an_invented_quantity():
 def test_workbook_errors_are_reported():
     with pytest.raises(ValueError, match="Excel error"):
         parse_export(document(workbook([["Item", "Quantity"], ["Wall", "#DIV/0!"]]), "errors.xlsx"))
+
+
+def rewrite_sheet(raw, before, after):
+    stream = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(raw)) as source, zipfile.ZipFile(stream, "w") as target:
+        for info in source.infolist():
+            content = source.read(info.filename)
+            if info.filename == "xl/worksheets/sheet1.xml":
+                assert before in content
+                content = content.replace(before, after)
+            target.writestr(info.filename, content)
+    return stream.getvalue()
+
+
+def test_saved_formula_results_are_imported_with_a_snapshot_warning():
+    raw = workbook([["Item", "Quantity"], ["Wall", "=2*3"]])
+    raw = rewrite_sheet(raw, b"<f>2*3</f><v></v>", b"<f>2*3</f><v>6</v>")
+    parsed = parse_export(document(raw, "cached.xlsx"))
+    assert parsed["sheets"][0]["rows"][1][1] == "6"
+    assert any("does not recalculate" in warning for warning in parsed["warnings"])
+
+
+@pytest.mark.parametrize("value", [b"NaN", b"Infinity", b"not-a-number"])
+def test_malformed_numeric_cells_cannot_silently_become_quantities(value):
+    raw = rewrite_sheet(workbook([["Item", "Quantity"], ["Wall", 6]]), b"<v>6</v>", b"<v>" + value + b"</v>")
+    with pytest.raises(ValueError, match="invalid number"):
+        parse_export(document(raw, "bad-number.xlsx"))
 
 
 def test_planning_receives_verified_bytes_and_provenance_not_client_preview():

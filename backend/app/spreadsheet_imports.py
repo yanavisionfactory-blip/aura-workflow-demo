@@ -8,6 +8,7 @@ import json
 import posixpath
 import re
 import zipfile
+from decimal import Decimal, InvalidOperation
 from xml.etree import ElementTree as ET
 
 MAX_TEXT = 40_000
@@ -70,12 +71,21 @@ def _xlsx(raw):
                     if kind == "e":
                         raise ValueError("A worksheet contains an Excel error. Fix the error before importing.")
                     if kind == "s":
+                        if not value.isdecimal() or int(value) >= len(strings):
+                            raise ValueError("A workbook text reference is invalid. Export the file again.")
                         value = strings[int(value)]
                     elif kind == "inlineStr":
                         inline = cell.find(f"{NS}is")
                         if inline is None:
                             raise ValueError("A workbook text cell is incomplete. Export the file again.")
                         value = "".join(node.text or "" for node in inline.iter(f"{NS}t"))
+                    elif kind in {None, "n"} and value:
+                        try:
+                            valid_number = Decimal(value).is_finite()
+                        except InvalidOperation:
+                            valid_number = False
+                        if not valid_number:
+                            raise ValueError("A workbook contains an invalid number. Fix it before importing.")
                     values.extend([""] * (column - len(values) - 1))
                     values.append(value)
                 if any(values):
