@@ -131,7 +131,10 @@ def source_presentation_requirements(prompt: str) -> list[str]:
         ".scope_folders, .unsupported_files, .limitations or the whole discovery receipt. "
         "For google-slides.create-presentation, pass presentation={{steps.compose.presentation}} "
         "when offered. The title-only variant is a blank shell, not a content write. Verify with "
-        "google-slides.get-presentation using the actual presentationId returned."),
+        "google-slides.get-presentation using the actual presentationId returned by Google Slides. "
+        "A Canva import returns Canva design IDs, never Google Slides presentation IDs. Read Canva "
+        "designs with canva.design.get and inspect their Canva PDF export; do not request Google "
+        "Slides access to verify a Canva design."),
         ("When a folder is requested, resolve it using real discovery reads. For a supplied parent / child "
         "path, find the parent and list its children by parent ID and exact child name; do not "
         "search for the whole slash-separated path as one folder name. Preserve Unicode names. "
@@ -171,6 +174,49 @@ def source_presentation_requirements(prompt: str) -> list[str]:
     ]
 
 
+def _bind_canva_metadata_reader(plan, available):
+    """Keep an unconsumed metadata read with the provider that owns its ID."""
+    by_key = {step.key: step for step in plan.steps}
+    for read in plan.steps:
+        if read.operation not in {"google-slides.get-presentation", "slides.get"}:
+            continue
+        references = referenced_step_keys(read.arguments)
+        canva_sources = [by_key[key] for key in references if key in by_key
+                         and by_key[key].tool_slug == "canva"]
+        if not canva_sources:
+            continue
+        source = canva_sources[0]
+        identity = next(iter(read.arguments.values()), None)
+        safe = (
+            len(canva_sources) == len(references) == 1
+            and source.operation == "canva.import.get"
+            and source.key in read.depends_on and plan.steps.index(source) < plan.steps.index(read)
+            and not source.optional and source.condition is None
+            and source.dependency_mode == "all_succeeded"
+            and set(read.arguments) in ({"presentationId"}, {"presentation_id"})
+            and isinstance(identity, str) and re.fullmatch(r"\{\{\s*steps\.[^{}]+\s*\}\}", identity)
+            and not read.consequential and not read.optional and read.condition is None
+            and read.dependency_mode == "all_succeeded" and not read.output_variables
+            and not read.required_evidence and not read.fallback_tool_slug and not read.fallback_operation
+            and read.reduced_scope_arguments is None
+            and "canva.design.get" in available.get("canva", set())
+            and not any(read.key in other.depends_on or read.key in referenced_step_keys(other.arguments)
+                        for other in plan.steps if other is not read)
+            and not (plan.result_contract and any(
+                metric.step_key == read.key for metric in plan.result_contract.metric_sources))
+        )
+        if not safe:
+            raise SourcePresentationPlanError(
+                "Google Slides cannot read a Canva design ID. Verify the saved Canva design with "
+                "Canva metadata/export reads and PDF inspection. Preserve the existing design, "
+                "update any dependent references, and do not add Google Slides access or recreate it."
+            )
+        read.tool_slug, read.operation = "canva", "canva.design.get"
+        read.arguments = {"design_id": "{{steps." + source.key + ".job.result.designs[0].id}}"}
+        read.reason = "Read the saved Canva design using its Canva identity."
+        read.expected_output = "Saved Canva design metadata."
+
+
 def bind_canva_verification(plan, manifests, request_prompt=""):
     """Complete a draft's native Canva verification path before approval.
 
@@ -184,6 +230,7 @@ def bind_canva_verification(plan, manifests, request_prompt=""):
         return
     available = {slug: {cap.get("name") for cap in manifest.get("capabilities", [])}
                  for slug, manifest in manifests.items()}
+    _bind_canva_metadata_reader(plan, available)
     if "intelligence.presentation.review" not in available.get("aura", set()):
         return
     by_key = {step.key: step for step in plan.steps}
