@@ -184,6 +184,11 @@ class ToolView(BaseModel):
     allowed_operations: list[str]
 
 
+class TakeoffImportPreview(BaseModel):
+    name: str = Field(min_length=1, max_length=500)
+    file_url: str = Field(min_length=1, max_length=14_000_000)
+
+
 class RunCreate(BaseModel):
     prompt: str = Field(min_length=3, max_length=20_000)
     workflow_id: str | None = None
@@ -212,6 +217,9 @@ class RunCreate(BaseModel):
                 encoded_size += len(file_url)
             if encoded_size > 16_000_000:
                 raise ValueError("Attached document content exceeds the per-run limit")
+        from .spreadsheet_imports import validate_exports
+
+        validate_exports(self.inputs)
         return self
 
 

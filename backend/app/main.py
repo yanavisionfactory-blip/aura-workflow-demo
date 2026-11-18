@@ -206,6 +206,7 @@ from .schemas import (
     ResumeDecision,
     RunCreate,
     RunPreflightRequest,
+    TakeoffImportPreview,
     ToolOutputReviewDecision,
     TrustSignalUpdate,
     WebhookReplayRequest,
@@ -2687,6 +2688,22 @@ async def _activate_pipedream_account_family(
         activated.append(tool)
     requested_tool = next(item for item in activated if item.slug == requested_pack.provider_slug)
     return requested_tool, activated, sorted(resumed)
+
+
+@app.post("/v1/document-imports/preview")
+def preview_takeoff_import(
+    payload: TakeoffImportPreview,
+    context: TenantContext = Depends(tenant_context),
+) -> dict:
+    from .spreadsheet_imports import parse_export
+
+    try:
+        parsed = parse_export(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"sha256": parsed["sha256"], "row_count": parsed["row_count"],
+            "sheets": [{"name": item["name"], "row_count": len(item["rows"])} for item in parsed["sheets"]],
+            "warnings": parsed["warnings"]}
 
 
 @app.post("/v1/connector-broker/{provider}/session", status_code=201)

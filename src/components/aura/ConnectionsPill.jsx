@@ -60,6 +60,7 @@ export default function ConnectionsPill() {
   const [query, setQuery] = useState(appPreset?.query || "");
   const [catalogRevision, setCatalogRevision] = useState(0);
   const [connecting, setConnecting] = useState(null);
+  const [importNotice, setImportNotice] = useState("");
   const [requesting, setRequesting] = useState(null);
   const [searchingCatalog, setSearchingCatalog] = useState(false);
   const [catalogSearchQuery, setCatalogSearchQuery] = useState("");
@@ -167,11 +168,17 @@ export default function ConnectionsPill() {
   const stacked = [...connectedTools, ...agentCards].slice(0, 4);
 
   const connect = async (tool) => {
-    if ((isMetaConnection(tool) && !connectionsLoaded) || !tool.connectable || tool.connectionId || (tool.isConnected ?? connected[tool.name])) return;
+    if ((isMetaConnection(tool) && !connectionsLoaded) || !tool.connectable
+      || (tool.provider !== "planswift" && (tool.connectionId || (tool.isConnected ?? connected[tool.name])))) return;
     setConnecting(tool.rowKey || tool.name);
     setError("");
     try {
       const result = await connectTool(tool.name, { provider: tool.provider });
+      if (result.inputAttached) {
+        setImportNotice(`${result.document.name} is ready for your next workflow. This is an imported snapshot, not a live app connection.`);
+        setTab("documents");
+        return;
+      }
       if (result.authorizationStarted) return;
       if (["google-ads", "reddit-ads"].includes(result.connection?.slug)) {
         setManagedConnection({ ...result.connection, uiName: tool.name });
@@ -388,6 +395,7 @@ export default function ConnectionsPill() {
               </div>
 
               {error && <p className="mx-5 mt-3 rounded-lg border border-red-400/20 bg-red-400/5 p-2 text-xs text-red-400">{error}</p>}
+              {importNotice && documents.some((doc) => doc.source_app === "planswift") && <p role="status" className="mx-5 mt-3 rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm">{importNotice}</p>}
               {appPreset && <p role="status" className="mx-5 mt-3 rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-muted-foreground">{appPreset.message}</p>}
 
               {tab === "apps" ? (
@@ -416,7 +424,10 @@ export default function ConnectionsPill() {
                             <p className="text-xs text-muted-foreground">{tool.desc}</p>
                           </div>
                           {tool.connectionId || isConnected ? (
-                            <button type="button" onClick={() => openConnectionManager(tool)} className={`flex items-center gap-1 text-xs ${isConnected ? "text-emerald-400" : "text-amber-300"}`}>{isConnected && <Check className="h-3.5 w-3.5" />}Manage</button>
+                            <div className="flex flex-wrap items-center gap-2">
+                              {tool.provider === "planswift" && <button type="button" onClick={() => connect(tool)} disabled={Boolean(connecting)} className="text-xs text-primary disabled:opacity-50">Use data</button>}
+                              <button type="button" onClick={() => openConnectionManager(tool)} className={`flex items-center gap-1 text-xs ${isConnected ? "text-emerald-400" : "text-amber-300"}`}>{isConnected && <Check className="h-3.5 w-3.5" />}Manage</button>
+                            </div>
                           ) : tool.requestable && catalogSearchQuery !== query.trim().replace(/\s+/g, " ") ? (
                             searchingCatalog
                               ? <span className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />Searching…</span>
@@ -427,7 +438,7 @@ export default function ConnectionsPill() {
                             </button>
                           ) : tool.connectable ? (
                             <button type="button" onClick={() => connect(tool)} disabled={Boolean(connecting) || (isMetaConnection(tool) && !connectionsLoaded)} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-50">
-                              {connecting === (tool.rowKey || tool.name) ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}{connecting === (tool.rowKey || tool.name) ? "Opening…" : "Connect"}
+                              {connecting === (tool.rowKey || tool.name) ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}{connecting === (tool.rowKey || tool.name) ? "Opening…" : tool.provider === "planswift" ? "Use data" : "Connect"}
                             </button>
                           ) : (
                             <span className="rounded-full border border-amber-400/20 bg-amber-400/5 px-2 py-1 text-[10px] text-amber-300">{tool.availability === "requested" ? "Requested" : "Coming soon"}</span>

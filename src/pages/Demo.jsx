@@ -22,6 +22,7 @@ import { connectTool } from "@/lib/connectService";
 import { catalogEntryFor } from "@/lib/toolCatalog";
 import { reconcileToolOmissions } from "@/lib/toolOmissions.mjs";
 import { attachedDocumentsFromRun } from "@/lib/runAttachments.mjs";
+import { documentInput, inputRoutes } from "@/lib/takeoffImport.mjs";
 import { replaceAttachedDocuments } from "@/lib/documentStore";
 import { announceWorkflowHistoryChanged } from "@/lib/workflowHistory.mjs";
 import {
@@ -758,9 +759,8 @@ Write ONE clear, conversational sentence restating what they want — but offer 
             excluded_tool_families: excludedFamilies,
             connection_routes: connectionRoutes,
             saved_workflow_id: currentWorkflowIdRef.current,
-            attached_documents: (resources.documents || []).map(({ name, file_url, size }) => ({
-              name, file_url, size,
-            })),
+            attached_documents: (resources.documents || []).map(documentInput),
+            input_routes: inputRoutes(resources.documents, selectedTools),
           });
           if (generation !== pythonPollGenerationRef.current) {
             if (requestKey !== runRequestKeyRef.current) {
@@ -822,7 +822,17 @@ Write ONE clear, conversational sentence restating what they want — but offer 
   reviewedPlanRef.current = plan;
 
   const handlePlanRevision = useCallback(
-    (instruction, options) => handleConfirm(interpretation, instruction, options),
+    (instruction, options = {}) => {
+      if (options.importedDocument) {
+        const resources = attachedResourcesRef.current || {};
+        const document = options.importedDocument;
+        attachedResourcesRef.current = { ...resources, documents: [
+          ...(resources.documents || []).filter((item) => item.file_url !== document.file_url || item.name !== document.name), document,
+        ] };
+        userSelectedToolsRef.current = userSelectedToolsRef.current.filter((name) => !/^plan\s*swift$/i.test(name));
+      }
+      return handleConfirm(interpretation, instruction, options);
+    },
     [handleConfirm, interpretation]
   );
 
@@ -1220,6 +1230,10 @@ Write ONE clear, conversational sentence restating what they want — but offer 
         } else if (action === "connect" && options.canRetry) {
           const toolName = planToolName({ tool_slug: options.toolSlug || "", operation: "" });
           const connected = await connectTool(toolName, { connectionId: options.connectionId });
+          if (connected.inputAttached) {
+            setRecoveryMessage("Export attached for a new workflow. This running workflow still requires its original app connection; it has not been resumed.");
+            return;
+          }
           if (!connected.connected) return;
           const connectionId = connected.connection?.id || connected.tool?.id;
           if (options.blockerCode === "connection_required") {

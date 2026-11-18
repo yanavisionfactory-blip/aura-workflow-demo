@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { TAKEOFF_IMPORT_REVISION } from "@/lib/takeoffImport.mjs";
 import { motion, AnimatePresence } from "framer-motion";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { AlertTriangle, Brain, Plus, ArrowRight, Sparkles, Loader2, Check, X, RotateCcw } from "lucide-react";
@@ -111,6 +112,10 @@ export default function PlanView({
           if (!controller.signal.aborted && connectionAttemptRef.current === controller) setConnectionProgress(progress);
         },
       });
+      if (res.inputAttached) {
+        if (!onRevisePlan) throw new Error("Export attached. Create a new workflow with this file to use the imported measurements.");
+        await onRevisePlan(TAKEOFF_IMPORT_REVISION, { importedDocument: res.document });
+      }
       return res;
     } catch (e) {
       setConnectionErrors((prev) => ({

@@ -6,6 +6,7 @@ const ICONS = {
   google: "✨",
   planswift: "📐",
   "excel-desktop": "📊",
+  "microsoft-excel": "📊",
   gmail: "📧",
   "google-drive": "🗂️",
   "google-docs": "📄",
@@ -80,6 +81,9 @@ export const CATALOG = [...NATIVE_FALLBACK];
 export const MARKETPLACE = [...NATIVE_FALLBACK];
 
 function description(item) {
+  if (item.provider === "microsoft-excel" && item.connectable) return "Sign in with Microsoft in your browser · No installation";
+  if (item.provider === "planswift" && item.connectable) return "Import an Excel or CSV export in your browser · Optional desktop access";
+  if (item.provider === "excel-desktop" && item.connectable) return "Advanced · Local Windows workbooks via AURA Desktop";
   if (canonicalProvider(item.provider) === "openai") {
     return "Connect with an OpenAI API key. ChatGPT sign-in and conversation history are not connected.";
   }
@@ -116,7 +120,8 @@ function normalize(item) {
       String(item.display_name || "").trim(),
       ...(socialSearchAliases[canonical] || []),
       ...(canonical === "openai" ? ["OpenAI", "OpenAI API", "ChatGPT", "OpenAI (ChatGPT)"] : []),
-      ...(Array.isArray(item.aliases) ? item.aliases.map(String) : []),
+      ...(provider === "microsoft-excel" ? ["Excel", "Excel Online", "Excel Cloud", "Microsoft 365 Excel"] : []),
+      ...(Array.isArray(item.aliases) ? item.aliases.map(String).filter((alias) => provider !== "excel-desktop" || alias.toLowerCase() !== "excel") : []),
     ].filter(Boolean))],
     routes: rawRoutes.map((route) => ({
       provider: String(route.provider || provider).trim().toLowerCase(),

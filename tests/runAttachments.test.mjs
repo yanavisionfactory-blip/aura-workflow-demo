@@ -98,3 +98,15 @@ test("upload recovery never guesses missing sources or replays existing effects"
   }
 });
 
+
+test("PlanSwift source choice survives restoration without restoring untrusted preview rows", async () => {
+  const { documentInput, inputRoutes } = await import("../src/lib/takeoffImport.mjs");
+  const exportFile = { name: "takeoff.csv", file_url: "data:text/csv;base64,SGk=", size: 2,
+    source_app: "planswift", source_kind: "export" };
+  const restored = attachedDocumentsFromRun({ inputs: { attached_documents: [{ ...exportFile, preview: ["forged"] }] } });
+  assert.deepEqual(restored, [exportFile]);
+  assert.deepEqual(documentInput(restored[0]), exportFile);
+  assert.deepEqual(inputRoutes(restored), { planswift: "export" });
+  assert.deepEqual(inputRoutes(restored, ["PlanSwift"]), {}, "an explicit native selection retains real connection requirements");
+  assert.deepEqual(inputRoutes([{ name: "PlanSwift.csv", file_url: exportFile.file_url }]), {});
+});

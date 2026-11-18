@@ -44,6 +44,26 @@ FastAPI web service, Celery worker, private Postgres database and durable job
 queue. Existing production data and encryption keys must be transferred before
 the frontend is switched to the new API.
 
+## Browser connections for Excel and PlanSwift exports
+
+Choose **Microsoft Excel → Connect** for Microsoft account authorization in the
+browser. This cloud connection is independent of PlanSwift and needs no AURA
+Desktop installation. **Microsoft Excel (Desktop)** remains a separate option
+for local Windows workbooks.
+
+Choose **PlanSwift → Use data** to import an `.xlsx` or `.csv` takeoff export from
+any device. AURA validates the file before attaching it, shows the imported row
+count, and uses the saved cell values as workflow inputs. This is an imported
+snapshot, not a live PlanSwift connection. Re-export when measurements change.
+The import accepts up to 2,000 rows per sheet, 100 columns, and 40,000 characters
+of parsed data per workflow. Oversize files, Excel errors, and formulas without
+saved results are rejected instead of silently dropping measurements. Include
+quantities and units; connect Excel separately for an online rate book.
+
+Importing from a blocked plan requests a new plan for approval. It never resumes
+the previous native plan or marks a desktop connection verified. To use the
+installed app, expand **Need access to the installed app?** in the import dialog.
+
 ## PlanSwift and desktop Excel connected estimating
 
 The first-party Windows connector exposes PlanSwift takeoff reads and Excel
