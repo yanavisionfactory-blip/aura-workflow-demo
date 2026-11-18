@@ -5,6 +5,7 @@ import json
 import multiprocessing
 import os
 import queue
+import sys
 import threading
 from pathlib import Path
 
@@ -45,7 +46,8 @@ def worker(config, operation, arguments, output):
         output.put({"ok": True, "value": run_operation(config, operation, arguments)})
     except Exception as exc:  # noqa: BLE001 -- isolate all COM and workbook failures at the process boundary
         # Local diagnosis contains no request body or credential. Cloud callers get a fixed error.
-        print(f"{operation} failed: {type(exc).__name__}: {str(exc)[:400]}", flush=True)
+        if sys.stdout is not None:
+            print(f"{operation} failed: {type(exc).__name__}: {str(exc)[:400]}", flush=True)
         output.put({"ok": False})
     finally:
         pythoncom.CoUninitialize()

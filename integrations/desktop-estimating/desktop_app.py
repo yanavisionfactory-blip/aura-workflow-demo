@@ -146,6 +146,14 @@ def main():
         with TemporaryDirectory(prefix="aura-desktop-check-") as directory:
             client = load_config(Path(directory) / "helper")
             assert (Path(client.config["data_folder"]) / "Rates" / "Approved-Rates.xlsx").exists()
+            # Exercise frozen multiprocessing without requiring licensed applications.
+            assert client.execute(client.config, "excel.ratebooks.list", {}) == {"rate_books": ["Approved-Rates.xlsx"]}
+            try:
+                client.execute(client.config, "unsupported-self-test-operation", {})
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("A failed child operation did not return its error receipt")
         return
     if os.name != "nt":
         raise SystemExit("AURA Desktop requires Windows")

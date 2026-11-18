@@ -64,8 +64,8 @@ An operator can use Cloudflare Tunnel (https://developers.cloudflare.com/cloudfl
 
 ## Legacy endpoint connection and workflow inputs
 
-1. In **My Workspace**, search for **PlanSwift**, click **Connect**, and enter the connector's HTTPS address and connection key. AURA probes the actual application and stores the key encrypted.
-2. Connect **Microsoft Excel (Desktop)** with the **same** address and key. AURA requires both connections to identify the same workstation. Keep the connector and tunnel running while workflows execute or download files.
+1. Existing legacy installations continue using their saved connection. An administrator integrating the legacy bridge programmatically can use the authenticated `/v1/desktop-estimating/connect` endpoint with its HTTPS address, connection key and selected provider. The normal **Connect** UI now uses computer authorization instead.
+2. Legacy **PlanSwift** and **Microsoft Excel (Desktop)** connections must use the **same** address and key. AURA requires both connections to identify the same workstation. Keep the legacy connector and tunnel running while workflows execute or download files.
 3. Start a workflow with both tools selected. Supply the exact open job name, drawing revision, rate-book filename, rate date, currency, material waste, markup and tax rules. Explicitly confirm that measurements have been reviewed. Choose **measurements** or **parts**; never price both scopes together.
 
 Example task (replace all placeholders with real job settings):
