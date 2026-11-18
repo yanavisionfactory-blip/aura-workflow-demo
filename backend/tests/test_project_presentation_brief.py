@@ -156,6 +156,80 @@ def test_page_review_binding_rejects_ambiguous_or_optional_comparisons(case):
     assert plan.model_dump() == before
 
 
+def plan_with_cross_provider_read():
+    plan, manifests = project_plan("canva"), project_manifests()
+    _normalize_planned_steps(plan, manifests, PROMPT)
+    read = PlanStep(key="verify_deck", agent="Verifier", tool_slug="google-slides",
+        operation="google-slides.get-presentation",
+        arguments={"presentationId": "{{steps.read_saved_import.job.result.designs[0].id}}"},
+        depends_on=["read_saved_import"], reason="Verify the Canva import", expected_output="Saved deck")
+    plan.steps.insert(4, read)
+    return plan, manifests, read
+
+
+@pytest.mark.parametrize("field", ["presentationId", "presentation_id"])
+def test_canva_import_metadata_read_stays_with_canva_without_slides_access(field):
+    from app.workflow_context import resolve_value
+
+    plan, manifests, read = plan_with_cross_provider_read()
+    identity = read.arguments.pop("presentationId")
+    read.arguments[field] = identity
+    writes = [step.model_dump() for step in plan.steps if step.consequential]
+    _normalize_planned_steps(plan, manifests, PROMPT)
+    validate_source_presentation_plan(PROMPT, plan)
+    assert (read.tool_slug, read.operation) == ("canva", "canva.design.get")
+    assert read.arguments == {"design_id": identity}
+    assert all(step.tool_slug != "google-slides" for step in plan.steps)
+    assert [step.model_dump() for step in plan.steps if step.consequential] == writes
+    assert resolve_value(read.arguments, {"steps": {"read_saved_import": {
+        "job": {"result": {"designs": [{"id": "ActualCanvaDesign"}]}}}}}) == {
+            "design_id": "ActualCanvaDesign"}
+    snapshot = plan.model_dump()
+    _normalize_planned_steps(plan, manifests, PROMPT)
+    assert plan.model_dump() == snapshot
+
+
+@pytest.mark.parametrize("case", ["consumer", "variables", "fallback", "evidence",
+                                 "extra_argument", "missing_capability", "missing_dependency"])
+def test_cross_provider_read_without_safe_local_repair_fails_before_execution(case):
+    from app.presentation_sources import bind_canva_verification
+
+    plan, manifests, read = plan_with_cross_provider_read()
+    if case == "consumer":
+        plan.steps[-1].depends_on.append(read.key)
+    elif case == "variables":
+        read.output_variables = {"slides": "{{steps.verify_deck.slides}}"}
+    elif case == "fallback":
+        read.fallback_tool_slug = "google-slides"
+        read.fallback_operation = "google-slides.get-presentation"
+    elif case == "evidence":
+        read.required_evidence = ["verified_slides"]
+    elif case == "extra_argument":
+        read.arguments["fields"] = "slides"
+    elif case == "missing_capability":
+        manifests["canva"]["capabilities"] = [item for item in manifests["canva"]["capabilities"]
+            if item["name"] != "canva.design.get"]
+    else:
+        read.depends_on = []
+    before = plan.model_dump()
+    with pytest.raises(SourcePresentationPlanError, match="Google Slides cannot read a Canva"):
+        bind_canva_verification(plan, manifests, PROMPT)
+    assert plan.model_dump() == before
+
+
+def test_real_google_slides_readback_keeps_its_provider_and_identity():
+    from app.presentation_sources import bind_canva_verification
+
+    plan, manifests = project_plan("google-slides"), project_manifests()
+    plan.steps.append(PlanStep(key="verify", agent="Verifier", tool_slug="google-slides",
+        operation="google-slides.get-presentation", depends_on=["create"],
+        arguments={"presentationId": "{{steps.create.presentationId}}"},
+        reason="Verify Google Slides", expected_output="Saved Google presentation"))
+    before = plan.model_dump()
+    bind_canva_verification(plan, manifests, PROMPT)
+    assert plan.model_dump() == before
+
+
 def test_existing_source_contract_upgrades_without_nesting_or_changing_legacy_query():
     original = capability("google-drive", drive_materials.OPERATION)
     v1 = upgrade_capabilities("google-drive", [original])[0]
