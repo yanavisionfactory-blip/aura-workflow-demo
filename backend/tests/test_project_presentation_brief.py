@@ -40,6 +40,14 @@ def project_plan(destination):
     ])
 
 
+def project_manifests():
+    return {"aura": native_manifest("aura"), "canva": native_manifest("canva"),
+        "google-drive": {"capabilities": upgrade_capabilities("google-drive", [
+            capability("google-drive", drive_materials.OPERATION)])},
+        "google-slides": {"capabilities": upgrade_capabilities("google-slides", [
+            capability("google-slides", "google-slides.create-presentation", True)])}}
+
+
 @pytest.mark.parametrize("field", ["documents", "files", "limitations", "scope_folders", "ret"])
 def test_source_repair_names_invalid_binding_and_verified_coverage(field):
     plan = project_plan("canva")
@@ -62,11 +70,7 @@ def test_exact_customer_request_survives_abridged_planner_arguments(destination,
     plan = project_plan(destination)
     if sources_omitted:
         plan.steps[1].arguments.pop("sources")
-    manifests = {"aura": native_manifest("aura"), "canva": native_manifest("canva"),
-        "google-drive": {"capabilities": upgrade_capabilities("google-drive", [
-            capability("google-drive", drive_materials.OPERATION)])},
-        "google-slides": {"capabilities": upgrade_capabilities("google-slides", [
-            capability("google-slides", "google-slides.create-presentation", True)])}}
+    manifests = project_manifests()
     _normalize_planned_steps(plan, manifests, PROMPT)
     validate_source_presentation_plan(PROMPT, plan)
     discover, compose, create = plan.steps[:3]
@@ -87,6 +91,69 @@ def test_exact_customer_request_survives_abridged_planner_arguments(destination,
     snapshot = plan.model_dump()
     _normalize_planned_steps(plan, manifests, PROMPT)
     assert plan.model_dump() == snapshot
+
+
+@pytest.mark.parametrize("expected", [None, {}, {"title": "Music"},
+    {"title": "Music", "phases": None},
+    {"title": "{{steps.compose.presentation.title}}", "phases": "{{steps.compose.phases}}"},
+    "{{steps.compose.body}}", "{{steps.compose.presentation}}"])
+def test_existing_page_review_receives_the_exact_complete_creation_content(expected):
+    from test_presentation_review import pdf
+
+    from app.presentation_review import inspect_pdf
+    from app.workflow_context import resolve_value
+
+    plan, manifests = project_plan("canva"), project_manifests()
+    _normalize_planned_steps(plan, manifests, PROMPT)
+    creation, inspection = plan.steps[2], plan.steps[-1]
+    inspection.arguments["expected_presentation"] = deepcopy(expected)
+    original_readback = {key: inspection.arguments[key] for key in ("file_url", "design_id")}
+    _normalize_planned_steps(plan, manifests, PROMPT)
+    validate_source_presentation_plan(PROMPT, plan)
+    assert len(plan.steps) == 7
+    assert inspection.arguments["expected_presentation"] == creation.arguments
+    assert original_readback == {key: inspection.arguments[key] for key in original_readback}
+    assert "compose" in inspection.depends_on
+    approved = {"title": "Music", "phases": [{"period": "Pilot", "title": "Offer",
+        "items": ["14 days", "Rights unverified"]}]}
+    context = {"steps": {"compose": {"presentation": approved}}}
+    baseline = resolve_value(inspection.arguments["expected_presentation"], context)
+    assert baseline == resolve_value(creation.arguments, context)
+    assert baseline["phases"] == approved["phases"]
+    assert not inspect_pdf(pdf(["Offer 14 days Rights unverified"]), baseline)[1]
+    assert any("Rights unverified" in issue for issue in inspect_pdf(pdf(["Offer 14 days"]), baseline)[1])
+    snapshot = plan.model_dump()
+    _normalize_planned_steps(plan, manifests, PROMPT)
+    assert plan.model_dump() == snapshot
+
+
+@pytest.mark.parametrize("case", ["other_source", "static_other_copy", "two_creations",
+                                 "optional", "conditional", "all_settled"])
+def test_page_review_binding_rejects_ambiguous_or_optional_comparisons(case):
+    from app.presentation_sources import bind_canva_verification
+
+    plan, manifests = project_plan("canva"), project_manifests()
+    _normalize_planned_steps(plan, manifests, PROMPT)
+    creation, inspection = plan.steps[2], plan.steps[-1]
+    if case == "other_source":
+        inspection.arguments["expected_presentation"] = "{{steps.discover.sources}}"
+    elif case == "static_other_copy":
+        inspection.arguments["expected_presentation"] = {"phases": [{"title": "Unrelated", "items": ["Other"]}]}
+    elif case == "two_creations":
+        other = creation.model_copy(deep=True)
+        other.key = "other_creation"
+        plan.steps.insert(3, other)
+        inspection.depends_on.append(other.key)
+    elif case == "optional":
+        inspection.optional = True
+    elif case == "conditional":
+        inspection.condition = StepCondition(left="{{inputs.review}}", operator="is_true")
+    else:
+        inspection.dependency_mode = "all_settled"
+    before = plan.model_dump()
+    with pytest.raises(SourcePresentationPlanError):
+        bind_canva_verification(plan, manifests, PROMPT)
+    assert plan.model_dump() == before
 
 
 def test_existing_source_contract_upgrades_without_nesting_or_changing_legacy_query():

@@ -1,6 +1,7 @@
 """Require document evidence before composing a deck from a Drive folder."""
 
 import re
+from copy import deepcopy
 from urllib.parse import urlsplit
 
 from .workflow_context import referenced_paths, referenced_step_keys
@@ -174,7 +175,8 @@ def bind_canva_verification(plan, manifests, request_prompt=""):
     """Complete a draft's native Canva verification path before approval.
 
     This adds visible, governed derivative-export/read steps, never dispatches them.
-    Do not modify an existing inspection path or guess a different provider contract.
+    Keep an existing inspection path and bind its baseline to the exact creation
+    content; do not duplicate provider writes or guess between created designs.
     """
     from .schemas import PlanStep
 
@@ -212,7 +214,34 @@ def bind_canva_verification(plan, manifests, request_prompt=""):
         if not {"canva.import.get", "canva.export.create", "canva.export.get"} <= available.get(creation.tool_slug, set()):
             continue
         related = [step for step in plan.steps if creation.key in _ancestors(step, by_key)]
-        if any(step.operation == "intelligence.presentation.review" for step in related):
+        inspections = [step for step in related if step.operation == "intelligence.presentation.review"]
+        if inspections:
+            for inspection in inspections:
+                creations = [step for step in plan.steps if step.operation == "canva.presentation.create"
+                             and step.key in _ancestors(inspection, by_key)]
+                if (len(creations) != 1 or inspection.optional or inspection.condition is not None
+                        or inspection.dependency_mode != "all_succeeded"):
+                    raise SourcePresentationPlanError(
+                        "Each required page inspection must depend on one successful Canva creation; "
+                        "keep separate inspections for separate presentations."
+                    )
+                expected = inspection.arguments.get("expected_presentation")
+                references = referenced_step_keys(expected)
+                creation_references = referenced_step_keys(creation.arguments)
+                if (references - creation_references or not references
+                        and isinstance(expected, dict) and expected.get("phases")
+                        and expected != creation.arguments):
+                    raise SourcePresentationPlanError(
+                        f"Step '{inspection.key}' must compare the saved pages with the complete "
+                        f"content passed to '{creation.key}', including its phases. Preserve the "
+                        "existing design/export references; do not create another presentation."
+                    )
+                # The composer may have been normalized from .body/.phases to
+                # .presentation.phases. Reuse that complete approved creation
+                # payload so the inspector cannot receive a title-only or null
+                # baseline from a stale sibling reference.
+                inspection.arguments["expected_presentation"] = deepcopy(creation.arguments)
+                inspection.depends_on = sorted(set(inspection.depends_on) | creation_references)
             continue
         reads = [step for step in related if step.operation == "canva.import.get"
                  and not step.optional and step.condition is None]
