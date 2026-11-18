@@ -18,7 +18,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  desktop-helper:
+    uses: ./.github/workflows/desktop-helper.yml
+
   build:
+    needs: desktop-helper
     runs-on: ubuntu-latest
     steps:
       - name: Checkout production application
@@ -132,6 +136,11 @@ jobs:
           path: dist/showcase/first-choice-seo/walkthrough.*
       - name: Support saved results deep links
         run: cp dist/index.html dist/404.html
+      - name: Include the verified Windows helper
+        uses: actions/download-artifact@v4
+        with:
+          name: aura-desktop-windows
+          path: dist/downloads
       - name: Publish build version
         run: printf '%s\n' "$GITHUB_SHA" > dist/version.txt
       - name: Disable Jekyll

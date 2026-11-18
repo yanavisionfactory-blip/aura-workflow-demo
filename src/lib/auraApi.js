@@ -1,6 +1,6 @@
 import { createFrontendClient } from "@pipedream/sdk/browser";
 import { shopifyCredentialDialog } from "@/lib/shopifyCredentialDialog";
-import { desktopEstimatingDialog } from "@/lib/desktopEstimatingDialog";
+import { desktopPairingDialog } from "@/lib/desktopPairingDialog";
 import { redirectConnectorAuthorization } from "@/lib/connectionNavigation.mjs";
 import { connectionTask, connectionPollDelay, CONNECTION_REQUEST_TIMEOUT_MS, CONNECTION_CANCELLED } from "@/lib/connectionAttempt.mjs";
 
@@ -563,9 +563,13 @@ export async function authorizeConnectorBroker(
   }
   if (session.backend === "desktop_estimating") {
     if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
-    const result = await desktopEstimatingDialog((payload) => request(
-      "/v1/desktop-estimating/connect", { method: "POST", body: JSON.stringify(payload), timeoutMs: 120000, signal },
-    ), session, signal);
+    if (!session.pairing_supported) throw new Error("Desktop authorization is being updated on this server. Retry shortly; your workflow remains saved.");
+    const root = "/v1/desktop-estimating/pairings";
+    const result = await desktopPairingDialog({
+      start: (pairSignal) => request(root, { method: "POST", timeoutMs: 20000, signal: pairSignal }),
+      status: (id, pairSignal) => request(`${root}/${encodeURIComponent(id)}`, { timeoutMs: 20000, signal: pairSignal }),
+      cancel: (id) => request(`${root}/${encodeURIComponent(id)}`, { method: "DELETE", timeoutMs: 10000 }),
+    }, session, signal);
     const tools = await listPythonTools({ signal });
     const tool = tools.find((item) => item.id === result.id);
     if (!tool || result.status !== "verified") throw new Error("The desktop application could not be verified.");

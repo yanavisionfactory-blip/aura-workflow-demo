@@ -27,7 +27,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.3,<9", "pytest-asyncio>=0.25,<1", "ruff>=0.9,<1", "aiosqlite>=0.20,<1", "openpyxl>=3.1.5,<4", "XlsxWriter>=3.2,<4"]
+dev = ["pytest>=8.3,<9", "pytest-asyncio>=0.25,<1", "ruff>=0.9,<1", "aiosqlite>=0.20,<1", "openpyxl>=3.1.5,<4", "XlsxWriter>=3.2,<4", "fakeredis[lua]==2.32.0"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

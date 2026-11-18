@@ -2705,7 +2705,8 @@ async def create_connector_broker_session(
             selected = await session.get(ToolConnection, connection_id)
             if not selected or selected.workspace_id != context.workspace_id or selected.slug != provider:
                 raise HTTPException(404, "Connection not found")
-        return {"backend": desktop_estimating.BACKEND, "provider": provider, "connection_id": connection_id}
+        return {"backend": desktop_estimating.BACKEND, "provider": provider,
+                "connection_id": connection_id, "pairing_supported": True}
     if provider == "hubspot" and settings.hubspot_connection_mode == "mcp":
         provider = "hubspot-mcp"
     if provider in {"frame-io-mcp", "pageproof-mcp", "meta-ads-mcp", "hubspot-mcp"}:
@@ -4122,6 +4123,12 @@ async def connect_desktop_estimating(
     if resumed:
         await dispatch_pending(context.workspace_id)
     return {"id": tool.id, "status": "verified", "verification": verification}
+
+
+from .desktop_pairing import register_routes as _register_desktop_pairing
+
+_register_desktop_pairing(app, tenant_context, tenant_session,
+                          _satisfy_matching_connection_requirements, dispatch_pending)
 
 
 @app.get("/v1/desktop-estimating/reports/{report_id}/download")

@@ -530,7 +530,7 @@ test("request deadlines include a stalled token lookup and prevent a late networ
   } finally { flow.setAuraTokenProvider(async () => "test-user-token"); }
 });
 
-test("desktop tools connect and reconnect through their verified form without OAuth popups", async () => {
+test("desktop tools use the shared computer authorization without key fields or OAuth popups", async () => {
   setup();
   const dom = new JSDOM("<!doctype html><body></body>");
   const original = { document: globalThis.document, FormData: globalThis.FormData };
@@ -543,35 +543,41 @@ test("desktop tools connect and reconnect through their verified form without OA
     connection_backend: "desktop_estimating", kind: "api_key", enabled: true,
     status: "verified", verification: { ok: true }, allowed_operations: ["planswift.job.read"] };
   flow.mergeMarketplaceApps([app]);
-  let connected = false, submissions = 0;
+  let connected = false, submissions = 0, finishStatus;
   globalThis.fetch = async (url, options) => {
     const route = new URL(url).pathname;
     if (route === "/v1/managed-connectors/status") return Response.json({ marketplace: [app] });
     if (route === "/v1/tools") return Response.json(connected ? [tool] : []);
     if (route === "/v1/connector-broker/apps") return Response.json({ apps: [app] });
-    if (route === "/v1/connector-broker/planswift/session") return Response.json({ backend: "desktop_estimating", provider: "planswift", connection_id: connected ? tool.id : null });
-    if (route === "/v1/desktop-estimating/connect") {
+    if (route === "/v1/connector-broker/planswift/session") return Response.json({ backend: "desktop_estimating", provider: "planswift", pairing_supported: true, connection_id: connected ? tool.id : null });
+    if (route === "/v1/desktop-estimating/pairings") {
       assert.equal(options.headers.Authorization, "Bearer test-user-token");
-      assert.equal(JSON.parse(options.body).provider, "planswift");
-      connected = true; submissions += 1;
-      return Response.json({ id: tool.id, status: "verified" });
+      assert.equal(options.body, undefined);
+      submissions += 1;
+      return Response.json({ pairing_id: "pair", code: "temporary-code" });
     }
+    if (route === "/v1/desktop-estimating/pairings/pair") return new Promise((resolve) => {
+      finishStatus = () => {
+        connected = true;
+        resolve(Response.json({ status: "verified", connections: [
+          { id: tool.id, provider: "planswift" }, { id: "excel-connection", provider: "excel-desktop" },
+        ] }));
+      };
+    });
     if (route === "/v1/connections/desktop-connection/test") return Response.json({ status: "verified", verification: { ok: true } });
     throw new Error(`Unexpected desktop request: ${route}`);
   };
-  async function submitForm(pending) {
-    for (let i = 0; i < 100 && !document.querySelector("form"); i++) await new Promise((resolve) => setTimeout(resolve, 10));
-    const form = document.querySelector("form");
-    assert.ok(form);
-    form.elements.endpoint.value = "https://workstation.example.com";
-    form.elements.connection_key.value = "test-connection-key-01234567890123456789";
-    assert.match(document.querySelector("a[download]").href, /\/aura-workflow-demo\/downloads\/aura-desktop-estimating.zip$/);
-    form.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true }));
+  async function authorizeComputer(pending) {
+    for (let i = 0; i < 100 && !finishStatus; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.ok(document.querySelector("dialog"));
+    assert.equal(document.querySelector("input"), null);
+    assert.match(document.querySelector("a[download]").href, /\/aura-workflow-demo\/downloads\/AURA-Desktop.exe$/);
+    finishStatus(); finishStatus = null;
     assert.equal((await pending).connected, true);
   }
   try {
-    await submitForm(flow.connectTool("PlanSwift", { provider: "planswift" }));
-    await submitForm(flow.reconnectTool("PlanSwift", tool.id));
+    await authorizeComputer(flow.connectTool("PlanSwift", { provider: "planswift" }));
+    await authorizeComputer(flow.reconnectTool("PlanSwift", tool.id));
     assert.equal(submissions, 2);
     assert.equal(flow.getAllConnections().PlanSwift, true);
   } finally {
