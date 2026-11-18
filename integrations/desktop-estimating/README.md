@@ -34,6 +34,28 @@ The plan should contain these connected operations:
 
 The generated workbook contains Summary, Takeoff, Rates and Estimate tabs. Waste applies only to materials; labor/equipment use the unadjusted quantity. Markup is applied to direct cost. Tax applies to either materials or the subtotal including markup, as explicitly selected. Composite rates must not duplicate separately entered labor/equipment. Repeating identical snapshot IDs and parameters reuses one report. Revised source content produces a new report. Reports remain drafts.
 
+## OpenAI agent handoff
+
+The direct OpenAI runtime and the optional managed-agent runtime use the same AURA
+provider gateway. The agent proposes the workflow; AURA validates its dependencies,
+executes connected operations, and returns provider evidence for subsequent steps.
+The managed runtime currently supplies reasoning only, with no direct desktop or
+provider tools. Enabling it does not pair a workstation or grant app access.
+
+Before plan review, AURA fills omitted estimate snapshot references when the plan
+declares exactly one required prior PlanSwift read and one required prior rate-book
+read as dependencies. It similarly binds a report read-back to one declared estimate
+creation. These are references to future provider receipts, never generated IDs.
+Explicit references are preserved. Multiple candidates, optional/conditional reads,
+and missing dependencies are not guessed; normal validation blocks incomplete plans.
+Missing measurement review, prices, project selection and tax rules are never filled
+by this handoff. The existing connection checks still require the same workstation.
+
+An external OpenAI agent can use this execution route through AURA's orchestration;
+the current ChatGPT MCP pilot only inspects connections and saves disabled drafts.
+It cannot execute workflows. Computer use for measuring drawings is a separate,
+unimplemented capability, not a consequence of selecting a different model.
+
 ## Failure behavior and boundaries
 
 - Missing/ambiguous/expired rates, unmatched units, missing item IDs/codes, negative/nonfinite quantities, more than 5000 rows, modified snapshots and changed jobs fail before reporting success. No unit conversion or zero-price substitution is guessed.
