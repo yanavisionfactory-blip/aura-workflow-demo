@@ -563,10 +563,10 @@ export async function authorizeConnectorBroker(
   }
   if (session.backend === "desktop_estimating") {
     if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
-    if (!session.pairing_supported) throw new Error("Desktop authorization is being updated on this server. Retry shortly; your workflow remains saved.");
+    if (!session.independent_pairing_supported) throw new Error("Individual app connections are being updated on this server. Retry shortly; your workflow remains saved.");
     const root = "/v1/desktop-estimating/pairings";
     const result = await desktopPairingDialog({
-      start: (pairSignal) => request(root, { method: "POST", timeoutMs: 20000, signal: pairSignal }),
+      start: (pairSignal) => request(root, { method: "POST", body: JSON.stringify({ provider: session.provider }), timeoutMs: 20000, signal: pairSignal }),
       status: (id, pairSignal) => request(`${root}/${encodeURIComponent(id)}`, { timeoutMs: 20000, signal: pairSignal }),
       cancel: (id) => request(`${root}/${encodeURIComponent(id)}`, { method: "DELETE", timeoutMs: 10000 }),
     }, session, signal);

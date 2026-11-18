@@ -13,7 +13,13 @@ from pathlib import Path
 from uuid import uuid4
 
 from desktop_client import ClientError, DesktopClient, pairing_code
+from estimating_contract import PROVIDERS
 from setup_rates import create_template
+
+PERMISSIONS = {
+    "planswift": "read existing PlanSwift measurements",
+    "excel-desktop": "read approved Excel rate books, and create and download new Excel estimates",
+}
 
 
 def private_folder(folder):
@@ -173,8 +179,9 @@ def main():
     root.geometry("590x440")
     panel = ttk.Frame(root, padding=24)
     panel.pack(fill="both", expand=True)
-    ttk.Label(panel, text="Connect your computer", font=("Segoe UI", 18, "bold")).pack(anchor="w")
-    ttk.Label(panel, text="AURA reads existing quantities and approved rates, and creates\nnew Excel estimates. Keep this helper open while workflows run.", wraplength=530).pack(anchor="w", pady=12)
+    heading = tk.StringVar(value="Connect an app")
+    ttk.Label(panel, textvariable=heading, font=("Segoe UI", 18, "bold")).pack(anchor="w")
+    ttk.Label(panel, text="Choose an app in AURA, then approve access here. Each app\nhas its own connection. Keep this helper open while AURA works.", wraplength=530).pack(anchor="w", pady=12)
     status = tk.StringVar(value="Install the helper once, then click Connect in AURA.")
     ttk.Label(panel, textvariable=status, wraplength=530).pack(anchor="w", pady=10)
     code = tk.StringVar(value=activation or "")
@@ -183,7 +190,6 @@ def main():
     entry.pack(fill="x", pady=6)
     version = tk.StringVar(value="12" if client.config["planswift_progid"] == "PlanSwift.PlanSwift12" else "11")
     row = ttk.Frame(panel)
-    row.pack(fill="x", pady=6)
     ttk.Label(row, text="PlanSwift version").pack(side="left")
     ttk.Combobox(row, textvariable=version, values=["11", "12"], state="readonly", width=5).pack(side="left", padx=8)
     working = [False]
@@ -211,7 +217,7 @@ def main():
         def inspect():
             try:
                 info = client.info(candidate)
-                events.put(("confirm", (candidate, info["workspace_name"])))
+                events.put(("confirm", (candidate, info)))
             except Exception as exc:  # noqa: BLE001 -- report bounded pairing diagnostics
                 events.put(("error", str(exc)[:300]))
         threading.Thread(target=inspect, daemon=True).start()
@@ -248,20 +254,30 @@ def main():
             except queue.Empty:
                 break
             if kind == "confirm":
-                candidate, workspace = value
-                approved = client.config.get("workspace_id") == candidate.split(".")[0] or messagebox.askyesno("Allow this AURA workspace?",
-                    f'Allow “{workspace}” to read PlanSwift takeoffs and approved rate books, and create and download new Excel estimates?\n\nAURA cannot measure drawings or edit your source workbooks through this helper.')
+                candidate, info = value
+                provider, workspace = info["provider"], info["workspace_name"]
+                name = PROVIDERS[provider]
+                heading.set("Connect " + name)
+                if provider == "planswift":
+                    row.pack(fill="x", pady=6, before=buttons)
+                else:
+                    row.pack_forget()
+                already_approved = (client.config.get("workspace_id") == candidate.split(".")[0]
+                                    and provider in client.config.get("authorized_providers", []))
+                approved = already_approved or messagebox.askyesno("Connect " + name + "?",
+                    f'Allow “{workspace}” to {PERMISSIONS[provider]}?\n\nOnly {name} will be connected. You can disconnect it in AURA.')
                 if not approved:
                     working[0] = False
                     connect_button.configure(state="normal")
                     status.set("Pairing cancelled on this computer.")
                     continue
-                client.config["planswift_progid"] = "PlanSwift.PlanSwift12" if version.get() == "12" else "PlanSwift9.PlanSwift"
+                if provider == "planswift":
+                    client.config["planswift_progid"] = "PlanSwift.PlanSwift12" if version.get() == "12" else "PlanSwift9.PlanSwift"
                 client.save()
-                status.set("Checking PlanSwift and Excel. This can take up to 90 seconds…")
-                def finish_pair(pair_code=candidate):
+                status.set(f"Checking {name}. This can take up to 90 seconds…")
+                def finish_pair(pair_code=candidate, selected=provider):
                     try:
-                        events.put(("paired", client.pair(pair_code)))
+                        events.put(("paired", client.pair(pair_code, selected)))
                     except Exception as exc:  # noqa: BLE001 -- GUI worker boundary
                         events.put(("error", str(exc)[:300]))
                 threading.Thread(target=finish_pair, daemon=True).start()

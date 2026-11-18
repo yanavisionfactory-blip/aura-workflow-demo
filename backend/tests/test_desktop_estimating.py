@@ -147,7 +147,7 @@ async def test_connection_storage_preflight_permissions_and_tenant_scope(databas
         assert tool.enabled and tool.encrypted_credentials
 
 
-async def test_connecting_two_different_workstations_is_rejected(database, monkeypatch):
+async def test_apps_connect_independently_but_replacing_one_requires_disconnect(database, monkeypatch):
     async def verify(credentials, provider):
         return {"ok": True, "identity": {"id": INSTANCE if provider == "planswift" else "other"}}
     async def satisfy(*args):
@@ -160,9 +160,12 @@ async def test_connecting_two_different_workstations_is_rejected(database, monke
         await session.commit()
         payload = {"endpoint": CREDS["endpoint"], "connection_key": KEY, "provider": "planswift"}
         await main.connect_desktop_estimating(request(payload), context, session)
-        with pytest.raises(HTTPException, match="same Windows workstation"):
-            await main.connect_desktop_estimating(request({**payload, "provider": "excel-desktop"}), context, session)
+        excel = await main.connect_desktop_estimating(request({**payload, "provider": "excel-desktop"}), context, session)
+        assert excel["verification"]["identity"]["id"] == "other"
         tool = await session.scalar(select(ToolConnection).where(ToolConnection.slug == "planswift"))
+        monkeypatch.setattr(desktop, "verify", lambda *args: verify({}, "excel-desktop"))
+        with pytest.raises(HTTPException, match="Disconnect the existing workstation"):
+            await main.connect_desktop_estimating(request(payload), context, session)
         await main.disconnect_connection(tool.id, context, session)
         # A deliberate disconnect releases the previous workstation identity.
         monkeypatch.setattr(desktop, "verify", lambda *args: verify({}, "excel-desktop"))

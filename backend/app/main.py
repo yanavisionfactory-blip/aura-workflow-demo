@@ -2706,7 +2706,7 @@ async def create_connector_broker_session(
             if not selected or selected.workspace_id != context.workspace_id or selected.slug != provider:
                 raise HTTPException(404, "Connection not found")
         return {"backend": desktop_estimating.BACKEND, "provider": provider,
-                "connection_id": connection_id, "pairing_supported": True}
+                "connection_id": connection_id, "pairing_supported": True, "independent_pairing_supported": True}
     if provider == "hubspot" and settings.hubspot_connection_mode == "mcp":
         provider = "hubspot-mcp"
     if provider in {"frame-io-mcp", "pageproof-mcp", "meta-ads-mcp", "hubspot-mcp"}:
@@ -4091,11 +4091,6 @@ async def connect_desktop_estimating(
     instance_id = verification["identity"]["id"]
     if tool and tool.enabled and tool.encrypted_credentials and tool.external_account_id != instance_id:
         raise HTTPException(409, "Disconnect the existing workstation before choosing a different one")
-    peers = (await session.scalars(select(ToolConnection).where(
-        ToolConnection.workspace_id == context.workspace_id,
-        ToolConnection.slug.in_(desktop.PROVIDERS), ToolConnection.enabled.is_(True)))).all()
-    if any(peer.external_account_id != instance_id for peer in peers):
-        raise HTTPException(409, "PlanSwift and Excel must connect to the same Windows workstation")
     credentials["instance_id"] = instance_id
     contract = desktop.manifest(payload.provider, instance_id)
     if not tool:

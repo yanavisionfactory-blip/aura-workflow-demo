@@ -549,18 +549,18 @@ test("desktop tools use the shared computer authorization without key fields or 
     if (route === "/v1/managed-connectors/status") return Response.json({ marketplace: [app] });
     if (route === "/v1/tools") return Response.json(connected ? [tool] : []);
     if (route === "/v1/connector-broker/apps") return Response.json({ apps: [app] });
-    if (route === "/v1/connector-broker/planswift/session") return Response.json({ backend: "desktop_estimating", provider: "planswift", pairing_supported: true, connection_id: connected ? tool.id : null });
+    if (route === "/v1/connector-broker/planswift/session") return Response.json({ backend: "desktop_estimating", provider: "planswift", pairing_supported: true, independent_pairing_supported: true, connection_id: connected ? tool.id : null });
     if (route === "/v1/desktop-estimating/pairings") {
       assert.equal(options.headers.Authorization, "Bearer test-user-token");
-      assert.equal(options.body, undefined);
+      assert.deepEqual(JSON.parse(options.body), { provider: "planswift" });
       submissions += 1;
-      return Response.json({ pairing_id: "pair", code: "temporary-code" });
+      return Response.json({ pairing_id: "pair", code: "temporary-code", provider: "planswift" });
     }
     if (route === "/v1/desktop-estimating/pairings/pair") return new Promise((resolve) => {
       finishStatus = () => {
         connected = true;
         resolve(Response.json({ status: "verified", connections: [
-          { id: tool.id, provider: "planswift" }, { id: "excel-connection", provider: "excel-desktop" },
+          { id: tool.id, provider: "planswift" },
         ] }));
       };
     });

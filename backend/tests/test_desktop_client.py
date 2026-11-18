@@ -3,6 +3,7 @@ import queue
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -52,18 +53,40 @@ def test_helper_executes_only_schema_checked_operations(client_module, tmp_path)
 def test_pair_claim_probes_real_adapters_and_preserves_identity_on_retry(client_module, tmp_path, monkeypatch):
     code = f"{uuid4()}.{uuid4()}." + "a" * 43
     config = {"instance_id": str(uuid4()), "device_token": "test-device-token-01234567890123456789"}
-    apps = {"planswift": {"available": True, "version": "12"}, "excel-desktop": {"available": True, "version": "16"}}
-    client = client_module.DesktopClient(config, tmp_path / "config.json", execute=lambda *_: {"applications": apps})
+    apps = {"excel-desktop": {"available": True, "version": "16"}}
+    def execute(config, operation, arguments):
+        assert operation == "status" and arguments == {"providers": ["excel-desktop"]}
+        return {"applications": apps}
+    client = client_module.DesktopClient(config, tmp_path / "config.json", execute=execute)
     payloads = []
     def claim(path, payload):
         payloads.append(payload)
-        return {"status": "verified", "workspace_id": code.split(".")[0], "workspace_name": "Test"}
+        return {"status": "verified", "workspace_id": code.split(".")[0], "workspace_name": "Test", "provider": "excel-desktop"}
     monkeypatch.setattr(client, "request", claim)
-    client.pair(code)
-    client.pair(code)
+    client.pair(code, "excel-desktop")
+    client.pair(code, "excel-desktop")
     assert payloads[0] == payloads[1]
     assert payloads[0]["applications"] == apps
+    assert payloads[0]["pairing_protocol"] == 2
+    assert client.config["authorized_providers"] == ["excel-desktop"]
     assert client.config_path.exists()
+
+
+@pytest.mark.parametrize("provider", ["planswift", "excel-desktop"])
+def test_application_probe_never_opens_the_other_app(client_module, provider):
+    windows = importlib.import_module("windows_apps")
+    calls = []
+    def planswift(progid):
+        calls.append("planswift")
+        assert provider == "planswift", "Excel connection must not open PlanSwift"
+        return SimpleNamespace(CurrentVersion="12", IsLoaded=True)
+    def excel(progid):
+        calls.append("excel-desktop")
+        assert provider == "excel-desktop", "PlanSwift connection must not open Excel"
+        return SimpleNamespace(Version="16", Quit=lambda: None)
+    adapter = windows.WindowsApps({}, dispatch=planswift, dispatch_ex=excel)
+    assert adapter.status([provider]) == {provider: {"available": True, "version": "12" if provider == "planswift" else "16"}}
+    assert calls == [provider]
 
 
 def test_helper_retries_a_receipt_without_repeating_the_action(client_module):
