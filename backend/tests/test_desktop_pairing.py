@@ -11,12 +11,13 @@ import fakeredis.aioredis
 import httpx
 import pytest
 import redis.asyncio as redis
+from fastapi import Depends, FastAPI, HTTPException, Request
+from sqlalchemy import select
+
 from app import desktop_estimating as desktop
 from app import desktop_pairing as pairing
 from app.models import AuditEvent, TenantMembership, ToolConnection, Workspace
 from app.security import CredentialVault
-from fastapi import Depends, FastAPI, HTTPException, Request
-from sqlalchemy import select
 
 APPS = {"planswift": {"available": True, "version": "12"},
         "excel-desktop": {"available": True, "version": "16"}}
