@@ -533,6 +533,7 @@ test("request deadlines include a stalled token lookup and prevent a late networ
 test("desktop tools use the shared computer authorization without key fields or OAuth popups", async () => {
   setup();
   const dom = new JSDOM("<!doctype html><body></body>");
+  Object.defineProperty(dom.window.navigator, "platform", { value: "Win32" });
   const original = { document: globalThis.document, FormData: globalThis.FormData };
   globalThis.document = dom.window.document;
   globalThis.FormData = dom.window.FormData;
@@ -568,6 +569,9 @@ test("desktop tools use the shared computer authorization without key fields or 
     throw new Error(`Unexpected desktop request: ${route}`);
   };
   async function authorizeComputer(pending) {
+    for (let i = 0; i < 100 && !document.querySelector("[data-start]"); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.ok(document.querySelector("[data-start]"));
+    document.querySelector("[data-start]").click();
     for (let i = 0; i < 100 && !finishStatus; i++) await new Promise((resolve) => setTimeout(resolve, 10));
     assert.ok(document.querySelector("dialog"));
     assert.equal(document.querySelector("input"), null);
