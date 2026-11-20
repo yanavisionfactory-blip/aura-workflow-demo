@@ -76,6 +76,7 @@ def test_adobe_authorization_binds_exact_callback_and_redacts_secret():
     assert query["redirect_uri"] == ["https://api.example.com/v1/oauth/frameio/callback"]
     assert query["scope"] == ["openid,email,profile,offline_access,additional_info.roles"]
     assert query["state"] == ["signed-state"]
+    assert query["prompt"] == ["login"]
     assert "adobe-secret" not in url + repr(config) + config.model_dump_json()
     with pytest.raises(ValueError, match="not configured"):
         providers.oauth_authorization_url(config.model_copy(update={"frameio_client_secret": ""}),
@@ -126,6 +127,8 @@ async def test_adobe_login_alone_cannot_create_verified_frameio_connection(monke
     ("https://api.frame.io/v4/me", 401,
      {"errors": [{"detail": "Your Frame user is not linked to an Adobe ID."}]},
      "frameio_identity", "adobe_identity_not_linked"),
+    ("https://api.frame.io/v4/me", 401, {"errors": [{"detail": "Invalid or missing authorization token"}]},
+     "frameio_identity", "frameio_access_denied"),
     ("https://api.frame.io/v4/accounts", 403, {"errors": "unexpected"},
      "frameio_accounts", "frameio_access_denied"),
     ("https://api.frame.io/v4/me", 503, {"error": "unavailable"},
@@ -157,6 +160,11 @@ async def test_callback_identifies_failure_stage_without_saving_or_leaking_crede
     assert diagnostic["reason"] == reason
     assert diagnostic["status_code"] == status
     assert query["oauth_message"] == [diagnostic["message"]]
+    if reason == "frameio_access_denied":
+        if stage == "frameio_identity":
+            assert "select Connect again in AURA" in diagnostic["message"]
+        else:
+            assert "denied the workspace check" in diagnostic["message"]
     assert f"stage={stage} reason={reason} status={status}" in caplog.text
     assert "private-" not in caplog.text + result.headers["location"] + json.dumps(diagnostic)
 

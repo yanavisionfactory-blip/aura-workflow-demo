@@ -347,6 +347,9 @@ def oauth_authorization_url(settings: Settings, provider: OAuthProvider, state: 
             "code_challenge": _oauth_code_challenge(settings, state),
             "code_challenge_method": "S256",
         })
+    if provider.slug == "frameio":
+        # Let the user choose the Adobe identity linked to Frame.io on each attempt.
+        params["prompt"] = "login"
     if provider.slug == "google":
         params.update({"access_type": "offline", "prompt": "consent", "include_granted_scopes": "true"})
     if provider.slug == "reddit-ads":

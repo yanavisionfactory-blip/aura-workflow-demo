@@ -50,8 +50,19 @@ def connection_failure(exc: Exception) -> dict:
                           reason="frameio_api_rejected",
                           message=f"Adobe sign-in succeeded, but Frame.io rejected the account check (HTTP {status}).")
             if status in {401, 403}:
-                result.update(reason="frameio_access_denied",
-                              message=f"Adobe sign-in succeeded, but Frame.io denied account access (HTTP {status}). Check this user's Frame.io access and Adobe account link.")
+                result["reason"] = "frameio_access_denied"
+                if result["stage"] == "frameio_identity":
+                    result["message"] = (
+                        f"Frame.io could not verify your Adobe sign-in (HTTP {status}). "
+                        "Open your Frame.io V4 workspace and check the Adobe account under Settings → Profile. "
+                        "Then select Connect again in AURA and sign in with that Adobe account. "
+                        "If it still fails, ask your AURA admin to check the Adobe app’s Frame.io API access."
+                    )
+                else:
+                    result["message"] = (
+                        f"Frame.io verified your Adobe identity but denied the workspace check (HTTP {status}). "
+                        "Ask your Frame.io workspace admin to check access for this Adobe account."
+                    )
                 try:
                     payload = exc.response.json()
                 except ValueError:
